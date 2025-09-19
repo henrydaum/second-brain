@@ -1,13 +1,17 @@
-Second Brain  
-*Local RAG Agent* by Henry Daum
+# Second Brain  
+# *Local RAG Agent* <mark>by Henry Daum</mark>
 
 ---
 
-Screenshots & GIFs
+## Screenshots & GIFs
+
+<img width="1858" height="1343" alt="Screenshot 2025-09-19 123225" src="https://github.com/user-attachments/assets/805f5a0d-520a-496e-8c45-8ef1fb975e61" />
+
+https://github.com/user-attachments/assets/ca803713-4199-4403-91ac-8b64056ae790
 
 ---
 
-Features
+## Features
 
 - Semantic search: Searches the entire knowledgebase to find information based on deep semantic meaning.  
 - Supported files: .txt, .pdf, .docx, .gdoc, .png, .jpg, .jpeg, .gif, .webp  
@@ -26,30 +30,34 @@ Features
 
 ---
 
-How It Works  
-*Backend Code*  
-SecondBrainBackend.py  
+## How It Works  
+### *Backend Code*  
+<mark>SecondBrainBackend.py</mark>
+
 This file handles two things: syncing the directory and performing searches. 
 
 **Syncing:** Scans the target directory, detects new, updated, or deleted files. Extracts text from files and splits it into manageable chunks, while also batching images together for the sake of speed. Converts text chunks and images into vector embeddings using sentence-transformer models. Stores embeddings in a persistent ChromaDB vector database. 
 
 **Retrieval**: Performs semantic search, reranks results using Maximal Marginal Relevance (MMR), and filters for relevance.
 
-*Frontend Code*  
-SecondBrainFrontend.py  
+### *Frontend Code*  
+<mark>SecondBrainFrontend.py</mark>
+
 The frontend code controls the user interface for the application. It controls threading for non-blocking backend operations, prompting patterns for the AI, and logging functions. Finds the most relevant parts of text attachments, ensures smooth user experience, and integrates the backend. Allows the user to send messages in a chat-like format. Performs many different functions simultaneously, and orchestrates blocking and re-enabling different buttons at different times to prevent crashes. *Looks good, too, if I may say so myself.*
 
-*Settings*  
-config.json  
+### *Settings*  
+<mark>config.json</mark>
+
 This file can be edited and changes the features of Second Brain.
 
-*Google Drive Authentication*  
-credentials.json  
+### *Google Drive Authentication*  
+<mark>credentials.json</mark>
+
 This file must be added if using Google Drive, as it allows the syncing of Google Doc files. 
 
 ---
 
-Getting Started
+## Getting Started
 
 1. Prerequisites  
 2. Installation  
@@ -58,7 +66,7 @@ Getting Started
 
 ---
 
-Usage Guide
+## Usage Guide
 
 - Syncing your files:  
   * The sync can be cancelled midway through with no consequences.  
@@ -70,7 +78,7 @@ Usage Guide
 
 ---
 
-Configuration Details  
+## Configuration Details  
 config.json
 
 | Parameter Name | Function | Range | Default |
@@ -97,7 +105,7 @@ config.json
 
 ---
 
-Dependencies  
+## Dependencies
 dependencies \= \[  
 "flet",  
 "PyPDF2",  
@@ -120,7 +128,7 @@ dependencies \= \[
 \]  
 ---
 
-Further Reading / Sources  
+## Further Reading / Sources  
 [https://lmstudio.ai/docs/python](https://lmstudio.ai/docs/python)
 
 [https://research.trychroma.com/evaluating-chunking](https://research.trychroma.com/evaluating-chunking)
