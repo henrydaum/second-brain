@@ -48,7 +48,7 @@ The frontend code controls the user interface for the application. It controls t
 ### *Settings*  
 <mark>config.json</mark>
 
-This file can be edited and changes the features of Second Brain.
+This file can be edited and changes the features of Second Brain (see below).
 
 ### *Google Drive Authentication*  
 <mark>credentials.json</mark>
