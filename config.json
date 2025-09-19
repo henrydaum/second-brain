@@ -1,0 +1,21 @@
+{
+    "credentials_path": "credentials.json",
+    "target_directory": "C:\\Users\\henry\\My Drive",
+    "text_model_name": "BAAI/bge-large-en-v1.5",
+    "image_model_name": "clip-ViT-B-16",
+    "batch_size": 20,
+    "chunk_size": 200,
+    "chunk_overlap": 0,
+    "mmr_lambda": 0.7,
+    "search_multiplier": 20,
+    "z_score": 1.5,
+    "ai_mode": true,
+    "llm_backend": "LM Studio",
+    "lms_model_name": "gemma-3-4b-it",
+    "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE",
+    "max_results": 7,
+    "search_prefix": "Represent this sentence for searching relevant passages: ",
+    "query_multiplier": 5,
+    "n_attachment_keywords": 3,
+    "n_attachment_chunks": 3
+}
