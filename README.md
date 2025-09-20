@@ -80,19 +80,19 @@ To start the application, run **SecondBrainFrontend.py** from the project folder
 
 ## Usage Guide
 
-- Syncing your files:  
-  Click the Sync Directory button to start embedding the files from your <mark>target_directory</mark>. It can take a while, but is necessary to enable search.
-  The sync can be cancelled midway through by clicking the *Cancel Sync* button with no consequences. If restarted, the sync will continue where it left off.
-- Searching:  
-  Text results are based on relevant chunks of text from the embedding database.
-  You can click on image results or file paths to open them directly.
-- Using AI mode:  
-  Toggle the AI Mode checkbox to enable or disable **LLM augmented search**.
-  When enabled, the app loads the selected LLM. Searches are enhanced with AI-generated queries, results are filtered by the AI for relevance, and a final "AI Insights" summary is streamed in the results container.
-  When disabled, the LLM is unloaded to save system resources, and the app performs a direct vector search with no query expansion, filtering, or summary.
-- Attaching files:
-  If you attach a text document (.pdf, .docx, etc.) with a query, the app extracts keywords and relevant chunks to provide focused context for the search.
-  If you attach an image, you can send it to find visually similar images in your database. Attached images will not affect other results.
+#### Syncing your files:  
+*Click the Sync Directory button to start embedding the files from your <mark>target_directory</mark>. It can take a while, but is necessary to enable search.
+The sync can be cancelled midway through by clicking the *Cancel Sync* button with no consequences. If restarted, the sync will continue where it left off.*
+#### Searching:  
+*Text results are based on relevant chunks of text from the embedding database.
+You can click on image results or file paths to open them directly.*
+#### Using AI mode:  
+*Toggle the AI Mode checkbox to enable or disable **LLM augmented search**.
+When enabled, the app loads the selected LLM. Searches are enhanced with AI-generated queries, results are filtered by the AI for relevance, and a final "AI Insights" summary is streamed in the results container.
+When disabled, the LLM is unloaded to save system resources, and the app performs a direct vector search with no query expansion, filtering, or summary.*
+#### Attaching files:  
+*If you attach a text document (.pdf, .docx, etc.) with a query, the app extracts keywords and relevant chunks to provide focused context for the search.
+If you attach an image, you can send it to find visually similar images in your database. Attached images will not affect other results.*
 
 ---
 
@@ -125,7 +125,8 @@ config.json
 
 ## Dependencies
 
-*You can install the Python dependencies with the following command:* 
+*You can install the Python dependencies with the following command:*
+
 ```pip install flet pypdf2 python-docx numpy chromadb torch Pillow requests transformers langchain sentence-transformers scipy yake```
 
 dependencies \= \[  
