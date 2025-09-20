@@ -20,11 +20,12 @@ https://github.com/user-attachments/assets/ca803713-4199-4403-91ac-8b64056ae790
 - Attachments of any size are supported.  
 - Optional AI Mode:  
   * LLM Integration: Supports local models via LM Studio and cloud models via Gemini.  
-  * **Retrieval-Augmented Generation (RAG)**: Uses search results to provide contextually aware AI responses.  
+  * **Retrieval-Augmented Generation (RAG)**: Uses search results to provide AI responses rooted in the knowledge-base.  
   * **AI-Powered Query Expansion:** Generates multiple related search queries to find more comprehensive results.  
   * **AI Result Filtering**: Reranks and filters search results for relevance.  
   * **AI Summarization**: Synthesizes information from multiple sources into a concise summary.  
-  * The AI Mode is optional; a search can be run without AI if there are not enough computational resources available.  
+  * The AI Mode is optional; a search can be run without AI if there are not enough computational resources available.
+- Sync 100,000+ files.
 - Security and privacy: local search ensures no data is sent to the internet (only applies if not using Gemini API option).  
 - Open source: all the code is right here.
 
@@ -53,28 +54,45 @@ This file can be edited and changes the features of Second Brain (see below).
 ### *Google Drive Authentication*  
 <mark>credentials.json</mark>
 
-This file must be added if using Google Drive, as it allows the syncing of Google Doc files. 
+This file must be added if using Google Drive (optional), as it allows the syncing of Google Doc files. 
 
 ---
 
 ## Getting Started
 
-1. Prerequisites  
-2. Installation  
-3. Configuration  
-4. Running the application
+### 1. Prerequisites
+Before running the application, ensure you have the following:
+   - Python: Second Brain requires Python 3.9 or higher.
+   - LM Studio: To use AI Mode with a local LLM, you must download and install LM Studio and set the local sever address to: ```http://127.0.0.1:1234```.
+   - API Key: To use the Gemini API, provide ```config.json``` with an API key.
+   - Dependencies: Install the required Python libraries (see below - dependencies) using pip.
+   - System requirements: The search engine can be used with GPU or CPU. It will automatically detect if a GPU exists and use it if available. Different text and image embedding models use different amounts of memory, and can be configured. For example, the default models use 2GB of VRAM.
+### 2. Installation
+Download ```SecondBrainBackend```, ```SecondBrainFrontend```, and ```config.json``` from this repository. Only these three files are needed.
+### 3. Configuration
+Open ```config.json``` and update the <mark>target_directory</mark> to point to the folder you want to use as your knowledge base.
+
+(Optional) To enable Google Doc syncing, follow the [Google Cloud API](https://developers.google.com/workspace/drive/api/guides/about-sdk) instructions to get a ```credentials.json``` file using OAuth. Either place the file in the project directory, or place it somewhere else and update <mark>credentials_path</mark> in ```config.json``` to point to it. The first time you sync, a browser window will open for you to authorize the application.
+### 4. Running the application
+To start the application, run **SecondBrainFrontend.py** from the project folder's terminal.
 
 ---
 
 ## Usage Guide
 
 - Syncing your files:  
-  * The sync can be cancelled midway through with no consequences.  
+  Click the Sync Directory button to start embedding the files from your <mark>target_directory</mark>. It can take a while, but is necessary to enable search.
+  The sync can be cancelled midway through by clicking the *Cancel Sync* button with no consequences. If restarted, the sync will continue where it left off.
 - Searching:  
-  *   
+  Text results are based on relevant chunks of text from the embedding database.
+  You can click on image results or file paths to open them directly.
 - Using AI mode:  
-  *   
+  Toggle the AI Mode checkbox to enable or disable **LLM augmented search**.
+  When enabled, the app loads the selected LLM. Searches are enhanced with AI-generated queries, results are filtered by the AI for relevance, and a final "AI Insights" summary is streamed in the results container.
+  When disabled, the LLM is unloaded to save system resources, and the app performs a direct vector search with no query expansion, filtering, or summary.
 - Attaching files:
+  If you attach a text document (.pdf, .docx, etc.) with a query, the app extracts keywords and relevant chunks to provide focused context for the search.
+  If you attach an image, you can send it to find visually similar images in your database. Attached images will not affect other results.
 
 ---
 
@@ -85,8 +103,8 @@ config.json
 | ----- | ----- | ----- | ----- |
 | credentials\_path | Path to credentials.json which is used to authenticate Google Drive downloads. | Any path | "credentials.json" |
 | target\_directory | Which directory to sync to. Embeds all valid files in the directory. | Any directory | "C:\\\\Users\\\\user\\\\My Drive" |
-| text\_model\_name | SentenceTransformers text embedding model name. "BAAI/bge-large-en-v1.5" and "BAAI/bge-small-en-v1.5" work well. | Any valid name | "BAAI/bge-large-en-v1.5" |
-| image\_model\_name | SentenceTransformers image embedding model name. "clip-ViT-B-16" and "clip-ViT-B-32" work well. | Any valid name | "clip-ViT-B-16" |
+| text\_model\_name | SentenceTransformers text embedding model name. "BAAI/bge-large-en-v1.5" and "BAAI/bge-small-en-v1.5" work well, with the small version using fewer system resources. | Any valid name | "BAAI/bge-large-en-v1.5" |
+| image\_model\_name | SentenceTransformers image embedding model name. "clip-ViT-B-16" and "clip-ViT-B-32" work well, with the 32 version using fewer system resources. | Any valid name | "clip-ViT-B-16" |
 | batch\_size | How many text chunks/images are processed in parallel with the embedders. Embedding is faster with higher values but laggier. | 1-50 | 20 |
 | chunk\_size | Maximum size of text chunks created from the text splitter; 200 and 0 overlap is shown in research to be very good. | 50-1000 | 200 |
 | chunk\_overlap | Used to preserve continuity when splitting text. | 0-200 | 0 |
@@ -106,6 +124,10 @@ config.json
 ---
 
 ## Dependencies
+
+*You can install the Python dependencies with the following command:* 
+```pip install flet pypdf2 python-docx numpy chromadb torch Pillow requests transformers langchain sentence-transformers scipy yake```
+
 dependencies \= \[  
 "flet",  
 "PyPDF2",  
@@ -125,7 +147,8 @@ dependencies \= \[
 "google-auth-oauthlib",  
 "google-generativeai==0.8.5",  
 "requests"  
-\]  
+\]
+
 ---
 
 ## Further Reading / Sources  
