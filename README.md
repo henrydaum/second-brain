@@ -72,7 +72,7 @@ Download ```SecondBrainBackend```, ```SecondBrainFrontend```, and ```config.json
 ### 3. Configuration
 Open ```config.json``` and update the <mark>target_directory</mark> to point to the folder you want to use as your knowledge base.
 
-(Optional) To enable Google Doc syncing, follow the [Google Cloud API](https://developers.google.com/workspace/drive/api/guides/about-sdk) instructions to get a ```credentials.json``` file using OAuth. Either place the file in the project directory, or place it somewhere else and update <mark>credentials_path</mark> in ```config.json``` to point to it. The first time you sync, a browser window will open for you to authorize the application.
+(Optional) To enable Google Doc syncing, follow the [Google Cloud API](https://developers.google.com/workspace/drive/api/guides/about-sdk) instructions to get a ```credentials.json``` file using OAuth. Either place the file in the project directory, or place it somewhere else and update <mark>credentials_path</mark> in ```config.json``` to point to it. The first time you sync, a browser window will open for you to authorize the application. Authentication is very finnicky and it might be necessary to delete the authorization token (```token.json```) and then reauthorize to get Drive syncing to work.
 ### 4. Running the application
 To start the application, run **SecondBrainFrontend.py** from the project folder's terminal.
 
