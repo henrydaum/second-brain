@@ -54,7 +54,12 @@ This file can be edited and changes the features of Second Brain (see below).
 ### *Google Drive Authentication*  
 <mark>credentials.json</mark>
 
-This file must be added if using Google Drive (optional), as it allows the syncing of Google Doc (.gdoc) files. 
+This file must be added if using Google Drive (optional), as it allows the syncing of Google Doc (.gdoc) files.
+
+### *Image Labels*
+<mark>image_labels.csv</mark>
+
+This CSV is used as a pool for possible image labels. The image embedder chooses the labels based on how close the image is to each image label.
 
 ---
 
