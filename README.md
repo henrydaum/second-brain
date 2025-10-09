@@ -99,7 +99,7 @@ When disabled, the LLM is unloaded to save system resources, and the app perform
 *If you attach a text document (.pdf, .docx, etc.) with a query, the app extracts keywords and relevant chunks to provide focused context for the search.
 If you attach an image, you can send it to find visually similar images in your database.*
 #### Saving Insights:  
-*If you find that Second Brain has produced a good insight, you can save it for future use in case you ask something similar in the future. When you click the "Save Insight" button, found after the AI Insights section of a response, the query and response get saved to a .txt file. This gives Second Brain a long-term memory of its own contributions.*
+*If you find that Second Brain has produced a good insight, you can save it for future use in case you ask something similar in the future. When you click the "Save Insight" button, found after the AI Insights section of a response, the query and response get saved to a .txt file. This gives Second Brain a long-term memory of its own contributions. (You can the delete an entry by deleting its .txt file, found in the saved_insights folder.)*
 
 ---
 
