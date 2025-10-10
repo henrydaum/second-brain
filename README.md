@@ -38,9 +38,9 @@ https://github.com/user-attachments/assets/ca803713-4199-4403-91ac-8b64056ae790
 
 This file handles two things: syncing the directory and performing searches. 
 
-**Syncing:** Scans the target directory, detects new, updated, or deleted files. Extracts text from files and splits it into manageable chunks, while also batching images together for the sake of speed. Converts text chunks and images into vector embeddings using sentence-transformer models. Stores embeddings in a persistent ChromaDB vector database. To enable lexical search, image captions are created and stored along with embeddings. A lexical database of both text and image entries is created using BM25, which enables lexical search.
+**Syncing:** Scans the target directory, detects new, updated, or deleted files. Extracts text from files and splits it into manageable chunks, while also batching images together for the sake of speed. Converts text chunks and images into vector embeddings using sentence-transformer models. Stores embeddings in a persistent ChromaDB vector database. To enable lexical search, image captions are created and stored along with image embeddings. A lexical database of both text and image entries is created using BM25.
 
-**Retrieval**: Performs both a semantic and lexical search, then combines the outputs, reranks all results using Maximal Marginal Relevance (MMR), takes the top N outputs, and finally filters for relevance using AI.
+**Retrieval**: Performs both a semantic and lexical search, then combines the outputs, reranks all results using Maximal Marginal Relevance (MMR), takes the top N outputs, and finally filters for relevance using AI (last step optional).
 
 ### *Frontend Code*  
 <mark>SecondBrainFrontend.py</mark>
@@ -50,7 +50,7 @@ The frontend code controls the user interface for the application. It controls t
 ### *Settings*  
 <mark>config.json</mark>
 
-This file can be edited and changes the features of Second Brain (see below).
+This file can be edited by the user and changes the features of Second Brain (see below).
 
 ### *Google Drive Authentication*  
 <mark>credentials.json</mark>
@@ -60,7 +60,7 @@ This file must be added if using Google Drive (optional), as it allows the synci
 ### *Image Labels*
 <mark>image_labels.csv</mark>
 
-This CSV is used as a pool for possible image labels. The image embedder chooses the labels based on how close the image is to each image label.
+This CSV is used as a pool for possible image labels. The image labels are chosen based on how close the image embedding is to each label embedding (a categorization task).
 
 ---
 
@@ -69,18 +69,17 @@ This CSV is used as a pool for possible image labels. The image embedder chooses
 ### 1. Prerequisites
 Before running the application, ensure you have the following:
    - Python: Second Brain requires Python 3.9 or higher.
-   - LM Studio: To use AI Mode with a local LLM, you must download and install LM Studio and download a .gguf model, ideally with vision capabilities.
-   - API Key: To use the Gemini API, provide ```config.json``` with an API key.
+   - LM Studio: To use AI Mode with a local LLM, you must download and install LM Studio with a .gguf model, ideally with vision capabilities (meta-llama-3.1-8b-instruct works well, but any model may be used).
    - Dependencies: Install the required Python libraries (see below - dependencies) using pip.
-   - System requirements: The search engine can be used with GPU or CPU. It will automatically detect if a GPU exists and use it if available. Different text and image embedding models use different amounts of memory, and can be configured. For example, the default models use 2GB of VRAM.
+   - System requirements: The search engine can be used with GPU or CPU. It will automatically detect if a GPU exists and use it if available. Different text and image embedding models use different amounts of memory, and can be configured. For example, the default models use 2GB of VRAM/RAM.
 ### 2. Installation
-Download ```SecondBrainBackend```, ```SecondBrainFrontend```, and ```config.json``` from this repository. Only these three files are needed.
+Download ```SecondBrainBackend```, ```SecondBrainFrontend```, and ```config.json``` from this repository. Only these three files are needed. Place them in a folder.
 ### 3. Configuration
 Open ```config.json``` and update the <mark>target_directory</mark> to point to the folder you want to use as your knowledge base.
 
-(Optional) To enable Google Doc syncing, follow the [Google Cloud API](https://developers.google.com/workspace/drive/api/guides/about-sdk) instructions to get a ```credentials.json``` file using OAuth. Either place the file in the project directory, or place it somewhere else and update <mark>credentials_path</mark> in ```config.json``` to point to it. The first time you sync, a browser window will open for you to authorize the application. Authentication is very finnicky and it might be necessary to delete the authorization token (```token.json```) and then reauthorize to get Drive syncing to work.
+(Optional) To enable Google Doc syncing, follow the [Google Cloud API](https://developers.google.com/workspace/drive/api/guides/about-sdk) instructions to get a ```credentials.json``` file using OAuth. Either place the file in the project directory, or place it somewhere else and update <mark>credentials_path</mark> in ```config.json``` to point to it. The first time you sync, a browser window will open for you to authorize the application. Authentication is very finnicky and it might be necessary to delete the authorization token (```token.json```) and then reauthorize to get Drive syncing to work. You can do this with the "Reauthorize Drive" button.
 ### 4. Running the application
-To start the application, run **SecondBrainFrontend.py** from the project folder's terminal. The first run may take a while to download all the dependencies.
+To start the application, run **SecondBrainFrontend.py** from the project folder. The first run may take a while to download all the dependencies.
 
 ---
 
@@ -91,16 +90,15 @@ To start the application, run **SecondBrainFrontend.py** from the project folder
 The sync can be cancelled midway through by clicking the *Cancel Sync* button with no consequences. If restarted, the sync will continue where it left off.*
 #### Searching:  
 *Text results are based on relevant chunks of text from the embedding database.
-You can click on image results or file paths to open them directly.*
+You can click on image results and file paths to open them directly.*
 #### Using AI mode:  
 *Toggle the AI Mode checkbox to enable or disable **LLM augmented search**.
-When enabled, the app loads the selected LLM. Searches are enhanced with AI-generated queries, results are filtered by the AI for relevance, and a final "AI Insights" summary is streamed in the results container. It is recommended to use vision-enabled models, since it can help to filter the results and give insights on images.
-When disabled, the LLM is unloaded to save system resources, and the app performs a direct vector search with no query expansion, filtering, or summary.*
+When enabled, the Second Brain loads the selected LLM from LM Studio. Searches are enhanced with AI-generated queries, results are (optionally) filtered by the AI for relevance, and a final "AI Insights" summary is streamed in the results container. It is recommended to use vision-enabled models, since it can help to filter the results and give insights on images. When disabled, the LLM is unloaded to save system resources, and the app performs a direct vector/lexical search with no query expansion, filtering, or summary.*
 #### Attaching files:  
-*If you attach a text document (.pdf, .docx, etc.) with a query, the app extracts keywords and relevant chunks to provide focused context for the search.
+*If you attach a text document (.pdf, .docx, etc.) with a query, the app extracts relevant chunks to provide focused context for the search.
 If you attach an image, you can send it to find visually similar images in your database.*
 #### Saving Insights:  
-*If you find that Second Brain has produced a good insight, you can save it for future use in case you ask something similar in the future. When you click the "Save Insight" button, found after the AI Insights section of a response, the query and response get saved to a .txt file. This gives Second Brain a long-term memory of its own contributions. (You can the delete an entry by deleting its .txt file, found in the saved_insights folder.)*
+*If you find that Second Brain has produced a good insight, you can save it for future use in case you ask something similar later on. When you click the "Save Insight" button, found after the AI Insights section of a response, the query and response get saved to a .txt file. This gives Second Brain a long-term memory of its own contributions. (You can the delete an entry by deleting its .txt file, found in the saved_insights folder.)*
 
 ---
 
@@ -111,24 +109,24 @@ config.json
 | ----- | ----- | ----- | ----- |
 | credentials\_path | Path to credentials.json which is used to authenticate Google Drive downloads. | Any path | "credentials.json" |
 | target\_directory | Which directory to sync to. Embeds all valid files in the directory. | Any directory | "C:\\\\Users\\\\user\\\\My Drive" |
-| text\_model\_name | SentenceTransformers text embedding model name. "BAAI/bge-large-en-v1.5" and "BAAI/bge-small-en-v1.5" work well, with the small version using fewer system resources. If you change the text model name, you need to remake all of your embeddings with that model. | Any valid name | "BAAI/bge-large-en-v1.5" |
+| text\_model\_name | SentenceTransformers text embedding model name. "BAAI/bge-large-en-v1.5" and "BAAI/bge-small-en-v1.5" work well, with the small version using fewer system resources. If you change the text model name, you need to remake all of your embeddings with that model - delete the chroma_db folder or use the helper function at the bottom of SecondBrainBackend. | Any valid name | "BAAI/bge-large-en-v1.5" |
 | image\_model\_name | SentenceTransformers image embedding model name. "clip-ViT-B-16" and "clip-ViT-B-32" work well, with the 32 version using fewer system resources. If you change the image model name, you need to remake all of your embeddings with that model. | Any valid name | "clip-ViT-B-16" |
 | embed\_use\_cuda | Turning this to false forces the embedding models to use CPU. If set to true, uses CUDA if possible. | true or false | true |
-| batch\_size | How many text chunks/images are processed in parallel with the embedders. Embedding is faster with higher values but laggier. | 1-50 | 20 |
+| batch\_size | How many text chunks/images are processed in parallel with the embedders. Embedding is faster with higher values, depending on hardware. | 1-50 | 20 |
 | chunk\_size | Maximum size of text chunks created from the text splitter; 200 and 0 overlap is shown in research to be very good. | 50-1000 | 200 |
 | chunk\_overlap | Used to preserve continuity when splitting text. | 0-200 | 0 |
 | mmr\_lambda | Prioritize diversity or relevance in search results; 0 \= prioritize diversity only, 1 \= prioritize relevance only. | 0.0-1.0 | 0.5 |
 | mmr\_alpha | The MMR rerank uses a hybrid semantic-lexical diversity metric. An mmr\_alpha of 0.0 prioritizes lexical diversity, while 1.0 is for using only semantic diversity in choosing how to rerank. | 0.0-1.0 | 0.5 |
 | search\_multiplier | How many results to process for each query. | At least 1 | 20 |
 | ai\_mode | Whether or not to use AI to aid in searches. | true or false | true |
-| llm\_backend | Choose which AI to use. | “LM Studio” or “Gemini” | "LM Studio" |
-| lms\_model\_name | Can be any language model from LM Studio, but it must be already downloaded. | Any valid name | "gemma-3-4b-it" |
-| gemini\_api\_key | Key to connect to paid, online Gemini service. | \- | "YOUR\_GEMINI\_API\_KEY\_HERE" |
+| llm_filter_results | Filtering results is somewhat slow. This gives the option to turn that part of ai_mode on/off. | true or false | false |
+| llm\_backend | Choose which AI to use. | “LM Studio” ("Gemini" in development) | "LM Studio" |
+| lms\_model\_name | Can be any language model from LM Studio, but it must be already downloaded. | Any valid name | "unsloth/gemma-3-4b-it" |
 | max\_results | Sets the maximum for both text and image results. | 1-30 | 7 |
-| search\_prefix | Phrase prefixed to the start of text search queries; useful with some text embedding models. Set to “” to disable. | \- | "Represent this sentence for searching relevant passages: " |
+| search\_prefix | Phrase prefixed to the start of text search queries; recommended with the default text embedding models. Set to “” to disable. | \- | "Represent this sentence for searching relevant passages: " |
 | query\_multiplier | How many queries the AI is asked to make to augment the search, based on the user’s attachment and user prompt. | At least 1 | 5 |
-| n\_attachment\_chunks | Text chunks are extracted from attachments. With AI Mode off, these are used as additional queries. In AI Mode, these are used as additional context for the AI. Decrease if the context window is small. | 0-10 | 3 |
-| system\_prompt | Special instructions for how the AI should do its job. | Any string | "You are a personal search assistant, made to turn user prompts into accurate and relevant search results, using information from the user's database. Special instruction: be concise and to the point; do not be verbose." |
+| n\_attachment\_chunks | Text chunks are extracted from attachments. These are used as additional queries. In AI Mode, these are used as additional context for the AI as well. Decrease if the context window is small. | 0-10 | 3 |
+| system\_prompt | Special instructions for how the AI should do its job. Feel free to change the special instructions to anything. | Any string | "You are a personal search assistant, made to turn user prompts into accurate and relevant search results, using information from the user's database. Special instruction: Sound casually confident and lightly playful, as if you enjoy the user's company but won't admit it. Not too warm, but still focused on the user. Avoid over-explaining or being too sweet. Quirk: Every so often, add a short, witty reflection on how ridiculous or fascinating human behavior is." |
 
 ---
 
@@ -158,6 +156,8 @@ dependencies \= \[
 "google-generativeai==0.8.5",  
 "requests"  
 \]
+
+As of 10/10/2025, it is safe to use the most updated version of each library.
 
 ---
 
