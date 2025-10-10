@@ -146,14 +146,14 @@ dependencies \= \[
 "transformers==4.56.1",  
 "langchain-text-splitters==0.3.11",  
 "sentence-transformers==5.1.0",  
-"yake",  
 "lmstudio==1.5.0",  
 "python-docx",  
 "Pillow",  
 "google-api-python-client",  
 "google-auth",  
 "google-auth-oauthlib",  
-"google-generativeai==0.8.5",  
+"google-generativeai==0.8.5",
+"rank_bm25",
 "requests"  
 \]
 
