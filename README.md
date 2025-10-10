@@ -157,8 +157,6 @@ dependencies \= \[
 "requests"  
 \]
 
-As of 10/10/2025, it is safe to use the most updated version of each library.
-
 ---
 
 ## Further Reading / Sources  
