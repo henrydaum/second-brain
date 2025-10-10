@@ -14,7 +14,7 @@ https://github.com/user-attachments/assets/ca803713-4199-4403-91ac-8b64056ae790
 ## Features
 
 - Semantic search: Searches the entire knowledgebase to find information based on deep semantic meaning.
-- Lexical search: find a needle in a haystack based on keywords.
+- Lexical search: find a needle in a haystack using keywords.
 - Supported files: .txt, .pdf, .docx, .gdoc, .png, .jpg, .jpeg, .gif, .webp  
 - Multimodal support: search for both text and images. Vision-enabled LLMs can be used to provide better results.
 - Find similar images: attach an image to find similar looking ones in your filebase.  
