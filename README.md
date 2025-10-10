@@ -27,7 +27,7 @@ https://github.com/user-attachments/assets/ca803713-4199-4403-91ac-8b64056ae790
   * **AI Summarization**: Synthesizes information from multiple documents and images into a concise summary.  
   * The AI Mode is optional; a search can be run without AI if there are not enough computational resources available.
 - Sync 100,000+ files.
-- Security and privacy: local search ensures no data is sent to the internet (only applies if not using Gemini API option).  
+- Security and privacy: local search ensures no data is sent to the internet.  
 - Open source: all the code is right here.
 
 ---
