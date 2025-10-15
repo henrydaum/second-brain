@@ -157,6 +157,9 @@ dependencies \= \[
 "requests"  
 \]
 
+## Infographic of How it Works
+<img width="1204" height="1580" alt="Second Brain Search Flowchart Infographic" src="https://github.com/user-attachments/assets/650e5c06-44e6-47fe-b60e-5d3826056766" />
+
 ---
 
 ## Further Reading / Sources  
