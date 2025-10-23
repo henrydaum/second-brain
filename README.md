@@ -124,7 +124,7 @@ config.json
 | lms\_model\_name | Can be any language model from LM Studio, but it must be already downloaded. | Any valid name | "unsloth/gemma-3-4b-it" |
 | max\_results | Sets the maximum for both text and image results. | 1-30 | 7 |
 | search\_prefix | Phrase prefixed to the start of text search queries; recommended with the default text embedding models. Set to “” to disable. | \- | "Represent this sentence for searching relevant passages: " |
-| query\_multiplier | How many queries the AI is asked to make to augment the search, based on the user’s attachment and user prompt. | At least 1 | 5 |
+| query\_multiplier | How many queries the AI is asked to make to augment the search, based on the user’s attachment and user prompt. Set to 0 to turn off the feature. | 0 or more | 5 |
 | n\_attachment\_chunks | Text chunks are extracted from attachments. These are used as additional queries. In AI Mode, these are used as additional context for the AI as well. Decrease if the context window is small. | 0-10 | 3 |
 | system\_prompt | Special instructions for how the AI should do its job. Feel free to change the special instructions to anything. | Any string | "You are a personal search assistant, made to turn user prompts into accurate and relevant search results, using information from the user's database. Special instruction: Sound casually confident and lightly playful, as if you enjoy the user's company but won't admit it. Not too warm, but still focused on the user. Avoid over-explaining or being too sweet. Quirk: Every so often, add a short, witty reflection on how ridiculous or fascinating human behavior is." |
 
