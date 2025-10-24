@@ -122,7 +122,7 @@ config.json
 | search\_multiplier | How many results to process for each query. | At least 1 | 20 |
 | ai\_mode | Whether or not to use AI to aid in searches. | true or false | true |
 | llm_filter_results | Filtering results is somewhat slow. This gives the option to turn that part of ai_mode on/off. | true or false | false |
-| llm\_backend | Choose which AI backend to use. | “LM Studio” or "OpenAI" | "LM Studio" |
+| llm\_backend | Choose which AI backend to use. | “LM Studio” or "Open AI" | "LM Studio" |
 | lms\_model\_name | Can be any language model from LM Studio, but it must be already downloaded. | Any valid name | "unsloth/gemma-3-4b-it" |
 | openai_model_name | Some OpenAI models, like gpt-5, require additional verification to use. | Any OpenAI model | "gpt-5-mini" |
 | openai_api_key | When using OpenAI as a backend, an API key from [platform.openai.com](https://platform.openai.com/) is required. Using it costs money, so the account must have enough funds. If this field is left blank (""), the OpenAI client will look for an *environmental variable* called OPENAI_API_KEY, and use that. Otherwise, the client will use the string found here. | Any API key | "" |
