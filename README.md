@@ -138,7 +138,7 @@ config.json
 
 *You can install the Python dependencies with the following command:*
 
-```pip install flet pypdf2 python-docx numpy chromadb torch Pillow requests transformers langchain sentence-transformers scipy fitz```
+```pip install flet python-docx numpy chromadb torch Pillow requests transformers langchain sentence-transformers scipy fitz```
 
 dependencies \= \[  
 "fitz",
