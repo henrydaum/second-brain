@@ -124,7 +124,7 @@ config.json
 | llm_filter_results | Filtering results is somewhat slow. This gives the option to turn that part of ai_mode on/off. | true or false | false |
 | llm\_backend | Choose which AI backend to use. OpenAI is slower but has smarter models. | “LM Studio” or "OpenAI" | "LM Studio" |
 | lms\_model\_name | Can be any language model from LM Studio, but it must be already downloaded. | Any valid name | "unsloth/gemma-3-4b-it" |
-| openai_model_name | Some OpenAI models, like gpt-5, require additional verification to use. | Any OpenAI model | "gpt-5-mini" |
+| openai_model_name | Can be any OpenAI text model. (Some OpenAI models, like gpt-5, require additional verification to use.) | Any OpenAI model | "gpt-5-mini" |
 | openai_api_key | When using OpenAI as a backend, an API key from [platform.openai.com](https://platform.openai.com/) is required. Using it costs money, so the account must have enough funds. If this field is left blank (""), the OpenAI client will look for an *environmental variable* called OPENAI_API_KEY, and use that. Otherwise, the client will use the string found here. | Any API key | "" |
 | max\_results | Sets the maximum for both text and image results. | 1-30 | 7 |
 | search\_prefix | Phrase prefixed to the start of text search queries; recommended with the text embedding models BAAI/bge-large-en-v1.5 and BAAI/bge-small-en-v1.5. Not needed for BAAI/bge-m3. Set to “” to disable. | \- | "Represent this sentence for searching relevant passages: " |
