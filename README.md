@@ -165,6 +165,9 @@ dependencies \= \[
 ## Infographic of How it Works
 <img width="1204" height="1580" alt="Second Brain Search Flowchart Infographic" src="https://github.com/user-attachments/assets/650e5c06-44e6-47fe-b60e-5d3826056766" />
 
+## Hidden variables:
+IMG_THUMBNAIL, stop_words, jpeg_quality, min_len, low_compression_threshold, high_compression_threshold, temperature, openai_vision_keywords, image_preview_size
+
 ---
 
 ## Further Reading / Sources  
