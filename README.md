@@ -116,7 +116,7 @@ config.json
 | batch\_size | How many text chunks/images are processed in parallel with the embedders. Embedding is faster with higher values, depending on hardware. | 1-50 | 20 |
 | chunk\_size | Maximum size of text chunks created from the text splitter, in tokens; 200 and 0 overlap is shown in research to be very good. | 50-2000 | 200 |
 | chunk\_overlap | Used to preserve continuity when splitting text. | 0-200 | 0 |
-| max_seq_length | Maximum input size for the text embedding model, in tokens. Lower values are faster. | 250-8192 | 0 |
+| max_seq_length | Maximum input size for the text embedding model, in tokens. Lower values are faster. | Depends on model, 250-8192 is ok. | 0 |
 | mmr\_lambda | Prioritize diversity or relevance in search results; 0 \= prioritize diversity only, 1 \= prioritize relevance only. | 0.0-1.0 | 0.5 |
 | mmr\_alpha | The MMR rerank uses a hybrid semantic-lexical diversity metric. An mmr\_alpha of 0.0 prioritizes lexical diversity, while 1.0 is for using only semantic diversity in choosing how to rerank. | 0.0-1.0 | 0.5 |
 | search\_multiplier | How many results to process for each query. | At least 1 | 20 |
