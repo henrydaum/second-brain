@@ -114,8 +114,9 @@ config.json
 | image\_model\_name | SentenceTransformers image embedding model name. "clip-ViT-L-14", "clip-ViT-B-16", and "clip-ViT-B-32" work well, with the 32 version using fewer system resources, and L-14 using the most. If you change the image model name, you need to remake all of your embeddings with that model. | Any valid name | "clip-ViT-B-16" |
 | embed\_use\_cuda | Turning this to false forces the embedding models to use CPU. If set to true, uses CUDA if possible. | true or false | true |
 | batch\_size | How many text chunks/images are processed in parallel with the embedders. Embedding is faster with higher values, depending on hardware. | 1-50 | 20 |
-| chunk\_size | Maximum size of text chunks created from the text splitter; 200 and 0 overlap is shown in research to be very good. | 50-1000 | 200 |
+| chunk\_size | Maximum size of text chunks created from the text splitter, in tokens; 200 and 0 overlap is shown in research to be very good. | 50-2000 | 200 |
 | chunk\_overlap | Used to preserve continuity when splitting text. | 0-200 | 0 |
+| max_seq_length | Maximum input size for the text embedding model, in tokens. Lower values are faster. | 250-8192 | 0 |
 | mmr\_lambda | Prioritize diversity or relevance in search results; 0 \= prioritize diversity only, 1 \= prioritize relevance only. | 0.0-1.0 | 0.5 |
 | mmr\_alpha | The MMR rerank uses a hybrid semantic-lexical diversity metric. An mmr\_alpha of 0.0 prioritizes lexical diversity, while 1.0 is for using only semantic diversity in choosing how to rerank. | 0.0-1.0 | 0.5 |
 | search\_multiplier | How many results to process for each query. | At least 1 | 20 |
@@ -124,9 +125,9 @@ config.json
 | llm\_backend | Choose which AI backend to use. | “LM Studio” or "OpenAI" | "LM Studio" |
 | lms\_model\_name | Can be any language model from LM Studio, but it must be already downloaded. | Any valid name | "unsloth/gemma-3-4b-it" |
 | openai_model_name | Some OpenAI models, like gpt-5, require additional verification to use. | Any OpenAI model | "gpt-5-mini" |
-| openai_api_key | When using OpenAI as a backend, an API key from [platform.openai.com](platform.openai.com) is required. Using it costs money, so the account must have enough funds. If this field is left blank (""), the OpenAI client will look for an *environmental variable* called OPENAI_API_KEY, and use that. Otherwise, the client will use the string found here. | Any API key | "" |
+| openai_api_key | When using OpenAI as a backend, an API key from [platform.openai.com](https://platform.openai.com/) is required. Using it costs money, so the account must have enough funds. If this field is left blank (""), the OpenAI client will look for an *environmental variable* called OPENAI_API_KEY, and use that. Otherwise, the client will use the string found here. | Any API key | "" |
 | max\_results | Sets the maximum for both text and image results. | 1-30 | 7 |
-| search\_prefix | Phrase prefixed to the start of text search queries; recommended with the default text embedding models. Set to “” to disable. | \- | "Represent this sentence for searching relevant passages: " |
+| search\_prefix | Phrase prefixed to the start of text search queries; recommended with the text embedding models BAAI/bge-large-en-v1.5 and BAAI/bge-small-en-v1.5. Not needed for BAAI/bge-m3. Set to “” to disable. | \- | "Represent this sentence for searching relevant passages: " |
 | query\_multiplier | How many queries the AI is asked to make to augment the search, based on the user’s attachment and user prompt. Set to 0 to turn off the feature. | 0 or more | 5 |
 | n\_attachment\_chunks | Text chunks are extracted from attachments. These are used as additional queries. In AI Mode, these are used as additional context for the AI as well. Decrease if the context window is small. | 0-10 | 3 |
 | system\_prompt | Special instructions for how the AI should do its job. Feel free to change the special instructions to anything. | Any string | "You are a personal search assistant, made to turn user prompts into accurate and relevant search results, using information from the user's database. Special instruction: Sound casually confident and lightly playful, as if you enjoy the user's company but won't admit it. Not too warm, but still focused on the user. Avoid over-explaining or being too sweet. Quirk: Every so often, add a short, witty reflection on how ridiculous or fascinating human behavior is." |
