@@ -69,7 +69,8 @@ This CSV is used as a pool for possible image labels. The image labels are chose
 ### 1. Prerequisites
 Before running the application, ensure you have the following:
    - Python: Second Brain requires Python 3.9 or higher.
-   - LM Studio: To use AI Mode with a local LLM, you must download and install LM Studio with a .gguf model, ideally with vision capabilities (meta-llama-3.1-8b-instruct works well, but any model may be used).
+   - LM Studio: To use AI Mode with a local LLM, you must download and install LM Studio with a .gguf model, ideally with vision capabilities (unsloth/gemma-3-4b-it works well, but any model may be used).
+   - Open AI API: To use a model from the OpenAI API, make sure you have an API key from platform.openai.com with sufficient funds.
    - Dependencies: Install the required Python libraries (see below - dependencies) using pip.
    - System requirements: The search engine can be used with GPU or CPU. It will automatically detect if a GPU exists and use it if available. Different text and image embedding models use different amounts of memory, and can be configured. For example, the default models use 2GB of VRAM/RAM.
 ### 2. Installation
@@ -93,7 +94,7 @@ The sync can be cancelled midway through by clicking the *Cancel Sync* button wi
 You can click on image results and file paths to open them directly.*
 #### Using AI mode:  
 *Toggle the AI Mode checkbox to enable or disable **LLM augmented search**.
-When enabled, the Second Brain loads the selected LLM from LM Studio. Searches are enhanced with AI-generated queries, results are (optionally) filtered by the AI for relevance, and a final "AI Insights" summary is streamed in the results container. It is recommended to use vision-enabled models, since it can help to filter the results and give insights on images. When disabled, the LLM is unloaded to save system resources, and the app performs a direct vector/lexical search with no query expansion, filtering, or summary.*
+When enabled, the Second Brain loads the selected LLM from LM Studio or the OpenAI API. Searches are enhanced with AI-generated queries, results are (optionally) filtered by the AI for relevance, and a final "AI Insights" summary is streamed in the results container. It is recommended to use vision-enabled models, since it can help to filter the results and give insights on images. When disabled, the LLM is unloaded to save system resources, and the app performs a direct vector/lexical search with no query expansion, filtering, or summary.*
 #### Attaching files:  
 *If you attach a text document (.pdf, .docx, etc.) with a query, the app extracts relevant chunks to provide focused context for the search.
 If you attach an image, you can send it to find visually similar images in your database.*
@@ -120,8 +121,10 @@ config.json
 | search\_multiplier | How many results to process for each query. | At least 1 | 20 |
 | ai\_mode | Whether or not to use AI to aid in searches. | true or false | true |
 | llm_filter_results | Filtering results is somewhat slow. This gives the option to turn that part of ai_mode on/off. | true or false | false |
-| llm\_backend | Choose which AI to use. | “LM Studio” ("Gemini" in development) | "LM Studio" |
+| llm\_backend | Choose which AI backend to use. | “LM Studio” or "OpenAI" | "LM Studio" |
 | lms\_model\_name | Can be any language model from LM Studio, but it must be already downloaded. | Any valid name | "unsloth/gemma-3-4b-it" |
+| openai_model_name | Some OpenAI models, like gpt-5, require additional verification to use. | Any OpenAI model | "gpt-5-mini" |
+| openai_api_key | When using OpenAI as a backend, an API key from [platform.openai.com](platform.openai.com) is required. Using it costs money, so the account must have enough funds. If this field is left blank (""), the OpenAI client will look for an *environmental variable* called OPENAI_API_KEY, and use that. Otherwise, the client will use the string found here. | Any API key | "" |
 | max\_results | Sets the maximum for both text and image results. | 1-30 | 7 |
 | search\_prefix | Phrase prefixed to the start of text search queries; recommended with the default text embedding models. Set to “” to disable. | \- | "Represent this sentence for searching relevant passages: " |
 | query\_multiplier | How many queries the AI is asked to make to augment the search, based on the user’s attachment and user prompt. Set to 0 to turn off the feature. | 0 or more | 5 |
