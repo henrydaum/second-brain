@@ -164,7 +164,7 @@ dependencies \= \[
 \]
 
 ## Infographic of How it Works
-<img width="1204" height="1580" alt="Second Brain Search Flowchart Infographic" src="https://github.com/user-attachments/assets/650e5c06-44e6-47fe-b60e-5d3826056766" />
+<img width="1206" height="1275" alt="Second Brain Search Flowchart Infographic" src="https://github.com/user-attachments/assets/b5539554-a3aa-4270-b228-d92052a70d7f" />
 
 ## Hidden Variables
 These can be found in the code to change minor features.
