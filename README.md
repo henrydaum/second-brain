@@ -5,7 +5,8 @@
 
 ## Screenshots & GIFs
 
-<img width="1708" height="1233" alt="Screenshot 2025-10-31 003520" src="https://github.com/user-attachments/assets/333790cb-a0f1-4901-a770-81b60242dc55" />
+<img width="1699" height="1239" alt="Screenshot 2025-10-31 004556" src="https://github.com/user-attachments/assets/36a2c631-2c58-4187-b690-79e4c5c7dfa9" />
+
 
 <img width="1858" height="1343" alt="Screenshot 2025-09-19 123225" src="https://github.com/user-attachments/assets/805f5a0d-520a-496e-8c45-8ef1fb975e61" />
 
