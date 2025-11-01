@@ -5,9 +5,9 @@
 
 ## Screenshots & GIFs
 
-<img width="1134" height="826" alt="Screenshot 2025-10-31 004705" src="https://github.com/user-attachments/assets/7c51f44b-93ff-4330-bb52-dfe8b4cf0c71" />
+<img width="567" height="413" alt="Screenshot 2025-10-31 004705" src="https://github.com/user-attachments/assets/7c51f44b-93ff-4330-bb52-dfe8b4cf0c71" />
 
-<img width="1134" height="826" alt="Screenshot 2025-09-19 123225" src="https://github.com/user-attachments/assets/805f5a0d-520a-496e-8c45-8ef1fb975e61" />
+<img width="567" height="413" alt="Screenshot 2025-09-19 123225" src="https://github.com/user-attachments/assets/805f5a0d-520a-496e-8c45-8ef1fb975e61" />
 
 https://github.com/user-attachments/assets/ca803713-4199-4403-91ac-8b64056ae790
 
