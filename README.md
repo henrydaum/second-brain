@@ -11,7 +11,7 @@
 
 https://github.com/user-attachments/assets/ca803713-4199-4403-91ac-8b64056ae790
 
-Uploading SecondBrainDemoVideo2.mp4…
+https://github.com/user-attachments/assets/38dd0998-328a-4164-8b5e-9ec1a52dcb84
 
 ---
 
