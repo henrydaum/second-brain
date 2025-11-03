@@ -72,6 +72,10 @@ This file must be added (see below) if using Google Drive (optional), as it allo
 
 This CSV is used as a pool for possible image labels. The image labels are chosen based on how close the image embedding is to each label embedding (a categorization task). It was constructed based on Google's Open Images dataset for object identification.
 
+### *Hotkey to Run Second Brain*
+<mark>AIAssistant.ahk</mark>
+*If you want, you can make a shortcut (I do ctrl+j) using AutoHotkey that automatically runs SecondBrainFrontend.py. This makes it very convenient.*
+
 ---
 
 ## Getting Started
