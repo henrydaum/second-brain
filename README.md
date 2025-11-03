@@ -1,7 +1,7 @@
 # Second Brain  
 # *Local RAG Agent* <mark>by Henry Daum</mark>
 
-**If you find any errors, please god let me know.**
+**If you find any errors, please let me know.**
 
 ---
 
