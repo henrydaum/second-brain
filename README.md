@@ -22,7 +22,7 @@ https://github.com/user-attachments/assets/38dd0998-328a-4164-8b5e-9ec1a52dcb84
 - Find similar images: attach an image to find similar looking ones in your filebase and related texts.  
 - Text and image attachments of any size are supported.  
 - Optional AI Mode:  
-  * LLM Integration: Supports local models via LM Studio and cloud models via Gemini.  
+  * LLM Integration: Supports local models via LM Studio and cloud models via OpenAI.  
   * **Retrieval-Augmented Generation (RAG)**: Uses search results to provide AI responses rooted in the knowledge-base.  
   * **AI-Powered Query Expansion:** Generates multiple related search queries to find more comprehensive results.  
   * **AI Result Filtering**: Reranks and filters search results for relevance.  
