@@ -30,6 +30,7 @@ https://github.com/user-attachments/assets/38dd0998-328a-4164-8b5e-9ec1a52dcb84
   * The AI Mode is entirely optional; a search can be run without AI.
 - Sync 100,000+ files.
 - Security and privacy: local search ensures no data is sent to the internet.
+- Works with Google Drive.
 - Open source: all the code is right here.
 
 ---
