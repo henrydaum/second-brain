@@ -36,6 +36,11 @@ https://github.com/user-attachments/assets/38dd0998-328a-4164-8b5e-9ec1a52dcb84
 
 ---
 
+## Infographic of How it Works
+<img width="1206" height="1275" alt="Second Brain Search Flowchart Infographic" src="https://github.com/user-attachments/assets/efdb2226-32c0-4b07-aed7-73aef4188ee1" />
+
+---
+
 ## How It Works  
 ### *Backend Code*  
 <mark>SecondBrainBackend.py</mark>
@@ -174,9 +179,6 @@ dependencies \= \[
 "rank_bm25",
 "requests"  
 \]
-
-## Infographic of How it Works
-<img width="1206" height="1275" alt="Second Brain Search Flowchart Infographic" src="https://github.com/user-attachments/assets/efdb2226-32c0-4b07-aed7-73aef4188ee1" />
 
 ## Hidden Variables
 These can be found in the code to change minor features.
