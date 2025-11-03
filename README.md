@@ -20,10 +20,11 @@ https://github.com/user-attachments/assets/38dd0998-328a-4164-8b5e-9ec1a52dcb84
 - Semantic search: Searches the entire knowledgebase to find information based on deep semantic meaning.
 - Lexical search: find a needle in a haystack using keywords.
 - Supported files: .txt, .pdf, .docx, .gdoc, .png, .jpg, .jpeg, .gif, .webp  
-- Multimodal support: search for both text and images. Vision-enabled LLMs can be used to provide better results.
-- Find similar images: attach an image to find similar looking ones in your filebase and related texts.  
-- Text and image attachments of any size are supported.  
-- Optional AI Mode:  
+- Multimodal in three ways:
+  * Can embed and search for both text and images.
+  * Can attach text documents and images, and use them to search.
+  * Can use AI language models with vision.
+- Optional AI Mode:
   * LLM Integration: Supports local models via LM Studio and cloud models via OpenAI.  
   * **Retrieval-Augmented Generation (RAG)**: Uses search results to provide AI responses rooted in the knowledge-base.  
   * **AI-Powered Query Expansion:** Generates multiple related search queries to find more comprehensive results.  
@@ -31,7 +32,7 @@ https://github.com/user-attachments/assets/38dd0998-328a-4164-8b5e-9ec1a52dcb84
   * **AI Summarization**: Synthesizes information from multiple documents and images into a concise summary.  
   * The AI Mode is optional; a search can be run without AI.
 - Sync 100,000+ files.
-- Security and privacy: local search ensures no data is sent to the internet.  
+- Security and privacy: local search ensures no data is sent to the internet.
 - Open source: all the code is right here.
 
 ---
