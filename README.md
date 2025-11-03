@@ -89,7 +89,7 @@ To start the application, run **SecondBrainFrontend.py** from the project folder
 ## Usage Guide
 
 #### Syncing your files:  
-*Click the Sync Directory button to start embedding the files from your <mark>target_directory</mark>. It can take a while, but is necessary to enable search.
+*Click the Sync Directory button to start embedding the files from your <mark>target_directory</mark>. Depending on the size of the directory, it can take a while (hours), but is necessary to enable search.
 The sync can be cancelled midway through by clicking the *Cancel Sync* button with no consequences. If restarted, the sync will continue where it left off.*
 #### Searching:  
 *Text results are based on relevant chunks of text from the embedding database.
