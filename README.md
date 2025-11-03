@@ -27,7 +27,7 @@ https://github.com/user-attachments/assets/38dd0998-328a-4164-8b5e-9ec1a52dcb84
   * **AI-Powered Query Expansion:** Generates multiple related search queries to find more comprehensive results.  
   * **AI Result Filtering**: Reranks and filters search results for relevance.  
   * **AI Summarization**: Synthesizes information from multiple documents and images into a concise summary.  
-  * The AI Mode is optional; a search can be run without AI for any reason.
+  * The AI Mode is optional; a search can be run without AI if desired.
 - Sync 100,000+ files.
 - Security and privacy: local search ensures no data is sent to the internet.  
 - Open source: all the code is right here.
