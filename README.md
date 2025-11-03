@@ -103,7 +103,7 @@ When enabled, the Second Brain loads the selected LLM from LM Studio or the Open
 *If you attach a text document (.pdf, .docx, etc.) with a query, the app extracts relevant chunks to provide focused context for the search.
 If you attach an image, you can send it to find visually similar images in your database.*
 #### Saving Insights:  
-*If you find that Second Brain has produced a good insight, you can save it for future use. When you click the "Save Insight" button, found after the AI Insights section of a response, the query and response get saved to a .txt file. These text files will be embedded, giving Second Brain a long-term memory of its own contributions. (You can re-read, or delete, an entry by viewing, or deleting, its .txt file, found in the saved_insights folder.)*
+*If you find that Second Brain has produced a good insight, you can save it for future use. When you click the "Save Insight" button, found after the AI Insights section of a response, the query and response get saved to a .txt file. These text files will be embedded, giving Second Brain a long-term memory of its own contributions. (You can re-read or delete entries by going to the saved_insights folder.)*
 
 ---
 
