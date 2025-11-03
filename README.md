@@ -100,7 +100,7 @@ You can click on image results and file paths to open them directly.*
 *Toggle the AI Mode checkbox to enable or disable **LLM augmented search**.
 When enabled, the Second Brain loads the selected LLM from LM Studio or the OpenAI API. Searches are enhanced with AI-generated queries, results are (optionally) filtered by the AI for relevance, and a final "AI Insights" summary is streamed in the results container. It is recommended to use vision-enabled models, since it can help to filter the results and give insights on images. When disabled, the LLM is unloaded to save system resources, and the app performs a direct vector/lexical search with no query expansion, filtering, or summary.*
 #### Attaching files:  
-*If you attach a text document (.pdf, .docx, etc.) with a query, the app extracts relevant chunks to provide focused context for the search.
+*If you attach a text document (.pdf, .docx, etc.) with a query, the entire text will be added if it is below a certain size (see below - max_attachment_size). If it is too large, it extracts relevant chunks to provide focused context for the search.
 If you attach an image, you can send it to find visually similar images in your database.*
 #### Saving Insights:  
 *If you find that Second Brain has produced a good insight, you can save it for future use. When you click the "Save Insight" button, found after the AI Insights section of a response, the query and response get saved to a .txt file. These text files will be embedded, giving Second Brain a long-term memory of its own contributions. (You can re-read or delete entries by going to the saved_insights folder.)*
