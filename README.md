@@ -143,7 +143,7 @@ config.json
 
 *You can install the Python dependencies with the following command:*
 
-```pip install flet python-docx numpy chromadb torch Pillow requests transformers langchain sentence-transformers scipy fitz```
+```pip install flet python-docx numpy chromadb torch Pillow requests transformers langchain sentence-transformers scipy fitz langchain_core```
 
 dependencies \= \[  
 "fitz",
@@ -153,7 +153,8 @@ dependencies \= \[
 "torch==2.8.0",  
 "numpy",  
 "scipy",  
-"transformers==4.56.1",  
+"transformers==4.56.1",
+"langchain_core",
 "langchain-text-splitters==0.3.11",  
 "sentence-transformers==5.1.0",  
 "lmstudio==1.5.0",  
