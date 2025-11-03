@@ -20,7 +20,7 @@ https://github.com/user-attachments/assets/38dd0998-328a-4164-8b5e-9ec1a52dcb84
 - Supported files: .txt, .pdf, .docx, .gdoc, .png, .jpg, .jpeg, .gif, .webp  
 - Multimodal support: search for both text and images. Vision-enabled LLMs can be used to provide better results.
 - Find similar images: attach an image to find similar looking ones in your filebase.  
-- Attachments of any size are supported.  
+- Text and image attachments of any size are supported.  
 - Optional AI Mode:  
   * LLM Integration: Supports local models via LM Studio and cloud models via Gemini.  
   * **Retrieval-Augmented Generation (RAG)**: Uses search results to provide AI responses rooted in the knowledge-base.  
