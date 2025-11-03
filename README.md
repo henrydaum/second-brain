@@ -47,7 +47,7 @@ This file handles two things: syncing the directory and performing searches.
 ### *Frontend Code*  
 <mark>SecondBrainFrontend.py</mark>
 
-The frontend code controls the user interface for the application. It controls threading for non-blocking backend operations, prompting patterns for the AI, and logging functions. Finds the most relevant parts of text attachments, ensures smooth user experience, and integrates the backend. Allows the user to send messages in a chat-like format. Performs many different functions simultaneously, and orchestrates blocking and re-enabling different buttons at different times to prevent crashes. *Looks good, too, if I may say so myself.*
+The frontend code controls the user interface for the application. It controls threading for non-blocking backend operations, prompting patterns for the AI, and logging functions. Manages data from text and image attachments to construct complex prompts for the LLM, and to ensure a smooth user experience. Allows the user to send messages in a chat-like format. Performs many different functions simultaneously, and orchestrates blocking and re-enabling different buttons at different times to prevent crashes. It is also designed to look fabulous, and has optional button visibility to maximize aesthetics.
 
 ### *Settings*  
 <mark>config.json</mark>
@@ -62,7 +62,7 @@ This file must be added if using Google Drive (optional), as it allows the synci
 ### *Image Labels*
 <mark>image_labels.csv</mark>
 
-This CSV is used as a pool for possible image labels. The image labels are chosen based on how close the image embedding is to each label embedding (a categorization task).
+This CSV is used as a pool for possible image labels. The image labels are chosen based on how close the image embedding is to each label embedding (a categorization task). It was constructed based on Google's Open Images dataset for object identification.
 
 ---
 
