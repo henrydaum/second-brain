@@ -47,7 +47,7 @@ This file handles two things: syncing the directory and performing searches.
 ### *Frontend Code*  
 <mark>SecondBrainFrontend.py</mark>
 
-The frontend code controls the user interface for the application. It controls threading for non-blocking backend operations, prompting patterns for the AI, and logging functions. Manages data from text and image attachments to construct complex prompts for the LLM, and to ensure a smooth user experience. Allows the user to send messages in a chat-like format. Performs many different functions simultaneously, and orchestrates blocking and re-enabling different buttons at different times to prevent crashes. It is also designed to look fabulous, and has optional button visibility to maximize aesthetics.
+The frontend code controls the user interface for the application. It controls threading for non-blocking backend operations, prompting patterns for the AI, and logging functions. Manages data from text and image attachments to construct complex prompts for the LLM, and to ensure a smooth user experience. Allows the user to send messages in a chat-like format. Performs many different functions simultaneously, and orchestrates blocking and re-enabling different buttons at different times to prevent crashes. *Looks good, too, if I may say so myself.*
 
 Uniquely, image and text results can be attached in order to perform continous searches, like web-surfing but through your own filebase. There is no other experience exactly like it. Simply click on an image result or the four squares by a text result and then click "attach result." Other similar amenities are available in the app.
 
