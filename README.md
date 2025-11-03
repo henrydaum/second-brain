@@ -47,14 +47,14 @@ This file handles two things: syncing the directory and performing searches.
 ### *Frontend Code*  
 <mark>SecondBrainFrontend.py</mark>
 
-The frontend code controls the user interface for the application. It controls threading for non-blocking backend operations, prompting patterns for the AI, and logging functions. Manages data from text and image attachments to construct complex prompts for the LLM, and to ensure a smooth user experience. Allows the user to send messages in a chat-like format. Performs many different functions simultaneously, and orchestrates blocking and re-enabling different buttons at different times to prevent crashes. *Looks good, too, if I may say so myself.*
+The frontend code controls the user interface for the application. It controls threading for non-blocking backend operations, prompting patterns for the AI, and logging functions. Manages data from text and image attachments to construct complex prompts for the LLM. Allows the user to send messages in a chat-like format. Performs many different functions simultaneously, and orchestrates blocking and re-enabling different buttons at different times to prevent crashes. *Looks good, too, if I may say so myself.*
 
 Uniquely, image and text results can be attached in order to perform continous searches, like web-surfing but through your own filebase. There is no other experience exactly like it. Simply click on an image result or the four squares by a text result and then click "attach result." Other similar amenities are available in the app.
 
 ### *Settings*  
 <mark>config.json</mark>
 
-This file can be edited by the user and changes the features of Second Brain (see below).
+This file can be edited by the user and changes the cool features of Second Brain (see below).
 
 ### *Google Drive Authentication*  
 <mark>credentials.json</mark>
@@ -82,9 +82,9 @@ Download ```SecondBrainBackend```, ```SecondBrainFrontend```, ```config.json```,
 ### 3. Configuration
 Open ```config.json``` and update the <mark>target_directory</mark> to point to the folder you want to use as your knowledge base.
 
-(Optional) To enable Google Doc syncing, follow the [Google Cloud API](https://developers.google.com/workspace/drive/api/guides/about-sdk) instructions to get a ```credentials.json``` file using OAuth. Either place the file in the project directory, or place it somewhere else and update <mark>credentials_path</mark> in ```config.json``` to point to it. The first time you sync, a browser window will open for you to authorize the application. Authentication is very finnicky and it might be necessary to delete the authorization token (```token.json```) and then reauthorize to get Drive syncing to work. You can do this with the "Reauthorize Drive" button.
+(Optional - skip if irrelevant) To enable Google Doc syncing, follow the [Google Cloud API](https://developers.google.com/workspace/drive/api/guides/about-sdk) instructions to get a ```credentials.json``` file using OAuth. Either place the file in the project directory, or place it somewhere else and update <mark>credentials_path</mark> in ```config.json``` to point to it. The first time you sync, a browser window will open for you to authorize the application. Authentication is very finnicky and it might be necessary to delete the authorization token (```token.json```) and then reauthorize to get Drive syncing to work. You can do this with the "Reauthorize Drive" button.
 ### 4. Running the application
-To start the application, run **SecondBrainFrontend.py** from the project folder. The first run may take a while to download all the dependencies.
+To start the application, run **SecondBrainFrontend.py** from the project folder. During the first run, it may take a while to download the models.
 
 ---
 
@@ -95,15 +95,16 @@ To start the application, run **SecondBrainFrontend.py** from the project folder
 The sync can be cancelled midway through by clicking the *Cancel Sync* button with no consequences. If restarted, the sync will continue where it left off.*
 #### Searching:  
 *Text results are based on relevant chunks of text from the embedding database.
-You can click on image results and file paths to open them directly.*
+You can click on image results and file paths to open them directly, attach them, see their parent folder, or copy their path.*
 #### Using AI mode:  
 *Toggle the AI Mode checkbox to enable or disable **LLM augmented search**.
-When enabled, the Second Brain loads the selected LLM from LM Studio or the OpenAI API. Searches are enhanced with AI-generated queries, results are (optionally) filtered by the AI for relevance, and a final "AI Insights" summary is streamed in the results container. It is recommended to use vision-enabled models, since it can help to filter the results and give insights on images. When disabled, the LLM is unloaded to save system resources, and the app performs a direct vector/lexical search with no query expansion, filtering, or summary.*
+When enabled, the Second Brain loads the selected LLM from LM Studio or the OpenAI API. Searches are (optionally) enhanced with AI-generated queries, results are (optionally) filtered by the AI for relevance, and a final "AI Insights" summary is always streamed in the results container, when AI Mode is active. It is optional but recommended to use vision-enabled models, since it is needed to filter images and give insights on them. When disabled, the LLM is unloaded to save system resources, and the app performs a direct vector/lexical search with no query expansion, filtering, or summary.*
 #### Attaching files:  
-*If you attach a text document (.pdf, .docx, etc.) with a query, the entire text will be added if it is below a certain size (see below - max_attachment_size). If it is too large, it extracts relevant chunks to provide focused context for the search.
-If you attach an image, you can send it to find visually similar images in your database.*
+*If you attach a text document (.pdf, .docx, etc.) with a query, the entire text will be added if it is below a certain size (see config: max_attachment_size). If it is too large, it extracts several relevant chunks to provide focused context for the search.
+If you attach an image, you can send it to find visually similar images in your database and related documents.
+You can send an attachment without a message.*
 #### Saving Insights:  
-*If you find that Second Brain has produced a good insight, you can save it for future use. When you click the "Save Insight" button, found after the AI Insights section of a response, the query and response get saved to a .txt file. These text files will be embedded, giving Second Brain a long-term memory of its own contributions. (You can re-read or delete entries by going to the saved_insights folder.)*
+*If you find that Second Brain has produced a good insight, you can save it for future use. When you click the "Save Insight" button, found after the AI Insights section of a response, the query and response get saved to a .txt file. These text files will be embedded, which gives Second Brain a long-term memory of its own contributions. (You can re-read or delete entries by going to the saved_insights folder, in the Second Brain directory.)*
 
 ---
 
