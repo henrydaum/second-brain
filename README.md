@@ -46,7 +46,7 @@ https://github.com/user-attachments/assets/38dd0998-328a-4164-8b5e-9ec1a52dcb84
 
 This file handles two things: syncing the directory and performing searches. 
 
-**Syncing:** Scans the target directory, detects new, updated, or deleted files. Extracts text from files and splits it into manageable chunks, while also batching images together for the sake of speed. Converts text chunks and images into vector embeddings using sentence-transformer models. Stores embeddings in a persistent ChromaDB vector database. To enable lexical search, image captions are created and stored along with image embeddings. A lexical database of both text documents and image captions is created using BM25.
+**Syncing:** Scans the target directory, detects new, updated, or deleted files. Extracts text from files and splits it into manageable chunks, while also batching images together for the sake of speed. Converts text chunks and images into vector embeddings using sentence-transformer models. Stores embeddings in a persistent ChromaDB vector database. To enable lexical search, image captions are created and stored along with image embeddings. A lexical index of both text documents and image captions is created using BM25 for lexical search.
 
 **Retrieval**: Performs both a semantic and lexical search, then combines the outputs, reranks all results using Maximal Marginal Relevance (MMR), takes the top N outputs, and finally filters for relevance using AI (last step optional).
 
