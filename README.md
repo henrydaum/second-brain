@@ -65,7 +65,7 @@ This file can be edited by the user and changes the cool features of Second Brai
 ### *Google Drive Authentication*  
 <mark>credentials.json</mark>
 
-This file must be added if using Google Drive (optional), as it allows the syncing of Google Doc (.gdoc) files.
+This file must be added (see below) if using Google Drive (optional), as it allows the syncing of Google Doc (.gdoc) files.
 
 ### *Image Labels*
 <mark>image_labels.csv</mark>
