@@ -74,7 +74,7 @@ This CSV is used as a pool for possible image labels. The image labels are chose
 
 ### *Hotkey to Run Second Brain*
 <mark>AIAssistant.ahk</mark>
-*If you want, you can make a shortcut (I do ctrl+j) using AutoHotkey that automatically runs SecondBrainFrontend.py. This makes it very convenient.*
+*If you want, you can make a shortcut (I do ctrl+j) using AutoHotkey that automatically runs SecondBrainFrontend.py. This makes it very convenient. To do this, edit it so that the path points to where your SecondBrain folder is, and you'll need to download AutoHotkey itself. It's also good to place the script inside your startup files, which you can find (on Windows) using Win+R and then typing `shell:startup`.*
 
 ---
 
