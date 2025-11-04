@@ -162,7 +162,7 @@ config.json
 ```pip install flet python-docx numpy chromadb torch Pillow requests transformers langchain sentence-transformers scipy fitz langchain_core```
 
 dependencies \= \[  
-"fitz",
+"fitz",  
 "flet",  
 "PyPDF2",  
 "chromadb==1.0.20",  
@@ -179,8 +179,8 @@ dependencies \= \[
 "google-api-python-client",  
 "google-auth",  
 "google-auth-oauthlib",  
-"google-generativeai==0.8.5",
-"rank_bm25",
+"google-generativeai==0.8.5",  
+"rank_bm25",  
 "requests"  
 \]
 
