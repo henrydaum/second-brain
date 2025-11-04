@@ -17,8 +17,8 @@ https://github.com/user-attachments/assets/38dd0998-328a-4164-8b5e-9ec1a52dcb84
 
 ## Features
 
-- Semantic search: Searches based on deep semantic meaning.
-- Lexical search: find a needle in a haystack using keywords.
+- Semantic search: searches based on deep semantic meaning.
+- Lexical search: finds a needle in a haystack using keywords.
 - Supported files: .txt, .pdf, .docx, .gdoc, .png, .jpg, .jpeg, .gif, .webp  
 - Multimodal in three ways:
   * Can embed and search for both text and images.
