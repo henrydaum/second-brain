@@ -159,26 +159,26 @@ config.json
 
 *You can install the Python dependencies with the following command:*
 
-```pip install requests PyMuPDF chromadb python-docx rank_bm25 flet numpy Pillow langchain transformers sentence-transformers scipy langchain-text-splitters openai lmstudio google-auth-oauthlib google-api-python-client torch```
+```pip install requests PyMuPDF chromadb python-docx rank_bm25 flet numpy Pillow langchain_core transformers sentence-transformers scipy langchain-text-splitters openai lmstudio google-auth-oauthlib google-api-python-client torch```
 
-   requests
-   PyMuPDF
-   chromadb
-   python-docx
-   rank_bm25
-   flet
-   numpy
-   Pillow
-   langchain
-   transformers
-   sentence-transformers
-   scipy
-   langchain-text-splitters
-   openai
-   lmstudio
-   google-auth-oauthlib
-   google-api-python-client
-   torch
+   requests  
+   PyMuPDF  
+   chromadb  
+   python-docx  
+   rank_bm25  
+   flet  
+   numpy  
+   Pillow  
+   langchain_core  
+   transformers  
+   sentence-transformers  
+   scipy  
+   langchain-text-splitters  
+   openai  
+   lmstudio  
+   google-auth-oauthlib  
+   google-api-python-client  
+   torch  
 
 ## Hidden Variables
 These can be found in the code to change minor features.
