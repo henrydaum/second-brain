@@ -159,30 +159,26 @@ config.json
 
 *You can install the Python dependencies with the following command:*
 
-```pip install flet python-docx numpy chromadb torch Pillow requests transformers langchain sentence-transformers scipy fitz langchain_core```
+```pip install requests PyMuPDF chromadb python-docx rank_bm25 flet numpy Pillow langchain transformers sentence-transformers scipy langchain-text-splitters openai lmstudio google-auth-oauthlib google-api-python-client torch```
 
-dependencies \= \[  
-"fitz",  
-"flet",  
-"PyPDF2",  
-"chromadb==1.0.20",  
-"torch==2.8.0",  
-"numpy",  
-"scipy",  
-"transformers==4.56.1",  
-"langchain_core",  
-"langchain-text-splitters==0.3.11",    
-"sentence-transformers==5.1.0",  
-"lmstudio==1.5.0",  
-"python-docx",  
-"Pillow",  
-"google-api-python-client",  
-"google-auth",  
-"google-auth-oauthlib",  
-"google-generativeai==0.8.5",  
-"rank_bm25",  
-"requests"  
-\]
+   requests
+   PyMuPDF
+   chromadb
+   python-docx
+   rank_bm25
+   flet
+   numpy
+   Pillow
+   langchain
+   transformers
+   sentence-transformers
+   scipy
+   langchain-text-splitters
+   openai
+   lmstudio
+   google-auth-oauthlib
+   google-api-python-client
+   torch
 
 ## Hidden Variables
 These can be found in the code to change minor features.
