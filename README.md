@@ -88,7 +88,7 @@ Before running the application, ensure you have the following:
    - Dependencies: Install the required Python libraries (see below - dependencies) using pip.
    - System requirements: The search engine can be used with GPU or CPU. It will automatically detect if a GPU exists and use it if available. Different text and image embedding models use different amounts of memory, and can be configured. For example, the default models use 2GB of VRAM/RAM.
 ### 2. Installation
-Download ```SecondBrainBackend```, ```SecondBrainFrontend```, ```config.json```, and ```image_labels.csv``` from this repository. Only these four files are needed. Not bad, right? Place them in a folder.
+Download ```SecondBrainBackend```, ```SecondBrainFrontend```, ```config.json```, and ```image_labels.csv``` from this repository. Only these four files are needed. Not bad, right? Place them in a folder. **Note: An installer is on the way!**
 ### 3. Configuration
 Open ```config.json``` and update the <mark>target_directory</mark> to point to the folder you want to use as your knowledge base.
 
