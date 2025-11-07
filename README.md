@@ -2,6 +2,7 @@
 # *Local RAG Agent* <mark>by Henry Daum</mark>
 
 **If you find any errors, please let me know.**
+
 NEW: You can download the *Installer* for Second Brain at [this Google drive link](https://drive.google.com/file/d/1SjsL2GHSH2nplZ9NIpKSq3B7fnDPXyx_/view?usp=sharing) (if you trust it...)
 
 ---
