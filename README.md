@@ -3,7 +3,7 @@
 
 **If you find any errors, please let me know.**
 
-NEW: You can download the *Installer* for Second Brain at [this Google drive link](https://drive.google.com/file/d/1SjsL2GHSH2nplZ9NIpKSq3B7fnDPXyx_/view?usp=sharing) (if you trust it...)
+NEW: You can download the *Installer* for Second Brain at [this Google drive link](https://drive.google.com/file/d/1SjsL2GHSH2nplZ9NIpKSq3B7fnDPXyx_/view?usp=sharing) (If you trust it, which I'm not assuming everybody will. If you don't, you can install it manually with the instructions below.)
 
 ---
 
