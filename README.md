@@ -7,7 +7,7 @@
 1. There is now an interactive settings page, and it's not necessary to download `config.json` now.
 2. OpenAI API keys are encrypted and saved using keyring.
 3. There is now a smooth and good-looking loading bar.
-4. A smoother download experience for embedding models.
+4. A better download experience for embedding models.
 5. Numerous tiny quality-of-life changes.
 
 ---
@@ -67,7 +67,7 @@ Uniquely, image and text results can be attached in order to perform continous s
 ### *Settings*  
 <mark>config.json</mark>
 
-This file is now created automatically by Second Brain and controls various features. The settings page in the main flet app shows these features and allows the user to change them without opening a confusing .json file. The new settings page looks great and makes using the app much smoother.
+This file is now created automatically by Second Brain and controls various features. The Settings page in the main flet app shows these features and allows the user to change them without opening a confusing .json file. The new settings page looks great and makes using the app much smoother.
 
 ### *Google Drive Authentication*  
 <mark>credentials.json</mark>
@@ -104,7 +104,7 @@ Download ```SecondBrainBackend```, ```SecondBrainFrontend```, ```icon.ico```, an
 ### 3. Configuration
 On the welcome screen, or in the settings, update the <mark>Sync Directory</mark> to point to the folder you want to use as your knowledge base.
 
-(Optional - skip if irrelevant) To enable Google Doc syncing, follow the [Google Cloud API](https://developers.google.com/workspace/drive/api/guides/about-sdk) instructions to get a ```credentials.json``` file using OAuth. Either place the file in the project directory, or place it somewhere else and update <mark>credentials_path</mark> in ```config.json``` to point to it. The first time you sync, a browser window will open for you to authorize the application. Authentication is very finnicky and it might be necessary to delete the authorization token (```token.json```) and then reauthorize to get Drive syncing to work. You can do this with the "Reauthorize Drive" button.
+(Optional - skip if irrelevant) To enable Google Doc syncing, follow the [Google Cloud API](https://developers.google.com/workspace/drive/api/guides/about-sdk) instructions to get a ```credentials.json``` file using OAuth. Either place the file in the project directory, or place it somewhere else and update <mark>Path to credentials.json</mark> in the settings. The first time you sync, a browser window will open for you to authorize the application. Authentication is very finnicky and it might be necessary to delete the authorization token (```token.json```) and then reauthorize to get Drive syncing to work. You can do this with the "Reauthorize Drive" button.
 ### 4. Running the application
 To start the application, run **SecondBrainFrontend.py** from the project folder. During the first run, it may take a while to download the models.
 
@@ -113,7 +113,7 @@ To start the application, run **SecondBrainFrontend.py** from the project folder
 ## Usage Guide
 
 #### Syncing your files:  
-*Click the Sync Directory button to start embedding the files from your <mark>target_directory</mark>. Depending on the size of the directory, it can take a while (hours), but is necessary to enable search.
+*Click the Sync Directory button to start embedding the files from your <mark>Sync Directory</mark>. Depending on the size of the directory, it can take a while (hours), but is necessary to enable search. This is faster with CUDA.
 The sync can be cancelled midway through by clicking the *Cancel Sync* button with no consequences. If restarted, the sync will continue where it left off.*
 #### Searching:  
 *Text results are based on relevant chunks of text from the embedding database.
@@ -132,6 +132,8 @@ You can send an attachment without a message.*
 
 ## Configuration Details  
 config.json
+
+Most of these settings can be controlled using the Settings page, but it is also possible to open the actual file to change some of the more obscure settings, like `synthesize\_results\_prompt`.
 
 | Parameter Name | Function | Range | Default |
 | ----- | ----- | ----- | ----- |
@@ -174,7 +176,7 @@ config.json
 ```pip install requests PyMuPDF chromadb python-docx rank_bm25 flet numpy Pillow langchain_core transformers sentence-transformers scipy langchain-text-splitters openai lmstudio google-auth-oauthlib google-api-python-client torch```
 
    requests  
-   PyMuPDF  
+   pdfminer.six  
    chromadb  
    python-docx  
    rank_bm25  
