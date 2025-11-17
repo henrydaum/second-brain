@@ -66,7 +66,7 @@ Uniquely, image and text results can be attached in order to perform continous s
 ### *Settings*  
 <mark>config.json</mark>
 
-This file is now created automatically by Second Brain and controls various features. It can be changed by going into the Settings page of the app and then clicking `Save & Close`, which reloads the backend to implement the changes.
+This file is now created automatically by Second Brain and controls various features. It is changed by going into the Settings page, changing a setting, and then clicking `Save & Close`, which reloads the backend to implement the changes.
 
 ### *Google Drive Authentication*  
 <mark>credentials.json</mark>
@@ -119,9 +119,9 @@ The sync can be cancelled midway through by clicking the *Cancel Sync* button wi
 You can click on image results and file paths to open them directly, attach them, see their parent folder, or copy their path.*
 #### Using AI mode:  
 *Toggle the AI Mode checkbox to enable or disable **LLM augmented search**.
-When enabled, Second Brain loads the selected LLM from LM Studio or the OpenAI API. Then, searches are enhanced with AI-generated queries, results are filtered by the AI based on relevance, and a final "AI Insights" summary is always streamed in the results container. It is optional but recommended to use vision-enabled models, since it is needed to filter images and give insights on them. When disabled, the LLM is unloaded to save system resources, and the app performs a direct vector/lexical search with no query expansion, filtering, or summary. It is possible to toggle query expansion and filtering (see config: query_expansion and llm_filter_results).*
+When enabled, Second Brain loads the selected LLM from LM Studio or the OpenAI API. Then, searches are enhanced with AI-generated queries, results are filtered by the AI based on relevance, and a final "AI Insights" summary is always streamed in the results container. It is optional but recommended to use vision-enabled models, since it is needed to filter images and give insights on them. When disabled, the LLM is unloaded to save system resources, and the app performs a direct vector/lexical search with no query expansion, filtering, or summary. It is possible to toggle query expansion and filtering (go to Settings: LLM Query Expansion and LLM Filtering).*
 #### Attaching files:  
-*If you attach a text document (.pdf, .docx, etc.), the entire text will be added if it is below a certain size (see config: max_attachment_size). If it is too large, it extracts several relevant chunks to provide focused context for the search.
+*If you attach a text document (.pdf, .docx, etc.), the entire text will be added if it is below a certain size (see Settings: Max Attachment Size). If it is too large, it extracts several relevant chunks to provide focused context for the search.
 If you attach an image, you can send it to find visually similar images in your database and related documents.
 You can send an attachment without a message.*
 #### Saving Insights:  
