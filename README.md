@@ -3,7 +3,12 @@
 
 **If you find any errors, please let me know.**
 
-Since getting Python packages into the Microsoft store isn't possible due to their packaging software, I'm putting the complete app onto here for free, for anyone to use and improve on.
+(2025-11-17) I've made some major improvements on the app:
+1. There is now an interactive settings page, and it's not necessary to download `config.json` now.
+2. OpenAI API keys are encrypted and saved using keyring.
+3. There is now a smooth and good-looking loading bar.
+4. A smoother download experience for embedding models.
+5. Numerous tiny quality-of-life changes.
 
 ---
 
@@ -62,7 +67,7 @@ Uniquely, image and text results can be attached in order to perform continous s
 ### *Settings*  
 <mark>config.json</mark>
 
-This file can be edited by the user and changes the cool features of Second Brain (see below).
+This file is now created automatically by Second Brain and controls various features. The settings page in the main flet app shows these features and allows the user to change them without opening a confusing .json file. The new settings page looks great and makes using the app much smoother.
 
 ### *Google Drive Authentication*  
 <mark>credentials.json</mark>
@@ -73,6 +78,11 @@ This file must be added (see below) if using Google Drive (optional), as it allo
 <mark>image_labels.csv</mark>
 
 This CSV is used as a pool for possible image labels. The image labels are chosen based on how close the image embedding is to each label embedding (a categorization task). It was constructed based on Google's Open Images dataset for object identification.
+
+### *Image Labels*
+<mark>icon.ico</mark>
+
+The Second Brain logo, used as the window icon for aesthetic purposes.
 
 ### *Hotkey to Run Second Brain*
 <mark>SecondBrainHotkey.ahk</mark>
@@ -90,10 +100,9 @@ Before running the application, ensure you have the following:
    - Dependencies: Install the required Python libraries (see below - dependencies) using pip.
    - System requirements: The search engine can be used with GPU or CPU. It will automatically detect if a GPU exists and use it if available. Different text and image embedding models use different amounts of memory, and can be configured. For example, the default models use 2GB of VRAM/RAM.
 ### 2. Installation
-Download ```SecondBrainBackend```, ```SecondBrainFrontend```, ```config.json```, and ```image_labels.csv``` from this repository. Only these four files are needed. Not bad, right? Place them in a folder. 
-**---Note: An installer is in the works!---**
+Download ```SecondBrainBackend```, ```SecondBrainFrontend```, ```icon.ico```, and ```image_labels.csv``` from this repository. Only these four files are needed. Not bad, right? Place them in a folder.
 ### 3. Configuration
-Open ```config.json``` and update the <mark>target_directory</mark> to point to the folder you want to use as your knowledge base.
+On the welcome screen, or in the settings, update the <mark>Sync Directory</mark> to point to the folder you want to use as your knowledge base.
 
 (Optional - skip if irrelevant) To enable Google Doc syncing, follow the [Google Cloud API](https://developers.google.com/workspace/drive/api/guides/about-sdk) instructions to get a ```credentials.json``` file using OAuth. Either place the file in the project directory, or place it somewhere else and update <mark>credentials_path</mark> in ```config.json``` to point to it. The first time you sync, a browser window will open for you to authorize the application. Authentication is very finnicky and it might be necessary to delete the authorization token (```token.json```) and then reauthorize to get Drive syncing to work. You can do this with the "Reauthorize Drive" button.
 ### 4. Running the application
