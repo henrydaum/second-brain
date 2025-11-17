@@ -173,7 +173,7 @@ Most of these settings can be controlled using the Settings page, but it is also
 
 *You can install the Python dependencies with the following command:*
 
-```pip install requests PyMuPDF chromadb python-docx rank_bm25 flet numpy Pillow langchain_core transformers sentence-transformers scipy langchain-text-splitters openai lmstudio google-auth-oauthlib google-api-python-client torch```
+```pip install requests pdfminer.six chromadb python-docx rank_bm25 flet numpy Pillow langchain_core transformers sentence-transformers scipy langchain-text-splitters openai lmstudio google-auth-oauthlib google-api-python-client torch keyring```
 
    requests  
    pdfminer.six  
@@ -192,7 +192,8 @@ Most of these settings can be controlled using the Settings page, but it is also
    lmstudio  
    google-auth-oauthlib  
    google-api-python-client  
-   torch  
+   torch (if using GPU, you need to download the version that works with your CUDA toolkit)  
+   keyring  
 
 ## Hidden Variables
 These can be found in the code to change minor features.
