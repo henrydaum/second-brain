@@ -81,7 +81,7 @@ This CSV is used as a pool for possible image labels. The image labels are chose
 ### *Image Labels*
 <mark>icon.ico</mark>
 
-The Second Brain logo, used as the window icon.
+(Optional) The Second Brain logo, used as the window icon.
 
 ### *Hotkey to Run Second Brain*
 <mark>SecondBrainHotkey.ahk</mark>
