@@ -7,8 +7,7 @@
 1. There is now an interactive settings page.
 2. OpenAI API keys are encrypted and saved using keyring.
 3. There is now a smooth and good-looking loading bar.
-4. A better experience for trying out different embedding models.
-5. Tiny quality-of-life changes.
+4. Embedding models can now be bundled with the app.
 
 ---
 
