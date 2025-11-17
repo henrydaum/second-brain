@@ -67,7 +67,7 @@ Uniquely, image and text results can be attached in order to perform continous s
 ### *Settings*  
 <mark>config.json</mark>
 
-This file is now created automatically by Second Brain and controls various features. The Settings page in the main flet app shows these features and allows the user to change them without opening a confusing .json file. The new settings page looks great and makes using the app much smoother.
+This file is now created automatically by Second Brain and controls various features. It can be changed in the Settings page of the app by changing a feature and clicking `Save & Close`, which will reload the backend to apply the changes.
 
 ### *Google Drive Authentication*  
 <mark>credentials.json</mark>
@@ -82,7 +82,7 @@ This CSV is used as a pool for possible image labels. The image labels are chose
 ### *Image Labels*
 <mark>icon.ico</mark>
 
-The Second Brain logo, used as the window icon for aesthetic purposes.
+The Second Brain logo, used as the window icon.
 
 ### *Hotkey to Run Second Brain*
 <mark>SecondBrainHotkey.ahk</mark>
