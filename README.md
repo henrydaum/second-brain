@@ -7,7 +7,7 @@
 1. There is now an interactive settings page, and it's not necessary to download `config.json` now.
 2. OpenAI API keys are encrypted and saved using keyring.
 3. There is now a smooth and good-looking loading bar.
-4. A better download experience for embedding models.
+4. A better experience for trying out different embedding models.
 5. Numerous tiny quality-of-life changes.
 
 ---
