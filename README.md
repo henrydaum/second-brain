@@ -7,7 +7,7 @@
 1. There is now an interactive settings page.
 2. OpenAI API keys are encrypted and saved using keyring.
 3. There is now a smooth and good-looking loading bar.
-4. The system for downloading and using embedding models is more robust.
+4. Downloading and using embedding models is easier.
 
 ---
 
