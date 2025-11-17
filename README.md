@@ -60,14 +60,14 @@ This file handles two things: syncing the directory and performing searches.
 ### *Frontend Code*  
 <mark>SecondBrainFrontend.py</mark>
 
-The frontend code controls the user interface for the application. It controls threading for non-blocking backend operations, prompting patterns for the AI, and logging functions. Manages text and image attachments to construct complex prompts for the LLM. Allows the user to send messages in a chat-like format. Performs many different functions simultaneously, and orchestrates blocking and re-enabling different buttons at different times to prevent crashes. *Looks good, too, if I may say so myself.*
+The frontend code controls the user interface for the application. It controls threading for non-blocking backend operations, prompting patterns for the AI, and logging functions. Manages text and image attachments to construct complex prompts for the LLM. Allows the user to send messages in a chat-like format. Provides an interactive settings page. Performs many different functions simultaneously, and orchestrates blocking and re-enabling different buttons at different times to prevent crashes. *Looks good, too, if I may say so myself.*
 
 Uniquely, image and text results can be attached in order to perform continous searches, like web-surfing but through your own filebase. There is no other experience exactly like it. Simply click on an image result or the four squares by a text result and then click "attach result." Other similar amenities are available in the app.
 
 ### *Settings*  
 <mark>config.json</mark>
 
-This file is now created automatically by Second Brain and controls various features. It can be changed in the Settings page of the app by changing a feature and clicking `Save & Close`, which will reload the backend to apply the changes.
+This file is now created automatically by Second Brain and controls various features. It can be changed by going into the Settings page of the app and then clicking `Save & Close`, which reloads the backend to implement the changes.
 
 ### *Google Drive Authentication*  
 <mark>credentials.json</mark>
@@ -133,7 +133,7 @@ You can send an attachment without a message.*
 ## Configuration Details  
 config.json
 
-Most of these settings can be controlled using the Settings page, but it is also possible to open the actual file to change some of the more obscure settings, like `synthesize\_results\_prompt`.
+Most of these settings can be controlled using the Settings page, but it is also possible to open the actual file to change some of the more obscure settings, like `synthesize\_results\_prompt`, if desired.
 
 | Parameter Name | Function | Range | Default |
 | ----- | ----- | ----- | ----- |
