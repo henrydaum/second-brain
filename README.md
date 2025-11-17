@@ -4,11 +4,11 @@
 **If you find any errors, please let me know.**
 
 (2025-11-17) I've made some major improvements on the app:
-1. There is now an interactive settings page, and it's not necessary to download `config.json` now.
+1. There is now an interactive settings page.
 2. OpenAI API keys are encrypted and saved using keyring.
 3. There is now a smooth and good-looking loading bar.
 4. A better experience for trying out different embedding models.
-5. Numerous tiny quality-of-life changes.
+5. Tiny quality-of-life changes.
 
 ---
 
