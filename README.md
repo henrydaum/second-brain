@@ -3,7 +3,7 @@
 
 **If you find any errors, please let me know.**
 
-(2025-11-17) New changes:
+(2025-11-17) I have been working hard on some updates:
 1. There is now an interactive settings page.
 2. OpenAI API keys are encrypted and saved using keyring.
 3. There is now a smooth and good-looking loading bar.
