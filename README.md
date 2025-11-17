@@ -149,7 +149,8 @@ Most of these settings can be controlled using the Settings page, but it is also
 | mmr\_alpha | The MMR rerank uses a hybrid semantic-lexical diversity metric. An mmr\_alpha of 0.0 prioritizes lexical diversity, while 1.0 is for using only semantic diversity in choosing how to rerank. | 0.0-1.0 | 0.5 |
 | search\_multiplier | How many results to find for each query. | At least 1 | 5 |
 | ai\_mode | Whether to use AI to aid in searches. | true or false | true |
-| show\_buttons | Whether to show the button row at the top. | true or false | true |
+| ai\_mode | Whether to show the top button bar. | true or false | true |
+| show\_buttons | Whether to show the button row at the top. Controlled by the button on the bottom left in the main screen. | true or false | true |
 | llm_filter_results | Filtering results is somewhat slow. This gives the option to turn that part of ai_mode on/off. | true or false | false |
 | llm\_backend | Choose which AI backend to use. OpenAI is slower and not local but has smarter models. | “LM Studio” or "OpenAI" | "LM Studio" |
 | lms\_model\_name | Can be any language model from LM Studio, but it must be already downloaded. Vision is preferred. | Any valid name | "unsloth/gemma-3-4b-it" |
