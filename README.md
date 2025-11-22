@@ -3,6 +3,8 @@
 
 **If you find any errors, please let me know.**
 
+[Second Brain Official Website](henrydaum.site)
+
 ---
 
 ## Screenshots & GIFs
