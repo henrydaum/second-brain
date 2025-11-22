@@ -3,7 +3,7 @@
 
 **If you find any errors, please let me know.**
 
-[Second Brain Official Website](henrydaum.site)
+[Second Brain Official Website](https://www.henrydaum.site/)
 
 ---
 
