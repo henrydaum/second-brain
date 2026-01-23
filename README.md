@@ -5,6 +5,8 @@
 
 [Second Brain Official Website](https://www.henrydaum.site/)
 
+[The New and Updated Version (6x faster!)](https://github.com/henrydaum/2nd-Brain)
+
 ---
 
 ## Screenshots & GIFs
