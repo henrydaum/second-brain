@@ -16,6 +16,9 @@ DEFAULTS = {
     # Directories to watch
     "sync_directories": [],
 
+    # Extensions to ignore (overrides modality mapping)
+    "ignored_extensions": [],  # need to implement
+
     # Folders to skip
     "ignored_folders": ["node_modules", "__pycache__", ".git", ".venv", "venv"],
     "skip_hidden_folders": True,
