@@ -5,7 +5,7 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from task import BaseTask, TaskContext, TaskResult
+from Stage_2.BaseTask import BaseTask, TaskContext, TaskResult
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +38,9 @@ class Orchestrator:
 		self.tasks: dict[str, BaseTask] = {}
 
 		# Thread pool
-		max_workers = config.get("max_workers", 4)
+		self.max_workers = config.get("max_workers", 4)
 		self.executor = ThreadPoolExecutor(
-			max_workers=max_workers, thread_name_prefix="Worker"
+			max_workers=self.max_workers, thread_name_prefix="Worker"
 		)
 		self.task_semaphores: dict[str, threading.Semaphore] = {}
 
@@ -88,7 +88,7 @@ class Orchestrator:
 			f"batch={task.batch_size})"
 		)
 
-		max_w = task.max_workers if task.max_workers > 0 else max_workers
+		max_w = task.max_workers if task.max_workers > 0 else self.max_workers
 		self.task_semaphores[task.name] = threading.Semaphore(max_w)
 
 		self._backfill_task(task)

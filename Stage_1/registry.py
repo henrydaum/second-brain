@@ -188,3 +188,6 @@ def parse(path: str, modality: str = None, config: dict = None) -> ParseResult:
     except Exception as e:
         logger.error(f"Parser failed for {path_obj.name} as {modality}: {e}")
         return ParseResult.failed(error=str(e), modality=modality)
+
+# Initialize the registry by importing all parsers
+from Stage_1.parsers import parse_audio, parse_image, parse_tabular, parse_text, parse_video, parse_container

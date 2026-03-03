@@ -35,27 +35,28 @@ class Database:
 		# Master file registry — one row per file on disk
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS files (
-				path        TEXT PRIMARY KEY,
-				file_name   TEXT,
-				extension   TEXT,
-				modality    TEXT,
-				file_mtime  REAL,
+				path          TEXT PRIMARY KEY,
+				file_name     TEXT,
+				extension     TEXT,
+				modality      TEXT,
+				file_size     INTEGER,
+				file_mtime    REAL,
 				discovered_at REAL,
-				updated_at  REAL
+				updated_at    REAL
 			)
 		""")
 
 		# Task queue — one row per (file, task) pair
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS task_queue (
-				path        TEXT,
-				task_name   TEXT,
+				path         TEXT,
+				task_name    TEXT,
 				task_version INTEGER DEFAULT 1,
-				status      TEXT DEFAULT 'PENDING',
-				created_at  REAL,
-				started_at  REAL,
+				status       TEXT DEFAULT 'PENDING',
+				created_at   REAL,
+				started_at   REAL,
 				completed_at REAL,
-				error       TEXT,
+				error        TEXT,
 				PRIMARY KEY (path, task_name)
 			)
 		""")
@@ -79,16 +80,17 @@ class Database:
 	# FILES
 	# =================================================================
 
-	def upsert_file(self, path, file_name, extension, modality, mtime):
+	def upsert_file(self, path, file_name, extension, modality, file_size, file_mtime):
 		now = time.time()
 		with self.lock:
 			self.conn.execute("""
-				INSERT INTO files (path, file_name, extension, modality, file_mtime, discovered_at, updated_at)
+				INSERT INTO files (path, file_name, extension, modality, file_size, file_mtime, discovered_at, updated_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(path) DO UPDATE SET
+					file_size = excluded.file_size,
 					file_mtime = excluded.file_mtime,
 					updated_at = excluded.updated_at
-			""", (path, file_name, extension, modality, mtime, now, now))
+			""", (path, file_name, extension, modality, file_size, file_mtime, now, now))
 			self.conn.commit()
 
 	def remove_file(self, path):
