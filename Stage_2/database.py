@@ -39,8 +39,7 @@ class Database:
 				file_name     TEXT,
 				extension     TEXT,
 				modality      TEXT,
-				file_size     INTEGER,
-				file_mtime    REAL,
+				mtime    REAL,
 				discovered_at REAL,
 				updated_at    REAL
 			)
@@ -76,21 +75,22 @@ class Database:
 			)
 		""")
 
+		self.conn.commit()
+
 	# =================================================================
 	# FILES
 	# =================================================================
 
-	def upsert_file(self, path, file_name, extension, modality, file_size, file_mtime):
+	def upsert_file(self, path, file_name, extension, modality, mtime):
 		now = time.time()
 		with self.lock:
 			self.conn.execute("""
-				INSERT INTO files (path, file_name, extension, modality, file_size, file_mtime, discovered_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO files (path, file_name, extension, modality, mtime, discovered_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(path) DO UPDATE SET
-					file_size = excluded.file_size,
-					file_mtime = excluded.file_mtime,
+					mtime = excluded.mtime,
 					updated_at = excluded.updated_at
-			""", (path, file_name, extension, modality, file_size, file_mtime, now, now))
+			""", (path, file_name, extension, modality, mtime, now, now))
 			self.conn.commit()
 
 	def remove_file(self, path):
@@ -103,8 +103,8 @@ class Database:
 	def get_all_files(self):
 		"""Returns {path: mtime} for diffing against disk."""
 		with self.lock:
-			cur = self.conn.execute("SELECT path, file_mtime FROM files")
-			return {row["path"]: row["file_mtime"] for row in cur.fetchall()}
+			cur = self.conn.execute("SELECT path, mtime FROM files")
+			return {row["path"]: row["mtime"] for row in cur.fetchall()}
 
 	def get_files_by_modality(self, modality):
 		"""Returns list of paths for a given modality."""
@@ -123,6 +123,22 @@ class Database:
 			self.conn.execute("""
 				INSERT OR IGNORE INTO task_queue (path, task_name, task_version, status, created_at)
 				VALUES (?, ?, ?, 'PENDING', ?)
+			""", (path, task_name, task_version, now))
+			self.conn.commit()
+
+	def re_enqueue_task(self, path, task_name, task_version=1):
+		"""Enqueue a task, resetting it to PENDING if it already exists."""
+		now = time.time()
+		with self.lock:
+			self.conn.execute("""
+				INSERT INTO task_queue (path, task_name, task_version, status, created_at)
+				VALUES (?, ?, ?, 'PENDING', ?)
+				ON CONFLICT(path, task_name) DO UPDATE SET
+					status = 'PENDING',
+					task_version = excluded.task_version,
+					started_at = NULL,
+					completed_at = NULL,
+					error = NULL
 			""", (path, task_name, task_version, now))
 			self.conn.commit()
 
@@ -218,6 +234,16 @@ class Database:
 	# =================================================================
 	# DYNAMIC OUTPUT TABLES
 	# =================================================================
+
+	def clean_output_tables(self, path, table_names):
+		"""Remove a file's data from multiple output tables."""
+		with self.lock:
+			for table in table_names:
+				try:
+					self.conn.execute(f"DELETE FROM {table} WHERE path = ?", (path,))
+				except sqlite3.OperationalError:
+					pass  # table might not exist yet
+			self.conn.commit()
 
 	def ensure_output_table(self, task_name, schema_sql):
 		"""

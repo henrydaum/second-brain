@@ -124,21 +124,13 @@ class Orchestrator:
 		for task in self.tasks.values():
 			if modality in task.modalities:
 				if self._deps_met(path, task):
-					self.db.enqueue_task(path, task.name, task.version)
+					self.db.re_enqueue_task(path, task.name, task.version)
 
 	def on_file_deleted(self, path: str):
-		"""
-		File removed from disk.
-		Clean up output tables, task queue, and files table.
-		"""
+		all_tables = []
 		for task in self.tasks.values():
-			for table in task.output_tables:
-				try:
-					self.db.conn.execute(
-						f"DELETE FROM {table} WHERE path = ?", (path,)
-					)
-				except Exception:
-					pass
+			all_tables.extend(task.output_tables)
+		self.db.clean_output_tables(path, all_tables)
 		self.db.remove_file(path)
 
 	# =================================================================

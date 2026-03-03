@@ -135,15 +135,6 @@ class BaseTask:
 		"""Can this task execute right now? Check model loaded, API reachable, etc."""
 		return True
 
-	def run(self, path: str, context: TaskContext) -> TaskResult:
-		"""
-		Process one file. Called when batch_size is 1.
-
-		The task calls parse(path, modality) itself to get the data it needs.
-		Returns TaskResult with success/failure and any data to store.
-		"""
-		raise NotImplementedError(f"Task '{self.name}' must implement run()")
-
 	def run_batch(self, paths: list[str], context: TaskContext) -> list[TaskResult]:
 		"""
 		Process multiple files. Can be used with batch_size=1 for single tasks.

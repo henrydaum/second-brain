@@ -53,6 +53,9 @@ class Watcher:
 		# Known extensions from the parser registry
 		self.supported_extensions = get_supported_extensions()
 
+		# Ignored extensions from config
+		self.ignored_extensions = set(config.get("ignored_extensions", []))
+
 		# Mtime cache — detects false alarms from Windows
 		self._known_mtimes: dict[str, float] = {}
 
@@ -243,6 +246,10 @@ class Watcher:
 		# Temp files (common patterns)
 		if name.endswith(".tmp") or name.endswith(".temp"):
 			return False
+
+		# Ignored extensions from config
+		if p.suffix.lower() in self.ignored_extensions:
+		    return False
 
 		return p.suffix.lower() in self.supported_extensions
 

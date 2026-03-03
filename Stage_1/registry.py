@@ -80,7 +80,7 @@ _register_modalities([
 
 # --- Image ---
 _register_modalities([
-    ".png", ".jpg", ".jpeg", ".gif", ".webp",
+    ".png", ".jpg", ".jpeg", ".webp",
     ".heic", ".heif", ".tif", ".tiff",
     ".bmp", ".ico",
 ], "image")
@@ -165,7 +165,7 @@ def parse(path: str, modality: str = None, config: dict = None) -> ParseResult:
 
     # Resolve modality
     if modality is None:
-        modality = get_default_modality(extension)
+        modality = get_modality(extension)
         if modality == "unknown":
             return ParseResult(
                 modality="unknown",
