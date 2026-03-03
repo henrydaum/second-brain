@@ -88,74 +88,63 @@ registry.register([
 # ===================================================================
 
 def parse_pdf_text(path: str, config: dict) -> ParseResult:
-    """
-    Extract text from a PDF.
-
-    Also detects embedded images and scanned pages (no extractable text).
-    These go into also_contains so the orchestrator can queue image
-    extraction or OCR tasks.
-    """
     try:
-        from pdfminer.high_level import extract_text
+        import fitz  # PyMuPDF
     except ImportError:
-        logger.debug("pdfminer.six not installed")
-        return ParseResult.failed("pdfminer.six not installed", modality="text")
+        logger.debug("PyMuPDF not installed")
+        return ParseResult.failed("PyMuPDF not installed", modality="text")
 
     try:
         limit = _max_chars(config)
-        text = extract_text(path)
-        text = _clean_text(text[:limit])
+        doc = fitz.open(path)
 
-        # --- Cheap multi-modal detection ---
-        metadata = {"char_count": len(text)}
-        also_contains = []
+        # Extract text
+        text_parts = []
+        current_len = 0
         image_count = 0
-        page_count = 0
+        has_tables = False
 
-        try:
-            from pdfminer.pdfpage import PDFPage
-            from pdfminer.pdfparser import PDFParser
-            from pdfminer.pdfdocument import PDFDocument
-            from pdfminer.psparser import LIT
+        for page in doc:
+            # Text extraction
+            page_text = page.get_text()
+            text_parts.append(page_text)
+            current_len += len(page_text)
 
-            with open(path, "rb") as f:
-                parser = PDFParser(f)
-                doc = PDFDocument(parser)
+            # Image detection (cheap — reads page structure, not pixel data)
+            image_count += len(page.get_images(full=False))
 
-                for page in PDFPage.create_pages(doc):
-                    page_count += 1
-                    resources = page.resources
-                    if not resources:
-                        continue
-                    xobjects = resources.get("XObject")
-                    if not xobjects:
-                        continue
-                    # Resolve indirect references
-                    if hasattr(xobjects, "resolve"):
-                        xobjects = xobjects.resolve()
-                    if isinstance(xobjects, dict):
-                        for _, obj in xobjects.items():
-                            if hasattr(obj, "resolve"):
-                                obj = obj.resolve()
-                            if isinstance(obj, dict):
-                                subtype = obj.get("Subtype")
-                                if subtype is LIT("Image") or subtype == "/Image":
-                                    image_count += 1
-        except Exception as e:
-            # Detection failed — not critical, just skip
-            logger.debug(f"PDF multi-modal detection failed: {e}")
+            # Table detection
+            if not has_tables:
+                tables = page.find_tables()
+                if tables.tables:
+                    has_tables = True
 
-        metadata["page_count"] = page_count
-        metadata["image_count"] = image_count
-        metadata["has_images"] = image_count > 0
-        metadata["is_scanned"] = len(text.strip()) < 50 and page_count > 0
+            if current_len > limit:
+                break
 
+        text = _clean_text("".join(text_parts)[:limit])
+
+        also_contains = []
         if image_count > 0:
             also_contains.append("image")
-        if metadata.get("is_scanned"):
-            # Scanned PDFs need OCR — flag as needing image processing
-            if "image" not in also_contains:
-                also_contains.append("image")
+        if has_tables:
+            also_contains.append("tabular")
+
+        is_scanned = len(text.strip()) < 50 and len(doc) > 0
+
+        if is_scanned and "image" not in also_contains:
+            also_contains.append("image")
+
+        metadata = {
+            "char_count": len(text),
+            "page_count": len(doc),
+            "image_count": image_count,
+            "has_images": image_count > 0,
+            "has_tables": has_tables,
+            "is_scanned": is_scanned,
+        }
+
+        doc.close()
 
         return ParseResult(
             modality="text",
@@ -172,16 +161,8 @@ registry.register(".pdf", "text", parse_pdf_text)
 
 
 def parse_pdf_image(path: str, config: dict) -> ParseResult:
-    """
-    Extract embedded images from a PDF as PIL.Image objects.
-
-    This is called when a task requests parse("report.pdf", "image").
-    Returns a list of PIL images — one per embedded image found.
-    """
     try:
-        from pdfminer.pdfpage import PDFPage
-        from pdfminer.pdfparser import PDFParser
-        from pdfminer.pdfdocument import PDFDocument
+        import fitz
         from PIL import Image
         import io
     except ImportError as e:
@@ -189,41 +170,25 @@ def parse_pdf_image(path: str, config: dict) -> ParseResult:
         return ParseResult.failed(f"Missing dependency: {e}", modality="image")
 
     try:
+        doc = fitz.open(path)
         images = []
         max_images = config.get("max_images", 50)
 
-        with open(path, "rb") as f:
-            parser = PDFParser(f)
-            doc = PDFDocument(parser)
-
-            for page in PDFPage.create_pages(doc):
+        for page in doc:
+            if len(images) >= max_images:
+                break
+            for img_info in page.get_images(full=True):
                 if len(images) >= max_images:
                     break
-                resources = page.resources
-                if not resources:
+                xref = img_info[0]
+                try:
+                    base_image = doc.extract_image(xref)
+                    img = Image.open(io.BytesIO(base_image["image"]))
+                    images.append(img)
+                except Exception:
                     continue
-                xobjects = resources.get("XObject")
-                if not xobjects:
-                    continue
-                if hasattr(xobjects, "resolve"):
-                    xobjects = xobjects.resolve()
-                if not isinstance(xobjects, dict):
-                    continue
-                for _, obj in xobjects.items():
-                    if len(images) >= max_images:
-                        break
-                    if hasattr(obj, "resolve"):
-                        obj = obj.resolve()
-                    if not isinstance(obj, dict):
-                        continue
-                    # Try to extract image data
-                    try:
-                        data = obj.get_data()
-                        img = Image.open(io.BytesIO(data))
-                        images.append(img)
-                    except Exception:
-                        # Not all XObjects are extractable this way
-                        continue
+
+        doc.close()
 
         if not images:
             return ParseResult.failed(
@@ -242,6 +207,67 @@ def parse_pdf_image(path: str, config: dict) -> ParseResult:
 
 registry.register(".pdf", "image", parse_pdf_image)
 
+
+def parse_pdf_tables(path: str, config: dict) -> ParseResult:
+    """Extract tables from a PDF as DataFrames."""
+    try:
+        import fitz
+        import pandas as pd
+    except ImportError as e:
+        logger.debug(f"Missing dependency: {e}")
+        return ParseResult.failed(f"Missing dependency: {e}", modality="tabular")
+
+    try:
+        doc = fitz.open(path)
+        all_tables = {}
+        table_idx = 0
+
+        for page_num, page in enumerate(doc):
+            found = page.find_tables()
+            for table in found.tables:
+                df = table.to_pandas()
+                # Skip empty tables
+                if df.empty:
+                    continue
+                key = f"page_{page_num + 1}_table_{table_idx + 1}"
+                all_tables[key] = df
+                table_idx += 1
+
+        doc.close()
+
+        if not all_tables:
+            return ParseResult.failed(
+                "No extractable tables found in PDF", modality="tabular"
+            )
+
+        table_meta = {}
+        total_rows = 0
+        for name, df in all_tables.items():
+            total_rows += len(df)
+            table_meta[name] = {
+                "row_count": len(df),
+                "column_count": len(df.columns),
+                "columns": list(df.columns),
+                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+            }
+
+        return ParseResult(
+            modality="tabular",
+            output=all_tables,
+            metadata={
+                "total_rows": total_rows,
+                "table_count": len(all_tables),
+                "table_names": list(all_tables.keys()),
+                "tables": table_meta,
+                "source_format": "pdf",
+            },
+        )
+    except Exception as e:
+        logger.debug(f"Failed to parse {path}: {e}")
+        return ParseResult.failed(str(e), modality="tabular")
+
+
+registry.register(".pdf", "tabular", parse_pdf_tables)
 
 # ===================================================================
 # DOCX

@@ -82,7 +82,7 @@ _register_modalities([
 _register_modalities([
     ".png", ".jpg", ".jpeg", ".gif", ".webp",
     ".heic", ".heif", ".tif", ".tiff",
-    ".bmp", ".ico", ".svg", ".psd",
+    ".bmp", ".ico",
 ], "image")
 
 # --- Audio ---
@@ -108,11 +108,11 @@ _register_modalities([
 # --- Video ---
 _register_modalities([
     ".mp4", ".mkv", ".avi", ".mov",
-    ".webm", ".flv", ".wmv",
+    ".webm", ".flv", ".wmv", ".gif",
 ], "video")
 
 
-def get_default_modality(extension: str) -> str:
+def get_modality(extension: str) -> str:
     """Get the default modality for an extension. Returns 'unknown' if unregistered."""
     ext = extension.lower() if extension.startswith(".") else f".{extension}"
     return _MODALITY_MAP.get(ext, "unknown")

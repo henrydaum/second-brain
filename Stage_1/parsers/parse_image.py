@@ -51,7 +51,7 @@ def parse_standard_image(path: str, config: dict) -> ParseResult:
 
 
 registry.register([
-    ".png", ".jpg", ".jpeg", ".gif", ".webp",
+    ".png", ".jpg", ".jpeg", ".webp",
     ".tif", ".tiff", ".bmp", ".ico",
 ], "image", parse_standard_image)
 
@@ -75,71 +75,3 @@ def parse_heic(path: str, config: dict) -> ParseResult:
 
 
 registry.register([".heic", ".heif"], "image", parse_heic)
-
-
-# ===================================================================
-# SVG (Vector → Raster)
-# ===================================================================
-
-def parse_svg(path: str, config: dict) -> ParseResult:
-    """Rasterize SVG to a PIL Image."""
-    try:
-        import cairosvg
-        from PIL import Image
-        import io
-
-        width = config.get("svg_render_width", 1024)
-        png_data = cairosvg.svg2png(url=path, output_width=width)
-        img = Image.open(io.BytesIO(png_data))
-        img.load()
-
-        return ParseResult(
-            modality="image",
-            output=[img],
-            metadata={
-                "width": img.width,
-                "height": img.height,
-                "format": "SVG (rasterized)",
-                "original_path": path,
-            },
-        )
-    except ImportError:
-        logger.debug("cairosvg not installed")
-        return ParseResult.failed("cairosvg not installed", modality="image")
-    except Exception as e:
-        logger.debug(f"Failed to parse SVG {path}: {e}")
-        return ParseResult.failed(str(e), modality="image")
-
-
-registry.register(".svg", "image", parse_svg)
-
-
-# ===================================================================
-# PSD (Photoshop)
-# PIL opens PSD as the flattened composite.
-# ===================================================================
-
-def parse_psd(path: str, config: dict) -> ParseResult:
-    """Extract the flattened composite from a PSD file."""
-    try:
-        from PIL import Image
-        Image.MAX_IMAGE_PIXELS = None
-
-        img = Image.open(path)
-        img.load()
-
-        return ParseResult(
-            modality="image",
-            output=[img],
-            metadata={
-                "width": img.width,
-                "height": img.height,
-                "format": "PSD (flattened)",
-            },
-        )
-    except Exception as e:
-        logger.debug(f"Failed to parse PSD {path}: {e}")
-        return ParseResult.failed(str(e), modality="image")
-
-
-registry.register(".psd", "image", parse_psd)

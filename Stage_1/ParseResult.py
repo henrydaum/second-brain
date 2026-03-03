@@ -12,7 +12,7 @@ class ParseResult:
         image     -> list[PIL.Image.Image]
         audio     -> tuple(np.ndarray, int)  # (samples, sample_rate)
         video     -> av.Container
-        tabular   -> pd.DataFrame
+        tabular   -> dict[sheet_name or "default", pd.DataFrame]
         container -> list[str]  # extracted child paths
     """
     modality: str = "unknown"

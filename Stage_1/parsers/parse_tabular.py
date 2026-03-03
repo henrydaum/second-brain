@@ -55,7 +55,7 @@ def parse_csv(path: str, config: dict) -> ParseResult:
 
         return ParseResult(
             modality="tabular",
-            output=df,
+            output={"default": df},
             metadata={
                 "row_count": len(df),
                 "column_count": len(df.columns),
@@ -76,7 +76,7 @@ registry.register([".csv", ".tsv"], "tabular", parse_csv)
 # ===================================================================
 
 def parse_xlsx(path: str, config: dict) -> ParseResult:
-    """Parse Excel files into a DataFrame (first sheet by default)."""
+    """Parse Excel files. Returns all sheets as a dict of DataFrames."""
     try:
         import pandas as pd
     except ImportError:
@@ -85,30 +85,28 @@ def parse_xlsx(path: str, config: dict) -> ParseResult:
 
     try:
         limit = _max_rows(config)
-        sheet_name = config.get("sheet_name", 0)  # default: first sheet
 
-        df = pd.read_excel(path, sheet_name=sheet_name, nrows=limit)
+        all_sheets = pd.read_excel(path, sheet_name=None, nrows=limit)
 
-        # Get all sheet names for metadata
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(path, read_only=True)
-            sheet_names = wb.sheetnames
-            wb.close()
-        except Exception:
-            logger.debug("openpyxl not installed")
-            sheet_names = []
-
-        return ParseResult(
-            modality="tabular",
-            output=df,
-            metadata={
+        sheet_meta = {}
+        for name, df in all_sheets.items():
+            sheet_meta[name] = {
                 "row_count": len(df),
                 "column_count": len(df.columns),
                 "columns": list(df.columns),
                 "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
-                "sheet_names": sheet_names,
-                "active_sheet": sheet_name,
+            }
+
+        total_rows = sum(len(df) for df in all_sheets.values())
+
+        return ParseResult(
+            modality="tabular",
+            output=all_sheets,
+            metadata={
+                "total_rows": total_rows,
+                "sheet_count": len(all_sheets),
+                "sheet_names": list(all_sheets.keys()),
+                "sheets": sheet_meta,
             },
         )
     except Exception as e:
@@ -146,7 +144,7 @@ def parse_parquet(path: str, config: dict) -> ParseResult:
 
         return ParseResult(
             modality="tabular",
-            output=df,
+            output={"default": df},
             metadata={
                 "row_count": len(df),
                 "column_count": len(df.columns),
@@ -168,12 +166,6 @@ registry.register([".parquet", ".feather"], "tabular", parse_parquet)
 # ===================================================================
 
 def parse_sqlite(path: str, config: dict) -> ParseResult:
-    """
-    Parse a SQLite database into a DataFrame.
-
-    By default reads the first table. Specify config["table_name"]
-    to target a specific table.
-    """
     try:
         import pandas as pd
         import sqlite3
@@ -183,10 +175,8 @@ def parse_sqlite(path: str, config: dict) -> ParseResult:
 
     try:
         limit = _max_rows(config)
-
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 
-        # Get all table names
         tables = pd.read_sql(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
             conn,
@@ -196,26 +186,35 @@ def parse_sqlite(path: str, config: dict) -> ParseResult:
             conn.close()
             return ParseResult.failed("No tables found in database", modality="tabular")
 
-        # Read the target table
-        table_name = config.get("table_name", tables[0])
-        df = pd.read_sql(
-            f'SELECT * FROM [{table_name}] LIMIT ?',
-            conn,
-            params=(limit,),
-        )
+        all_tables = {}
+        table_meta = {}
+        total_rows = 0
+
+        for table_name in tables:
+            df = pd.read_sql(
+                f'SELECT * FROM [{table_name}] LIMIT ?',
+                conn,
+                params=(limit,),
+            )
+            all_tables[table_name] = df
+            total_rows += len(df)
+            table_meta[table_name] = {
+                "row_count": len(df),
+                "column_count": len(df.columns),
+                "columns": list(df.columns),
+                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+            }
 
         conn.close()
 
         return ParseResult(
             modality="tabular",
-            output=df,
+            output=all_tables,
             metadata={
-                "row_count": len(df),
-                "column_count": len(df.columns),
-                "columns": list(df.columns),
-                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
-                "tables": tables,
-                "active_table": table_name,
+                "total_rows": total_rows,
+                "table_count": len(all_tables),
+                "table_names": list(all_tables.keys()),
+                "tables": table_meta,
             },
         )
     except Exception as e:
