@@ -80,7 +80,7 @@ def main():
 	watcher.start()
 
 	# --- 8. Run until interrupted ---
-	logger.info("Forge is running. Press Ctrl+C to stop.")
+	logger.info("DataRefinery is running. Press Ctrl+C to stop.")
 
 	def shutdown(sig, frame):
 		logger.info("Shutting down...")

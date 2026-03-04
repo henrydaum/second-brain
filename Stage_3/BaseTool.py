@@ -20,7 +20,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from context import ForgeContext
+from context import DataRefineryContext
 
 logger = logging.getLogger("Tool")
 
@@ -67,12 +67,12 @@ class BaseTool:
     # --- Service requirements ---
     requires_services: list[str] = []
 
-    def run(self, context: ForgeContext, **kwargs) -> ToolResult:
+    def run(self, context: DataRefineryContext, **kwargs) -> ToolResult:
         """
         Execute the tool with the given arguments.
 
         Args:
-            context:    ForgeContext with db, config, services, parse, call_tool.
+            context:    DataRefineryContext with db, config, services, parse, call_tool.
             **kwargs:   The arguments matching self.parameters schema.
 
         Returns:
@@ -140,7 +140,7 @@ class ToolRegistry:
                 )
 
         # Build context with call_tool pointing back to this registry
-        context = ForgeContext(
+        context = DataRefineryContext(
             db=self.db,
             config=self.config,
             services=self.service_manager,

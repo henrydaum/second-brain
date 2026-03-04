@@ -13,7 +13,7 @@
     "poll_interval": 1.0,
     "task_timeout": 300,
     "reprocess_interval": 300,
-    "db_path": "forge.db",
+    "db_path": "database.db",
     "llm_model_name": "gemma-3-4b-it@q4_k_s",
     "embed_text_model_name": "BAAI/bge-m3",
     "embed_image_model_name": "clip-ViT-L-14",

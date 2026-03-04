@@ -4,7 +4,7 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from context import ForgeContext
+from context import DataRefineryContext
 from Stage_1.registry import parse
 from Stage_2.BaseTask import BaseTask, TaskResult
 
@@ -280,11 +280,11 @@ class Orchestrator:
 		"""
 		Run a task on a batch of paths. Called in a worker thread.
 
-		1. Build ForgeContext
+		1. Build DataRefineryContext
 		2. Call run()
 		3. Per result: write outputs, mark done/failed, trigger downstream
 		"""
-		context = ForgeContext(
+		context = DataRefineryContext(
 			db=self.db,
 			config=self.config,
 			services=self.service_manager,

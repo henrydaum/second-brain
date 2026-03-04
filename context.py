@@ -1,5 +1,5 @@
 """
-Forge Context.
+DataRefinery Context.
 
 The single context object passed to everything: tasks, tools, parsers.
 Built once in main.py, shared everywhere.
@@ -23,7 +23,7 @@ from typing import Any
 
 
 @dataclass
-class ForgeContext:
+class DataRefineryContext:
     """
     What every task and tool receives when it runs.
 

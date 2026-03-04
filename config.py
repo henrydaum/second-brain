@@ -36,7 +36,7 @@ DEFAULTS = {
     "reprocess_interval": 300,
 
     # Database
-    "db_path": "forge.db",
+    "db_path": "database.db",
 }
 
 
