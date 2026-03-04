@@ -249,7 +249,7 @@ class Watcher:
 
 		# Ignored extensions from config
 		if p.suffix.lower() in self.ignored_extensions:
-		    return False
+			return False
 
 		return p.suffix.lower() in self.supported_extensions
 

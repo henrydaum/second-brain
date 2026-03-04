@@ -135,11 +135,10 @@ class BaseTask:
 		"""Can this task execute right now? Check model loaded, API reachable, etc."""
 		return True
 
-	def run_batch(self, paths: list[str], context: TaskContext) -> list[TaskResult]:
+	def run(self, paths: list[str], context: TaskContext) -> list[TaskResult]:
 		"""
-		Process multiple files. Can be used with batch_size=1 for single tasks.
+		Process multiple files. Can be used with a list size of 1 for single tasks, or more for batch jobs.
 
-		Default implementation just calls run() in a loop.
-		Override for real batching (e.g. batch embedding).
+		Replace with a real function. Return a list of TaskResult objects, one per input path.
 		"""
-		return [self.run(path, context) for path in paths]
+		return [TaskResult.failed("Not implemented") for path in paths]

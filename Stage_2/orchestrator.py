@@ -14,7 +14,7 @@ Orchestrator.
 
 The generic dispatcher. Zero knowledge of what any task does.
 It only knows the BaseTask interface: modalities, depends_on,
-batch_size, is_ready(), run_batch().
+batch_size, is_ready(), run().
 
 Flow:
 	Watcher detects file -> on_file_discovered()
@@ -221,13 +221,13 @@ class Orchestrator:
 		Run a task on a batch of paths. Called in a worker thread.
 
 		1. Build context
-		2. Call run_batch()
+		2. Call run()
 		3. Per result: write outputs, mark done/failed, trigger downstream
 		"""
 		context = TaskContext(config=self.config, db=self.db)
 
 		try:
-			results = task.run_batch(paths, context)
+			results = task.run(paths, context)
 		except Exception as e:
 			logger.error(f"Task '{task.name}' batch failed: {e}")
 			for path in paths:
