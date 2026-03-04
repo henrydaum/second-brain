@@ -7,11 +7,6 @@ and parsers, call other tools, and return structured results.
 Unlike tasks (which run in the background on every file), tools are
 called on demand and return results immediately to a caller.
 
-Three tiers:
-    Tier 1 - Data tools:     Read from task output tables. Pure queries.
-    Tier 2 - Compute tools:  Do work at call time. Embed a query, call an LLM.
-    Tier 3 - Composite tools: Orchestrate other tools. Research, construct tasks.
-
 Tools become LLM function calls with zero translation:
     - name        -> function name
     - description -> function description
@@ -25,25 +20,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from context import ForgeContext
 
-
-@dataclass
-class ToolContext:
-    """
-    What a tool receives when it runs.
-
-    db:         Database access — read task outputs, file info, etc.
-    config:     Global settings.
-    call_tool:  Invoke another tool by name. Returns that tool's result dict.
-                Usage: context.call_tool("keyword_search", query="neural nets", limit=10)
-    parse:      Call a parser directly.
-                Usage: context.parse("report.pdf", "text")
-    """
-    db: Any = None
-    config: dict = field(default_factory=dict)
-    call_tool: Any = None   # callable(name: str, **kwargs) -> dict
-    parse: Any = None       # callable(path: str, modality: str) -> ParseResult
+logger = logging.getLogger("Tool")
 
 
 @dataclass
@@ -71,14 +50,13 @@ class BaseTool:
     The contract every tool implements.
 
     Class attributes (override these):
-        name            Unique identifier. "keyword_search", "vector_search", etc.
-        description     Natural language description. Doubles as the LLM tool description.
-                        Be specific — the LLM uses this to decide when to call the tool.
-        parameters      JSON schema dict describing the input arguments.
-                        Follows the OpenAI function calling format.
+        name              Unique identifier. "keyword_search", "vector_search", etc.
+        description       Natural language description. Doubles as the LLM tool description.
+        parameters        JSON schema dict describing the input arguments.
+        requires_services List of services that must be loaded. Same as tasks.
 
     Methods (override these):
-        run(**kwargs, context) -> ToolResult
+        run(context, **kwargs) -> ToolResult
     """
 
     # --- Identity ---
@@ -86,12 +64,15 @@ class BaseTool:
     description: str = ""
     parameters: dict = {}
 
-    def run(self, context: ToolContext, **kwargs) -> ToolResult:
+    # --- Service requirements ---
+    requires_services: list[str] = []
+
+    def run(self, context: ForgeContext, **kwargs) -> ToolResult:
         """
         Execute the tool with the given arguments.
 
         Args:
-            context:    ToolContext with db access, config, call_tool, parse.
+            context:    ForgeContext with db, config, services, parse, call_tool.
             **kwargs:   The arguments matching self.parameters schema.
 
         Returns:
@@ -101,13 +82,16 @@ class BaseTool:
 
     def to_schema(self) -> dict:
         """
-        Export as an LLM-compatible function schema.
-        Works with OpenAI, Anthropic, and similar function calling formats.
+        Export as an OpenAI-compatible function schema.
+        Works directly with OpenAI, Anthropic, and similar function calling APIs.
         """
         return {
-            "name": self.name,
-            "description": self.description,
-            "parameters": self.parameters,
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            }
         }
 
 
@@ -117,14 +101,14 @@ class ToolRegistry:
 
     The registry:
         1. Stores tool instances by name
-        2. Dispatches calls (including tool-to-tool calls)
+        2. Dispatches calls (including tool-to-tool calls via context.call_tool)
         3. Exports schemas for LLM function calling
-        4. Provides the call_tool function that composite tools use
     """
 
-    def __init__(self, db, config: dict):
+    def __init__(self, db, config: dict, service_manager=None):
         self.db = db
         self.config = config
+        self.service_manager = service_manager
         self.tools: dict[str, BaseTool] = {}
 
     def register(self, tool: BaseTool):
@@ -144,10 +128,22 @@ class ToolRegistry:
         if tool is None:
             return ToolResult.failed(f"Unknown tool: {name}")
 
+        # Check service requirements
+        if tool.requires_services and self.service_manager:
+            if not self.service_manager.ensure_loaded(tool.requires_services):
+                missing = [
+                    s for s in tool.requires_services
+                    if not self.service_manager.is_loaded(s)
+                ]
+                return ToolResult.failed(
+                    f"Required services not available: {missing}"
+                )
+
         # Build context with call_tool pointing back to this registry
-        context = ToolContext(
+        context = ForgeContext(
             db=self.db,
             config=self.config,
+            services=self.service_manager,
             call_tool=self.call,  # recursive — tools can call tools
             parse=self._get_parse_fn(),
         )

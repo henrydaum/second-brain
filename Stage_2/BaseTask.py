@@ -2,6 +2,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+# Use the unified context
+from context import ForgeContext
+
 logger = logging.getLogger(__name__)
 
 """
@@ -14,9 +17,9 @@ it only knows the interface defined here.
 A task declares:
 	- What files it works on (modalities)
 	- What must finish first (depends_on)
+	- What shared services must be loaded (requires_services)
 	- What tables it writes to (output_tables, output_schema)
-	- Whether it batches (batch_size)
-	- How to execute (run / run_batch)
+	- How to execute (run)
 
 Example concrete task:
 
@@ -24,7 +27,8 @@ Example concrete task:
 		name = "embed_text"
 		version = 1
 		modalities = ["text"]
-		depends_on = []
+		depends_on = ["extract_text"]
+		requires_services = ["embedder"]
 		output_tables = ["embeddings"]
 		output_schema = \"""
 			CREATE TABLE IF NOT EXISTS embeddings (
@@ -37,14 +41,8 @@ Example concrete task:
 		\"""
 		batch_size = 16
 
-		def setup(self, config):
-			self.model = load_model(config["embed_model"])
-
-		def is_ready(self):
-			return self.model is not None
-
-		def run_batch(self, paths, context):
-			# parse, chunk, embed, return results
+		def run(self, paths, context):
+			embedder = context.services.get("embedder")
 			...
 """
 
@@ -68,43 +66,28 @@ class TaskResult:
 		return TaskResult(success=False, error=error)
 
 
-@dataclass
-class TaskContext:
-	"""
-	What the orchestrator passes to a task when it runs.
-
-	config:  global settings (model paths, batch sizes, etc.)
-	db:      read-only database access for checking prior results
-	"""
-	config: dict = field(default_factory=dict)
-	db: Any = None  # Database instance
-
-
 class BaseTask:
 	"""
 	The contract every task implements.
 
 	Class attributes (override these):
-		name            Unique identifier. "embed_text", "ocr", etc.
-		version         Integer. Bump when the model or logic changes.
-						Triggers re-processing of all files for this task.
-		modalities      List of modalities this task works on.
-						["text"], ["image"], ["text", "image"], etc.
-		depends_on      List of task names that must complete first.
-						[] means no dependencies — runs as soon as file is cataloged.
-		output_tables   List of table names this task writes to.
-						Used for cleanup when files are deleted.
-		output_schema   Raw SQL to create the output table(s).
-						Only CREATE TABLE and CREATE INDEX allowed.
-		batch_size      0 = run() called once per file.
-						>0 = run_batch() called with up to N files.
+		name              Unique identifier. "embed_text", "ocr", etc.
+		version           Integer. Bump when the model or logic changes.
+		modalities        List of modalities this task works on.
+		depends_on        List of task names that must complete first.
+		requires_services List of service names that must be loaded before dispatch.
+		                  In manual mode, task sits in queue until user loads the service.
+		                  In auto mode, system loads the service before dispatch.
+		                  Empty list = no service requirements (e.g. extract_text).
+		output_tables     List of table names this task writes to.
+		output_schema     Raw SQL to create the output table(s).
+		batch_size        How many files to process per run() call.
+		max_workers       0 = use global max. >0 = limit concurrent workers for this task.
 
 	Methods (override these):
-		setup(config)           Called once at registration. Load models here.
-		teardown()              Called on shutdown. Release resources.
-		is_ready() -> bool      Can this task execute right now?
-		run(path, context)      Process one file. Return TaskResult.
-		run_batch(paths, context)   Process multiple files. Return list[TaskResult].
+		setup(config)         Called once at registration.
+		teardown()            Called on shutdown.
+		run(paths, context)   Process files. Return list[TaskResult].
 	"""
 
 	# --- Identity ---
@@ -114,6 +97,9 @@ class BaseTask:
 	# --- Routing ---
 	modalities: list[str] = []
 	depends_on: list[str] = []
+
+	# --- Service requirements ---
+	requires_services: list[str] = []
 
 	# --- Schema ---
 	output_tables: list[str] = []
@@ -131,14 +117,8 @@ class BaseTask:
 		"""Called on shutdown. Release GPU memory, close connections."""
 		pass
 
-	def is_ready(self) -> bool:
-		"""Can this task execute right now? Check model loaded, API reachable, etc."""
-		return True
-
-	def run(self, paths: list[str], context: TaskContext) -> list[TaskResult]:
+	def run(self, paths: list[str], context: ForgeContext) -> list[TaskResult]:
 		"""
-		Process multiple files. Can be used with a list size of 1 for single tasks, or more for batch jobs.
-
-		Replace with a real function. Return a list of TaskResult objects, one per input path.
+		Process multiple files. Return a list of TaskResult objects, one per input path.
 		"""
 		return [TaskResult.failed("Not implemented") for path in paths]

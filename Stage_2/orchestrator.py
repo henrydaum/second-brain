@@ -1,11 +1,12 @@
 import logging
 from pathlib import Path
-import os
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from Stage_2.BaseTask import BaseTask, TaskContext, TaskResult
+from context import ForgeContext
+from Stage_1.registry import parse
+from Stage_2.BaseTask import BaseTask, TaskResult
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,7 @@ Orchestrator.
 
 The generic dispatcher. Zero knowledge of what any task does.
 It only knows the BaseTask interface: modalities, depends_on,
-batch_size, is_ready(), run().
+requires_services, batch_size, run().
 
 Flow:
 	Watcher detects file -> on_file_discovered()
@@ -25,14 +26,18 @@ Flow:
 		-> checks which tasks depend on completed one
 		-> if ALL deps now met, enqueue
 
-	Dispatch loop polls DB, claims work, routes to thread pool.
+	Dispatch loop:
+		-> for each task, check services are loaded
+		-> skip if services not ready (task stays PENDING)
+		-> claim work from DB, route to thread pool
 """
 
 
 class Orchestrator:
-	def __init__(self, db, config: dict):
+	def __init__(self, db, config: dict, service_manager=None):
 		self.db = db
 		self.config = config
+		self.service_manager = service_manager
 
 		# Task registry: name -> BaseTask instance
 		self.tasks: dict[str, BaseTask] = {}
@@ -49,6 +54,9 @@ class Orchestrator:
 		self.dispatch_thread = None
 		self.poll_interval = config.get("poll_interval", 1.0)
 
+		# Track which tasks were skipped last cycle (avoid log spam)
+		self._skip_logged: set[str] = set()
+
 	# =================================================================
 	# TASK REGISTRATION
 	# =================================================================
@@ -57,7 +65,7 @@ class Orchestrator:
 		"""
 		Register a task with the system.
 
-		1. Call setup() to load models
+		1. Call setup() to initialize
 		2. Create output tables from output_schema
 		3. Check for version changes
 		4. Save registration to DB
@@ -82,10 +90,12 @@ class Orchestrator:
 		)
 
 		self.tasks[task.name] = task
+
+		svc_info = f", requires={task.requires_services}" if task.requires_services else ""
 		logger.info(
 			f"Registered: {task.name} v{task.version} "
 			f"(modalities={task.modalities}, depends_on={task.depends_on}, "
-			f"batch={task.batch_size})"
+			f"batch={task.batch_size}{svc_info})"
 		)
 
 		max_w = task.max_workers if task.max_workers > 0 else self.max_workers
@@ -111,6 +121,52 @@ class Orchestrator:
 			if not self.db.is_task_done(path, dep):
 				return False
 		return True
+
+	# =================================================================
+	# SERVICE CHECK
+	# =================================================================
+
+	def _services_ready(self, task: BaseTask) -> bool:
+		"""
+		Check if all required services for a task are loaded.
+
+		In auto mode:   ServiceManager loads them on demand.
+		In manual mode: ServiceManager just checks.
+
+		Either way, if this returns False, the task is skipped this cycle.
+		Tasks stay PENDING in the queue — they'll run once services are loaded.
+		"""
+		if not task.requires_services:
+			return True
+
+		if self.service_manager is None:
+			# No service manager — skip tasks that need services
+			if task.name not in self._skip_logged:
+				logger.warning(
+					f"Task '{task.name}' requires services {task.requires_services} "
+					f"but no ServiceManager is configured"
+				)
+				self._skip_logged.add(task.name)
+			return False
+
+		ready = self.service_manager.ensure_loaded(task.requires_services)
+
+		if not ready:
+			# Log once per task to avoid spam
+			if task.name not in self._skip_logged:
+				missing = [
+					s for s in task.requires_services
+					if not self.service_manager.is_loaded(s)
+				]
+				logger.info(
+					f"Task '{task.name}' waiting for services: {missing}"
+				)
+				self._skip_logged.add(task.name)
+		else:
+			# Services came online — clear the skip flag so we log again if they go down
+			self._skip_logged.discard(task.name)
+
+		return ready
 
 	# =================================================================
 	# FILE EVENTS (called by crawler / watcher)
@@ -172,7 +228,7 @@ class Orchestrator:
 			target=self._dispatch_loop, daemon=True
 		)
 		self.dispatch_thread.start()
-		logger.info(f"Orchestrator started ({self.config.get('max_workers', 4)} workers)")
+		logger.info(f"Orchestrator started ({self.max_workers} workers)")
 
 	def stop(self):
 		self.running = False
@@ -184,7 +240,8 @@ class Orchestrator:
 	def _dispatch_loop(self):
 		"""
 		Main loop. For each registered task:
-			- Skip if not ready
+			- Check services are loaded
+			- Skip if not ready (tasks stay PENDING)
 			- Claim up to batch_size paths from DB
 			- Submit to thread pool
 		"""
@@ -192,16 +249,19 @@ class Orchestrator:
 			dispatched_any = False
 
 			for task in self.tasks.values():
-				if not task.is_ready():
+				# Gate 1: services loaded?
+				if not self._services_ready(task):
 					continue
 
+				# Gate 2: semaphore available?
 				sem = self.task_semaphores[task.name]
 				if not sem.acquire(blocking=False):
-					continue  # all slots for this task are busy
+					continue
 
+				# Gate 3: any work to do?
 				paths = self.db.claim_tasks(task.name, task.batch_size)
 				if not paths:
-					sem.release()  # nothing to do, give the slot back
+					sem.release()
 					continue
 
 				dispatched_any = True
@@ -220,11 +280,16 @@ class Orchestrator:
 		"""
 		Run a task on a batch of paths. Called in a worker thread.
 
-		1. Build context
+		1. Build ForgeContext
 		2. Call run()
 		3. Per result: write outputs, mark done/failed, trigger downstream
 		"""
-		context = TaskContext(config=self.config, db=self.db)
+		context = ForgeContext(
+			db=self.db,
+			config=self.config,
+			services=self.service_manager,
+			parse=parse,
+		)
 
 		try:
 			results = task.run(paths, context)

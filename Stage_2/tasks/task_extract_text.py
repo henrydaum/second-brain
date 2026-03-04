@@ -1,19 +1,16 @@
 """
 Extract Text task.
 
-A simple first task that parses text files and stores the content.
-Uses the Stage 1 parser system to read files.
-
-This is a real task, not a dummy — it's the foundation that
-downstream tasks (embedding, summarization) will depend on.
+Parses text files and stores the content. Uses the Stage 1 parser system.
+This is the foundation that downstream tasks (embedding, summarization)
+depend on. No services required — just calls the parser directly.
 """
 
 import logging
 import time
 from pathlib import Path
 
-from Stage_1.registry import parse
-from Stage_2.BaseTask import BaseTask, TaskContext, TaskResult
+from Stage_2.BaseTask import BaseTask, TaskResult
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +20,7 @@ class ExtractText(BaseTask):
 	version = 1
 	modalities = ["text"]
 	depends_on = []
+	requires_services = []  # no models needed
 	output_tables = ["extracted_text"]
 	output_schema = """
 		CREATE TABLE IF NOT EXISTS extracted_text (
@@ -39,13 +37,11 @@ class ExtractText(BaseTask):
 		results = []
 		for path in paths:
 			try:
-				parse_result = parse(path, "text")
+				parse_result = context.parse(path, "text")
 
 				if not parse_result.success:
 					results.append(TaskResult.failed(f"Parse failed: {parse_result.error}"))
 					continue
-				
-				print(f"Found content: {parse_result.output[:100]}...")  # Debug log
 
 				content = parse_result.output or ""
 
