@@ -99,8 +99,6 @@ class SentenceTransformerEmbedder(BaseEmbedder):
 
     def load(self):
         """Loads the model into memory. Returns True if successful, False otherwise."""
-        
-        """Basically, the model weights can be but in either the BASE_DIR or the DATA_DIR; both work. If neither, it will download into the DATA_DIR."""
         logger.info(f"Loading Sentence Transformer model: {self.model_name}")
         if self.loaded and self.model is not None:
             return True
@@ -108,9 +106,8 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         import torch 
         from sentence_transformers import SentenceTransformer
         
-        # Determine Device
-        embed_use_cuda = self.config.get('embed_use_cuda', True)
-        self.device = "cuda" if torch.cuda.is_available() and embed_use_cuda else "cpu"
+        # Determine Device — uses self.use_cuda from __init__
+        self.device = "cuda" if torch.cuda.is_available() and self.use_cuda else "cpu"
         logger.info(f"Loading model on {self.device}...")
 
         # 1. Check Internet / Environment

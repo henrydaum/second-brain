@@ -1,14 +1,15 @@
 import logging
+import os
 from pathlib import Path
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from context import DataRefineryContext
-from Stage_1.registry import parse
+from Stage_1.registry import parse, get_modality
 from Stage_2.BaseTask import BaseTask, TaskResult
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Orchestrator")
 
 """
 Orchestrator.
@@ -34,10 +35,10 @@ Flow:
 
 
 class Orchestrator:
-	def __init__(self, db, config: dict, service_manager=None):
+	def __init__(self, db, config: dict, services: dict = {}):
 		self.db = db
 		self.config = config
-		self.service_manager = service_manager
+		self.services = services
 
 		# Task registry: name -> BaseTask instance
 		self.tasks: dict[str, BaseTask] = {}
@@ -92,11 +93,7 @@ class Orchestrator:
 		self.tasks[task.name] = task
 
 		svc_info = f", requires={task.requires_services}" if task.requires_services else ""
-		logger.info(
-			f"Registered: {task.name} v{task.version} "
-			f"(modalities={task.modalities}, depends_on={task.depends_on}, "
-			f"batch={task.batch_size}{svc_info})"
-		)
+		logger.info(f"Registered: {task.name} v{task.version}")
 
 		max_w = task.max_workers if task.max_workers > 0 else self.max_workers
 		self.task_semaphores[task.name] = threading.Semaphore(max_w)
@@ -129,44 +126,31 @@ class Orchestrator:
 	def _services_ready(self, task: BaseTask) -> bool:
 		"""
 		Check if all required services for a task are loaded.
-
-		In auto mode:   ServiceManager loads them on demand.
-		In manual mode: ServiceManager just checks.
-
-		Either way, if this returns False, the task is skipped this cycle.
-		Tasks stay PENDING in the queue — they'll run once services are loaded.
+		If not ready, the task is skipped this cycle and stays PENDING.
 		"""
 		if not task.requires_services:
 			return True
 
-		if self.service_manager is None:
-			# No service manager — skip tasks that need services
+		not_registered = []
+		not_loaded = []
+		for name in task.requires_services:
+			svc = self.services.get(name)
+			if svc is None:
+				not_registered.append(name)
+			elif not svc.loaded:
+				not_loaded.append(name)
+
+		if not_registered or not_loaded:
 			if task.name not in self._skip_logged:
-				logger.warning(
-					f"Task '{task.name}' requires services {task.requires_services} "
-					f"but no ServiceManager is configured"
-				)
+				if not_registered:
+					logger.warning(f"Task '{task.name}' requires unregistered services: {not_registered}")
+				if not_loaded:
+					logger.info(f"Task '{task.name}' waiting for services to load: {not_loaded}")
 				self._skip_logged.add(task.name)
 			return False
 
-		ready = self.service_manager.ensure_loaded(task.requires_services)
-
-		if not ready:
-			# Log once per task to avoid spam
-			if task.name not in self._skip_logged:
-				missing = [
-					s for s in task.requires_services
-					if not self.service_manager.is_loaded(s)
-				]
-				logger.info(
-					f"Task '{task.name}' waiting for services: {missing}"
-				)
-				self._skip_logged.add(task.name)
-		else:
-			# Services came online — clear the skip flag so we log again if they go down
-			self._skip_logged.discard(task.name)
-
-		return ready
+		self._skip_logged.discard(task.name)
+		return True
 
 	# =================================================================
 	# FILE EVENTS (called by crawler / watcher)
@@ -213,6 +197,46 @@ class Orchestrator:
 				if modality in task.modalities:
 					if self._deps_met(path, task):
 						self.db.enqueue_task(path, task.name, task.version)
+
+	def on_paths_discovered(self, child_paths: list[str]):
+		"""
+		A task produced new files (e.g. container extraction).
+		Register each child as a first-class file and queue tasks for it,
+		exactly as the watcher would for a newly discovered file on disk.
+
+		Skips paths that don't exist or have unrecognized extensions.
+		"""
+		from Stage_1.registry import get_modality, get_supported_extensions
+		supported = get_supported_extensions()
+
+		for child_path in child_paths:
+			if not os.path.exists(child_path):
+				logger.warning(f"Discovered path does not exist, skipping: {child_path}")
+				continue
+
+			p = Path(child_path)
+			ext = p.suffix.lower()
+
+			if ext not in supported:
+				logger.debug(f"Skipping unsupported extension from container: {p.name}")
+				continue
+
+			modality = get_modality(ext)
+			mtime = os.path.getmtime(child_path)
+
+			# Register in DB — same as watcher._register_file
+			self.db.upsert_file(
+				path=child_path,
+				file_name=p.name,
+				extension=ext,
+				modality=modality,
+				mtime=mtime,
+			)
+
+			logger.info(f"[Container] Registered: {p.name} ({modality})")
+
+			# Queue tasks — same as on_file_discovered
+			self.on_file_discovered(child_path, ext, modality)
 
 	# =================================================================
 	# DISPATCH LOOP
@@ -287,7 +311,7 @@ class Orchestrator:
 		context = DataRefineryContext(
 			db=self.db,
 			config=self.config,
-			services=self.service_manager,
+			services=self.services,
 			parse=parse,
 		)
 
@@ -315,8 +339,13 @@ class Orchestrator:
 				self.db.complete_task(path, task.name)
 				self.on_task_completed(path, task.name)
 
+				# Multi-modal discovery — same file, different modalities
 				if result.also_contains:
 					self.on_also_contains(path, result.also_contains)
+
+				# New file discovery — child files from containers
+				if result.discovered_paths:
+					self.on_paths_discovered(result.discovered_paths)
 			else:
 				self.db.fail_task(path, task.name, result.error)
 				logger.warning(

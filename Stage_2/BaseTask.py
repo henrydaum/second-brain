@@ -5,7 +5,7 @@ from typing import Any
 # Use the unified context
 from context import DataRefineryContext
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("BaseTask")
 
 """
 Task interface.
@@ -55,11 +55,15 @@ class TaskResult:
 	The orchestrator reads success to decide DONE vs FAILED.
 	The data dict is passed to db.write_outputs() if non-empty.
 	also_contains is forwarded from the parser for multi-modal discovery.
+	discovered_paths is for tasks that produce new files (e.g. container
+	extraction). The orchestrator registers these as first-class files
+	and queues tasks for them, just like the watcher would.
 	"""
 	success: bool = True
 	error: str = ""
 	data: list[dict] = field(default_factory=list)  # rows to write to output table(s)
 	also_contains: list[str] = field(default_factory=list)  # from ParseResult
+	discovered_paths: list[str] = field(default_factory=list)  # new files to register
 
 	@staticmethod
 	def failed(error: str) -> "TaskResult":

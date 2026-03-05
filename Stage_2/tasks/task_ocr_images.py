@@ -15,7 +15,7 @@ from pathlib import Path
 
 from Stage_2.BaseTask import BaseTask, TaskResult
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("OCRImages")
 
 
 class OCRImages(BaseTask):

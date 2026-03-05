@@ -5,14 +5,14 @@ The registry maps (extension, modality) pairs to parser functions.
 Each parser function looks like this: func(path: str, config: dict) -> ParseResult
 
 A single extension can have multiple entries for different modalities.
-The default modality for each extension is defined in _MODALITY_MAP.
+The first modality registered for an extension becomes its default.
 """
 
 import logging
 from pathlib import Path
 from Stage_1.ParseResult import ParseResult
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Registry")
 
 
 # ===================================================================
@@ -20,18 +20,35 @@ logger = logging.getLogger(__name__)
 #
 # Key:   (extension, modality)  e.g. (".pdf", "text"), (".pdf", "image")
 # Value: parser function
+#
+# _MODALITY_MAP stores the default modality per extension.
+# It's set automatically by register() — the first modality registered
+# for an extension becomes the default.
 # ===================================================================
 
 _REGISTRY: dict[tuple[str, str], callable] = {}
+_MODALITY_MAP: dict[str, str] = {}
 
 
 def register(extensions: str | list[str], modality: str, func: callable):
-    """Register a parser function for one or more extensions under a modality."""
+    """
+    Register a parser function for one or more extensions under a modality.
+    The first modality registered for an extension becomes its default.
+    """
     if isinstance(extensions, str):
         extensions = [extensions]
     for ext in extensions:
         ext = ext.lower() if ext.startswith(".") else f".{ext}"
         _REGISTRY[(ext, modality)] = func
+        # First registration wins as the default modality
+        if ext not in _MODALITY_MAP:
+            _MODALITY_MAP[ext] = modality
+
+
+def get_modality(extension: str) -> str:
+    """Get the default modality for an extension. Returns 'unknown' if unregistered."""
+    ext = extension.lower() if extension.startswith(".") else f".{extension}"
+    return _MODALITY_MAP.get(ext, "unknown")
 
 
 def get_modalities_for(extension: str) -> list[str]:
@@ -43,79 +60,6 @@ def get_modalities_for(extension: str) -> list[str]:
 def get_supported_extensions() -> set[str]:
     """All extensions that have at least one registered parser."""
     return {ext for ext, _ in _REGISTRY}
-
-
-# ===================================================================
-# MODALITY MAP
-#
-# Static mapping of extension -> modality.
-# Serves two purposes:
-#   1. The crawler uses this to classify files WITHOUT importing parsers.
-#   2. Defines the default modality for each extension.
-# ===================================================================
-
-_MODALITY_MAP: dict[str, str] = {}
-
-
-def _register_modalities(extensions: list[str], modality: str):
-    for ext in extensions:
-        ext = ext.lower() if ext.startswith(".") else f".{ext}"
-        _MODALITY_MAP[ext] = modality
-
-
-# --- Text ---
-_register_modalities([
-    ".txt", ".md", ".markdown", ".rst", ".tex", ".log",
-    ".pdf", ".docx", ".doc", ".rtf", ".pptx", ".odt", ".epub",
-    ".json", ".yaml", ".yml", ".xml",
-    ".ini", ".toml", ".cfg", ".env",
-    ".py", ".js", ".jsx", ".ts", ".tsx",
-    ".html", ".htm", ".css", ".scss",
-    ".c", ".cpp", ".h", ".hpp",
-    ".java", ".cs", ".php", ".rb",
-    ".go", ".rs", ".swift", ".kt",
-    ".sql", ".sh", ".bat", ".ps1",
-    ".r", ".m", ".scala", ".lua",
-], "text")
-
-# --- Image ---
-_register_modalities([
-    ".png", ".jpg", ".jpeg", ".webp",
-    ".heic", ".heif", ".tif", ".tiff",
-    ".bmp", ".ico",
-], "image")
-
-# --- Audio ---
-_register_modalities([
-    ".mp3", ".wav", ".flac", ".m4a",
-    ".aac", ".ogg", ".wma", ".opus",
-], "audio")
-
-# --- Tabular ---
-_register_modalities([
-    ".csv", ".tsv",
-    ".xlsx", ".xls",
-    ".parquet", ".feather",
-    ".sqlite", ".db",
-], "tabular")
-
-# --- Container ---
-_register_modalities([
-    ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
-    ".eml",
-], "container")
-
-# --- Video ---
-_register_modalities([
-    ".mp4", ".mkv", ".avi", ".mov",
-    ".webm", ".flv", ".wmv", ".gif",
-], "video")
-
-
-def get_modality(extension: str) -> str:
-    """Get the default modality for an extension. Returns 'unknown' if unregistered."""
-    ext = extension.lower() if extension.startswith(".") else f".{extension}"
-    return _MODALITY_MAP.get(ext, "unknown")
 
 
 # ===================================================================
@@ -189,5 +133,7 @@ def parse(path: str, modality: str = None, config: dict = None) -> ParseResult:
         logger.error(f"Parser failed for {path_obj.name} as {modality}: {e}")
         return ParseResult.failed(error=str(e), modality=modality)
 
-# Initialize the registry by importing all parsers
+# Initialize the registry by importing all parsers.
+# Each parser file calls register() at module level, which populates
+# both _REGISTRY and _MODALITY_MAP in one shot.
 from Stage_1.parsers import parse_audio, parse_image, parse_tabular, parse_text, parse_video, parse_container

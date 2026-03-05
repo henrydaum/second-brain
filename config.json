@@ -1,5 +1,8 @@
 {
-    "sync_directories": ["C:\\Users\\henry\\Documents\\My_Code\\Test Database"],
+    "sync_directories": [
+        "C:\\Users\\henry\\Documents\\My_Code\\Test Database"
+    ],
+    "db_path": "database.db",
     "ignored_extensions": [],
     "ignored_folders": [
         "node_modules",
@@ -13,8 +16,9 @@
     "poll_interval": 1.0,
     "task_timeout": 300,
     "reprocess_interval": 300,
-    "db_path": "database.db",
     "llm_model_name": "gemma-3-4b-it@q4_k_s",
+    "llm_endpoint": null,
+    "llm_api_key": null,
     "embed_text_model_name": "BAAI/bge-m3",
     "embed_image_model_name": "clip-ViT-L-14",
     "embed_use_cuda": false,

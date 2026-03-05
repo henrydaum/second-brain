@@ -9,7 +9,7 @@ from watchdog.events import FileSystemEventHandler
 
 from Stage_1.registry import get_modality, get_supported_extensions
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Watcher")
 
 """
 Watcher.

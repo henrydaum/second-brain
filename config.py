@@ -2,7 +2,7 @@ import logging
 import json
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Config")
 
 """
 Config loader.
@@ -13,30 +13,27 @@ Loads and saves config as a plain dict.
 
 
 DEFAULTS = {
-    # Directories to watch
+    # Basic config
     "sync_directories": [],
-
-    # Extensions to ignore (overrides modality mapping)
-    "ignored_extensions": [],  # need to implement
-
-    # Folders to skip
+    "db_path": "database.db",
+    # Whitelist/blacklist files
+    "ignored_extensions": [],
     "ignored_folders": ["node_modules", "__pycache__", ".git", ".venv", "venv"],
     "skip_hidden_folders": True,
-
-    # Workers
+    # Threading
     "max_workers": 4,
-
-    # Dispatch
     "poll_interval": 1.0,
-
-    # Timeouts
     "task_timeout": 300,
-
-    # Reprocess interval (seconds) — skip re-queuing if recently processed
     "reprocess_interval": 300,
-
-    # Database
-    "db_path": "database.db",
+    # LLM
+    "llm_model_name": "gemma-3-4b-it@q4_k_s",
+    "llm_endpoint": "http://127.0.0.1:1234",
+    "llm_api_key": "OPENAI_API_KEY",
+    # Embedding
+    "embed_text_model_name": "BAAI/bge-m3",
+    "embed_image_model_name": "clip-ViT-L-14",
+    "embed_use_cuda": False,
+    "embed_chunk_size": 512
 }
 
 
@@ -50,9 +47,10 @@ def load(path: str = "config.json") -> dict:
         return dict(DEFAULTS)
 
     with open(p, "r") as f:
+        logger.info(f"Loading config from {p}")
         user_config = json.load(f)
 
-    # Merge with defaults so new keys are always present
+    # If new settings are added, this adds them to the existing config.json
     merged = dict(DEFAULTS)
     merged.update(user_config)
 

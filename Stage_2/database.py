@@ -3,7 +3,7 @@ import sqlite3
 import threading
 import time
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("Database")
 
 """
 Database for the task pipeline.
@@ -39,7 +39,7 @@ class Database:
 				file_name     TEXT,
 				extension     TEXT,
 				modality      TEXT,
-				mtime    REAL,
+				mtime         REAL,
 				discovered_at REAL,
 				updated_at    REAL
 			)
@@ -67,11 +67,11 @@ class Database:
 		# Task registry — remembers which tasks are registered across restarts
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS registered_tasks (
-				task_name   TEXT PRIMARY KEY,
+				task_name    TEXT PRIMARY KEY,
 				task_version INTEGER,
 				output_table TEXT,
-				modalities  TEXT,
-				depends_on  TEXT
+				modalities   TEXT,
+				depends_on   TEXT
 			)
 		""")
 
@@ -232,7 +232,7 @@ class Database:
 			self.conn.commit()
 
 	# =================================================================
-	# DYNAMIC OUTPUT TABLES
+	# OUTPUT TABLES
 	# =================================================================
 
 	def clean_output_tables(self, path, table_names):

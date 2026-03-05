@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ParseResult")
 
 @dataclass
 class ParseResult:
