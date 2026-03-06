@@ -66,7 +66,7 @@ def get_supported_extensions() -> set[str]:
 # MAIN ENTRY POINT
 # ===================================================================
 
-def parse(path: str, modality: str = None, config: dict = None) -> ParseResult:
+def parse(path: str, modality: str = None, config: dict = None, services: dict = None) -> ParseResult:
     """
     Parse a file and return standardized content.
 
@@ -127,7 +127,7 @@ def parse(path: str, modality: str = None, config: dict = None) -> ParseResult:
 
     # Call the parser
     try:
-        result = parser_func(path, config)
+        result = parser_func(path, config, services)
         return result
     except Exception as e:
         logger.error(f"Parser failed for {path_obj.name} as {modality}: {e}")

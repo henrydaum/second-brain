@@ -33,7 +33,9 @@ DEFAULTS = {
     "embed_text_model_name": "BAAI/bge-m3",
     "embed_image_model_name": "clip-ViT-L-14",
     "embed_use_cuda": False,
-    "embed_chunk_size": 512
+    "embed_chunk_size": 512,
+    # Cloud Services
+    "use_drive": True,
 }
 
 

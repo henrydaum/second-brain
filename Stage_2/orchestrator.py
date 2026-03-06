@@ -28,8 +28,8 @@ Flow:
 		-> if ALL deps now met, enqueue
 
 	Dispatch loop:
-		-> for each task, check services are loaded
-		-> skip if services not ready (task stays PENDING)
+		-> for each task, check paused, services, semaphore
+		-> skip if not ready (task stays PENDING)
 		-> claim work from DB, route to thread pool
 """
 
@@ -42,6 +42,9 @@ class Orchestrator:
 
 		# Task registry: name -> BaseTask instance
 		self.tasks: dict[str, BaseTask] = {}
+
+		# Paused tasks — skipped during dispatch, work stays PENDING
+		self.paused: set[str] = set()
 
 		# Thread pool
 		self.max_workers = config.get("max_workers", 4)
@@ -63,15 +66,6 @@ class Orchestrator:
 	# =================================================================
 
 	def register_task(self, task: BaseTask):
-		"""
-		Register a task with the system.
-
-		1. Call setup() to initialize
-		2. Create output tables from output_schema
-		3. Check for version changes
-		4. Save registration to DB
-		5. Backfill existing files
-		"""
 		task.setup(self.config)
 
 		if task.output_schema:
@@ -91,8 +85,6 @@ class Orchestrator:
 		)
 
 		self.tasks[task.name] = task
-
-		svc_info = f", requires={task.requires_services}" if task.requires_services else ""
 		logger.info(f"Registered: {task.name} v{task.version}")
 
 		max_w = task.max_workers if task.max_workers > 0 else self.max_workers
@@ -101,11 +93,9 @@ class Orchestrator:
 		self._backfill_task(task)
 
 	def _reset_task_for_reprocessing(self, task: BaseTask):
-		"""Version changed -- reset all DONE entries so they get re-queued."""
 		self.db.reset_task(task.name)
 
 	def _backfill_task(self, task: BaseTask):
-		"""Queue this task for existing files that match and have deps met."""
 		for modality in task.modalities:
 			paths = self.db.get_files_by_modality(modality)
 			for path in paths:
@@ -113,7 +103,6 @@ class Orchestrator:
 					self.db.enqueue_task(path, task.name, task.version)
 
 	def _deps_met(self, path: str, task: BaseTask) -> bool:
-		"""Are all dependencies satisfied for this file?"""
 		for dep in task.depends_on:
 			if not self.db.is_task_done(path, dep):
 				return False
@@ -124,10 +113,6 @@ class Orchestrator:
 	# =================================================================
 
 	def _services_ready(self, task: BaseTask) -> bool:
-		"""
-		Check if all required services for a task are loaded.
-		If not ready, the task is skipped this cycle and stays PENDING.
-		"""
 		if not task.requires_services:
 			return True
 
@@ -153,14 +138,10 @@ class Orchestrator:
 		return True
 
 	# =================================================================
-	# FILE EVENTS (called by crawler / watcher)
+	# FILE EVENTS
 	# =================================================================
 
 	def on_file_discovered(self, path: str, extension: str, modality: str):
-		"""
-		New or modified file found.
-		Queue every task that accepts this modality and has deps met.
-		"""
 		for task in self.tasks.values():
 			if modality in task.modalities:
 				if self._deps_met(path, task):
@@ -178,20 +159,12 @@ class Orchestrator:
 	# =================================================================
 
 	def on_task_completed(self, path: str, task_name: str):
-		"""
-		Task finished. Check downstream tasks:
-		if all their deps are now met, queue them.
-		"""
 		for task in self.tasks.values():
 			if task_name in task.depends_on:
 				if self._deps_met(path, task):
 					self.db.enqueue_task(path, task.name, task.version)
 
 	def on_also_contains(self, path: str, modalities: list[str]):
-		"""
-		Parser discovered extra modalities (e.g. images in a PDF).
-		Queue tasks that accept these modalities.
-		"""
 		for modality in modalities:
 			for task in self.tasks.values():
 				if modality in task.modalities:
@@ -199,13 +172,6 @@ class Orchestrator:
 						self.db.enqueue_task(path, task.name, task.version)
 
 	def on_paths_discovered(self, child_paths: list[str]):
-		"""
-		A task produced new files (e.g. container extraction).
-		Register each child as a first-class file and queue tasks for it,
-		exactly as the watcher would for a newly discovered file on disk.
-
-		Skips paths that don't exist or have unrecognized extensions.
-		"""
 		from Stage_1.registry import get_modality, get_supported_extensions
 		supported = get_supported_extensions()
 
@@ -224,7 +190,6 @@ class Orchestrator:
 			modality = get_modality(ext)
 			mtime = os.path.getmtime(child_path)
 
-			# Register in DB — same as watcher._register_file
 			self.db.upsert_file(
 				path=child_path,
 				file_name=p.name,
@@ -234,8 +199,6 @@ class Orchestrator:
 			)
 
 			logger.info(f"[Container] Registered: {p.name} ({modality})")
-
-			# Queue tasks — same as on_file_discovered
 			self.on_file_discovered(child_path, ext, modality)
 
 	# =================================================================
@@ -262,27 +225,24 @@ class Orchestrator:
 		logger.info("Orchestrator stopped")
 
 	def _dispatch_loop(self):
-		"""
-		Main loop. For each registered task:
-			- Check services are loaded
-			- Skip if not ready (tasks stay PENDING)
-			- Claim up to batch_size paths from DB
-			- Submit to thread pool
-		"""
 		while self.running:
 			dispatched_any = False
 
 			for task in self.tasks.values():
-				# Gate 1: services loaded?
+				# Gate 1: paused?
+				if task.name in self.paused:
+					continue
+
+				# Gate 2: services loaded?
 				if not self._services_ready(task):
 					continue
 
-				# Gate 2: semaphore available?
+				# Gate 3: semaphore available?
 				sem = self.task_semaphores[task.name]
 				if not sem.acquire(blocking=False):
 					continue
 
-				# Gate 3: any work to do?
+				# Gate 4: any work to do?
 				paths = self.db.claim_tasks(task.name, task.batch_size)
 				if not paths:
 					sem.release()
@@ -301,18 +261,11 @@ class Orchestrator:
 			sem.release()
 
 	def _execute(self, task: BaseTask, paths: list[str]):
-		"""
-		Run a task on a batch of paths. Called in a worker thread.
-
-		1. Build DataRefineryContext
-		2. Call run()
-		3. Per result: write outputs, mark done/failed, trigger downstream
-		"""
 		context = DataRefineryContext(
 			db=self.db,
 			config=self.config,
 			services=self.services,
-			parse=parse,
+			parse=lambda path, modality=None, config=None: parse(path, modality, config, self.services),  # Services are passed automatically to parsers
 		)
 
 		try:
@@ -325,7 +278,6 @@ class Orchestrator:
 
 		for path, result in zip(paths, results):
 			if result.success:
-				# Write outputs
 				if result.data and task.output_tables:
 					try:
 						self.db.write_outputs(task.output_tables[0], result.data)
@@ -339,11 +291,9 @@ class Orchestrator:
 				self.db.complete_task(path, task.name)
 				self.on_task_completed(path, task.name)
 
-				# Multi-modal discovery — same file, different modalities
 				if result.also_contains:
 					self.on_also_contains(path, result.also_contains)
 
-				# New file discovery — child files from containers
 				if result.discovered_paths:
 					self.on_paths_discovered(result.discovered_paths)
 			else:

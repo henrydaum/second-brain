@@ -3,7 +3,7 @@ from pathlib import Path
 from Stage_1.ParseResult import ParseResult
 import Stage_1.registry as registry
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ParseImage")
 
 # Returns standardized PIL object
 
@@ -26,7 +26,7 @@ Downstream tasks decide what to do: OCR, CLIP embed, thumbnail, etc.
 # PIL handles these natively.
 # ===================================================================
 
-def parse_standard_image(path: str, config: dict) -> ParseResult:
+def parse_standard_image(path: str, config: dict, services: dict = None) -> ParseResult:
     """Open a standard image file and return as PIL.Image."""
     try:
         from PIL import Image
@@ -60,7 +60,7 @@ registry.register([
 # HEIC / HEIF (Apple format)
 # ===================================================================
 
-def parse_heic(path: str, config: dict) -> ParseResult:
+def parse_heic(path: str, config: dict, services: dict = None) -> ParseResult:
     """Parse HEIC/HEIF images. Requires pillow-heif."""
     try:
         import pillow_heif

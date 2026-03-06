@@ -21,6 +21,7 @@
     "llm_api_key": null,
     "embed_text_model_name": "BAAI/bge-m3",
     "embed_image_model_name": "clip-ViT-L-14",
-    "embed_use_cuda": false,
-    "embed_chunk_size": 512
+    "embed_use_cuda": true,
+    "embed_chunk_size": 512,
+    "use_drive": true
 }

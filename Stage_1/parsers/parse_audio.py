@@ -5,7 +5,7 @@ from pathlib import Path
 from Stage_1.ParseResult import ParseResult
 import Stage_1.registry as registry
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ParseAudio")
 
 # Returns a standardized np.ndarray + sample rate integer
 
@@ -69,7 +69,7 @@ def _probe_metadata(path: str) -> dict:
         return {}
 
 
-def parse_audio(path: str, config: dict) -> ParseResult:
+def parse_audio(path: str, config: dict, services: dict = None) -> ParseResult:
     """
     Load an audio file as (np.ndarray, sample_rate).
 

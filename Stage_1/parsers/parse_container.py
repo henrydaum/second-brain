@@ -10,7 +10,7 @@ from pathlib import Path
 from Stage_1.ParseResult import ParseResult
 import Stage_1.registry as registry
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ParseContainer")
 
 # Returns a list of child paths (folders or files)
 
@@ -83,7 +83,7 @@ def _collect_paths(dest: str) -> list[str]:
 # ZIP
 # ===================================================================
 
-def parse_zip(path: str, config: dict) -> ParseResult:
+def parse_zip(path: str, config: dict, services: dict = None) -> ParseResult:
     """Extract a ZIP archive and return child paths."""
     try:
         if not zipfile.is_zipfile(path):
@@ -143,7 +143,7 @@ registry.register(".zip", "container", parse_zip)
 # TAR (including .tar.gz, .tar.bz2)
 # ===================================================================
 
-def parse_tar(path: str, config: dict) -> ParseResult:
+def parse_tar(path: str, config: dict, services: dict = None) -> ParseResult:
     """Extract a TAR archive (optionally compressed) and return child paths."""
     try:
         if not tarfile.is_tarfile(path):
@@ -203,7 +203,7 @@ registry.register([".tar", ".gz", ".bz2"], "container", parse_tar)
 # 7Z
 # ===================================================================
 
-def parse_7z(path: str, config: dict) -> ParseResult:
+def parse_7z(path: str, config: dict, services: dict = None) -> ParseResult:
     """Extract a 7-Zip archive and return child paths."""
     try:
         import py7zr
@@ -240,7 +240,7 @@ registry.register(".7z", "container", parse_7z)
 # RAR
 # ===================================================================
 
-def parse_rar(path: str, config: dict) -> ParseResult:
+def parse_rar(path: str, config: dict, services: dict = None) -> ParseResult:
     """Extract a RAR archive and return child paths."""
     try:
         import rarfile
@@ -281,7 +281,7 @@ registry.register(".rar", "container", parse_rar)
 # original filenames. All land in the extraction directory.
 # ===================================================================
 
-def parse_eml(path: str, config: dict) -> ParseResult:
+def parse_eml(path: str, config: dict, services: dict = None) -> ParseResult:
     """Extract an email's body and attachments as child files."""
     try:
         dest = _extract_dir(path)

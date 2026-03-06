@@ -44,6 +44,7 @@ class ExtractText(BaseTask):
 					continue
 
 				content = parse_result.output or ""
+				logger.info(f"Extracted {len(content)} chars from {Path(path).name}: {content[:25]}...")
 
 				results.append(TaskResult(
 					success=True,
@@ -58,4 +59,4 @@ class ExtractText(BaseTask):
 				))
 			except Exception as e:
 				results.append(TaskResult.failed(str(e)))
-		return results
+		return 

@@ -3,7 +3,7 @@ from pathlib import Path
 from Stage_1.ParseResult import ParseResult
 import Stage_1.registry as registry
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ParseVideo")
 
 # Returns a standardized av.Container object
 
@@ -32,7 +32,7 @@ Requires: av (PyAV)
 """
 
 
-def parse_video(path: str, config: dict) -> ParseResult:
+def parse_video(path: str, config: dict, services: dict = None) -> ParseResult:
     """
     Open a video file and return an av.Container handle.
 
@@ -105,7 +105,7 @@ registry.register([
     ".webm", ".flv", ".wmv", ".gif",
 ], "video", parse_video)
 
-def parse_video_audio(path: str, config: dict) -> ParseResult:
+def parse_video_audio(path: str, config: dict, services: dict = None) -> ParseResult:
     """Extract the audio track from a video as (np.ndarray, sample_rate)."""
     try:
         import av

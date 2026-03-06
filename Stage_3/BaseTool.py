@@ -68,23 +68,10 @@ class BaseTool:
     requires_services: list[str] = []
 
     def run(self, context: DataRefineryContext, **kwargs) -> ToolResult:
-        """
-        Execute the tool with the given arguments.
-
-        Args:
-            context:    DataRefineryContext with db, config, services, parse, call_tool.
-            **kwargs:   The arguments matching self.parameters schema.
-
-        Returns:
-            ToolResult with the data.
-        """
         raise NotImplementedError(f"Tool '{self.name}' must implement run()")
 
     def to_schema(self) -> dict:
-        """
-        Export as an OpenAI-compatible function schema.
-        Works directly with OpenAI, Anthropic, and similar function calling APIs.
-        """
+        """Export as an OpenAI-compatible function schema."""
         return {
             "type": "function",
             "function": {
@@ -105,10 +92,10 @@ class ToolRegistry:
         3. Exports schemas for LLM function calling
     """
 
-    def __init__(self, db, config: dict, service_manager=None):
+    def __init__(self, db, config: dict, services: dict = {}):
         self.db = db
         self.config = config
-        self.service_manager = service_manager
+        self.services = services
         self.tools: dict[str, BaseTool] = {}
 
     def register(self, tool: BaseTool):
@@ -129,23 +116,23 @@ class ToolRegistry:
             return ToolResult.failed(f"Unknown tool: {name}")
 
         # Check service requirements
-        if tool.requires_services and self.service_manager:
-            if not self.service_manager.ensure_loaded(tool.requires_services):
-                missing = [
-                    s for s in tool.requires_services
-                    if not self.service_manager.is_loaded(s)
-                ]
-                return ToolResult.failed(
-                    f"Required services not available: {missing}"
-                )
+        if tool.requires_services:
+            not_ready = []
+            for svc_name in tool.requires_services:
+                svc = self.services.get(svc_name)
+                if svc is None or not svc.loaded:
+                    not_ready.append(svc_name)
+            if not_ready:
+                return ToolResult.failed(f"Required services not available: {not_ready}")
 
         # Build context with call_tool pointing back to this registry
+        from Stage_1.registry import parse
         context = DataRefineryContext(
             db=self.db,
             config=self.config,
-            services=self.service_manager,
-            call_tool=self.call,  # recursive — tools can call tools
-            parse=self._get_parse_fn(),
+            services=self.services,
+            call_tool=self.call,
+            parse=lambda path, modality=None, config=None: parse(path, modality, config, self.services),  # Passes services automatically to parsers
         )
 
         try:
@@ -160,18 +147,8 @@ class ToolRegistry:
         return [tool.to_schema() for tool in self.tools.values()]
 
     def get_schema(self, name: str) -> dict | None:
-        """Export a single tool's schema."""
         tool = self.tools.get(name)
         return tool.to_schema() if tool else None
 
     def list_tools(self) -> list[str]:
-        """List all registered tool names."""
         return list(self.tools.keys())
-
-    def _get_parse_fn(self):
-        """Lazy import to avoid circular dependency."""
-        try:
-            from Stage_1.registry import parse
-            return parse
-        except ImportError:
-            return None

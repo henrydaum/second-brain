@@ -4,7 +4,7 @@ from pathlib import Path
 from Stage_1.ParseResult import ParseResult
 import Stage_1.registry as registry
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ParseText")
 
 # Returns standardized UTF-8 string
 
@@ -46,7 +46,7 @@ def _clean_text(text: str) -> str:
 # PLAIN TEXT / CODE
 # ===================================================================
 
-def parse_plaintext(path: str, config: dict) -> ParseResult:
+def parse_plaintext(path: str, config: dict, services: dict = None) -> ParseResult:
     """Read any UTF-8 text file. Falls back to latin-1."""
     try:
         limit = _max_chars(config)
@@ -87,7 +87,7 @@ registry.register([
 # PDF
 # ===================================================================
 
-def parse_pdf_text(path: str, config: dict) -> ParseResult:
+def parse_pdf_text(path: str, config: dict, services: dict = None) -> ParseResult:
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -160,7 +160,7 @@ def parse_pdf_text(path: str, config: dict) -> ParseResult:
 registry.register(".pdf", "text", parse_pdf_text)
 
 
-def parse_pdf_image(path: str, config: dict) -> ParseResult:
+def parse_pdf_image(path: str, config: dict, services: dict = None) -> ParseResult:
     try:
         import fitz
         from PIL import Image
@@ -208,7 +208,7 @@ def parse_pdf_image(path: str, config: dict) -> ParseResult:
 registry.register(".pdf", "image", parse_pdf_image)
 
 
-def parse_pdf_tables(path: str, config: dict) -> ParseResult:
+def parse_pdf_tables(path: str, config: dict, services: dict = None) -> ParseResult:
     """Extract tables from a PDF as DataFrames."""
     try:
         import fitz
@@ -273,7 +273,7 @@ registry.register(".pdf", "tabular", parse_pdf_tables)
 # DOCX
 # ===================================================================
 
-def parse_docx_text(path: str, config: dict) -> ParseResult:
+def parse_docx_text(path: str, config: dict, services: dict = None) -> ParseResult:
     """Extract text from a Word document. Detects embedded images."""
     try:
         from docx import Document
@@ -333,7 +333,7 @@ def parse_docx_text(path: str, config: dict) -> ParseResult:
 registry.register([".docx", ".doc"], "text", parse_docx_text)
 
 
-def parse_docx_image(path: str, config: dict) -> ParseResult:
+def parse_docx_image(path: str, config: dict, services: dict = None) -> ParseResult:
     """Extract embedded images from a DOCX as PIL.Image objects."""
     try:
         from docx import Document
@@ -381,7 +381,7 @@ registry.register([".docx", ".doc"], "image", parse_docx_image)
 # PPTX
 # ===================================================================
 
-def parse_pptx_text(path: str, config: dict) -> ParseResult:
+def parse_pptx_text(path: str, config: dict, services: dict = None) -> ParseResult:
     """Extract text from a PowerPoint. Detects embedded images."""
     try:
         from pptx import Presentation
@@ -432,7 +432,7 @@ def parse_pptx_text(path: str, config: dict) -> ParseResult:
 registry.register(".pptx", "text", parse_pptx_text)
 
 
-def parse_pptx_image(path: str, config: dict) -> ParseResult:
+def parse_pptx_image(path: str, config: dict, services: dict = None) -> ParseResult:
     """Extract embedded images from a PPTX as PIL.Image objects."""
     try:
         from pptx import Presentation
@@ -478,3 +478,91 @@ def parse_pptx_image(path: str, config: dict) -> ParseResult:
 
 
 registry.register(".pptx", "image", parse_pptx_image)
+
+# ===================================================================
+# GDOC
+# .gdoc files are JSON shortcuts containing a doc_id.
+# Requires the "drive" service to be loaded. If not loaded,
+# returns ParseResult.failed() — the task will be marked FAILED
+# and can be retried later once the service is available.
+# ===================================================================
+
+
+def _download_drive_content(drive_service, doc_id: str, mime_type: str):
+    """Download a Google Doc's content using its file ID."""
+    try:
+        import io
+        from googleapiclient.http import MediaIoBaseDownload
+        request = drive_service.files().export_media(fileId=doc_id, mimeType=mime_type)
+
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+
+        fh.seek(0)
+        text = fh.read().decode("utf-8")
+        logger.info(f"[Drive] Downloaded {len(text)} chars")
+        return text
+    except Exception as e:
+        logger.error(f"[Drive Download Error] {e}")
+        return None
+
+
+def parse_gdoc(path: str, config: dict, services: dict = None) -> ParseResult:
+    """
+    Parse a .gdoc file (JSON shortcut) and fetch content from Google Drive.
+    Requires the "google_drive" service to be loaded and available in config["_services"].
+    """
+    import json
+
+    # Get the drive service
+    drive_svc = services.get("google_drive")
+
+    if drive_svc is None or not getattr(drive_svc, "loaded", False):
+        return ParseResult.failed(
+            "Drive service not loaded — retry after loading",
+            modality="text",
+        )
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            gdoc_data = json.load(f)
+
+        doc_id = gdoc_data.get("doc_id")
+        if not doc_id:
+            return ParseResult.failed("No doc_id found in .gdoc file", modality="text")
+
+        # Get the authenticated Google Drive API service object
+        drive_api = drive_svc.service
+        if drive_api is None:
+            return ParseResult.failed(
+                "Drive service not authenticated",
+                modality="text",
+            )
+
+        content = _download_drive_content(drive_api, doc_id, "text/plain")
+
+        if content is None:
+            return ParseResult.failed("Failed to download document", modality="text")
+
+        limit = _max_chars(config)
+        content = _clean_text(content[:limit])
+
+        return ParseResult(
+            modality="text",
+            output=content,
+            metadata={
+                "char_count": len(content),
+                "source": "google_drive",
+                "doc_id": doc_id,
+            },
+        )
+    except Exception as e:
+        logger.error(f"Failed to parse gdoc {Path(path).name}: {e}")
+        return ParseResult.failed(str(e), modality="text")
+
+
+registry.register(".gdoc", "text", parse_gdoc)

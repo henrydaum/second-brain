@@ -3,7 +3,7 @@ from pathlib import Path
 from Stage_1.ParseResult import ParseResult
 import Stage_1.registry as registry
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ParseTabular")
 
 # Returns standardized DataFrame object
 
@@ -30,7 +30,7 @@ def _max_rows(config: dict) -> int:
 # CSV / TSV
 # ===================================================================
 
-def parse_csv(path: str, config: dict) -> ParseResult:
+def parse_csv(path: str, config: dict, services: dict = None) -> ParseResult:
     """Parse CSV/TSV into a DataFrame."""
     try:
         import pandas as pd
@@ -75,7 +75,7 @@ registry.register([".csv", ".tsv"], "tabular", parse_csv)
 # XLSX / XLS
 # ===================================================================
 
-def parse_xlsx(path: str, config: dict) -> ParseResult:
+def parse_xlsx(path: str, config: dict, services: dict = None) -> ParseResult:
     """Parse Excel files. Returns all sheets as a dict of DataFrames."""
     try:
         import pandas as pd
@@ -121,7 +121,7 @@ registry.register([".xlsx", ".xls"], "tabular", parse_xlsx)
 # PARQUET / FEATHER
 # ===================================================================
 
-def parse_parquet(path: str, config: dict) -> ParseResult:
+def parse_parquet(path: str, config: dict, services: dict = None) -> ParseResult:
     """Parse Apache Parquet files into a DataFrame."""
     try:
         import pandas as pd
@@ -165,7 +165,7 @@ registry.register([".parquet", ".feather"], "tabular", parse_parquet)
 # SQLITE
 # ===================================================================
 
-def parse_sqlite(path: str, config: dict) -> ParseResult:
+def parse_sqlite(path: str, config: dict, services: dict = None) -> ParseResult:
     try:
         import pandas as pd
         import sqlite3
