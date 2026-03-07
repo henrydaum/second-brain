@@ -198,17 +198,23 @@ class Database:
 				cur = self.conn.execute(
 					"SELECT path, task_name FROM task_queue WHERE status = 'PENDING'")
 			return [(row["path"], row["task_name"]) for row in cur.fetchall()]
+	
+	def reset_stuck_tasks_for(self, task_name: str, timeout_seconds: int) -> int:
+		"""
+		Reset PROCESSING entries for a specific task back to PENDING
+		if they've been running longer than timeout_seconds.
 
-	def reset_stuck_tasks(self, timeout_seconds=300):
-		"""Reset tasks stuck in PROCESSING back to PENDING."""
+		Returns the number of rows reset.
+		"""
 		cutoff = time.time() - timeout_seconds
 		with self.lock:
-			self.conn.execute("""
+			cur = self.conn.execute("""
 				UPDATE task_queue
 				SET status = 'PENDING', started_at = NULL
-				WHERE status = 'PROCESSING' AND started_at < ?
-			""", (cutoff,))
+				WHERE task_name = ? AND status = 'PROCESSING' AND started_at < ?
+			""", (task_name, cutoff))
 			self.conn.commit()
+			return cur.rowcount
 
 	def reset_failed_tasks(self, task_name=None):
 		with self.lock:
@@ -355,4 +361,38 @@ class Database:
 
 			return {"files": file_stats, "tasks": task_stats}
 		
-		
+	# =================================================================
+	# DIRECT QUERY
+	# =================================================================
+	def query(self, sql: str, max_rows: int = 25) -> dict:
+		"""
+		Execute a read-only SQL query and return results.
+
+		Returns:
+			{
+				"columns":   list of column names,
+				"rows":      list of tuples,
+				"truncated": bool — True if results were capped at max_rows,
+			}
+
+		Raises ValueError for non-SELECT statements.
+		Raises sqlite3.Error for invalid SQL.
+		"""
+		normalized = " ".join(sql.strip().split()).lower()
+		if not (normalized.startswith("select") or normalized.startswith("pragma")):
+			raise ValueError("Only SELECT and PRAGMA statements are allowed.")
+
+		with self.lock:
+			cur = self.conn.execute(sql)
+			columns = [desc[0] for desc in cur.description] if cur.description else []
+			rows = cur.fetchmany(max_rows + 1)
+
+			truncated = len(rows) > max_rows
+			if truncated:
+				rows = rows[:max_rows]
+
+			return {
+				"columns": columns,
+				"rows": [tuple(row) for row in rows],
+				"truncated": truncated,
+			}

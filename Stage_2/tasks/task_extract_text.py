@@ -32,6 +32,7 @@ class ExtractText(BaseTask):
 		);
 	"""
 	batch_size = 8
+	timeout = 120
 
 	def run(self, paths, context):
 		results = []
@@ -59,4 +60,4 @@ class ExtractText(BaseTask):
 				))
 			except Exception as e:
 				results.append(TaskResult.failed(str(e)))
-		return 
+		return results

@@ -536,7 +536,7 @@ def parse_gdoc(path: str, config: dict, services: dict = None) -> ParseResult:
             return ParseResult.failed("No doc_id found in .gdoc file", modality="text")
 
         # Get the authenticated Google Drive API service object
-        drive_api = drive_svc.service
+        drive_api = drive_svc.get_client()
         if drive_api is None:
             return ParseResult.failed(
                 "Drive service not authenticated",

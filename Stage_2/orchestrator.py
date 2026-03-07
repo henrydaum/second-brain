@@ -208,8 +208,10 @@ class Orchestrator:
 	def start(self):
 		self.running = True
 
-		timeout = self.config.get("task_timeout", 300)
-		self.db.reset_stuck_tasks(timeout)
+		for task in self.tasks.values():
+			count = self.db.reset_stuck_tasks_for(task.name, task.timeout)
+			if count > 0:
+				logger.info(f"Startup: reset {count} stuck '{task.name}' entries")
 
 		self.dispatch_thread = threading.Thread(
 			target=self._dispatch_loop, daemon=True
@@ -225,8 +227,23 @@ class Orchestrator:
 		logger.info("Orchestrator stopped")
 
 	def _dispatch_loop(self):
+		# Periodic stuck-task recovery
+		stuck_check_interval = 60  # How often (seconds) to sweep for stuck tasks
+		last_stuck_check = 0.0     # Force an immediate first check
+
 		while self.running:
 			dispatched_any = False
+
+			now = time.time()
+			if now - last_stuck_check >= stuck_check_interval:
+				for task in self.tasks.values():
+					count = self.db.reset_stuck_tasks_for(task.name, task.timeout)
+					if count > 0:
+						logger.warning(
+							f"Reset {count} stuck '{task.name}' entries "
+							f"(PROCESSING > {task.timeout}s)"
+						)
+				last_stuck_check = now
 
 			for task in self.tasks.values():
 				# Gate 1: paused?

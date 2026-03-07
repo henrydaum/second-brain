@@ -41,6 +41,7 @@ class ExtractContainer(BaseTask):
 	"""
 	batch_size = 2
 	max_workers = 2  # extraction is I/O-heavy, limit concurrency
+	timeout = 300
 
 	def run(self, paths, context):
 		results = []

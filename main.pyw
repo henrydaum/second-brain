@@ -204,6 +204,25 @@ def _repl(ctrl, shutdown_fn):
 			elif cmd == "stats":
 				print(ctrl.stats())
 
+			# --- Direct Query ---
+			elif cmd == "sql":
+				if not arg:
+					print("Usage: sql <SELECT ...>")
+					print("  Example: sql SELECT path, status FROM task_queue WHERE status='FAILED'")
+				else:
+					print(ctrl.query(arg))
+
+			elif cmd == "tables":
+				print(ctrl.query(
+					"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+				))
+
+			elif cmd == "schema":
+				if not arg:
+					print("Usage: schema <table_name>")
+				else:
+					print(ctrl.query(f"PRAGMA table_info({arg})"))
+
 			else:
 				print(f"Unknown command: '{cmd}'. Type 'help' for available commands.")
 

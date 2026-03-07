@@ -14,7 +14,7 @@ Loads and saves config as a plain dict.
 
 DEFAULTS = {
     # Basic config
-    "sync_directories": [],
+    "sync_directories": ["C:\\Users\\henry\\Documents\\My_Code\\Test Database"],
     "db_path": "database.db",
     # Whitelist/blacklist files
     "ignored_extensions": [],
@@ -34,8 +34,8 @@ DEFAULTS = {
     "embed_image_model_name": "clip-ViT-L-14",
     "embed_use_cuda": False,
     "embed_chunk_size": 512,
-    # Cloud Services
-    "use_drive": True,
+    # REPL
+    "max_query_rows": 25,
 }
 
 

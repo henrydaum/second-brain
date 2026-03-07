@@ -24,20 +24,24 @@ Credentials:
       Stored in DATA_DIR (immutable, user provides once)
     - token.json: OAuth refresh token (auto-generated after first login)
       Stored in DATA_DIR (mutable, auto-refreshed)
+
+Store the authenticated credentials (lightweight, thread-safe).
+Hand out a fresh build() client per call via get_client().
+build() is cheap (~1ms) — the OAuth dance only happens in load().
 """
 
-import logging
 import os
 from pathlib import Path
+import logging
 
-logger = logging.getLogger("DriveService")
+logger = logging.getLogger("driveService")
 
-DATA_DIR = Path(os.getenv("LOCALAPPDATA", "")) / "2nd Brain"
-
+DATA_DIR = Path(os.getenv('LOCALAPPDATA')) / "2nd Brain"
 
 class GoogleDriveService:
     def __init__(self):
-        self.service = None      # The Google Drive API service object
+        self._creds = None       # Authenticated credentials (thread-safe, reusable)
+        self.service = None      # Keep one instance for backward compat / quick checks
         self.model_name = "google_drive"
         self.loaded = False
 
@@ -53,16 +57,14 @@ class GoogleDriveService:
 
     def load(self) -> bool:
         """
-        Authenticate with Google Drive and create the API service.
+        Authenticate with Google Drive and store credentials.
         Opens a browser for OAuth consent if no valid token exists.
         Returns True if successful.
         """
-        # Check internet
         if not self._is_connected():
             logger.warning("[Drive] No internet — cannot authenticate.")
             return False
 
-        # Lazy imports
         try:
             from google.auth.transport.requests import Request
             from google.oauth2.credentials import Credentials
@@ -73,7 +75,6 @@ class GoogleDriveService:
                          "pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib")
             return False
 
-        # Check for credentials.json
         cred_path = DATA_DIR / "credentials.json"
         if not cred_path.exists():
             logger.error(f"[Drive] No credentials.json found at {cred_path}")
@@ -83,14 +84,12 @@ class GoogleDriveService:
         token_path = DATA_DIR / "token.json"
         creds = None
 
-        # Load existing token
         if token_path.exists():
             try:
                 creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
             except Exception:
-                pass  # Invalid token, will refresh or re-auth
+                pass
 
-        # Refresh or re-authenticate
         try:
             if not creds or not creds.valid:
                 if creds and creds.expired and creds.refresh_token:
@@ -100,10 +99,13 @@ class GoogleDriveService:
                     flow = InstalledAppFlow.from_client_secrets_file(str(cred_path), SCOPES)
                     creds = flow.run_local_server(port=0)
 
-                # Save token for next time
                 with open(token_path, "w") as f:
                     f.write(creds.to_json())
 
+            # Store creds — the important part
+            self._creds = creds
+
+            # Keep a default instance for backward compat
             self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
             self.loaded = True
             logger.info("[Drive] Authenticated successfully.")
@@ -113,8 +115,38 @@ class GoogleDriveService:
             logger.error(f"[Drive] Authentication failed: {e}")
             return False
 
+    def get_client(self):
+        """
+        Return a fresh Drive API client for the caller's exclusive use.
+
+        Each call to build() creates an independent httplib2 transport,
+        so concurrent threads won't block each other. The credentials
+        object is thread-safe and shared — only the HTTP client is new.
+
+        Returns None if the service isn't loaded.
+        """
+        if not self.loaded or not self._creds:
+            logger.error("[Drive] Not loaded — call load() first.")
+            return None
+
+        try:
+            from google.auth.transport.requests import Request
+            from googleapiclient.discovery import build
+
+            # Refresh token if expired (thread-safe operation on creds)
+            if self._creds.expired and self._creds.refresh_token:
+                logger.info("[Drive] Refreshing expired token...")
+                self._creds.refresh(Request())
+
+            return build("drive", "v3", credentials=self._creds, cache_discovery=False)
+
+        except Exception as e:
+            logger.error(f"[Drive] Failed to create client: {e}")
+            return None
+
     def unload(self):
-        """Release the Drive API service."""
+        """Release the Drive API service and credentials."""
+        self._creds = None
         self.service = None
         self.loaded = False
         logger.info("[Drive] Service unloaded.")

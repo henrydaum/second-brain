@@ -36,6 +36,7 @@ class OCRImages(BaseTask):
 	"""
 	batch_size = 4
 	max_workers = 1  # OCR is CPU-heavy, don't saturate
+	timeout = 300
 
 	def run(self, paths, context):
 		ocr = context.services.get("ocr")

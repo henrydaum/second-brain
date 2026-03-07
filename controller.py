@@ -191,6 +191,58 @@ class Controller:
             lines.append("  (empty)")
 
         return "\n".join(lines)
+    
+    # =================================================================
+    # DIRECT QUERY
+    # =================================================================
+
+    def _truncate_cell(self, text: str, max_len: int = 200) -> str:
+        """Shorten long cell values for tabular display."""
+        if len(text) <= max_len:
+            return text
+        return text[:max_len - 3] + "..."
+
+    def query(self, sql: str) -> str:
+        """Execute a read-only SQL query and return formatted results."""
+        max_rows = self.config.get("max_query_rows", 25)
+
+        try:
+            result = self.db.query(sql, max_rows=max_rows)
+        except ValueError as e:
+            logger.warning(f"Query rejected: {e}")
+            return f"Rejected: {e}"
+        except Exception as e:
+            logger.error(f"Query failed: {e}")
+            return f"Error: {e}"
+
+        columns = result["columns"]
+        rows = result["rows"]
+
+        if not rows:
+            return "(no results)"
+
+        # Calculate column widths
+        col_widths = [len(c) for c in columns]
+        for row in rows:
+            for i, val in enumerate(row):
+                col_widths[i] = max(col_widths[i], len(self._truncate_cell(str(val))))
+
+        # Build table
+        header = "  ".join(c.ljust(w) for c, w in zip(columns, col_widths))
+        separator = "  ".join("-" * w for w in col_widths)
+
+        lines = [header, separator]
+        for row in rows:
+            line = "  ".join(
+                self._truncate_cell(str(val)).ljust(w)
+                for val, w in zip(row, col_widths)
+            )
+            lines.append(line)
+
+        if result["truncated"]:
+            lines.append(f"  ... (results capped at {max_rows} rows)")
+
+        return "\n".join(lines)
 
     # =================================================================
     # HELP
@@ -198,17 +250,21 @@ class Controller:
 
     def help(self) -> str:
         return """Commands:
-		services                  List services and status
-		load <name>               Load a service
-		unload <name>             Unload a service
+        services                  List services and status
+        load <name>               Load a service
+        unload <name>             Unload a service
 
-		tasks                     List tasks with status counts
-		pause <name>              Pause a task
-		unpause <name>            Unpause a task
-		reset <name>              Reset all entries for a task to PENDING
-		retry <name>              Retry failed entries for a task
-		retry all                 Retry all failed across all tasks
+        tasks                     List tasks with status counts
+        pause <name>              Pause a task
+        unpause <name>            Unpause a task
+        reset <name>              Reset all entries for a task to PENDING
+        retry <name>              Retry failed entries for a task
+        retry all                 Retry all failed across all tasks
 
-		stats                     System overview
+        stats                     System overview
 
-		quit / exit               Shutdown"""
+        sql <query>               Run a read-only SQL query
+        tables                    List all database tables
+        schema <table>            Show columns for a table
+
+        quit / exit               Shutdown"""

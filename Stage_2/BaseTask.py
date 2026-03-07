@@ -112,6 +112,7 @@ class BaseTask:
 	# --- Execution ---
 	batch_size: int = 1
 	max_workers: int = 0  # 0 = use all available workers
+	timeout: int = 300  # Seconds before a PROCESSING entry is considered stuck.
 
 	def setup(self, config: dict):
 		"""Called once when the task is registered. Load models, warm caches."""
