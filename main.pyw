@@ -15,7 +15,7 @@ logging.basicConfig(
 
 logger = logging.getLogger("Main")
 
-import config as config_manager
+import config_manager
 from Stage_2.database import Database
 from Stage_2.orchestrator import Orchestrator
 from Stage_2.watcher import Watcher
