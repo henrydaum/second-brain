@@ -22,10 +22,10 @@ from Stage_2.watcher import Watcher
 from controller import Controller
 
 # Import services
-from services.embedService import SentenceTransformerEmbedder
-from services.llmService import LMStudioLLM, OpenAILLM
-from services.ocrService import WindowsOCR
-from services.driveService import GoogleDriveService
+from Stage_0.services.embedService import SentenceTransformerEmbedder
+from Stage_0.services.llmService import LMStudioLLM, OpenAILLM
+from Stage_0.services.ocrService import WindowsOCR
+from Stage_0.services.driveService import GoogleDriveService
 
 # Import tasks
 from Stage_2.tasks.task_extract_text import ExtractText

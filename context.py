@@ -1,28 +1,3 @@
-"""
-DataRefinery Context.
-
-The single context object passed to everything: tasks, tools, parsers.
-Built once per dispatch, shared everywhere.
-
-Tasks get:     db, config, services, parse
-Tools get:     db, config, services, parse, call_tool
-Parsers get:   config (if they need it)
-
-The services field is a plain dict of {name: service_instance}.
-Tasks and tools access models through it:
-
-    embedder = context.services["text_embedder"]
-    embedder.encode(chunks)
-
-    # Or safely:
-    embedder = context.services.get("text_embedder")
-    if embedder and embedder.loaded:
-        embedder.encode(chunks)
-
-This avoids duplicate model instances — everyone shares the same
-embedder, the same LLM, the same OCR engine.
-"""
-
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -30,7 +5,7 @@ from typing import Any
 @dataclass
 class DataRefineryContext:
     """
-    What every task, tool, and parser receives when it runs.
+    What every task and tool receives when it runs.
 
     db:         Database instance. Read/write access.
     config:     Global settings dict.
@@ -45,3 +20,28 @@ class DataRefineryContext:
     services: dict = field(default_factory=dict)
     parse: Any = None        # callable(path, modality, config) -> ParseResult
     call_tool: Any = None    # callable(name, **kwargs) -> ToolResult (tools only)
+
+
+def build_context(db, config: dict, services: dict, call_tool=None) -> DataRefineryContext:
+    """
+    Factory that wires up a fully functional context.
+
+    The parse callable is built here, with services baked in, so callers
+    don't need to import Stage_1.registry or build the lambda themselves.
+
+    Usage:
+        # In orchestrator (tasks — no call_tool):
+        context = build_context(self.db, self.config, self.services)
+
+        # In tool registry (tools — with call_tool):
+        context = build_context(self.db, self.config, self.services, call_tool=self.call)
+    """
+    from Stage_1.registry import parse as _parse
+
+    return DataRefineryContext(
+        db=db,
+        config=config,
+        services=services,
+        parse=lambda path, modality=None, config=None: _parse(path, modality, config, services),
+        call_tool=call_tool,
+    )

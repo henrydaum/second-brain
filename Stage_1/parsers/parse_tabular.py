@@ -223,3 +223,77 @@ def parse_sqlite(path: str, config: dict, services: dict = None) -> ParseResult:
 
 
 registry.register([".sqlite", ".db"], "tabular", parse_sqlite)
+
+
+# ===================================================================
+# GOOGLE SHEETS - if GoogleDriveService is unloaded, returns False
+# ===================================================================
+
+
+def parse_gsheet(path: str, config: dict, services: dict = None) -> ParseResult:
+    """
+    Parse a .gsheet file (JSON shortcut) by downloading content from
+    Google Drive as CSV and converting to a DataFrame.
+    """
+    import json
+    import io
+
+    try:
+        import pandas as pd
+    except ImportError:
+        logger.debug("pandas not installed")
+        return ParseResult.failed("pandas not installed", modality="tabular")
+
+    drive_svc = services.get("google_drive") if services else None
+
+    if drive_svc is None or not getattr(drive_svc, "loaded", False):
+        return ParseResult.failed(
+            "Drive service not loaded — retry after loading",
+            modality="tabular",
+        )
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            gsheet_data = json.load(f)
+
+        doc_id = gsheet_data.get("doc_id")
+        if not doc_id:
+            return ParseResult.failed(
+                "No doc_id found in .gsheet file", modality="tabular"
+            )
+
+        # Download as CSV via the Drive export API
+        csv_text = drive_svc.download_csv(doc_id)
+
+        if csv_text is None:
+            return ParseResult.failed(
+                "Failed to download spreadsheet", modality="tabular"
+            )
+
+        if not csv_text.strip():
+            return ParseResult.failed(
+                "Spreadsheet is empty", modality="tabular"
+            )
+
+        # Parse CSV into DataFrame
+        limit = _max_rows(config)
+        df = pd.read_csv(io.StringIO(csv_text), nrows=limit)
+
+        return ParseResult(
+            modality="tabular",
+            output={"default": df},
+            metadata={
+                "row_count": len(df),
+                "column_count": len(df.columns),
+                "columns": list(df.columns),
+                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                "source": "google_drive",
+                "doc_id": doc_id,
+            },
+        )
+    except Exception as e:
+        logger.error(f"Failed to parse gsheet {Path(path).name}: {e}")
+        return ParseResult.failed(str(e), modality="tabular")
+
+
+registry.register(".gsheet", "tabular", parse_gsheet)

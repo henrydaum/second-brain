@@ -34,16 +34,19 @@ import os
 from pathlib import Path
 import logging
 
+from Stage_0.BaseService import BaseService
+
 logger = logging.getLogger("driveService")
 
 DATA_DIR = Path(os.getenv('LOCALAPPDATA')) / "2nd Brain"
 
-class GoogleDriveService:
+class GoogleDriveService(BaseService):
     def __init__(self):
+        super().__init__()
+        self.model_name = "google_drive"
+        self.shared = False  # Each client is a separate instance (build() is cheap)
         self._creds = None       # Authenticated credentials (thread-safe, reusable)
         self.service = None      # Keep one instance for backward compat / quick checks
-        self.model_name = "google_drive"
-        self.loaded = False
 
     @staticmethod
     def _is_connected() -> bool:
@@ -150,3 +153,64 @@ class GoogleDriveService:
         self.service = None
         self.loaded = False
         logger.info("[Drive] Service unloaded.")
+    
+    def download_as(self, doc_id: str, mime_type: str) -> bytes | None:
+        """
+        Download a Google Drive file exported as the given MIME type.
+
+        Uses get_client() internally for thread safety — each call gets
+        its own HTTP transport.
+
+        Args:
+            doc_id:    Google Drive file ID.
+            mime_type: Export MIME type (e.g. "text/plain", "text/csv",
+                    "application/pdf").
+
+        Returns raw bytes, or None on failure.
+        """
+        client = self.get_client()
+        if client is None:
+            return None
+
+        try:
+            import io
+            from googleapiclient.http import MediaIoBaseDownload
+
+            request = client.files().export_media(fileId=doc_id, mimeType=mime_type)
+            buffer = io.BytesIO()
+            downloader = MediaIoBaseDownload(buffer, request)
+
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+
+            buffer.seek(0)
+            data = buffer.read()
+            logger.info(f"[Drive] Downloaded {len(data)} bytes for {doc_id} as {mime_type}")
+            return data
+
+        except Exception as e:
+            logger.error(f"[Drive] Download failed for {doc_id}: {e}")
+            return None
+
+    def download_text(self, doc_id: str) -> str | None:
+        """Download a Google Doc as plain text. Returns string or None."""
+        data = self.download_as(doc_id, "text/plain")
+        if data is None:
+            return None
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError as e:
+            logger.error(f"[Drive] UTF-8 decode failed for {doc_id}: {e}")
+            return None
+
+    def download_csv(self, doc_id: str) -> str | None:
+        """Download a Google Sheet as CSV. Returns string or None."""
+        data = self.download_as(doc_id, "text/csv")
+        if data is None:
+            return None
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError as e:
+            logger.error(f"[Drive] UTF-8 decode failed for {doc_id}: {e}")
+            return None

@@ -5,8 +5,8 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from context import DataRefineryContext
-from Stage_1.registry import parse, get_modality
+from context import build_context
+from Stage_1.registry import get_modality
 from Stage_2.BaseTask import BaseTask, TaskResult
 
 logger = logging.getLogger("Orchestrator")
@@ -278,12 +278,7 @@ class Orchestrator:
 			sem.release()
 
 	def _execute(self, task: BaseTask, paths: list[str]):
-		context = DataRefineryContext(
-			db=self.db,
-			config=self.config,
-			services=self.services,
-			parse=lambda path, modality=None, config=None: parse(path, modality, config, self.services),  # Services are passed automatically to parsers
-		)
+		context = build_context(self.db, self.config, self.services)
 
 		try:
 			results = task.run(paths, context)

@@ -3,11 +3,13 @@ from dataclasses import dataclass, field
 import os
 import logging
 
+from Stage_0.BaseService import BaseService
+
 logger = logging.getLogger("LLMClass")
 
 
 @dataclass
-class LLMResponse:
+class LLMResponse(BaseService):
     """
     Standardized response from invoke() and chat_with_tools().
     content is always populated. tool_calls is populated when
@@ -22,7 +24,7 @@ class LLMResponse:
         return len(self.tool_calls) > 0
 
 
-class BaseLLM:
+class BaseLLM(BaseService):
     """
     Abstract base class for Large Language Models.
 
@@ -34,6 +36,10 @@ class BaseLLM:
 
     Subclasses convert to their native format internally.
     """
+    def __init__(self):
+        super().__init__()
+        self.shared = True  # LLM clients are typically thread-safe
+
     def load(self):
         raise NotImplementedError
 
@@ -92,6 +98,7 @@ class BaseLLM:
 
 class LMStudioLLM(BaseLLM):
     def __init__(self, model_name):
+        super().__init__()
         self.model_name = model_name
         self.model = None
         self.vision = None
@@ -281,6 +288,7 @@ class LMStudioLLM(BaseLLM):
 
 class OpenAILLM(BaseLLM):
     def __init__(self, model_name, api_key=None, base_url=None):
+        super().__init__()
         self.model_name = model_name
         self.api_key = api_key
         self.base_url = base_url

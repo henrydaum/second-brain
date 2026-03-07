@@ -480,45 +480,17 @@ def parse_pptx_image(path: str, config: dict, services: dict = None) -> ParseRes
 registry.register(".pptx", "image", parse_pptx_image)
 
 # ===================================================================
-# GDOC
-# .gdoc files are JSON shortcuts containing a doc_id.
-# Requires the "drive" service to be loaded. If not loaded,
-# returns ParseResult.failed() — the task will be marked FAILED
-# and can be retried later once the service is available.
+# GDOC - if GoogleDriveService is unloaded, returns False
 # ===================================================================
-
-
-def _download_drive_content(drive_service, doc_id: str, mime_type: str):
-    """Download a Google Doc's content using its file ID."""
-    try:
-        import io
-        from googleapiclient.http import MediaIoBaseDownload
-        request = drive_service.files().export_media(fileId=doc_id, mimeType=mime_type)
-
-        fh = io.BytesIO()
-        downloader = MediaIoBaseDownload(fh, request)
-
-        done = False
-        while not done:
-            status, done = downloader.next_chunk()
-
-        fh.seek(0)
-        text = fh.read().decode("utf-8")
-        logger.info(f"[Drive] Downloaded {len(text)} chars")
-        return text
-    except Exception as e:
-        logger.error(f"[Drive Download Error] {e}")
-        return None
 
 
 def parse_gdoc(path: str, config: dict, services: dict = None) -> ParseResult:
     """
     Parse a .gdoc file (JSON shortcut) and fetch content from Google Drive.
-    Requires the "google_drive" service to be loaded and available in config["_services"].
+    Requires the "google_drive" service to be loaded.
     """
     import json
 
-    # Get the drive service
     drive_svc = services.get("google_drive")
 
     if drive_svc is None or not getattr(drive_svc, "loaded", False):
@@ -535,15 +507,8 @@ def parse_gdoc(path: str, config: dict, services: dict = None) -> ParseResult:
         if not doc_id:
             return ParseResult.failed("No doc_id found in .gdoc file", modality="text")
 
-        # Get the authenticated Google Drive API service object
-        drive_api = drive_svc.get_client()
-        if drive_api is None:
-            return ParseResult.failed(
-                "Drive service not authenticated",
-                modality="text",
-            )
-
-        content = _download_drive_content(drive_api, doc_id, "text/plain")
+        # Service handles the API call and thread safety internally
+        content = drive_svc.download_text(doc_id)
 
         if content is None:
             return ParseResult.failed("Failed to download document", modality="text")
@@ -563,6 +528,5 @@ def parse_gdoc(path: str, config: dict, services: dict = None) -> ParseResult:
     except Exception as e:
         logger.error(f"Failed to parse gdoc {Path(path).name}: {e}")
         return ParseResult.failed(str(e), modality="text")
-
 
 registry.register(".gdoc", "text", parse_gdoc)

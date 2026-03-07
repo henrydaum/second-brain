@@ -4,6 +4,8 @@ import tempfile
 import logging
 from pathlib import Path
 
+from Stage_0.BaseService import BaseService
+
 # 3rd Party
 from PIL import Image
 try:
@@ -14,14 +16,11 @@ except ImportError:
 
 logger = logging.getLogger("OCRClass")
 
-class WindowsOCR:
+class WindowsOCR(BaseService):
     def __init__(self):
-        self.enabled = False
+        super().__init__()
         self.model_name = "winrt_windows_ocr"
-
-    @property
-    def loaded(self):
-        return self.enabled
+        self.shared = True
 
     def load(self):
         """Just imports stuff and checks if library is present and enables the flag."""
@@ -29,12 +28,12 @@ class WindowsOCR:
         # Must import this before other .dlls
         import torch
         
-        self.enabled = True
+        self.loaded = True
         logger.info("Windows OCR loaded.")
         return True
 
     def unload(self):
-        self.enabled = False
+        self.loaded = False
         logger.info("Windows OCR unloaded.")
 
     def process_image(self, image_path):
@@ -42,7 +41,7 @@ class WindowsOCR:
         The Orchestrator calls this. We use YOUR proven logic here.
         """
         
-        if not self.enabled: return ""
+        if not self.loaded: return ""
         if not os.path.exists(image_path): return ""
 
         # 1. PRE-PROCESS (Your PIL optimization)

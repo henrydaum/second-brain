@@ -7,23 +7,26 @@ import logging
 # 3rd Party - also includes torch, sentence_transformers (imported later)
 import numpy as np
 
+from Stage_0.BaseService import BaseService
+
 logger = logging.getLogger("EmbedClass")
 
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = Path(os.getenv('LOCALAPPDATA')) / "2nd Brain"
 
 # --- BASE CLASS ---
-class BaseEmbedder:
+class BaseEmbedder(BaseService):
     """
     Abstract base class for all embedding models.
     Enforces a standard interface for Loading, Unloading, and Encoding.
     """
     def __init__(self, model_name, chunk_size=512, use_cuda=True):
+        super().__init__()
         self.model_name = model_name
+        self.shared = True  # Embedders are thread-safe (encode() is stateless)
         self.chunk_size = chunk_size
         self.use_cuda = use_cuda
-        self.loaded = False
-        
+
     def load(self):
         """Must implement model loading logic."""
         raise NotImplementedError

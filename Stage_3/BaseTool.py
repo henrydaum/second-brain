@@ -20,7 +20,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from context import DataRefineryContext
+from context import DataRefineryContext, build_context
 
 logger = logging.getLogger("Tool")
 
@@ -127,13 +127,7 @@ class ToolRegistry:
 
         # Build context with call_tool pointing back to this registry
         from Stage_1.registry import parse
-        context = DataRefineryContext(
-            db=self.db,
-            config=self.config,
-            services=self.services,
-            call_tool=self.call,
-            parse=lambda path, modality=None, config=None: parse(path, modality, config, self.services),  # Passes services automatically to parsers
-        )
+        context = build_context(self.db, self.config, self.services, call_tool=self.call)
 
         try:
             result = tool.run(context, **kwargs)
