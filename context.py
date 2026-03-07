@@ -30,7 +30,7 @@ from typing import Any
 @dataclass
 class DataRefineryContext:
     """
-    What every task and tool receives when it runs.
+    What every task, tool, and parser receives when it runs.
 
     db:         Database instance. Read/write access.
     config:     Global settings dict.

@@ -86,6 +86,7 @@ def main():
 	orchestrator.register_task(ExtractText())
 	orchestrator.register_task(OCRImages())
 	# orchestrator.register_task(EmbedText())
+	# orchestrator.register_task(EmbedImages())
 
 	# --- 6. Initialize controller ---
 	ctrl = Controller(orchestrator, database, services, config)
