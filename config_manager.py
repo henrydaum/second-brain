@@ -29,6 +29,7 @@ DEFAULTS = {
     "llm_model_name": "gemma-3-4b-it@q4_k_s",
     "llm_endpoint": "http://127.0.0.1:1234",
     "llm_api_key": "OPENAI_API_KEY",
+    "max_tool_calls": 5,
     # Embedding
     "embed_text_model_name": "BAAI/bge-m3",
     "embed_image_model_name": "clip-ViT-L-14",

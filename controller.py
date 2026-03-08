@@ -9,18 +9,69 @@ The controller never prints — it returns strings or dicts.
 The caller decides how to display them.
 """
 
+import json
 import logging
 from pathlib import Path
 
 logger = logging.getLogger("Controller")
 
 
+def _truncate_cell(text: str, max_len: int = 60) -> str:
+    """Shorten long cell values for tabular display."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 3] + "..."
+
+
+def _format_tool_result(result) -> str:
+    """Format a ToolResult for human-readable REPL output."""
+    if not result.success:
+        return f"Error: {result.error}"
+
+    data = result.data
+
+    # Special handling for sql_query — render as a table
+    if isinstance(data, dict) and "columns" in data and "rows" in data:
+        columns = data["columns"]
+        rows = data["rows"]
+
+        if not rows:
+            return "(no results)"
+
+        col_widths = [len(c) for c in columns]
+        for row in rows:
+            for i, val in enumerate(row):
+                col_widths[i] = max(col_widths[i], len(_truncate_cell(str(val))))
+
+        header = "  ".join(c.ljust(w) for c, w in zip(columns, col_widths))
+        separator = "  ".join("-" * w for w in col_widths)
+        lines = [header, separator]
+        for row in rows:
+            line = "  ".join(
+                _truncate_cell(str(val)).ljust(w)
+                for val, w in zip(row, col_widths)
+            )
+            lines.append(line)
+
+        if data.get("truncated"):
+            lines.append("  ... (results capped at 100 rows)")
+
+        return "\n".join(lines)
+
+    # Default: pretty-print as JSON
+    try:
+        return json.dumps(data, indent=2, default=str)
+    except Exception:
+        return str(data)
+
+
 class Controller:
-    def __init__(self, orchestrator, db, services: dict, config: dict):
+    def __init__(self, orchestrator, db, services: dict, config: dict, tool_registry=None):
         self.orchestrator = orchestrator
         self.db = db
         self.services = services
         self.config = config
+        self.tool_registry = tool_registry
 
     # =================================================================
     # SERVICES
@@ -108,7 +159,6 @@ class Controller:
                 f"{paused}{svc_info}"
             )
 
-        header = "  {'Task':<22} {'Pending':<6} {'Running':<6} {'Done':<6} {'Failed':<6}"
         return "Tasks:\n" + "\n".join(lines)
 
     def pause_task(self, name: str) -> str:
@@ -191,58 +241,48 @@ class Controller:
             lines.append("  (empty)")
 
         return "\n".join(lines)
-    
+
     # =================================================================
-    # DIRECT QUERY
+    # TOOLS
     # =================================================================
 
-    def _truncate_cell(self, text: str, max_len: int = 200) -> str:
-        """Shorten long cell values for tabular display."""
-        if len(text) <= max_len:
-            return text
-        return text[:max_len - 3] + "..."
+    def list_tools(self) -> str:
+        """List all registered tools with descriptions and required services."""
+        if self.tool_registry is None or not self.tool_registry.tools:
+            return "No tools registered."
 
-    def query(self, sql: str) -> str:
-        """Execute a read-only SQL query and return formatted results."""
-        max_rows = self.config.get("max_query_rows", 25)
+        lines = []
+        for name, tool in self.tool_registry.tools.items():
+            svc_info = f"  needs: {tool.requires_services}" if tool.requires_services else ""
+            lines.append(f"  {name}{svc_info}")
 
-        try:
-            result = self.db.query(sql, max_rows=max_rows)
-        except ValueError as e:
-            logger.warning(f"Query rejected: {e}")
-            return f"Rejected: {e}"
-        except Exception as e:
-            logger.error(f"Query failed: {e}")
-            return f"Error: {e}"
+            # Description (first line only, truncated)
+            desc = (tool.description or "").split("\n")[0]
+            if len(desc) > 200:
+                desc = desc[:197] + "..."
+            lines.append(f"    {desc}")
 
-        columns = result["columns"]
-        rows = result["rows"]
+            # Parameters
+            params = tool.parameters.get("properties", {})
+            required = set(tool.parameters.get("required", []))
+            if params:
+                param_parts = []
+                for pname, pschema in params.items():
+                    req = "*" if pname in required else ""
+                    param_parts.append(f"{pname}{req}")
+                lines.append(f"    args: {', '.join(param_parts)}")
 
-        if not rows:
-            return "(no results)"
+            lines.append("")
 
-        # Calculate column widths
-        col_widths = [len(c) for c in columns]
-        for row in rows:
-            for i, val in enumerate(row):
-                col_widths[i] = max(col_widths[i], len(self._truncate_cell(str(val))))
+        return "Tools:\n" + "\n".join(lines)
 
-        # Build table
-        header = "  ".join(c.ljust(w) for c, w in zip(columns, col_widths))
-        separator = "  ".join("-" * w for w in col_widths)
+    def call_tool(self, name: str, kwargs: dict) -> str:
+        """Call a tool by name and return formatted results."""
+        if self.tool_registry is None:
+            return "No tool registry available."
 
-        lines = [header, separator]
-        for row in rows:
-            line = "  ".join(
-                self._truncate_cell(str(val)).ljust(w)
-                for val, w in zip(row, col_widths)
-            )
-            lines.append(line)
-
-        if result["truncated"]:
-            lines.append(f"  ... (results capped at {max_rows} rows)")
-
-        return "\n".join(lines)
+        result = self.tool_registry.call(name, **kwargs)
+        return _format_tool_result(result)
 
     # =================================================================
     # HELP
@@ -250,21 +290,21 @@ class Controller:
 
     def help(self) -> str:
         return """Commands:
-        services                  List services and status
-        load <name>               Load a service
-        unload <name>             Unload a service
+  services                  List services and status
+  load <n>                  Load a service
+  unload <n>                Unload a service
 
-        tasks                     List tasks with status counts
-        pause <name>              Pause a task
-        unpause <name>            Unpause a task
-        reset <name>              Reset all entries for a task to PENDING
-        retry <name>              Retry failed entries for a task
-        retry all                 Retry all failed across all tasks
+  tasks                     List tasks with status counts
+  pause <n>                 Pause a task
+  unpause <n>               Unpause a task
+  reset <n>                 Reset all entries for a task to PENDING
+  retry <n>                 Retry failed entries for a task
+  retry all                 Retry all failed across all tasks
 
-        stats                     System overview
+  tools                     List registered tools
+  call <tool> <json_args>   Call a tool (e.g. call sql_query {"sql": "SELECT ..."})
 
-        sql <query>               Run a read-only SQL query
-        tables                    List all database tables
-        schema <table>            Show columns for a table
+  chat                      Enter agent chat mode (requires llm service)
 
-        quit / exit               Shutdown"""
+  stats                     System overview
+  quit / exit               Shutdown"""

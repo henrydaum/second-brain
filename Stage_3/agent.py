@@ -8,7 +8,7 @@ conversation history.
 
 Usage:
     llm = service_manager.get("llm")        # OpenAILLM with chat_with_tools()
-    tools = tool_registry                     # ToolRegistry with registered tools
+    tools = tool_registry                   # ToolRegistry with registered tools
 
     agent = Agent(llm, tools)
     answer = agent.chat("What files mention revenue?")
@@ -22,11 +22,9 @@ import logging
 
 logger = logging.getLogger("Agent")
 
-MAX_TOOL_ROUNDS = 10
-
 
 class Agent:
-    def __init__(self, llm, tool_registry, system_prompt: str = None):
+    def __init__(self, llm, tool_registry, config, system_prompt: str = None):
         """
         Args:
             llm:            A BaseLLM instance that implements chat_with_tools().
@@ -40,6 +38,7 @@ class Agent:
             "Use the available tools to search and retrieve information from the user's files. "
             "Be concise and cite which files your answers come from."
         )
+        self.MAX_TOOL_CALLS = config['max_tool_calls']
         self.history: list[dict] = []
 
     def chat(self, message: str) -> str:
@@ -57,7 +56,7 @@ class Agent:
 
         tools = self.tool_registry.get_all_schemas() or None
 
-        for _ in range(MAX_TOOL_ROUNDS):
+        for _ in range(self.MAX_TOOL_CALLS):
             response = self.llm.chat_with_tools(messages, tools)
 
             if not response.has_tool_calls:
@@ -80,7 +79,7 @@ class Agent:
                 self.history.append(tool_msg)
 
         # Exceeded max rounds
-        logger.warning(f"Agent hit max tool rounds ({MAX_TOOL_ROUNDS})")
+        logger.warning(f"Agent hit max tool rounds ({self.MAX_TOOL_CALLS})")
         fallback = "I've made too many tool calls. Could you try a more specific question?"
         self.history.append({"role": "assistant", "content": fallback})
         return fallback

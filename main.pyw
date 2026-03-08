@@ -3,6 +3,7 @@ import signal
 import sys
 import time
 import threading
+import json
 
 # Silence noisy libraries
 logging.getLogger("PIL").setLevel(logging.WARNING)
@@ -32,6 +33,10 @@ from Stage_2.tasks.task_extract_text import ExtractText
 from Stage_2.tasks.task_ocr_images import OCRImages
 from Stage_2.tasks.task_extract_container import ExtractContainer
 # from Stage_2.tasks.task_embed_text import EmbedText
+
+from Stage_3.agent import Agent
+from Stage_3.tools.tool_sql_query import SQLQuery
+from Stage_3.BaseTool import ToolRegistry
 
 # Global shutdown event
 _shutdown = threading.Event()
@@ -88,8 +93,12 @@ def main():
 	# orchestrator.register_task(EmbedText())
 	# orchestrator.register_task(EmbedImages())
 
+	# --- 5b. Initialize tool registry ---
+	tool_registry = ToolRegistry(database, config, services)
+	tool_registry.register(SQLQuery())
+
 	# --- 6. Initialize controller ---
-	ctrl = Controller(orchestrator, database, services, config)
+	ctrl = Controller(orchestrator, database, services, config, tool_registry)
 
 	# --- 7. Start orchestrator ---
 	orchestrator.start()
@@ -123,16 +132,20 @@ def main():
 	signal.signal(signal.SIGINT, shutdown)
 	signal.signal(signal.SIGTERM, shutdown)
 
-	# --- 10. Start REPL on its own thread ---
-	repl_thread = threading.Thread(target=_repl, args=(ctrl, shutdown), daemon=True)
+	# --- 11. Start REPL on its own thread ---
+	repl_thread = threading.Thread(
+		target=_repl,
+		args=(ctrl, shutdown, tool_registry, services, config),
+		daemon=True,
+	)
 	repl_thread.start()
 
-	# --- 11. Main thread just keeps the process alive ---
+	# --- 12. Main thread just keeps the process alive ---
 	while not _shutdown.is_set():
 		_shutdown.wait(timeout=1.0)
 
 
-def _repl(ctrl, shutdown_fn):
+def _repl(ctrl, shutdown_fn, tool_registry, services, config):
 	"""
 	Simple command loop. Maps user input to controller methods.
 	Runs on its own daemon thread so it never blocks the dispatch loop.
@@ -204,13 +217,7 @@ def _repl(ctrl, shutdown_fn):
 			elif cmd == "stats":
 				print(ctrl.stats())
 
-			# --- Direct Query ---
-			elif cmd == "sql":
-				if not arg:
-					print("Usage: sql <SELECT ...>")
-					print("  Example: sql SELECT path, status FROM task_queue WHERE status='FAILED'")
-				else:
-					print(ctrl.query(arg))
+			# --- Database ---
 
 			elif cmd == "tables":
 				print(ctrl.query(
@@ -222,6 +229,67 @@ def _repl(ctrl, shutdown_fn):
 					print("Usage: schema <table_name>")
 				else:
 					print(ctrl.query(f"PRAGMA table_info({arg})"))
+
+			# --- Tools ---
+			elif cmd == "tools":
+				print(ctrl.list_tools())
+
+			elif cmd == "call":
+				if not arg:
+					print("Usage: call <tool_name> {\"arg\": \"value\"}")
+					print("Example: call sql_query {\"sql\": \"SELECT * FROM files LIMIT 5\"}")
+				else:
+					call_parts = arg.split(maxsplit=1)
+					tool_name = call_parts[0]
+					raw_args = call_parts[1] if len(call_parts) > 1 else "{}"
+
+					try:
+						kwargs = json.loads(raw_args)
+					except json.JSONDecodeError as e:
+						print(f"Invalid JSON arguments: {e}")
+						print("Expected format: call <tool_name> {\"key\": \"value\"}")
+						continue
+
+					print(ctrl.call_tool(tool_name, kwargs))
+
+			# --- Agent Chat ---
+			elif cmd == "chat":
+				llm = services.get("llm")
+				if llm is None or not llm.loaded:
+					print("LLM service not loaded. Run 'load llm' first.")
+					continue
+
+				if agent is None:
+					agent = Agent(llm, tool_registry, config)
+					logger.info("Agent initialized.")
+
+				print("Entering chat mode. Type 'exit' to return to REPL.")
+				print("---")
+
+				while not _shutdown.is_set():
+					try:
+						user_input = input("you> ").strip()
+					except (KeyboardInterrupt, EOFError):
+						break
+
+					if not user_input:
+						continue
+					if user_input.lower() in ("exit", "quit", "back"):
+						break
+					if user_input.lower() == "reset":
+						agent.reset()
+						print("(conversation history cleared)")
+						continue
+
+					try:
+						response = agent.chat(user_input)
+						print(f"\nassistant> {response}\n")
+					except Exception as e:
+						logger.error(f"Agent error: {e}")
+						print(f"Error: {e}")
+
+				print("---")
+				print("Exited chat mode.")
 
 			else:
 				print(f"Unknown command: '{cmd}'. Type 'help' for available commands.")
