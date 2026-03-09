@@ -9,7 +9,7 @@ logger = logging.getLogger("LLMClass")
 
 
 @dataclass
-class LLMResponse(BaseService):
+class LLMResponse:
     """
     Standardized response from invoke() and chat_with_tools().
     content is always populated. tool_calls is populated when
@@ -199,7 +199,7 @@ class LMStudioLLM(BaseLLM):
                 if os.path.exists(f_path):
                     os.remove(f_path)
             except Exception:
-                pass
+                logger.debug(f"Temp cleanup failed for {f_path}: {e}")
 
     def invoke(self, messages, image_paths=None, **kwargs):
         if not self.loaded or not self.model:
@@ -427,3 +427,12 @@ class OpenAILLM(BaseLLM):
         if tools:
             kwargs["tools"] = tools
         return self.invoke(messages, **kwargs)
+
+
+def build_services(config: dict) -> dict:
+    return {
+        "llm": OpenAILLM(
+            model_name=config.get("llm_model_name", "gemma-3-4b-it"),
+            base_url=config.get("llm_endpoint", "http://localhost:1234/v1"),
+        ),
+    }

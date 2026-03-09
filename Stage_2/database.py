@@ -251,6 +251,35 @@ class Database:
 					pass  # table might not exist yet
 			self.conn.commit()
 
+	def create_cascade_trigger(self, upstream_table: str, downstream_table: str):
+		"""
+		Create a SQL trigger that deletes downstream rows when upstream rows
+		are deleted. INSERT OR REPLACE fires DELETE triggers in SQLite, so
+		this automatically cascades when an upstream task re-runs for a file.
+		"""
+		trigger_name = f"cascade_delete_{upstream_table}_to_{downstream_table}"
+		sql = f"""
+			CREATE TRIGGER IF NOT EXISTS {trigger_name}
+			AFTER DELETE ON {upstream_table}
+			FOR EACH ROW
+			BEGIN
+				DELETE FROM {downstream_table} WHERE path = OLD.path;
+			END;
+		"""
+		with self.lock:
+			self.conn.execute(sql)
+			self.conn.commit()
+
+	def unclaim_tasks(self, task_name: str, paths: list[str]):
+		"""Return claimed tasks to PENDING when deps aren't met at dispatch time."""
+		with self.lock:
+			self.conn.executemany(
+				"UPDATE task_queue SET status = 'PENDING', started_at = NULL "
+				"WHERE path = ? AND task_name = ?",
+				[(p, task_name) for p in paths]
+			)
+			self.conn.commit()
+
 	def ensure_output_table(self, task_name, schema_sql):
 		"""
 		Execute a task's schema SQL. Only CREATE TABLE and CREATE INDEX allowed.

@@ -172,17 +172,32 @@ class SentenceTransformerEmbedder(BaseEmbedder):
 
     def encode(self, inputs, batch_size=11):
         """
-        Accepts string or list of strings. 
+        Accepts string or list of strings.
         For images (image models), the input should be a list of image file paths.
         Returns numpy array.
         """
         if not self.model or not self.loaded:
             logger.warning("Attempted generation while model is unloaded.")
             return None
-        
+
         try:
             # normalize_embeddings=True is critical for Cosine Similarity
             return self.model.encode(inputs, normalize_embeddings=True, convert_to_numpy=True)
         except Exception as e:
             logger.error(f"Inference failed: {e}")
             return None
+
+
+def build_services(config: dict) -> dict:
+    return {
+        "text_embedder": SentenceTransformerEmbedder(
+            model_name=config.get("embed_text_model_name", "BAAI/bge-small-en-v1.5"),
+            use_cuda=config.get("embed_use_cuda", False),
+            chunk_size=config.get("embed_chunk_size", 512),
+        ),
+        "image_embedder": SentenceTransformerEmbedder(
+            model_name=config.get("embed_image_model_name", "clip-ViT-L-14"),
+            use_cuda=config.get("embed_use_cuda", False),
+            chunk_size=config.get("embed_chunk_size", 512),
+        ),
+    }

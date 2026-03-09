@@ -55,7 +55,8 @@ class GoogleDriveService(BaseService):
             import requests
             requests.head("https://www.google.com", timeout=3)
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Connectivity check failed: {e}")
             return False
 
     def load(self) -> bool:
@@ -91,7 +92,7 @@ class GoogleDriveService(BaseService):
             try:
                 creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
             except Exception:
-                pass
+                logger.debug(f"Token load failed, will re-auth: {e}")
 
         try:
             if not creds or not creds.valid:
@@ -214,3 +215,7 @@ class GoogleDriveService(BaseService):
         except UnicodeDecodeError as e:
             logger.error(f"[Drive] UTF-8 decode failed for {doc_id}: {e}")
             return None
+
+
+def build_services(config: dict) -> dict:
+    return {"google_drive": GoogleDriveService()}

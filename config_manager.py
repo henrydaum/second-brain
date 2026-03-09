@@ -26,15 +26,16 @@ DEFAULTS = {
     "task_timeout": 300,
     "reprocess_interval": 300,
     # LLM
-    "llm_model_name": "gemma-3-4b-it@q4_k_s",
+    "llm_model_name": "gpt-5-mini",
     "llm_endpoint": "http://127.0.0.1:1234",
     "llm_api_key": "OPENAI_API_KEY",
     "max_tool_calls": 5,
     # Embedding
     "embed_text_model_name": "BAAI/bge-m3",
     "embed_image_model_name": "clip-ViT-L-14",
-    "embed_use_cuda": False,
+    "embed_use_cuda": True,
     "embed_chunk_size": 512,
+    "embed_chunk_overlap": 50,
     # REPL
     "max_query_rows": 25,
 }

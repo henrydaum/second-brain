@@ -1,9 +1,12 @@
+import importlib
+import inspect
 import logging
 import signal
 import sys
 import time
 import threading
 import json
+from pathlib import Path
 
 # Silence noisy libraries
 logging.getLogger("PIL").setLevel(logging.WARNING)
@@ -21,22 +24,89 @@ from Stage_2.database import Database
 from Stage_2.orchestrator import Orchestrator
 from Stage_2.watcher import Watcher
 from controller import Controller
-
-# Import services
-from Stage_0.services.embedService import SentenceTransformerEmbedder
-from Stage_0.services.llmService import LMStudioLLM, OpenAILLM
-from Stage_0.services.ocrService import WindowsOCR
-from Stage_0.services.driveService import GoogleDriveService
-
-# Import tasks
-from Stage_2.tasks.task_extract_text import ExtractText
-from Stage_2.tasks.task_ocr_images import OCRImages
-from Stage_2.tasks.task_extract_container import ExtractContainer
-# from Stage_2.tasks.task_embed_text import EmbedText
-
 from Stage_3.agent import Agent
-from Stage_3.tools.tool_sql_query import SQLQuery
 from Stage_3.BaseTool import ToolRegistry
+
+
+_ROOT = Path(__file__).parent
+
+
+def _auto_discover_services(config: dict) -> dict:
+	"""
+	Scan Stage_0/services/ for modules that expose a build_services(config)
+	function and collect all returned service instances.
+
+	To add a new service, drop a file into Stage_0/services/ and add a
+	module-level build_services(config) -> dict function.
+	"""
+	services = {}
+	services_dir = _ROOT / "Stage_0" / "services"
+	for py_file in sorted(services_dir.glob("*.py")):
+		if py_file.stem.startswith("_"):
+			continue
+		module_name = f"Stage_0.services.{py_file.stem}"
+		try:
+			module = importlib.import_module(module_name)
+		except Exception as e:
+			logger.warning(f"Could not import {module_name}: {e}")
+			continue
+		build_fn = getattr(module, "build_services", None)
+		if build_fn is None:
+			continue
+		try:
+			built = build_fn(config)
+			if built:
+				services.update(built)
+		except Exception as e:
+			logger.warning(f"build_services() in {module_name} failed: {e}")
+	return services
+
+
+def _auto_discover_tasks(orchestrator, config):
+	"""
+	Scan Stage_2/tasks/task_*.py for BaseTask subclasses and register them.
+
+	To add a new task, drop a task_<name>.py file into Stage_2/tasks/.
+	"""
+	from Stage_2.BaseTask import BaseTask
+	tasks_dir = _ROOT / "Stage_2" / "tasks"
+	for py_file in sorted(tasks_dir.glob("task_*.py")):
+		module_name = f"Stage_2.tasks.{py_file.stem}"
+		try:
+			module = importlib.import_module(module_name)
+		except Exception as e:
+			logger.warning(f"Could not import {module_name}: {e}")
+			continue
+		for _, cls in inspect.getmembers(module, inspect.isclass):
+			if issubclass(cls, BaseTask) and cls is not BaseTask and cls.__module__ == module_name:
+				try:
+					orchestrator.register_task(cls())
+				except Exception as e:
+					logger.warning(f"Could not register task {cls.__name__}: {e}")
+
+
+def _auto_discover_tools(tool_registry, config):
+	"""
+	Scan Stage_3/tools/tool_*.py for BaseTool subclasses and register them.
+
+	To add a new tool, drop a tool_<name>.py file into Stage_3/tools/.
+	"""
+	from Stage_3.BaseTool import BaseTool
+	tools_dir = _ROOT / "Stage_3" / "tools"
+	for py_file in sorted(tools_dir.glob("tool_*.py")):
+		module_name = f"Stage_3.tools.{py_file.stem}"
+		try:
+			module = importlib.import_module(module_name)
+		except Exception as e:
+			logger.warning(f"Could not import {module_name}: {e}")
+			continue
+		for _, cls in inspect.getmembers(module, inspect.isclass):
+			if issubclass(cls, BaseTool) and cls is not BaseTool and cls.__module__ == module_name:
+				try:
+					tool_registry.register(cls())
+				except Exception as e:
+					logger.warning(f"Could not register tool {cls.__name__}: {e}")
+
 
 # Global shutdown event
 _shutdown = threading.Event()
@@ -55,47 +125,17 @@ def main():
 	logger.info(f"Database: {config['db_path']}")
 
 	# --- 3. Initialize services ---
-	services = {}
-
-	text_embedder = SentenceTransformerEmbedder(
-		model_name=config.get("embed_text_model_name", "BAAI/bge-small-en-v1.5"),
-		use_cuda=config.get("embed_use_cuda", False),
-		chunk_size=config.get("embed_chunk_size", 512),
-	)
-	services["text_embedder"] = text_embedder
-
-	image_embedder = SentenceTransformerEmbedder(
-		model_name=config.get("embed_image_model_name", "clip-ViT-L-14"),
-		use_cuda=config.get("embed_use_cuda", False),
-		chunk_size=config.get("embed_chunk_size", 512),
-	)
-	services["image_embedder"] = image_embedder
-
-	llm = OpenAILLM(
-		model_name=config.get("llm_model_name", "gemma-3-4b-it"),
-		base_url=config.get("llm_endpoint", "http://localhost:1234/v1"),
-	)
-	services["llm"] = llm
-
-	drive_service = GoogleDriveService()
-	services["google_drive"] = drive_service
-
-	ocr = WindowsOCR()
-	services["ocr"] = ocr
+	services = _auto_discover_services(config)
 
 	# --- 4. Initialize orchestrator ---
 	orchestrator = Orchestrator(database, config, services)
 
 	# --- 5. Register tasks ---
-	orchestrator.register_task(ExtractContainer())
-	orchestrator.register_task(ExtractText())
-	orchestrator.register_task(OCRImages())
-	# orchestrator.register_task(EmbedText())
-	# orchestrator.register_task(EmbedImages())
+	_auto_discover_tasks(orchestrator, config)
 
 	# --- 5b. Initialize tool registry ---
 	tool_registry = ToolRegistry(database, config, services)
-	tool_registry.register(SQLQuery())
+	_auto_discover_tools(tool_registry, config)
 
 	# --- 6. Initialize controller ---
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)
@@ -121,9 +161,11 @@ def main():
 		for svc in services.values():
 			if getattr(svc, 'loaded', False):
 				try:
+					logger.info(f"Unloading service: {svc.model_name}")
 					svc.unload()
-				except Exception:
-					pass
+				except Exception as e:
+					logger.debug(f"Service unload error: {e}")
+		logger.info("Saving config...")
 		config_manager.save(config)
 		logger.info("Done.")
 		os._exit(0)
@@ -150,6 +192,7 @@ def _repl(ctrl, shutdown_fn, tool_registry, services, config):
 	Simple command loop. Maps user input to controller methods.
 	Runs on its own daemon thread so it never blocks the dispatch loop.
 	"""
+	agent = None
 	while not _shutdown.is_set():
 		try:
 			raw = input("\n> ").strip()
@@ -216,19 +259,6 @@ def _repl(ctrl, shutdown_fn, tool_registry, services, config):
 			# --- Stats ---
 			elif cmd == "stats":
 				print(ctrl.stats())
-
-			# --- Database ---
-
-			elif cmd == "tables":
-				print(ctrl.query(
-					"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-				))
-
-			elif cmd == "schema":
-				if not arg:
-					print("Usage: schema <table_name>")
-				else:
-					print(ctrl.query(f"PRAGMA table_info({arg})"))
 
 			# --- Tools ---
 			elif cmd == "tools":

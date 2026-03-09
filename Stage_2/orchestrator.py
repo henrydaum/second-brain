@@ -162,7 +162,7 @@ class Orchestrator:
 		for task in self.tasks.values():
 			if task_name in task.depends_on:
 				if self._deps_met(path, task):
-					self.db.enqueue_task(path, task.name, task.version)
+					self.db.re_enqueue_task(path, task.name, task.version)
 
 	def on_also_contains(self, path: str, modalities: list[str]):
 		for modality in modalities:
@@ -208,6 +208,8 @@ class Orchestrator:
 	def start(self):
 		self.running = True
 
+		self._create_cascade_triggers()
+
 		for task in self.tasks.values():
 			count = self.db.reset_stuck_tasks_for(task.name, task.timeout)
 			if count > 0:
@@ -218,6 +220,26 @@ class Orchestrator:
 		)
 		self.dispatch_thread.start()
 		logger.info(f"Orchestrator started ({self.max_workers} workers)")
+
+	def _create_cascade_triggers(self):
+		"""
+		Auto-create SQL DELETE cascade triggers from the dependency graph.
+
+		When a task declares depends_on, we create triggers so that deleting
+		(or replacing) rows in the upstream task's output table automatically
+		cleans the downstream task's output table. INSERT OR REPLACE fires
+		DELETE triggers in SQLite, so re-running an upstream task cascades
+		cleanup through the entire chain automatically.
+		"""
+		for task in self.tasks.values():
+			for dep_name in task.depends_on:
+				dep_task = self.tasks.get(dep_name)
+				if dep_task is None:
+					continue
+				for upstream_table in dep_task.output_tables:
+					for downstream_table in task.output_tables:
+						self.db.create_cascade_trigger(upstream_table, downstream_table)
+						logger.info(f"Cascade trigger: {upstream_table} -> {downstream_table}")
 
 	def stop(self):
 		self.running = False
@@ -265,7 +287,19 @@ class Orchestrator:
 					sem.release()
 					continue
 
+				# Gate 5: deps still met? (safety net for file-update races)
+				if task.depends_on:
+					ready = [p for p in paths if self._deps_met(p, task)]
+					not_ready = [p for p in paths if p not in ready]
+					if not_ready:
+						self.db.unclaim_tasks(task.name, not_ready)
+					if not ready:
+						sem.release()
+						continue
+					paths = ready
+
 				dispatched_any = True
+				logger.info(f"Dispatching {task.name}: {len(paths)} file(s)")
 				self.executor.submit(self._execute_wrapper, task, paths, sem)
 
 			if not dispatched_any:

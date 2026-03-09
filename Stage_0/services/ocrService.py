@@ -56,14 +56,15 @@ class WindowsOCR(BaseService):
             text = asyncio.run(self._run_windows_ocr_task(temp_path))
             return text if text else ""
         except Exception as e:
-            logger.info(f"[Error] OCR Failed for {Path(image_path).name}: {e}")
+            logger.warning(f"OCR failed for {Path(image_path).name}: {e}")
             return ""
         finally:
             # 3. CLEANUP
             if temp_path and os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
-                except: pass
+                except Exception as e:
+                    logger.debug(f"Temp cleanup failed: {e}")
 
     async def _run_windows_ocr_task(self, image_path):
         """
@@ -95,7 +96,7 @@ class WindowsOCR(BaseService):
             return "\n".join(lines)
 
         except Exception as e:
-            logger.error(f"[OCR Async Error] {e}")
+            logger.error(f"Async OCR failed: {e}")
             return None
 
     def _create_optimized_temp_file(self, original_path):
@@ -108,15 +109,19 @@ class WindowsOCR(BaseService):
                 max_dim = 2500
                 if img.width > max_dim or img.height > max_dim:
                     img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-                
+
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
-                
+
                 # delete=False required for Windows
                 temp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
                 img.save(temp.name, format="PNG")
-                temp.close() 
+                temp.close()
                 return temp.name
         except Exception as e:
-            logger.error(f"[OCR Pre-process Error] {Path(original_path).name}: {e}")
+            logger.error(f"Image preprocess failed for {Path(original_path).name}: {e}")
             return None
+
+
+def build_services(config: dict) -> dict:
+    return {"ocr": WindowsOCR()}

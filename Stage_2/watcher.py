@@ -199,7 +199,7 @@ class Watcher:
 			logger.info(f"[Live] Changed: {Path(path).name}")
 			self._register_file(path, current_mtime)
 		except OSError:
-			pass
+			logger.debug(f"Could not stat {Path(path).name}: {e}")
 
 	def handle_delete(self, path: str):
 		"""Called immediately (no debounce) when a file or folder is deleted."""
