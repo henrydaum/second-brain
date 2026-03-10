@@ -17,7 +17,6 @@ logger = logging.getLogger("ExtractText")
 
 class ExtractText(BaseTask):
 	name = "extract_text"
-	version = 1
 	modalities = ["text"]
 	depends_on = []
 	requires_services = []  # no models needed

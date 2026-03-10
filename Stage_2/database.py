@@ -50,7 +50,6 @@ class Database:
 			CREATE TABLE IF NOT EXISTS task_queue (
 				path         TEXT,
 				task_name    TEXT,
-				task_version INTEGER DEFAULT 1,
 				status       TEXT DEFAULT 'PENDING',
 				created_at   REAL,
 				started_at   REAL,
@@ -68,7 +67,6 @@ class Database:
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS registered_tasks (
 				task_name    TEXT PRIMARY KEY,
-				task_version INTEGER,
 				output_table TEXT,
 				modalities   TEXT,
 				depends_on   TEXT
@@ -116,30 +114,29 @@ class Database:
 	# TASK QUEUE
 	# =================================================================
 
-	def enqueue_task(self, path, task_name, task_version=1):
+	def enqueue_task(self, path, task_name):
 		"""Add a task to the queue. Skips if already exists."""
 		now = time.time()
 		with self.lock:
 			self.conn.execute("""
-				INSERT OR IGNORE INTO task_queue (path, task_name, task_version, status, created_at)
-				VALUES (?, ?, ?, 'PENDING', ?)
-			""", (path, task_name, task_version, now))
+				INSERT OR IGNORE INTO task_queue (path, task_name, status, created_at)
+				VALUES (?, ?, 'PENDING', ?)
+			""", (path, task_name, now))
 			self.conn.commit()
 
-	def re_enqueue_task(self, path, task_name, task_version=1):
+	def re_enqueue_task(self, path, task_name):
 		"""Enqueue a task, resetting it to PENDING if it already exists."""
 		now = time.time()
 		with self.lock:
 			self.conn.execute("""
-				INSERT INTO task_queue (path, task_name, task_version, status, created_at)
-				VALUES (?, ?, ?, 'PENDING', ?)
+				INSERT INTO task_queue (path, task_name, status, created_at)
+				VALUES (?, ?, 'PENDING', ?)
 				ON CONFLICT(path, task_name) DO UPDATE SET
 					status = 'PENDING',
-					task_version = excluded.task_version,
 					started_at = NULL,
 					completed_at = NULL,
 					error = NULL
-			""", (path, task_name, task_version, now))
+			""", (path, task_name, now))
 			self.conn.commit()
 
 	def claim_tasks(self, task_name, batch_size):
@@ -228,14 +225,52 @@ class Database:
 			self.conn.commit()
 
 	def reset_task(self, task_name):
-		"""Reset all entries for a task back to PENDING. Used when version changes."""
+		"""Reset all entries for a task back to PENDING."""
 		with self.lock:
 			self.conn.execute("""
-				UPDATE task_queue 
+				UPDATE task_queue
 				SET status = 'PENDING', started_at = NULL, completed_at = NULL, error = NULL
 				WHERE task_name = ?
 			""", (task_name,))
 			self.conn.commit()
+
+	def invalidate_tasks_for_paths(self, task_names: list[str], paths: list[str]):
+		"""Reset task_queue entries to PENDING for specific (path, task_name) pairs.
+		Used to cascade invalidation when an upstream task fails."""
+		if not task_names or not paths:
+			return
+		with self.lock:
+			for task_name in task_names:
+				self.conn.executemany(
+					"""UPDATE task_queue
+					   SET status = 'PENDING', started_at = NULL, completed_at = NULL, error = NULL
+					   WHERE path = ? AND task_name = ? AND status != 'PENDING'""",
+					[(p, task_name) for p in paths]
+				)
+			self.conn.commit()
+
+	def invalidate_tasks_bulk(self, task_names: list[str]):
+		"""Reset ALL entries for given task names to PENDING.
+		Used to cascade invalidation when an upstream task is fully reset."""
+		if not task_names:
+			return
+		with self.lock:
+			for task_name in task_names:
+				self.conn.execute(
+					"""UPDATE task_queue
+					   SET status = 'PENDING', started_at = NULL, completed_at = NULL, error = NULL
+					   WHERE task_name = ? AND status != 'PENDING'""",
+					(task_name,)
+				)
+			self.conn.commit()
+
+	def get_paths_for_task_status(self, task_name: str, status: str) -> list[str]:
+		"""Get all paths for a task with a given status."""
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT path FROM task_queue WHERE task_name = ? AND status = ?",
+				(task_name, status))
+			return [row["path"] for row in cur.fetchall()]
 
 	# =================================================================
 	# OUTPUT TABLES
@@ -341,14 +376,14 @@ class Database:
 	# TASK REGISTRATION
 	# =================================================================
 
-	def register_task(self, name, version, output_table, modalities, depends_on):
-		"""Persist task metadata so we can detect version changes across restarts."""
+	def register_task(self, name, output_table, modalities, depends_on):
+		"""Persist task metadata across restarts."""
 		with self.lock:
 			self.conn.execute("""
 				INSERT OR REPLACE INTO registered_tasks
-				(task_name, task_version, output_table, modalities, depends_on)
-				VALUES (?, ?, ?, ?, ?)
-			""", (name, version, output_table,
+				(task_name, output_table, modalities, depends_on)
+				VALUES (?, ?, ?, ?)
+			""", (name, output_table,
 				  ",".join(modalities) if modalities else "",
 				  ",".join(depends_on) if depends_on else ""))
 			self.conn.commit()
@@ -357,15 +392,6 @@ class Database:
 		with self.lock:
 			cur = self.conn.execute("SELECT * FROM registered_tasks")
 			return [dict(row) for row in cur.fetchall()]
-
-	def has_version_changed(self, name, version):
-		with self.lock:
-			cur = self.conn.execute(
-				"SELECT task_version FROM registered_tasks WHERE task_name = ?", (name,))
-			row = cur.fetchone()
-			if row is None:
-				return True  # new task, never seen before
-			return row["task_version"] != version
 
 	# =================================================================
 	# STATS

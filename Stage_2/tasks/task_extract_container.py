@@ -25,7 +25,6 @@ logger = logging.getLogger("ExtractContainer")
 
 class ExtractContainer(BaseTask):
 	name = "extract_container"
-	version = 1
 	modalities = ["container"]
 	depends_on = []
 	requires_services = []  # no models needed

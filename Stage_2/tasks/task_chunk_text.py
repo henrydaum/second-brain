@@ -69,7 +69,6 @@ def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 
 class ChunkText(BaseTask):
 	name = "chunk_text"
-	version = 1
 	modalities = ["text"]
 	depends_on = ["extract_text"]
 	requires_services = []

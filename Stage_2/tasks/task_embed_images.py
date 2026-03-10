@@ -1,8 +1,9 @@
 """
 Embed Images task.
 
-Loads image files with PIL, batches them, and encodes them using the
-image_embedder service (e.g. CLIP). One embedding per image.
+Uses the parser system to extract images from any file type (PDF, DOCX,
+standalone images, etc.), then batches and encodes them using the
+image_embedder service (e.g. CLIP). One embedding per extracted image.
 
 No upstream dependencies — images don't need text extraction first.
 Requires the image_embedder service to be loaded.
@@ -12,8 +13,6 @@ import logging
 import time
 from pathlib import Path
 
-from PIL import Image
-
 from Stage_2.BaseTask import BaseTask, TaskResult
 
 logger = logging.getLogger("EmbedImages")
@@ -21,17 +20,18 @@ logger = logging.getLogger("EmbedImages")
 
 class EmbedImages(BaseTask):
 	name = "embed_images"
-	version = 1
 	modalities = ["image"]
 	depends_on = []
 	requires_services = ["image_embedder"]
 	output_tables = ["image_embeddings"]
 	output_schema = """
 		CREATE TABLE IF NOT EXISTS image_embeddings (
-			path TEXT PRIMARY KEY,
+			path TEXT,
+			image_index INTEGER,
 			embedding BLOB,
 			model_name TEXT,
-			embedded_at REAL
+			embedded_at REAL,
+			PRIMARY KEY (path, image_index)
 		);
 	"""
 	batch_size = 4
@@ -45,29 +45,41 @@ class EmbedImages(BaseTask):
 
 		now = time.time()
 
-		# --- 1. Load images ---
-		images = []
-		valid_paths = []
+		# --- 1. Extract images via parser system ---
+		# Each entry: (path, image_index, PIL.Image)
+		image_entries = []
 		failed = {}  # path -> error
-
-		Image.MAX_IMAGE_PIXELS = None
 
 		for path in paths:
 			try:
-				with Image.open(path) as img:
+				parse_result = context.parse(path, "image")
+
+				if not parse_result.success:
+					logger.error(f"Image parse failed for {Path(path).name}: {parse_result.error}")
+					failed[path] = parse_result.error
+					continue
+
+				images = parse_result.output or []
+				if not images:
+					logger.info(f"No images found in {Path(path).name}")
+					failed[path] = "No images found"
+					continue
+
+				for idx, img in enumerate(images):
 					img = img.convert("RGB")
 					img.thumbnail((512, 512))
-					images.append(img.copy())
-				valid_paths.append(path)
+					image_entries.append((path, idx, img))
+
 			except Exception as e:
-				logger.error(f"Failed to load image {Path(path).name}: {e}")
+				logger.error(f"Failed to extract images from {Path(path).name}: {e}")
 				failed[path] = str(e)
 
-		# --- 2. Encode all valid images at once ---
+		# --- 2. Encode all images at once ---
 		embeddings = None
-		if images:
+		if image_entries:
 			try:
-				embeddings = embedder.encode(images)
+				pil_images = [entry[2] for entry in image_entries]
+				embeddings = embedder.encode(pil_images)
 			except Exception as e:
 				logger.error(f"Image embedding failed: {e}")
 				return [TaskResult.failed(f"Encode failed: {e}") for _ in paths]
@@ -76,26 +88,25 @@ class EmbedImages(BaseTask):
 				return [TaskResult.failed("Embedder returned None") for _ in paths]
 
 		# --- 3. Build results ---
-		results = []
-		embed_idx = 0
+		# Group embeddings by path
+		path_rows = {path: [] for path in paths}
+		for i, (path, idx, _img) in enumerate(image_entries):
+			path_rows[path].append({
+				"path": path,
+				"image_index": idx,
+				"embedding": embeddings[i].tobytes(),
+				"model_name": embedder.model_name,
+				"embedded_at": now,
+			})
 
+		results = []
 		for path in paths:
 			if path in failed:
 				results.append(TaskResult.failed(failed[path]))
-				continue
+			else:
+				results.append(TaskResult(success=True, data=path_rows[path]))
 
-			embedding_bytes = embeddings[embed_idx].tobytes()
-			embed_idx += 1
-
-			results.append(TaskResult(
-				success=True,
-				data=[{
-					"path": path,
-					"embedding": embedding_bytes,
-					"model_name": embedder.model_name,
-					"embedded_at": now,
-				}],
-			))
-
-		logger.info(f"Embedded {len(valid_paths)} images")
+		embedded_count = len(image_entries)
+		file_count = len(paths) - len(failed)
+		logger.info(f"Embedded {embedded_count} images from {file_count} file(s)")
 		return results

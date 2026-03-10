@@ -71,42 +71,51 @@ class Orchestrator:
 		if task.output_schema:
 			self.db.ensure_output_table(task.name, task.output_schema)
 
-		version_changed = self.db.has_version_changed(task.name, task.version)
-		if version_changed:
-			logger.info(f"Task '{task.name}' version changed -- will re-process")
-			self._reset_task_for_reprocessing(task)
-
 		self.db.register_task(
 			name=task.name,
-			version=task.version,
 			output_table=",".join(task.output_tables),
 			modalities=task.modalities,
 			depends_on=task.depends_on,
 		)
 
 		self.tasks[task.name] = task
-		logger.info(f"Registered: {task.name} v{task.version}")
+		logger.info(f"Registered: {task.name}")
 
 		max_w = task.max_workers if task.max_workers > 0 else self.max_workers
 		self.task_semaphores[task.name] = threading.Semaphore(max_w)
 
 		self._backfill_task(task)
 
-	def _reset_task_for_reprocessing(self, task: BaseTask):
-		self.db.reset_task(task.name)
-
 	def _backfill_task(self, task: BaseTask):
 		for modality in task.modalities:
 			paths = self.db.get_files_by_modality(modality)
 			for path in paths:
 				if self._deps_met(path, task):
-					self.db.enqueue_task(path, task.name, task.version)
+					self.db.enqueue_task(path, task.name)
 
 	def _deps_met(self, path: str, task: BaseTask) -> bool:
 		for dep in task.depends_on:
 			if not self.db.is_task_done(path, dep):
 				return False
 		return True
+
+	def _get_all_downstream(self, task_name: str) -> list[str]:
+		"""Return all task names that transitively depend on task_name."""
+		downstream = []
+		frontier = [task_name]
+		while frontier:
+			current = frontier.pop()
+			for task in self.tasks.values():
+				if current in task.depends_on and task.name not in downstream:
+					downstream.append(task.name)
+					frontier.append(task.name)
+		return downstream
+
+	def _invalidate_downstream(self, task_name: str, paths: list[str]):
+		"""Reset downstream tasks to PENDING for specific paths."""
+		downstream = self._get_all_downstream(task_name)
+		if downstream:
+			self.db.invalidate_tasks_for_paths(downstream, paths)
 
 	# =================================================================
 	# SERVICE CHECK
@@ -145,7 +154,9 @@ class Orchestrator:
 		for task in self.tasks.values():
 			if modality in task.modalities:
 				if self._deps_met(path, task):
-					self.db.re_enqueue_task(path, task.name, task.version)
+					self.db.re_enqueue_task(path, task.name)
+					# Task is being re-queued — invalidate downstream tasks
+					self._invalidate_downstream(task.name, [path])
 
 	def on_file_deleted(self, path: str):
 		all_tables = []
@@ -162,14 +173,14 @@ class Orchestrator:
 		for task in self.tasks.values():
 			if task_name in task.depends_on:
 				if self._deps_met(path, task):
-					self.db.re_enqueue_task(path, task.name, task.version)
+					self.db.re_enqueue_task(path, task.name)
 
 	def on_also_contains(self, path: str, modalities: list[str]):
 		for modality in modalities:
 			for task in self.tasks.values():
 				if modality in task.modalities:
 					if self._deps_met(path, task):
-						self.db.enqueue_task(path, task.name, task.version)
+						self.db.enqueue_task(path, task.name)
 
 	def on_paths_discovered(self, child_paths: list[str]):
 		from Stage_1.registry import get_modality, get_supported_extensions
@@ -320,8 +331,10 @@ class Orchestrator:
 			logger.error(f"Task '{task.name}' batch failed: {e}")
 			for path in paths:
 				self.db.fail_task(path, task.name, str(e))
+			self._invalidate_downstream(task.name, paths)
 			return
 
+		failed_paths = []
 		for path, result in zip(paths, results):
 			if result.success:
 				if result.data and task.output_tables:
@@ -332,7 +345,17 @@ class Orchestrator:
 							f"Write failed for '{task.name}' on {Path(path).name}: {e}"
 						)
 						self.db.fail_task(path, task.name, f"Write failed: {e}")
+						failed_paths.append(path)
 						continue
+
+				# Safety: verify deps are still met before completing.
+				# Handles the race where upstream was invalidated mid-execution.
+				if task.depends_on and not self._deps_met(path, task):
+					self.db.re_enqueue_task(path, task.name)
+					logger.warning(
+						f"Deps no longer met for '{task.name}' on {Path(path).name}, re-enqueued"
+					)
+					continue
 
 				self.db.complete_task(path, task.name)
 				self.on_task_completed(path, task.name)
@@ -344,6 +367,10 @@ class Orchestrator:
 					self.on_paths_discovered(result.discovered_paths)
 			else:
 				self.db.fail_task(path, task.name, result.error)
+				failed_paths.append(path)
 				logger.warning(
 					f"Task '{task.name}' failed on {Path(path).name}: {result.error}"
 				)
+
+		if failed_paths:
+			self._invalidate_downstream(task.name, failed_paths)

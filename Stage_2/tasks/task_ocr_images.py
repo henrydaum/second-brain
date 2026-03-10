@@ -22,7 +22,6 @@ logger = logging.getLogger("OCRImages")
 
 class OCRImages(BaseTask):
     name = "ocr_images"
-    version = 2
     modalities = ["image"]
     depends_on = []
     requires_services = ["ocr"]

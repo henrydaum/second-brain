@@ -25,7 +25,6 @@ Example concrete task:
 
 	class EmbedText(BaseTask):
 		name = "embed_text"
-		version = 1
 		modalities = ["text"]
 		depends_on = ["extract_text"]
 		requires_services = ["embedder"]
@@ -76,7 +75,6 @@ class BaseTask:
 
 	Class attributes (override these):
 		name              Unique identifier. "embed_text", "ocr", etc.
-		version           Integer. Bump when the model or logic changes.
 		modalities        List of modalities this task works on.
 		depends_on        List of task names that must complete first.
 		requires_services List of service names that must be loaded before dispatch.
@@ -96,7 +94,6 @@ class BaseTask:
 
 	# --- Identity ---
 	name: str = ""
-	version: int = 1
 
 	# --- Routing ---
 	modalities: list[str] = []

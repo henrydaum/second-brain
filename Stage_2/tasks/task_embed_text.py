@@ -19,7 +19,6 @@ logger = logging.getLogger("EmbedText")
 
 class EmbedText(BaseTask):
 	name = "embed_text"
-	version = 1
 	modalities = ["text"]
 	depends_on = ["chunk_text"]
 	requires_services = ["text_embedder"]

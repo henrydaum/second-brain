@@ -184,23 +184,37 @@ class Controller:
         return f"Task '{name}' unpaused."
 
     def reset_task(self, name: str) -> str:
-        """Reset ALL entries for a task back to PENDING."""
+        """Reset ALL entries for a task back to PENDING, including downstream tasks."""
         if name not in self.orchestrator.tasks:
             return f"Unknown task: '{name}'."
 
         self.db.reset_task(name)
-        return f"Task '{name}' reset — all entries back to PENDING."
+        downstream = self.orchestrator._get_all_downstream(name)
+        if downstream:
+            self.db.invalidate_tasks_bulk(downstream)
+        return f"Task '{name}' reset — all entries back to PENDING (+ {len(downstream)} downstream)."
 
     def retry_task(self, name: str) -> str:
-        """Retry only FAILED entries for a task."""
+        """Retry only FAILED entries for a task, invalidating their downstream tasks."""
         if name not in self.orchestrator.tasks:
             return f"Unknown task: '{name}'."
 
+        failed_paths = self.db.get_paths_for_task_status(name, "FAILED")
         self.db.reset_failed_tasks(name)
+        downstream = self.orchestrator._get_all_downstream(name)
+        if downstream and failed_paths:
+            self.db.invalidate_tasks_for_paths(downstream, failed_paths)
         return f"Task '{name}' — failed entries reset to PENDING."
 
     def retry_all(self) -> str:
-        """Retry all FAILED entries across all tasks."""
+        """Retry all FAILED entries across all tasks, invalidating downstream."""
+        # Cascade before resetting so we can detect which paths were FAILED
+        for name in self.orchestrator.tasks:
+            failed_paths = self.db.get_paths_for_task_status(name, "FAILED")
+            if failed_paths:
+                downstream = self.orchestrator._get_all_downstream(name)
+                if downstream:
+                    self.db.invalidate_tasks_for_paths(downstream, failed_paths)
         self.db.reset_failed_tasks()
         return "All failed tasks reset to PENDING."
 
