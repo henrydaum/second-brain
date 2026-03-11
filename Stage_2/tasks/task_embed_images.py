@@ -21,9 +21,9 @@ logger = logging.getLogger("EmbedImages")
 class EmbedImages(BaseTask):
 	name = "embed_images"
 	modalities = ["image"]
-	depends_on = []
+	reads = []
+	writes = ["image_embeddings"]
 	requires_services = ["image_embedder"]
-	output_tables = ["image_embeddings"]
 	output_schema = """
 		CREATE TABLE IF NOT EXISTS image_embeddings (
 			path TEXT,

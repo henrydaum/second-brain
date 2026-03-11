@@ -20,9 +20,9 @@ logger = logging.getLogger("EmbedText")
 class EmbedText(BaseTask):
 	name = "embed_text"
 	modalities = ["text"]
-	depends_on = ["chunk_text"]
+	reads = ["text_chunks"]
+	writes = ["text_embeddings"]
 	requires_services = ["text_embedder"]
-	output_tables = ["text_embeddings"]
 	output_schema = """
 		CREATE TABLE IF NOT EXISTS text_embeddings (
 			path TEXT,

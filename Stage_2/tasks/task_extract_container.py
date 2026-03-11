@@ -26,9 +26,9 @@ logger = logging.getLogger("ExtractContainer")
 class ExtractContainer(BaseTask):
 	name = "extract_container"
 	modalities = ["container"]
-	depends_on = []
+	reads = []
+	writes = ["extracted_containers"]
 	requires_services = []  # no models needed
-	output_tables = ["extracted_containers"]
 	output_schema = """
 		CREATE TABLE IF NOT EXISTS extracted_containers (
 			path TEXT PRIMARY KEY,

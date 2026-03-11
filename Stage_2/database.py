@@ -14,9 +14,8 @@ Two fixed tables:
 
 Dynamic output tables:
 	Created by tasks via raw SQL. Each task owns its own schema.
-
-Search index:
-	FTS5 table fed by tasks. Built out later.
+	Supports CREATE TABLE, CREATE INDEX, CREATE VIRTUAL TABLE,
+	and CREATE TRIGGER (for FTS5 content-sync).
 """
 
 
@@ -64,12 +63,14 @@ class Database:
 		""")
 
 		# Task registry — remembers which tasks are registered across restarts
+		# Drop and recreate to handle schema migrations cleanly
+		self.conn.execute("DROP TABLE IF EXISTS registered_tasks")
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS registered_tasks (
 				task_name    TEXT PRIMARY KEY,
-				output_table TEXT,
-				modalities   TEXT,
-				depends_on   TEXT
+				writes       TEXT,
+				reads        TEXT,
+				modalities   TEXT
 			)
 		""")
 
@@ -108,6 +109,19 @@ class Database:
 		"""Returns list of paths for a given modality."""
 		with self.lock:
 			cur = self.conn.execute("SELECT path FROM files WHERE modality = ?", (modality,))
+			return [row["path"] for row in cur.fetchall()]
+
+	def get_paths_with_any_task_done(self, task_names):
+		"""Returns distinct paths where any of the given tasks are DONE.
+		Used by _backfill_tasks for downstream tasks with no modalities."""
+		if not task_names:
+			return []
+		with self.lock:
+			placeholders = ",".join("?" * len(task_names))
+			cur = self.conn.execute(f"""
+				SELECT DISTINCT path FROM task_queue
+				WHERE task_name IN ({placeholders}) AND status = 'DONE'
+			""", task_names)
 			return [row["path"] for row in cur.fetchall()]
 
 	# =================================================================
@@ -317,13 +331,39 @@ class Database:
 
 	def ensure_output_table(self, task_name, schema_sql):
 		"""
-		Execute a task's schema SQL. Only CREATE TABLE and CREATE INDEX allowed.
-		The task owns its schema — it provides raw SQL. 
-		
-		Takes raw SQL that can contain multiple CREATE TABLE and CREATE INDEX statements separated by semicolons.
+		Execute a task's schema SQL. Only CREATE statements allowed.
+		The task owns its schema — it provides raw SQL.
+
+		Takes raw SQL that can contain multiple statements separated by
+		semicolons, including CREATE TRIGGER blocks (which contain internal
+		semicolons within BEGIN...END).
 		"""
-		allowed_prefixes = ("create table", "create index", "create unique index")
-		statements = [s.strip() for s in schema_sql.split(";") if s.strip()]
+		allowed_prefixes = ("create table", "create index", "create unique index",
+						   "create virtual table", "create trigger")
+
+		# Split on semicolons, but rejoin trigger bodies (BEGIN...END blocks)
+		raw_parts = [s.strip() for s in schema_sql.split(";") if s.strip()]
+		statements = []
+		current = None
+		in_trigger = False
+
+		for part in raw_parts:
+			if in_trigger:
+				current += ";" + part
+				if part.strip().upper() == "END":
+					statements.append(current)
+					current = None
+					in_trigger = False
+			else:
+				normalized = " ".join(part.lower().split())
+				if normalized.startswith("create trigger"):
+					in_trigger = True
+					current = part
+				else:
+					statements.append(part)
+
+		if current:
+			statements.append(current)
 
 		for stmt in statements:
 			normalized = " ".join(stmt.lower().split())
@@ -376,16 +416,17 @@ class Database:
 	# TASK REGISTRATION
 	# =================================================================
 
-	def register_task(self, name, output_table, modalities, depends_on):
+	def register_task(self, name, writes, reads, modalities):
 		"""Persist task metadata across restarts."""
 		with self.lock:
 			self.conn.execute("""
 				INSERT OR REPLACE INTO registered_tasks
-				(task_name, output_table, modalities, depends_on)
+				(task_name, writes, reads, modalities)
 				VALUES (?, ?, ?, ?)
-			""", (name, output_table,
-				  ",".join(modalities) if modalities else "",
-				  ",".join(depends_on) if depends_on else ""))
+			""", (name,
+				  ",".join(writes) if writes else "",
+				  ",".join(reads) if reads else "",
+				  ",".join(modalities) if modalities else ""))
 			self.conn.commit()
 
 	def get_registered_tasks(self):

@@ -18,9 +18,9 @@ logger = logging.getLogger("ExtractText")
 class ExtractText(BaseTask):
 	name = "extract_text"
 	modalities = ["text"]
-	depends_on = []
+	reads = []
+	writes = ["extracted_text"]
 	requires_services = []  # no models needed
-	output_tables = ["extracted_text"]
 	output_schema = """
 		CREATE TABLE IF NOT EXISTS extracted_text (
 			path TEXT PRIMARY KEY,

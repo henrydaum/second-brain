@@ -23,9 +23,9 @@ logger = logging.getLogger("OCRImages")
 class OCRImages(BaseTask):
     name = "ocr_images"
     modalities = ["image"]
-    depends_on = []
+    reads = []
+    writes = ["ocr_text"]
     requires_services = ["ocr"]
-    output_tables = ["ocr_text"]
     output_schema = """
         CREATE TABLE IF NOT EXISTS ocr_text (
             path TEXT PRIMARY KEY,

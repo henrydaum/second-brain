@@ -15,8 +15,12 @@ logger = logging.getLogger("Orchestrator")
 Orchestrator.
 
 The generic dispatcher. Zero knowledge of what any task does.
-It only knows the BaseTask interface: modalities, depends_on,
+It only knows the BaseTask interface: modalities, reads, writes,
 requires_services, batch_size, run().
+
+Dependencies are derived automatically from reads/writes declarations.
+If task A writes to table X, and task B reads from table X, then B
+depends on A. No explicit wiring needed.
 
 Flow:
 	Watcher detects file -> on_file_discovered()
@@ -24,8 +28,8 @@ Flow:
 		-> if no deps or all deps met, enqueue
 
 	Worker completes task -> on_task_completed()
-		-> checks which tasks depend on completed one
-		-> if ALL deps now met, enqueue
+		-> walks the graph: which tasks read from this task's output tables?
+		-> if deps now met (AND/OR), enqueue
 
 	Dispatch loop:
 		-> for each task, check paused, services, semaphore
@@ -61,6 +65,10 @@ class Orchestrator:
 		# Track which tasks were skipped last cycle (avoid log spam)
 		self._skip_logged: set[str] = set()
 
+		# Dependency graph — built by _build_graph() after all tasks are registered
+		self.table_producers: dict[str, str] = {}    # table -> task name that writes it
+		self.upstream: dict[str, list[str]] = {}      # task name -> upstream task names
+
 	# =================================================================
 	# TASK REGISTRATION
 	# =================================================================
@@ -73,9 +81,9 @@ class Orchestrator:
 
 		self.db.register_task(
 			name=task.name,
-			output_table=",".join(task.output_tables),
+			writes=task.writes,
+			reads=task.reads,
 			modalities=task.modalities,
-			depends_on=task.depends_on,
 		)
 
 		self.tasks[task.name] = task
@@ -84,20 +92,65 @@ class Orchestrator:
 		max_w = task.max_workers if task.max_workers > 0 else self.max_workers
 		self.task_semaphores[task.name] = threading.Semaphore(max_w)
 
-		self._backfill_task(task)
+	def _build_graph(self):
+		"""Derive the dependency graph from reads/writes declarations.
+		Called once after all tasks are registered, before start()."""
 
-	def _backfill_task(self, task: BaseTask):
-		for modality in task.modalities:
-			paths = self.db.get_files_by_modality(modality)
-			for path in paths:
-				if self._deps_met(path, task):
-					self.db.enqueue_task(path, task.name)
+		# table -> task name that writes it
+		self.table_producers = {}
+		for task in self.tasks.values():
+			for table in task.writes:
+				if table in self.table_producers:
+					# Shared table — multiple writers (e.g. search_content)
+					# Store first writer; downstream logic uses reads matching, not this map
+					pass
+				else:
+					self.table_producers[table] = task.name
+
+		# task name -> list of upstream task names (derived from reads -> writes)
+		self.upstream = {}
+		for task in self.tasks.values():
+			deps = set()
+			for table in task.reads:
+				producer = self.table_producers.get(table)
+				if producer:
+					deps.add(producer)
+			self.upstream[task.name] = list(deps)
+
+	def _backfill_tasks(self):
+		"""Enqueue all existing files for tasks whose deps are already met."""
+		for task in self.tasks.values():
+			if task.modalities:
+				# Root task — find files by modality
+				for modality in task.modalities:
+					paths = self.db.get_files_by_modality(modality)
+					for path in paths:
+						if self._deps_met(path, task):
+							self.db.enqueue_task(path, task.name)
+			elif task.reads:
+				# Downstream task (no modalities) — find paths with upstream done
+				paths = self._get_backfill_paths(task)
+				for path in paths:
+					if self._deps_met(path, task):
+						self.db.enqueue_task(path, task.name)
+
+	def _get_backfill_paths(self, task):
+		"""Get paths where at least one upstream task is DONE."""
+		upstream_tasks = self.upstream.get(task.name, [])
+		return self.db.get_paths_with_any_task_done(upstream_tasks)
 
 	def _deps_met(self, path: str, task: BaseTask) -> bool:
-		for dep in task.depends_on:
-			if not self.db.is_task_done(path, dep):
-				return False
-		return True
+		"""Check if upstream dependencies are satisfied for a path.
+		AND mode: all upstream tasks must be DONE.
+		OR mode: at least one upstream task must be DONE."""
+		upstream_tasks = self.upstream.get(task.name, [])
+		if not upstream_tasks:
+			return True
+		done = [dep for dep in upstream_tasks if self.db.is_task_done(path, dep)]
+		if task.require_all_inputs:
+			return len(done) == len(upstream_tasks)
+		else:
+			return len(done) > 0
 
 	def _get_all_downstream(self, task_name: str) -> list[str]:
 		"""Return all task names that transitively depend on task_name."""
@@ -105,10 +158,14 @@ class Orchestrator:
 		frontier = [task_name]
 		while frontier:
 			current = frontier.pop()
-			for task in self.tasks.values():
-				if current in task.depends_on and task.name not in downstream:
-					downstream.append(task.name)
-					frontier.append(task.name)
+			current_task = self.tasks.get(current)
+			if current_task is None:
+				continue
+			for table in current_task.writes:
+				for task in self.tasks.values():
+					if table in task.reads and task.name not in downstream:
+						downstream.append(task.name)
+						frontier.append(task.name)
 		return downstream
 
 	def _invalidate_downstream(self, task_name: str, paths: list[str]):
@@ -161,7 +218,7 @@ class Orchestrator:
 	def on_file_deleted(self, path: str):
 		all_tables = []
 		for task in self.tasks.values():
-			all_tables.extend(task.output_tables)
+			all_tables.extend(task.writes)
 		self.db.clean_output_tables(path, all_tables)
 		self.db.remove_file(path)
 
@@ -170,10 +227,14 @@ class Orchestrator:
 	# =================================================================
 
 	def on_task_completed(self, path: str, task_name: str):
-		for task in self.tasks.values():
-			if task_name in task.depends_on:
-				if self._deps_met(path, task):
-					self.db.re_enqueue_task(path, task.name)
+		completed_task = self.tasks.get(task_name)
+		if not completed_task:
+			return
+		for table in completed_task.writes:
+			for task in self.tasks.values():
+				if table in task.reads:
+					if self._deps_met(path, task):
+						self.db.re_enqueue_task(path, task.name)
 
 	def on_also_contains(self, path: str, modalities: list[str]):
 		for modality in modalities:
@@ -219,7 +280,10 @@ class Orchestrator:
 	def start(self):
 		self.running = True
 
+		self._build_graph()
+		self._log_pipeline_graph()
 		self._create_cascade_triggers()
+		self._backfill_tasks()
 
 		for task in self.tasks.values():
 			count = self.db.reset_stuck_tasks_for(task.name, task.timeout)
@@ -234,23 +298,77 @@ class Orchestrator:
 
 	def _create_cascade_triggers(self):
 		"""
-		Auto-create SQL DELETE cascade triggers from the dependency graph.
+		Auto-create SQL DELETE cascade triggers from the reads/writes graph.
 
-		When a task declares depends_on, we create triggers so that deleting
-		(or replacing) rows in the upstream task's output table automatically
+		For each task that reads from a table, create a trigger so that
+		deleting (or replacing) rows in the upstream table automatically
 		cleans the downstream task's output table. INSERT OR REPLACE fires
 		DELETE triggers in SQLite, so re-running an upstream task cascades
 		cleanup through the entire chain automatically.
+
+		Shared output tables (written by multiple tasks) are skipped —
+		cascade could delete rows from other writers. For those, INSERT OR
+		REPLACE with composite keys handles correctness.
 		"""
+		# Detect shared tables (written by multiple tasks)
+		table_writers: dict[str, list[str]] = {}
 		for task in self.tasks.values():
-			for dep_name in task.depends_on:
-				dep_task = self.tasks.get(dep_name)
-				if dep_task is None:
-					continue
-				for upstream_table in dep_task.output_tables:
-					for downstream_table in task.output_tables:
-						self.db.create_cascade_trigger(upstream_table, downstream_table)
-						logger.info(f"Cascade trigger: {upstream_table} -> {downstream_table}")
+			for table in task.writes:
+				table_writers.setdefault(table, []).append(task.name)
+		shared_tables = {t for t, writers in table_writers.items() if len(writers) > 1}
+
+		for task in self.tasks.values():
+			if not task.reads:
+				continue
+			for input_table in task.reads:
+				for output_table in task.writes:
+					if output_table in shared_tables:
+						logger.info(f"Skipping cascade {input_table} -> {output_table} (shared table)")
+						continue
+					self.db.create_cascade_trigger(input_table, output_table)
+					logger.info(f"Cascade trigger: {input_table} -> {output_table}")
+
+	def _log_pipeline_graph(self):
+		"""Log a visual representation of the pipeline at startup."""
+		if not self.tasks:
+			return
+
+		lines = ["Pipeline:"]
+
+		# Find root tasks (no upstream dependencies)
+		roots = [t for t in self.tasks.values() if not self.upstream.get(t.name)]
+
+		visited = set()
+
+		def walk(task_name, indent=2):
+			if task_name in visited:
+				return
+			visited.add(task_name)
+			task = self.tasks[task_name]
+			mode = ""
+			if task.reads and not task.require_all_inputs:
+				mode = " (OR)"
+
+			tables_str = ", ".join(f"[{t}]" for t in task.writes)
+			lines.append(f"{'':>{indent}}{task_name}{mode} -> {tables_str}")
+
+			# Find downstream tasks
+			for table in task.writes:
+				for downstream in self.tasks.values():
+					if table in downstream.reads:
+						walk(downstream.name, indent + 4)
+
+		for root in roots:
+			walk(root.name)
+
+		# Log any tasks not reachable from roots (orphans or cycles)
+		for task_name in self.tasks:
+			if task_name not in visited:
+				task = self.tasks[task_name]
+				tables_str = ", ".join(f"[{t}]" for t in task.writes)
+				lines.append(f"  {task_name} -> {tables_str}")
+
+		logger.info("\n".join(lines))
 
 	def stop(self):
 		self.running = False
@@ -299,7 +417,7 @@ class Orchestrator:
 					continue
 
 				# Gate 5: deps still met? (safety net for file-update races)
-				if task.depends_on:
+				if task.reads:
 					ready = [p for p in paths if self._deps_met(p, task)]
 					not_ready = [p for p in paths if p not in ready]
 					if not_ready:
@@ -337,9 +455,10 @@ class Orchestrator:
 		failed_paths = []
 		for path, result in zip(paths, results):
 			if result.success:
-				if result.data and task.output_tables:
+				if result.data and task.writes:
 					try:
-						self.db.write_outputs(task.output_tables[0], result.data)
+						for table in task.writes:
+							self.db.write_outputs(table, result.data)
 					except Exception as e:
 						logger.error(
 							f"Write failed for '{task.name}' on {Path(path).name}: {e}"
@@ -350,7 +469,7 @@ class Orchestrator:
 
 				# Safety: verify deps are still met before completing.
 				# Handles the race where upstream was invalidated mid-execution.
-				if task.depends_on and not self._deps_met(path, task):
+				if task.reads and not self._deps_met(path, task):
 					self.db.re_enqueue_task(path, task.name)
 					logger.warning(
 						f"Deps no longer met for '{task.name}' on {Path(path).name}, re-enqueued"

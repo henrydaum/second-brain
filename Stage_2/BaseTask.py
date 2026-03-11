@@ -16,24 +16,28 @@ it only knows the interface defined here.
 
 A task declares:
 	- What files it works on (modalities)
-	- What must finish first (depends_on)
+	- What tables it reads from (reads) — the orchestrator derives dependencies
+	  automatically by matching reads to writes across all tasks
+	- What tables it writes to (writes)
+	- Whether it needs ALL inputs or ANY input (require_all_inputs)
 	- What shared services must be loaded (requires_services)
-	- What tables it writes to (output_tables, output_schema)
 	- How to execute (run)
+
+The dependency graph is built automatically from reads/writes declarations,
+like Factorio's crafting tree. Tasks never reference each other by name.
 
 Example concrete task:
 
 	class EmbedText(BaseTask):
 		name = "embed_text"
 		modalities = ["text"]
-		depends_on = ["extract_text"]
+		reads = ["text_chunks"]
+		writes = ["text_embeddings"]
 		requires_services = ["embedder"]
-		output_tables = ["embeddings"]
 		output_schema = \"""
-			CREATE TABLE IF NOT EXISTS embeddings (
+			CREATE TABLE IF NOT EXISTS text_embeddings (
 				path TEXT,
 				chunk_index INTEGER,
-				text_content TEXT,
 				embedding BLOB,
 				PRIMARY KEY (path, chunk_index)
 			)
@@ -75,13 +79,18 @@ class BaseTask:
 
 	Class attributes (override these):
 		name              Unique identifier. "embed_text", "ocr", etc.
-		modalities        List of modalities this task works on.
-		depends_on        List of task names that must complete first.
+		modalities        File types this task processes. Required for root
+		                  tasks (no reads). Downstream tasks leave this empty —
+		                  they're triggered by upstream completion.
+		reads             Input tables. Dependencies are derived automatically
+		                  by matching reads to other tasks' writes.
+		writes            Output tables this task writes to.
+		require_all_inputs True (default) = AND: all input tables must have
+		                  upstream data. False = OR: at least one suffices.
 		requires_services List of service names that must be loaded before dispatch.
 		                  In manual mode, task sits in queue until user loads the service.
 		                  In auto mode, system loads the service before dispatch.
 		                  Empty list = no service requirements (e.g. extract_text).
-		output_tables     List of table names this task writes to.
 		output_schema     Raw SQL to create the output table(s).
 		batch_size        How many files to process per run() call.
 		max_workers       0 = use global max. >0 = limit concurrent workers for this task.
@@ -97,13 +106,16 @@ class BaseTask:
 
 	# --- Routing ---
 	modalities: list[str] = []
-	depends_on: list[str] = []
+
+	# --- Data flow ---
+	reads: list[str] = []              # input tables (dependencies derived automatically)
+	writes: list[str] = []             # output tables
+	require_all_inputs: bool = True    # True=AND (all inputs needed), False=OR (any input suffices)
 
 	# --- Service requirements ---
 	requires_services: list[str] = []
 
 	# --- Schema ---
-	output_tables: list[str] = []
 	output_schema: str = ""
 
 	# --- Execution ---

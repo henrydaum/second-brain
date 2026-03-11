@@ -70,9 +70,9 @@ def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 class ChunkText(BaseTask):
 	name = "chunk_text"
 	modalities = ["text"]
-	depends_on = ["extract_text"]
+	reads = ["extracted_text"]
+	writes = ["text_chunks"]
 	requires_services = []
-	output_tables = ["text_chunks"]
 	output_schema = """
 		CREATE TABLE IF NOT EXISTS text_chunks (
 			path TEXT,
