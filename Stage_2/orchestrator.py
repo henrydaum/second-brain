@@ -335,38 +335,54 @@ class Orchestrator:
 
 		lines = ["Pipeline:"]
 
-		# Find root tasks (no upstream dependencies)
-		roots = [t for t in self.tasks.values() if not self.upstream.get(t.name)]
-
-		visited = set()
-
-		def walk(task_name, indent=2):
-			if task_name in visited:
-				return
-			visited.add(task_name)
-			task = self.tasks[task_name]
-			mode = ""
-			if task.reads and not task.require_all_inputs:
-				mode = " (OR)"
-
-			tables_str = ", ".join(f"[{t}]" for t in task.writes)
-			lines.append(f"{'':>{indent}}{task_name}{mode} -> {tables_str}")
-
-			# Find downstream tasks
+		# Pre-compute children (downstream tasks) for each task
+		children: dict[str, list[str]] = {name: [] for name in self.tasks}
+		for task in self.tasks.values():
 			for table in task.writes:
 				for downstream in self.tasks.values():
-					if table in downstream.reads:
-						walk(downstream.name, indent + 4)
+					if table in downstream.reads and downstream.name not in children[task.name]:
+						children[task.name].append(downstream.name)
 
-		for root in roots:
-			walk(root.name)
+		# Find root tasks (no upstream dependencies)
+		roots = [t.name for t in self.tasks.values() if not self.upstream.get(t.name)]
 
-		# Log any tasks not reachable from roots (orphans or cycles)
-		for task_name in self.tasks:
-			if task_name not in visited:
-				task = self.tasks[task_name]
-				tables_str = ", ".join(f"[{t}]" for t in task.writes)
-				lines.append(f"  {task_name} -> {tables_str}")
+		# BFS to find orphans (unreachable from roots)
+		reachable = set()
+		queue = list(roots)
+		while queue:
+			name = queue.pop(0)
+			if name in reachable:
+				continue
+			reachable.add(name)
+			queue.extend(children[name])
+
+		orphans = [name for name in self.tasks if name not in reachable]
+		top_level = roots + orphans
+
+		visited: set[str] = set()
+
+		def walk(task_name: str, prefix: str, is_last: bool):
+			task = self.tasks[task_name]
+			connector = "└── " if is_last else "├── "
+
+			if task_name in visited:
+				# Cross-reference: show the edge but mark as already printed
+				mode = " (OR)" if (task.reads and not task.require_all_inputs) else ""
+				lines.append(f"{prefix}{connector}{task_name}{mode} *")
+				return
+
+			visited.add(task_name)
+			mode = " (OR)" if (task.reads and not task.require_all_inputs) else ""
+			tables_str = ", ".join(f"[{t}]" for t in task.writes)
+			lines.append(f"{prefix}{connector}{task_name}{mode} -> {tables_str}")
+
+			child_prefix = prefix + ("    " if is_last else "│   ")
+			kids = children[task_name]
+			for i, child_name in enumerate(kids):
+				walk(child_name, child_prefix, is_last=(i == len(kids) - 1))
+
+		for i, task_name in enumerate(top_level):
+			walk(task_name, prefix="", is_last=(i == len(top_level) - 1))
 
 		logger.info("\n".join(lines))
 

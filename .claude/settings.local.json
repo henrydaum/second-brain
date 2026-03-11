@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"def.*graph\\\\|def.*depend\\\\|def.*topo\\\\|class.*Pipeline\\\\|class.*Orchestrator\" 'c:\\\\Users\\\\henry\\\\Documents\\\\My_Code\\\\The Data Refinery' --include=*.py)",
+      "Bash(grep -E \"\\\\.py$\")",
+      "Bash(xargs grep:*)"
+    ]
+  }
+}
