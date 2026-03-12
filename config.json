@@ -17,12 +17,13 @@
     "task_timeout": 300,
     "reprocess_interval": 300,
     "llm_model_name": "gpt-5-mini",
-    "llm_endpoint": "",
+    "llm_endpoint": "http://127.0.0.1:1234",
     "llm_api_key": "OPENAI_API_KEY",
+    "max_tool_calls": 5,
     "embed_text_model_name": "BAAI/bge-m3",
     "embed_image_model_name": "clip-ViT-L-14",
     "embed_use_cuda": true,
-    "embed_chunk_size": 800,
-    "embed_chunk_overlap": 0,
+    "embed_chunk_size": 512,
+    "embed_chunk_overlap": 50,
     "max_query_rows": 25
 }

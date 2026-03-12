@@ -101,7 +101,7 @@ class Orchestrator:
 		for task in self.tasks.values():
 			for table in task.writes:
 				if table in self.table_producers:
-					# Shared table — multiple writers (e.g. search_content)
+					# Shared table — multiple writers (e.g. lexical_content)
 					# Store first writer; downstream logic uses reads matching, not this map
 					pass
 				else:

@@ -1,7 +1,7 @@
 """
-Index Search task.
+Lexical Index task.
 
-Reads text chunks and/or OCR text and writes them to the search_content
+Reads text chunks and/or OCR text and writes them to the lexical_content
 table, which feeds an FTS5 full-text search index via SQLite triggers.
 Enables BM25-ranked keyword search across all indexed files.
 
@@ -20,19 +20,55 @@ import time
 from pathlib import Path
 
 from Stage_2.BaseTask import BaseTask, TaskResult
-from Stage_2.tasks.search_schema import SEARCH_SCHEMA
 
-logger = logging.getLogger("IndexSearch")
+logger = logging.getLogger("IndexLexical")
 
 
-class IndexSearch(BaseTask):
-	name = "index_search"
+class IndexLexical(BaseTask):
+	name = "index_lexical"
 	modalities = []  # downstream task — triggered by upstream completion
 	reads = ["text_chunks", "ocr_text"]
-	writes = ["search_content"]
+	writes = ["lexical_content"]
 	require_all_inputs = False  # run when either input exists
 	requires_services = []
-	output_schema = SEARCH_SCHEMA
+	output_schema = """
+		CREATE TABLE IF NOT EXISTS lexical_content (
+			path TEXT,
+			source TEXT,
+			chunk_index INTEGER,
+			content TEXT,
+			char_count INTEGER,
+			indexed_at REAL,
+			PRIMARY KEY (path, source, chunk_index)
+		);
+
+		CREATE VIRTUAL TABLE IF NOT EXISTS lexical_index USING fts5(
+			path,
+			content,
+			source,
+			chunk_index,
+			content=lexical_content,
+			content_rowid=rowid,
+			tokenize='porter unicode61'
+		);
+
+		CREATE TRIGGER IF NOT EXISTS lexical_content_ai AFTER INSERT ON lexical_content BEGIN
+			INSERT INTO lexical_index(rowid, path, content, source, chunk_index)
+			VALUES (new.rowid, new.path, new.content, new.source, new.chunk_index);
+		END;
+
+		CREATE TRIGGER IF NOT EXISTS lexical_content_ad AFTER DELETE ON lexical_content BEGIN
+			INSERT INTO lexical_index(lexical_index, rowid, path, content, source, chunk_index)
+			VALUES('delete', old.rowid, old.path, old.content, old.source, old.chunk_index);
+		END;
+
+		CREATE TRIGGER IF NOT EXISTS lexical_content_au AFTER UPDATE ON lexical_content BEGIN
+			INSERT INTO lexical_index(lexical_index, rowid, path, content, source, chunk_index)
+			VALUES('delete', old.rowid, old.path, old.content, old.source, old.chunk_index);
+			INSERT INTO lexical_index(rowid, path, content, source, chunk_index)
+			VALUES (new.rowid, new.path, new.content, new.source, new.chunk_index);
+		END;
+	"""
 	batch_size = 8
 	timeout = 120
 
