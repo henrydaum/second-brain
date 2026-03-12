@@ -198,6 +198,9 @@ def _repl(ctrl, shutdown_fn, tool_registry, services, config):
 
 	def cmd_help(arg):
 		print(ctrl.help())
+	
+	def cmd_pipeline(arg):
+		ctrl.orchestrator.log_pipeline_graph()
 
 	def cmd_services(arg):
 		print(ctrl.list_services())
@@ -301,7 +304,7 @@ def _repl(ctrl, shutdown_fn, tool_registry, services, config):
 		"unpause": cmd_unpause, "reset": cmd_reset,
 		"retry": cmd_retry, "stats": cmd_stats,
 		"tools": cmd_tools, "call": cmd_call,
-		"chat": cmd_chat,
+		"chat": cmd_chat, "pipeline": cmd_pipeline,
 	}
 
 	# --- Main loop ---

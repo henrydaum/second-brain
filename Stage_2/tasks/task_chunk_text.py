@@ -19,14 +19,46 @@ from Stage_2.BaseTask import BaseTask, TaskResult
 logger = logging.getLogger("ChunkText")
 
 
+def _recursive_split(text: str, separators: list[str], chunk_size: int) -> list[str]:
+	"""Break text into atomic segments by recursively splitting on separators."""
+	if not text:
+		return []
+
+	sep = separators[0]
+	remaining_seps = separators[1:]
+
+	# Last separator (empty string) — text is the atomic unit
+	if not sep:
+		return [text]
+
+	splits = text.split(sep)
+
+	segments = []
+	for i, s in enumerate(splits):
+		# Re-attach separator to preserve it in output (except last piece)
+		if i < len(splits) - 1:
+			s += sep
+		if not s:
+			continue
+
+		# If small enough, keep as atomic segment; otherwise recurse deeper
+		if len(s) <= chunk_size or not remaining_seps:
+			segments.append(s)
+		else:
+			segments.extend(_recursive_split(s, remaining_seps, chunk_size))
+
+	return segments
+
+
 def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 	"""
 	Split text into overlapping chunks, breaking on natural boundaries.
 
-	Tries to split on paragraph breaks, then newlines, then sentence
-	endings, then spaces, and finally raw characters as a last resort.
-	Each chunk is at most chunk_size characters. Adjacent chunks share
-	overlap characters.
+	Two-phase approach:
+	1. Recursively split text into atomic segments using natural boundaries
+	   (paragraphs → newlines → sentences → words → characters).
+	2. Merge segments into chunks up to chunk_size, with overlap between
+	   adjacent chunks.
 	"""
 	if not text or not text.strip():
 		return []
@@ -34,35 +66,47 @@ def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 	if len(text) <= chunk_size:
 		return [text]
 
-	# Separators in priority order
-	separators = ["\n\n", "\n", ". ", " "]
+	separators = ["\n\n", "\n", ". ", "? ", "! ", " ", ""]
+	segments = _recursive_split(text, separators, chunk_size)
+
 	chunks = []
-	start = 0
+	current_chunk = []
+	current_len = 0
 
-	while start < len(text):
-		end = start + chunk_size
+	for segment in segments:
+		seg_len = len(segment)
 
-		if end >= len(text):
-			chunks.append(text[start:])
-			break
+		# Oversized segment that couldn't be split further — emit as-is
+		if seg_len > chunk_size:
+			if current_chunk:
+				chunks.append("".join(current_chunk))
+				current_chunk = []
+				current_len = 0
+			chunks.append(segment)
+			continue
 
-		# Try to find a natural break point within the chunk
-		split_at = None
-		for sep in separators:
-			# Search backwards from the end for a separator
-			idx = text.rfind(sep, start, end)
-			if idx > start:
-				split_at = idx + len(sep)
-				break
+		# Adding this segment would exceed chunk_size — finalize current chunk
+		if current_len + seg_len > chunk_size:
+			chunks.append("".join(current_chunk))
 
-		if split_at is None:
-			# No natural boundary found — hard split at chunk_size
-			split_at = end
+			# Build overlap from tail of previous chunk
+			overlap_buffer = []
+			overlap_len = 0
+			for prev_seg in reversed(current_chunk):
+				prev_len = len(prev_seg)
+				if overlap_len + prev_len > overlap:
+					break
+				overlap_buffer.insert(0, prev_seg)
+				overlap_len += prev_len
 
-		chunks.append(text[start:split_at])
+			current_chunk = overlap_buffer
+			current_len = overlap_len
 
-		# Move start forward, accounting for overlap
-		start = max(start + 1, split_at - overlap)
+		current_chunk.append(segment)
+		current_len += seg_len
+
+	if current_chunk:
+		chunks.append("".join(current_chunk))
 
 	return chunks
 

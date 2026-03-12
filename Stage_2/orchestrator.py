@@ -303,7 +303,7 @@ class Orchestrator:
 		self.running = True
 
 		self._build_graph()
-		self._log_pipeline_graph()
+		self.log_pipeline_graph()
 		self._create_cascade_triggers()
 		self._backfill_tasks()
 
@@ -350,7 +350,7 @@ class Orchestrator:
 					self.db.create_cascade_trigger(input_table, output_table)
 					logger.info(f"Cascade trigger: {input_table} -> {output_table}")
 
-	def _log_pipeline_graph(self):
+	def log_pipeline_graph(self):
 		"""Log a visual representation of the pipeline at startup."""
 		if not self.tasks:
 			return

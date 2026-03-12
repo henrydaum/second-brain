@@ -309,6 +309,7 @@ class Controller:
   unload <n>                Unload a service
 
   tasks                     List tasks with status counts
+  pipeline                  Show task dependency graph
   pause <n>                 Pause a task
   unpause <n>               Unpause a task
   reset <n>                 Reset all entries for a task to PENDING
