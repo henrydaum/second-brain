@@ -198,7 +198,7 @@ class LMStudioLLM(BaseLLM):
             try:
                 if os.path.exists(f_path):
                     os.remove(f_path)
-            except Exception:
+            except Exception as e:
                 logger.debug(f"Temp cleanup failed for {f_path}: {e}")
 
     def invoke(self, messages, image_paths=None, **kwargs):

@@ -51,7 +51,7 @@ def parse_plaintext(path: str, config: dict, services: dict = None) -> ParseResu
     try:
         limit = _max_chars(config)
         try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 content = f.read(limit)
         except UnicodeDecodeError:
             with open(path, "r", encoding="latin-1") as f:
@@ -96,55 +96,53 @@ def parse_pdf_text(path: str, config: dict, services: dict = None) -> ParseResul
 
     try:
         limit = _max_chars(config)
-        doc = fitz.open(path)
 
-        # Extract text
-        text_parts = []
-        current_len = 0
-        image_count = 0
-        has_tables = False
+        with fitz.open(path) as doc:
+            # Extract text
+            text_parts = []
+            current_len = 0
+            image_count = 0
+            has_tables = False
 
-        for page in doc:
-            # Text extraction
-            page_text = page.get_text()
-            text_parts.append(page_text)
-            current_len += len(page_text)
+            for page in doc:
+                # Text extraction
+                page_text = page.get_text()
+                text_parts.append(page_text)
+                current_len += len(page_text)
 
-            # Image detection (cheap — reads page structure, not pixel data)
-            image_count += len(page.get_images(full=False))
+                # Image detection (cheap — reads page structure, not pixel data)
+                image_count += len(page.get_images(full=False))
 
-            # Table detection
-            if not has_tables:
-                tables = page.find_tables()
-                if tables.tables:
-                    has_tables = True
+                # Table detection
+                if not has_tables:
+                    tables = page.find_tables()
+                    if tables.tables:
+                        has_tables = True
 
-            if current_len > limit:
-                break
+                if current_len > limit:
+                    break
 
-        text = _clean_text("".join(text_parts)[:limit])
+            text = _clean_text("".join(text_parts)[:limit])
 
-        also_contains = []
-        if image_count > 0:
-            also_contains.append("image")
-        if has_tables:
-            also_contains.append("tabular")
+            also_contains = []
+            if image_count > 0:
+                also_contains.append("image")
+            if has_tables:
+                also_contains.append("tabular")
 
-        is_scanned = len(text.strip()) < 50 and len(doc) > 0
+            is_scanned = len(text.strip()) < 50 and len(doc) > 0
 
-        if is_scanned and "image" not in also_contains:
-            also_contains.append("image")
+            if is_scanned and "image" not in also_contains:
+                also_contains.append("image")
 
-        metadata = {
-            "char_count": len(text),
-            "page_count": len(doc),
-            "image_count": image_count,
-            "has_images": image_count > 0,
-            "has_tables": has_tables,
-            "is_scanned": is_scanned,
-        }
-
-        doc.close()
+            metadata = {
+                "char_count": len(text),
+                "page_count": len(doc),
+                "image_count": image_count,
+                "has_images": image_count > 0,
+                "has_tables": has_tables,
+                "is_scanned": is_scanned,
+            }
 
         return ParseResult(
             modality="text",
@@ -170,25 +168,23 @@ def parse_pdf_image(path: str, config: dict, services: dict = None) -> ParseResu
         return ParseResult.failed(f"Missing dependency: {e}", modality="image")
 
     try:
-        doc = fitz.open(path)
-        images = []
-        max_images = config.get("max_images", 50)
+        with fitz.open(path) as doc:
+            images = []
+            max_images = config.get("max_images", 50)
 
-        for page in doc:
-            if len(images) >= max_images:
-                break
-            for img_info in page.get_images(full=True):
+            for page in doc:
                 if len(images) >= max_images:
                     break
-                xref = img_info[0]
-                try:
-                    base_image = doc.extract_image(xref)
-                    img = Image.open(io.BytesIO(base_image["image"]))
-                    images.append(img)
-                except Exception:
-                    continue
-
-        doc.close()
+                for img_info in page.get_images(full=True):
+                    if len(images) >= max_images:
+                        break
+                    xref = img_info[0]
+                    try:
+                        base_image = doc.extract_image(xref)
+                        img = Image.open(io.BytesIO(base_image["image"]))
+                        images.append(img)
+                    except Exception:
+                        continue
 
         if not images:
             return ParseResult.failed(
@@ -218,22 +214,20 @@ def parse_pdf_tables(path: str, config: dict, services: dict = None) -> ParseRes
         return ParseResult.failed(f"Missing dependency: {e}", modality="tabular")
 
     try:
-        doc = fitz.open(path)
-        all_tables = {}
-        table_idx = 0
+        with fitz.open(path) as doc:
+            all_tables = {}
+            table_idx = 0
 
-        for page_num, page in enumerate(doc):
-            found = page.find_tables()
-            for table in found.tables:
-                df = table.to_pandas()
-                # Skip empty tables
-                if df.empty:
-                    continue
-                key = f"page_{page_num + 1}_table_{table_idx + 1}"
-                all_tables[key] = df
-                table_idx += 1
-
-        doc.close()
+            for page_num, page in enumerate(doc):
+                found = page.find_tables()
+                for table in found.tables:
+                    df = table.to_pandas()
+                    # Skip empty tables
+                    if df.empty:
+                        continue
+                    key = f"page_{page_num + 1}_table_{table_idx + 1}"
+                    all_tables[key] = df
+                    table_idx += 1
 
         if not all_tables:
             return ParseResult.failed(
@@ -491,7 +485,7 @@ def parse_gdoc(path: str, config: dict, services: dict = None) -> ParseResult:
     """
     import json
 
-    drive_svc = services.get("google_drive")
+    drive_svc = services.get("google_drive") if services else None
 
     if drive_svc is None or not getattr(drive_svc, "loaded", False):
         return ParseResult.failed(

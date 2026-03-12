@@ -1,9 +1,14 @@
 import logging
 from pathlib import Path
+from PIL import Image
 from Stage_1.ParseResult import ParseResult
 import Stage_1.registry as registry
 
 logger = logging.getLogger("ParseImage")
+
+# Allow large images but keep a safety cap (500 megapixels) to prevent
+# decompression bombs from exhausting memory.
+Image.MAX_IMAGE_PIXELS = 500_000_000
 
 # Returns standardized PIL object
 
@@ -29,9 +34,6 @@ Downstream tasks decide what to do: OCR, CLIP embed, thumbnail, etc.
 def parse_standard_image(path: str, config: dict, services: dict = None) -> ParseResult:
     """Open a standard image file and return as PIL.Image."""
     try:
-        from PIL import Image
-        Image.MAX_IMAGE_PIXELS = None  # allow large images
-
         img = Image.open(path)
         img.load()  # force read so file handle isn't kept open
 

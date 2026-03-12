@@ -39,10 +39,10 @@ Flow:
 
 
 class Orchestrator:
-	def __init__(self, db, config: dict, services: dict = {}):
+	def __init__(self, db, config: dict, services: dict = None):
 		self.db = db
 		self.config = config
-		self.services = services
+		self.services = services or {}
 
 		# Task registry: name -> BaseTask instance
 		self.tasks: dict[str, BaseTask] = {}
@@ -87,7 +87,7 @@ class Orchestrator:
 		)
 
 		self.tasks[task.name] = task
-		logger.info(f"Registered: {task.name}")
+		logger.info(f"Registered task: {task.name}")
 
 		max_w = task.max_workers if task.max_workers > 0 else self.max_workers
 		self.task_semaphores[task.name] = threading.Semaphore(max_w)
@@ -220,6 +220,27 @@ class Orchestrator:
 		for task in self.tasks.values():
 			all_tables.extend(task.writes)
 		self.db.clean_output_tables(path, all_tables)
+
+		# Cascade: if this was a container, delete its extracted children too
+		try:
+			with self.db.lock:
+				cur = self.db.conn.execute(
+					"SELECT extract_dir FROM extracted_containers WHERE path = ?", (path,)
+				)
+				row = cur.fetchone()
+			if row and row["extract_dir"]:
+				child_paths = self.db.get_container_children(row["extract_dir"])
+				for child in child_paths:
+					self.on_file_deleted(child)
+				# Clean up extracted directory from disk
+				import shutil
+				extract_dir = row["extract_dir"]
+				if os.path.isdir(extract_dir):
+					shutil.rmtree(extract_dir, ignore_errors=True)
+					logger.info(f"Cleaned up extracted directory: {extract_dir}")
+		except Exception:
+			pass  # extracted_containers table may not exist yet
+
 		self.db.remove_file(path)
 
 	# =================================================================
@@ -241,7 +262,7 @@ class Orchestrator:
 			for task in self.tasks.values():
 				if modality in task.modalities:
 					if self._deps_met(path, task):
-						self.db.enqueue_task(path, task.name)
+						self.db.re_enqueue_task(path, task.name)
 
 	def on_paths_discovered(self, child_paths: list[str]):
 		from Stage_1.registry import get_modality, get_supported_extensions
@@ -268,6 +289,7 @@ class Orchestrator:
 				extension=ext,
 				modality=modality,
 				mtime=mtime,
+				source="container",
 			)
 
 			logger.info(f"[Container] Registered: {p.name} ({modality})")
@@ -470,42 +492,47 @@ class Orchestrator:
 
 		failed_paths = []
 		for path, result in zip(paths, results):
-			if result.success:
-				if result.data and task.writes:
-					try:
-						for table in task.writes:
-							self.db.write_outputs(table, result.data)
-					except Exception as e:
-						logger.error(
-							f"Write failed for '{task.name}' on {Path(path).name}: {e}"
-						)
-						self.db.fail_task(path, task.name, f"Write failed: {e}")
-						failed_paths.append(path)
-						continue
-
-				# Safety: verify deps are still met before completing.
-				# Handles the race where upstream was invalidated mid-execution.
-				if task.reads and not self._deps_met(path, task):
-					self.db.re_enqueue_task(path, task.name)
-					logger.warning(
-						f"Deps no longer met for '{task.name}' on {Path(path).name}, re-enqueued"
-					)
-					continue
-
-				self.db.complete_task(path, task.name)
-				self.on_task_completed(path, task.name)
-
-				if result.also_contains:
-					self.on_also_contains(path, result.also_contains)
-
-				if result.discovered_paths:
-					self.on_paths_discovered(result.discovered_paths)
-			else:
-				self.db.fail_task(path, task.name, result.error)
-				failed_paths.append(path)
-				logger.warning(
-					f"Task '{task.name}' failed on {Path(path).name}: {result.error}"
-				)
-
+			self._process_result(task, path, result, failed_paths)
 		if failed_paths:
 			self._invalidate_downstream(task.name, failed_paths)
+
+	def _process_result(self, task, path, result, failed_paths):
+		if result.success:
+			if not self._handle_success(task, path, result):
+				failed_paths.append(path)
+		else:
+			self.db.fail_task(path, task.name, result.error)
+			failed_paths.append(path)
+			logger.warning(
+				f"Task '{task.name}' failed on {Path(path).name}: {result.error}"
+			)
+
+	def _handle_success(self, task, path, result):
+		"""Write outputs, verify deps, complete task, and cascade. Returns False on write failure."""
+		# NOTE: writes same data to all tables — assumes one write table per task
+		if result.data and task.writes:
+			try:
+				for table in task.writes:
+					self.db.write_outputs(table, result.data)
+			except Exception as e:
+				logger.error(f"Write failed for '{task.name}' on {Path(path).name}: {e}")
+				self.db.fail_task(path, task.name, f"Write failed: {e}")
+				return False
+
+		# Safety: verify deps are still met before completing.
+		# Handles the race where upstream was invalidated mid-execution.
+		if task.reads and not self._deps_met(path, task):
+			self.db.re_enqueue_task(path, task.name)
+			logger.warning(
+				f"Deps no longer met for '{task.name}' on {Path(path).name}, re-enqueued"
+			)
+			return True  # not a failure, just re-queued
+
+		self.db.complete_task(path, task.name)
+		self.on_task_completed(path, task.name)
+
+		if result.also_contains:
+			self.on_also_contains(path, result.also_contains)
+		if result.discovered_paths:
+			self.on_paths_discovered(result.discovered_paths)
+		return True

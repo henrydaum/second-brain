@@ -100,7 +100,7 @@ class Watcher:
 		Modified files -> upsert + notify orchestrator.
 		Deleted files (ghosts) -> remove from DB + notify orchestrator.
 		"""
-		db_state = self.db.get_all_files()  # {path: mtime}
+		db_state = self.db.get_watched_files()  # {path: mtime} — watched only
 		disk_files = set()
 
 		for watch_dir in valid_dirs:
@@ -198,7 +198,7 @@ class Watcher:
 			self._known_mtimes[path] = current_mtime
 			logger.info(f"[Live] Changed: {Path(path).name}")
 			self._register_file(path, current_mtime)
-		except OSError:
+		except OSError as e:
 			logger.debug(f"Could not stat {Path(path).name}: {e}")
 
 	def handle_delete(self, path: str):

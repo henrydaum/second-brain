@@ -91,7 +91,7 @@ class GoogleDriveService(BaseService):
         if token_path.exists():
             try:
                 creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-            except Exception:
+            except Exception as e:
                 logger.debug(f"Token load failed, will re-auth: {e}")
 
         try:

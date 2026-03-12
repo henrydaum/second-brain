@@ -193,6 +193,119 @@ def _repl(ctrl, shutdown_fn, tool_registry, services, config):
 	Runs on its own daemon thread so it never blocks the dispatch loop.
 	"""
 	agent = None
+
+	# --- Command handlers (one per REPL command) ---
+
+	def cmd_help(arg):
+		print(ctrl.help())
+
+	def cmd_services(arg):
+		print(ctrl.list_services())
+
+	def cmd_load(arg):
+		print(ctrl.load_service(arg) if arg else "Usage: load <service_name>")
+
+	def cmd_unload(arg):
+		print(ctrl.unload_service(arg) if arg else "Usage: unload <service_name>")
+
+	def cmd_tasks(arg):
+		print(ctrl.list_tasks())
+
+	def cmd_pause(arg):
+		print(ctrl.pause_task(arg) if arg else "Usage: pause <task_name>")
+
+	def cmd_unpause(arg):
+		print(ctrl.unpause_task(arg) if arg else "Usage: unpause <task_name>")
+
+	def cmd_reset(arg):
+		print(ctrl.reset_task(arg) if arg else "Usage: reset <task_name>")
+
+	def cmd_retry(arg):
+		if arg.lower() == "all":
+			print(ctrl.retry_all())
+		elif arg:
+			print(ctrl.retry_task(arg))
+		else:
+			print("Usage: retry <task_name> | retry all")
+
+	def cmd_stats(arg):
+		print(ctrl.stats())
+
+	def cmd_tools(arg):
+		print(ctrl.list_tools())
+
+	def cmd_call(arg):
+		if not arg:
+			print("Usage: call <tool_name> {\"arg\": \"value\"}")
+			print("Example: call sql_query {\"sql\": \"SELECT * FROM files LIMIT 5\"}")
+			return
+
+		call_parts = arg.split(maxsplit=1)
+		tool_name = call_parts[0]
+		raw_args = call_parts[1] if len(call_parts) > 1 else "{}"
+
+		try:
+			kwargs = json.loads(raw_args)
+		except json.JSONDecodeError as e:
+			print(f"Invalid JSON arguments: {e}")
+			print("Expected format: call <tool_name> {\"key\": \"value\"}")
+			return
+
+		print(ctrl.call_tool(tool_name, kwargs))
+
+	def cmd_chat(arg):
+		nonlocal agent
+		llm = services.get("llm")
+		if llm is None or not llm.loaded:
+			print("LLM service not loaded. Run 'load llm' first.")
+			return
+
+		if agent is None:
+			agent = Agent(llm, tool_registry, config)
+			logger.info("Agent initialized.")
+
+		print("Entering chat mode. Type 'exit' to return to REPL.")
+		print("---")
+
+		while not _shutdown.is_set():
+			try:
+				user_input = input("you> ").strip()
+			except (KeyboardInterrupt, EOFError):
+				break
+
+			if not user_input:
+				continue
+			if user_input.lower() in ("exit", "quit", "back"):
+				break
+			if user_input.lower() == "reset":
+				agent.reset()
+				print("(conversation history cleared)")
+				continue
+
+			try:
+				response = agent.chat(user_input)
+				print(f"\nassistant> {response}\n")
+			except Exception as e:
+				logger.error(f"Agent error: {e}")
+				print(f"Error: {e}")
+
+		print("---")
+		print("Exited chat mode.")
+
+	# --- Command dispatch table ---
+
+	commands = {
+		"help": cmd_help, "services": cmd_services,
+		"load": cmd_load, "unload": cmd_unload,
+		"tasks": cmd_tasks, "pause": cmd_pause,
+		"unpause": cmd_unpause, "reset": cmd_reset,
+		"retry": cmd_retry, "stats": cmd_stats,
+		"tools": cmd_tools, "call": cmd_call,
+		"chat": cmd_chat,
+	}
+
+	# --- Main loop ---
+
 	while not _shutdown.is_set():
 		try:
 			raw = input("\n> ").strip()
@@ -207,120 +320,9 @@ def _repl(ctrl, shutdown_fn, tool_registry, services, config):
 				shutdown_fn()
 				return
 
-			elif cmd == "help":
-				print(ctrl.help())
-
-			# --- Services ---
-			elif cmd == "services":
-				print(ctrl.list_services())
-
-			elif cmd == "load":
-				if not arg:
-					print("Usage: load <service_name>")
-				else:
-					print(ctrl.load_service(arg))
-
-			elif cmd == "unload":
-				if not arg:
-					print("Usage: unload <service_name>")
-				else:
-					print(ctrl.unload_service(arg))
-
-			# --- Tasks ---
-			elif cmd == "tasks":
-				print(ctrl.list_tasks())
-
-			elif cmd == "pause":
-				if not arg:
-					print("Usage: pause <task_name>")
-				else:
-					print(ctrl.pause_task(arg))
-
-			elif cmd == "unpause":
-				if not arg:
-					print("Usage: unpause <task_name>")
-				else:
-					print(ctrl.unpause_task(arg))
-
-			elif cmd == "reset":
-				if not arg:
-					print("Usage: reset <task_name>")
-				else:
-					print(ctrl.reset_task(arg))
-
-			elif cmd == "retry":
-				if arg.lower() == "all":
-					print(ctrl.retry_all())
-				elif not arg:
-					print("Usage: retry <task_name> | retry all")
-				else:
-					print(ctrl.retry_task(arg))
-
-			# --- Stats ---
-			elif cmd == "stats":
-				print(ctrl.stats())
-
-			# --- Tools ---
-			elif cmd == "tools":
-				print(ctrl.list_tools())
-
-			elif cmd == "call":
-				if not arg:
-					print("Usage: call <tool_name> {\"arg\": \"value\"}")
-					print("Example: call sql_query {\"sql\": \"SELECT * FROM files LIMIT 5\"}")
-				else:
-					call_parts = arg.split(maxsplit=1)
-					tool_name = call_parts[0]
-					raw_args = call_parts[1] if len(call_parts) > 1 else "{}"
-
-					try:
-						kwargs = json.loads(raw_args)
-					except json.JSONDecodeError as e:
-						print(f"Invalid JSON arguments: {e}")
-						print("Expected format: call <tool_name> {\"key\": \"value\"}")
-						continue
-
-					print(ctrl.call_tool(tool_name, kwargs))
-
-			# --- Agent Chat ---
-			elif cmd == "chat":
-				llm = services.get("llm")
-				if llm is None or not llm.loaded:
-					print("LLM service not loaded. Run 'load llm' first.")
-					continue
-
-				if agent is None:
-					agent = Agent(llm, tool_registry, config)
-					logger.info("Agent initialized.")
-
-				print("Entering chat mode. Type 'exit' to return to REPL.")
-				print("---")
-
-				while not _shutdown.is_set():
-					try:
-						user_input = input("you> ").strip()
-					except (KeyboardInterrupt, EOFError):
-						break
-
-					if not user_input:
-						continue
-					if user_input.lower() in ("exit", "quit", "back"):
-						break
-					if user_input.lower() == "reset":
-						agent.reset()
-						print("(conversation history cleared)")
-						continue
-
-					try:
-						response = agent.chat(user_input)
-						print(f"\nassistant> {response}\n")
-					except Exception as e:
-						logger.error(f"Agent error: {e}")
-						print(f"Error: {e}")
-
-				print("---")
-				print("Exited chat mode.")
-
+			handler = commands.get(cmd)
+			if handler:
+				handler(arg)
 			else:
 				print(f"Unknown command: '{cmd}'. Type 'help' for available commands.")
 

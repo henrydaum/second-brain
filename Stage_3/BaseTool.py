@@ -92,10 +92,10 @@ class ToolRegistry:
         3. Exports schemas for LLM function calling
     """
 
-    def __init__(self, db, config: dict, services: dict = {}):
+    def __init__(self, db, config: dict, services: dict = None):
         self.db = db
         self.config = config
-        self.services = services
+        self.services = services or {}
         self.tools: dict[str, BaseTool] = {}
 
     def register(self, tool: BaseTool):

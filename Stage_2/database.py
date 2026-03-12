@@ -40,9 +40,16 @@ class Database:
 				modality      TEXT,
 				mtime         REAL,
 				discovered_at REAL,
-				updated_at    REAL
+				updated_at    REAL,
+				source        TEXT DEFAULT 'watched'
 			)
 		""")
+
+		# Migration: add source column for existing databases
+		try:
+			self.conn.execute("ALTER TABLE files ADD COLUMN source TEXT DEFAULT 'watched'")
+		except sqlite3.OperationalError:
+			pass  # column already exists
 
 		# Task queue — one row per (file, task) pair
 		self.conn.execute("""
@@ -80,16 +87,16 @@ class Database:
 	# FILES
 	# =================================================================
 
-	def upsert_file(self, path, file_name, extension, modality, mtime):
+	def upsert_file(self, path, file_name, extension, modality, mtime, source="watched"):
 		now = time.time()
 		with self.lock:
 			self.conn.execute("""
-				INSERT INTO files (path, file_name, extension, modality, mtime, discovered_at, updated_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO files (path, file_name, extension, modality, mtime, discovered_at, updated_at, source)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(path) DO UPDATE SET
 					mtime = excluded.mtime,
 					updated_at = excluded.updated_at
-			""", (path, file_name, extension, modality, mtime, now, now))
+			""", (path, file_name, extension, modality, mtime, now, now, source))
 			self.conn.commit()
 
 	def remove_file(self, path):
@@ -104,6 +111,21 @@ class Database:
 		with self.lock:
 			cur = self.conn.execute("SELECT path, mtime FROM files")
 			return {row["path"]: row["mtime"] for row in cur.fetchall()}
+
+	def get_watched_files(self):
+		"""Returns {path: mtime} for watched files only (excludes container-extracted)."""
+		with self.lock:
+			cur = self.conn.execute("SELECT path, mtime FROM files WHERE source = 'watched'")
+			return {row["path"]: row["mtime"] for row in cur.fetchall()}
+
+	def get_container_children(self, extract_dir):
+		"""Returns list of paths for files extracted from a container (under extract_dir)."""
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT path FROM files WHERE source = 'container' AND path LIKE ?",
+				(extract_dir.rstrip("/\\") + "%",)
+			)
+			return [row["path"] for row in cur.fetchall()]
 
 	def get_files_by_modality(self, modality):
 		"""Returns list of paths for a given modality."""
@@ -296,8 +318,9 @@ class Database:
 			for table in table_names:
 				try:
 					self.conn.execute(f"DELETE FROM {table} WHERE path = ?", (path,))
-				except sqlite3.OperationalError:
-					pass  # table might not exist yet
+				except sqlite3.OperationalError as e:
+					if "no such table" not in str(e):
+						raise
 			self.conn.commit()
 
 	def create_cascade_trigger(self, upstream_table: str, downstream_table: str):
