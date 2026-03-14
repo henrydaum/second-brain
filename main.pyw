@@ -26,6 +26,7 @@ from Stage_2.watcher import Watcher
 from controller import Controller
 from Stage_3.agent import Agent
 from Stage_3.BaseTool import ToolRegistry
+from Stage_3.system_prompt import build_system_prompt
 
 
 _ROOT = Path(__file__).parent
@@ -200,7 +201,7 @@ def _repl(ctrl, shutdown_fn, tool_registry, services, config):
 		print(ctrl.help())
 	
 	def cmd_pipeline(arg):
-		ctrl.orchestrator.log_pipeline_graph()
+		print(ctrl.orchestrator.dependency_pipeline_graph())
 
 	def cmd_services(arg):
 		print(ctrl.list_services())
@@ -263,9 +264,9 @@ def _repl(ctrl, shutdown_fn, tool_registry, services, config):
 			print("LLM service not loaded. Run 'load llm' first.")
 			return
 
-		if agent is None:
-			agent = Agent(llm, tool_registry, config)
-			logger.info("Agent initialized.")
+		prompt = build_system_prompt(ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services)
+		agent = Agent(llm, tool_registry, config, system_prompt=prompt)
+		logger.info("Agent initialized.")
 
 		print("Entering chat mode. Type 'exit' to return to REPL.")
 		print("---")
