@@ -5,64 +5,14 @@ The command layer between user input and the system. Exposes every
 control action as a plain method. The terminal REPL calls these,
 and the GUI will call the same methods later.
 
-The controller never prints — it returns strings or dicts.
+The controller never prints — it returns structured data or status strings.
 The caller decides how to display them.
 """
 
-import json
 import logging
 from pathlib import Path
 
 logger = logging.getLogger("Controller")
-
-
-def _truncate_cell(text: str, max_len: int = 60) -> str:
-    """Shorten long cell values for tabular display."""
-    if len(text) <= max_len:
-        return text
-    return text[:max_len - 3] + "..."
-
-
-def _format_tool_result(result) -> str:
-    """Format a ToolResult for human-readable REPL output."""
-    if not result.success:
-        return f"Error: {result.error}"
-
-    data = result.data
-
-    # Special handling for sql_query — render as a table
-    if isinstance(data, dict) and "columns" in data and "rows" in data:
-        columns = data["columns"]
-        rows = data["rows"]
-
-        if not rows:
-            return "(no results)"
-
-        col_widths = [len(c) for c in columns]
-        for row in rows:
-            for i, val in enumerate(row):
-                col_widths[i] = max(col_widths[i], len(_truncate_cell(str(val))))
-
-        header = "  ".join(c.ljust(w) for c, w in zip(columns, col_widths))
-        separator = "  ".join("-" * w for w in col_widths)
-        lines = [header, separator]
-        for row in rows:
-            line = "  ".join(
-                _truncate_cell(str(val)).ljust(w)
-                for val, w in zip(row, col_widths)
-            )
-            lines.append(line)
-
-        if data.get("truncated"):
-            lines.append("  ... (results capped at 100 rows)")
-
-        return "\n".join(lines)
-
-    # Default: pretty-print as JSON
-    try:
-        return json.dumps(data, indent=2, default=str)
-    except Exception:
-        return str(data)
 
 
 class Controller:
@@ -77,19 +27,13 @@ class Controller:
     # SERVICES
     # =================================================================
 
-    def list_services(self) -> str:
+    def list_services(self) -> list[dict]:
         """List all services and their status."""
-        if not self.services:
-            return "No services registered."
-
-        lines = []
-        for name, svc in self.services.items():
-            loaded = getattr(svc, 'loaded', False)
-            model = getattr(svc, 'model_name', '')
-            status = "LOADED" if loaded else "unloaded"
-            lines.append(f"  {name:<20} {status:<10} {model}")
-
-        return "Services:\n" + "\n".join(lines)
+        return [
+            {"name": name, "loaded": getattr(svc, 'loaded', False),
+             "model_name": getattr(svc, 'model_name', '')}
+            for name, svc in self.services.items()
+        ]
 
     def load_service(self, name: str) -> str:
         """Load a service and re-check blocked tasks."""
@@ -136,30 +80,17 @@ class Controller:
     # TASKS
     # =================================================================
 
-    def list_tasks(self) -> str:
+    def list_tasks(self) -> list[dict]:
         """List all tasks with status counts and paused state."""
         stats = self.db.get_system_stats()
         task_stats = stats.get("tasks", {})
-
-        if not self.orchestrator.tasks:
-            return "No tasks registered."
-
-        lines = []
-        for name, task in self.orchestrator.tasks.items():
-            counts = task_stats.get(name, {"PENDING": 0, "PROCESSING": 0, "DONE": 0, "FAILED": 0})
-            paused = " [PAUSED]" if name in self.orchestrator.paused else ""
-            svc_info = f"  needs: {task.requires_services}" if task.requires_services else ""
-
-            lines.append(
-                f"  {name:<22} "
-                f"P:{counts['PENDING']:<4} "
-                f"R:{counts['PROCESSING']:<4} "
-                f"D:{counts['DONE']:<4} "
-                f"F:{counts['FAILED']:<4}"
-                f"{paused}{svc_info}"
-            )
-
-        return "Tasks:\n" + "\n".join(lines)
+        return [
+            {"name": name,
+             "counts": task_stats.get(name, {"PENDING": 0, "PROCESSING": 0, "DONE": 0, "FAILED": 0}),
+             "paused": name in self.orchestrator.paused,
+             "requires_services": task.requires_services}
+            for name, task in self.orchestrator.tasks.items()
+        ]
 
     def pause_task(self, name: str) -> str:
         """Pause a task. It stays PENDING but won't be dispatched."""
@@ -208,7 +139,6 @@ class Controller:
 
     def retry_all(self) -> str:
         """Retry all FAILED entries across all tasks, invalidating downstream."""
-        # Cascade before resetting so we can detect which paths were FAILED
         for name in self.orchestrator.tasks:
             failed_paths = self.db.get_paths_for_task_status(name, "FAILED")
             if failed_paths:
@@ -222,104 +152,104 @@ class Controller:
     # STATS
     # =================================================================
 
-    def stats(self) -> str:
-        """System overview."""
+    def stats(self) -> dict:
+        """System overview as structured data."""
         s = self.db.get_system_stats()
-
-        lines = ["Files by modality:"]
-        file_stats = s.get("files", {})
-        if file_stats:
-            for mod, count in sorted(file_stats.items()):
-                lines.append(f"  {mod:<12} {count}")
-        else:
-            lines.append("  (none)")
-
-        total = sum(file_stats.values()) if file_stats else 0
-        lines.append(f"  {'total':<12} {total}")
-
-        lines.append("")
-        lines.append("Task queue:")
-        task_stats = s.get("tasks", {})
-        if task_stats:
-            for name, counts in sorted(task_stats.items()):
-                paused = " [PAUSED]" if name in self.orchestrator.paused else ""
-                lines.append(
-                    f"  {name:<22} "
-                    f"P:{counts['PENDING']:<4} "
-                    f"R:{counts['PROCESSING']:<4} "
-                    f"D:{counts['DONE']:<4} "
-                    f"F:{counts['FAILED']:<4}"
-                    f"{paused}"
-                )
-        else:
-            lines.append("  (empty)")
-
-        return "\n".join(lines)
+        return {
+            "files": s.get("files", {}),
+            "tasks": {
+                name: {**counts, "paused": name in self.orchestrator.paused}
+                for name, counts in s.get("tasks", {}).items()
+            },
+        }
 
     # =================================================================
     # TOOLS
     # =================================================================
 
-    def list_tools(self) -> str:
-        """List all registered tools with descriptions and required services."""
-        if self.tool_registry is None or not self.tool_registry.tools:
-            return "No tools registered."
-
-        lines = []
-        for name, tool in self.tool_registry.tools.items():
-            svc_info = f"  needs: {tool.requires_services}" if tool.requires_services else ""
-            lines.append(f"  {name}{svc_info}")
-
-            # Description (first line only, truncated)
-            desc = (tool.description or "").split("\n")[0]
-            if len(desc) > 200:
-                desc = desc[:197] + "..."
-            lines.append(f"    {desc}")
-
-            # Parameters
-            params = tool.parameters.get("properties", {})
-            required = set(tool.parameters.get("required", []))
-            if params:
-                param_parts = []
-                for pname, pschema in params.items():
-                    req = "*" if pname in required else ""
-                    param_parts.append(f"{pname}{req}")
-                lines.append(f"    args: {', '.join(param_parts)}")
-
-            lines.append("")
-
-        return "Tools:\n" + "\n".join(lines)
-
-    def call_tool(self, name: str, kwargs: dict) -> str:
-        """Call a tool by name and return formatted results."""
+    def enable_tool(self, name: str) -> str:
+        """Enable a tool for agent use."""
         if self.tool_registry is None:
             return "No tool registry available."
+        tool = self.tool_registry.tools.get(name)
+        if tool is None:
+            return f"Unknown tool: '{name}'. Use 'tools' to see available."
+        if tool.agent_enabled:
+            return f"Tool '{name}' is already enabled."
+        tool.agent_enabled = True
+        return f"Tool '{name}' enabled for agent use."
 
-        result = self.tool_registry.call(name, **kwargs)
-        return _format_tool_result(result)
+    def disable_tool(self, name: str) -> str:
+        """Disable a tool from agent use (still callable via 'call')."""
+        if self.tool_registry is None:
+            return "No tool registry available."
+        tool = self.tool_registry.tools.get(name)
+        if tool is None:
+            return f"Unknown tool: '{name}'. Use 'tools' to see available."
+        if not tool.agent_enabled:
+            return f"Tool '{name}' is already disabled."
+        tool.agent_enabled = False
+        return f"Tool '{name}' disabled for agent use."
+
+    def list_tools(self) -> list[dict]:
+        """List all registered tools with descriptions and required services."""
+        if self.tool_registry is None:
+            return []
+        return [
+            {"name": name,
+             "description": (tool.description or "").split("\n")[0],
+             "agent_enabled": tool.agent_enabled,
+             "max_calls": tool.max_calls,
+             "requires_services": tool.requires_services,
+             "parameters": tool.parameters}
+            for name, tool in self.tool_registry.tools.items()
+        ]
+
+    def call_tool(self, name: str, kwargs: dict):
+        """Call a tool by name and return the ToolResult."""
+        if self.tool_registry is None:
+            from Stage_3.BaseTool import ToolResult
+            return ToolResult.failed("No tool registry available.")
+        return self.tool_registry.call(name, **kwargs)
+
+    # =================================================================
+    # PLUGINS
+    # =================================================================
+
+    def reload_plugins(self, root_dir: Path) -> str:
+        """Hot-reload tasks and tools from their plugin directories."""
+        from Stage_2.auto_discover_tasks import discover as discover_tasks
+        from Stage_3.auto_discover_tools import discover as discover_tools
+        discover_tasks(root_dir, self.orchestrator, self.config, reload=True)
+        discover_tools(root_dir, self.tool_registry, self.config, reload=True)
+        return "Plugins reloaded."
 
     # =================================================================
     # HELP
     # =================================================================
 
-    def help(self) -> str:
-        return """Commands:
-  services                  List services and status
-  load <n>                  Load a service
-  unload <n>                Unload a service
-
-  tasks                     List tasks with status counts
-  pipeline                  Show task dependency graph
-  pause <n>                 Pause a task
-  unpause <n>               Unpause a task
-  reset <n>                 Reset all entries for a task to PENDING
-  retry <n>                 Retry failed entries for a task
-  retry all                 Retry all failed across all tasks
-
-  tools                     List registered tools
-  call <tool> <json_args>   Call a tool (e.g. call sql_query {"sql": "SELECT ..."})
-
-  chat                      Enter agent chat mode (requires llm service)
-
-  stats                     System overview
-  quit / exit               Shutdown"""
+    def help(self) -> list[dict]:
+        return [
+            {"command": "services", "description": "List services and status"},
+            {"command": "load <n>", "description": "Load a service"},
+            {"command": "unload <n>", "description": "Unload a service"},
+            {"command": "", "description": ""},
+            {"command": "tasks", "description": "List tasks with status counts"},
+            {"command": "pipeline", "description": "Show task dependency graph"},
+            {"command": "pause <n>", "description": "Pause a task"},
+            {"command": "unpause <n>", "description": "Unpause a task"},
+            {"command": "reset <n>", "description": "Reset all entries for a task to PENDING"},
+            {"command": "retry <n>", "description": "Retry failed entries for a task"},
+            {"command": "retry all", "description": "Retry all failed across all tasks"},
+            {"command": "", "description": ""},
+            {"command": "tools", "description": "List registered tools"},
+            {"command": "enable <n>", "description": "Enable a tool for agent use"},
+            {"command": "disable <n>", "description": "Disable a tool from agent use"},
+            {"command": "call <tool> <json>", "description": "Call a tool directly"},
+            {"command": "", "description": ""},
+            {"command": "chat", "description": "Enter agent chat mode (requires llm service)"},
+            {"command": "reload", "description": "Hot-reload tasks and tools"},
+            {"command": "", "description": ""},
+            {"command": "stats", "description": "System overview"},
+            {"command": "quit / exit", "description": "Shutdown"},
+        ]

@@ -20,6 +20,7 @@ logger = logging.getLogger("LexicalSearch")
 
 class LexicalSearch(BaseTool):
     name = "lexical_search"
+    agent_enabled = False  # Superseded by hybrid_search; still callable internally
     description = (
         "Search for files by keyword using BM25-ranked full-text search. "
         "Searches across all indexed text content including text chunks, "

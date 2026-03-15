@@ -123,6 +123,13 @@ class BaseTask:
 	max_workers: int = 0  # 0 = use all available workers
 	timeout: int = 300  # Seconds before a PROCESSING entry is considered stuck. Make sure to keep in mind the batch size.
 
+	def __init_subclass__(cls, **kwargs):
+		super().__init_subclass__(**kwargs)
+		for attr in ("modalities", "reads", "writes", "requires_services"):
+			value = getattr(cls, attr)
+			if isinstance(value, (dict, list)):
+				setattr(cls, attr, value.copy())
+
 	def setup(self, config: dict):
 		"""Called once when the task is registered. Load models, warm caches."""
 		pass

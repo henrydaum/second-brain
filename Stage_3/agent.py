@@ -38,8 +38,9 @@ class Agent:
             "Use the available tools to search and retrieve information from the user's files. "
             "Be concise and cite which files your answers come from."
         )
-        self.MAX_TOOL_CALLS = config['max_tool_calls']
+        self.max_tool_calls = tool_registry.max_tool_calls
         self.history: list[dict] = []
+        self._tool_call_counts: dict[str, int] = {}
 
     def chat(self, message: str) -> str:
         """
@@ -55,8 +56,9 @@ class Agent:
         messages.extend(self.history)
 
         tools = self.tool_registry.get_all_schemas() or None
+        self._tool_call_counts.clear()
 
-        for _ in range(self.MAX_TOOL_CALLS):
+        for _ in range(self.max_tool_calls):
             response = self.llm.chat_with_tools(messages, tools)
 
             if not response.has_tool_calls:
@@ -79,7 +81,7 @@ class Agent:
                 self.history.append(tool_msg)
 
         # Exceeded max rounds
-        logger.warning(f"Agent hit max tool rounds ({self.MAX_TOOL_CALLS})")
+        logger.warning(f"Agent hit max tool rounds ({self.max_tool_calls})")
         fallback = "I've made too many tool calls. Could you try a more specific question?"
         self.history.append({"role": "assistant", "content": fallback})
         return fallback
@@ -97,9 +99,18 @@ class Agent:
             logger.error(f"Failed to parse arguments for tool '{name}': {e}")
             return json.dumps({"error": f"Invalid arguments: {e}"})
 
+        # Enforce per-tool call limit
+        tool = self.tool_registry.tools.get(name)
+        if tool:
+            count = self._tool_call_counts.get(name, 0)
+            if count >= tool.max_calls:
+                logger.warning(f"Tool '{name}' hit max calls ({tool.max_calls})")
+                return json.dumps({"error": f"Tool '{name}' has reached its call limit ({tool.max_calls}). Try a different approach."})
+
         logger.info(f"Tool call: {name}({args})")
 
         result = self.tool_registry.call(name, **args)
+        self._tool_call_counts[name] = self._tool_call_counts.get(name, 0) + 1
 
         if result.success:
             try:

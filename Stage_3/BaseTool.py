@@ -67,6 +67,17 @@ class BaseTool:
     # --- Service requirements ---
     requires_services: list[str] = []
 
+    # --- Agent controls ---
+    agent_enabled: bool = True   # Whether the LLM can see and call this tool
+    max_calls: int = 3           # Max times the agent can call this tool per message
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        for attr in ("parameters", "requires_services"):
+            value = getattr(cls, attr)
+            if isinstance(value, (dict, list)):
+                setattr(cls, attr, value.copy())
+
     def run(self, context: DataRefineryContext, **kwargs) -> ToolResult:
         raise NotImplementedError(f"Tool '{self.name}' must implement run()")
 
@@ -126,7 +137,6 @@ class ToolRegistry:
                 return ToolResult.failed(f"Required services not available: {not_ready}")
 
         # Build context with call_tool pointing back to this registry
-        from Stage_1.registry import parse
         context = build_context(self.db, self.config, self.services, call_tool=self.call)
 
         try:
@@ -136,9 +146,14 @@ class ToolRegistry:
             logger.error(f"Tool '{name}' failed: {e}")
             return ToolResult.failed(str(e))
 
+    @property
+    def max_tool_calls(self) -> int:
+        """Total tool call budget for the agent (sum of per-tool max_calls)."""
+        return sum(t.max_calls for t in self.tools.values() if t.agent_enabled)
+
     def get_all_schemas(self) -> list[dict]:
-        """Export all tool schemas for LLM function calling."""
-        return [tool.to_schema() for tool in self.tools.values()]
+        """Export tool schemas for LLM function calling (agent_enabled tools only)."""
+        return [tool.to_schema() for tool in self.tools.values() if tool.agent_enabled]
 
     def get_schema(self, name: str) -> dict | None:
         tool = self.tools.get(name)

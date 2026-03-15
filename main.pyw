@@ -1,11 +1,8 @@
-import importlib
-import inspect
 import logging
+import os
 import signal
 import sys
-import time
 import threading
-import json
 from pathlib import Path
 
 # Silence noisy libraries
@@ -18,95 +15,20 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("Main")
-
+ 
 import config_manager
 from Stage_2.database import Database
 from Stage_2.orchestrator import Orchestrator
 from Stage_2.watcher import Watcher
 from controller import Controller
-from Stage_3.agent import Agent
 from Stage_3.BaseTool import ToolRegistry
-from Stage_3.system_prompt import build_system_prompt
+from Stage_0.auto_discover_services import discover as discover_services
+from Stage_2.auto_discover_tasks import discover as discover_tasks
+from Stage_3.auto_discover_tools import discover as discover_tools
+from repl import run_repl
 
 
 _ROOT = Path(__file__).parent
-
-
-def _auto_discover_services(config: dict) -> dict:
-	"""
-	Scan Stage_0/services/ for modules that expose a build_services(config)
-	function and collect all returned service instances.
-
-	To add a new service, drop a file into Stage_0/services/ and add a
-	module-level build_services(config) -> dict function.
-	"""
-	services = {}
-	services_dir = _ROOT / "Stage_0" / "services"
-	for py_file in sorted(services_dir.glob("*.py")):
-		if py_file.stem.startswith("_"):
-			continue
-		module_name = f"Stage_0.services.{py_file.stem}"
-		try:
-			module = importlib.import_module(module_name)
-		except Exception as e:
-			logger.warning(f"Could not import {module_name}: {e}")
-			continue
-		build_fn = getattr(module, "build_services", None)
-		if build_fn is None:
-			continue
-		try:
-			built = build_fn(config)
-			if built:
-				services.update(built)
-		except Exception as e:
-			logger.warning(f"build_services() in {module_name} failed: {e}")
-	return services
-
-
-def _auto_discover_tasks(orchestrator, config):
-	"""
-	Scan Stage_2/tasks/task_*.py for BaseTask subclasses and register them.
-
-	To add a new task, drop a task_<name>.py file into Stage_2/tasks/.
-	"""
-	from Stage_2.BaseTask import BaseTask
-	tasks_dir = _ROOT / "Stage_2" / "tasks"
-	for py_file in sorted(tasks_dir.glob("task_*.py")):
-		module_name = f"Stage_2.tasks.{py_file.stem}"
-		try:
-			module = importlib.import_module(module_name)
-		except Exception as e:
-			logger.warning(f"Could not import {module_name}: {e}")
-			continue
-		for _, cls in inspect.getmembers(module, inspect.isclass):
-			if issubclass(cls, BaseTask) and cls is not BaseTask and cls.__module__ == module_name:
-				try:
-					orchestrator.register_task(cls())
-				except Exception as e:
-					logger.warning(f"Could not register task {cls.__name__}: {e}")
-
-
-def _auto_discover_tools(tool_registry, config):
-	"""
-	Scan Stage_3/tools/tool_*.py for BaseTool subclasses and register them.
-
-	To add a new tool, drop a tool_<name>.py file into Stage_3/tools/.
-	"""
-	from Stage_3.BaseTool import BaseTool
-	tools_dir = _ROOT / "Stage_3" / "tools"
-	for py_file in sorted(tools_dir.glob("tool_*.py")):
-		module_name = f"Stage_3.tools.{py_file.stem}"
-		try:
-			module = importlib.import_module(module_name)
-		except Exception as e:
-			logger.warning(f"Could not import {module_name}: {e}")
-			continue
-		for _, cls in inspect.getmembers(module, inspect.isclass):
-			if issubclass(cls, BaseTool) and cls is not BaseTool and cls.__module__ == module_name:
-				try:
-					tool_registry.register(cls())
-				except Exception as e:
-					logger.warning(f"Could not register tool {cls.__name__}: {e}")
 
 
 # Global shutdown event
@@ -126,17 +48,17 @@ def main():
 	logger.info(f"Database: {config['db_path']}")
 
 	# --- 3. Initialize services ---
-	services = _auto_discover_services(config)
+	services = discover_services(_ROOT, config)
 
 	# --- 4. Initialize orchestrator ---
 	orchestrator = Orchestrator(database, config, services)
 
 	# --- 5. Register tasks ---
-	_auto_discover_tasks(orchestrator, config)
+	discover_tasks(_ROOT, orchestrator, config)
 
 	# --- 5b. Initialize tool registry ---
 	tool_registry = ToolRegistry(database, config, services)
-	_auto_discover_tools(tool_registry, config)
+	discover_tools(_ROOT, tool_registry, config)
 
 	# --- 6. Initialize controller ---
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)
@@ -145,7 +67,15 @@ def main():
 	orchestrator.start()
 
 	# --- 8. Start watcher ---
-	watcher = Watcher(orchestrator, database, config)
+	config["_root"] = str(_ROOT)
+
+	def reload_plugins():
+		logger.info("Hot-reloading plugins...")
+		discover_tasks(_ROOT, orchestrator, config, reload=True)
+		discover_tools(_ROOT, tool_registry, config, reload=True)
+		logger.info("Plugins reloaded.")
+
+	watcher = Watcher(orchestrator, database, config, on_plugin_changed=reload_plugins)
 	watcher.start()
 	logger.info("-----------------------------")
 	logger.info("DataRefinery is running. Type 'help' for commands, 'quit' to exit.")
@@ -171,14 +101,13 @@ def main():
 		logger.info("Done.")
 		os._exit(0)
 
-	import os
 	signal.signal(signal.SIGINT, shutdown)
 	signal.signal(signal.SIGTERM, shutdown)
 
 	# --- 11. Start REPL on its own thread ---
 	repl_thread = threading.Thread(
-		target=_repl,
-		args=(ctrl, shutdown, tool_registry, services, config),
+		target=run_repl,
+		args=(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT),
 		daemon=True,
 	)
 	repl_thread.start()
@@ -186,153 +115,6 @@ def main():
 	# --- 12. Main thread just keeps the process alive ---
 	while not _shutdown.is_set():
 		_shutdown.wait(timeout=1.0)
-
-
-def _repl(ctrl, shutdown_fn, tool_registry, services, config):
-	"""
-	Simple command loop. Maps user input to controller methods.
-	Runs on its own daemon thread so it never blocks the dispatch loop.
-	"""
-	agent = None
-
-	# --- Command handlers (one per REPL command) ---
-
-	def cmd_help(arg):
-		print(ctrl.help())
-	
-	def cmd_pipeline(arg):
-		print(ctrl.orchestrator.dependency_pipeline_graph())
-
-	def cmd_services(arg):
-		print(ctrl.list_services())
-
-	def cmd_load(arg):
-		print(ctrl.load_service(arg) if arg else "Usage: load <service_name>")
-
-	def cmd_unload(arg):
-		print(ctrl.unload_service(arg) if arg else "Usage: unload <service_name>")
-
-	def cmd_tasks(arg):
-		print(ctrl.list_tasks())
-
-	def cmd_pause(arg):
-		print(ctrl.pause_task(arg) if arg else "Usage: pause <task_name>")
-
-	def cmd_unpause(arg):
-		print(ctrl.unpause_task(arg) if arg else "Usage: unpause <task_name>")
-
-	def cmd_reset(arg):
-		print(ctrl.reset_task(arg) if arg else "Usage: reset <task_name>")
-
-	def cmd_retry(arg):
-		if arg.lower() == "all":
-			print(ctrl.retry_all())
-		elif arg:
-			print(ctrl.retry_task(arg))
-		else:
-			print("Usage: retry <task_name> | retry all")
-
-	def cmd_stats(arg):
-		print(ctrl.stats())
-
-	def cmd_tools(arg):
-		print(ctrl.list_tools())
-
-	def cmd_call(arg):
-		if not arg:
-			print("Usage: call <tool_name> {\"arg\": \"value\"}")
-			print("Example: call sql_query {\"sql\": \"SELECT * FROM files LIMIT 5\"}")
-			return
-
-		call_parts = arg.split(maxsplit=1)
-		tool_name = call_parts[0]
-		raw_args = call_parts[1] if len(call_parts) > 1 else "{}"
-
-		try:
-			kwargs = json.loads(raw_args)
-		except json.JSONDecodeError as e:
-			print(f"Invalid JSON arguments: {e}")
-			print("Expected format: call <tool_name> {\"key\": \"value\"}")
-			return
-
-		print(ctrl.call_tool(tool_name, kwargs))
-
-	def cmd_chat(arg):
-		nonlocal agent
-		llm = services.get("llm")
-		if llm is None or not llm.loaded:
-			print("LLM service not loaded. Run 'load llm' first.")
-			return
-
-		prompt = build_system_prompt(ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services)
-		agent = Agent(llm, tool_registry, config, system_prompt=prompt)
-		logger.info("Agent initialized.")
-
-		print("Entering chat mode. Type 'exit' to return to REPL.")
-		print("---")
-
-		while not _shutdown.is_set():
-			try:
-				user_input = input("you> ").strip()
-			except (KeyboardInterrupt, EOFError):
-				break
-
-			if not user_input:
-				continue
-			if user_input.lower() in ("exit", "quit", "back"):
-				break
-			if user_input.lower() == "reset":
-				agent.reset()
-				print("(conversation history cleared)")
-				continue
-
-			try:
-				response = agent.chat(user_input)
-				print(f"\nassistant> {response}\n")
-			except Exception as e:
-				logger.error(f"Agent error: {e}")
-				print(f"Error: {e}")
-
-		print("---")
-		print("Exited chat mode.")
-
-	# --- Command dispatch table ---
-
-	commands = {
-		"help": cmd_help, "services": cmd_services,
-		"load": cmd_load, "unload": cmd_unload,
-		"tasks": cmd_tasks, "pause": cmd_pause,
-		"unpause": cmd_unpause, "reset": cmd_reset,
-		"retry": cmd_retry, "stats": cmd_stats,
-		"tools": cmd_tools, "call": cmd_call,
-		"chat": cmd_chat, "pipeline": cmd_pipeline,
-	}
-
-	# --- Main loop ---
-
-	while not _shutdown.is_set():
-		try:
-			raw = input("\n> ").strip()
-			if not raw:
-				continue
-
-			parts = raw.split(maxsplit=1)
-			cmd = parts[0].lower()
-			arg = parts[1].strip() if len(parts) > 1 else ""
-
-			if cmd in ("quit", "exit"):
-				shutdown_fn()
-				return
-
-			handler = commands.get(cmd)
-			if handler:
-				handler(arg)
-			else:
-				print(f"Unknown command: '{cmd}'. Type 'help' for available commands.")
-
-		except (KeyboardInterrupt, EOFError):
-			shutdown_fn()
-			return
 
 
 if __name__ == "__main__":

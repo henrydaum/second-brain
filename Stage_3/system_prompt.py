@@ -22,6 +22,7 @@ def build_system_prompt(db, orchestrator, tool_registry, services: dict) -> str:
         _database_tables(db),
         _pipeline_status(db, orchestrator),
         _services_status(services),
+        _available_tools(tool_registry),
         _file_inventory(db),
         _source_files(),
         _authoring_guidance(),
@@ -124,6 +125,30 @@ def _services_status(services: dict) -> str:
         status = "loaded" if getattr(svc, "loaded", False) else "unloaded"
         parts.append(f"{name} ({status})")
     return "## Services\n" + ", ".join(parts)
+
+
+def _available_tools(tool_registry) -> str:
+    if not tool_registry:
+        return ""
+    enabled = [t for t in tool_registry.tools.values() if t.agent_enabled]
+    disabled = [t for t in tool_registry.tools.values() if not t.agent_enabled]
+    lines = ["## Your tools"]
+    if enabled:
+        lines.append("These are the ONLY tools you can call via function calling:")
+        for tool in enabled:
+            desc = (tool.description or "").split("\n")[0]
+            lines.append(f"- **{tool.name}**: {desc}")
+    else:
+        lines.append("No tools are currently enabled.")
+    if disabled:
+        lines.append("")
+        lines.append(
+            "The following tools exist but are DISABLED (agent_enabled=False). "
+            "You cannot call them directly. They may be used internally by other tools."
+        )
+        for tool in disabled:
+            lines.append(f"- ~~{tool.name}~~")
+    return "\n".join(lines)
 
 
 def _file_inventory(db) -> str:

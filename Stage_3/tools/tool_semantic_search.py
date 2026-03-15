@@ -74,6 +74,7 @@ INDEX_FIELD_MAP = {
 
 class SemanticSearch(BaseTool):
     name = "semantic_search"
+    agent_enabled = False  # Superseded by hybrid_search; still callable internally
     description = (
         "Search for files by meaning using vector similarity. Embeds your "
         "query and compares it against stored embeddings (text, image, and "

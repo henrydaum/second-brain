@@ -47,7 +47,7 @@ class OCRImages(BaseTask):
         results = []
         for path in paths:
             try:
-                # Paso 1: Extract images using the appropriate parser
+                # Step 1: Extract images using the appropriate parser
                 parse_result = context.parse(path, "image")
                 
                 if not parse_result.success:
@@ -58,7 +58,7 @@ class OCRImages(BaseTask):
                 images = parse_result.output or []
                 all_text = []
 
-                # Paso 2: Process each extracted image
+                # Step 2: Process each extracted image
                 for img in images:
                     temp_path = None
                     try:
