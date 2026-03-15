@@ -11,6 +11,7 @@ Returns a list of SearchResult dicts, one per matching chunk.
 import logging
 import os
 import re
+import time
 
 from Stage_3.BaseTool import BaseTool, ToolResult
 from Stage_3.SearchResult import SearchResult
@@ -103,10 +104,12 @@ class LexicalSearch(BaseTool):
         sql = "\n".join(sql_parts)
 
         # --- 3. Execute ---
+        t0 = time.time()
         try:
             with context.db.lock:
                 cur = context.db.conn.execute(sql, params)
                 rows = cur.fetchall()
+            logger.debug(f"FTS5 query returned {len(rows)} rows in {time.time() - t0:.3f}s")
         except Exception as e:
             logger.error(f"Lexical search failed: {e}")
             return ToolResult.failed(f"Search failed: {e}")

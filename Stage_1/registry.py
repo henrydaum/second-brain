@@ -126,6 +126,7 @@ def parse(path: str, modality: str = None, config: dict = None, services: dict =
         )
 
     # Call the parser
+    logger.debug(f"Parsing '{path_obj.name}' as {modality} (ext={extension})")
     try:
         result = parser_func(path, config, services)
         return result

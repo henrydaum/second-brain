@@ -5,6 +5,7 @@ import os
 import shutil
 import tarfile
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from Stage_1.ParseResult import ParseResult
@@ -89,6 +90,7 @@ def parse_zip(path: str, config: dict, services: dict = None) -> ParseResult:
         if not zipfile.is_zipfile(path):
             return ParseResult.failed("Not a valid ZIP file", modality="container")
 
+        t0 = time.time()
         dest = _extract_dir(path)
         max_size = config.get("max_extract_size", MAX_EXTRACT_SIZE)
         max_files = config.get("max_files", MAX_FILES)
@@ -121,6 +123,9 @@ def parse_zip(path: str, config: dict, services: dict = None) -> ParseResult:
                 zf.extract(info, dest)
 
         children = _collect_paths(dest)
+        logger.debug(
+            f"ZIP extracted: {Path(path).name} — {len(children)} files in {time.time() - t0:.2f}s"
+        )
 
         return ParseResult(
             modality="container",

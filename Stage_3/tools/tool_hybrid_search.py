@@ -11,13 +11,16 @@ Modality-agnostic — works with whatever modalities the sub-tools return
 """
 
 import logging
+import time
 from collections import defaultdict
 
 from Stage_3.BaseTool import BaseTool, ToolResult
 
 logger = logging.getLogger("HybridSearch")
 
-RRF_K = 60  # Standard RRF constant
+# RRF constant — higher values give less weight to rank differences.
+# 60 is the standard value from the original RRF paper.
+RRF_K = 60
 
 
 class HybridSearch(BaseTool):
@@ -79,6 +82,7 @@ class HybridSearch(BaseTool):
             return ToolResult.failed("No query provided.")
 
         # --- 1. Fetch from sub-tools ---
+        # Over-fetch to give RRF enough candidates to fuse meaningfully.
         fetch_limit = max(200, top_k * 10)
 
         lex_kwargs = {"query": query, "top_k": fetch_limit}
@@ -91,8 +95,10 @@ class HybridSearch(BaseTool):
         if streams:
             sem_kwargs["streams"] = streams
 
+        t0 = time.time()
         lex_result = context.call_tool("lexical_search", **lex_kwargs)
         sem_result = context.call_tool("semantic_search", **sem_kwargs)
+        logger.debug(f"Sub-tool fetch completed in {time.time() - t0:.2f}s")
 
         lex_data = lex_result.data if lex_result.success and lex_result.data else []
         sem_data = sem_result.data if sem_result.success and sem_result.data else []
@@ -149,8 +155,10 @@ class HybridSearch(BaseTool):
 
 def _dedup_by_path(results):
     """
-    Collapse multiple chunks of the same path into one entry.
-    Keeps the highest-scoring chunk's content, counts total hits.
+    Collapse multiple chunks of the same file into one document entry.
+    A single PDF might have 50 matching chunks — we keep the best-scoring
+    chunk's content as the representative snippet, and count total hits
+    so the user knows how much of the document matched.
     """
     by_path = {}
     for res in results:
@@ -169,6 +177,11 @@ def _dedup_by_path(results):
 def _apply_rrf(deduped_streams):
     """
     Apply Reciprocal Rank Fusion across all streams.
+
+    RRF scores each document as: sum over streams of 1/(K + rank).
+    Documents that appear in multiple streams accumulate higher scores,
+    naturally boosting results found by both keyword AND vector search.
+
     Returns (merged_docs, rrf_scores) where:
       - merged_docs: path -> merged result dict
       - rrf_scores:  path -> cumulative RRF score
@@ -182,6 +195,7 @@ def _apply_rrf(deduped_streams):
 
         for rank, doc in enumerate(docs):
             path = doc["path"]
+            # RRF formula: each stream contributes 1/(K + rank + 1) per document
             rrf_scores[path] = rrf_scores.get(path, 0.0) + 1.0 / (RRF_K + rank + 1)
 
             if path not in merged_docs:

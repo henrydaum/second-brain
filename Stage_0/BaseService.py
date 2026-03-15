@@ -1,4 +1,5 @@
 import logging
+import time
 from abc import ABC, abstractmethod
 
 logger = logging.getLogger("BaseService")
@@ -15,6 +16,7 @@ class BaseService(ABC):
 
     Lifecycle:
         load()        Initialize the service. Returns True on success.
+                      Timing is logged automatically by the base class wrapper.
         unload()      Release resources. Safe to call multiple times.
         loaded        Property indicating whether the service is ready.
 
@@ -37,9 +39,26 @@ class BaseService(ABC):
     def loaded(self, value: bool):
         self._loaded = value
 
-    @abstractmethod
     def load(self) -> bool:
-        """Initialize the service. Return True on success, False on failure."""
+        """Wraps _load() with automatic timing. Subclasses override _load()."""
+        name = self.model_name or self.__class__.__name__
+        logger.info(f"Loading model: {name}...")
+        t0 = time.time()
+        try:
+            result = self._load()
+            elapsed = time.time() - t0
+            if result:
+                logger.info(f"Model loaded: {name} ({elapsed:.2f}s)")
+            else:
+                logger.warning(f"Model failed to load: {name} ({elapsed:.2f}s)")
+            return result
+        except Exception as e:
+            logger.error(f"Model crashed during load: {name} ({time.time() - t0:.2f}s): {e}")
+            raise
+
+    @abstractmethod
+    def _load(self) -> bool:
+        """Initialize the service model. Return True on success, False on failure."""
         ...
 
     @abstractmethod

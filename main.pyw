@@ -3,6 +3,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 
 # Silence noisy libraries
@@ -36,6 +37,8 @@ _shutdown = threading.Event()
 
 
 def main():
+	t_start = time.time()
+
 	# --- 1. Load config ---
 	config = config_manager.load()
 
@@ -44,21 +47,28 @@ def main():
 		sys.exit(1)
 
 	# --- 2. Initialize database ---
+	t0 = time.time()
 	database = Database(config["db_path"])
-	logger.info(f"Database: {config['db_path']}")
+	logger.info(f"Database ready: {config['db_path']} ({time.time() - t0:.2f}s)")
 
 	# --- 3. Initialize services ---
+	t0 = time.time()
 	services = discover_services(_ROOT, config)
+	logger.info(f"Services discovered: {list(services.keys())} ({time.time() - t0:.2f}s)")
 
 	# --- 4. Initialize orchestrator ---
 	orchestrator = Orchestrator(database, config, services)
 
 	# --- 5. Register tasks ---
+	t0 = time.time()
 	discover_tasks(_ROOT, orchestrator, config)
+	logger.info(f"Tasks registered: {list(orchestrator.tasks.keys())} ({time.time() - t0:.2f}s)")
 
 	# --- 5b. Initialize tool registry ---
+	t0 = time.time()
 	tool_registry = ToolRegistry(database, config, services)
 	discover_tools(_ROOT, tool_registry, config)
+	logger.info(f"Tools registered: {list(tool_registry.tools.keys())} ({time.time() - t0:.2f}s)")
 
 	# --- 6. Initialize controller ---
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)
@@ -78,7 +88,7 @@ def main():
 	watcher = Watcher(orchestrator, database, config, on_plugin_changed=reload_plugins)
 	watcher.start()
 	logger.info("-----------------------------")
-	logger.info("DataRefinery is running. Type 'help' for commands, 'quit' to exit.")
+	logger.info(f"DataRefinery started in {time.time() - t_start:.2f}s. Type 'help' for commands, 'quit' to exit.")
 
 	# --- 9. Shutdown handler ---
 	def shutdown(sig=None, frame=None):
@@ -92,8 +102,10 @@ def main():
 		for svc in services.values():
 			if getattr(svc, 'loaded', False):
 				try:
+					t0 = time.time()
 					logger.info(f"Unloading service: {svc.model_name}")
 					svc.unload()
+					logger.debug(f"Unloaded {svc.model_name} in {time.time() - t0:.2f}s")
 				except Exception as e:
 					logger.debug(f"Service unload error: {e}")
 		logger.info("Saving config...")

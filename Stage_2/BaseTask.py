@@ -125,6 +125,8 @@ class BaseTask:
 
 	def __init_subclass__(cls, **kwargs):
 		super().__init_subclass__(**kwargs)
+		# Prevent subclasses from sharing mutable class attributes.
+		# Without .copy(), every subclass would mutate the same list object.
 		for attr in ("modalities", "reads", "writes", "requires_services"):
 			value = getattr(cls, attr)
 			if isinstance(value, (dict, list)):

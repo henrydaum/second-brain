@@ -13,6 +13,7 @@ Adding a new modality = one entry in EMBEDDING_STREAMS.
 
 import logging
 import os
+import time
 
 import numpy as np
 
@@ -174,7 +175,8 @@ class SemanticSearch(BaseTool):
             logger.info(f"Skipping {stream_name} stream: {service_name} not loaded")
             return None
 
-        # 2. Encode query
+        # 2. Encode query — this calls the embedding model and can be slow
+        logger.debug(f"Encoding query for {stream_name} stream...")
         try:
             query_vec = embedder.encode(query)
         except Exception as e:
@@ -213,7 +215,9 @@ class SemanticSearch(BaseTool):
             logger.info(f"No embeddings in {table} for model {embedder.model_name}")
             return []
 
-        # 4. Deserialize and stack into matrix
+        # 4. Deserialize embedding blobs into numpy vectors and stack into
+        # a matrix. Skip any rows with dimension mismatches (stale embeddings
+        # from a different model).
         paths = []
         indices = []
         valid_vecs = []
@@ -232,8 +236,13 @@ class SemanticSearch(BaseTool):
 
         emb_matrix = np.vstack(valid_vecs)
 
-        # 5. Compute cosine similarity (vectors are pre-normalized)
+        # 5. Cosine similarity — both query and stored vectors are pre-normalized
+        # during encoding, so dot product == cosine similarity.
+        t_sim = time.time()
         scores = np.dot(emb_matrix, query_vec)
+        logger.debug(
+            f"Similarity search over {len(valid_vecs)} vectors in {time.time() - t_sim:.3f}s"
+        )
 
         # 6. Top-k
         k = min(top_k, len(scores))

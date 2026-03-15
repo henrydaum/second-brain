@@ -31,6 +31,7 @@ build() is cheap (~1ms) — the OAuth dance only happens in load().
 """
 
 import os
+import time
 from pathlib import Path
 import logging
 
@@ -59,7 +60,7 @@ class GoogleDriveService(BaseService):
             logger.debug(f"Connectivity check failed: {e}")
             return False
 
-    def load(self) -> bool:
+    def _load(self) -> bool:
         """
         Authenticate with Google Drive and store credentials.
         Opens a browser for OAuth consent if no valid token exists.
@@ -112,7 +113,6 @@ class GoogleDriveService(BaseService):
             # Keep a default instance for backward compat
             self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
             self.loaded = True
-            logger.info("[Drive] Authenticated successfully.")
             return True
 
         except Exception as e:
@@ -177,6 +177,8 @@ class GoogleDriveService(BaseService):
             import io
             from googleapiclient.http import MediaIoBaseDownload
 
+            logger.debug(f"[Drive] Downloading {doc_id} as {mime_type}...")
+            t0 = time.time()
             request = client.files().export_media(fileId=doc_id, mimeType=mime_type)
             buffer = io.BytesIO()
             downloader = MediaIoBaseDownload(buffer, request)
@@ -187,7 +189,10 @@ class GoogleDriveService(BaseService):
 
             buffer.seek(0)
             data = buffer.read()
-            logger.info(f"[Drive] Downloaded {len(data)} bytes for {doc_id} as {mime_type}")
+            logger.info(
+                f"[Drive] Downloaded {len(data)} bytes for {doc_id} "
+                f"as {mime_type} in {time.time() - t0:.2f}s"
+            )
             return data
 
         except Exception as e:

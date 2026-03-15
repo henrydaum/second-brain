@@ -2,6 +2,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 import os
 import logging
+import time
 
 from Stage_0.BaseService import BaseService
 
@@ -40,7 +41,7 @@ class BaseLLM(BaseService):
         super().__init__()
         self.shared = True  # LLM clients are typically thread-safe
 
-    def load(self):
+    def _load(self):
         raise NotImplementedError
 
     def unload(self):
@@ -104,15 +105,13 @@ class LMStudioLLM(BaseLLM):
         self.vision = None
         self.loaded = False
 
-    def load(self):
-        logger.info(f"Loading LM Studio model: {self.model_name}")
+    def _load(self):
         try:
             import lmstudio as lms
             self.model = lms.llm(self.model_name)
             self.vision = self.model.get_info().vision
             logger.info(f"Model has vision support: {self.vision}")
             self.loaded = True
-            logger.info("LM Studio model loaded.")
             return True
         except Exception as e:
             logger.error(f"LM Studio Load Error: {e}")
@@ -224,14 +223,18 @@ class LMStudioLLM(BaseLLM):
             if "temperature" in kwargs:
                 config["temperature"] = kwargs["temperature"]
 
+            logger.debug(
+                f"LM Studio invoke: {len(messages)} messages, {len(valid_names)} images"
+            )
+            t0 = time.time()
             response = self.model.respond(chat, config=config if config else None)
+            logger.debug(f"LM Studio responded in {time.time() - t0:.2f}s")
             return LLMResponse(content=response.content)
         except Exception as e:
             logger.error(f"LM Studio Invoke Error: {e}")
             return LLMResponse(content=f"Error: {e}")
         finally:
             if temp_files:
-                import time
                 time.sleep(0.1)
                 self._cleanup_temp_files(temp_files)
 
@@ -263,7 +266,6 @@ class LMStudioLLM(BaseLLM):
             logger.error(f"LM Studio Stream Error: {e}")
         finally:
             if temp_files:
-                import time
                 time.sleep(0.1)
                 self._cleanup_temp_files(temp_files)
 
@@ -295,9 +297,8 @@ class OpenAILLM(BaseLLM):
         self.client = None
         self.loaded = False
 
-    def load(self):
+    def _load(self):
         try:
-            logger.info(f"Loading OpenAI model: {self.model_name}")
             import openai
 
             client_kwargs = {}
@@ -308,8 +309,6 @@ class OpenAILLM(BaseLLM):
 
             self.client = openai.OpenAI(**client_kwargs)
             self.loaded = True
-            logger.info(f"OpenAI model loaded: {self.model_name}" +
-                        (f" @ {self.base_url}" if self.base_url else ""))
             return True
         except Exception as e:
             logger.error(f"OpenAI Load Error: {e}")
@@ -376,11 +375,18 @@ class OpenAILLM(BaseLLM):
         try:
             messages = self._inject_images(messages, image_paths)
 
+            has_tools = "tools" in kwargs and kwargs["tools"]
+            logger.debug(
+                f"OpenAI invoke: {len(messages)} messages, "
+                f"tools={'yes' if has_tools else 'no'}, model={self.model_name}"
+            )
+            t0 = time.time()
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
                 **kwargs,
             )
+            logger.debug(f"OpenAI responded in {time.time() - t0:.2f}s")
             choice = response.choices[0]
 
             if choice.message.tool_calls:

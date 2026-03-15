@@ -77,6 +77,7 @@ class EmbedImages(BaseTask):
 		# --- 2. Encode all images at once ---
 		embeddings = None
 		if image_entries:
+			logger.debug(f"Encoding {len(image_entries)} images across {len(paths)} files...")
 			try:
 				pil_images = [entry[2] for entry in image_entries]
 				embeddings = embedder.encode(pil_images)

@@ -110,8 +110,11 @@ class Watcher:
 		Modified files -> upsert + notify orchestrator.
 		Deleted files (ghosts) -> remove from DB + notify orchestrator.
 		"""
+		t0 = time.time()
 		db_state = self.db.get_watched_files()  # {path: mtime} — watched only
 		disk_files = set()
+		new_count = 0
+		modified_count = 0
 
 		for watch_dir in valid_dirs:
 			if self._is_ignored(watch_dir):
@@ -135,18 +138,27 @@ class Watcher:
 					self._known_mtimes[path] = mtime
 
 					if path not in db_state:
-						# New file
 						self._register_file(path, mtime)
+						new_count += 1
 
 					elif abs(mtime - db_state[path]) > 1.0:
-						# Modified file
 						self._register_file(path, mtime)
+						modified_count += 1
 
 		# Ghost cleanup — files in DB but not on disk
+		ghost_count = 0
 		for db_path in db_state:
 			if db_path not in disk_files:
 				logger.info(f"[Scan] Removed: {Path(db_path).name}")
 				self.orchestrator.on_file_deleted(db_path)
+				ghost_count += 1
+
+		elapsed = time.time() - t0
+		logger.info(
+			f"Initial scan complete: {len(disk_files)} files on disk, "
+			f"{new_count} new, {modified_count} modified, {ghost_count} ghosts removed "
+			f"({elapsed:.2f}s)"
+		)
 
 	# =================================================================
 	# FILE REGISTRATION
@@ -300,8 +312,10 @@ class DebouncedHandler(FileSystemEventHandler):
 			timer.start()
 
 	def _fire(self, path: str):
+		"""Called after the debounce interval expires — events have settled."""
 		with self.lock:
 			self.pending.pop(path, None)
+		logger.debug(f"[Debounce] Firing for: {Path(path).name}")
 		self.watcher.handle_create_or_modify(path)
 
 	# --- Watchdog event callbacks ---

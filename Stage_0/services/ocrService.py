@@ -22,14 +22,12 @@ class WindowsOCR(BaseService):
         self.model_name = "winrt_windows_ocr"
         self.shared = True
 
-    def load(self):
+    def _load(self):
         """Just imports stuff and checks if library is present and enables the flag."""
-        logger.info("Enabling Windows OCR")
         # Must import this before other .dlls
         import torch
-        
+
         self.loaded = True
-        logger.info("Windows OCR loaded.")
         return True
 
     def unload(self):
@@ -38,28 +36,32 @@ class WindowsOCR(BaseService):
 
     def process_image(self, image_path):
         """
-        The Orchestrator calls this. We use YOUR proven logic here.
+        Run OCR on a single image file. Returns extracted text or empty string.
+        Pre-processes the image first (resize, convert to RGB) for stability.
         """
-        
+        import time as _time
+
         if not self.loaded: return ""
         if not os.path.exists(image_path): return ""
 
-        # 1. PRE-PROCESS (Your PIL optimization)
-        # This is crucial. It prevents the engine from choking on huge/weird files.
+        # 1. PRE-PROCESS: resize and convert to RGB PNG.
+        # This prevents the OCR engine from choking on huge/weird files.
         temp_path = self._create_optimized_temp_file(image_path)
         if not temp_path:
             return ""
 
         try:
-            # 2. RUN OCR (Your Async Wrapper)
-            # We run this BLOCKING, so the Orchestrator waits for the result.
+            # 2. RUN OCR via Windows async API (blocking wrapper).
+            # This can hang if the Windows OCR engine is unresponsive.
+            logger.debug(f"OCR starting: {Path(image_path).name}")
+            t0 = _time.time()
             text = asyncio.run(self._run_windows_ocr_task(temp_path))
+            logger.debug(f"OCR completed: {Path(image_path).name} in {_time.time() - t0:.2f}s")
             return text if text else ""
         except Exception as e:
             logger.warning(f"OCR failed for {Path(image_path).name}: {e}")
             return ""
         finally:
-            # 3. CLEANUP
             if temp_path and os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)

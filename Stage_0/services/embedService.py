@@ -27,7 +27,7 @@ class BaseEmbedder(BaseService):
         self.chunk_size = chunk_size
         self.use_cuda = use_cuda
 
-    def load(self):
+    def _load(self):
         """Must implement model loading logic."""
         raise NotImplementedError
 
@@ -100,9 +100,8 @@ class SentenceTransformerEmbedder(BaseEmbedder):
                 shutil.rmtree(self.download_path, ignore_errors=True)
             return False
 
-    def load(self):
+    def _load(self):
         """Loads the model into memory. Returns True if successful, False otherwise."""
-        logger.info(f"Loading Sentence Transformer model: {self.model_name}")
         if self.loaded and self.model is not None:
             return True
 
@@ -111,7 +110,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         
         # Determine Device — uses self.use_cuda from __init__
         self.device = "cuda" if torch.cuda.is_available() and self.use_cuda else "cpu"
-        logger.info(f"Loading model on {self.device}...")
+        logger.debug(f"Using device: {self.device}")
 
         # 1. Check Internet / Environment
         connected = self.is_connected()
@@ -152,7 +151,6 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         self.model.max_seq_length = self.chunk_size
         
         self.loaded = True
-        logger.info("Sentence Transformer model loaded.")
         return True
 
     def unload(self):
@@ -180,11 +178,17 @@ class SentenceTransformerEmbedder(BaseEmbedder):
             logger.warning("Attempted generation while model is unloaded.")
             return None
 
+        import time as _time
+        input_count = len(inputs) if isinstance(inputs, list) else 1
+        logger.debug(f"Encoding {input_count} input(s) with {self.model_name} on {self.device}...")
+        t0 = _time.time()
         try:
             # normalize_embeddings=True is critical for Cosine Similarity
-            return self.model.encode(inputs, normalize_embeddings=True, convert_to_numpy=True)
+            result = self.model.encode(inputs, normalize_embeddings=True, convert_to_numpy=True)
+            logger.debug(f"Encoded {input_count} input(s) in {_time.time() - t0:.2f}s")
+            return result
         except Exception as e:
-            logger.error(f"Inference failed: {e}")
+            logger.error(f"Inference failed after {_time.time() - t0:.2f}s: {e}")
             return None
 
 

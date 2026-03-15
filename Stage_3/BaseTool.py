@@ -17,6 +17,7 @@ The interface is the same — only the transport layer changes.
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -139,11 +140,13 @@ class ToolRegistry:
         # Build context with call_tool pointing back to this registry
         context = build_context(self.db, self.config, self.services, call_tool=self.call)
 
+        t0 = time.time()
         try:
             result = tool.run(context, **kwargs)
+            logger.debug(f"Tool '{name}' completed in {time.time() - t0:.3f}s")
             return result
         except Exception as e:
-            logger.error(f"Tool '{name}' failed: {e}")
+            logger.error(f"Tool '{name}' failed after {time.time() - t0:.3f}s: {e}")
             return ToolResult.failed(str(e))
 
     @property

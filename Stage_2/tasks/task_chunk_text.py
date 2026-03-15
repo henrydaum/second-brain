@@ -20,14 +20,22 @@ logger = logging.getLogger("ChunkText")
 
 
 def _recursive_split(text: str, separators: list[str], chunk_size: int) -> list[str]:
-	"""Break text into atomic segments by recursively splitting on separators."""
+	"""
+	Break text into atomic segments by trying progressively finer separators.
+
+	Strategy: Try splitting on the coarsest boundary first (paragraphs).
+	If any piece is still too large, recurse with the next finer separator
+	(newlines -> sentences -> words -> characters). This preserves natural
+	reading boundaries as much as possible.
+	"""
 	if not text:
 		return []
 
 	sep = separators[0]
 	remaining_seps = separators[1:]
 
-	# Last separator (empty string) — text is the atomic unit
+	# Base case: empty separator means single-character splitting.
+	# The text itself is the smallest atomic unit we can produce.
 	if not sep:
 		return [text]
 
@@ -35,13 +43,14 @@ def _recursive_split(text: str, separators: list[str], chunk_size: int) -> list[
 
 	segments = []
 	for i, s in enumerate(splits):
-		# Re-attach separator to preserve it in output (except last piece)
+		# Re-attach separator to preserve whitespace in output (except last piece)
 		if i < len(splits) - 1:
 			s += sep
 		if not s:
 			continue
 
-		# If small enough, keep as atomic segment; otherwise recurse deeper
+		# If this piece fits in a chunk, keep it as-is.
+		# Otherwise, recurse with a finer separator to break it down further.
 		if len(s) <= chunk_size or not remaining_seps:
 			segments.append(s)
 		else:
@@ -66,6 +75,8 @@ def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 	if len(text) <= chunk_size:
 		return [text]
 
+	# Separator hierarchy: try coarse boundaries first, fall back to finer ones.
+	# Empty string at the end is the "character-level" fallback.
 	separators = ["\n\n", "\n", ". ", "? ", "! ", " ", ""]
 	segments = _recursive_split(text, separators, chunk_size)
 
@@ -76,20 +87,25 @@ def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 	for segment in segments:
 		seg_len = len(segment)
 
-		# Oversized segment that couldn't be split further — emit as-is
+		# Oversized segment that couldn't be split further — emit as-is.
+		# This only happens when a single "word" exceeds chunk_size (rare).
 		if seg_len > chunk_size:
 			if current_chunk:
 				chunks.append("".join(current_chunk))
 				current_chunk = []
 				current_len = 0
 			chunks.append(segment)
+			logger.debug(f"Oversized segment ({seg_len} chars) emitted as standalone chunk")
 			continue
 
 		# Adding this segment would exceed chunk_size — finalize current chunk
 		if current_len + seg_len > chunk_size:
 			chunks.append("".join(current_chunk))
 
-			# Build overlap from tail of previous chunk
+			# Overlap: carry the tail of the previous chunk into the next one.
+			# This ensures context isn't lost at chunk boundaries — critical for
+			# embedding quality. Walk backwards through segments until we've
+			# accumulated ~overlap characters.
 			overlap_buffer = []
 			overlap_len = 0
 			for prev_seg in reversed(current_chunk):

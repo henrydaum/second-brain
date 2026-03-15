@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from pathlib import Path
 from Stage_1.ParseResult import ParseResult
 import Stage_1.registry as registry
@@ -95,6 +96,7 @@ def parse_pdf_text(path: str, config: dict, services: dict = None) -> ParseResul
         return ParseResult.failed("PyMuPDF not installed", modality="text")
 
     try:
+        t0 = time.time()
         limit = _max_chars(config)
 
         with fitz.open(path) as doc:
@@ -130,6 +132,8 @@ def parse_pdf_text(path: str, config: dict, services: dict = None) -> ParseResul
             if has_tables:
                 also_contains.append("tabular")
 
+            # A PDF with almost no text but multiple pages is likely a scanned document.
+            # Flag it so the orchestrator queues OCR via the image modality.
             is_scanned = len(text.strip()) < 50 and len(doc) > 0
 
             if is_scanned and "image" not in also_contains:
@@ -144,6 +148,10 @@ def parse_pdf_text(path: str, config: dict, services: dict = None) -> ParseResul
                 "is_scanned": is_scanned,
             }
 
+        logger.debug(
+            f"PDF parsed: {Path(path).name} — {len(doc)} pages, "
+            f"{len(text)} chars in {time.time() - t0:.2f}s"
+        )
         return ParseResult(
             modality="text",
             output=text,
@@ -276,6 +284,7 @@ def parse_docx_text(path: str, config: dict, services: dict = None) -> ParseResu
         return ParseResult.failed("python-docx not installed", modality="text")
 
     try:
+        t0 = time.time()
         limit = _max_chars(config)
         doc = Document(path)
 
@@ -313,6 +322,10 @@ def parse_docx_text(path: str, config: dict, services: dict = None) -> ParseResu
         if has_tables:
             also_contains.append("tabular")
 
+        logger.debug(
+            f"DOCX parsed: {Path(path).name} — {len(doc.paragraphs)} paragraphs, "
+            f"{len(content)} chars in {time.time() - t0:.2f}s"
+        )
         return ParseResult(
             modality="text",
             output=content,
@@ -384,6 +397,7 @@ def parse_pptx_text(path: str, config: dict, services: dict = None) -> ParseResu
         return ParseResult.failed("python-pptx not installed", modality="text")
 
     try:
+        t0 = time.time()
         limit = _max_chars(config)
         prs = Presentation(path)
 
@@ -407,6 +421,10 @@ def parse_pptx_text(path: str, config: dict, services: dict = None) -> ParseResu
         if image_count > 0:
             also_contains.append("image")
 
+        logger.debug(
+            f"PPTX parsed: {Path(path).name} — {len(prs.slides)} slides, "
+            f"{len(content)} chars in {time.time() - t0:.2f}s"
+        )
         return ParseResult(
             modality="text",
             output=content,

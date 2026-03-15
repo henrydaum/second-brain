@@ -67,8 +67,11 @@ class EmbedText(BaseTask):
 				path_to_indices[path] = None  # sentinel for failure
 
 		# --- 2. Encode the entire pool at once ---
+		# Pooling chunks across files into one encode() call is much faster
+		# than encoding per-file, because the GPU can batch efficiently.
 		embeddings = None
 		if pool_texts:
+			logger.debug(f"Encoding {len(pool_texts)} text chunks across {len(paths)} files...")
 			try:
 				embeddings = embedder.encode(pool_texts)
 			except Exception as e:

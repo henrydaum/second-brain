@@ -19,6 +19,9 @@ logger = logging.getLogger("Discovery")
 
 
 def discover(root_dir: Path, orchestrator, config: dict, reload: bool = False):
+    import time
+    t0 = time.time()
+    count = 0
     tasks_dir = root_dir / "Stage_2" / "tasks"
     for py_file in sorted(tasks_dir.glob("task_*.py")):
         module_name = f"Stage_2.tasks.{py_file.stem}"
@@ -37,5 +40,7 @@ def discover(root_dir: Path, orchestrator, config: dict, reload: bool = False):
             if issubclass(cls, BaseTask) and cls is not BaseTask and cls.__module__ == module_name:
                 try:
                     orchestrator.register_task(cls())
+                    count += 1
                 except Exception as e:
                     logger.error(f"Could not register task {cls.__name__}: {e}", exc_info=True)
+    logger.info(f"Discovered {count} task(s) in {time.time() - t0:.2f}s")

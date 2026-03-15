@@ -19,6 +19,7 @@ Usage:
 
 import json
 import logging
+import time
 
 logger = logging.getLogger("Agent")
 
@@ -58,14 +59,21 @@ class Agent:
         tools = self.tool_registry.get_all_schemas() or None
         self._tool_call_counts.clear()
 
-        for _ in range(self.max_tool_calls):
+        for round_num in range(self.max_tool_calls):
+            logger.debug(
+                f"LLM call (round {round_num + 1}), history size: {len(self.history)} messages"
+            )
+            t0 = time.time()
             response = self.llm.chat_with_tools(messages, tools)
+            logger.debug(f"LLM responded in {time.time() - t0:.2f}s")
 
             if not response.has_tool_calls:
                 self.history.append({"role": "assistant", "content": response.content})
                 return response.content
 
             # Build the assistant message with tool calls for the conversation
+            tool_names = [tc["name"] for tc in response.tool_calls]
+            logger.info(f"Agent requesting tool calls: {tool_names}")
             assistant_msg = {"role": "assistant", "content": response.content or None, "tool_calls": [
                 {"id": tc["id"], "type": "function", "function": {"name": tc["name"], "arguments": tc["arguments"]}}
                 for tc in response.tool_calls
@@ -75,7 +83,9 @@ class Agent:
 
             # Execute each tool call and append results
             for tc in response.tool_calls:
+                t_tool = time.time()
                 result_str = self._execute_tool_call(tc)
+                logger.debug(f"Tool '{tc['name']}' completed in {time.time() - t_tool:.2f}s")
                 tool_msg = {"role": "tool", "tool_call_id": tc["id"], "content": result_str}
                 messages.append(tool_msg)
                 self.history.append(tool_msg)

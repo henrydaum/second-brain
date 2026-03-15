@@ -96,18 +96,22 @@ class Orchestrator:
 		"""Derive the dependency graph from reads/writes declarations.
 		Called once after all tasks are registered, before start()."""
 
-		# table -> task name that writes it
+		# Phase 1: Map each output table to the task that produces it.
+		# If multiple tasks write the same table (e.g. lexical_content), we keep
+		# the first writer here but downstream logic uses reads-matching anyway.
 		self.table_producers = {}
 		for task in self.tasks.values():
 			for table in task.writes:
 				if table in self.table_producers:
-					# Shared table — multiple writers (e.g. lexical_content)
-					# Store first writer; downstream logic uses reads matching, not this map
-					pass
+					logger.debug(
+						f"Shared table '{table}': written by both "
+						f"'{self.table_producers[table]}' and '{task.name}'"
+					)
 				else:
 					self.table_producers[table] = task.name
 
-		# task name -> list of upstream task names (derived from reads -> writes)
+		# Phase 2: For each task, find which other tasks must complete first.
+		# If task B reads from table X, and task A writes to table X, then B depends on A.
 		self.upstream = {}
 		for task in self.tasks.values():
 			deps = set()
@@ -116,10 +120,16 @@ class Orchestrator:
 				if producer:
 					deps.add(producer)
 			self.upstream[task.name] = list(deps)
+			if deps:
+				logger.debug(f"Dependencies for '{task.name}': {list(deps)}")
+			else:
+				logger.debug(f"Root task (no dependencies): '{task.name}'")
 
 	def _backfill_tasks(self):
 		"""Enqueue all existing files for tasks whose deps are already met."""
+		total_enqueued = 0
 		for task in self.tasks.values():
+			enqueued = 0
 			if task.modalities:
 				# Root task — find files by modality
 				for modality in task.modalities:
@@ -127,12 +137,19 @@ class Orchestrator:
 					for path in paths:
 						if self._deps_met(path, task):
 							self.db.enqueue_task(path, task.name)
+							enqueued += 1
 			elif task.reads:
 				# Downstream task (no modalities) — find paths with upstream done
 				paths = self._get_backfill_paths(task)
 				for path in paths:
 					if self._deps_met(path, task):
 						self.db.enqueue_task(path, task.name)
+						enqueued += 1
+			if enqueued:
+				logger.debug(f"Backfill: enqueued {enqueued} entries for '{task.name}'")
+			total_enqueued += enqueued
+		if total_enqueued:
+			logger.info(f"Backfill: {total_enqueued} total entries enqueued across all tasks")
 
 	def _get_backfill_paths(self, task):
 		"""Get paths where at least one upstream task is DONE."""
@@ -172,6 +189,10 @@ class Orchestrator:
 		"""Reset downstream tasks to PENDING for specific paths."""
 		downstream = self._get_all_downstream(task_name)
 		if downstream:
+			logger.debug(
+				f"Invalidating downstream of '{task_name}': "
+				f"{downstream} for {len(paths)} path(s)"
+			)
 			self.db.invalidate_tasks_for_paths(downstream, paths)
 
 	# =================================================================
@@ -221,7 +242,10 @@ class Orchestrator:
 			all_tables.extend(task.writes)
 		self.db.clean_output_tables(path, all_tables)
 
-		# Cascade: if this was a container, delete its extracted children too
+		# Cascade: if the deleted file was an archive, also remove all files
+		# that were extracted from it (and clean up the temp directory on disk).
+		# This recurses — if an extracted child was itself an archive, its
+		# children get deleted too.
 		try:
 			with self.db.lock:
 				cur = self.db.conn.execute(
@@ -230,9 +254,11 @@ class Orchestrator:
 				row = cur.fetchone()
 			if row and row["extract_dir"]:
 				child_paths = self.db.get_container_children(row["extract_dir"])
+				logger.debug(
+					f"Cascading delete: {len(child_paths)} children from container {Path(path).name}"
+				)
 				for child in child_paths:
 					self.on_file_deleted(child)
-				# Clean up extracted directory from disk
 				import shutil
 				extract_dir = row["extract_dir"]
 				if os.path.isdir(extract_dir):
@@ -251,11 +277,17 @@ class Orchestrator:
 		completed_task = self.tasks.get(task_name)
 		if not completed_task:
 			return
+		triggered = []
 		for table in completed_task.writes:
 			for task in self.tasks.values():
 				if table in task.reads:
 					if self._deps_met(path, task):
 						self.db.re_enqueue_task(path, task.name)
+						triggered.append(task.name)
+		if triggered:
+			logger.debug(
+				f"'{task_name}' completed on {Path(path).name} → triggered: {triggered}"
+			)
 
 	def on_also_contains(self, path: str, modalities: list[str]):
 		for modality in modalities:
@@ -263,6 +295,10 @@ class Orchestrator:
 				if modality in task.modalities:
 					if self._deps_met(path, task):
 						self.db.re_enqueue_task(path, task.name)
+						logger.debug(
+							f"Multi-modal: {Path(path).name} also contains "
+							f"'{modality}' → enqueued '{task.name}'"
+						)
 
 	def on_paths_discovered(self, child_paths: list[str]):
 		from Stage_1.registry import get_modality, get_supported_extensions
@@ -302,10 +338,15 @@ class Orchestrator:
 	def start(self):
 		self.running = True
 
+		t0 = time.time()
 		self._build_graph()
+		logger.debug(f"Dependency graph built in {time.time() - t0:.3f}s")
 		print(self.dependency_pipeline_graph())
 		self._create_cascade_triggers()
+
+		t0 = time.time()
 		self._backfill_tasks()
+		logger.debug(f"Backfill scan completed in {time.time() - t0:.3f}s")
 
 		for task in self.tasks.values():
 			count = self.db.reset_stuck_tasks_for(task.name, task.timeout)
@@ -416,7 +457,8 @@ class Orchestrator:
 		logger.info("Orchestrator stopped")
 
 	def _dispatch_loop(self):
-		# Periodic stuck-task recovery
+		# Periodic stuck-task recovery — tasks stuck in PROCESSING longer than
+		# their timeout are reset to PENDING so they get retried.
 		stuck_check_interval = 60  # How often (seconds) to sweep for stuck tasks
 		last_stuck_check = 0.0     # Force an immediate first check
 
@@ -435,31 +477,39 @@ class Orchestrator:
 				last_stuck_check = now
 
 			for task in self.tasks.values():
-				# Gate 1: paused?
+				# Gate 1: Skip paused tasks — work stays PENDING until unpaused
 				if task.name in self.paused:
 					continue
 
-				# Gate 2: services loaded?
+				# Gate 2: Skip if required services aren't loaded yet
 				if not self._services_ready(task):
 					continue
 
-				# Gate 3: semaphore available?
+				# Gate 3: Skip if this task already has max concurrent workers running.
+				# Non-blocking acquire: if all worker slots are taken, move on.
 				sem = self.task_semaphores[task.name]
 				if not sem.acquire(blocking=False):
+					logger.debug(f"Skipping '{task.name}': all worker slots busy")
 					continue
 
-				# Gate 4: any work to do?
+				# Gate 4: Atomically claim PENDING work from DB.
+				# If nothing is PENDING, release the semaphore and move on.
 				paths = self.db.claim_tasks(task.name, task.batch_size)
 				if not paths:
 					sem.release()
 					continue
 
-				# Gate 5: deps still met? (safety net for file-update races)
+				# Gate 5: Double-check dependencies right before dispatch.
+				# Protects against a race where an upstream task was invalidated
+				# between the DB claim and now.
 				if task.reads:
 					ready = [p for p in paths if self._deps_met(p, task)]
 					not_ready = [p for p in paths if p not in ready]
 					if not_ready:
 						self.db.unclaim_tasks(task.name, not_ready)
+						logger.debug(
+							f"Unclaimed {len(not_ready)} '{task.name}' entries: deps not met"
+						)
 					if not ready:
 						sem.release()
 						continue
@@ -481,14 +531,18 @@ class Orchestrator:
 	def _execute(self, task: BaseTask, paths: list[str]):
 		context = build_context(self.db, self.config, self.services)
 
+		t0 = time.time()
 		try:
 			results = task.run(paths, context)
 		except Exception as e:
-			logger.error(f"Task '{task.name}' batch failed: {e}")
+			logger.error(f"Task '{task.name}' batch failed after {time.time() - t0:.2f}s: {e}")
 			for path in paths:
 				self.db.fail_task(path, task.name, str(e))
 			self._invalidate_downstream(task.name, paths)
 			return
+
+		elapsed = time.time() - t0
+		logger.debug(f"Task '{task.name}' ran {len(paths)} file(s) in {elapsed:.2f}s")
 
 		failed_paths = []
 		for path, result in zip(paths, results):

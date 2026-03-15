@@ -19,6 +19,9 @@ logger = logging.getLogger("Discovery")
 
 
 def discover(root_dir: Path, tool_registry, config: dict, reload: bool = False):
+    import time
+    t0 = time.time()
+    count = 0
     tools_dir = root_dir / "Stage_3" / "tools"
     for py_file in sorted(tools_dir.glob("tool_*.py")):
         module_name = f"Stage_3.tools.{py_file.stem}"
@@ -37,5 +40,7 @@ def discover(root_dir: Path, tool_registry, config: dict, reload: bool = False):
             if issubclass(cls, BaseTool) and cls is not BaseTool and cls.__module__ == module_name:
                 try:
                     tool_registry.register(cls())
+                    count += 1
                 except Exception as e:
                     logger.error(f"Could not register tool {cls.__name__}: {e}", exc_info=True)
+    logger.info(f"Discovered {count} tool(s) in {time.time() - t0:.2f}s")

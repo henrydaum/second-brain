@@ -16,6 +16,8 @@ logger = logging.getLogger("Discovery")
 
 
 def discover(root_dir: Path, config: dict) -> dict:
+    import time
+    t0 = time.time()
     services = {}
     services_dir = root_dir / "Stage_0" / "services"
     for py_file in sorted(services_dir.glob("*.py")):
@@ -37,6 +39,8 @@ def discover(root_dir: Path, config: dict) -> dict:
             built = build_fn(config)
             if built:
                 services.update(built)
+                logger.debug(f"Services from {py_file.stem}: {list(built.keys())}")
         except Exception as e:
             logger.error(f"build_services() in {module_name} failed: {e}", exc_info=True)
+    logger.info(f"Discovered {len(services)} service(s) in {time.time() - t0:.2f}s")
     return services

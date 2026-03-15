@@ -28,7 +28,10 @@ class Database:
 		self._setup()
 
 	def _setup(self):
+		# WAL mode allows concurrent readers while one writer holds the lock —
+		# critical for the dispatch loop reading while workers write results.
 		self.conn.execute("PRAGMA journal_mode=WAL")
+		# Negative value = KB. -50000 ≈ 50 MB page cache (default is ~2 MB).
 		self.conn.execute("PRAGMA cache_size=-50000")
 
 		# Master file registry — one row per file on disk
@@ -364,7 +367,8 @@ class Database:
 		allowed_prefixes = ("create table", "create index", "create unique index",
 						   "create virtual table", "create trigger")
 
-		# Split on semicolons, but rejoin trigger bodies (BEGIN...END blocks)
+		# Trigger bodies contain semicolons inside BEGIN...END, so we can't
+		# naively split on ";". Instead, split and then rejoin trigger blocks.
 		raw_parts = [s.strip() for s in schema_sql.split(";") if s.strip()]
 		statements = []
 		current = None
@@ -395,10 +399,15 @@ class Database:
 					f"Task '{task_name}' schema contains disallowed SQL: {stmt[:80]}"
 				)
 
+		t0 = time.time()
 		with self.lock:
 			try:
 				self.conn.executescript(schema_sql)
 				self.conn.commit()
+				logger.debug(
+					f"Schema for '{task_name}' ensured ({len(statements)} statements, "
+					f"{time.time() - t0:.3f}s)"
+				)
 			except sqlite3.Error as e:
 				logger.error(f"Schema creation failed for '{task_name}': {e}")
 				raise
@@ -409,11 +418,15 @@ class Database:
 			return
 		columns = ", ".join(rows[0].keys())
 		placeholders = ", ".join("?" * len(rows[0]))
+		t0 = time.time()
 		with self.lock:
 			self.conn.executemany(
 				f"INSERT OR REPLACE INTO {table_name} ({columns}) VALUES ({placeholders})",
 				[list(row.values()) for row in rows])
 			self.conn.commit()
+		elapsed = time.time() - t0
+		if elapsed > 0.5:
+			logger.debug(f"write_outputs: {len(rows)} rows to '{table_name}' in {elapsed:.2f}s")
 
 	def get_task_output(self, table_name, path):
 		"""Retrieve output for a single file from any output table."""
