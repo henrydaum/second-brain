@@ -103,11 +103,11 @@ def main():
 			if getattr(svc, 'loaded', False):
 				try:
 					t0 = time.time()
-					logger.info(f"Unloading service: {svc.model_name}")
+					logger.info(f"Unloading model: {svc.model_name}")
 					svc.unload()
 					logger.debug(f"Unloaded {svc.model_name} in {time.time() - t0:.2f}s")
 				except Exception as e:
-					logger.debug(f"Service unload error: {e}")
+					logger.debug(f"Model unload error: {e}")
 		logger.info("Saving config...")
 		config_manager.save(config)
 		logger.info("Done.")
