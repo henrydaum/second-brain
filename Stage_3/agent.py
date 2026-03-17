@@ -20,6 +20,9 @@ Usage:
 import json
 import logging
 import time
+from pathlib import Path
+
+from Stage_1.registry import get_modality
 
 logger = logging.getLogger("Agent")
 
@@ -62,12 +65,14 @@ class Agent:
         tools = self.tool_registry.get_all_schemas() or None
         self._tool_call_counts.clear()
 
+        compiled_image_paths = []
+
         for round_num in range(self.max_tool_calls):
             logger.debug(
                 f"LLM call (round {round_num + 1}), history size: {len(self.history)} messages"
             )
             t0 = time.time()
-            response = self.llm.chat_with_tools(messages, tools)
+            response = self.llm.chat_with_tools(messages, tools, image_paths=compiled_image_paths or None)
             logger.debug(f"LLM responded in {time.time() - t0:.2f}s")
 
             if not response.has_tool_calls:
@@ -87,7 +92,9 @@ class Agent:
             # Execute each tool call and append results
             for tc in response.tool_calls:
                 t_tool = time.time()
-                result_str = self._execute_tool_call(tc)
+                result_str, tc_images = self._execute_tool_call(tc)
+                if tc_images:
+                    compiled_image_paths.extend(tc_images)
                 logger.debug(f"Tool '{tc['name']}' completed in {time.time() - t_tool:.2f}s")
                 tool_msg = {"role": "tool", "tool_call_id": tc["id"], "content": result_str}
                 messages.append(tool_msg)
@@ -103,14 +110,14 @@ class Agent:
         """Clear conversation history."""
         self.history.clear()
 
-    def _execute_tool_call(self, tool_call: dict) -> str:
-        """Execute a single tool call via the registry, return result as string."""
+    def _execute_tool_call(self, tool_call: dict) -> tuple[str, list[str]]:
+        """Execute a single tool call via the registry, return (result_string, image_paths)."""
         name = tool_call["name"]
         try:
             args = json.loads(tool_call["arguments"])
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse arguments for tool '{name}': {e}")
-            return json.dumps({"error": f"Invalid arguments: {e}"})
+            return json.dumps({"error": f"Invalid arguments: {e}"}), []
 
         # Enforce per-tool call limit
         tool = self.tool_registry.tools.get(name)
@@ -118,7 +125,7 @@ class Agent:
             count = self._tool_call_counts.get(name, 0)
             if count >= tool.max_calls:
                 logger.warning(f"Tool '{name}' hit max calls ({tool.max_calls})")
-                return json.dumps({"error": f"Tool '{name}' has reached its call limit ({tool.max_calls}). Try a different approach."})
+                return json.dumps({"error": f"Tool '{name}' has reached its call limit ({tool.max_calls}). Try a different approach."}), []
 
         logger.info(f"Tool call: {name}({args})")
 
@@ -132,11 +139,16 @@ class Agent:
                 logger.debug(f"on_tool_result callback error: {e}")
 
         if result.success:
+            image_paths = []
+            if result.gui_display_paths:
+                image_paths = [p for p in result.gui_display_paths if get_modality(Path(p).suffix) == "image"]
+
             try:
-                return result.llm_summary or json.dumps(result.data, default=str)
+                result_str = result.llm_summary or json.dumps(result.data, default=str)
+                return result_str, image_paths
             except (TypeError, ValueError) as e:
                 logger.error(f"Failed to serialize result from '{name}': {e}")
-                return json.dumps({"error": f"Result serialization failed: {e}"})
+                return json.dumps({"error": f"Result serialization failed: {e}"}), []
         else:
             logger.warning(f"Tool '{name}' failed: {result.error}")
-            return json.dumps({"error": result.error})
+            return json.dumps({"error": result.error}), []
