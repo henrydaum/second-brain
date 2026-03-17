@@ -24,5 +24,6 @@
     "embed_use_cuda": true,
     "embed_chunk_size": 512,
     "embed_chunk_overlap": 50,
-    "max_query_rows": 25
+    "max_query_rows": 25,
+    "_root": "c:\\Users\\henry\\Documents\\My_Code\\The Data Refinery"
 }

@@ -40,6 +40,7 @@ class ToolResult:
     data: Any = None
     error: str = ""
     metadata: dict = field(default_factory=dict)
+    result_paths: list[str] = field(default_factory=list)  # File paths for GUI rendering
 
     @staticmethod
     def failed(error: str) -> "ToolResult":

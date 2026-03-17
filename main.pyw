@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 import signal
@@ -16,7 +17,7 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("Main")
- 
+
 import config_manager
 from Stage_2.database import Database
 from Stage_2.orchestrator import Orchestrator
@@ -116,7 +117,12 @@ def main():
 	signal.signal(signal.SIGINT, shutdown)
 	signal.signal(signal.SIGTERM, shutdown)
 
-	# --- 11. Start REPL on its own thread ---
+	# --- 10. Parse CLI args ---
+	parser = argparse.ArgumentParser(description="The Data Refinery")
+	parser.add_argument("--no-gui", action="store_true", help="Run without GUI (REPL only)")
+	args = parser.parse_args()
+
+	# --- 11. Start REPL on its own thread (always, for debugging) ---
 	repl_thread = threading.Thread(
 		target=run_repl,
 		args=(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT),
@@ -124,9 +130,73 @@ def main():
 	)
 	repl_thread.start()
 
-	# --- 12. Main thread just keeps the process alive ---
-	while not _shutdown.is_set():
-		_shutdown.wait(timeout=1.0)
+	if args.no_gui:
+		# --- 12a. No GUI: main thread waits ---
+		while not _shutdown.is_set():
+			_shutdown.wait(timeout=1.0)
+	else:
+		# --- 12b. GUI mode: pystray + Flet ---
+		from gui.app import run_gui
+
+		# Holds references for tray interaction
+		_page_ref = {"page": None, "close_app": None}
+
+		def on_page_ready(page, close_app):
+			_page_ref["page"] = page
+			_page_ref["close_app"] = close_app
+
+		# System tray icon via pystray (run_detached)
+		tray_icon = None
+		try:
+			import pystray
+			from PIL import Image as PILImage
+
+			# Load app icon
+			icon_img = PILImage.open(str(_ROOT / "icon.ico"))
+
+			def show_window(icon, item):
+				"""Bring Flet window back to front."""
+				p = _page_ref.get("page")
+				if p:
+					p.window.visible = True
+					p.update()
+
+			def quit_app(icon, item):
+				icon.stop()
+				close_fn = _page_ref.get("close_app")
+				if close_fn:
+					close_fn()
+				else:
+					shutdown()
+
+			tray_icon = pystray.Icon(
+				"DataRefinery",
+				icon_img,
+				"The Data Refinery",
+				menu=pystray.Menu(
+					pystray.MenuItem("Show Window", show_window, default=True),
+					pystray.MenuItem("Quit", quit_app),
+				),
+			)
+			tray_icon.run_detached()
+			logger.info("System tray icon active.")
+		except ImportError:
+			logger.warning("pystray not installed — no system tray icon.")
+		except Exception as e:
+			logger.warning(f"Failed to start tray icon: {e}")
+
+		# Flet on main thread (blocks until window closes)
+		try:
+			run_gui(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT,
+			        on_page_ready=on_page_ready)
+		finally:
+			if tray_icon:
+				try:
+					tray_icon.stop()
+				except Exception:
+					pass
+			if not _shutdown.is_set():
+				shutdown()
 
 
 if __name__ == "__main__":

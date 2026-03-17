@@ -25,15 +25,18 @@ logger = logging.getLogger("Agent")
 
 
 class Agent:
-    def __init__(self, llm, tool_registry, config, system_prompt: str = None):
+    def __init__(self, llm, tool_registry, config, system_prompt: str = None, on_tool_result=None):
         """
         Args:
             llm:            A BaseLLM instance that implements chat_with_tools().
             tool_registry:  A ToolRegistry instance with registered tools.
             system_prompt:  Optional system message. Uses a sensible default if None.
+            on_tool_result: Optional callback(tool_name: str, tool_result: ToolResult)
+                            fired after each tool execution, for GUI rendering.
         """
         self.llm = llm
         self.tool_registry = tool_registry
+        self.on_tool_result = on_tool_result
         self.system_prompt = system_prompt or (
             "You are a helpful assistant with access to a local file database. "
             "Use the available tools to search and retrieve information from the user's files. "
@@ -121,6 +124,12 @@ class Agent:
 
         result = self.tool_registry.call(name, **args)
         self._tool_call_counts[name] = self._tool_call_counts.get(name, 0) + 1
+
+        if self.on_tool_result:
+            try:
+                self.on_tool_result(name, result)
+            except Exception as e:
+                logger.debug(f"on_tool_result callback error: {e}")
 
         if result.success:
             try:
