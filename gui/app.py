@@ -155,21 +155,24 @@ def _system_message(text: str) -> ft.Container:
 
 def _user_bubble(text: str) -> ft.Container:
     """Right-aligned user chat bubble."""
-    return ft.Container(
+    bubble = ft.Container(
         content=ft.Text(text, size=13, color=ft.Colors.ON_PRIMARY),
         padding=ft.padding.symmetric(horizontal=14, vertical=10),
-        margin=ft.margin.only(left=80, bottom=4),
         border_radius=ft.border_radius.only(
             top_left=16, top_right=16, bottom_left=16, bottom_right=4,
         ),
         bgcolor=ft.Colors.PRIMARY,
+    )
+    return ft.Container(
+        content=bubble,
         alignment=ft.alignment.center_right,
+        margin=ft.margin.only(left=80, bottom=4),
     )
 
 
 def _assistant_bubble(text: str) -> ft.Container:
     """Left-aligned assistant chat bubble."""
-    return ft.Container(
+    bubble = ft.Container(
         content=ft.Markdown(
             value=text,
             selectable=True,
@@ -177,30 +180,44 @@ def _assistant_bubble(text: str) -> ft.Container:
         ) if any(m in text[:200] for m in ("# ", "**", "- ", "```", "| ")) else
         ft.Text(text, size=13, selectable=True),
         padding=ft.padding.symmetric(horizontal=14, vertical=10),
-        margin=ft.margin.only(right=80, bottom=4),
         border_radius=ft.border_radius.only(
             top_left=16, top_right=16, bottom_left=4, bottom_right=16,
         ),
         bgcolor=ft.Colors.SECONDARY_CONTAINER,
     )
+    return ft.Container(
+        content=bubble,
+        alignment=ft.alignment.center_left,
+        margin=ft.margin.only(right=80, bottom=4),
+    )
 
 
-def _tool_call_card(tool_name: str, success: bool) -> ft.Container:
-    """Small inline card showing a tool was called."""
+def _tool_call_card(tool_name: str, success: bool, content_control: ft.Control, initially_expanded: bool) -> ft.Container:
+    """Expansion tile showing a tool was called and its result."""
     icon = ft.Icons.CHECK_CIRCLE if success else ft.Icons.ERROR
     color = ft.Colors.PRIMARY if success else ft.Colors.ERROR
     return ft.Container(
-        content=ft.Row(
+        content=ft.ExpansionTile(
+            title=ft.Row(
+                controls=[
+                    ft.Icon(icon, size=14, color=color),
+                    ft.Text(f"Tool Call: {tool_name}", size=12, italic=True),
+                ],
+                spacing=6,
+            ),
+            initially_expanded=initially_expanded,
             controls=[
-                ft.Icon(icon, size=14, color=color),
-                ft.Text(f"Tool: {tool_name}", size=11, italic=True),
+                ft.Container(
+                    content=content_control,
+                    padding=ft.padding.only(left=16, right=16, bottom=8, top=8)
+                )
             ],
-            spacing=6,
+            dense=True
         ),
-        padding=ft.padding.symmetric(horizontal=10, vertical=4),
         margin=ft.margin.only(bottom=2),
-        border_radius=6,
-        border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
+        border_radius=0,
+        border=None,
+        bgcolor=None,
     )
 
 
@@ -320,14 +337,16 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # --- Tool result callback (called from agent thread) ---
         def on_tool_result(tool_name: str, result):
             """Insert a tool card + rendered paths into the message list."""
-            message_list.controls.append(_tool_call_card(tool_name, result.success))
             if result.gui_display_paths:
-                widget = render_paths(result.gui_display_paths, page, config)
-                message_list.controls.append(widget)
+                content = render_paths(result.gui_display_paths, page, config)
             elif result.llm_summary:
-                message_list.controls.append(_system_message(result.llm_summary))
+                content = _system_message(result.llm_summary)
             else:
-                message_list.controls.append(_system_message(_format_tool_result(result)))
+                content = _system_message(_format_tool_result(result))
+                
+            message_list.controls.append(
+                _tool_call_card(tool_name, result.success, content, initially_expanded=False)
+            )
             page.update()
 
         # =============================================================
@@ -507,14 +526,16 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 _close()
 
                 result = ctrl.call_tool(tool_name, kwargs)
-                message_list.controls.append(_tool_call_card(tool_name, result.success))
                 if result.gui_display_paths:
-                    widget = render_paths(result.gui_display_paths, page, config)
-                    message_list.controls.append(widget)
+                    content = render_paths(result.gui_display_paths, page, config)
                 elif result.llm_summary:
-                    message_list.controls.append(_system_message(result.llm_summary))
+                    content = _system_message(result.llm_summary)
                 else:
-                    message_list.controls.append(_system_message(_format_tool_result(result)))
+                    content = _system_message(_format_tool_result(result))
+                
+                message_list.controls.append(
+                    _tool_call_card(tool_name, result.success, content, initially_expanded=True)
+                )
                 page.update()
 
             # Fixed header controls (always visible)
