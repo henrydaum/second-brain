@@ -32,13 +32,12 @@ class ToolResult:
     What a tool returns.
 
     success:     Did it work?
+    error:       Error message if failed.
     data:        Rich result payload for GUI display (tables, lists, etc.).
                  Never sent to Claude directly.
-    error:       Error message if failed.
-    paths:       Flat list of file paths for GUI file-preview rendering.
-                 Never sent to Claude.
-    llm_summary: Text sent to Claude. All tools must populate this.
+    llm_summary: Text sent to the LLM. All tools must populate this.
                  Standardized human-readable format regardless of tool type.
+    gui_display_paths:       Flat list of file paths for GUI file-preview rendering in Flet. Never sent to the LLM, unless the file path is an image, since the LLM can receive those.
     """
     success: bool = True
     error: str = ""

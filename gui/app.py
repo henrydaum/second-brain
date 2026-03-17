@@ -324,6 +324,10 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             if result.gui_display_paths:
                 widget = render_paths(result.gui_display_paths, page, config)
                 message_list.controls.append(widget)
+            elif result.llm_summary:
+                message_list.controls.append(_system_message(result.llm_summary))
+            else:
+                message_list.controls.append(_system_message(_format_tool_result(result)))
             page.update()
 
         # =============================================================
@@ -504,10 +508,13 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
                 result = ctrl.call_tool(tool_name, kwargs)
                 message_list.controls.append(_tool_call_card(tool_name, result.success))
-                message_list.controls.append(_system_message(_format_tool_result(result)))
                 if result.gui_display_paths:
                     widget = render_paths(result.gui_display_paths, page, config)
                     message_list.controls.append(widget)
+                elif result.llm_summary:
+                    message_list.controls.append(_system_message(result.llm_summary))
+                else:
+                    message_list.controls.append(_system_message(_format_tool_result(result)))
                 page.update()
 
             # Fixed header controls (always visible)

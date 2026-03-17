@@ -81,11 +81,14 @@ def render_text(path: str, output, page: ft.Page) -> ft.Control:
         controls=[
             _file_header(path),
             ft.Container(
-                content=content,
+                content=ft.Column(
+                    controls=[content],
+                    scroll=ft.ScrollMode.AUTO,
+                ),
                 padding=8,
                 border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
                 border_radius=4,
-                max_height=300,
+                height=300,
             ),
         ],
         spacing=4,
@@ -124,10 +127,12 @@ def render_image(path: str, output, page: ft.Page) -> ft.Control:
     return ft.Column(
         controls=[
             _file_header(path),
-            ft.Row(
-                controls=thumbnails,
-                wrap=True,
-                spacing=8,
+            ft.Container(
+                content=ft.Column(
+                    controls=[ft.Row(controls=thumbnails, wrap=True, spacing=8)],
+                    scroll=ft.ScrollMode.AUTO,
+                ),
+                height=280,
             ),
         ],
         spacing=4,
@@ -211,14 +216,17 @@ def render_tabular(path: str, output, page: ft.Page) -> ft.Control:
 
         controls.append(
             ft.Container(
-                content=ft.DataTable(
-                    columns=columns,
-                    rows=rows,
-                    column_spacing=16,
-                    data_row_max_height=32,
-                    horizontal_lines=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT),
+                content=ft.Column(
+                    controls=[ft.DataTable(
+                        columns=columns,
+                        rows=rows,
+                        column_spacing=16,
+                        data_row_max_height=32,
+                        horizontal_lines=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT),
+                    )],
+                    scroll=ft.ScrollMode.AUTO,
                 ),
-                max_height=400,
+                height=400,
             )
         )
 
@@ -346,5 +354,5 @@ def render_paths(paths: list[str], page: ft.Page, config: dict = None, services:
         padding=8,
         border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
         border_radius=8,
-        bgcolor=ft.Colors.SURFACE_VARIANT,
+        bgcolor=ft.Colors.SURFACE,
     )
