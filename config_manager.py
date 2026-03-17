@@ -12,32 +12,10 @@ Loads and saves config as a plain dict.
 """
 
 
-DEFAULTS = {
-    # Basic config
-    "sync_directories": ["C:\\Users\\henry\\Documents\\My_Code\\Test Database"],
-    "db_path": "database.db",
-    # Whitelist/blacklist files
-    "ignored_extensions": [],
-    "ignored_folders": ["node_modules", "__pycache__", ".git", ".venv", "venv"],
-    "skip_hidden_folders": True,
-    # Threading
-    "max_workers": 4,
-    "poll_interval": 1.0,
-    "task_timeout": 300,
-    "reprocess_interval": 300,
-    # LLM
-    "llm_model_name": "gpt-5-mini",
-    "llm_endpoint": "",
-    "llm_api_key": "OPENAI_API_KEY",
-    # Embedding
-    "embed_text_model_name": "BAAI/bge-m3",
-    "embed_image_model_name": "clip-ViT-L-14",
-    "embed_use_cuda": True,
-    "embed_chunk_size": 512,
-    "embed_chunk_overlap": 50,
-    # REPL
-    "max_query_rows": 25,
-}
+from config_data import SETTINGS_DATA
+
+# Derive defaults from the single source of truth in config_data.py
+DEFAULTS = {name: default for (_, name, _, default, _) in SETTINGS_DATA}
 
 
 def load(path: str = "config.json") -> dict:

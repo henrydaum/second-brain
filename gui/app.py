@@ -609,6 +609,8 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             CommandEntry("clear",    "Clear chat conversation history",       handler=_clear_handler),
             CommandEntry("quit",     "Shutdown",                              handler=_quit_handler),
             CommandEntry("exit",     "Shutdown",                              handler=_quit_handler),
+            CommandEntry("config",   "Open settings panel",                   handler=lambda _: _show_settings()),
+            CommandEntry("settings", "Open settings panel",                   handler=lambda _: _show_settings()),
         ]:
             registry.register(entry)
 
@@ -918,22 +920,9 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             visible=False,
         )
 
-        gear_button = ft.IconButton(
-            icon=ft.Icons.SETTINGS,
-            icon_size=15,
-            width=26,
-            height=26,
-            tooltip="Settings",
-            on_click=lambda e: _show_settings(),
-            style=ft.ButtonStyle(
-                shape=ft.CircleBorder(),
-                padding=ft.padding.all(0)
-            )
-        )
-
         status_row = ft.Container(
             content=ft.Row(
-                controls=[latest_log_text, gear_button],
+                controls=[latest_log_text],
                 spacing=4,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
@@ -1005,65 +994,53 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # --- Settings overlay ---
         def _show_settings():
             import config_manager as cm
-
-            SECTIONS = {
-                "Directories": ["sync_directories", "db_path"],
-                "File Filtering": ["ignored_extensions", "ignored_folders", "skip_hidden_folders"],
-                "Processing": ["max_workers", "poll_interval", "task_timeout", "reprocess_interval"],
-                "LLM": ["llm_model_name", "llm_endpoint", "llm_api_key"],
-                "Embedding": ["embed_text_model_name", "embed_image_model_name",
-                              "embed_use_cuda", "embed_chunk_size", "embed_chunk_overlap"],
-                "Display": ["max_query_rows"],
-            }
+            from config_data import SETTINGS_DATA
 
             fields = {}
             field_rows = []
 
-            for section_name, keys in SECTIONS.items():
-                field_rows.append(ft.Text(section_name, size=14, weight=ft.FontWeight.BOLD))
-                field_rows.append(ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT))
-                field_rows.append(ft.Container(height=4))
+            for title, name, description, default, type_info in SETTINGS_DATA:
+                if name not in config:
+                    continue
+                val = config[name]
+                control_type = type_info.get("type", "text")
 
-                for key in keys:
-                    if key not in config:
-                        continue
-                    val = config[key]
-                    default = cm.DEFAULTS.get(key)
-
-                    if isinstance(default, bool):
-                        control = ft.Checkbox(value=bool(val))
-                        fields[key] = {"control": control, "type": "boolean"}
-                    elif isinstance(default, int):
-                        control = ft.TextField(
-                            value=str(val), dense=True,
-                            input_filter=ft.NumbersOnlyInputFilter(),
-                        )
-                        fields[key] = {"control": control, "type": "integer"}
-                    elif isinstance(default, float):
+                if control_type == "bool":
+                    control = ft.Checkbox(value=bool(val))
+                elif control_type == "slider":
+                    if type_info.get("is_float"):
                         control = ft.TextField(
                             value=str(val), dense=True,
                             input_filter=ft.InputFilter(regex_string=r"[0-9.\-]"),
                         )
-                        fields[key] = {"control": control, "type": "number"}
-                    elif isinstance(default, list):
-                        control = ft.TextField(
-                            value=json.dumps(val), dense=True,
-                            multiline=True, min_lines=1,
-                            hint_text="JSON array",
-                        )
-                        fields[key] = {"control": control, "type": "json_list"}
                     else:
-                        control = ft.TextField(value=str(val), dense=True)
-                        fields[key] = {"control": control, "type": "string"}
+                        control = ft.TextField(
+                            value=str(val), dense=True,
+                            input_filter=ft.NumbersOnlyInputFilter(),
+                        )
+                elif control_type == "json_list":
+                    control = ft.TextField(
+                        value=json.dumps(val), dense=True,
+                        multiline=True, min_lines=1,
+                        hint_text="JSON array",
+                    )
+                else:  # "text"
+                    control = ft.TextField(value=str(val), dense=True)
 
-                    label = key.replace("_", " ").title()
-                    field_rows.append(ft.Container(
-                        content=ft.Column(controls=[
-                            ft.Text(label, size=13, weight=ft.FontWeight.W_500),
-                            control,
-                        ], spacing=2),
-                        padding=ft.padding.only(bottom=10, left=20, right=20),
-                    ))
+                fields[name] = {
+                    "control": control,
+                    "type": control_type,
+                    "is_float": type_info.get("is_float", False),
+                }
+
+                field_rows.append(ft.Container(
+                    content=ft.Column(controls=[
+                        ft.Text(title, size=13, weight=ft.FontWeight.W_500),
+                        ft.Text(description, size=11, color=ft.Colors.ON_SURFACE_VARIANT),
+                        control,
+                    ], spacing=2),
+                    padding=ft.padding.only(bottom=10, left=20, right=20),
+                ))
 
             def _close(e=None):
                 settings_overlay.visible = False
@@ -1074,12 +1051,10 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     raw = info["control"].value
                     t = info["type"]
                     try:
-                        if t == "boolean":
+                        if t == "bool":
                             config[key] = bool(raw)
-                        elif t == "integer":
-                            config[key] = int(raw)
-                        elif t == "number":
-                            config[key] = float(raw)
+                        elif t == "slider":
+                            config[key] = float(raw) if info["is_float"] else int(raw)
                         elif t == "json_list":
                             config[key] = json.loads(raw)
                         else:
