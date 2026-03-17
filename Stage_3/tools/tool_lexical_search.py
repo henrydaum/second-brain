@@ -41,8 +41,8 @@ class LexicalSearch(BaseTool):
             },
             "top_k": {
                 "type": "integer",
-                "description": "Maximum number of results to return. Default 20.",
-                "default": 20,
+                "description": "Maximum number of results to return. Default 5.",
+                "default": 5,
             },
             "sources": {
                 "type": "array",
@@ -64,7 +64,7 @@ class LexicalSearch(BaseTool):
 
     def run(self, context, **kwargs):
         query = kwargs.get("query", "").strip()
-        top_k = kwargs.get("top_k", 20)
+        top_k = kwargs.get("top_k", 5)
         sources = kwargs.get("sources", None)
         folder = kwargs.get("folder", None)
 

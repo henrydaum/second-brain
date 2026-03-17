@@ -43,8 +43,8 @@ class HybridSearch(BaseTool):
             },
             "top_k": {
                 "type": "integer",
-                "description": "Maximum results per modality in the final output. Default 10.",
-                "default": 10,
+                "description": "Maximum results per modality in the final output. Default 5.",
+                "default": 5,
             },
             "folder": {
                 "type": "string",
@@ -73,7 +73,7 @@ class HybridSearch(BaseTool):
 
     def run(self, context, **kwargs):
         query = kwargs.get("query", "").strip()
-        top_k = kwargs.get("top_k", 10)
+        top_k = kwargs.get("top_k", 5)
         folder = kwargs.get("folder", None)
         sources = kwargs.get("sources", None)
         streams = kwargs.get("streams", None)

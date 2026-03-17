@@ -229,6 +229,7 @@ class Controller:
     # =================================================================
 
     def help(self) -> list[dict]:
+        """Command list for the REPL. The GUI generates its own help from the command registry."""
         return [
             {"command": "services", "description": "List services and status"},
             {"command": "load <n>", "description": "Load a service"},
@@ -247,7 +248,6 @@ class Controller:
             {"command": "disable <n>", "description": "Disable a tool from agent use"},
             {"command": "call <tool> <json>", "description": "Call a tool directly"},
             {"command": "", "description": ""},
-            {"command": "chat", "description": "Enter agent chat mode (requires llm service)"},
             {"command": "reload", "description": "Hot-reload tasks and tools"},
             {"command": "", "description": ""},
             {"command": "stats", "description": "System overview"},

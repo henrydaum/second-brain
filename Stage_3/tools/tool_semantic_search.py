@@ -92,8 +92,8 @@ class SemanticSearch(BaseTool):
             },
             "top_k": {
                 "type": "integer",
-                "description": "Maximum results per stream. Default 20.",
-                "default": 20,
+                "description": "Maximum results per stream. Default 5.",
+                "default": 5,
             },
             "streams": {
                 "type": "array",
@@ -114,7 +114,7 @@ class SemanticSearch(BaseTool):
 
     def run(self, context, **kwargs):
         query = kwargs.get("query", "").strip()
-        top_k = kwargs.get("top_k", 20)
+        top_k = kwargs.get("top_k", 5)
         requested_streams = kwargs.get("streams", None)
         folder = kwargs.get("folder", None)
 
