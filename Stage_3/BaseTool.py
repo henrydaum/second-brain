@@ -31,16 +31,20 @@ class ToolResult:
     """
     What a tool returns.
 
-    success:  Did it work?
-    data:     The actual result — a dict, list, whatever the tool produces.
-    error:    Error message if failed.
-    metadata: Optional extra info (timing, result count, sources used, etc.)
+    success:     Did it work?
+    data:        Rich result payload for GUI display (tables, lists, etc.).
+                 Never sent to Claude directly.
+    error:       Error message if failed.
+    paths:       Flat list of file paths for GUI file-preview rendering.
+                 Never sent to Claude.
+    llm_summary: Text sent to Claude. All tools must populate this.
+                 Standardized human-readable format regardless of tool type.
     """
     success: bool = True
-    data: Any = None
     error: str = ""
-    metadata: dict = field(default_factory=dict)
-    result_paths: list[str] = field(default_factory=list)  # File paths for GUI rendering
+    data: Any = None
+    llm_summary: str = ""  # What the LLM will see as the tool result
+    gui_display_paths: list[str] = field(default_factory=list)  # What the GUI will render as file previews
 
     @staticmethod
     def failed(error: str) -> "ToolResult":

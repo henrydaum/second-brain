@@ -15,6 +15,7 @@ import time
 from collections import defaultdict
 
 from Stage_3.BaseTool import BaseTool, ToolResult
+from Stage_3.tools.tool_lexical_search import _search_summary
 
 logger = logging.getLogger("HybridSearch")
 
@@ -106,10 +107,7 @@ class HybridSearch(BaseTool):
         all_raw = lex_data + sem_data
 
         if not all_raw:
-            return ToolResult(
-                data={},
-                metadata={"query": query, "result_count": 0},
-            )
+            return ToolResult(data={}, llm_summary=f'No results found for "{query}".')
 
         # --- 2. Group by stream ---
         by_stream = defaultdict(list)
@@ -142,14 +140,16 @@ class HybridSearch(BaseTool):
             f"{len(merged_docs)} unique docs, {total} returned"
         )
 
+        flat_results = sorted(
+            [doc for docs in final.values() for doc in docs],
+            key=lambda d: d["score"],
+            reverse=True,
+        )
+        paths = [d["path"] for d in flat_results]
         return ToolResult(
             data=final,
-            metadata={
-                "query": query,
-                "streams_fused": list(by_stream.keys()),
-                "unique_docs": len(merged_docs),
-                "result_count": total,
-            },
+            llm_summary=_search_summary(query, flat_results),
+            gui_display_paths=paths,
         )
 
 

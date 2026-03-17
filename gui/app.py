@@ -321,8 +321,8 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         def on_tool_result(tool_name: str, result):
             """Insert a tool card + rendered paths into the message list."""
             message_list.controls.append(_tool_call_card(tool_name, result.success))
-            if result.result_paths:
-                widget = render_paths(result.result_paths, page, config)
+            if result.gui_display_paths:
+                widget = render_paths(result.gui_display_paths, page, config)
                 message_list.controls.append(widget)
             page.update()
 
@@ -505,8 +505,8 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 result = ctrl.call_tool(tool_name, kwargs)
                 message_list.controls.append(_tool_call_card(tool_name, result.success))
                 message_list.controls.append(_system_message(_format_tool_result(result)))
-                if result.result_paths:
-                    widget = render_paths(result.result_paths, page, config)
+                if result.gui_display_paths:
+                    widget = render_paths(result.gui_display_paths, page, config)
                     message_list.controls.append(widget)
                 page.update()
 

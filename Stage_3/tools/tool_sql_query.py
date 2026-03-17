@@ -57,12 +57,30 @@ class SQLQuery(BaseTool):
             logger.error(f"Query failed: {e}")
             return ToolResult.failed(str(e))
 
+        columns = result["columns"]
+        rows = result["rows"]
+        row_count = len(rows)
+        truncated = result["truncated"]
+
         return ToolResult(
             data={
-                "columns": result["columns"],
-                "rows": result["rows"],
-                "row_count": len(result["rows"]),
-                "truncated": result["truncated"],
+                "columns": columns,
+                "rows": rows,
+                "row_count": row_count,
+                "truncated": truncated,
             },
-            metadata={"sql": sql},
+            llm_summary=_sql_summary(sql, columns, rows, row_count, truncated),
         )
+
+
+def _sql_summary(sql: str, columns: list, rows: list, row_count: int, truncated: bool) -> str:
+    """Format a SQL result as a readable summary for the LLM."""
+    trunc_note = " (truncated)" if truncated else ""
+    header = f"SQL: {sql}\n\nReturned {row_count} row(s){trunc_note}."
+    if not rows:
+        return header
+    col_str = " | ".join(str(c) for c in columns)
+    sep = " | ".join("-" * max(len(str(c)), 3) for c in columns)
+    row_lines = [" | ".join(str(v) for v in row) for row in rows]
+    table = "\n".join([col_str, sep] + row_lines)
+    return f"{header}\n\n{table}"

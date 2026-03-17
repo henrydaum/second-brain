@@ -59,4 +59,4 @@ class ReadSourceCode(BaseTool):
         except Exception as e:
             return ToolResult.failed(f"Failed to read {path}: {e}")
 
-        return ToolResult(data=content)
+        return ToolResult(data=content, llm_summary=content, gui_display_paths=[str(path)])

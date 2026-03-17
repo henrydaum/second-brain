@@ -115,10 +115,7 @@ class LexicalSearch(BaseTool):
             return ToolResult.failed(f"Search failed: {e}")
 
         if not rows:
-            return ToolResult(
-                data=[],
-                metadata={"query": query, "fts_query": fts_query, "result_count": 0},
-            )
+            return ToolResult(data=[], llm_summary=f'No results found for "{query}".')
 
         # --- 4. Look up modalities for result paths ---
         paths = list({row[0] for row in rows})
@@ -137,13 +134,11 @@ class LexicalSearch(BaseTool):
                 chunk_index=int(chunk_index),
             ).to_dict())
 
+        paths = list({r["path"] for r in results})
         return ToolResult(
             data=results,
-            metadata={
-                "query": query,
-                "fts_query": fts_query,
-                "result_count": len(results),
-            },
+            llm_summary=_search_summary(query, results),
+            gui_display_paths=paths,
         )
 
     # --- Helpers ---
@@ -181,3 +176,14 @@ class LexicalSearch(BaseTool):
         except Exception as e:
             logger.error(f"Modality lookup failed: {e}")
             return {}
+
+
+def _search_summary(query: str, results: list) -> str:
+    """Build the standardized LLM summary string for search results."""
+    lines = [f'Found {len(results)} result(s) for "{query}":']
+    for r in results[:5]:
+        snippet = (r.get("content") or "").replace("\n", " ")[:120]
+        lines.append(f'- {r["path"]} (score {r["score"]:.2f}): "{snippet}..."')
+    if len(results) > 5:
+        lines.append(f"[+{len(results) - 5} more]")
+    return "\n".join(lines)

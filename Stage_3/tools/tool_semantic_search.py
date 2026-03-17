@@ -19,6 +19,7 @@ import numpy as np
 
 from Stage_3.BaseTool import BaseTool, ToolResult
 from Stage_3.SearchResult import SearchResult
+from Stage_3.tools.tool_lexical_search import _search_summary
 
 logger = logging.getLogger("SemanticSearch")
 
@@ -147,14 +148,11 @@ class SemanticSearch(BaseTool):
                 streams_searched.append(stream_name)
                 all_results.extend(stream_results)
 
+        paths = list({r["path"] for r in all_results})
         return ToolResult(
             data=all_results,
-            metadata={
-                "query": query,
-                "streams_searched": streams_searched,
-                "streams_skipped": streams_skipped,
-                "result_count": len(all_results),
-            },
+            llm_summary=_search_summary(query, all_results),
+            gui_display_paths=paths,
         )
 
     def _search_stream(self, context, stream_name, query, top_k, folder):

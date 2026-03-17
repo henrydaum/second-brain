@@ -133,7 +133,7 @@ class Agent:
 
         if result.success:
             try:
-                return json.dumps(result.data, default=str)
+                return result.llm_summary or json.dumps(result.data, default=str)
             except (TypeError, ValueError) as e:
                 logger.error(f"Failed to serialize result from '{name}': {e}")
                 return json.dumps({"error": f"Result serialization failed: {e}"})
