@@ -9,7 +9,8 @@
       "Bash(python -c \"import flet as ft; print\\([m for m in dir\\(ft.Page\\) if ''run'' in m.lower\\(\\) or ''thread'' in m.lower\\(\\)]\\)\")",
       "Bash(python -c \"import flet as ft; help\\(ft.Page.run_thread\\)\")",
       "Bash(python -c \"import py_compile; py_compile.compile\\(''gui/app.py'', doraise=True\\); py_compile.compile\\(''main.pyw'', doraise=True\\); print\\(''OK''\\)\")",
-      "Bash(python -c \":*)"
+      "Bash(python -c \":*)",
+      "Bash(find c:UsershenryDocumentsMy_CodeSecondBrain -maxdepth 2 -name *Frontend* -o -name *frontend* -o -name *Gui* -o -name *gui*)"
     ]
   }
 }
