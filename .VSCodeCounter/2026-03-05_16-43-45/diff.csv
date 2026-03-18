@@ -1,9 +1,0 @@
-"filename", "language", "Python", "comment", "blank", "total"
-"c:\Users\henry\Documents\My_Code\The Data Refinery\Stage_1\registry.py", "Python", -38, -4, -12, -54
-"c:\Users\henry\Documents\My_Code\The Data Refinery\Stage_2\orchestrator.py", "Python", -10, -8, -1, -19
-"c:\Users\henry\Documents\My_Code\The Data Refinery\Stage_3\agent.py", "Python", 59, 36, 18, 113
-"c:\Users\henry\Documents\My_Code\The Data Refinery\config.py", "Python", 8, -3, -7, -2
-"c:\Users\henry\Documents\My_Code\The Data Refinery\main.pyw", "Python", 1, 0, 0, 1
-"c:\Users\henry\Documents\My_Code\The Data Refinery\services\llmService.py", "Python", 50, 41, 27, 118
-"c:\Users\henry\Documents\My_Code\The Data Refinery\services\manager.py", "Python", -144, -89, -32, -265
-"Total", "-", -74, -27, -7, -108
