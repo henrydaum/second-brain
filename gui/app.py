@@ -4,6 +4,13 @@ Flet GUI for the Data Refinery.
 A unified chat-first interface. Plain text goes to the LLM agent;
 slash-prefixed commands (e.g. /services, /load llm) control the system.
 An autocomplete popup appears when typing /.
+
+Organisation
+------------
+The file has four top-level sections — REPL Formatters, Message Widgets,
+Log Handler, and Main App.  Nearly all GUI state lives inside the
+``run_gui`` → ``main_view`` closure so that inner functions can freely
+read and mutate shared widgets without passing dozens of arguments.
 """
 
 import collections
@@ -22,17 +29,23 @@ from gui.renderers import render_paths
 logger = logging.getLogger("GUI")
 
 
-# ===================================================================
-# REPL FORMATTERS (reused from repl.py logic)
-# ===================================================================
+# =====================================================================
+# REPL FORMATTERS -- Plain-text formatting for command output
+# =====================================================================
 
 def _truncate_cell(text: str, max_len: int = 60) -> str:
+    """Truncate *text* to *max_len*, appending '...' if clipped."""
     if len(text) <= max_len:
         return text
     return text[:max_len - 3] + "..."
 
 
 def _format_tool_result(result) -> str:
+    """Format a ToolResult for monospace display.
+
+    Tabular data (columns + rows) is rendered as aligned columns;
+    everything else falls back to pretty-printed JSON.
+    """
     if not result.success:
         return f"Error: {result.error}"
     data = result.data
@@ -61,6 +74,7 @@ def _format_tool_result(result) -> str:
 
 
 def _format_services(services: list[dict]) -> str:
+    """Format the service list showing name, loaded/unloaded status, and model."""
     if not services:
         return "No services registered."
     lines = []
@@ -71,6 +85,7 @@ def _format_services(services: list[dict]) -> str:
 
 
 def _format_tasks(tasks: list[dict]) -> str:
+    """Format task list with queue counts (Pending/Processing/Done/Failed)."""
     if not tasks:
         return "No tasks registered."
     lines = []
@@ -87,6 +102,7 @@ def _format_tasks(tasks: list[dict]) -> str:
 
 
 def _format_stats(stats: dict) -> str:
+    """Format system overview: file counts by modality + task queue summaries."""
     lines = ["Files by modality:"]
     files = stats.get("files", {})
     if files:
@@ -112,6 +128,7 @@ def _format_stats(stats: dict) -> str:
 
 
 def _format_tools(tools: list[dict]) -> str:
+    """Format tool list with enabled/disabled status, descriptions, and parameters."""
     if not tools:
         return "No tools registered."
     lines = []
@@ -133,14 +150,15 @@ def _format_tools(tools: list[dict]) -> str:
 
 
 def _format_help(commands: list[dict]) -> str:
+    """Format the help output as an aligned two-column list."""
     return "Commands:\n" + "\n".join(
         f"  {c['command']:<25} {c['description']}" for c in commands
     )
 
 
-# ===================================================================
-# MESSAGE WIDGETS
-# ===================================================================
+# =====================================================================
+# MESSAGE WIDGETS -- Flet container factories for chat bubbles & cards
+# =====================================================================
 
 def _system_message(text: str) -> ft.Container:
     """A monospace text block for command output."""
@@ -171,7 +189,9 @@ def _user_bubble(text: str) -> ft.Container:
 
 
 def _assistant_bubble(text: str) -> ft.Container:
-    """Left-aligned assistant chat bubble."""
+    """Left-aligned assistant chat bubble (auto-detects Markdown)."""
+    # Heuristic: if the first 200 chars contain markdown indicators,
+    # render as Markdown; otherwise use plain Text for speed.
     bubble = ft.Container(
         content=ft.Markdown(
             value=text,
@@ -201,7 +221,7 @@ def _tool_call_card(tool_name: str, success: bool, content_control: ft.Control, 
             title=ft.Row(
                 controls=[
                     ft.Icon(icon, size=14, color=color),
-                    ft.Text(f"Tool Call: {tool_name}", size=12, italic=True),
+                    ft.Text(f"Tool Call: {tool_name}", size=14),
                 ],
                 spacing=6,
             ),
@@ -221,17 +241,21 @@ def _tool_call_card(tool_name: str, success: bool, content_control: ft.Control, 
     )
 
 
-# ===================================================================
-# LOG HANDLER (captures log records for the GUI)
-# ===================================================================
+# =====================================================================
+# LOG HANDLER -- Captures log records into a bounded deque for GUI display
+# =====================================================================
 
 class GuiLogHandler(logging.Handler):
+    """Thread-safe handler that stores formatted records and notifies the GUI."""
+
     def __init__(self, max_records=500):
+        """Initialize with a bounded deque of *max_records* and no callback."""
         super().__init__()
         self._records = collections.deque(maxlen=max_records)
         self._on_record = None
 
     def set_callback(self, fn):
+        """Register *fn(formatted_str, record)* to be invoked on each emit."""
         self._on_record = fn
 
     @property
@@ -239,6 +263,7 @@ class GuiLogHandler(logging.Handler):
         return list(self._records)
 
     def emit(self, record):
+        """Store the formatted record and notify the callback if set."""
         formatted = self.format(record)
         self._records.append((formatted, record))
         if self._on_record:
@@ -248,9 +273,9 @@ class GuiLogHandler(logging.Handler):
                 pass
 
 
-# ===================================================================
-# MAIN APP
-# ===================================================================
+# =====================================================================
+# MAIN APP -- Entry point; run_gui() blocks until the window closes
+# =====================================================================
 
 def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             tool_registry, services, config, root_dir: Path,
@@ -263,6 +288,34 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
     """
 
     def main_view(page: ft.Page):
+        """Flet page builder -- all GUI state lives as closures within this function.
+
+        Sub-sections (approximate line numbers):
+        ─────────────────────────────────────────
+        Page Setup & Window Config
+        Close & Cleanup Handlers
+        Log Handler Setup
+        State & Message List
+        Agent Lifecycle
+        Tool Result Callback
+        Command Registry
+          ├ Slash command handlers
+          ├ Dynamic tool form overlay
+          └ Command registration table
+        Autocomplete Overlay
+        Input Field & Send Button
+        Chat Handling
+        Input Handler
+        Layout (input bar, status bar, log dialog)
+        Log Streaming
+        Settings Overlay
+        Final Assembly
+        Startup (auto-load LLM)
+        """
+
+        # -----------------------------------------------------------------
+        # PAGE SETUP & WINDOW CONFIG
+        # -----------------------------------------------------------------
         page.title = "The Data Refinery"
         page.theme_mode = ft.ThemeMode.DARK
         page.window.width = 800
@@ -272,16 +325,20 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         page.padding = 0
         page.window.center()
 
-        # --- Minimize to tray on close (X button) ---
+        # Minimize to tray on close (X button) instead of quitting
         page.window.prevent_close = True
 
         def on_window_event(e):
+            """Intercept the close event and hide the window instead."""
             if e.data == "close":
                 page.window.visible = False
                 page.update()
 
         page.window.on_event = on_window_event
 
+        # -----------------------------------------------------------------
+        # CLOSE & CLEANUP
+        # -----------------------------------------------------------------
         def close_app():
             """Actually close the window and exit Flet's event loop."""
             logging.getLogger().removeHandler(gui_handler)
@@ -293,7 +350,9 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         if on_page_ready:
             on_page_ready(page, close_app)
 
-        # --- Log handler (capture log records for the status bar) ---
+        # -----------------------------------------------------------------
+        # LOG HANDLER SETUP
+        # -----------------------------------------------------------------
         gui_handler = GuiLogHandler()
         gui_handler.setFormatter(logging.Formatter(
             "%(asctime)s | %(name)-12s | %(levelname)-5s | %(message)s",
@@ -301,11 +360,14 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         ))
         logging.getLogger().addHandler(gui_handler)
 
-        # --- State ---
+        # -----------------------------------------------------------------
+        # STATE & MESSAGE LIST
+        # -----------------------------------------------------------------
+        # Mutable containers (not bare variables) so that inner closures
+        # can mutate shared state — a Python scoping requirement.
         agent_ref = {"agent": None}
         processing = {"value": False}
 
-        # --- Message list ---
         message_list = ft.ListView(
             expand=True,
             spacing=4,
@@ -313,14 +375,15 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             auto_scroll=True,
         )
 
-        # Welcome message
         message_list.controls.append(_system_message(
             "The Data Refinery\n"
             "Type a message to chat, or / for commands.\n"
             "Loading LLM..."
         ))
 
-        # --- Agent lifecycle ---
+        # -----------------------------------------------------------------
+        # AGENT LIFECYCLE
+        # -----------------------------------------------------------------
         def create_agent():
             """Build or rebuild the Agent from the currently loaded LLM."""
             llm = services.get("llm")
@@ -334,7 +397,9 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     on_tool_result=on_tool_result,
                 )
 
-        # --- Tool result callback (called from agent thread) ---
+        # -----------------------------------------------------------------
+        # TOOL RESULT CALLBACK (called from agent thread)
+        # -----------------------------------------------------------------
         def on_tool_result(tool_name: str, result):
             """Insert a tool card + rendered paths into the message list."""
             if result.gui_display_paths:
@@ -343,18 +408,21 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 content = _system_message(result.llm_summary)
             else:
                 content = _system_message(_format_tool_result(result))
-                
+
             message_list.controls.append(
                 _tool_call_card(tool_name, result.success, content, initially_expanded=(tool_name == "render_files"))
             )
             page.update()
 
         # =============================================================
-        # COMMAND REGISTRY
+        # COMMAND REGISTRY -- Slash-command handlers and registration
         # =============================================================
         registry = CommandRegistry()
 
+        # --- Slash command handlers ---
+
         def _help_handler(_arg):
+            """Build the /help output from the command registry."""
             lines = ["Commands:"]
             for cmd in registry.all_commands():
                 hint = f" {cmd.arg_hint}" if cmd.arg_hint else ""
@@ -362,16 +430,17 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return "\n".join(lines)
 
         def _load_handler(arg):
+            """Handle /load <service>. Side-effect: creates agent when LLM loads."""
             if not arg:
                 return "Usage: /load <service_name>"
             result = ctrl.load_service(arg)
-            # Side-effect: create agent when LLM loads successfully
             if arg == "llm" and services.get("llm") and services["llm"].loaded:
                 create_agent()
                 return result + "\nAgent ready — you can chat now."
             return result
 
         def _unload_handler(arg):
+            """Handle /unload <service>. Destroys agent if LLM is unloaded."""
             if not arg:
                 return "Usage: /unload <service_name>"
             result = ctrl.unload_service(arg)
@@ -380,13 +449,20 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return result
 
         def _clear_handler(_arg):
+            """Handle /clear: reset the agent's conversation history."""
             if agent_ref["agent"]:
                 agent_ref["agent"].reset()
             return "(conversation history cleared)"
 
         # --- Dynamic tool form overlay ---
+
         def _show_tool_form(tool_name: str, tool):
-            """Build and show a glassmorphism overlay with dynamic form fields."""
+            """Build and show a glassmorphism overlay with dynamic form fields.
+
+            Each parameter in the tool's JSON schema is mapped to an
+            appropriate Flet widget (Dropdown for enums, Checkbox for
+            booleans, TextField variants for numbers/strings/arrays/objects).
+            """
             properties = tool.parameters.get("properties", {})
             required_set = set(tool.parameters.get("required", []))
 
@@ -402,7 +478,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 is_required = param_name in required_set
                 title_text = f"{param_name} *" if is_required else param_name
 
-                # 1. Create the input widget
+                # 1. Create the input widget based on JSON schema type
                 if enum_values:
                     control = ft.Dropdown(
                         options=[ft.dropdown.Option(str(v)) for v in enum_values],
@@ -475,10 +551,12 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 )
 
             def _close(e=None):
+                """Hide the tool form overlay."""
                 overlay.visible = False
                 page.update()
 
             def _execute(e):
+                """Validate form fields, call the tool, and display results."""
                 kwargs = {}
                 has_error = False
 
@@ -535,7 +613,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     content = _system_message(result.llm_summary)
                 else:
                     content = _system_message(_format_tool_result(result))
-                
+
                 message_list.controls.append(
                     _tool_call_card(tool_name, result.success, content, initially_expanded=True)
                 )
@@ -600,6 +678,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             page.update()
 
         def _call_handler(arg):
+            """Handle /call <tool>: open the dynamic tool form overlay."""
             if not arg:
                 return "Usage: /call <tool_name>"
             tool_name = arg.split()[0]
@@ -610,16 +689,18 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return None  # output comes later via Execute
 
         def _quit_handler(_arg):
+            """Handle /quit or /exit: close the app."""
             close_app()
             return None
 
-        # Arg completion callables (live queries, reflect hot-reloaded plugins)
+        # --- Command registration table ---
+
+        # Lambdas (not static lists) so completions reflect hot-reloaded plugins.
         _task_names = lambda: list(ctrl.orchestrator.tasks.keys())
         _service_names = lambda: list(services.keys())
         _tool_names = lambda: list(tool_registry.tools.keys())
         _retry_names = lambda: _task_names() + ["all"]
 
-        # Register all commands
         for entry in [
             CommandEntry("help",     "Show available commands",               handler=_help_handler),
             CommandEntry("services", "List services and status",              handler=lambda _: _format_services(ctrl.list_services())),
@@ -646,7 +727,8 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             registry.register(entry)
 
         # =============================================================
-        # AUTOCOMPLETE OVERLAY
+        # AUTOCOMPLETE OVERLAY -- Popup that filters commands/args as
+        # the user types after '/'
         # =============================================================
         autocomplete_list = ft.ListView(spacing=0, padding=0)
 
@@ -661,12 +743,17 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 color=ft.Colors.with_opacity(0.3, ft.Colors.BLACK),
                 offset=ft.Offset(0, -2),
             ),
-            # height=300 is removed; it will be set dynamically below
+            # Height is set dynamically in _update_autocomplete()
             visible=False,
         )
 
         def _update_autocomplete(text: str):
-            """Show/hide and populate the autocomplete popup based on input."""
+            """Show/hide and populate the autocomplete popup based on input text.
+
+            Two phases:
+            - Phase 1 (no space yet): match command names by prefix.
+            - Phase 2 (space present): match argument values for the command.
+            """
             if not text.startswith("/"):
                 autocomplete_overlay.visible = False
                 return
@@ -695,11 +782,12 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         padding=ft.padding.symmetric(horizontal=12, vertical=8),
                         on_click=lambda e, n=cmd.name: _select_command(n),
                         ink=True,
-                        height=56,  # Absolute height for predictable math
+                        height=56,  # Fixed height for predictable layout math
                     )
                     autocomplete_list.controls.append(tile)
-                
-                # Calculate dynamic height: 56px per tile + 8px outer padding
+
+                # Each command tile is 56px; add 8px for container padding.
+                # Cap at 272px (~4.8 tiles) to avoid overwhelming the input area.
                 calculated_height = (len(matches) * 56) + 8
                 autocomplete_overlay.height = min(calculated_height, 272)
                 autocomplete_overlay.visible = True
@@ -729,11 +817,11 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         padding=ft.padding.symmetric(horizontal=12, vertical=10),
                         on_click=lambda e, cmd=cmd_name, arg=name: _select_arg(cmd, arg),
                         ink=True,
-                        height=40,  # Absolute height for predictable math
+                        height=40,  # Fixed height for predictable layout math
                     )
                     autocomplete_list.controls.append(tile)
-                
-                # Calculate dynamic height: 40px per tile + 8px outer padding
+
+                # Each arg tile is 40px; same 8px padding, same 272px cap.
                 calculated_height = (len(candidates) * 40) + 8
                 autocomplete_overlay.height = min(calculated_height, 272)
                 autocomplete_overlay.visible = True
@@ -757,7 +845,9 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             _update_autocomplete(input_field.value or "")
             page.update()
 
-        # --- Input bar ---
+        # -----------------------------------------------------------------
+        # INPUT FIELD & SEND BUTTON
+        # -----------------------------------------------------------------
         input_field = ft.TextField(
             label="Message the assistant, or type / for commands...",
             expand=True,
@@ -765,9 +855,9 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             shift_enter=True,
             text_size=13,
             multiline=True,
-            min_lines=1, 
-            max_lines=10, 
-            max_length=4096, 
+            min_lines=1,
+            max_lines=10,
+            max_length=4096,
             focused_border_width=2,
             content_padding=ft.padding.symmetric(horizontal=16, vertical=8),
             on_submit=lambda e: handle_input(e),
@@ -786,10 +876,10 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         )
 
         # =============================================================
-        # CHAT HANDLING (runs agent.chat in background thread)
+        # CHAT HANDLING -- Sends user text to agent in a background thread
         # =============================================================
         def send_chat(user_text: str):
-            """Run agent.chat() in a background thread."""
+            """Run agent.chat() in a background thread, re-enable input on completion."""
             processing["value"] = True
             input_field.disabled = True
             send_button.disabled = True
@@ -812,9 +902,10 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             threading.Thread(target=run, daemon=True).start()
 
         # =============================================================
-        # INPUT HANDLER (unified: slash = command, else = chat)
+        # INPUT HANDLER -- Routes /commands to registry, plain text to agent
         # =============================================================
         def handle_input(e):
+            """Unified input handler: routes /commands to registry, plain text to agent."""
             text = (input_field.value or "").strip()
             if not text:
                 return
@@ -854,22 +945,20 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             input_field.focus()
 
         # =============================================================
-        # LAYOUT
+        # LAYOUT -- Widget assembly: input bar, status bar, log dialog
         # =============================================================
+
+        # --- Input bar ---
         input_bar = ft.Container(
             content=input_row,
             padding=ft.padding.symmetric(horizontal=12, vertical=8),
         )
 
-        # --- Bottom status panel (log bar + expandable history) ---
+        # --- Bottom status bar ---
         STATUS_BAR_HEIGHT = 24
-        DEFAULT_EXPANDED_HEIGHT = 175
-        MIN_EXPANDED_HEIGHT = 100
-        MAX_EXPANDED_HEIGHT = 400
-
-        panel_state = {"expanded": False, "height": DEFAULT_EXPANDED_HEIGHT}
 
         def _level_color(levelno):
+            """Map log level to a Flet color: red for ERROR, amber for WARNING, grey otherwise."""
             if levelno >= logging.ERROR:
                 return ft.Colors.ERROR
             if levelno >= logging.WARNING:
@@ -891,18 +980,10 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         log_list = ft.ListView(
             spacing=3,
             auto_scroll=True,
-            width=9999,
+            width=9999,  # Forces fill of available horizontal space (Flet quirk)
         )
 
-        log_list_container = ft.Container(
-            content=log_list,
-            padding=ft.padding.only(left=8, right=8, top=4, bottom=0),
-            expand=True,
-            alignment=ft.alignment.bottom_left,
-            visible=False
-        )
-
-        # Reference for autocomplete positioning (updated dynamically)
+        # Position the autocomplete popup just above the input bar + status bar
         autocomplete_container = ft.Container(
             content=autocomplete_overlay,
             bottom=60 + STATUS_BAR_HEIGHT,
@@ -910,47 +991,65 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             right=12,
         )
 
-        def _toggle_log_panel(e=None):
-            panel_state["expanded"] = not panel_state["expanded"]
-            if panel_state["expanded"]:
-                status_panel.height = panel_state["height"]
-                drag_row.visible = True
-                log_list_container.visible = True
-                autocomplete_container.bottom = 60 + panel_state["height"]
-            else:
-                status_panel.height = STATUS_BAR_HEIGHT
-                drag_row.visible = False
-                log_list_container.visible = False
-                autocomplete_container.bottom = 60 + STATUS_BAR_HEIGHT
-            page.update()
+        # --- Log dialog overlay (opened by clicking status bar) ---
+        _log_overlay_ref = {"overlay": None}
 
-        def _on_pan_update(e: ft.DragUpdateEvent):
-            new_h = panel_state["height"] - e.delta_y
-            new_h = max(MIN_EXPANDED_HEIGHT, min(MAX_EXPANDED_HEIGHT, new_h))
-            panel_state["height"] = new_h
-            status_panel.height = new_h
-            autocomplete_container.bottom = 60 + new_h
-            page.update()
+        def _show_log_dialog(e=None):
+            """Open (or re-show) the full-screen log viewer overlay."""
+            if _log_overlay_ref["overlay"] is not None:
+                _log_overlay_ref["overlay"].visible = True
+                page.update()
+                return
 
-        drag_handle = ft.GestureDetector(
-            on_vertical_drag_update=_on_pan_update,
-            content=ft.Container(
-                content=ft.Container(
-                    height=4,
-                    width=40,
-                    bgcolor=ft.Colors.OUTLINE_VARIANT,
-                    border_radius=2,
+            def _close(e=None):
+                _log_overlay_ref["overlay"].visible = False
+                page.update()
+
+            log_card = ft.Container(
+                expand=True,
+                bgcolor=ft.Colors.SURFACE,
+                border_radius=12,
+                padding=25,
+                content=ft.Column(
+                    expand=True,
+                    spacing=0,
+                    controls=[
+                        ft.Row(
+                            controls=[
+                                ft.Text("Logs", size=18, weight=ft.FontWeight.BOLD),
+                                ft.IconButton(
+                                    icon=ft.Icons.CLOSE,
+                                    icon_size=20,
+                                    on_click=_close,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        ft.Container(height=8),
+                        ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT),
+                        ft.Container(height=8),
+                        ft.Container(
+                            content=log_list,
+                            expand=True,
+                            padding=ft.padding.only(left=8, right=8),
+                        ),
+                    ],
                 ),
-                alignment=ft.alignment.center,
-                padding=ft.padding.symmetric(vertical=4),
-            ),
-            mouse_cursor=ft.MouseCursor.RESIZE_ROW,
-        )
+            )
 
-        drag_row = ft.Container(
-            content=drag_handle,
-            visible=False,
-        )
+            overlay = ft.Container(
+                expand=True,
+                blur=(10, 10),
+                bgcolor=ft.Colors.with_opacity(0.3, ft.Colors.BLACK),
+                padding=40,
+                content=log_card,
+                visible=True,
+            )
+
+            _log_overlay_ref["overlay"] = overlay
+            page.overlay.append(overlay)
+            page.update()
 
         status_row = ft.Container(
             content=ft.Row(
@@ -960,30 +1059,29 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             ),
             height=STATUS_BAR_HEIGHT,
             padding=ft.padding.only(left=8, right=20),
-            on_click=_toggle_log_panel,
+            on_click=_show_log_dialog,
         )
 
         status_panel = ft.Container(
-            content=ft.Column(
-                controls=[drag_row, log_list_container, status_row],
-                spacing=0,
-                expand=True,
-                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
-            ),
+            content=status_row,
             height=STATUS_BAR_HEIGHT,
             bgcolor=ft.Colors.with_opacity(0.3, ft.Colors.BLACK),
-            clip_behavior=ft.ClipBehavior.HARD_EDGE
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
 
-        # Wire log callback — buffer records, flush to UI every 250ms.
-        # _on_log_record does zero UI work (safe to call from any thread).
-        # _flush_log drains the buffer, appends batch, caps entries, updates once.
+        # =============================================================
+        # LOG STREAMING -- Thread-safe buffered log display
+        # =============================================================
+        # Pattern: _on_log_record (called from ANY thread) just buffers.
+        # _flush_log (called by a 250ms Timer) drains the buffer and does
+        # a single page.update(), avoiding per-record UI thrashing.
         _prev_log = {"formatted": None, "record": None}
         _log_buffer = []
         _log_lock = threading.Lock()
         _log_flush_scheduled = {"value": False}
 
         def _flush_log():
+            """Drain the log buffer, append entries to log_list, update status bar."""
             with _log_lock:
                 _log_flush_scheduled["value"] = False
                 batch = list(_log_buffer)
@@ -1006,7 +1104,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 del log_list.controls[:overflow]
 
             if latest_fmt:
-                latest_log_text.value = latest_fmt
+                latest_log_text.value = latest_fmt.split("\n", 1)[0]
                 latest_log_text.color = _level_color(latest_rec.levelno)
 
             try:
@@ -1015,10 +1113,9 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 pass
 
         def _on_log_record(formatted, record):
+            """Thread-safe callback: buffer the record and schedule a flush."""
             with _log_lock:
-                # Buffer the previous record for history
-                if _prev_log["formatted"] is not None:
-                    _log_buffer.append((_prev_log["formatted"], _prev_log["record"]))
+                _log_buffer.append((formatted, record))
                 _prev_log["formatted"] = formatted
                 _prev_log["record"] = record
 
@@ -1026,11 +1123,11 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     _log_flush_scheduled["value"] = True
                     threading.Timer(0.25, _flush_log).start()
 
-        # Backfill any records captured before the callback was set
+        # Backfill: records captured between handler creation and callback
+        # registration would otherwise be lost from the UI.
         records = gui_handler.records
         if records:
-            # All but last go into the history list
-            for fmt, rec in records[:-1]:
+            for fmt, rec in records:
                 log_list.controls.append(
                     ft.Text(
                         fmt,
@@ -1041,17 +1138,19 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         no_wrap=True,
                     )
                 )
-            # Last one becomes the status row + prev_log buffer
             last_fmt, last_rec = records[-1]
             _prev_log["formatted"] = last_fmt
             _prev_log["record"] = last_rec
-            latest_log_text.value = last_fmt
+            latest_log_text.value = last_fmt.split("\n", 1)[0]
             latest_log_text.color = _level_color(last_rec.levelno)
 
         gui_handler.set_callback(_on_log_record)
 
-        # --- Settings overlay ---
+        # =============================================================
+        # SETTINGS OVERLAY -- Config editor with save/cancel
+        # =============================================================
         def _show_settings():
+            """Build and display the settings editor overlay from SETTINGS_DATA."""
             import config_manager as cm
             from config_data import SETTINGS_DATA
 
@@ -1102,10 +1201,12 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 ))
 
             def _close(e=None):
+                """Hide the settings overlay."""
                 settings_overlay.visible = False
                 page.update()
 
             def _save(e):
+                """Validate and persist all settings, then rescan the watcher if present."""
                 for key, info in fields.items():
                     raw = info["control"].value
                     t = info["type"]
@@ -1172,7 +1273,9 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             page.overlay.append(settings_overlay)
             page.update()
 
-        # --- Assemble layout ---
+        # =============================================================
+        # FINAL ASSEMBLY -- Stack layout: chat column + autocomplete popup
+        # =============================================================
         page.add(
             ft.Stack(
                 controls=[
@@ -1192,9 +1295,10 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         input_field.focus()
 
         # =============================================================
-        # AUTO-LOAD LLM on startup
+        # STARTUP -- Auto-load LLM in background thread
         # =============================================================
         def auto_load():
+            """Attempt to load the LLM service and create the agent on success."""
             result = ctrl.load_service("llm")
             llm = services.get("llm")
             if llm and llm.loaded:
@@ -1211,4 +1315,5 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
         threading.Thread(target=auto_load, daemon=True).start()
 
+    # ft.app() blocks until the Flet window is closed.
     ft.app(target=main_view)

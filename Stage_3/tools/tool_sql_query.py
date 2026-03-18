@@ -42,6 +42,7 @@ class SQLQuery(BaseTool):
         "required": ["sql"],
     }
     requires_services = []
+    max_calls = 6  # Failed queries are common, so allow a few extra calls.
 
     def run(self, context, **kwargs):
         sql = kwargs.get("sql", "").strip()

@@ -376,6 +376,8 @@ def _build_sheet_table(df, sheet_name: str) -> ft.Control:
         ft.DataColumn(ft.Text(str(col), size=11, weight=ft.FontWeight.BOLD))
         for col in display_df.columns
     ]
+    if not columns:
+        return ft.Text("(empty table — no columns)", size=11, italic=True)
     rows = []
     for _, row in display_df.iterrows():
         cells = [ft.DataCell(ft.Text(str(val)[:80], size=11)) for val in row]
