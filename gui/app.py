@@ -80,8 +80,8 @@ def _format_tasks(tasks: list[dict]) -> str:
         svc = f"  needs: {t['requires_services']}" if t["requires_services"] else ""
         lines.append(
             f"  {t['name']:<22} "
-            f"P:{c['PENDING']:<4} R:{c['PROCESSING']:<4} "
-            f"D:{c['DONE']:<4} F:{c['FAILED']:<4}{paused}{svc}"
+            f"P:{c['PENDING']:<8} R:{c['PROCESSING']:<8} "
+            f"D:{c['DONE']:<8} F:{c['FAILED']:<8}{paused}{svc}"
         )
     return "Tasks:\n" + "\n".join(lines)
 
@@ -103,8 +103,8 @@ def _format_stats(stats: dict) -> str:
             paused = " [PAUSED]" if counts.get("paused") else ""
             lines.append(
                 f"  {name:<22} "
-                f"P:{counts['PENDING']:<4} R:{counts['PROCESSING']:<4} "
-                f"D:{counts['DONE']:<4} F:{counts['FAILED']:<4}{paused}"
+                f"P:{counts['PENDING']:<8} R:{counts['PROCESSING']:<8} "
+                f"D:{counts['DONE']:<8} F:{counts['FAILED']:<8}{paused}"
             )
     else:
         lines.append("  (empty)")
@@ -254,7 +254,7 @@ class GuiLogHandler(logging.Handler):
 
 def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             tool_registry, services, config, root_dir: Path,
-            on_page_ready=None):
+            on_page_ready=None, watcher=None):
     """
     Launch the Flet GUI. Blocks until the window is closed.
 
@@ -345,7 +345,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 content = _system_message(_format_tool_result(result))
                 
             message_list.controls.append(
-                _tool_call_card(tool_name, result.success, content, initially_expanded=False)
+                _tool_call_card(tool_name, result.success, content, initially_expanded=(tool_name == "render_files"))
             )
             page.update()
 
@@ -430,10 +430,13 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     )
                     fields[param_name] = {"control": control, "type": "number"}
                 elif schema_type == "array":
-                    default_str = ", ".join(str(v) for v in default) if isinstance(default, list) else ""
+                    default_str = "\n".join(str(v) for v in default) if isinstance(default, list) else ""
                     control = ft.TextField(
                         value=default_str,
-                        hint_text="Comma-separated values",
+                        hint_text="One item per line, no quotations",
+                        multiline=True,
+                        min_lines=2,
+                        max_lines=6,
                         dense=True,
                     )
                     fields[param_name] = {"control": control, "type": "array"}
@@ -509,7 +512,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         elif schema_type == "number":
                             kwargs[param_name] = float(raw)
                         elif schema_type == "array":
-                            kwargs[param_name] = [s.strip() for s in raw.split(",") if s.strip()]
+                            kwargs[param_name] = [s.strip() for s in raw.split("\n") if s.strip()]
                         elif schema_type == "object":
                             kwargs[param_name] = json.loads(raw)
                         else:  # string, enum
@@ -883,9 +886,10 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             expand=True,
         )
 
-        log_list = ft.Column(
+        MAX_LOG_ENTRIES = 200
+
+        log_list = ft.ListView(
             spacing=3,
-            scroll=ft.ScrollMode.AUTO,
             auto_scroll=True,
             width=9999,
         )
@@ -971,29 +975,56 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             clip_behavior=ft.ClipBehavior.HARD_EDGE
         )
 
-        # Wire log callback — the status row shows the latest message,
-        # the log_list shows all previous messages (not the current one).
+        # Wire log callback — buffer records, flush to UI every 250ms.
+        # _on_log_record does zero UI work (safe to call from any thread).
+        # _flush_log drains the buffer, appends batch, caps entries, updates once.
         _prev_log = {"formatted": None, "record": None}
+        _log_buffer = []
+        _log_lock = threading.Lock()
+        _log_flush_scheduled = {"value": False}
 
-        def _on_log_record(formatted, record):
-            # Move previous latest into the history list
-            if _prev_log["formatted"] is not None:
+        def _flush_log():
+            with _log_lock:
+                _log_flush_scheduled["value"] = False
+                batch = list(_log_buffer)
+                _log_buffer.clear()
+                latest_fmt = _prev_log["formatted"]
+                latest_rec = _prev_log["record"]
+
+            for fmt, rec in batch:
                 log_list.controls.append(
                     ft.Text(
-                        _prev_log["formatted"],
-                        size=11,
-                        font_family="Consolas",
-                        color=_level_color(_prev_log["record"].levelno),
-                        selectable=True,
-                        no_wrap=True,
+                        fmt, size=11, font_family="Consolas",
+                        color=_level_color(rec.levelno),
+                        selectable=True, no_wrap=True,
                     )
                 )
-            # New record becomes the status row text only
-            _prev_log["formatted"] = formatted
-            _prev_log["record"] = record
-            latest_log_text.value = formatted
-            latest_log_text.color = _level_color(record.levelno)
-            page.update()
+
+            # Cap oldest entries
+            overflow = len(log_list.controls) - MAX_LOG_ENTRIES
+            if overflow > 0:
+                del log_list.controls[:overflow]
+
+            if latest_fmt:
+                latest_log_text.value = latest_fmt
+                latest_log_text.color = _level_color(latest_rec.levelno)
+
+            try:
+                page.update()
+            except Exception:
+                pass
+
+        def _on_log_record(formatted, record):
+            with _log_lock:
+                # Buffer the previous record for history
+                if _prev_log["formatted"] is not None:
+                    _log_buffer.append((_prev_log["formatted"], _prev_log["record"]))
+                _prev_log["formatted"] = formatted
+                _prev_log["record"] = record
+
+                if not _log_flush_scheduled["value"]:
+                    _log_flush_scheduled["value"] = True
+                    threading.Timer(0.25, _flush_log).start()
 
         # Backfill any records captured before the callback was set
         records = gui_handler.records
@@ -1094,6 +1125,8 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         return
 
                 cm.save(config)
+                if watcher:
+                    watcher.rescan()
                 _close()
 
             settings_card = ft.Container(

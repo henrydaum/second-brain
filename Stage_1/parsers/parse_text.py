@@ -149,7 +149,7 @@ def parse_pdf_text(path: str, config: dict, services: dict = None) -> ParseResul
             }
 
         logger.debug(
-            f"PDF parsed: {Path(path).name} — {len(doc)} pages, "
+            f"PDF parsed: {Path(path).name} — {metadata['page_count']} pages, "
             f"{len(text)} chars in {time.time() - t0:.2f}s"
         )
         return ParseResult(

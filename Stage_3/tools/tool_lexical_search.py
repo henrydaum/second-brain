@@ -49,7 +49,7 @@ class LexicalSearch(BaseTool):
                 "items": {"type": "string"},
                 "description": (
                     "Filter by content source. Omit to search all sources. "
-                    'Current values: "extracted", "ocr". '
+                    'Current values: "extracted", "ocr", "tabular". '
                     "Future values may include audio_transcript, video_subtitle, etc."
                 ),
             },

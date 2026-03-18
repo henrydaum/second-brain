@@ -188,7 +188,7 @@ def main():
 		# Flet on main thread (blocks until window closes)
 		try:
 			run_gui(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT,
-			        on_page_ready=on_page_ready)
+			        on_page_ready=on_page_ready, watcher=watcher)
 		finally:
 			if tray_icon:
 				try:

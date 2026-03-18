@@ -15,7 +15,12 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\(''gui/renderers.py''\\).read\\(\\)\\); print\\(''Syntax OK''\\)\")",
       "Bash(python -c \"from gui.renderers import render_paths, Carousel; print\\(''Imports OK''\\)\")",
       "Bash(python -c \"import flet as ft; c = ft.Container\\(max_height=500\\); print\\(''max_height supported:'', hasattr\\(c, ''max_height''\\)\\)\")",
-      "Bash(python -c \"from gui.renderers import render_paths; print\\(''Imports OK''\\)\")"
+      "Bash(python -c \"from gui.renderers import render_paths; print\\(''Imports OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''Stage_2/watcher.py'', doraise=True\\); print\\(''watcher.py OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''main.pyw'', doraise=True\\); print\\(''main.pyw OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''gui/app.py'', doraise=True\\); print\\(''app.py OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''gui/app.py'', doraise=True\\); print\\(''OK''\\)\")",
+      "Bash(find '/c/Users/henry/Documents/My_Code/The Data Refinery' -type f \\\\\\(-name *.log -o -name *.txt \\\\\\))"
     ]
   }
 }

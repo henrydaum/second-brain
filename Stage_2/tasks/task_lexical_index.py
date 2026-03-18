@@ -1,18 +1,21 @@
 """
 Lexical Index task.
 
-Reads text chunks and/or OCR text and writes them to the lexical_content
-table, which feeds an FTS5 full-text search index via SQLite triggers.
-Enables BM25-ranked keyword search across all indexed files.
+Reads text chunks, OCR text, and/or tabular text and writes them to the
+lexical_content table, which feeds an FTS5 full-text search index via
+SQLite triggers. Enables BM25-ranked keyword search across all indexed files.
 
 Indexes at chunk level so BM25 results align with embedding results
-for hybrid search fusion. OCR text (typically short) gets chunk_index=0.
+for hybrid search fusion. OCR and tabular text (typically short) get
+chunk_index=0.
 
 This is a downstream task — no modalities needed. It runs whenever
-either upstream (chunk_text or ocr_images) completes for a path.
+any upstream (chunk_text, ocr_images, or textualize_tabular) completes
+for a path.
 
 Depends on text_chunks (produced by chunk_text) OR ocr_text (produced
-by ocr_images). require_all_inputs = False means either suffices.
+by ocr_images) OR tabular_text (produced by textualize_tabular).
+require_all_inputs = False means any one suffices.
 """
 
 import logging
@@ -27,7 +30,7 @@ logger = logging.getLogger("IndexLexical")
 class IndexLexical(BaseTask):
 	name = "index_lexical"
 	modalities = []  # downstream task — triggered by upstream completion
-	reads = ["text_chunks", "ocr_text"]
+	reads = ["text_chunks", "ocr_text", "tabular_text"]
 	writes = ["lexical_content"]
 	require_all_inputs = False  # run when either input exists
 	requires_services = []
@@ -103,6 +106,20 @@ class IndexLexical(BaseTask):
 						data.append({
 							"path": path,
 							"source": "ocr",
+							"chunk_index": 0,
+							"content": content,
+							"char_count": len(content),
+							"indexed_at": now,
+						})
+
+				# Index tabular text if available
+				tabular = context.db.get_task_output("tabular_text", path)
+				if tabular:
+					content = tabular[0]["content"] or ""
+					if content.strip():
+						data.append({
+							"path": path,
+							"source": "tabular",
 							"chunk_index": 0,
 							"content": content,
 							"char_count": len(content),

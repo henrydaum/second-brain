@@ -74,9 +74,6 @@ class Watcher:
 			logger.error("No valid sync directories found. Watcher not starting.")
 			return
 
-		logger.info("Running initial scan...")
-		self._initial_scan(valid_dirs)
-
 		handler = DebouncedHandler(self)
 		for d in valid_dirs:
 			self.observer.schedule(handler, d, recursive=True)
@@ -92,6 +89,47 @@ class Watcher:
 					logger.info(f"Watching plugins: {plugin_dir}")
 
 		self.observer.start()
+
+		# Initial scan in background — doesn't block startup
+		threading.Thread(target=self._initial_scan, args=(valid_dirs,), daemon=True).start()
+
+	def rescan(self):
+		"""Re-read sync_directories from config, update observers, run fresh scan."""
+		# Refresh config-driven state
+		raw_dirs = self.config.get("sync_directories", [])
+		if isinstance(raw_dirs, str):
+			raw_dirs = [raw_dirs]
+		self.watch_dirs = raw_dirs
+		self.ignored_extensions = set(self.config.get("ignored_extensions", []))
+		self.ignored_folders = set(self.config.get("ignored_folders", []))
+		self.skip_hidden = self.config.get("skip_hidden_folders", True)
+
+		valid_dirs = [d for d in self.watch_dirs if d and os.path.exists(d)]
+		if not valid_dirs:
+			logger.warning("No valid sync directories after rescan.")
+			return
+
+		# Tear down existing observer, create fresh one
+		if self.observer.is_alive():
+			self.observer.stop()
+			self.observer.join()
+		self.observer = Observer()
+
+		handler = DebouncedHandler(self)
+		for d in valid_dirs:
+			self.observer.schedule(handler, d, recursive=True)
+			logger.info(f"Watching: {d}")
+
+		if self.on_plugin_changed:
+			plugin_handler = PluginHandler(self.on_plugin_changed)
+			root = Path(self.config.get("_root", ""))
+			for plugin_dir in [root / "Stage_2" / "tasks", root / "Stage_3" / "tools"]:
+				if plugin_dir.exists():
+					self.observer.schedule(plugin_handler, str(plugin_dir), recursive=False)
+
+		self.observer.start()
+		threading.Thread(target=self._initial_scan, args=(valid_dirs,), daemon=True).start()
+		logger.info("Rescan triggered.")
 
 	def stop(self):
 		if self.observer.is_alive():

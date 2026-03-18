@@ -451,7 +451,9 @@ class Orchestrator:
 
 	def stop(self):
 		self.running = False
-		self.executor.shutdown(wait=True)
+		# Pause all tasks so queued futures flush back to PENDING (see _execute check)
+		self.paused.update(self.tasks.keys())
+		self.executor.shutdown(wait=False, cancel_futures=True)
 		for task in self.tasks.values():
 			task.teardown()
 		logger.info("Orchestrator stopped")
@@ -529,6 +531,12 @@ class Orchestrator:
 			sem.release()
 
 	def _execute(self, task: BaseTask, paths: list[str]):
+		# If task was paused after dispatch, return paths to PENDING
+		if task.name in self.paused:
+			self.db.unclaim_tasks(task.name, paths)
+			logger.info(f"Task '{task.name}' is paused — returned {len(paths)} path(s) to PENDING")
+			return
+
 		context = build_context(self.db, self.config, self.services)
 
 		t0 = time.time()
