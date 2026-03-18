@@ -2,8 +2,12 @@
 Modality renderers for the GUI.
 
 Takes a list of file paths, parses each one, groups by modality,
-and returns Flet controls that display the content with an "Open File"
-button for each file.
+and returns Flet controls that display the content.
+
+Layout strategies:
+  - Carousel (dot indicators + arrows) for image, audio, video
+  - ExpansionTiles (collapsed by default) for text, tabular
+  - Simple row for container
 """
 
 import base64
@@ -21,11 +25,104 @@ logger = logging.getLogger("Renderers")
 
 
 # ===================================================================
-# INDIVIDUAL MODALITY RENDERERS
-#
-# Each takes (path, parse_result, page) and returns an ft.Control.
-# The parse_result.output is already in the standard format for that
-# modality (see ParseResult docstring).
+# CONSTANTS
+# ===================================================================
+
+_CAROUSEL_MODALITIES = {"image", "audio", "video"}
+_CAROUSEL_HEIGHTS = {
+    "image": 340,   # 300 image + label + nav
+    "audio": 60,    # player row
+    "video": 310,   # 270 video + label + nav
+}
+_MAX_EXPAND_HEIGHT = 200
+
+
+# ===================================================================
+# CAROUSEL
+# ===================================================================
+
+class Carousel:
+    """
+    Reusable carousel widget with left/right arrows and dot indicators.
+
+    Shows one slide at a time. Dot indicators for <= 7 items,
+    numeric counter for > 7 items.
+    """
+
+    def __init__(self, slides: list[ft.Control], page: ft.Page, height: int | None = None):
+        self._slides = slides
+        self._page = page
+        self._height = height
+        self._current = 0
+
+    def build(self) -> ft.Control:
+        if len(self._slides) <= 1:
+            return self._slides[0] if self._slides else ft.Text("(empty)", italic=True, size=11)
+
+        # Wrap each slide in a centered container, only active one visible
+        for i, slide in enumerate(self._slides):
+            slide.visible = (i == 0)
+
+        self._stack = ft.Stack(
+            controls=self._slides,
+            height=self._height,
+        )
+
+        self._left_btn = ft.IconButton(
+            icon=ft.Icons.CHEVRON_LEFT,
+            on_click=self._go_left,
+            icon_size=24,
+            disabled=True,
+        )
+        self._right_btn = ft.IconButton(
+            icon=ft.Icons.CHEVRON_RIGHT,
+            on_click=self._go_right,
+            icon_size=24,
+            disabled=(len(self._slides) <= 1),
+        )
+        self._indicator = self._build_indicator()
+
+        nav_row = ft.Row(
+            controls=[self._left_btn, self._indicator, self._right_btn],
+            alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=4,
+        )
+
+        return ft.Column(controls=[self._stack, nav_row], spacing=4)
+
+    def _build_indicator(self) -> ft.Text:
+        total = len(self._slides)
+        return ft.Text(
+            f"{self._current + 1} / {total}",
+            size=12,
+            text_align=ft.TextAlign.CENTER,
+        )
+
+    def _update_view(self):
+        for i, slide in enumerate(self._slides):
+            slide.visible = (i == self._current)
+
+        total = len(self._slides)
+        self._indicator.value = f"{self._current + 1} / {total}"
+
+        self._left_btn.disabled = (self._current == 0)
+        self._right_btn.disabled = (self._current >= total - 1)
+        self._page.update()
+
+    def _go_left(self, _):
+        if self._current > 0:
+            self._current -= 1
+            self._update_view()
+
+    def _go_right(self, _):
+        if self._current < len(self._slides) - 1:
+            self._current += 1
+            self._update_view()
+
+
+# ===================================================================
+# HELPERS
 # ===================================================================
 
 def _open_file_button(path: str) -> ft.IconButton:
@@ -38,8 +135,8 @@ def _open_file_button(path: str) -> ft.IconButton:
     )
 
 
-def _file_header(path: str) -> ft.Row:
-    """File name label + open button, used as a header for each rendered file."""
+def _expansion_title_row(path: str) -> ft.Row:
+    """Filename + open button, used as the title of an ExpansionTile."""
     return ft.Row(
         controls=[
             ft.Text(Path(path).name, size=12, weight=ft.FontWeight.BOLD, expand=True),
@@ -50,16 +147,81 @@ def _file_header(path: str) -> ft.Row:
     )
 
 
+def _modality_header(modality: str) -> ft.Container:
+    """Centered '{MODALITY} RESULTS:' label."""
+    return ft.Container(
+        content=ft.Text(
+            f"{modality.upper()} RESULTS:",
+            size=13,
+            weight=ft.FontWeight.BOLD,
+            color=ft.Colors.PRIMARY,
+            text_align=ft.TextAlign.CENTER,
+        ),
+        alignment=ft.alignment.center,
+        padding=ft.padding.only(top=4, bottom=4),
+    )
+
+
+def _error_tile(path: str, error) -> ft.ExpansionTile:
+    """Error displayed as an ExpansionTile matching text/tabular style."""
+    return ft.ExpansionTile(
+        title=_expansion_title_row(path),
+        initially_expanded=False,
+        tile_padding=ft.padding.symmetric(horizontal=8, vertical=0),
+        controls=[
+            ft.ListTile(
+                subtitle=ft.Container(
+                    content=ft.Text(
+                        f"Error: {error}",
+                        color=ft.Colors.ERROR,
+                        selectable=True,
+                        size=12,
+                    ),
+                    bgcolor=ft.Colors.SURFACE,
+                    border=ft.border.all(0.5, ft.Colors.ERROR),
+                    padding=5,
+                    border_radius=7,
+                ),
+            ),
+        ],
+        dense=True,
+    )
+
+
+def _error_slide(path: str, error) -> ft.Container:
+    """Error displayed as a carousel slide for media modalities."""
+    return ft.Container(
+        content=ft.Column(
+            controls=[
+                ft.Text(Path(path).name, size=11, italic=True),
+                ft.Text(f"Error: {error}", color=ft.Colors.ERROR, size=12),
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=4,
+        ),
+        alignment=ft.alignment.center,
+    )
+
+
+# ===================================================================
+# INDIVIDUAL MODALITY RENDERERS
+#
+# Carousel modalities (image, audio, video) return list[ft.Control]
+# (one slide per item). The dispatch layer aggregates these into a
+# single Carousel.
+#
+# Expansion modalities (text, tabular) return ft.ExpansionTile.
+# Container returns a simple ft.Row.
+# ===================================================================
+
 def render_text(path: str, output, page: ft.Page) -> ft.Control:
-    """Render a text string. Uses Markdown if content looks like it."""
+    """Render a text string inside a collapsed ExpansionTile."""
     text = str(output) if output else "(empty)"
 
-    # Truncate very long text for display
     max_chars = 5000
     truncated = len(text) > max_chars
     display_text = text[:max_chars] + "\n\n... (truncated)" if truncated else text
 
-    # Simple heuristic: if it has markdown-ish markers, render as markdown
     md_markers = ("# ", "## ", "**", "- ", "```", "| ")
     looks_like_md = any(marker in display_text[:500] for marker in md_markers)
 
@@ -77,70 +239,77 @@ def render_text(path: str, output, page: ft.Page) -> ft.Control:
             size=12,
         )
 
-    return ft.Column(
+    return ft.ExpansionTile(
+        title=_expansion_title_row(path),
+        initially_expanded=False,
+        tile_padding=ft.padding.symmetric(horizontal=8, vertical=0),
         controls=[
-            _file_header(path),
-            ft.Container(
-                content=ft.Column(
-                    controls=[content],
-                    scroll=ft.ScrollMode.AUTO,
+            ft.ListTile(
+                subtitle=ft.Container(
+                    content=ft.Column(
+                        controls=[content],
+                        scroll=ft.ScrollMode.AUTO,
+                    ),
+                    bgcolor=ft.Colors.SURFACE,
+                    border=ft.border.all(0.5, ft.Colors.ON_SURFACE),
+                    padding=5,
+                    border_radius=7,
+                    height=_MAX_EXPAND_HEIGHT,
                 ),
-                padding=8,
-                border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
-                border_radius=4,
-                height=300,
             ),
         ],
-        spacing=4,
+        dense=True,
     )
 
 
-def render_image(path: str, output, page: ft.Page) -> ft.Control:
-    """Render a list of PIL Images as a thumbnail gallery."""
+def render_image(path: str, output, page: ft.Page) -> list[ft.Control]:
+    """Return a list of carousel slides, one per PIL image."""
     images = output if isinstance(output, list) else [output]
+    slides = []
 
-    thumbnails = []
     for i, img in enumerate(images):
         try:
-            # Resize for thumbnail
             thumb = img.copy()
-            thumb.thumbnail((256, 256))
+            thumb.thumbnail((400, 300))
 
             buf = io.BytesIO()
             fmt = "PNG" if thumb.mode == "RGBA" else "JPEG"
             thumb.save(buf, format=fmt)
             b64 = base64.b64encode(buf.getvalue()).decode()
 
-            thumbnails.append(
-                ft.Image(
-                    src_base64=b64,
-                    width=256,
-                    height=256,
-                    fit=ft.ImageFit.CONTAIN,
-                    border_radius=4,
+            slides.append(
+                ft.Container(
+                    content=ft.Column(
+                        controls=[
+                            ft.Text(Path(path).name, size=11, italic=True),
+                            ft.Image(
+                                src_base64=b64,
+                                width=400,
+                                height=300,
+                                fit=ft.ImageFit.CONTAIN,
+                                border_radius=4,
+                            ),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=4,
+                    ),
+                    alignment=ft.alignment.center,
                 )
             )
         except Exception as e:
             logger.debug(f"Failed to render image {i} from {path}: {e}")
-            thumbnails.append(ft.Text(f"(image {i} failed: {e})", italic=True, size=11))
+            slides.append(
+                ft.Container(
+                    content=ft.Text(f"({Path(path).name} image {i} failed: {e})", italic=True, size=11),
+                    alignment=ft.alignment.center,
+                )
+            )
 
-    return ft.Column(
-        controls=[
-            _file_header(path),
-            ft.Container(
-                content=ft.Column(
-                    controls=[ft.Row(controls=thumbnails, wrap=True, spacing=8)],
-                    scroll=ft.ScrollMode.AUTO,
-                ),
-                height=280,
-            ),
-        ],
-        spacing=4,
-    )
+    return slides
 
 
-def render_audio(path: str, output, page: ft.Page) -> ft.Control:
-    """Render an audio player using the original file path."""
+def render_audio(path: str, output, page: ft.Page) -> list[ft.Control]:
+    """Return a list with one carousel slide containing an audio player."""
     audio = ft.Audio(src=path, autoplay=False)
     page.overlay.append(audio)
 
@@ -161,20 +330,19 @@ def render_audio(path: str, output, page: ft.Page) -> ft.Control:
         icon_size=32,
     )
 
-    return ft.Column(
-        controls=[
-            _file_header(path),
-            ft.Row(
-                controls=[play_btn, ft.Text(Path(path).name, size=12)],
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-        ],
-        spacing=4,
+    slide = ft.Container(
+        content=ft.Row(
+            controls=[play_btn, ft.Text(Path(path).name, size=12)],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        alignment=ft.alignment.center,
     )
 
+    return [slide]
 
-def render_video(path: str, output, page: ft.Page) -> ft.Control:
-    """Render a video player using the original file path."""
+
+def render_video(path: str, output, page: ft.Page) -> list[ft.Control]:
+    """Return a list with one carousel slide containing a video player."""
     video = ft.Video(
         playlist=[ft.VideoMedia(path)],
         width=480,
@@ -183,84 +351,113 @@ def render_video(path: str, output, page: ft.Page) -> ft.Control:
         show_controls=True,
     )
 
-    return ft.Column(
-        controls=[
-            _file_header(path),
-            video,
-        ],
-        spacing=4,
+    slide = ft.Container(
+        content=ft.Column(
+            controls=[
+                ft.Text(Path(path).name, size=11, italic=True),
+                video,
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=4,
+        ),
+        alignment=ft.alignment.center,
     )
 
+    return [slide]
 
-def render_tabular(path: str, output, page: ft.Page) -> ft.Control:
-    """Render dict[sheet_name, DataFrame] as DataTables."""
-    tables = output if isinstance(output, dict) else {"default": output}
 
-    controls = [_file_header(path)]
+def _build_sheet_table(df, sheet_name: str) -> ft.Control:
+    """Build a single sheet's DataTable with horizontal + vertical scroll."""
+    max_rows = 50
+    display_df = df.head(max_rows)
+    truncated = len(df) > max_rows
 
-    for sheet_name, df in tables.items():
-        # Cap display rows
-        max_rows = 50
-        display_df = df.head(max_rows)
-        truncated = len(df) > max_rows
+    columns = [
+        ft.DataColumn(ft.Text(str(col), size=11, weight=ft.FontWeight.BOLD))
+        for col in display_df.columns
+    ]
+    rows = []
+    for _, row in display_df.iterrows():
+        cells = [ft.DataCell(ft.Text(str(val)[:80], size=11)) for val in row]
+        rows.append(ft.DataRow(cells=cells))
 
-        columns = [ft.DataColumn(ft.Text(str(col), size=11, weight=ft.FontWeight.BOLD)) for col in display_df.columns]
-        rows = []
-        for _, row in display_df.iterrows():
-            cells = [ft.DataCell(ft.Text(str(val)[:80], size=11)) for val in row]
-            rows.append(ft.DataRow(cells=cells))
+    table = ft.DataTable(
+        columns=columns,
+        rows=rows,
+        column_spacing=16,
+        data_row_max_height=32,
+        horizontal_lines=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT),
+    )
 
-        label = f"Sheet: {sheet_name}" if sheet_name != "default" else ""
-        if label:
-            controls.append(ft.Text(label, size=11, italic=True))
+    controls = []
+    if sheet_name != "default":
+        controls.append(ft.Text(f"Sheet: {sheet_name}", size=11, italic=True))
 
-        controls.append(
-            ft.Container(
-                content=ft.Column(
-                    controls=[ft.DataTable(
-                        columns=columns,
-                        rows=rows,
-                        column_spacing=16,
-                        data_row_max_height=32,
-                        horizontal_lines=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT),
-                    )],
-                    scroll=ft.ScrollMode.AUTO,
-                ),
-                height=400,
-            )
+    # Horizontal scroll via Row, vertical scroll via Column
+    controls.append(
+        ft.Row(
+            controls=[table],
+            scroll=ft.ScrollMode.AUTO,
         )
+    )
 
-        if truncated:
-            controls.append(ft.Text(f"... showing {max_rows} of {len(df)} rows", size=11, italic=True))
+    if truncated:
+        controls.append(ft.Text(f"... showing {max_rows} of {len(df)} rows", size=11, italic=True))
 
     return ft.Column(controls=controls, spacing=4)
 
 
-def render_container(path: str, output, page: ft.Page) -> ft.Control:
-    """Render a list of child file paths as a clickable list."""
-    child_paths = output if isinstance(output, list) else []
+def render_tabular(path: str, output, page: ft.Page) -> ft.Control:
+    """Render DataFrames inside a collapsed ExpansionTile. Multi-sheet files get an inner carousel."""
+    tables = output if isinstance(output, dict) else {"default": output}
 
-    items = []
-    for child in child_paths[:100]:  # Cap display
-        items.append(
-            ft.ListTile(
-                leading=ft.Icon(ft.Icons.INSERT_DRIVE_FILE, size=16),
-                title=ft.Text(Path(child).name, size=12),
-                subtitle=ft.Text(str(child), size=10),
-                on_click=lambda _, p=child: os.startfile(p),
-                dense=True,
-            )
-        )
+    if len(tables) == 1:
+        # Single sheet — render directly
+        sheet_name, df = next(iter(tables.items()))
+        inner = _build_sheet_table(df, sheet_name)
+    else:
+        # Multiple sheets — carousel of sheets
+        slides = []
+        for sheet_name, df in tables.items():
+            slides.append(_build_sheet_table(df, sheet_name))
+        carousel = Carousel(slides, page, height=450)
+        inner = carousel.build()
 
-    if len(child_paths) > 100:
-        items.append(ft.Text(f"... and {len(child_paths) - 100} more files", size=11, italic=True))
-
-    return ft.Column(
+    return ft.ExpansionTile(
+        title=_expansion_title_row(path),
+        initially_expanded=False,
+        tile_padding=ft.padding.symmetric(horizontal=8, vertical=0),
         controls=[
-            _file_header(path),
-            ft.ListView(controls=items, height=min(300, len(items) * 48)),
+            ft.ListTile(
+                subtitle=ft.Container(
+                    content=ft.Column(
+                        controls=[inner],
+                        scroll=ft.ScrollMode.AUTO,
+                    ),
+                    bgcolor=ft.Colors.SURFACE,
+                    border=ft.border.all(0.5, ft.Colors.ON_SURFACE),
+                    padding=5,
+                    border_radius=7,
+                    height=_MAX_EXPAND_HEIGHT,
+                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                ),
+            ),
         ],
-        spacing=4,
+        dense=True,
+    )
+
+
+def render_container(path: str, output, page: ft.Page) -> ft.Control:
+    """Render a container as a simple filepath row with open button."""
+    return ft.Row(
+        controls=[
+            ft.Icon(ft.Icons.FOLDER_OPEN, size=16, color=ft.Colors.PRIMARY),
+            ft.Text(str(path), size=12, expand=True),
+            _open_file_button(path),
+        ],
+        alignment=ft.MainAxisAlignment.START,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        spacing=8,
     )
 
 
@@ -278,81 +475,84 @@ _RENDERERS = {
 }
 
 
-def _render_single(path: str, page: ft.Page, config: dict = None, services: dict = None) -> ft.Control:
-    """Parse a single file and return the appropriate rendered widget."""
-    result = parse(path, config=config, services=services)
-
-    if not result.success:
-        return ft.Column(controls=[
-            _file_header(path),
-            ft.Text(f"Parse error: {result.error}", color=ft.Colors.ERROR, size=12),
-        ])
-
-    renderer = _RENDERERS.get(result.modality)
-    if renderer is None:
-        return ft.Column(controls=[
-            _file_header(path),
-            ft.Text(f"No renderer for modality: {result.modality}", italic=True, size=12),
-        ])
-
-    try:
-        return renderer(path, result.output, page)
-    except Exception as e:
-        logger.error(f"Renderer failed for {path} ({result.modality}): {e}")
-        return ft.Column(controls=[
-            _file_header(path),
-            ft.Text(f"Render error: {e}", color=ft.Colors.ERROR, size=12),
-        ])
-
-
 def render_paths(paths: list[str], page: ft.Page, config: dict = None, services: dict = None) -> ft.Control:
     """
     Main entry point. Takes one or more file paths, parses each,
-    groups by modality, and returns a single Flet control that
-    displays them all.
+    groups by modality, and returns a single Flet control.
 
-    If all files share the same modality, no grouping header is shown
-    (unless there are multiple files). If modalities differ, results
-    are grouped under modality headers.
+    Carousel modalities (image, audio, video) are aggregated across
+    files into a single carousel per modality. Expansion modalities
+    (text, tabular) get individual ExpansionTiles per file.
     """
     if not paths:
         return ft.Text("(no files)", italic=True, size=12)
 
-    # Parse all and group by modality
-    grouped = defaultdict(list)
+    # Phase 1: Parse all files, group by modality (even failures stay with their modality)
+    grouped: dict[str, list[tuple[str, object]]] = defaultdict(list)
     for path in paths:
         modality = get_modality(Path(path).suffix)
-        grouped[modality].append(path)
+        result = parse(path, config=config, services=services)
+        grouped[modality].append((path, result))
 
-    # Single modality, single file — render directly
-    if len(grouped) == 1 and len(paths) == 1:
-        return _render_single(paths[0], page, config, services)
+    # Phase 2: Render per modality group — each gets its own bordered box
+    modality_boxes: list[ft.Control] = []
 
-    # Build grouped display
-    sections = []
-    for modality, mod_paths in grouped.items():
-        if len(grouped) > 1:
-            sections.append(
-                ft.Text(
-                    modality.upper(),
-                    size=13,
-                    weight=ft.FontWeight.BOLD,
-                    color=ft.Colors.PRIMARY,
-                )
+    for modality, items in grouped.items():
+        group_controls: list[ft.Control] = [_modality_header(modality)]
+
+        if modality in _CAROUSEL_MODALITIES:
+            # Collect all slides across files into one carousel
+            all_slides: list[ft.Control] = []
+            for path, result in items:
+                if not result.success:
+                    all_slides.append(_error_slide(path, result.error))
+                    continue
+                renderer = _RENDERERS.get(modality)
+                if renderer is None:
+                    all_slides.append(_error_slide(path, f"No renderer for: {modality}"))
+                    continue
+                try:
+                    slides = renderer(path, result.output, page)
+                    all_slides.extend(slides)
+                except Exception as e:
+                    logger.error(f"Renderer failed for {path} ({modality}): {e}")
+                    all_slides.append(_error_slide(path, e))
+
+            if len(all_slides) == 1:
+                group_controls.append(all_slides[0])
+            elif all_slides:
+                height = _CAROUSEL_HEIGHTS.get(modality)
+                carousel = Carousel(all_slides, page, height=height)
+                group_controls.append(carousel.build())
+        else:
+            # Per-file rendering (text, tabular, container)
+            for path, result in items:
+                if not result.success:
+                    group_controls.append(_error_tile(path, result.error))
+                    continue
+                renderer = _RENDERERS.get(modality)
+                if renderer is None:
+                    group_controls.append(_error_tile(path, f"No renderer for: {modality}"))
+                    continue
+                try:
+                    group_controls.append(renderer(path, result.output, page))
+                except Exception as e:
+                    logger.error(f"Renderer failed for {path} ({modality}): {e}")
+                    group_controls.append(_error_tile(path, e))
+
+        # Wrap this modality group in its own bordered box
+        modality_boxes.append(
+            ft.Container(
+                content=ft.Column(controls=group_controls, spacing=8),
+                padding=8,
+                border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
+                border_radius=8,
+                bgcolor=ft.Colors.SURFACE,
             )
+        )
 
-        for path in mod_paths:
-            sections.append(_render_single(path, page, config, services))
-        sections.append(ft.Divider(height=1))
+    # If only one modality, return just that box; otherwise stack them
+    if len(modality_boxes) == 1:
+        return modality_boxes[0]
 
-    # Remove trailing divider
-    if sections and isinstance(sections[-1], ft.Divider):
-        sections.pop()
-
-    return ft.Container(
-        content=ft.Column(controls=sections, spacing=8),
-        padding=8,
-        border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
-        border_radius=8,
-        bgcolor=ft.Colors.SURFACE,
-    )
+    return ft.Column(controls=modality_boxes, spacing=8)

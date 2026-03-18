@@ -3,3 +3,4 @@ __pycache__/
 config.json
 database.db*
 .VSCodeCounter
+.claude
