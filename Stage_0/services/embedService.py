@@ -8,11 +8,11 @@ import logging
 import numpy as np
 
 from Stage_0.BaseService import BaseService
+from paths import DATA_DIR
 
 logger = logging.getLogger("EmbedClass")
 
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = Path(os.getenv('LOCALAPPDATA')) / "2nd Brain"
 
 # --- BASE CLASS ---
 class BaseEmbedder(BaseService):

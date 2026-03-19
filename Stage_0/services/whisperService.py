@@ -14,11 +14,11 @@ import os
 from pathlib import Path
 
 from Stage_0.BaseService import BaseService
+from paths import DATA_DIR
 
 logger = logging.getLogger("WhisperService")
 
-# NOTE: model cache path will be changed in the future
-DATA_DIR = Path(os.getenv("LOCALAPPDATA")) / "2nd Brain" / "whisper"
+WHISPER_DIR = DATA_DIR / "whisper"
 
 
 class FasterWhisperService(BaseService):
@@ -41,13 +41,13 @@ class FasterWhisperService(BaseService):
             logger.info("CUDA not available, falling back to CPU")
             device = "cpu"
 
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        WHISPER_DIR.mkdir(parents=True, exist_ok=True)
 
         self.model = WhisperModel(
             self.model_name,
             device=device,
             compute_type="auto",
-            download_root=str(DATA_DIR),
+            download_root=str(WHISPER_DIR),
         )
         self.loaded = True
         return True

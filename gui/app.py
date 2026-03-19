@@ -1,5 +1,5 @@
 """
-Flet GUI for the Data Refinery.
+Flet GUI for Second Brain.
 
 A unified chat-first interface. Plain text goes to the LLM agent;
 slash-prefixed commands (e.g. /services, /load llm) control the system.
@@ -16,6 +16,7 @@ read and mutate shared widgets without passing dozens of arguments.
 import collections
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
 from gui.commands import CommandEntry, CommandRegistry
 from gui.renderers import render_paths
+from paths import DATA_DIR
 
 logger = logging.getLogger("GUI")
 
@@ -316,7 +318,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # -----------------------------------------------------------------
         # PAGE SETUP & WINDOW CONFIG
         # -----------------------------------------------------------------
-        page.title = "The Data Refinery"
+        page.title = "Second Brain"
         page.theme_mode = ft.ThemeMode.DARK
         page.window.width = 800
         page.window.height = 700
@@ -382,7 +384,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         )
 
         message_list.controls.append(_system_message(
-            "The Data Refinery\n"
+            "Second Brain\n"
             "Type a message to chat, or / for commands.\n"
             "Loading LLM..."
         ))
@@ -705,6 +707,13 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             close_app()
             return None
 
+        def _open_folder(path):
+            """Open a folder in Windows Explorer, creating it if needed."""
+            p = Path(path)
+            p.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(p))
+            return f"Opened {p}"
+
         # --- Command registration table ---
 
         # Lambdas (not static lists) so completions reflect hot-reloaded plugins.
@@ -735,6 +744,8 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             CommandEntry("exit",     "Shutdown",                              handler=_quit_handler),
             CommandEntry("config",   "Open settings panel",                   handler=lambda _: _show_settings()),
             CommandEntry("settings", "Open settings panel",                   handler=lambda _: _show_settings()),
+            CommandEntry("open_data", "Open the data folder in Explorer",    handler=lambda _: _open_folder(DATA_DIR)),
+            CommandEntry("open_root", "Open the project root in Explorer",   handler=lambda _: _open_folder(root_dir)),
         ]:
             registry.register(entry)
 
@@ -874,8 +885,10 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             item_center = (index * tile_h) + (tile_h / 2)
             offset = item_center - visible_h / 2
             if offset < 0 or offset >= max_offset:
+                page.update()
                 return  # near top or bottom — don't scroll
             autocomplete_list.scroll_to(offset=offset, duration=0)
+            page.update()
 
         def _select_ac_current() -> bool:
             """Select the currently highlighted autocomplete item.
@@ -1436,11 +1449,9 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 if key == "Arrow Down":
                     _ac_index["value"] = (_ac_index["value"] + 1) % count
                     _highlight_ac_item(_ac_index["value"])
-                    page.update()
                 elif key == "Arrow Up":
                     _ac_index["value"] = (_ac_index["value"] - 1) % count
                     _highlight_ac_item(_ac_index["value"])
-                    page.update()
                 elif key == "Escape":
                     autocomplete_overlay.visible = False
                     _ac_index["value"] = -1

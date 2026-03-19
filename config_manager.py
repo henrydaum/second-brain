@@ -2,6 +2,8 @@ import logging
 import json
 from pathlib import Path
 
+from paths import DATA_DIR
+
 logger = logging.getLogger("Config")
 
 """
@@ -17,10 +19,15 @@ from config_data import SETTINGS_DATA
 # Derive defaults from the single source of truth in config_data.py
 DEFAULTS = {name: default for (_, name, _, default, _) in SETTINGS_DATA}
 
+_DEFAULT_CONFIG_PATH = str(DATA_DIR / "config.json")
 
-def load(path: str = "config.json") -> dict:
+
+def load(path: str = None) -> dict:
     """Load config from JSON file. Creates default if missing."""
+    if path is None:
+        path = _DEFAULT_CONFIG_PATH
     p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
 
     if not p.exists():
         logger.info(f"No config found — creating default at {p}")
@@ -38,8 +45,12 @@ def load(path: str = "config.json") -> dict:
     return merged
 
 
-def save(config: dict, path: str = "config.json"):
+def save(config: dict, path: str = None):
     """Save config dict to JSON file."""
+    if path is None:
+        path = _DEFAULT_CONFIG_PATH
+    # Strip _root from persisted config — it's set dynamically at runtime
+    to_save = {k: v for k, v in config.items() if k != "_root"}
     with open(path, "w") as f:
-        json.dump(config, f, indent=4)
+        json.dump(to_save, f, indent=4)
     logger.info(f"Config saved to {path}")

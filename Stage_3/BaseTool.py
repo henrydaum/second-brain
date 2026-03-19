@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from context import DataRefineryContext, build_context
+from context import SecondBrainContext, build_context
 
 logger = logging.getLogger("Tool")
 
@@ -83,7 +83,7 @@ class BaseTool:
             if isinstance(value, (dict, list)):
                 setattr(cls, attr, value.copy())
 
-    def run(self, context: DataRefineryContext, **kwargs) -> ToolResult:
+    def run(self, context: SecondBrainContext, **kwargs) -> ToolResult:
         raise NotImplementedError(f"Tool '{self.name}' must implement run()")
 
     def to_schema(self) -> dict:

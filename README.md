@@ -1,4 +1,4 @@
-# The Data Refinery
+# Second Brain
 
 A local-first file intelligence pipeline that watches your directories, parses every file it finds, and makes them searchable and queryable through an LLM-powered agent. Think of it as a personal data warehouse that builds itself.
 
@@ -14,7 +14,7 @@ The system is organized into four stages, inspired by the layered transport syst
 
 **Stage 3 — Agent** is the query layer. Six tools wrap database queries, search indexes, and file rendering behind a uniform interface that doubles as LLM function-calling schemas. An agent loop connects a local LLM to the tool registry, so you can ask natural-language questions about your files and get grounded answers. Tools are auto-discovered from `Stage_3/tools/`.
 
-A shared `DataRefineryContext` object flows through every layer, giving tasks and tools access to the database, config, services, parsers, and (for tools) the ability to call other tools.
+A shared `SecondBrainContext` object flows through every layer, giving tasks and tools access to the database, config, services, parsers, and (for tools) the ability to call other tools.
 
 ## The GUI
 
@@ -34,11 +34,12 @@ A terminal REPL is also available via `--no-gui` and always runs in the backgrou
 ## Project Structure
 
 ```
-The Data Refinery/
+Second Brain/
 ├── main.pyw              # Entry point — GUI + system tray (or --no-gui for REPL)
+├── paths.py              # Centralized path constants (ROOT_DIR, DATA_DIR)
 ├── config_data.py        # Declarative settings schema (titles, types, defaults)
-├── config_manager.py     # Loads/saves config.json, merges defaults
-├── context.py            # DataRefineryContext — shared context for tasks & tools
+├── config_manager.py     # Loads/saves config.json, merges defaults, migration
+├── context.py            # SecondBrainContext — shared context for tasks & tools
 ├── controller.py         # Command layer between user input and the system
 ├── repl.py               # Terminal REPL (runs as background thread, or standalone)
 │
@@ -114,7 +115,7 @@ The Data Refinery/
 
 ```bash
 git clone <repo-url>
-cd "The Data Refinery"
+cd "Second Brain"
 pip install -r requirements.txt
 ```
 
@@ -122,7 +123,7 @@ Key dependencies include `flet`, `pystray`, `watchdog`, `PyMuPDF (fitz)`, `pytho
 
 ### Configure
 
-On first run, the system creates a `config.json` with sensible defaults. The main thing you need to set is `sync_directories` — the folders you want the system to watch. You can edit `config.json` directly or use `/config` in the GUI.
+On first run, the system creates a `config.json` in the data directory (`%LOCALAPPDATA%/Second Brain/`) with sensible defaults. The main thing you need to set is `sync_directories` — the folders you want the system to watch. You can edit `config.json` directly (use `/open_data` to find it) or use `/config` in the GUI.
 
 ```json
 {
@@ -179,6 +180,8 @@ Available as slash commands in the GUI (with autocomplete) or as plain commands 
 | `reload` | Hot-reload tasks and tools from disk |
 | `stats` | System-wide statistics |
 | `config` / `settings` | Open the settings panel (GUI) |
+| `open_data` | Open the data folder in Explorer |
+| `open_root` | Open the project root in Explorer |
 | `clear` | Clear chat conversation history |
 | `quit` / `exit` | Graceful shutdown |
 

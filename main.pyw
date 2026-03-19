@@ -89,7 +89,7 @@ def main():
 	watcher = Watcher(orchestrator, database, config, on_plugin_changed=reload_plugins)
 	watcher.start()
 	logger.info("-----------------------------")
-	logger.info(f"DataRefinery started in {time.time() - t_start:.2f}s. Type 'help' for commands, 'quit' to exit.")
+	logger.info(f"SecondBrain started in {time.time() - t_start:.2f}s. Type 'help' for commands, 'quit' to exit.")
 
 	# --- 9. Shutdown handler ---
 	def shutdown(sig=None, frame=None):
@@ -118,7 +118,7 @@ def main():
 	signal.signal(signal.SIGTERM, shutdown)
 
 	# --- 10. Parse CLI args ---
-	parser = argparse.ArgumentParser(description="The Data Refinery")
+	parser = argparse.ArgumentParser(description="Second Brain")
 	parser.add_argument("--no-gui", action="store_true", help="Run without GUI (REPL only)")
 	args = parser.parse_args()
 
@@ -170,9 +170,9 @@ def main():
 					shutdown()
 
 			tray_icon = pystray.Icon(
-				"DataRefinery",
+				"SecondBrain",
 				icon_img,
-				"The Data Refinery",
+				"Second Brain",
 				menu=pystray.Menu(
 					pystray.MenuItem("Show Window", show_window, default=True),
 					pystray.MenuItem("Quit", quit_app),

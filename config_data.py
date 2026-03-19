@@ -13,6 +13,8 @@ Each entry: (title, variable_name, description, default, type_info)
                    {"type": "slider", "range": (min, max, divisions), "is_float": bool}
 """
 
+from paths import DATA_DIR
+
 SETTINGS_DATA = [
     # --- Directories ---
     ("Sync Directories", "sync_directories",
@@ -22,7 +24,7 @@ SETTINGS_DATA = [
 
     ("Database Path", "db_path",
      "Path to the SQLite database file.",
-     "database.db",
+     str(DATA_DIR / "database.db"),
      {"type": "text"}),
 
     # --- File Filtering ---

@@ -3,7 +3,7 @@ from typing import Any
 
 
 @dataclass
-class DataRefineryContext:
+class SecondBrainContext:
     """
     What every task and tool receives when it runs.
 
@@ -22,7 +22,11 @@ class DataRefineryContext:
     call_tool: Any = None    # callable(name, **kwargs) -> ToolResult (tools only)
 
 
-def build_context(db, config: dict, services: dict, call_tool=None) -> DataRefineryContext:
+# Backward-compat alias so existing plugins using the old name still work
+DataRefineryContext = SecondBrainContext
+
+
+def build_context(db, config: dict, services: dict, call_tool=None) -> SecondBrainContext:
     """
     Factory that wires up a fully functional context.
 
@@ -38,7 +42,7 @@ def build_context(db, config: dict, services: dict, call_tool=None) -> DataRefin
     """
     from Stage_1.registry import parse as _parse
 
-    return DataRefineryContext(
+    return SecondBrainContext(
         db=db,
         config=config,
         services=services,

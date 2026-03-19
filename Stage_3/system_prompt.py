@@ -2,7 +2,7 @@
 System prompt builder.
 
 Assembles a concise system prompt for the agent that includes both a static
-explanation of how the Data Refinery works and dynamic runtime state (tables,
+explanation of how Second Brain works and dynamic runtime state (tables,
 task status, services, file inventory). Built fresh each time the user enters
 chat mode so the LLM always sees current state.
 """
@@ -34,7 +34,7 @@ def build_system_prompt(db, orchestrator, tool_registry, services: dict) -> str:
 
 def _identity() -> str:
     return (
-        "You are the Data Refinery assistant — an AI embedded in a local file intelligence system. "
+        "You are the Second Brain assistant — an AI embedded in a local file intelligence system. "
         "You have tools to search and query a database of user files. "
         "Be concise and always cite which files your answers come from."
     )
@@ -42,7 +42,7 @@ def _identity() -> str:
 
 def _architecture() -> str:
     return (
-        "## How the Data Refinery works\n"
+        "## How Second Brain works\n"
         "The system watches local directories and processes every file through a four-stage pipeline:\n"
         "\n"
         "Stage 0 — Services: shared resources (LLM, text/image embedders, OCR) with a load/unload lifecycle. "
@@ -62,7 +62,7 @@ def _architecture() -> str:
         "Stage 3 — Tools: the on-demand query layer (where you operate). Tools accept arguments, "
         "query the database or call other tools, and return structured results. Your available tools are provided via function calling. The tool call limit is per-message, not per-session. If you run out of one tool, you can call another.\n"
         "\n"
-        "Both tasks and tools receive a DataRefineryContext giving them access to the database, config, "
+        "Both tasks and tools receive a SecondBrainContext giving them access to the database, config, "
         "services, the parser, and (for tools) the ability to call other tools."
     )
 
@@ -71,7 +71,7 @@ def _authoring_guidance() -> str:
     return (
         "## Extending the system\n"
         "You can help the user design new tasks and tools. The key interfaces (BaseTask, BaseTool, "
-        "TaskResult, ToolResult, DataRefineryContext) will be provided in full when needed via "
+        "TaskResult, ToolResult, SecondBrainContext) will be provided in full when needed via "
         "dedicated creation tools. For now, understand that tasks declare reads/writes/modalities "
         "and tools declare name/description/parameters as a JSON schema."
     )

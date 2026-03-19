@@ -1,7 +1,7 @@
 """
 Read source code tool.
 
-Lets the LLM read the Data Refinery's own source code by module name.
+Lets the LLM read Second Brain's own source code by module name.
 Used when the agent needs to reference existing implementations to help
 design new tools or tasks.
 """
@@ -26,7 +26,7 @@ for p in _PROJECT_ROOT.rglob("*"):
 class ReadSourceCode(BaseTool):
     name = "read_source_code"
     description = (
-        "Read the source code of a Data Refinery module by name. "
+        "Read the source code of a Second Brain module by name. "
         "Use this to see how existing tasks, tools, services, or parsers are implemented. "
         "Pass just the module name without extension (e.g. 'BaseTask', 'agent', 'tool_lexical_search')."
     )

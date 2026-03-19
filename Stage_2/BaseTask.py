@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Use the unified context
-from context import DataRefineryContext
+from context import SecondBrainContext
 
 logger = logging.getLogger("BaseTask")
 
@@ -140,7 +140,7 @@ class BaseTask:
 		"""Called on shutdown. Release GPU memory, close connections."""
 		pass
 
-	def run(self, paths: list[str], context: DataRefineryContext) -> list[TaskResult]:
+	def run(self, paths: list[str], context: SecondBrainContext) -> list[TaskResult]:
 		"""
 		Process multiple files. Return a list of TaskResult objects, one per input path.
 		"""
