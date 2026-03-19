@@ -60,7 +60,7 @@ def _architecture() -> str:
         "Task results get written to their SQLite output tables.\n"
         "\n"
         "Stage 3 — Tools: the on-demand query layer (where you operate). Tools accept arguments, "
-        "query the database or call other tools, and return structured results. Your available tools are provided via function calling. The tool call limit is per tool and per-message, not per-session.\n"
+        "query the database or call other tools, and return structured results. Your available tools are provided via function calling. The tool call limit is per-message, not per-session. If you run out of one tool, you can call another.\n"
         "\n"
         "Both tasks and tools receive a DataRefineryContext giving them access to the database, config, "
         "services, the parser, and (for tools) the ability to call other tools."

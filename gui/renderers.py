@@ -545,10 +545,10 @@ def render_paths(paths: list[str], page: ft.Page, config: dict = None, services:
         # Wrap this modality group in its own bordered box
         modality_boxes.append(
             ft.Container(
-                content=ft.Column(controls=group_controls, spacing=8),
+                content=ft.Column(controls=group_controls, spacing=6),
                 padding=8,
                 border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
-                border_radius=8,
+                border_radius=4,
                 bgcolor=ft.Colors.SURFACE,
             )
         )
