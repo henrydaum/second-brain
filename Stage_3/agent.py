@@ -48,6 +48,7 @@ class Agent:
         self.max_tool_calls = tool_registry.max_tool_calls
         self.history: list[dict] = []
         self._tool_call_counts: dict[str, int] = {}
+        self.cancelled = False
 
     def chat(self, message: str) -> str:
         """
@@ -68,6 +69,9 @@ class Agent:
         compiled_image_paths = []
 
         for round_num in range(self.max_tool_calls):
+            if self.cancelled:
+                return None
+
             logger.debug(
                 f"LLM call (round {round_num + 1}), history size: {len(self.history)} messages"
             )
@@ -91,6 +95,8 @@ class Agent:
 
             # Execute each tool call and append results
             for tc in response.tool_calls:
+                if self.cancelled:
+                    break
                 t_tool = time.time()
                 result_str, tc_images = self._execute_tool_call(tc)
                 if tc_images:

@@ -368,6 +368,12 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         agent_ref = {"agent": None}
         processing = {"value": False}
 
+        # Keyboard navigation state
+        _ac_index = {"value": -1}           # highlighted autocomplete item (-1 = none)
+        _input_history = []                  # submitted inputs, newest last
+        _history_cursor = {"value": -1}      # -1 = not browsing; 0..N = position
+        _history_stash = {"value": ""}       # saves draft when entering history mode
+
         message_list = ft.ListView(
             expand=True,
             spacing=4,
@@ -619,6 +625,12 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 )
                 page.update()
 
+            # Allow Enter to submit from single-line TextFields
+            for info in fields.values():
+                c = info["control"]
+                if isinstance(c, ft.TextField) and not c.multiline:
+                    c.on_submit = _execute
+
             # Fixed header controls (always visible)
             header_controls = [
                 ft.Text(tool_name, size=18, weight=ft.FontWeight.BOLD),
@@ -754,6 +766,8 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             - Phase 1 (no space yet): match command names by prefix.
             - Phase 2 (space present): match argument values for the command.
             """
+            _ac_index["value"] = -1  # reset highlight on every content change
+
             if not text.startswith("/"):
                 autocomplete_overlay.visible = False
                 return
@@ -769,9 +783,10 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     return
 
                 autocomplete_list.controls.clear()
-                for cmd in matches:
+                for i, cmd in enumerate(matches):
                     hint = f" {cmd.arg_hint}" if cmd.arg_hint else ""
                     tile = ft.Container(
+                        key=str(i),
                         content=ft.Column(
                             controls=[
                                 ft.Text(f"/{cmd.name}{hint}", size=13, weight=ft.FontWeight.W_500),
@@ -811,8 +826,9 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     return
 
                 autocomplete_list.controls.clear()
-                for name in candidates:
+                for i, name in enumerate(candidates):
                     tile = ft.Container(
+                        key=str(i),
                         content=ft.Text(name, size=13, weight=ft.FontWeight.W_500),
                         padding=ft.padding.symmetric(horizontal=12, vertical=10),
                         on_click=lambda e, cmd=cmd_name, arg=name: _select_arg(cmd, arg),
@@ -840,8 +856,66 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             input_field.focus()
             page.update()
 
+        def _highlight_ac_item(index: int):
+            """Apply visual highlight to the tile at *index*, clear all others."""
+            for i, tile in enumerate(autocomplete_list.controls):
+                tile.bgcolor = (
+                    ft.Colors.with_opacity(0.12, ft.Colors.PRIMARY)
+                    if i == index
+                    else None
+                )
+            # Scroll so the highlighted tile is centered in the visible area.
+            # Skip scrolling near the bottom to avoid a jarring jump.
+            count = len(autocomplete_list.controls)
+            tile_h = autocomplete_list.controls[index].height
+            total_h = count * tile_h
+            visible_h = autocomplete_overlay.height or 272
+            max_offset = total_h - visible_h
+            item_center = (index * tile_h) + (tile_h / 2)
+            offset = item_center - visible_h / 2
+            if offset < 0 or offset >= max_offset:
+                return  # near top or bottom — don't scroll
+            autocomplete_list.scroll_to(offset=offset, duration=0)
+
+        def _select_ac_current() -> bool:
+            """Select the currently highlighted autocomplete item.
+
+            Returns True if a selection was made.
+            """
+            idx = _ac_index["value"]
+            controls = autocomplete_list.controls
+            if idx < 0 or idx >= len(controls):
+                return False
+
+            text = input_field.value or ""
+            body = text[1:]  # strip leading /
+            has_space = " " in body
+
+            if not has_space:
+                # Phase 1 — command names
+                matches = registry.get_completions(body)
+                if idx < len(matches):
+                    _select_command(matches[idx].name)
+                    return True
+            else:
+                # Phase 2 — argument values
+                parts = body.split(maxsplit=1)
+                cmd_name = parts[0].lower()
+                partial_arg = parts[1] if len(parts) > 1 else ""
+                entry = registry._commands.get(cmd_name)
+                if entry and entry.arg_completions:
+                    candidates = entry.arg_completions()
+                    if partial_arg:
+                        candidates = [c for c in candidates
+                                      if c.lower().startswith(partial_arg.lower())]
+                    if idx < len(candidates):
+                        _select_arg(cmd_name, candidates[idx])
+                        return True
+            return False
+
         def _on_input_change(e):
             """Called on every keystroke in the input field."""
+            _history_cursor["value"] = -1  # exit history mode on manual edit
             _update_autocomplete(input_field.value or "")
             page.update()
 
@@ -870,8 +944,31 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             icon_size=20,
         )
 
+        _spinner = ft.ProgressRing(width=20, height=20, stroke_width=2)
+        _stop_icon = ft.Icon(ft.Icons.STOP, size=20)
+
+        def _on_cancel_hover(e):
+            cancel_button.content = _stop_icon if e.data == "true" else _spinner
+            cancel_button.tooltip = "Cancel" if e.data == "true" else None
+            page.update()
+
+        def _on_cancel_click(e):
+            agent = agent_ref.get("agent")
+            if agent:
+                agent.cancelled = True
+                message_list.controls.append(_system_message("Cancelling request..."))
+                page.update()
+
+        cancel_button = ft.IconButton(
+            content=_spinner,
+            on_click=_on_cancel_click,
+            on_hover=_on_cancel_hover,
+            icon_size=20,
+            visible=False,
+        )
+
         input_row = ft.Row(
-            controls=[input_field, send_button],
+            controls=[input_field, send_button, cancel_button],
             spacing=8,
         )
 
@@ -882,20 +979,25 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             """Run agent.chat() in a background thread, re-enable input on completion."""
             processing["value"] = True
             input_field.disabled = True
-            send_button.disabled = True
+            send_button.visible = False
+            cancel_button.content = _spinner  # reset to spinner
+            cancel_button.visible = True
             page.update()
 
             def run():
                 try:
                     response = agent_ref["agent"].chat(user_text)
-                    message_list.controls.append(_assistant_bubble(response))
+                    if response is not None:
+                        message_list.controls.append(_assistant_bubble(response))
                 except Exception as e:
                     logger.error(f"Agent error: {e}")
                     message_list.controls.append(_system_message(f"Error: {e}"))
                 finally:
                     processing["value"] = False
                     input_field.disabled = False
-                    send_button.disabled = False
+                    cancel_button.visible = False
+                    send_button.visible = True
+                    agent_ref["agent"].cancelled = False
                     input_field.focus()
                     page.update()
 
@@ -906,9 +1008,21 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # =============================================================
         def handle_input(e):
             """Unified input handler: routes /commands to registry, plain text to agent."""
+            # Guard: if autocomplete is visible with a highlighted item,
+            # Enter selects the item instead of submitting input.
+            if autocomplete_overlay.visible and _ac_index["value"] >= 0:
+                _select_ac_current()
+                _ac_index["value"] = -1
+                return
+
             text = (input_field.value or "").strip()
             if not text:
                 return
+
+            # Record input history and reset navigation state
+            _input_history.append(text)
+            _history_cursor["value"] = -1
+            _history_stash["value"] = ""
 
             input_field.value = ""
             autocomplete_overlay.visible = False
@@ -976,11 +1090,16 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         )
 
         MAX_LOG_ENTRIES = 200
+        _log_at_bottom = {"value": True}
+
+        def _on_log_scroll(e: ft.OnScrollEvent):
+            _log_at_bottom["value"] = e.pixels >= e.max_scroll_extent - 20
 
         log_list = ft.ListView(
             spacing=3,
-            auto_scroll=True,
+            auto_scroll=False,
             width=9999,  # Forces fill of available horizontal space (Flet quirk)
+            on_scroll=_on_log_scroll,
         )
 
         # Position the autocomplete popup just above the input bar + status bar
@@ -1109,6 +1228,9 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
             try:
                 page.update()
+                if _log_at_bottom["value"]:
+                    log_list.scroll_to(offset=-1, duration=0)
+                    page.update()
             except Exception:
                 pass
 
@@ -1230,6 +1352,12 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     watcher.rescan()
                 _close()
 
+            # Allow Enter to submit from single-line TextFields
+            for info in fields.values():
+                c = info["control"]
+                if isinstance(c, ft.TextField) and not c.multiline:
+                    c.on_submit = _save
+
             settings_card = ft.Container(
                 expand=True,
                 bgcolor=ft.Colors.SURFACE,
@@ -1291,6 +1419,83 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 expand=True,
             )
         )
+
+        # =============================================================
+        # KEYBOARD EVENT HANDLER -- Arrow keys & Escape for autocomplete
+        # navigation and input history recall
+        # =============================================================
+        def _on_key(e: ft.KeyboardEvent):
+            key = e.key
+
+            # --- Autocomplete navigation (takes priority) ---
+            if autocomplete_overlay.visible:
+                count = len(autocomplete_list.controls)
+                if count == 0:
+                    return
+
+                if key == "Arrow Down":
+                    _ac_index["value"] = (_ac_index["value"] + 1) % count
+                    _highlight_ac_item(_ac_index["value"])
+                    page.update()
+                elif key == "Arrow Up":
+                    _ac_index["value"] = (_ac_index["value"] - 1) % count
+                    _highlight_ac_item(_ac_index["value"])
+                    page.update()
+                elif key == "Escape":
+                    autocomplete_overlay.visible = False
+                    _ac_index["value"] = -1
+                    page.update()
+                elif key == "Tab":
+                    if _ac_index["value"] < 0:
+                        _ac_index["value"] = 0
+                        _highlight_ac_item(0)
+                    _select_ac_current()
+                    _ac_index["value"] = -1
+                    page.update()
+                # Enter is handled by the guard in handle_input
+                return
+
+            # --- Escape closes the topmost visible overlay ---
+            if key == "Escape":
+                for overlay in reversed(page.overlay):
+                    if hasattr(overlay, "visible") and overlay.visible:
+                        overlay.visible = False
+                        page.update()
+                        return
+
+            # --- Input history navigation ---
+            # Only activate when input has no newlines (single logical line)
+            current = input_field.value or ""
+            if "\n" in current:
+                return  # let arrow keys do normal cursor movement
+
+            if not _input_history:
+                return
+
+            if key == "Arrow Up":
+                if _history_cursor["value"] == -1:
+                    # Entering history mode: stash current input
+                    _history_stash["value"] = current
+                    _history_cursor["value"] = len(_input_history) - 1
+                elif _history_cursor["value"] > 0:
+                    _history_cursor["value"] -= 1
+
+                input_field.value = _input_history[_history_cursor["value"]]
+                page.update()
+
+            elif key == "Arrow Down":
+                if _history_cursor["value"] == -1:
+                    return  # not in history mode
+                elif _history_cursor["value"] < len(_input_history) - 1:
+                    _history_cursor["value"] += 1
+                    input_field.value = _input_history[_history_cursor["value"]]
+                else:
+                    # Past the end: restore stashed input
+                    _history_cursor["value"] = -1
+                    input_field.value = _history_stash["value"]
+                page.update()
+
+        page.on_keyboard_event = _on_key
 
         input_field.focus()
 
