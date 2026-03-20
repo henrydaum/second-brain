@@ -54,9 +54,9 @@ class Controller:
             return f"Service '{name}' failed to load."
 
         # Clear skip log so orchestrator re-checks waiting tasks
-        self.orchestrator._skip_logged.discard(name)
+        self.orchestrator.skip_cache.discard(name)
         # Clear all task skip flags — services changed, recheck everything
-        self.orchestrator._skip_logged.clear()
+        self.orchestrator.skip_cache.clear()
 
         return f"Service '{name}' loaded."
 
@@ -120,7 +120,7 @@ class Controller:
             return f"Unknown task: '{name}'."
 
         self.db.reset_task(name)
-        downstream = self.orchestrator._get_all_downstream(name)
+        downstream = self.orchestrator.get_all_downstream(name)
         if downstream:
             self.db.invalidate_tasks_bulk(downstream)
         return f"Task '{name}' reset — all entries back to PENDING (+ {len(downstream)} downstream)."
@@ -132,7 +132,7 @@ class Controller:
 
         failed_paths = self.db.get_paths_for_task_status(name, "FAILED")
         self.db.reset_failed_tasks(name)
-        downstream = self.orchestrator._get_all_downstream(name)
+        downstream = self.orchestrator.get_all_downstream(name)
         if downstream and failed_paths:
             self.db.invalidate_tasks_for_paths(downstream, failed_paths)
         return f"Task '{name}' — failed entries reset to PENDING."
@@ -142,7 +142,7 @@ class Controller:
         for name in self.orchestrator.tasks:
             failed_paths = self.db.get_paths_for_task_status(name, "FAILED")
             if failed_paths:
-                downstream = self.orchestrator._get_all_downstream(name)
+                downstream = self.orchestrator.get_all_downstream(name)
                 if downstream:
                     self.db.invalidate_tasks_for_paths(downstream, failed_paths)
         self.db.reset_failed_tasks()

@@ -63,7 +63,7 @@ class Orchestrator:
 		self.poll_interval = config.get("poll_interval", 1.0)
 
 		# Track which tasks were skipped last cycle (avoid log spam)
-		self._skip_logged: set[str] = set()
+		self.skip_cache: set[str] = set()
 
 		# Dependency graph — built by _build_graph() after all tasks are registered
 		self.table_producers: dict[str, str] = {}    # table -> task name that writes it
@@ -169,7 +169,7 @@ class Orchestrator:
 		else:
 			return len(done) > 0
 
-	def _get_all_downstream(self, task_name: str) -> list[str]:
+	def get_all_downstream(self, task_name: str) -> list[str]:
 		"""Return all task names that transitively depend on task_name."""
 		downstream = []
 		frontier = [task_name]
@@ -187,7 +187,7 @@ class Orchestrator:
 
 	def _invalidate_downstream(self, task_name: str, paths: list[str]):
 		"""Reset downstream tasks to PENDING for specific paths."""
-		downstream = self._get_all_downstream(task_name)
+		downstream = self.get_all_downstream(task_name)
 		if downstream:
 			logger.debug(
 				f"Invalidating downstream of '{task_name}': "
@@ -213,15 +213,15 @@ class Orchestrator:
 				not_loaded.append(name)
 
 		if not_registered or not_loaded:
-			if task.name not in self._skip_logged:
+			if task.name not in self.skip_cache:
 				if not_registered:
 					logger.warning(f"Task '{task.name}' requires unregistered services: {not_registered}")
 				if not_loaded:
 					logger.info(f"Task '{task.name}' waiting for services to load: {not_loaded}")
-				self._skip_logged.add(task.name)
+				self.skip_cache.add(task.name)
 			return False
 
-		self._skip_logged.discard(task.name)
+		self.skip_cache.discard(task.name)
 		return True
 
 	# =================================================================

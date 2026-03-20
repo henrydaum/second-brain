@@ -436,9 +436,12 @@ class OpenAILLM(BaseLLM):
 
 
 def build_services(config: dict) -> dict:
+    api_key = config.get("llm_api_key", "OPENAI_API_KEY")
+    resolved_key = os.environ.get(api_key, api_key) if api_key else None
     return {
         "llm": OpenAILLM(
             model_name=config.get("llm_model_name", "gemma-3-4b-it"),
+            api_key=resolved_key,
             base_url=config.get("llm_endpoint", "http://localhost:1234/v1"),
         ),
     }

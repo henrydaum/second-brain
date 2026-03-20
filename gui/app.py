@@ -7,13 +7,15 @@ An autocomplete popup appears when typing /.
 
 Organisation
 ------------
-The file has four top-level sections — REPL Formatters, Message Widgets,
-Log Handler, and Main App.  Nearly all GUI state lives inside the
-``run_gui`` → ``main_view`` closure so that inner functions can freely
-read and mutate shared widgets without passing dozens of arguments.
+Formatters, message widgets, the log handler, and the settings overlay
+have been extracted into gui/formatters.py, gui/widgets.py,
+gui/log_handler.py, and gui/settings.py respectively.
+
+Nearly all GUI state lives inside the ``run_gui`` → ``main_view``
+closure so that inner functions can freely read and mutate shared
+widgets without passing dozens of arguments.
 """
 
-import collections
 import json
 import logging
 import os
@@ -25,254 +27,17 @@ import flet as ft
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
 from gui.commands import CommandEntry, CommandRegistry
+from gui.formatters import (
+    format_tool_result, format_services, format_tasks,
+    format_stats, format_tools,
+)
+from gui.log_handler import GuiLogHandler
 from gui.renderers import render_paths
+from gui.widgets import system_message, user_bubble, assistant_bubble, tool_call_card
 from paths import DATA_DIR
 
 logger = logging.getLogger("GUI")
 
-
-# =====================================================================
-# REPL FORMATTERS -- Plain-text formatting for command output
-# =====================================================================
-
-def _truncate_cell(text: str, max_len: int = 60) -> str:
-    """Truncate *text* to *max_len*, appending '...' if clipped."""
-    if len(text) <= max_len:
-        return text
-    return text[:max_len - 3] + "..."
-
-
-def _format_tool_result(result) -> str:
-    """Format a ToolResult for monospace display.
-
-    Tabular data (columns + rows) is rendered as aligned columns;
-    everything else falls back to pretty-printed JSON.
-    """
-    if not result.success:
-        return f"Error: {result.error}"
-    data = result.data
-    if isinstance(data, dict) and "columns" in data and "rows" in data:
-        columns = data["columns"]
-        rows = data["rows"]
-        if not rows:
-            return "(no results)"
-        col_widths = [len(c) for c in columns]
-        for row in rows:
-            for i, val in enumerate(row):
-                col_widths[i] = max(col_widths[i], len(_truncate_cell(str(val))))
-        header = "  ".join(c.ljust(w) for c, w in zip(columns, col_widths))
-        separator = "  ".join("-" * w for w in col_widths)
-        lines = [header, separator]
-        for row in rows:
-            line = "  ".join(_truncate_cell(str(val)).ljust(w) for val, w in zip(row, col_widths))
-            lines.append(line)
-        if data.get("truncated"):
-            lines.append("  ... (results capped at 100 rows)")
-        return "\n".join(lines)
-    try:
-        return json.dumps(data, indent=2, default=str)
-    except Exception:
-        return str(data)
-
-
-def _format_services(services: list[dict]) -> str:
-    """Format the service list showing name, loaded/unloaded status, and model."""
-    if not services:
-        return "No services registered."
-    lines = []
-    for s in services:
-        status = "LOADED" if s["loaded"] else "unloaded"
-        lines.append(f"  {s['name']:<20} {status:<10} {s['model_name']}")
-    return "Services:\n" + "\n".join(lines)
-
-
-def _format_tasks(tasks: list[dict]) -> str:
-    """Format task list with queue counts (Pending/Processing/Done/Failed)."""
-    if not tasks:
-        return "No tasks registered."
-    lines = []
-    for t in tasks:
-        c = t["counts"]
-        paused = " [PAUSED]" if t["paused"] else ""
-        svc = f"  needs: {t['requires_services']}" if t["requires_services"] else ""
-        lines.append(
-            f"  {t['name']:<22} "
-            f"P:{c['PENDING']:<8} R:{c['PROCESSING']:<8} "
-            f"D:{c['DONE']:<8} F:{c['FAILED']:<8}{paused}{svc}"
-        )
-    return "Tasks:\n" + "\n".join(lines)
-
-
-def _format_stats(stats: dict) -> str:
-    """Format system overview: file counts by modality + task queue summaries."""
-    lines = ["Files by modality:"]
-    files = stats.get("files", {})
-    if files:
-        for mod, count in sorted(files.items()):
-            lines.append(f"  {mod:<12} {count}")
-    else:
-        lines.append("  (none)")
-    lines.append(f"  {'total':<12} {sum(files.values()) if files else 0}")
-    lines.append("")
-    lines.append("Task queue:")
-    tasks = stats.get("tasks", {})
-    if tasks:
-        for name, counts in sorted(tasks.items()):
-            paused = " [PAUSED]" if counts.get("paused") else ""
-            lines.append(
-                f"  {name:<22} "
-                f"P:{counts['PENDING']:<8} R:{counts['PROCESSING']:<8} "
-                f"D:{counts['DONE']:<8} F:{counts['FAILED']:<8}{paused}"
-            )
-    else:
-        lines.append("  (empty)")
-    return "\n".join(lines)
-
-
-def _format_tools(tools: list[dict]) -> str:
-    """Format tool list with enabled/disabled status, descriptions, and parameters."""
-    if not tools:
-        return "No tools registered."
-    lines = []
-    for t in tools:
-        status = "" if t["agent_enabled"] else " [DISABLED]"
-        svc = f"  needs: {t['requires_services']}" if t["requires_services"] else ""
-        lines.append(f"  {t['name']}{status}{svc}")
-        desc = t["description"]
-        if len(desc) > 200:
-            desc = desc[:197] + "..."
-        lines.append(f"    {desc}")
-        params = t["parameters"].get("properties", {})
-        required = set(t["parameters"].get("required", []))
-        if params:
-            parts = [f"{p}{'*' if p in required else ''}" for p in params]
-            lines.append(f"    args: {', '.join(parts)}")
-        lines.append("")
-    return "Tools:\n" + "\n".join(lines)
-
-
-def _format_help(commands: list[dict]) -> str:
-    """Format the help output as an aligned two-column list."""
-    return "Commands:\n" + "\n".join(
-        f"  {c['command']:<25} {c['description']}" for c in commands
-    )
-
-
-# =====================================================================
-# MESSAGE WIDGETS -- Flet container factories for chat bubbles & cards
-# =====================================================================
-
-def _system_message(text: str) -> ft.Container:
-    """A monospace text block for command output."""
-    return ft.Container(
-        content=ft.Text(text, font_family="Consolas", size=12, selectable=True),
-        padding=ft.padding.symmetric(horizontal=12, vertical=8),
-        margin=ft.margin.only(bottom=4),
-        border_radius=8,
-        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-    )
-
-
-def _user_bubble(text: str) -> ft.Container:
-    """Right-aligned user chat bubble."""
-    bubble = ft.Container(
-        content=ft.Text(text, size=13, color=ft.Colors.ON_PRIMARY),
-        padding=ft.padding.symmetric(horizontal=14, vertical=10),
-        border_radius=ft.border_radius.only(
-            top_left=16, top_right=16, bottom_left=16, bottom_right=4,
-        ),
-        bgcolor=ft.Colors.PRIMARY,
-    )
-    return ft.Container(
-        content=bubble,
-        alignment=ft.alignment.center_right,
-        margin=ft.margin.only(left=80, bottom=4),
-    )
-
-
-def _assistant_bubble(text: str) -> ft.Container:
-    """Left-aligned assistant chat bubble (auto-detects Markdown)."""
-    # Heuristic: if the first 200 chars contain markdown indicators,
-    # render as Markdown; otherwise use plain Text for speed.
-    bubble = ft.Container(
-        content=ft.Markdown(
-            value=text,
-            selectable=True,
-            extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-        ) if any(m in text[:200] for m in ("# ", "**", "- ", "```", "| ")) else
-        ft.Text(text, size=13, selectable=True),
-        padding=ft.padding.symmetric(horizontal=14, vertical=10),
-        border_radius=ft.border_radius.only(
-            top_left=16, top_right=16, bottom_left=4, bottom_right=16,
-        ),
-        bgcolor=ft.Colors.SECONDARY_CONTAINER,
-    )
-    return ft.Container(
-        content=bubble,
-        alignment=ft.alignment.center_left,
-        margin=ft.margin.only(right=80, bottom=4),
-    )
-
-
-def _tool_call_card(tool_name: str, success: bool, content_control: ft.Control, initially_expanded: bool) -> ft.Container:
-    """Expansion tile showing a tool was called and its result."""
-    icon = ft.Icons.CHECK_CIRCLE if success else ft.Icons.ERROR
-    color = ft.Colors.PRIMARY if success else ft.Colors.ERROR
-    return ft.Container(
-        content=ft.ExpansionTile(
-            title=ft.Row(
-                controls=[
-                    ft.Icon(icon, size=14, color=color),
-                    ft.Text(f"Tool Call: {tool_name}", size=14),
-                ],
-                spacing=6,
-            ),
-            initially_expanded=initially_expanded,
-            controls=[
-                ft.Container(
-                    content=content_control,
-                    padding=ft.padding.only(left=16, right=16, bottom=8, top=8)
-                )
-            ],
-            dense=True
-        ),
-        margin=ft.margin.only(bottom=2),
-        border_radius=0,
-        border=None,
-        bgcolor=None,
-    )
-
-
-# =====================================================================
-# LOG HANDLER -- Captures log records into a bounded deque for GUI display
-# =====================================================================
-
-class GuiLogHandler(logging.Handler):
-    """Thread-safe handler that stores formatted records and notifies the GUI."""
-
-    def __init__(self, max_records=500):
-        """Initialize with a bounded deque of *max_records* and no callback."""
-        super().__init__()
-        self._records = collections.deque(maxlen=max_records)
-        self._on_record = None
-
-    def set_callback(self, fn):
-        """Register *fn(formatted_str, record)* to be invoked on each emit."""
-        self._on_record = fn
-
-    @property
-    def records(self):
-        return list(self._records)
-
-    def emit(self, record):
-        """Store the formatted record and notify the callback if set."""
-        formatted = self.format(record)
-        self._records.append((formatted, record))
-        if self._on_record:
-            try:
-                self._on_record(formatted, record)
-            except Exception:
-                pass
 
 
 # =====================================================================
@@ -383,7 +148,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             auto_scroll=True,
         )
 
-        message_list.controls.append(_system_message(
+        message_list.controls.append(system_message(
             "Second Brain\n"
             "Type a message to chat, or / for commands.\n"
             "Loading LLM..."
@@ -413,12 +178,12 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             if result.gui_display_paths:
                 content = render_paths(result.gui_display_paths, page, config)
             elif result.llm_summary:
-                content = _system_message(result.llm_summary)
+                content = system_message(result.llm_summary)
             else:
-                content = _system_message(_format_tool_result(result))
+                content = system_message(format_tool_result(result))
 
             message_list.controls.append(
-                _tool_call_card(tool_name, result.success, content, initially_expanded=(tool_name == "render_files"))
+                tool_call_card(tool_name, result.success, content, initially_expanded=(tool_name == "render_files"))
             )
             page.update()
 
@@ -618,12 +383,12 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 if result.gui_display_paths:
                     content = render_paths(result.gui_display_paths, page, config)
                 elif result.llm_summary:
-                    content = _system_message(result.llm_summary)
+                    content = system_message(result.llm_summary)
                 else:
-                    content = _system_message(_format_tool_result(result))
+                    content = system_message(format_tool_result(result))
 
                 message_list.controls.append(
-                    _tool_call_card(tool_name, result.success, content, initially_expanded=True)
+                    tool_call_card(tool_name, result.success, content, initially_expanded=True)
                 )
                 page.update()
 
@@ -724,21 +489,21 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
         for entry in [
             CommandEntry("help",     "Show available commands",               handler=_help_handler),
-            CommandEntry("services", "List services and status",              handler=lambda _: _format_services(ctrl.list_services())),
+            CommandEntry("services", "List services and status",              handler=lambda _: format_services(ctrl.list_services())),
             CommandEntry("load",     "Load a service",         "<service>",   handler=_load_handler,   arg_completions=_service_names),
             CommandEntry("unload",   "Unload a service",       "<service>",   handler=_unload_handler, arg_completions=_service_names),
-            CommandEntry("tasks",    "List tasks with status counts",         handler=lambda _: _format_tasks(ctrl.list_tasks())),
+            CommandEntry("tasks",    "List tasks with status counts",         handler=lambda _: format_tasks(ctrl.list_tasks())),
             CommandEntry("pipeline", "Show task dependency graph",            handler=lambda _: ctrl.orchestrator.dependency_pipeline_graph()),
             CommandEntry("pause",    "Pause a task",           "<task>",      handler=lambda a: ctrl.pause_task(a) if a else "Usage: /pause <task_name>",       arg_completions=_task_names),
             CommandEntry("unpause",  "Unpause a task",         "<task>",      handler=lambda a: ctrl.unpause_task(a) if a else "Usage: /unpause <task_name>",   arg_completions=_task_names),
             CommandEntry("reset",    "Reset a task to PENDING", "<task>",     handler=lambda a: ctrl.reset_task(a) if a else "Usage: /reset <task_name>",       arg_completions=_task_names),
             CommandEntry("retry",    "Retry failed entries",   "<task>|all",  handler=lambda a: ctrl.retry_all() if a and a.lower() == "all" else ctrl.retry_task(a) if a else "Usage: /retry <task_name> | /retry all", arg_completions=_retry_names),
-            CommandEntry("tools",    "List registered tools",                 handler=lambda _: _format_tools(ctrl.list_tools())),
+            CommandEntry("tools",    "List registered tools",                 handler=lambda _: format_tools(ctrl.list_tools())),
             CommandEntry("enable",   "Enable a tool for agent use",  "<tool>", handler=lambda a: ctrl.enable_tool(a) if a else "Usage: /enable <tool_name>",   arg_completions=_tool_names),
             CommandEntry("disable",  "Disable a tool",         "<tool>",      handler=lambda a: ctrl.disable_tool(a) if a else "Usage: /disable <tool_name>",  arg_completions=_tool_names),
             CommandEntry("call",     "Call a tool directly",   "<tool>",        handler=_call_handler, arg_completions=_tool_names),
             CommandEntry("reload",   "Hot-reload tasks and tools",            handler=lambda _: ctrl.reload_plugins(root_dir)),
-            CommandEntry("stats",    "System overview",                       handler=lambda _: _format_stats(ctrl.stats())),
+            CommandEntry("stats",    "System overview",                       handler=lambda _: format_stats(ctrl.stats())),
             CommandEntry("clear",    "Clear chat conversation history",       handler=_clear_handler),
             CommandEntry("quit",     "Shutdown",                              handler=_quit_handler),
             CommandEntry("exit",     "Shutdown",                              handler=_quit_handler),
@@ -969,7 +734,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             agent = agent_ref.get("agent")
             if agent:
                 agent.cancelled = True
-                message_list.controls.append(_system_message("Cancelling request..."))
+                message_list.controls.append(system_message("Cancelling request..."))
                 page.update()
 
         cancel_button = ft.IconButton(
@@ -1001,10 +766,10 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 try:
                     response = agent_ref["agent"].chat(user_text)
                     if response is not None:
-                        message_list.controls.append(_assistant_bubble(response))
+                        message_list.controls.append(assistant_bubble(response))
                 except Exception as e:
                     logger.error(f"Agent error: {e}")
-                    message_list.controls.append(_system_message(f"Error: {e}"))
+                    message_list.controls.append(system_message(f"Error: {e}"))
                 finally:
                     processing["value"] = False
                     input_field.disabled = False
@@ -1048,24 +813,24 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 arg = parts[1].strip() if len(parts) > 1 else ""
 
                 message_list.controls.append(
-                    _system_message(f"> /{cmd_name}" + (f" {arg}" if arg else ""))
+                    system_message(f"> /{cmd_name}" + (f" {arg}" if arg else ""))
                 )
 
                 output = registry.dispatch(cmd_name, arg)
                 if output:
-                    message_list.controls.append(_system_message(str(output)))
+                    message_list.controls.append(system_message(str(output)))
                 page.update()
             else:
                 # --- Chat message to LLM ---
                 if not agent_ref["agent"]:
-                    message_list.controls.append(_system_message(
+                    message_list.controls.append(system_message(
                         "LLM is not loaded. Use /load llm to load it, "
                         "or /services to check status."
                     ))
                     page.update()
                     return
 
-                message_list.controls.append(_user_bubble(text))
+                message_list.controls.append(user_bubble(text))
                 page.update()
                 send_chat(text)
 
@@ -1285,134 +1050,12 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # SETTINGS OVERLAY -- Config editor with save/cancel
         # =============================================================
         def _show_settings():
-            """Build and display the settings editor overlay from SETTINGS_DATA."""
-            import config_manager as cm
-            from config_data import SETTINGS_DATA
-
-            fields = {}
-            field_rows = []
-
-            for title, name, description, default, type_info in SETTINGS_DATA:
-                if name not in config:
-                    continue
-                val = config[name]
-                control_type = type_info.get("type", "text")
-
-                if control_type == "bool":
-                    control = ft.Checkbox(value=bool(val))
-                elif control_type == "slider":
-                    if type_info.get("is_float"):
-                        control = ft.TextField(
-                            value=str(val), dense=True,
-                            input_filter=ft.InputFilter(regex_string=r"[0-9.\-]"),
-                        )
-                    else:
-                        control = ft.TextField(
-                            value=str(val), dense=True,
-                            input_filter=ft.NumbersOnlyInputFilter(),
-                        )
-                elif control_type == "json_list":
-                    control = ft.TextField(
-                        value=json.dumps(val), dense=True,
-                        multiline=True, min_lines=1,
-                        hint_text="JSON array",
-                    )
-                else:  # "text"
-                    control = ft.TextField(value=str(val), dense=True)
-
-                fields[name] = {
-                    "control": control,
-                    "type": control_type,
-                    "is_float": type_info.get("is_float", False),
-                }
-
-                field_rows.append(ft.Container(
-                    content=ft.Column(controls=[
-                        ft.Text(title, size=13, weight=ft.FontWeight.W_500),
-                        ft.Text(description, size=11, color=ft.Colors.ON_SURFACE_VARIANT),
-                        control,
-                    ], spacing=2),
-                    padding=ft.padding.only(bottom=10, left=20, right=20),
-                ))
-
-            def _close(e=None):
-                """Hide the settings overlay."""
-                settings_overlay.visible = False
-                page.update()
-
-            def _save(e):
-                """Validate and persist all settings, then rescan the watcher if present."""
-                for key, info in fields.items():
-                    raw = info["control"].value
-                    t = info["type"]
-                    try:
-                        if t == "bool":
-                            config[key] = bool(raw)
-                        elif t == "slider":
-                            config[key] = float(raw) if info["is_float"] else int(raw)
-                        elif t == "json_list":
-                            config[key] = json.loads(raw)
-                        else:
-                            config[key] = raw
-                    except (ValueError, json.JSONDecodeError):
-                        if hasattr(info["control"], "error_text"):
-                            info["control"].error_text = "Invalid value"
-                        page.update()
-                        return
-
-                cm.save(config)
-                if watcher:
-                    watcher.rescan()
-                _close()
-
-            # Allow Enter to submit from single-line TextFields
-            for info in fields.values():
-                c = info["control"]
-                if isinstance(c, ft.TextField) and not c.multiline:
-                    c.on_submit = _save
-
-            settings_card = ft.Container(
-                expand=True,
-                bgcolor=ft.Colors.SURFACE,
-                border_radius=12,
-                padding=25,
-                content=ft.Column(
-                    expand=True,
-                    spacing=0,
-                    controls=[
-                        ft.Text("Settings", size=18, weight=ft.FontWeight.BOLD),
-                        ft.Container(height=8),
-                        ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT),
-                        ft.Container(height=8),
-                        ft.Column(
-                            controls=field_rows,
-                            scroll=ft.ScrollMode.AUTO,
-                            spacing=0,
-                            expand=True,
-                        ),
-                        ft.Container(height=8),
-                        ft.Row(
-                            controls=[
-                                ft.TextButton("Cancel", on_click=_close),
-                                ft.ElevatedButton("Save", on_click=_save),
-                            ],
-                            alignment=ft.MainAxisAlignment.END,
-                        ),
-                    ],
-                ),
+            """Build and display the settings editor overlay."""
+            from gui.settings import show_settings
+            show_settings(
+                page, config, services, ctrl, watcher,
+                message_list, agent_ref, create_agent, root_dir,
             )
-
-            settings_overlay = ft.Container(
-                expand=True,
-                blur=(10, 10),
-                bgcolor=ft.Colors.with_opacity(0.3, ft.Colors.BLACK),
-                padding=40,
-                content=settings_card,
-                visible=True,
-            )
-
-            page.overlay.append(settings_overlay)
-            page.update()
 
         # =============================================================
         # FINAL ASSEMBLY -- Stack layout: chat column + autocomplete popup
@@ -1519,11 +1162,11 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             llm = services.get("llm")
             if llm and llm.loaded:
                 create_agent()
-                message_list.controls.append(_system_message(
+                message_list.controls.append(system_message(
                     "LLM loaded. You can start chatting."
                 ))
             else:
-                message_list.controls.append(_system_message(
+                message_list.controls.append(system_message(
                     f"LLM not available: {result}\n"
                     "You can still use /commands. Use /load llm to try again."
                 ))
