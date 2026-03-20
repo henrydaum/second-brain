@@ -29,7 +29,9 @@ class SQLQuery(BaseTool):
         "- PRAGMA table_info(table_name)\n"
         "- SELECT path, status FROM task_queue WHERE task_name='extract_text' AND status='FAILED'\n"
         "- SELECT path, char_count FROM extracted_text ORDER BY char_count DESC LIMIT 10\n"
-        "- SELECT modality, COUNT(*) FROM files GROUP BY modality"
+        "- SELECT modality, COUNT(*) FROM files GROUP BY modality\n"
+        "- SELECT c.id, c.title, c.updated_at FROM conversations c ORDER BY c.updated_at DESC LIMIT 10\n"
+        "- SELECT role, content FROM conversation_messages WHERE conversation_id = N ORDER BY timestamp"
     )
     parameters = {
         "type": "object",

@@ -10,7 +10,7 @@ class RenderFiles(BaseTool):
     description = (
         "Display one or more files to the user in the chat. "
         "Accepts any file path — images, text, audio, video, tabular data, etc. "
-        "Use this to show the user specific files. "
+        "Use this frequently, even if the user doesn't explicitly request it. "
         'Example: {"paths": ["C:/Users/user/Documents/report.pdf", "C:/Users/user/Pictures/photo.jpg"]}'
     )
     parameters = {

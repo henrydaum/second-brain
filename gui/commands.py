@@ -55,7 +55,8 @@ def _build_help(registry: CommandRegistry) -> str:
     lines = ["Commands:"]
     for cmd in registry.all_commands():
         hint = f" {cmd.arg_hint}" if cmd.arg_hint else ""
-        lines.append(f"  /{cmd.name}{hint:<20}  {cmd.description}")
+        label = f"/{cmd.name}{hint}"
+        lines.append(f"  {label:<22} {cmd.description}")
     return "\n".join(lines)
 
 

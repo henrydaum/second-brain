@@ -34,7 +34,7 @@ class EmbedImages(BaseTask):
 			PRIMARY KEY (path, image_index)
 		);
 	"""
-	batch_size = 4
+	batch_size = 12
 	max_workers = 4
 	timeout = 300
 
