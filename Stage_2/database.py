@@ -8,9 +8,11 @@ logger = logging.getLogger("Database")
 """
 Database for the task pipeline.
 
-Two fixed tables:
-	files       — one row per discovered file (crawler writes here)
-	task_queue  — one row per (file, task) pair (orchestrator writes here)
+Fixed tables:
+	files                  — one row per discovered file (crawler writes here)
+	task_queue             — one row per (file, task) pair (orchestrator writes here)
+	conversations          — one row per chat conversation
+	conversation_messages  — one row per message in a conversation
 
 Dynamic output tables:
 	Created by tasks via raw SQL. Each task owns its own schema.
@@ -83,6 +85,33 @@ class Database:
 				modalities   TEXT
 			)
 		""")
+
+		# Conversation history — persists agent chat sessions
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS conversations (
+				id          INTEGER PRIMARY KEY AUTOINCREMENT,
+				title       TEXT,
+				created_at  REAL,
+				updated_at  REAL
+			)
+		""")
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS conversation_messages (
+				id              INTEGER PRIMARY KEY AUTOINCREMENT,
+				conversation_id INTEGER REFERENCES conversations(id) ON DELETE CASCADE,
+				role            TEXT,
+				content         TEXT,
+				tool_call_id    TEXT,
+				tool_name       TEXT,
+				timestamp       REAL
+			)
+		""")
+		self.conn.execute("""
+			CREATE INDEX IF NOT EXISTS idx_conv_msg_conv
+			ON conversation_messages(conversation_id)
+		""")
+		# Enable foreign key enforcement (needed for ON DELETE CASCADE)
+		self.conn.execute("PRAGMA foreign_keys = ON")
 
 		self.conn.commit()
 
@@ -528,3 +557,70 @@ class Database:
 				"rows": [tuple(row) for row in rows],
 				"truncated": truncated,
 			}
+
+	# =================================================================
+	# CONVERSATIONS
+	# =================================================================
+
+	def create_conversation(self, title="New conversation") -> int:
+		now = time.time()
+		with self.lock:
+			cur = self.conn.execute(
+				"INSERT INTO conversations (title, created_at, updated_at) VALUES (?, ?, ?)",
+				(title, now, now))
+			self.conn.commit()
+			return cur.lastrowid
+
+	def save_message(self, conversation_id, role, content,
+					 tool_call_id=None, tool_name=None):
+		now = time.time()
+		with self.lock:
+			self.conn.execute("""
+				INSERT INTO conversation_messages
+				(conversation_id, role, content, tool_call_id, tool_name, timestamp)
+				VALUES (?, ?, ?, ?, ?, ?)
+			""", (conversation_id, role, content, tool_call_id, tool_name, now))
+			self.conn.execute(
+				"UPDATE conversations SET updated_at = ? WHERE id = ?",
+				(now, conversation_id))
+			self.conn.commit()
+
+	def update_conversation_title(self, conversation_id, title):
+		with self.lock:
+			self.conn.execute(
+				"UPDATE conversations SET title = ? WHERE id = ?",
+				(title, conversation_id))
+			self.conn.commit()
+
+	def list_conversations(self, limit=50):
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?",
+				(limit,))
+			return [dict(row) for row in cur.fetchall()]
+
+	def get_conversation_messages(self, conversation_id):
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY timestamp",
+				(conversation_id,))
+			return [dict(row) for row in cur.fetchall()]
+
+	def delete_conversation(self, conversation_id):
+		with self.lock:
+			self.conn.execute(
+				"DELETE FROM conversations WHERE id = ?", (conversation_id,))
+			self.conn.commit()
+
+	def delete_all_conversations(self):
+		with self.lock:
+			self.conn.execute("DELETE FROM conversation_messages")
+			self.conn.execute("DELETE FROM conversations")
+			self.conn.commit()
+
+	def conversation_message_count(self, conversation_id) -> int:
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT COUNT(*) as cnt FROM conversation_messages WHERE conversation_id = ?",
+				(conversation_id,))
+			return cur.fetchone()["cnt"]

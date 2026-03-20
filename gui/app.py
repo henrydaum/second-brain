@@ -28,6 +28,7 @@ from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
 from gui.commands import CommandEntry, CommandRegistry, register_core_commands
 from gui.formatters import format_tool_result
+from gui.history import build_history_drawer
 from gui.log_handler import GuiLogHandler
 from gui.renderers import render_paths
 from gui.widgets import system_message, user_bubble, assistant_bubble, tool_call_card
@@ -131,6 +132,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # can mutate shared state — a Python scoping requirement.
         agent_ref = {"agent": None}
         processing = {"value": False}
+        conversation_ref = {"id": None}  # current conversation DB id
 
         # Keyboard navigation state
         _ac_index = {"value": -1}           # highlighted autocomplete item (-1 = none)
@@ -145,11 +147,116 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             auto_scroll=True,
         )
 
-        message_list.controls.append(system_message(
-            "Second Brain\n"
-            "Type a message to chat, or / for commands.\n"
-            "Loading LLM..."
-        ))
+        # -----------------------------------------------------------------
+        # CONVERSATION PERSISTENCE
+        # -----------------------------------------------------------------
+        def _on_agent_message(msg: dict):
+            """Callback from Agent — save each message to the DB."""
+            role = msg.get("role", "")
+            content = msg.get("content") or ""
+            tool_call_id = msg.get("tool_call_id")
+            tool_name = msg.get("name")  # present on tool result messages
+
+            # Lazy creation: first message in a new chat creates the DB row
+            if conversation_ref["id"] is None:
+                title = content[:80].replace("\n", " ").strip() if role == "user" else "New conversation"
+                conversation_ref["id"] = ctrl.db.create_conversation(title)
+
+            conv_id = conversation_ref["id"]
+
+            # For assistant messages with tool_calls, serialize the tool_calls
+            if msg.get("tool_calls"):
+                content = json.dumps({
+                    "content": content,
+                    "tool_calls": msg["tool_calls"],
+                })
+
+            ctrl.db.save_message(conv_id, role, content,
+                                 tool_call_id=tool_call_id, tool_name=tool_name)
+
+        def _start_new_conversation():
+            """Reset the UI for a fresh conversation. DB row is created lazily
+            on the first message so that empty conversations never pile up."""
+            conversation_ref["id"] = None
+            if agent_ref["agent"]:
+                agent_ref["agent"].reset()
+            message_list.controls.clear()
+            message_list.controls.append(system_message(
+                "Second Brain\n"
+                "Type a message to chat, or / for commands."
+            ))
+
+        def _load_conversation(conversation_id):
+            """Load a past conversation into the chat view."""
+            messages = ctrl.db.get_conversation_messages(conversation_id)
+
+            conversation_ref["id"] = conversation_id
+            message_list.controls.clear()
+
+            if not messages:
+                # Empty conversation — just switch to it with a fresh view
+                if agent_ref["agent"]:
+                    agent_ref["agent"].reset()
+                message_list.controls.append(system_message(
+                    "Second Brain\n"
+                    "Type a message to chat, or / for commands."
+                ))
+                page.update()
+                return
+
+            message_list.controls.append(system_message(
+                "Second Brain\n"
+                "(Loaded from history)"
+            ))
+
+            # Rebuild the visual message list and agent history
+            agent_history = []
+            for msg in messages:
+                role = msg["role"]
+                content = msg["content"] or ""
+
+                if role == "user":
+                    message_list.controls.append(user_bubble(content))
+                    agent_history.append({"role": "user", "content": content})
+
+                elif role == "assistant":
+                    # Check if content is a serialized tool_calls message
+                    try:
+                        parsed = json.loads(content)
+                        if isinstance(parsed, dict) and "tool_calls" in parsed:
+                            agent_history.append({
+                                "role": "assistant",
+                                "content": parsed.get("content"),
+                                "tool_calls": parsed["tool_calls"],
+                            })
+                            continue  # tool call assistants are shown via tool_call_card
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    message_list.controls.append(assistant_bubble(content))
+                    agent_history.append({"role": "assistant", "content": content})
+
+                elif role == "tool":
+                    agent_history.append({
+                        "role": "tool",
+                        "tool_call_id": msg.get("tool_call_id"),
+                        "content": content,
+                    })
+                    # Show a minimal tool card for history
+                    tool_name = msg.get("tool_name") or "tool"
+                    message_list.controls.append(
+                        tool_call_card(tool_name, True,
+                                       system_message(content[:200] + ("..." if len(content) > 200 else "")),
+                                       initially_expanded=False)
+                    )
+
+            # Restore agent conversation state
+            if agent_ref["agent"]:
+                agent_ref["agent"].history = agent_history
+
+            page.update()
+
+        # Start the first conversation
+        _start_new_conversation()
 
         # -----------------------------------------------------------------
         # AGENT LIFECYCLE
@@ -165,6 +272,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     llm, tool_registry, config,
                     system_prompt=prompt,
                     on_tool_result=on_tool_result,
+                    on_message=_on_agent_message,
                 )
 
         # -----------------------------------------------------------------
@@ -211,11 +319,20 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 agent_ref["agent"] = None
             return result
 
-        def _clear_handler(_arg):
-            """Handle /clear: reset the agent's conversation history."""
-            if agent_ref["agent"]:
-                agent_ref["agent"].reset()
-            return "(conversation history cleared)"
+        def _new_handler(_arg):
+            """Handle /new: start a fresh conversation."""
+            _start_new_conversation()
+            page.update()
+            return "(new conversation started)"
+
+        def _history_handler(_arg):
+            """Handle /history: open the conversation history drawer."""
+            refresh_history()
+            page.drawer = history_drawer
+            history_drawer.open = True
+            page.update()
+            return None  # no text output needed
+
 
         # --- Dynamic tool form overlay ---
 
@@ -481,13 +598,14 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             CommandEntry("unload",    "Unload a service",       "<service>",
                          handler=_unload_handler, arg_completions=_service_names),
             # GUI-only commands
-            CommandEntry("clear",     "Clear chat conversation history",  handler=_clear_handler),
+            CommandEntry("new",       "Start a new conversation",    handler=_new_handler),
             CommandEntry("call",      "Call a tool directly",   "<tool>",
                          handler=_call_handler, arg_completions=_tool_names),
             CommandEntry("quit",      "Shutdown",               handler=_quit_handler),
             CommandEntry("exit",      "Shutdown",               handler=_quit_handler),
             CommandEntry("config",    "Open settings panel",    handler=lambda _: _show_settings()),
             CommandEntry("settings",  "Open settings panel",    handler=lambda _: _show_settings()),
+            CommandEntry("history",   "Open conversation history",   handler=_history_handler),
             CommandEntry("open_data", "Open the data folder in Explorer",
                          handler=lambda _: _open_folder(DATA_DIR)),
             CommandEntry("open_root", "Open the project root in Explorer",
@@ -726,8 +844,46 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             visible=False,
         )
 
+        # -----------------------------------------------------------------
+        # CONVERSATION HISTORY DRAWER
+        # -----------------------------------------------------------------
+        def _on_select_conversation(conversation_id):
+            _load_conversation(conversation_id)
+
+        def _on_new_chat():
+            _start_new_conversation()
+            page.update()
+
+        def _on_delete_conversation(conversation_id):
+            ctrl.db.delete_conversation(conversation_id)
+            # If the deleted conversation is the current one, clear the view
+            if conversation_ref["id"] == conversation_id:
+                _start_new_conversation()
+                page.update()
+            # If it was an unsaved conversation (id is None), nothing to do
+
+        history_drawer, refresh_history = build_history_drawer(
+            page, ctrl.db,
+            on_select_conversation=_on_select_conversation,
+            on_new_chat=_on_new_chat,
+            on_delete_conversation=_on_delete_conversation,
+        )
+
+        def _open_history(e):
+            refresh_history()
+            page.drawer = history_drawer
+            history_drawer.open = True
+            page.update()
+
+        history_button = ft.IconButton(
+            icon=ft.Icons.HISTORY,
+            on_click=_open_history,
+            icon_size=20,
+            tooltip="Conversation history",
+        )
+
         input_row = ft.Row(
-            controls=[input_field, send_button, cancel_button],
+            controls=[history_button, input_field, send_button, cancel_button],
             spacing=8,
         )
 

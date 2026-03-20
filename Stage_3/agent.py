@@ -28,7 +28,8 @@ logger = logging.getLogger("Agent")
 
 
 class Agent:
-    def __init__(self, llm, tool_registry, config, system_prompt: str = None, on_tool_result=None):
+    def __init__(self, llm, tool_registry, config, system_prompt: str = None,
+                 on_tool_result=None, on_message=None):
         """
         Args:
             llm:            A BaseLLM instance that implements chat_with_tools().
@@ -36,10 +37,13 @@ class Agent:
             system_prompt:  Optional system message. Uses a sensible default if None.
             on_tool_result: Optional callback(tool_name: str, tool_result: ToolResult)
                             fired after each tool execution, for GUI rendering.
+            on_message:     Optional callback(msg: dict) fired after each message
+                            is added to history, for conversation persistence.
         """
         self.llm = llm
         self.tool_registry = tool_registry
         self.on_tool_result = on_tool_result
+        self.on_message = on_message
         self.system_prompt = system_prompt or (
             "You are a helpful assistant with access to a local file database. "
             "Use the available tools to search and retrieve information from the user's files. "
@@ -57,7 +61,9 @@ class Agent:
 
         Returns the assistant's final text response.
         """
-        self.history.append({"role": "user", "content": message})
+        user_msg = {"role": "user", "content": message}
+        self.history.append(user_msg)
+        self._fire_on_message(user_msg)
 
         # Build full message list with system prompt
         messages = [{"role": "system", "content": self.system_prompt}]
@@ -80,7 +86,9 @@ class Agent:
             logger.debug(f"LLM responded in {time.time() - t0:.2f}s")
 
             if not response.has_tool_calls:
-                self.history.append({"role": "assistant", "content": response.content})
+                assistant_msg = {"role": "assistant", "content": response.content}
+                self.history.append(assistant_msg)
+                self._fire_on_message(assistant_msg)
                 return response.content
 
             # Build the assistant message with tool calls for the conversation
@@ -92,6 +100,7 @@ class Agent:
             ]}
             messages.append(assistant_msg)
             self.history.append(assistant_msg)
+            self._fire_on_message(assistant_msg)
 
             # Execute each tool call and append results
             for tc in response.tool_calls:
@@ -102,19 +111,30 @@ class Agent:
                 if tc_images:
                     compiled_image_paths.extend(tc_images)
                 logger.debug(f"Tool '{tc['name']}' completed in {time.time() - t_tool:.2f}s")
-                tool_msg = {"role": "tool", "tool_call_id": tc["id"], "content": result_str}
+                tool_msg = {"role": "tool", "tool_call_id": tc["id"], "name": tc["name"], "content": result_str}
                 messages.append(tool_msg)
                 self.history.append(tool_msg)
+                self._fire_on_message(tool_msg)
 
         # Exceeded max rounds
         logger.warning(f"Agent hit max tool rounds ({self.max_tool_calls})")
         fallback = "I've made too many tool calls. Could you try a more specific question?"
-        self.history.append({"role": "assistant", "content": fallback})
+        fallback_msg = {"role": "assistant", "content": fallback}
+        self.history.append(fallback_msg)
+        self._fire_on_message(fallback_msg)
         return fallback
 
     def reset(self):
         """Clear conversation history."""
         self.history.clear()
+
+    def _fire_on_message(self, msg: dict):
+        """Notify the on_message callback, if set."""
+        if self.on_message:
+            try:
+                self.on_message(msg)
+            except Exception as e:
+                logger.debug(f"on_message callback error: {e}")
 
     def _execute_tool_call(self, tool_call: dict) -> tuple[str, list[str]]:
         """Execute a single tool call via the registry, return (result_string, image_paths)."""
