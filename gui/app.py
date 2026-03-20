@@ -26,11 +26,8 @@ import flet as ft
 
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
-from gui.commands import CommandEntry, CommandRegistry
-from gui.formatters import (
-    format_tool_result, format_services, format_tasks,
-    format_stats, format_tools,
-)
+from gui.commands import CommandEntry, CommandRegistry, register_core_commands
+from gui.formatters import format_tool_result
 from gui.log_handler import GuiLogHandler
 from gui.renderers import render_paths
 from gui.widgets import system_message, user_bubble, assistant_bubble, tool_call_card
@@ -188,19 +185,12 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             page.update()
 
         # =============================================================
-        # COMMAND REGISTRY -- Slash-command handlers and registration
+        # COMMAND REGISTRY -- Shared core + GUI-specific overrides
         # =============================================================
         registry = CommandRegistry()
+        register_core_commands(registry, ctrl, services, tool_registry, root_dir)
 
-        # --- Slash command handlers ---
-
-        def _help_handler(_arg):
-            """Build the /help output from the command registry."""
-            lines = ["Commands:"]
-            for cmd in registry.all_commands():
-                hint = f" {cmd.arg_hint}" if cmd.arg_hint else ""
-                lines.append(f"  /{cmd.name}{hint:<20}  {cmd.description}")
-            return "\n".join(lines)
+        # --- GUI-specific command handlers (override or extend core) ---
 
         def _load_handler(arg):
             """Handle /load <service>. Side-effect: creates agent when LLM loads."""
@@ -479,38 +469,29 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             os.startfile(str(p))
             return f"Opened {p}"
 
-        # --- Command registration table ---
+        # --- GUI-specific command registration (overrides + additions) ---
 
-        # Lambdas (not static lists) so completions reflect hot-reloaded plugins.
-        _task_names = lambda: list(ctrl.orchestrator.tasks.keys())
         _service_names = lambda: list(services.keys())
         _tool_names = lambda: list(tool_registry.tools.keys())
-        _retry_names = lambda: _task_names() + ["all"]
 
         for entry in [
-            CommandEntry("help",     "Show available commands",               handler=_help_handler),
-            CommandEntry("services", "List services and status",              handler=lambda _: format_services(ctrl.list_services())),
-            CommandEntry("load",     "Load a service",         "<service>",   handler=_load_handler,   arg_completions=_service_names),
-            CommandEntry("unload",   "Unload a service",       "<service>",   handler=_unload_handler, arg_completions=_service_names),
-            CommandEntry("tasks",    "List tasks with status counts",         handler=lambda _: format_tasks(ctrl.list_tasks())),
-            CommandEntry("pipeline", "Show task dependency graph",            handler=lambda _: ctrl.orchestrator.dependency_pipeline_graph()),
-            CommandEntry("pause",    "Pause a task",           "<task>",      handler=lambda a: ctrl.pause_task(a) if a else "Usage: /pause <task_name>",       arg_completions=_task_names),
-            CommandEntry("unpause",  "Unpause a task",         "<task>",      handler=lambda a: ctrl.unpause_task(a) if a else "Usage: /unpause <task_name>",   arg_completions=_task_names),
-            CommandEntry("reset",    "Reset a task to PENDING", "<task>",     handler=lambda a: ctrl.reset_task(a) if a else "Usage: /reset <task_name>",       arg_completions=_task_names),
-            CommandEntry("retry",    "Retry failed entries",   "<task>|all",  handler=lambda a: ctrl.retry_all() if a and a.lower() == "all" else ctrl.retry_task(a) if a else "Usage: /retry <task_name> | /retry all", arg_completions=_retry_names),
-            CommandEntry("tools",    "List registered tools",                 handler=lambda _: format_tools(ctrl.list_tools())),
-            CommandEntry("enable",   "Enable a tool for agent use",  "<tool>", handler=lambda a: ctrl.enable_tool(a) if a else "Usage: /enable <tool_name>",   arg_completions=_tool_names),
-            CommandEntry("disable",  "Disable a tool",         "<tool>",      handler=lambda a: ctrl.disable_tool(a) if a else "Usage: /disable <tool_name>",  arg_completions=_tool_names),
-            CommandEntry("call",     "Call a tool directly",   "<tool>",        handler=_call_handler, arg_completions=_tool_names),
-            CommandEntry("reload",   "Hot-reload tasks and tools",            handler=lambda _: ctrl.reload_plugins(root_dir)),
-            CommandEntry("stats",    "System overview",                       handler=lambda _: format_stats(ctrl.stats())),
-            CommandEntry("clear",    "Clear chat conversation history",       handler=_clear_handler),
-            CommandEntry("quit",     "Shutdown",                              handler=_quit_handler),
-            CommandEntry("exit",     "Shutdown",                              handler=_quit_handler),
-            CommandEntry("config",   "Open settings panel",                   handler=lambda _: _show_settings()),
-            CommandEntry("settings", "Open settings panel",                   handler=lambda _: _show_settings()),
-            CommandEntry("open_data", "Open the data folder in Explorer",    handler=lambda _: _open_folder(DATA_DIR)),
-            CommandEntry("open_root", "Open the project root in Explorer",   handler=lambda _: _open_folder(root_dir)),
+            # Override /load and /unload to manage agent lifecycle
+            CommandEntry("load",      "Load a service",         "<service>",
+                         handler=_load_handler, arg_completions=_service_names),
+            CommandEntry("unload",    "Unload a service",       "<service>",
+                         handler=_unload_handler, arg_completions=_service_names),
+            # GUI-only commands
+            CommandEntry("clear",     "Clear chat conversation history",  handler=_clear_handler),
+            CommandEntry("call",      "Call a tool directly",   "<tool>",
+                         handler=_call_handler, arg_completions=_tool_names),
+            CommandEntry("quit",      "Shutdown",               handler=_quit_handler),
+            CommandEntry("exit",      "Shutdown",               handler=_quit_handler),
+            CommandEntry("config",    "Open settings panel",    handler=lambda _: _show_settings()),
+            CommandEntry("settings",  "Open settings panel",    handler=lambda _: _show_settings()),
+            CommandEntry("open_data", "Open the data folder in Explorer",
+                         handler=lambda _: _open_folder(DATA_DIR)),
+            CommandEntry("open_root", "Open the project root in Explorer",
+                         handler=lambda _: _open_folder(root_dir)),
         ]:
             registry.register(entry)
 

@@ -27,7 +27,7 @@ from Stage_3.tool_registry import ToolRegistry
 from Stage_0.auto_discover_services import discover as discover_services
 from Stage_2.auto_discover_tasks import discover as discover_tasks
 from Stage_3.auto_discover_tools import discover as discover_tools
-from repl import run_repl
+from gui.repl import run_repl
 
 
 _ROOT = Path(__file__).parent
