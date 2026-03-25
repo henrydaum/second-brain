@@ -34,11 +34,19 @@ def _max_chars(config: dict) -> int:
     return config.get("max_chars", DEFAULT_MAX_CHARS)
 
 
-def _clean_text(text: str) -> str:
-    """Normalize whitespace and remove junk."""
+def _clean_text(text: str, preserve_indent: bool = False) -> str:
+    """Normalize whitespace and remove junk.
+
+    If preserve_indent is True, only collapse horizontal whitespace
+    within lines (not leading whitespace), keeping indentation intact.
+    """
     if not text:
         return ""
-    text = re.sub(r"[ \t]+", " ", text)
+    if preserve_indent:
+        # Collapse runs of spaces/tabs mid-line only, keep leading whitespace
+        text = re.sub(r"(?<=\S)[ \t]+", " ", text)
+    else:
+        text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -58,7 +66,16 @@ def parse_plaintext(path: str, config: dict, services: dict = None) -> ParseResu
             with open(path, "r", encoding="latin-1") as f:
                 content = f.read(limit)
 
-        content = _clean_text(content)
+        # Preserve indentation for code/config files
+        _CODE_SUFFIXES = {
+            ".py", ".js", ".jsx", ".ts", ".tsx", ".html", ".htm", ".css", ".scss",
+            ".c", ".cpp", ".h", ".hpp", ".java", ".cs", ".php", ".rb",
+            ".go", ".rs", ".swift", ".kt", ".sql", ".sh", ".bat", ".ps1",
+            ".r", ".m", ".scala", ".lua", ".json", ".yaml", ".yml", ".xml",
+            ".ini", ".toml", ".cfg", ".env", ".log",
+        }
+        is_code = Path(path).suffix.lower() in _CODE_SUFFIXES
+        content = _clean_text(content, preserve_indent=is_code)
 
         return ParseResult(
             modality="text",

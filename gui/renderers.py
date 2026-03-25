@@ -34,7 +34,16 @@ _CAROUSEL_HEIGHTS = {
     "audio": 60,    # player row
     "video": 310,   # 270 video + label + nav
 }
-_MAX_EXPAND_HEIGHT = 200
+_MAX_EXPAND_HEIGHT = 350
+
+_CODE_EXTENSIONS = {
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".html", ".htm", ".css", ".scss",
+    ".c", ".cpp", ".h", ".hpp", ".java", ".cs", ".php", ".rb",
+    ".go", ".rs", ".swift", ".kt", ".sql", ".sh", ".bat", ".ps1",
+    ".r", ".m", ".scala", ".lua", ".json", ".yaml", ".yml", ".xml",
+    ".ini", ".toml", ".cfg", ".env", ".log",
+}
+_MARKDOWN_EXTENSIONS = {".md", ".markdown", ".rst", ".tex", ".rtf"}
 
 
 # ===================================================================
@@ -222,22 +231,38 @@ def render_text(path: str, output, page: ft.Page) -> ft.Control:
     truncated = len(text) > max_chars
     display_text = text[:max_chars] + "\n\n... (truncated)" if truncated else text
 
-    md_markers = ("# ", "## ", "**", "- ", "```", "| ")
-    looks_like_md = any(marker in display_text[:500] for marker in md_markers)
+    ext = Path(path).suffix.lower()
 
-    if looks_like_md:
-        content = ft.Markdown(
-            value=display_text,
-            selectable=True,
-            extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-        )
-    else:
+    if ext in _CODE_EXTENSIONS:
         content = ft.Text(
             value=display_text,
             selectable=True,
             font_family="Consolas",
             size=12,
         )
+    elif ext in _MARKDOWN_EXTENSIONS:
+        content = ft.Markdown(
+            value=display_text,
+            selectable=True,
+            extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
+        )
+    else:
+        # Unknown extension, .txt, or document-extracted text: content heuristic
+        md_markers = ("# ", "## ", "**", "- ", "```", "| ")
+        looks_like_md = any(marker in display_text[:500] for marker in md_markers)
+        if looks_like_md:
+            content = ft.Markdown(
+                value=display_text,
+                selectable=True,
+                extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
+            )
+        else:
+            content = ft.Text(
+                value=display_text,
+                selectable=True,
+                font_family="Consolas",
+                size=12,
+            )
 
     return ft.ExpansionTile(
         title=_expansion_title_row(path),
@@ -366,7 +391,7 @@ def render_video(path: str, output, page: ft.Page) -> list[ft.Control]:
     return [slide]
 
 
-def _build_sheet_table(df, sheet_name: str) -> ft.Control:
+def _build_sheet_table(df, sheet_name: str, show_sheet_label: bool = True) -> ft.Control:
     """Build a single sheet's DataTable with horizontal + vertical scroll."""
     max_rows = 50
     display_df = df.head(max_rows)
@@ -392,7 +417,7 @@ def _build_sheet_table(df, sheet_name: str) -> ft.Control:
     )
 
     controls = []
-    if sheet_name != "default":
+    if show_sheet_label and sheet_name != "default":
         controls.append(ft.Text(f"Sheet: {sheet_name}", size=11, italic=True))
 
     # Horizontal scroll via Row, vertical scroll via Column
@@ -418,12 +443,62 @@ def render_tabular(path: str, output, page: ft.Page) -> ft.Control:
         sheet_name, df = next(iter(tables.items()))
         inner = _build_sheet_table(df, sheet_name)
     else:
-        # Multiple sheets — carousel of sheets
-        slides = []
-        for sheet_name, df in tables.items():
-            slides.append(_build_sheet_table(df, sheet_name))
-        carousel = Carousel(slides, page, height=450)
-        inner = carousel.build()
+        # Multiple sheets — dedicated switcher with controls above table
+        sheet_items = list(tables.items())
+        sheet_controls = []
+        for sname, df in sheet_items:
+            sheet_controls.append(_build_sheet_table(df, sname, show_sheet_label=False))
+
+        current = {"idx": 0}
+        for i, ctrl in enumerate(sheet_controls):
+            ctrl.visible = (i == 0)
+
+        stack = ft.Stack(controls=sheet_controls)
+
+        sheet_label = ft.Text(
+            f"Sheet: {sheet_items[0][0]}",
+            size=12, weight=ft.FontWeight.W_500, expand=True,
+            text_align=ft.TextAlign.CENTER,
+        )
+        counter = ft.Text(
+            f"1 / {len(sheet_items)}", size=12,
+            text_align=ft.TextAlign.CENTER,
+        )
+
+        def _go(delta, _e):
+            new = current["idx"] + delta
+            if 0 <= new < len(sheet_controls):
+                sheet_controls[current["idx"]].visible = False
+                current["idx"] = new
+                sheet_controls[new].visible = True
+                sheet_label.value = f"Sheet: {sheet_items[new][0]}"
+                counter.value = f"{new + 1} / {len(sheet_items)}"
+                left_btn.disabled = (new == 0)
+                right_btn.disabled = (new >= len(sheet_items) - 1)
+                page.update()
+
+        left_btn = ft.IconButton(
+            icon=ft.Icons.CHEVRON_LEFT, on_click=lambda e: _go(-1, e),
+            icon_size=20, disabled=True,
+        )
+        right_btn = ft.IconButton(
+            icon=ft.Icons.CHEVRON_RIGHT, on_click=lambda e: _go(1, e),
+            icon_size=20, disabled=(len(sheet_items) <= 1),
+        )
+
+        nav_row = ft.Container(
+            content=ft.Row(
+                controls=[left_btn, sheet_label, counter, right_btn],
+                alignment=ft.MainAxisAlignment.CENTER,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=4,
+            ),
+            bgcolor=ft.Colors.SURFACE,
+            border_radius=ft.border_radius.only(top_left=6, top_right=6),
+            padding=ft.padding.symmetric(horizontal=8, vertical=2),
+        )
+
+        inner = ft.Column(controls=[nav_row, stack], spacing=0)
 
     return ft.ExpansionTile(
         title=_expansion_title_row(path),

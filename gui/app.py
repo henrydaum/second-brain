@@ -794,7 +794,10 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             """Called on every keystroke in the input field."""
             _history_cursor["value"] = -1  # exit history mode on manual edit
             _update_autocomplete(input_field.value or "")
-            page.update()
+            try:
+                page.update()
+            except AssertionError:
+                pass  # Flet race: rapid keystrokes can leave new controls without UIDs
 
         # -----------------------------------------------------------------
         # INPUT FIELD & SEND BUTTON
