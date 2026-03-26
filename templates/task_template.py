@@ -5,15 +5,25 @@ This file is a self-contained reference for creating new tasks.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
 To create a new task:
-  1. Copy this file to Stage_2/tasks/task_<your_name>.py
-  2. Rename the class and fill in the class attributes
-  3. Implement run()
-  4. The system auto-discovers it on startup (or via /reload)
+  1. Use build_plugin(plugin_type="task", file_name="task_<your_name>.py",
+     action="create", code="...") to write the file to the sandbox.
+  2. The code MUST inherit from BaseTask and include:
+       from Stage_2.BaseTask import BaseTask, TaskResult
+  3. Fill in the class attributes and implement run().
+  4. Hot-reload picks it up automatically — no restart needed.
+  5. If the task needs extra packages, install them first with
+     run_command(command="pip install <pkg>", justification="...", timeout=300).
+
+build_plugin automatically validates:
+  - Correct import (from Stage_2.BaseTask import BaseTask, TaskResult)
+  - Class inheriting BaseTask with a `name` attribute
+  - No name collisions with baked-in tasks
+  - File naming conventions (must start with "task_")
 
 
 AUTO-DISCOVERY RULES
 --------------------
-- File must be in Stage_2/tasks/
+- File must be in Stage_2/tasks/ (baked-in) or the sandbox tasks dir
 - File name must start with "task_"
 - Class must inherit from BaseTask
 - One task class per file (recommended)

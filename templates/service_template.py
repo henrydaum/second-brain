@@ -5,16 +5,26 @@ This file is a self-contained reference for creating new services.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
 To create a new service:
-  1. Copy this file to Stage_0/services/<your_name>Service.py
-  2. Create a class inheriting from BaseService
-  3. Implement _load(), unload(), and your service methods
-  4. Add a build_services(config) factory function at the bottom
-  5. The system auto-discovers it on startup
+  1. Use build_plugin(plugin_type="service", file_name="<name>Service.py",
+     action="create", code="...") to write the file to the sandbox.
+  2. The code MUST inherit from BaseService and include:
+       from Stage_0.BaseService import BaseService
+  3. Implement _load(), unload(), and your service methods.
+  4. Add a build_services(config) factory function at the bottom.
+  5. Hot-reload picks it up automatically — no restart needed.
+  6. If the service needs extra packages, install them first with
+     run_command(command="pip install <pkg>", justification="...", timeout=300).
+
+build_plugin automatically validates:
+  - Correct import (from Stage_0.BaseService import BaseService)
+  - Class inheriting BaseService
+  - Presence of build_services() function
+  - File naming conventions
 
 
 AUTO-DISCOVERY RULES
 --------------------
-- File must be in Stage_0/services/
+- File must be in Stage_0/services/ (baked-in) or the sandbox services dir
 - File must NOT start with "_"
 - Module must have a top-level build_services(config) -> dict function
 - The returned dict maps service names to service instances
