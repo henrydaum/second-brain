@@ -56,7 +56,7 @@ def discover(root_dir: Path, tool_registry, config: dict, reload: bool = False):
     # --- Sandbox tools ---
     if SANDBOX_TOOLS.exists():
         for py_file in sorted(SANDBOX_TOOLS.glob("tool_*.py")):
-            module_name = f"sandbox_tools.{py_file.stem}"
+            module_name = f"sandbox_tools_{py_file.stem}"
             try:
                 if reload and module_name in sys.modules:
                     module = importlib.reload(sys.modules[module_name])

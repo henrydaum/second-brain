@@ -72,7 +72,7 @@ def _architecture() -> str:
 def _authoring_guidance() -> str:
     return (
         "## Extending the system (sandbox)\n"
-        "You can create, edit, and delete plugins using the write_plugin tool.\n"
+        "You can create, edit, and delete plugins using the build_plugin tool.\n"
         "You can read files, search code, and install packages using the run_command tool.\n\n"
         "Templates (read these before writing a new plugin):\n"
         "- templates/tool_template.py — Tool reference with BaseTool, ToolResult, parameters schema\n"
@@ -86,8 +86,8 @@ def _authoring_guidance() -> str:
         "Workflow:\n"
         "1. Read the appropriate template with run_command (e.g. type templates\\tool_template.py)\n"
         "2. Read similar existing plugins for reference\n"
-        "3. Create the plugin with write_plugin (action='create')\n"
-        "4. If errors, fix with write_plugin (action='edit', search_block/replace_block)\n"
+        "3. Create the plugin with build_plugin (action='create')\n"
+        "4. If errors, fix with build_plugin (action='edit', search_block/replace_block)\n"
         "5. Iterate with the user until they're satisfied"
     )
 

@@ -58,7 +58,7 @@ def discover(root_dir: Path, config: dict) -> dict:
         for py_file in sorted(SANDBOX_SERVICES.glob("*.py")):
             if py_file.stem.startswith("_"):
                 continue
-            module_name = f"sandbox_services.{py_file.stem}"
+            module_name = f"sandbox_services_{py_file.stem}"
             try:
                 if module_name in sys.modules:
                     module = importlib.reload(sys.modules[module_name])

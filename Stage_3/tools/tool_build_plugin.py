@@ -13,7 +13,7 @@ from pathlib import Path
 from Stage_3.BaseTool import BaseTool, ToolResult
 from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, ROOT_DIR
 
-logger = logging.getLogger("WritePlugin")
+logger = logging.getLogger("BuildPlugin")
 
 # Map plugin_type to (sandbox dir, naming prefix, base class name)
 _PLUGIN_CONFIG = {
@@ -30,8 +30,8 @@ _BAKED_IN_DIRS = {
 }
 
 
-class WritePlugin(BaseTool):
-    name = "write_plugin"
+class BuildPlugin(BaseTool):
+    name = "build_plugin"
     description = (
         "Create, edit, or delete a sandbox plugin (tool, task, or service). "
         "Use action='create' with full source code to create a new plugin. "

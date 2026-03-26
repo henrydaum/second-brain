@@ -56,7 +56,7 @@ def discover(root_dir: Path, orchestrator, config: dict, reload: bool = False):
     # --- Sandbox tasks ---
     if SANDBOX_TASKS.exists():
         for py_file in sorted(SANDBOX_TASKS.glob("task_*.py")):
-            module_name = f"sandbox_tasks.{py_file.stem}"
+            module_name = f"sandbox_tasks_{py_file.stem}"
             try:
                 if reload and module_name in sys.modules:
                     module = importlib.reload(sys.modules[module_name])
