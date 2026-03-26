@@ -10,8 +10,8 @@ class RenderFiles(BaseTool):
     description = (
         "Display one or more files to the user in the chat. "
         "Accepts any file path — images, text, audio, video, tabular data, etc. "
-        "Use this frequently, even if the user doesn't explicitly request it. "
-        'Example: {"paths": ["C:/Users/user/Documents/report.pdf", "C:/Users/user/Pictures/photo.jpg"]}'
+        "Use whenever the user says these trigger words: 'show me', 'display', 'render' 'let me see', etc.—use often. "
+        'Example input: {"paths": ["C:/Users/user/Documents/report.pdf", "C:/Users/user/Pictures/photo.jpg"]}'
     )
     parameters = {
         "type": "object",
