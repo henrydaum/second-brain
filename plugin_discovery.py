@@ -306,18 +306,26 @@ def _load_baked_in(module_name: str, reload: bool):
 
 
 def _load_sandbox(module_name: str, file_path: Path, reload: bool):
-    """Load a sandbox module via spec_from_file_location."""
+    """Load a sandbox module via spec_from_file_location.
+
+    Always uses spec_from_file_location (never importlib.reload) because
+    reload() can't re-find specs for modules loaded this way.
+    """
     try:
-        if reload and module_name in sys.modules:
-            return importlib.reload(sys.modules[module_name])
+        if reload:
+            sys.modules.pop(module_name, None)
+        elif module_name in sys.modules:
+            return sys.modules[module_name]
         spec = importlib.util.spec_from_file_location(module_name, file_path)
+        if spec is None:
+            logger.error(f"Failed to load sandbox plugin {file_path.name}: spec not found")
+            return None
         module = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = module
         spec.loader.exec_module(module)
         return module
     except Exception as e:
         logger.error(f"Failed to load sandbox plugin {file_path.name}: {e}")
-        # Clean up failed module from sys.modules
         sys.modules.pop(module_name, None)
     return None
 
