@@ -19,7 +19,7 @@ from pathlib import Path
 import flet as ft
 
 from Stage_1.registry import parse, get_modality
-from gui.widgets import preview_card, build_nav_strip
+from gui.widgets import preview_card, build_nav_strip, _truncate_path
 
 logger = logging.getLogger("Renderers")
 
@@ -328,11 +328,11 @@ def render_paths(paths: list[str], page: ft.Page, config: dict = None,
 
             # Title/path refs that update on nav
             title_text = ft.Text(
-                rendered_items[0][1], size=14,
-                weight=ft.FontWeight.BOLD, expand=True,
+                Path(rendered_items[0][1]).stem, size=14,
+                weight=ft.FontWeight.BOLD,
             )
             path_text = ft.Text(
-                rendered_items[0][2], size=10,
+                _truncate_path(rendered_items[0][2]), size=10, italic=True,
                 color=ft.Colors.ON_SURFACE_VARIANT,
                 max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
             )
@@ -341,8 +341,8 @@ def render_paths(paths: list[str], page: ft.Page, config: dict = None,
                              _title=title_text, _path=path_text):
                 for i, (c, _, _) in enumerate(_items):
                     c.visible = (i == new_idx)
-                _title.value = _items[new_idx][1]
-                _path.value = _items[new_idx][2]
+                _title.value = Path(_items[new_idx][1]).stem
+                _path.value = _truncate_path(_items[new_idx][2])
 
             nav = build_nav_strip(current_ref, len(rendered_items),
                                   rendered_items, _on_navigate, page)
@@ -359,6 +359,11 @@ def render_paths(paths: list[str], page: ft.Page, config: dict = None,
                         on_click=lambda _, ref=current_ref, ri=rendered_items: os.startfile(ri[ref["idx"]][2]),
                     ),
                     ft.PopupMenuItem(
+                        text="Open File Location",
+                        icon=ft.Icons.FOLDER_OPEN_ROUNDED,
+                        on_click=lambda _, ref=current_ref, ri=rendered_items: os.startfile(str(Path(ri[ref["idx"]][2]).parent)),
+                    ),
+                    ft.PopupMenuItem(
                         text="Copy Path",
                         icon=ft.Icons.COPY_ROUNDED,
                         on_click=lambda _, ref=current_ref, ri=rendered_items: page.set_clipboard(ri[ref["idx"]][2]),
@@ -366,15 +371,21 @@ def render_paths(paths: list[str], page: ft.Page, config: dict = None,
                 ],
             )
 
-            title_row = ft.Row(
-                controls=[title_text, menu_btn],
+            title_col = ft.Column(
+                controls=[title_text, path_text],
+                spacing=0,
+                expand=True,
+            )
+
+            header_row = ft.Row(
+                controls=[title_col, menu_btn],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             )
 
             card = ft.Container(
                 content=ft.Column(
-                    controls=[title_row, path_text, stack, nav],
+                    controls=[header_row, stack, nav],
                     spacing=4,
                 ),
                 padding=12,

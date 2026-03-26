@@ -9,6 +9,13 @@ from pathlib import Path
 import flet as ft
 
 
+def _truncate_path(path: str, max_len: int = 60) -> str:
+    """Left-truncate long paths: '...final\\parts\\of\\file.ext'."""
+    if len(path) <= max_len:
+        return path
+    return "..." + path[-(max_len - 3):]
+
+
 def system_message(text: str) -> ft.Container:
     """A monospace text block for command output."""
     return ft.Container(
@@ -105,37 +112,49 @@ def preview_card(
       │     ◀  1 of N  ▶             │  nav strip (optional)
       └───────────────────────────────┘
     """
-    title_row = ft.Row(
+    stem = Path(filename).stem
+
+    title_col = ft.Column(
         controls=[
-            ft.Text(filename, size=14, weight=ft.FontWeight.BOLD, expand=True),
-            ft.PopupMenuButton(
-                icon=ft.Icons.MORE_VERT,
-                icon_size=16,
-                tooltip=filename,
-                items=[
-                    ft.PopupMenuItem(
-                        text="Open File",
-                        icon=ft.Icons.OPEN_IN_NEW_ROUNDED,
-                        on_click=lambda _, p=file_path: os.startfile(p),
-                    ),
-                    ft.PopupMenuItem(
-                        text="Copy Path",
-                        icon=ft.Icons.COPY_ROUNDED,
-                        on_click=lambda _, p=file_path: page.set_clipboard(p),
-                    ),
-                ],
+            ft.Text(stem, size=14, weight=ft.FontWeight.BOLD),
+            ft.Text(_truncate_path(file_path), size=10, italic=True,
+                    color=ft.Colors.ON_SURFACE_VARIANT,
+                    max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+        ],
+        spacing=0,
+        expand=True,
+    )
+
+    menu_btn = ft.PopupMenuButton(
+        icon=ft.Icons.MORE_VERT,
+        icon_size=16,
+        tooltip=filename,
+        items=[
+            ft.PopupMenuItem(
+                text="Open File",
+                icon=ft.Icons.OPEN_IN_NEW_ROUNDED,
+                on_click=lambda _, p=file_path: os.startfile(p),
+            ),
+            ft.PopupMenuItem(
+                text="Open File Location",
+                icon=ft.Icons.FOLDER_OPEN_ROUNDED,
+                on_click=lambda _, p=file_path: os.startfile(str(Path(p).parent)),
+            ),
+            ft.PopupMenuItem(
+                text="Copy Path",
+                icon=ft.Icons.COPY_ROUNDED,
+                on_click=lambda _, p=file_path: page.set_clipboard(p),
             ),
         ],
+    )
+
+    header_row = ft.Row(
+        controls=[title_col, menu_btn],
         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
-    path_text = ft.Text(
-        file_path, size=10, color=ft.Colors.ON_SURFACE_VARIANT,
-        max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
-    )
-
-    controls = [title_row, path_text, content]
+    controls = [header_row, content]
     if nav_strip:
         controls.append(nav_strip)
 
