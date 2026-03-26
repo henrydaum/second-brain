@@ -24,9 +24,7 @@ from Stage_2.orchestrator import Orchestrator
 from Stage_2.watcher import Watcher
 from controller import Controller
 from Stage_3.tool_registry import ToolRegistry
-from Stage_0.auto_discover_services import discover as discover_services
-from Stage_2.auto_discover_tasks import discover as discover_tasks
-from Stage_3.auto_discover_tools import discover as discover_tools
+from plugin_discovery import discover_services, discover_tasks, discover_tools
 from gui.repl import run_repl
 
 
@@ -85,6 +83,7 @@ def main():
 	# --- 5b. Initialize tool registry ---
 	t0 = time.time()
 	tool_registry = ToolRegistry(database, config, services)
+	tool_registry.orchestrator = orchestrator
 	discover_tools(_ROOT, tool_registry, config)
 	logger.info(f"Tools registered: {list(tool_registry.tools.keys())} ({time.time() - t0:.2f}s)")
 
@@ -97,13 +96,7 @@ def main():
 	# --- 8. Start watcher ---
 	config["_root"] = str(_ROOT)
 
-	def reload_plugins():
-		logger.info("Hot-reloading plugins...")
-		discover_tasks(_ROOT, orchestrator, config, reload=True)
-		discover_tools(_ROOT, tool_registry, config, reload=True)
-		logger.info("Plugins reloaded.")
-
-	watcher = Watcher(orchestrator, database, config, on_plugin_changed=reload_plugins)
+	watcher = Watcher(orchestrator, database, config)
 	watcher.start()
 	logger.info("-----------------------------")
 	logger.info(f"SecondBrain started in {time.time() - t_start:.2f}s. Type 'help' for commands, 'quit' to exit.")

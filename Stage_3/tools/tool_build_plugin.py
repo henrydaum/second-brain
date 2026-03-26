@@ -1,13 +1,14 @@
 """
-Write Plugin tool.
+Build Plugin tool.
 
 Allows the LLM agent to create, edit (via FIND/REPLACE), and delete
 sandbox plugins (tools, tasks, services). Files are written to the
-sandbox directories in DATA_DIR and picked up by hot-reload.
+sandbox directories in DATA_DIR and registered immediately.
 """
 
 import ast
 import logging
+import sys
 from pathlib import Path
 
 from Stage_3.BaseTool import BaseTool, ToolResult
@@ -116,7 +117,7 @@ class BuildPlugin(BaseTool):
             )
 
         if action == "delete":
-            return self._delete(sandbox_path, file_name)
+            return self._delete(sandbox_path, file_name, plugin_type, context)
         elif action == "create":
             return self._create(sandbox_path, file_name, plugin_type, kwargs.get("code"), context)
         elif action == "edit":
@@ -134,6 +135,11 @@ class BuildPlugin(BaseTool):
 
         warnings = _validate_code(code, file_name, plugin_type, context)
         sandbox_path.write_text(code, encoding="utf-8")
+
+        # Register immediately (only if no syntax errors)
+        if not any("SyntaxError" in w for w in warnings):
+            _try_register(sandbox_path, plugin_type, context, warnings)
+
         return _build_result(sandbox_path, warnings, "created")
 
     def _edit(self, sandbox_path, file_name, plugin_type, search_block, replace_block, context):
@@ -163,14 +169,30 @@ class BuildPlugin(BaseTool):
 
         warnings = _validate_code(new_content, file_name, plugin_type, context)
         sandbox_path.write_text(new_content, encoding="utf-8")
+
+        # Re-register immediately (only if no syntax errors)
+        if not any("SyntaxError" in w for w in warnings):
+            _try_register(sandbox_path, plugin_type, context, warnings)
+
         return _build_result(sandbox_path, warnings, "edited")
 
-    def _delete(self, sandbox_path, file_name):
+    def _delete(self, sandbox_path, file_name, plugin_type, context):
         if not sandbox_path.exists():
             return ToolResult.failed(f"'{file_name}' does not exist in the sandbox.")
+
+        # Unregister before deleting
+        plugin_name = _extract_plugin_name(sandbox_path, plugin_type)
+        if plugin_name:
+            from plugin_discovery import unload_plugin
+            unload_plugin(plugin_type, plugin_name,
+                          context.tool_registry, context.orchestrator, context.services)
+
+        # Clean up sys.modules
+        _cleanup_module(sandbox_path, plugin_type)
+
         sandbox_path.unlink()
         return ToolResult(
-            llm_summary=f"Deleted '{file_name}'. Hot-reload will remove it from the registry.",
+            llm_summary=f"Deleted and unregistered '{file_name}'.",
         )
 
 
@@ -317,6 +339,56 @@ def _check_name_collision(tree: ast.Module, plugin_type: str, context, warnings:
                 continue
 
 
+def _try_register(sandbox_path: Path, plugin_type: str, context, warnings: list):
+    """Attempt to load and register the plugin. Appends to warnings on failure."""
+    from plugin_discovery import load_single_plugin
+    name, error = load_single_plugin(
+        plugin_type, sandbox_path,
+        context.tool_registry, context.orchestrator,
+        context.services, context.config,
+    )
+    if error:
+        warnings.append(f"Registration failed: {error}")
+
+
+def _extract_plugin_name(sandbox_path: Path, plugin_type: str) -> str | None:
+    """Extract the plugin name from source via AST (without importing)."""
+    try:
+        source = sandbox_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+    except Exception:
+        return None
+
+    if plugin_type == "service":
+        # Services use build_services() — name comes from dict keys, not class attr.
+        # Best-effort: return the stem as identifier.
+        return sandbox_path.stem
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, ast.Assign):
+                    for target in item.targets:
+                        if isinstance(target, ast.Name) and target.id == "name":
+                            if isinstance(item.value, ast.Constant) and isinstance(item.value.value, str):
+                                return item.value.value
+    return None
+
+
+_SANDBOX_NS = {
+    "tool":    "sandbox_tools_{stem}",
+    "task":    "sandbox_tasks_{stem}",
+    "service": "sandbox_services_{stem}",
+}
+
+
+def _cleanup_module(sandbox_path: Path, plugin_type: str):
+    """Remove the sandbox module from sys.modules."""
+    ns = _SANDBOX_NS.get(plugin_type, "")
+    module_name = ns.format(stem=sandbox_path.stem)
+    sys.modules.pop(module_name, None)
+
+
 def _build_result(sandbox_path: Path, warnings: list, verb: str) -> ToolResult:
     """Build a ToolResult for create/edit actions."""
     if warnings:
@@ -330,5 +402,5 @@ def _build_result(sandbox_path: Path, warnings: list, verb: str) -> ToolResult:
             ),
         )
     return ToolResult(
-        llm_summary=f"Plugin {verb}: {sandbox_path.name}. Validation passed. Hot-reload will pick it up.",
+        llm_summary=f"Plugin {verb} and registered: {sandbox_path.name}. Ready to use.",
     )

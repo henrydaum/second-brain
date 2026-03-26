@@ -8,8 +8,6 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from Stage_1.registry import get_modality, get_supported_extensions
-from paths import SANDBOX_TOOLS, SANDBOX_TASKS
-
 logger = logging.getLogger("Watcher")
 
 """
@@ -39,11 +37,10 @@ Hard problems solved here:
 
 
 class Watcher:
-	def __init__(self, orchestrator, db, config: dict, on_plugin_changed=None):
+	def __init__(self, orchestrator, db, config: dict):
 		self.orchestrator = orchestrator
 		self.db = db
 		self.config = config
-		self.on_plugin_changed = on_plugin_changed
 		self.observer = Observer()
 
 		# Directories to watch
@@ -80,21 +77,6 @@ class Watcher:
 			self.observer.schedule(handler, d, recursive=True)
 			logger.info(f"Watching: {d}")
 
-		# Watch plugin directories for hot-reload
-		if self.on_plugin_changed:
-			plugin_handler = PluginHandler(self.on_plugin_changed)
-			root = Path(self.config.get("_root", ""))
-			plugin_dirs = [
-				root / "Stage_2" / "tasks",
-				root / "Stage_3" / "tools",
-				SANDBOX_TOOLS,
-				SANDBOX_TASKS,
-			]
-			for plugin_dir in plugin_dirs:
-				if plugin_dir.exists():
-					self.observer.schedule(plugin_handler, str(plugin_dir), recursive=False)
-					logger.info(f"Watching plugins: {plugin_dir}")
-
 		self.observer.start()
 
 		# Initial scan in background — doesn't block startup
@@ -126,19 +108,6 @@ class Watcher:
 		for d in valid_dirs:
 			self.observer.schedule(handler, d, recursive=True)
 			logger.info(f"Watching: {d}")
-
-		if self.on_plugin_changed:
-			plugin_handler = PluginHandler(self.on_plugin_changed)
-			root = Path(self.config.get("_root", ""))
-			plugin_dirs = [
-				root / "Stage_2" / "tasks",
-				root / "Stage_3" / "tools",
-				SANDBOX_TOOLS,
-				SANDBOX_TASKS,
-			]
-			for plugin_dir in plugin_dirs:
-				if plugin_dir.exists():
-					self.observer.schedule(plugin_handler, str(plugin_dir), recursive=False)
 
 		self.observer.start()
 		threading.Thread(target=self._initial_scan, args=(valid_dirs,), daemon=True).start()
@@ -389,56 +358,3 @@ class DebouncedHandler(FileSystemEventHandler):
 		self.watcher.handle_delete(event.src_path)
 
 
-class PluginHandler(FileSystemEventHandler):
-	"""
-	Watches plugin directories for new/modified task and tool files.
-	Debounces changes (2s) then calls the reload callback.
-
-	Includes mtime tracking to avoid false alarms — on Windows, merely
-	reading a file can update its access time and trigger on_modified.
-	"""
-
-	def __init__(self, on_plugin_changed):
-		self.on_plugin_changed = on_plugin_changed
-		self._debounce_timer = None
-		self._lock = threading.Lock()
-		self._known_mtimes: dict[str, float] = {}
-
-	def _is_plugin_file(self, path: str) -> bool:
-		name = Path(path).name
-		return (name.startswith("task_") or name.startswith("tool_")) and name.endswith(".py")
-
-	def _mtime_changed(self, path: str) -> bool:
-		"""Return True only if the file's mtime actually changed."""
-		try:
-			current = os.path.getmtime(path)
-		except OSError:
-			return False
-		last = self._known_mtimes.get(path)
-		if last and abs(current - last) < 0.1:
-			return False
-		self._known_mtimes[path] = current
-		return True
-
-	def _schedule_reload(self):
-		with self._lock:
-			if self._debounce_timer:
-				self._debounce_timer.cancel()
-			self._debounce_timer = threading.Timer(2.0, self.on_plugin_changed)
-			self._debounce_timer.start()
-
-	def on_created(self, event):
-		if not event.is_directory and self._is_plugin_file(event.src_path):
-			try:
-				self._known_mtimes[event.src_path] = os.path.getmtime(event.src_path)
-			except OSError:
-				pass
-			logger.info(f"[Plugin] New: {Path(event.src_path).name}")
-			self._schedule_reload()
-
-	def on_modified(self, event):
-		if not event.is_directory and self._is_plugin_file(event.src_path):
-			if not self._mtime_changed(event.src_path):
-				return  # False alarm — file was read, not written
-			logger.info(f"[Plugin] Modified: {Path(event.src_path).name}")
-			self._schedule_reload()

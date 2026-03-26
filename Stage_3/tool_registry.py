@@ -30,11 +30,18 @@ class ToolRegistry:
         self.services = services or {}
         self.tools: dict[str, BaseTool] = {}
         self.on_approve_command = None  # callable(command, justification) -> bool
+        self.orchestrator = None        # set after construction in main.pyw
 
     def register(self, tool: BaseTool):
         """Register a tool. Overwrites if name already exists."""
         self.tools[tool.name] = tool
         logger.info(f"Registered tool: {tool.name}")
+
+    def unregister(self, name: str):
+        """Remove a tool from the registry (used by build_plugin on delete)."""
+        removed = self.tools.pop(name, None)
+        if removed:
+            logger.info(f"Unregistered tool: {name}")
 
     def call(self, name: str, **kwargs) -> ToolResult:
         """
@@ -61,7 +68,9 @@ class ToolRegistry:
         # Build context with call_tool pointing back to this registry
         context = build_context(self.db, self.config, self.services,
                                 call_tool=self.call,
-                                approve_command=self.on_approve_command)
+                                approve_command=self.on_approve_command,
+                                tool_registry=self,
+                                orchestrator=self.orchestrator)
 
         t0 = time.time()
         try:

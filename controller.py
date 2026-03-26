@@ -217,9 +217,8 @@ class Controller:
     # =================================================================
 
     def reload_plugins(self, root_dir: Path) -> str:
-        """Hot-reload tasks and tools from their plugin directories."""
-        from Stage_2.auto_discover_tasks import discover as discover_tasks
-        from Stage_3.auto_discover_tools import discover as discover_tools
+        """Re-discover tasks and tools from all plugin directories."""
+        from plugin_discovery import discover_tasks, discover_tools
         discover_tasks(root_dir, self.orchestrator, self.config, reload=True)
         discover_tools(root_dir, self.tool_registry, self.config, reload=True)
         return "Plugins reloaded."

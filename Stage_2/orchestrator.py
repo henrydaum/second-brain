@@ -92,6 +92,14 @@ class Orchestrator:
 		max_w = task.max_workers if task.max_workers > 0 else self.max_workers
 		self.task_semaphores[task.name] = threading.Semaphore(max_w)
 
+	def unregister_task(self, name: str):
+		"""Remove a task from the orchestrator (used by build_plugin on delete)."""
+		removed = self.tasks.pop(name, None)
+		self.task_semaphores.pop(name, None)
+		if removed:
+			self._build_graph()
+			logger.info(f"Unregistered task: {name}")
+
 	def _build_graph(self):
 		"""Derive the dependency graph from reads/writes declarations.
 		Called once after all tasks are registered, before start()."""

@@ -109,7 +109,7 @@ def show_settings(page, config, services, ctrl, watcher,
 
         # -- Group A: Service settings -> rebuild services --
         if changed & SERVICE_KEYS:
-            from Stage_0.auto_discover_services import discover as discover_services
+            from plugin_discovery import discover_services
 
             previously_loaded = [
                 name for name, svc in services.items()
