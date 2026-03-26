@@ -19,7 +19,14 @@ logger = logging.getLogger("BuildPlugin")
 _PLUGIN_CONFIG = {
     "tool":    (SANDBOX_TOOLS,    "tool_",  "BaseTool"),
     "task":    (SANDBOX_TASKS,    "task_",  "BaseTask"),
-    "service": (SANDBOX_SERVICES, None,     None),
+    "service": (SANDBOX_SERVICES, None,     "BaseService"),
+}
+
+# Expected import statements for each plugin type
+_EXPECTED_IMPORTS = {
+    "tool":    ("Stage_3.BaseTool", {"BaseTool", "ToolResult"}),
+    "task":    ("Stage_2.BaseTask", {"BaseTask", "TaskResult"}),
+    "service": ("Stage_0.BaseService", {"BaseService"}),
 }
 
 # Baked-in source directories (read-only)
@@ -48,7 +55,7 @@ class BuildPlugin(BaseTool):
             },
             "file_name": {
                 "type": "string",
-                "description": "File name (e.g. tool_my_search.py). Must follow naming convention.",
+                "description": "File name (e.g. tool_get_weather.py). Must follow naming convention.",
             },
             "action": {
                 "type": "string",
@@ -57,19 +64,19 @@ class BuildPlugin(BaseTool):
             },
             "code": {
                 "type": "string",
-                "description": "Complete Python source code. Required for 'create' action.",
+                "description": "Complete Python source code. Required for 'create' action; leave blank for other actions.",
             },
             "search_block": {
                 "type": "string",
                 "description": (
-                    "Exact text to find in the existing file. Required for 'edit' action. "
+                    "Exact text to find in the existing file. Required for 'edit' action; leave blank for other actions. "
                     "Whitespace and indentation must match exactly."
                 ),
             },
             "replace_block": {
                 "type": "string",
                 "description": (
-                    "Text to replace the search_block with. Required for 'edit' action. "
+                    "Text to replace the search_block with. Required for 'edit' action; leave blank for other actions. "
                     "Can be empty string to delete the matched block."
                 ),
             },
@@ -203,9 +210,11 @@ def _validate_code(code: str, file_name: str, plugin_type: str, context) -> list
     except SyntaxError:
         return warnings  # Already reported above
 
+    base_class = _PLUGIN_CONFIG[plugin_type][2]
+    _check_class_structure(tree, base_class, plugin_type, warnings)
+    _check_import_statement(tree, plugin_type, warnings)
+
     if plugin_type in ("tool", "task"):
-        base_class = _PLUGIN_CONFIG[plugin_type][2]
-        _check_class_structure(tree, base_class, plugin_type, warnings)
         _check_name_collision(tree, plugin_type, context, warnings)
     elif plugin_type == "service":
         _check_service_structure(tree, warnings)
@@ -249,6 +258,23 @@ def _check_service_structure(tree: ast.Module, warnings: list):
             break
     if not found:
         warnings.append("No build_services() function found. Services must define build_services(config).")
+
+
+def _check_import_statement(tree: ast.Module, plugin_type: str, warnings: list):
+    """Check that the code imports the correct Base class from the right stage folder."""
+    expected_module, expected_names = _EXPECTED_IMPORTS[plugin_type]
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == expected_module:
+            imported_names = {alias.name for alias in node.names}
+            if expected_names <= imported_names:
+                return  # Correct import found
+
+    names_str = ", ".join(sorted(expected_names))
+    warnings.append(
+        f"Missing required import: 'from {expected_module} import {names_str}'. "
+        f"{plugin_type.title()}s must import their base class from the correct module."
+    )
 
 
 def _check_name_collision(tree: ast.Module, plugin_type: str, context, warnings: list):
