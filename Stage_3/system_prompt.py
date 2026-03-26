@@ -189,23 +189,31 @@ def _file_inventory(db) -> str:
 def _source_files() -> str:
     from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES
 
-    # Baked-in source
-    names = sorted({
-        p.stem for p in _PROJECT_ROOT.rglob("*")
-        if p.suffix in (".py", ".pyw")
-        and not any(part in _SKIP_DIRS for part in p.parts)
-    })
+    lines = ["## Source files (use run_command to inspect, e.g. `type Stage_3\\agent.py`)"]
 
-    # Sandbox source
-    sandbox_names = set()
-    for sd in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES):
-        if sd.exists():
-            sandbox_names.update(p.stem for p in sd.glob("*.py") if not p.name.startswith("_"))
+    # Baked-in source grouped by directory
+    seen = set()
+    for py_file in sorted(_PROJECT_ROOT.rglob("*.py")):
+        if any(part in _SKIP_DIRS for part in py_file.parts):
+            continue
+        rel = py_file.relative_to(_PROJECT_ROOT)
+        if rel not in seen:
+            seen.add(rel)
+            lines.append(str(rel))
 
-    lines = []
-    if names:
-        lines.append("## Source code (use run_command to view, e.g. `type Stage_3\\agent.py`)")
-        lines.append(", ".join(names))
-    if sandbox_names:
-        lines.append(f"\nSandbox plugins: {', '.join(sorted(sandbox_names))}")
-    return "\n".join(lines) if lines else ""
+    # Sandbox plugins with full paths
+    sandbox_lines = []
+    for label, sd in [("tools", SANDBOX_TOOLS), ("tasks", SANDBOX_TASKS), ("services", SANDBOX_SERVICES)]:
+        if not sd.exists():
+            continue
+        for py_file in sorted(sd.glob("*.py")):
+            if py_file.name.startswith("_"):
+                continue
+            sandbox_lines.append(f"  {label}/{py_file.name}  →  {py_file}")
+
+    if sandbox_lines:
+        lines.append("")
+        lines.append("Sandbox plugins (created via build_plugin, editable):")
+        lines.extend(sandbox_lines)
+
+    return "\n".join(lines)

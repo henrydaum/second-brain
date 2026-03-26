@@ -28,13 +28,16 @@ logger = logging.getLogger("Agent")
 
 
 class Agent:
-    def __init__(self, llm, tool_registry, config, system_prompt: str = None,
+    def __init__(self, llm, tool_registry, config, system_prompt=None,
                  on_tool_result=None, on_message=None):
         """
         Args:
             llm:            A BaseLLM instance that implements chat_with_tools().
             tool_registry:  A ToolRegistry instance with registered tools.
-            system_prompt:  Optional system message. Uses a sensible default if None.
+            system_prompt:  A string, or a callable that returns a string.
+                            If callable, it is re-evaluated on every chat() call
+                            so the LLM always sees current state (e.g. after
+                            plugins are added/removed via hot-reload).
             on_tool_result: Optional callback(tool_name: str, tool_result: ToolResult)
                             fired after each tool execution, for GUI rendering.
             on_message:     Optional callback(msg: dict) fired after each message
@@ -44,11 +47,12 @@ class Agent:
         self.tool_registry = tool_registry
         self.on_tool_result = on_tool_result
         self.on_message = on_message
-        self.system_prompt = system_prompt or (
+        self._default_prompt = (
             "You are a helpful assistant with access to a local file database. "
             "Use the available tools to search and retrieve information from the user's files. "
             "Be concise and cite which files your answers come from."
         )
+        self.system_prompt = system_prompt or self._default_prompt
         self.max_tool_calls = tool_registry.max_tool_calls
         self.history: list[dict] = []
         self._tool_call_counts: dict[str, int] = {}
@@ -65,8 +69,9 @@ class Agent:
         self.history.append(user_msg)
         self._fire_on_message(user_msg)
 
-        # Build full message list with system prompt
-        messages = [{"role": "system", "content": self.system_prompt}]
+        # Build full message list with system prompt (re-evaluated if callable)
+        prompt = self.system_prompt() if callable(self.system_prompt) else self.system_prompt
+        messages = [{"role": "system", "content": prompt}]
         messages.extend(self.history)
 
         tools = self.tool_registry.get_all_schemas() or None

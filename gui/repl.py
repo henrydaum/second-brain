@@ -68,8 +68,12 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         if llm is None or not llm.loaded:
             return "LLM service not loaded. Run '/load llm' first."
 
-        prompt = build_system_prompt(ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services)
-        agent = Agent(llm, tool_registry, config, system_prompt=prompt)
+        agent = Agent(
+            llm, tool_registry, config,
+            system_prompt=lambda: build_system_prompt(
+                ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services
+            ),
+        )
         logger.info("Agent initialized.")
 
         print("Entering chat mode. Type 'exit' to return to REPL.")

@@ -265,12 +265,11 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             """Build or rebuild the Agent from the currently loaded LLM."""
             llm = services.get("llm")
             if llm and llm.loaded:
-                prompt = build_system_prompt(
-                    ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services
-                )
                 agent_ref["agent"] = Agent(
                     llm, tool_registry, config,
-                    system_prompt=prompt,
+                    system_prompt=lambda: build_system_prompt(
+                        ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services
+                    ),
                     on_tool_result=on_tool_result,
                     on_message=_on_agent_message,
                 )
