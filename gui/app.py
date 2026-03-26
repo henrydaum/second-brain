@@ -31,7 +31,7 @@ from gui.formatters import format_tool_result
 from gui.history import build_history_drawer
 from gui.log_handler import GuiLogHandler
 from gui.renderers import render_paths
-from gui.widgets import system_message, user_bubble, assistant_bubble, tool_call_card
+from gui.widgets import system_message, user_bubble, assistant_message, tool_call_card
 from paths import DATA_DIR
 
 logger = logging.getLogger("GUI")
@@ -232,7 +232,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                             continue  # tool call assistants are shown via tool_call_card
                     except (json.JSONDecodeError, TypeError):
                         pass
-                    message_list.controls.append(assistant_bubble(content))
+                    message_list.controls.append(assistant_message(content))
                     agent_history.append({"role": "assistant", "content": content})
 
                 elif role == "tool":
@@ -279,18 +279,31 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # TOOL RESULT CALLBACK (called from agent thread)
         # -----------------------------------------------------------------
         def on_tool_result(tool_name: str, result):
-            """Insert a tool card + rendered paths into the message list."""
-            if result.gui_display_paths:
-                content = render_paths(result.gui_display_paths, page, config)
-            elif result.llm_summary:
-                content = system_message(result.llm_summary)
-            else:
-                content = system_message(format_tool_result(result))
+            """Insert tool results into the message list.
 
-            message_list.controls.append(
-                tool_call_card(tool_name, result.success, content, initially_expanded=(tool_name == "render_files"))
-            )
-            page.update()
+            render_files → inline preview cards (no tool wrapper).
+            All other tools → collapsed expansion tile.
+            """
+            if tool_name == "render_files" and result.gui_display_paths:
+                # Inline: preview cards go directly into the message flow
+                control = render_paths(result.gui_display_paths, page, config)
+                message_list.controls.append(control)
+            else:
+                # Wrapped in a collapsed tool card
+                if result.gui_display_paths:
+                    content = render_paths(result.gui_display_paths, page, config)
+                elif result.llm_summary:
+                    content = system_message(result.llm_summary)
+                else:
+                    content = system_message(format_tool_result(result))
+                card = tool_call_card(tool_name, result.success, content, initially_expanded=False)
+                message_list.controls.append(card)
+            try:
+                page.update()
+            except Exception as e:
+                logger.error(f"page.update() failed in on_tool_result: {e}")
+                if message_list.controls:
+                    message_list.controls.pop()
 
         # =============================================================
         # COMMAND REGISTRY -- Shared core + GUI-specific overrides
@@ -487,16 +500,20 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 _close()
 
                 result = ctrl.call_tool(tool_name, kwargs)
-                if result.gui_display_paths:
-                    content = render_paths(result.gui_display_paths, page, config)
-                elif result.llm_summary:
-                    content = system_message(result.llm_summary)
+                if tool_name == "render_files" and result.gui_display_paths:
+                    message_list.controls.append(
+                        render_paths(result.gui_display_paths, page, config)
+                    )
                 else:
-                    content = system_message(format_tool_result(result))
-
-                message_list.controls.append(
-                    tool_call_card(tool_name, result.success, content, initially_expanded=True)
-                )
+                    if result.gui_display_paths:
+                        content = render_paths(result.gui_display_paths, page, config)
+                    elif result.llm_summary:
+                        content = system_message(result.llm_summary)
+                    else:
+                        content = system_message(format_tool_result(result))
+                    message_list.controls.append(
+                        tool_call_card(tool_name, result.success, content, initially_expanded=False)
+                    )
                 page.update()
 
             # Allow Enter to submit from single-line TextFields
@@ -906,7 +923,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 try:
                     response = agent_ref["agent"].chat(user_text)
                     if response is not None:
-                        message_list.controls.append(assistant_bubble(response))
+                        message_list.controls.append(assistant_message(response))
                 except Exception as e:
                     logger.error(f"Agent error: {e}")
                     message_list.controls.append(system_message(f"Error: {e}"))
