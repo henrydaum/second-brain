@@ -22,7 +22,7 @@ class RunCommand(BaseTool):
     description = (
         "Run a terminal command. Requires user approval before execution. "
         "Use this to read source files (e.g. cat, type), search code (e.g. grep, findstr), "
-        "install packages (e.g. pip install), check environment state, and more. "
+        "install packages for plugins (e.g. pip install), check environment state, and more. "
         "Always provide an honest justification so the user can make an informed decision."
     )
     parameters = {
@@ -36,6 +36,13 @@ class RunCommand(BaseTool):
                 "type": "string",
                 "description": "Plain English explanation of what this command does and why.",
             },
+            "timeout": {
+                "type": "integer",
+                "description": (
+                    "Max seconds to wait for the command to finish. Defaults to 30. "
+                    "Use higher values for slow operations like 'pip install torch' (300+). Max 600."
+                ),
+            },
         },
         "required": ["command", "justification"],
     }
@@ -46,6 +53,7 @@ class RunCommand(BaseTool):
     def run(self, context, **kwargs) -> ToolResult:
         command = kwargs.get("command", "").strip()
         justification = kwargs.get("justification", "").strip()
+        timeout = min(max(int(kwargs.get("timeout", 30)), 5), 600)
 
         if not command:
             return ToolResult.failed("No command provided.")
@@ -76,11 +84,11 @@ class RunCommand(BaseTool):
                 shell=True,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=timeout,
                 cwd=str(ROOT_DIR),
             )
         except subprocess.TimeoutExpired:
-            return ToolResult.failed("Command timed out after 30 seconds.")
+            return ToolResult.failed(f"Command timed out after {timeout} seconds.")
         except Exception as e:
             return ToolResult.failed(f"Command execution error: {e}")
 
