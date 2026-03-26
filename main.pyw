@@ -57,6 +57,18 @@ def main():
 	services = discover_services(_ROOT, config)
 	logger.info(f"Services discovered: {list(services.keys())} ({time.time() - t0:.2f}s)")
 
+	# --- 3b. Auto-load services ---
+	for svc_name in config.get("autoload_services", []):
+		svc = services.get(svc_name)
+		if svc is None:
+			logger.warning(f"Auto-load: unknown service '{svc_name}', skipping.")
+			continue
+		try:
+			svc.load()
+			logger.info(f"Auto-loaded service: {svc_name}")
+		except Exception as e:
+			logger.error(f"Auto-load failed for '{svc_name}': {e}")
+
 	# --- 4. Initialize orchestrator ---
 	orchestrator = Orchestrator(database, config, services)
 

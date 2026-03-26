@@ -43,6 +43,12 @@ SETTINGS_DATA = [
      True,
      {"type": "bool"}),
 
+    # --- Services ---
+    ("Auto-load Services", "autoload_services",
+     "Service names to load automatically on startup (e.g. [\"google_drive\"]).",
+     [],
+     {"type": "json_list"}),
+
     # --- Processing ---
     ("Max Workers", "max_workers",
      "Maximum parallel worker threads for task processing. Takes effect on save.",
