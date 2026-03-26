@@ -47,6 +47,11 @@ def main():
 		logger.error("No sync_directories set in config.json. Add at least one folder path.")
 		sys.exit(1)
 
+	# --- 1b. Ensure sandbox directories exist ---
+	from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES
+	for d in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES):
+		d.mkdir(parents=True, exist_ok=True)
+
 	# --- 2. Initialize database ---
 	t0 = time.time()
 	database = Database(config["db_path"])

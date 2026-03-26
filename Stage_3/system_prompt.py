@@ -71,11 +71,24 @@ def _architecture() -> str:
 
 def _authoring_guidance() -> str:
     return (
-        "## Extending the system\n"
-        "You can help the user design new tasks and tools. The key interfaces (BaseTask, BaseTool, "
-        "TaskResult, ToolResult, SecondBrainContext) will be provided in full when needed via "
-        "dedicated creation tools. For now, understand that tasks declare reads/writes/modalities "
-        "and tools declare name/description/parameters as a JSON schema."
+        "## Extending the system (sandbox)\n"
+        "You can create, edit, and delete plugins using the write_plugin tool.\n"
+        "You can read files, search code, and install packages using the run_command tool.\n\n"
+        "Templates (read these before writing a new plugin):\n"
+        "- templates/tool_template.py — Tool reference with BaseTool, ToolResult, parameters schema\n"
+        "- templates/task_template.py — Task reference with BaseTask, TaskResult, reads/writes\n"
+        "- templates/service_template.py — Service reference with BaseService, build_services\n\n"
+        "Naming conventions:\n"
+        "- Tools: tool_<name>.py, class inherits BaseTool\n"
+        "- Tasks: task_<name>.py, class inherits BaseTask\n"
+        "- Services: <name>.py, must have build_services(config) function\n\n"
+        "Plugin names must be unique — no collisions with baked-in names allowed.\n\n"
+        "Workflow:\n"
+        "1. Read the appropriate template with run_command (e.g. type templates\\tool_template.py)\n"
+        "2. Read similar existing plugins for reference\n"
+        "3. Create the plugin with write_plugin (action='create')\n"
+        "4. If errors, fix with write_plugin (action='edit', search_block/replace_block)\n"
+        "5. Iterate with the user until they're satisfied"
     )
 
 
@@ -138,7 +151,8 @@ def _available_tools(tool_registry) -> str:
         lines.append("These are the ONLY tools you can call via function calling:")
         for tool in enabled:
             desc = (tool.description or "").split("\n")[0]
-            lines.append(f"- **{tool.name}**: {desc}")
+            tag = " [mutable]" if getattr(tool, '_mutable', False) else ""
+            lines.append(f"- **{tool.name}**{tag}: {desc}")
     else:
         lines.append("No tools are currently enabled.")
     if disabled:
@@ -173,11 +187,25 @@ def _file_inventory(db) -> str:
 
 
 def _source_files() -> str:
+    from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES
+
+    # Baked-in source
     names = sorted({
         p.stem for p in _PROJECT_ROOT.rglob("*")
         if p.suffix in (".py", ".pyw")
         and not any(part in _SKIP_DIRS for part in p.parts)
     })
-    if not names:
-        return ""
-    return "## Source code (use read_source_code to view)\n" + ", ".join(names)
+
+    # Sandbox source
+    sandbox_names = set()
+    for sd in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES):
+        if sd.exists():
+            sandbox_names.update(p.stem for p in sd.glob("*.py") if not p.name.startswith("_"))
+
+    lines = []
+    if names:
+        lines.append("## Source code (use run_command to view, e.g. `type Stage_3\\agent.py`)")
+        lines.append(", ".join(names))
+    if sandbox_names:
+        lines.append(f"\nSandbox plugins: {', '.join(sorted(sandbox_names))}")
+    return "\n".join(lines) if lines else ""

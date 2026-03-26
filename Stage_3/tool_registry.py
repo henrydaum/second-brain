@@ -29,6 +29,7 @@ class ToolRegistry:
         self.config = config
         self.services = services or {}
         self.tools: dict[str, BaseTool] = {}
+        self.on_approve_command = None  # callable(command, justification) -> bool
 
     def register(self, tool: BaseTool):
         """Register a tool. Overwrites if name already exists."""
@@ -58,7 +59,9 @@ class ToolRegistry:
                 return ToolResult.failed(f"Required services not available: {not_ready}")
 
         # Build context with call_tool pointing back to this registry
-        context = build_context(self.db, self.config, self.services, call_tool=self.call)
+        context = build_context(self.db, self.config, self.services,
+                                call_tool=self.call,
+                                approve_command=self.on_approve_command)
 
         t0 = time.time()
         try:

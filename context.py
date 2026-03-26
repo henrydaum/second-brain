@@ -18,15 +18,16 @@ class SecondBrainContext:
     db: Any = None
     config: dict = field(default_factory=dict)
     services: dict = field(default_factory=dict)
-    parse: Any = None        # callable(path, modality, config) -> ParseResult
-    call_tool: Any = None    # callable(name, **kwargs) -> ToolResult (tools only)
+    parse: Any = None            # callable(path, modality, config) -> ParseResult
+    call_tool: Any = None        # callable(name, **kwargs) -> ToolResult (tools only)
+    approve_command: Any = None  # callable(command, justification) -> bool (tools only)
 
 
 # Backward-compat alias so existing plugins using the old name still work
 DataRefineryContext = SecondBrainContext
 
 
-def build_context(db, config: dict, services: dict, call_tool=None) -> SecondBrainContext:
+def build_context(db, config: dict, services: dict, call_tool=None, approve_command=None) -> SecondBrainContext:
     """
     Factory that wires up a fully functional context.
 
@@ -48,5 +49,6 @@ def build_context(db, config: dict, services: dict, call_tool=None) -> SecondBra
         services=services,
         parse=lambda path, modality=None, config=None: _parse(path, modality, config, services),
         call_tool=call_tool,
+        approve_command=approve_command,
     )
     

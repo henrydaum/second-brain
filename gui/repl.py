@@ -26,6 +26,20 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
              tool_registry, services, config, root_dir: Path):
     agent = None
 
+    # --- Console-based approval for run_command (fallback; GUI overrides) ---
+    def _repl_approve_command(command: str, justification: str) -> bool:
+        print(f"\n--- Agent wants to run a command ---")
+        print(f"  Command:  {command}")
+        print(f"  Reason:   {justification}")
+        try:
+            response = input("  Allow? [y/N]: ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            return False
+        return response in ("y", "yes")
+
+    if tool_registry.on_approve_command is None:
+        tool_registry.on_approve_command = _repl_approve_command
+
     # --- Build command registry (shared + REPL-specific) ---
     registry = CommandRegistry()
     register_core_commands(registry, ctrl, services, tool_registry, root_dir)

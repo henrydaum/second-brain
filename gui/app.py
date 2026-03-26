@@ -305,6 +305,72 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 if message_list.controls:
                     message_list.controls.pop()
 
+        # -----------------------------------------------------------------
+        # COMMAND APPROVAL DIALOG (for run_command tool)
+        # -----------------------------------------------------------------
+        def _approve_command(command: str, justification: str) -> bool:
+            """Show a confirmation dialog for run_command. Blocks until user responds."""
+            result_event = threading.Event()
+            approved = {"value": False}
+
+            def _allow(e):
+                approved["value"] = True
+                overlay.visible = False
+                page.update()
+                result_event.set()
+
+            def _deny(e):
+                approved["value"] = False
+                overlay.visible = False
+                page.update()
+                result_event.set()
+
+            overlay = ft.Container(
+                expand=True,
+                blur=(10, 10),
+                bgcolor=ft.Colors.with_opacity(0.3, ft.Colors.BLACK),
+                padding=40,
+                content=ft.Container(
+                    bgcolor=ft.Colors.SURFACE,
+                    border_radius=12,
+                    padding=25,
+                    width=500,
+                    content=ft.Column([
+                        ft.Text("Terminal Command", size=18, weight=ft.FontWeight.BOLD),
+                        ft.Container(height=8),
+                        ft.Container(
+                            bgcolor=ft.Colors.SURFACE,
+                            border_radius=8,
+                            padding=12,
+                            content=ft.Text(command, font_family="Consolas", size=13, selectable=True),
+                        ),
+                        ft.Container(height=8),
+                        ft.Text(justification, size=13, color=ft.Colors.ON_SURFACE),
+                        ft.Container(height=8),
+                        ft.Text(
+                            "Terminal commands can read files and modify your system. "
+                            "Only approve commands you understand.",
+                            size=11, color=ft.Colors.ERROR, italic=True,
+                        ),
+                        ft.Container(height=12),
+                        ft.Row([
+                            ft.TextButton("Deny", on_click=_deny),
+                            ft.ElevatedButton("Allow", on_click=_allow),
+                        ], alignment=ft.MainAxisAlignment.END),
+                    ], tight=True),
+                ),
+                alignment=ft.alignment.center,
+            )
+            page.overlay.append(overlay)
+            page.update()
+            result_event.wait()  # blocks the tool's thread
+            if overlay in page.overlay:
+                page.overlay.remove(overlay)
+            return approved["value"]
+
+        # Wire the approval callback into the tool registry
+        tool_registry.on_approve_command = _approve_command
+
         # =============================================================
         # COMMAND REGISTRY -- Shared core + GUI-specific overrides
         # =============================================================

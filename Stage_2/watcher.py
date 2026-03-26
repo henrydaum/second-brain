@@ -8,6 +8,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from Stage_1.registry import get_modality, get_supported_extensions
+from paths import SANDBOX_TOOLS, SANDBOX_TASKS
 
 logger = logging.getLogger("Watcher")
 
@@ -83,7 +84,13 @@ class Watcher:
 		if self.on_plugin_changed:
 			plugin_handler = PluginHandler(self.on_plugin_changed)
 			root = Path(self.config.get("_root", ""))
-			for plugin_dir in [root / "Stage_2" / "tasks", root / "Stage_3" / "tools"]:
+			plugin_dirs = [
+				root / "Stage_2" / "tasks",
+				root / "Stage_3" / "tools",
+				SANDBOX_TOOLS,
+				SANDBOX_TASKS,
+			]
+			for plugin_dir in plugin_dirs:
 				if plugin_dir.exists():
 					self.observer.schedule(plugin_handler, str(plugin_dir), recursive=False)
 					logger.info(f"Watching plugins: {plugin_dir}")
@@ -123,7 +130,13 @@ class Watcher:
 		if self.on_plugin_changed:
 			plugin_handler = PluginHandler(self.on_plugin_changed)
 			root = Path(self.config.get("_root", ""))
-			for plugin_dir in [root / "Stage_2" / "tasks", root / "Stage_3" / "tools"]:
+			plugin_dirs = [
+				root / "Stage_2" / "tasks",
+				root / "Stage_3" / "tools",
+				SANDBOX_TOOLS,
+				SANDBOX_TASKS,
+			]
+			for plugin_dir in plugin_dirs:
 				if plugin_dir.exists():
 					self.observer.schedule(plugin_handler, str(plugin_dir), recursive=False)
 
