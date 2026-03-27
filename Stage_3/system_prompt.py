@@ -73,7 +73,8 @@ def _authoring_guidance() -> str:
     return (
         "## Extending the system (sandbox)\n"
         "You can create, edit, and delete plugins using the build_plugin tool.\n"
-        "You can read files, search code, and install packages using the run_command tool.\n\n"
+        "You can read files using the read_file tool.\n"
+        "You can install packages using run_command (e.g. run_command(command='pip install requests')).\n\n"
         "Templates (read these before writing a new plugin):\n"
         "- templates/tool_template.py — Tool reference with BaseTool, ToolResult, parameters schema\n"
         "- templates/task_template.py — Task reference with BaseTask, TaskResult, reads/writes\n"
@@ -189,7 +190,7 @@ def _file_inventory(db) -> str:
 def _source_files() -> str:
     from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES
 
-    lines = ["## Source files (use run_command to inspect, e.g. `type Stage_3\\agent.py`)"]
+    lines = ["## Source files (use read_file to inspect, e.g. read_file(path='Stage_3/agent.py'))"]
 
     # Baked-in source grouped by directory
     seen = set()
@@ -209,11 +210,11 @@ def _source_files() -> str:
         for py_file in sorted(sd.glob("*.py")):
             if py_file.name.startswith("_"):
                 continue
-            sandbox_lines.append(f"  {label}/{py_file.name}  →  {py_file}")
+            sandbox_lines.append(str(py_file))
 
     if sandbox_lines:
         lines.append("")
-        lines.append("Sandbox plugins (created via build_plugin, editable):")
+        lines.append("Sandbox plugins (use these full paths with read_file):")
         lines.extend(sandbox_lines)
 
     return "\n".join(lines)
