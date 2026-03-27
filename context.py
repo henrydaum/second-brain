@@ -25,10 +25,6 @@ class SecondBrainContext:
     orchestrator: Any = None     # Orchestrator instance (tools only)
 
 
-# Backward-compat alias so existing plugins using the old name still work
-DataRefineryContext = SecondBrainContext
-
-
 def build_context(db, config: dict, services: dict, call_tool=None, approve_command=None,
                    tool_registry=None, orchestrator=None) -> SecondBrainContext:
     """

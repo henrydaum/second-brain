@@ -6,6 +6,7 @@ LLM consumption. Only infrastructure code lives here.
 """
 
 import logging
+import threading
 import time
 
 from context import build_context
@@ -29,17 +30,20 @@ class ToolRegistry:
         self.config = config
         self.services = services or {}
         self.tools: dict[str, BaseTool] = {}
+        self._lock = threading.Lock()
         self.on_approve_command = None  # callable(command, justification) -> bool
         self.orchestrator = None        # set after construction in main.pyw
 
     def register(self, tool: BaseTool):
         """Register a tool. Overwrites if name already exists."""
-        self.tools[tool.name] = tool
+        with self._lock:
+            self.tools[tool.name] = tool
         logger.info(f"Registered tool: {tool.name}")
 
     def unregister(self, name: str):
         """Remove a tool from the registry (used by build_plugin on delete)."""
-        removed = self.tools.pop(name, None)
+        with self._lock:
+            removed = self.tools.pop(name, None)
         if removed:
             logger.info(f"Unregistered tool: {name}")
 
@@ -51,7 +55,8 @@ class ToolRegistry:
             - External callers (API, CLI, LLM)
             - Other tools via context.call_tool
         """
-        tool = self.tools.get(name)
+        with self._lock:
+            tool = self.tools.get(name)
         if tool is None:
             return ToolResult.failed(f"Unknown tool: {name}")
 

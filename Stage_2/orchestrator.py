@@ -46,6 +46,7 @@ class Orchestrator:
 
 		# Task registry: name -> BaseTask instance
 		self.tasks: dict[str, BaseTask] = {}
+		self._task_lock = threading.Lock()
 
 		# Paused tasks — skipped during dispatch, work stays PENDING
 		self.paused: set[str] = set()
@@ -86,16 +87,17 @@ class Orchestrator:
 			modalities=task.modalities,
 		)
 
-		self.tasks[task.name] = task
+		with self._task_lock:
+			self.tasks[task.name] = task
+			max_w = task.max_workers if task.max_workers > 0 else self.max_workers
+			self.task_semaphores[task.name] = threading.Semaphore(max_w)
 		logger.info(f"Registered task: {task.name}")
-
-		max_w = task.max_workers if task.max_workers > 0 else self.max_workers
-		self.task_semaphores[task.name] = threading.Semaphore(max_w)
 
 	def unregister_task(self, name: str):
 		"""Remove a task from the orchestrator (used by build_plugin on delete)."""
-		removed = self.tasks.pop(name, None)
-		self.task_semaphores.pop(name, None)
+		with self._task_lock:
+			removed = self.tasks.pop(name, None)
+			self.task_semaphores.pop(name, None)
 		if removed:
 			self._build_graph()
 			logger.info(f"Unregistered task: {name}")

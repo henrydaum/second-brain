@@ -181,11 +181,11 @@ class BuildPlugin(BaseTool):
             return ToolResult.failed(f"'{file_name}' does not exist in the sandbox.")
 
         # Unregister before deleting
+        from plugin_discovery import unload_plugin
         plugin_name = _extract_plugin_name(sandbox_path, plugin_type)
-        if plugin_name:
-            from plugin_discovery import unload_plugin
-            unload_plugin(plugin_type, plugin_name,
-                          context.tool_registry, context.orchestrator, context.services)
+        unload_plugin(plugin_type, plugin_name or file_name,
+                      context.tool_registry, context.orchestrator,
+                      context.services, source_path=str(sandbox_path))
 
         # Clean up sys.modules
         _cleanup_module(sandbox_path, plugin_type)

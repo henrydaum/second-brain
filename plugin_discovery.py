@@ -211,21 +211,32 @@ def load_single_plugin(plugin_type: str, file_path: Path,
 
 def unload_plugin(plugin_type: str, plugin_name: str,
                   tool_registry=None, orchestrator=None,
-                  services: dict = None):
-    """Unregister a plugin by name. Also cleans up sys.modules."""
+                  services: dict = None, source_path: str = None):
+    """Unregister a plugin. For services, uses source_path to find all
+    service names registered from that file."""
     if plugin_type == "tool" and tool_registry:
         tool_registry.unregister(plugin_name)
     elif plugin_type == "task" and orchestrator:
         orchestrator.unregister_task(plugin_name)
     elif plugin_type == "service" and services:
-        svc = services.pop(plugin_name, None)
-        if svc and hasattr(svc, "unload") and getattr(svc, "loaded", False):
+        _unload_services_by_source(services, source_path or plugin_name)
+
+
+def _unload_services_by_source(services: dict, source_path: str):
+    """Find all services registered from a source file, unload and remove them."""
+    to_remove = [
+        name for name, svc in services.items()
+        if getattr(svc, "_source_path", None) == source_path
+    ]
+    for name in to_remove:
+        svc = services.pop(name)
+        if hasattr(svc, "unload") and getattr(svc, "loaded", False):
             try:
                 svc.unload()
+                logger.info(f"Unloaded service: {name}")
             except Exception as e:
-                logger.error(f"Error unloading service '{plugin_name}': {e}")
-        if svc:
-            logger.info(f"Unregistered service: {plugin_name}")
+                logger.error(f"Error unloading service '{name}': {e}")
+        logger.info(f"Unregistered service: {name}")
 
 
 def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str | None]:
@@ -271,6 +282,9 @@ def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str 
 def _load_single_service(file_path: Path, services: dict, config: dict) -> tuple[str | None, str | None]:
     cfg = _SERVICE_CONFIG
     module_name = cfg["sandbox_ns"].format(stem=file_path.stem)
+
+    # Unload any existing services from this file first (frees models/GPU)
+    _unload_services_by_source(services, str(file_path))
 
     module = _load_sandbox(module_name, file_path, reload=True)
     if module is None:
