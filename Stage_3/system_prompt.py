@@ -56,7 +56,7 @@ def _authoring_guidance() -> str:
         "3. Create: build_plugin(plugin_type='tool', file_name='tool_foo.py', action='create', code='...')\n"
         "4. Fix errors: build_plugin(action='edit', search_block='...', replace_block='...')\n"
         "5. Install packages if needed: run_command(command='pip install requests')\n\n"
-        "Naming: tools → tool_<name>.py, tasks → task_<name>.py, services → <name>.py\n"
+        "Naming: tools are tool_<name>.py, tasks are task_<name>.py, services are only <name>.py\n"
         "Names must be unique — no collisions with baked-in plugins."
     )
 
