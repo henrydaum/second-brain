@@ -1,31 +1,29 @@
 """
 System prompt builder.
 
-Assembles a concise system prompt for the agent that includes both a static
-explanation of how Second Brain works and dynamic runtime state (tables,
-task status, services, file inventory). Built fresh each time the user enters
-chat mode so the LLM always sees current state.
+Assembles a system prompt for the agent that includes a brief identity,
+actionable guidance, tool descriptions, and dynamic runtime state.
+Built fresh each time the user sends a message so the LLM always sees
+current state (e.g. newly registered plugins, service status changes).
 """
 
 from pathlib import Path
 
-from Stage_1.registry import get_supported_extensions, _MODALITY_MAP
+from Stage_1.registry import get_supported_extensions
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
-_SKIP_DIRS = {"__pycache__", ".git", ".venv", "venv"}
 
 
 def build_system_prompt(db, orchestrator, tool_registry, services: dict) -> str:
     sections = [
         _identity(),
-        _architecture(),
-        _database_tables(db),
-        _pipeline_status(db, orchestrator),
-        _services_status(services),
         _available_tools(tool_registry),
-        _file_inventory(db),
-        _source_files(),
         _authoring_guidance(),
+        _sandbox_files(),
+        _database_tables(db),
+        _services_status(services),
+        _pipeline_status(db, orchestrator),
+        _file_inventory(db),
     ]
     return "\n\n".join(s for s in sections if s)
 
@@ -35,65 +33,78 @@ def build_system_prompt(db, orchestrator, tool_registry, services: dict) -> str:
 def _identity() -> str:
     return (
         "You are the Second Brain assistant — an AI embedded in a local file intelligence system. "
-        "You have tools to search and query a database of user files. "
-        "Past conversations are stored in the database (conversations and conversation_messages tables) "
-        "and can be queried with the sql_query tool to recall what was discussed previously. "
-        "Be concise and always cite which files your answers come from."
-    )
-
-
-def _architecture() -> str:
-    return (
-        "## How Second Brain works\n"
-        "The system watches local directories and processes every file through a four-stage pipeline:\n"
+        "You have tools to search and query a SQLite database of the user's files, and to "
+        "create new tools, tasks, and services via a sandbox plugin system.\n"
         "\n"
-        "Stage 0 — Services: shared resources (LLM, text/image embedders, OCR) with a load/unload lifecycle. "
-        "Parsers, tasks, and tools can use services; the orchestrator waits until they're loaded.\n"
-        "\n"
-        "Stage 1 — Parsers: convert any supported file into a standardised ParseResult. "
-        "Each file extension maps to a default modality (text, image, audio, video, tabular, container). "
-        "Some files contain multiple modalities (e.g. a PDF with embedded images); the parser reports "
-        "these via also_contains so the pipeline can process them too.\n"
-        "\n"
-        "Stage 2 — Tasks: background workers that run on every file. Each task declares the database "
-        "tables it reads from and writes to. The orchestrator derives a dependency DAG from these "
-        "declarations automatically — no explicit wiring. When an upstream task completes, downstream "
-        "tasks that read its output are enqueued if all of their dependencies are met. "
-        "Task results get written to their SQLite output tables.\n"
-        "\n"
-        "Stage 3 — Tools: the on-demand query layer (where you operate). Tools accept arguments, "
-        "query the database or call other tools, and return structured results. Your available tools are provided via function calling. The tool call limit is per-message, not per-session. If you run out of one tool, you can call another.\n"
-        "\n"
-        "Both tasks and tools receive a SecondBrainContext giving them access to the database, config, "
-        "services, the parser, and (for tools) the ability to call other tools."
+        "Guidelines:\n"
+        "- Be concise. When answering questions about files, cite which files your answers come from.\n"
+        "- Past conversations are stored in the database (conversations, conversation_messages tables) "
+        "and can be recalled with sql_query.\n"
+        "- For architecture details and design philosophy, use read_file(path='README.md').\n"
+        "- The tool call limit is per-message, not per-session. "
+        "If you hit the limit on one tool, you can still call others."
     )
 
 
 def _authoring_guidance() -> str:
     return (
-        "## Extending the system (sandbox)\n"
-        "You can create, edit, and delete plugins using the build_plugin tool.\n"
-        "You can read files using the read_file tool.\n"
-        "You can install packages using run_command (e.g. run_command(command='pip install requests')).\n\n"
-        "Templates (read these before writing a new plugin):\n"
-        "- templates/tool_template.py — Tool reference with BaseTool, ToolResult, parameters schema\n"
-        "- templates/task_template.py — Task reference with BaseTask, TaskResult, reads/writes\n"
-        "- templates/service_template.py — Service reference with BaseService, build_services\n\n"
-        "Naming conventions:\n"
-        "- Tools: tool_<name>.py, class inherits BaseTool\n"
-        "- Tasks: task_<name>.py, class inherits BaseTask\n"
-        "- Services: <name>.py, must have build_services(config) function\n\n"
-        "Plugin names must be unique — no collisions with baked-in names allowed.\n\n"
+        "## Building plugins\n"
+        "You can extend the system by creating sandbox plugins (tools, tasks, services).\n\n"
         "Workflow:\n"
-        "1. Read the appropriate template with read_file (e.g. read_file(path='templates/tool_template.py'))\n"
-        "2. Read similar existing plugins for reference (paths are listed in the Source Files section above)\n"
-        "3. Create the plugin with build_plugin (action='create')\n"
-        "4. If errors, fix with build_plugin (action='edit', search_block/replace_block)\n"
-        "5. Iterate with the user until they're satisfied"
+        "1. Read the template: read_file(path='templates/tool_template.py') (or task_template.py, service_template.py)\n"
+        "2. Read similar existing plugins for reference (sandbox paths listed below, baked-in paths use read_file with relative paths like 'Stage_3/tools/tool_hybrid_search.py')\n"
+        "3. Create: build_plugin(plugin_type='tool', file_name='tool_foo.py', action='create', code='...')\n"
+        "4. Fix errors: build_plugin(action='edit', search_block='...', replace_block='...')\n"
+        "5. Install packages if needed: run_command(command='pip install requests')\n\n"
+        "Naming: tools → tool_<name>.py, tasks → task_<name>.py, services → <name>.py\n"
+        "Names must be unique — no collisions with baked-in plugins."
     )
 
 
 # ── Dynamic sections ─────────────────────────────────────────────────
+
+def _available_tools(tool_registry) -> str:
+    if not tool_registry:
+        return ""
+    enabled = [t for t in tool_registry.tools.values() if t.agent_enabled]
+    disabled = [t for t in tool_registry.tools.values() if not t.agent_enabled]
+    lines = ["## Your tools (call via function calling)"]
+    if enabled:
+        for tool in enabled:
+            desc = (tool.description or "").strip()
+            tag = " [sandbox]" if getattr(tool, '_mutable', False) else ""
+            lines.append(f"### {tool.name}{tag}")
+            lines.append(desc)
+    else:
+        lines.append("No tools are currently enabled.")
+    if disabled:
+        lines.append("")
+        lines.append(
+            "Disabled tools (cannot call directly, used internally): "
+            + ", ".join(t.name for t in disabled)
+        )
+    return "\n".join(lines)
+
+
+def _sandbox_files() -> str:
+    from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES
+
+    sandbox_lines = []
+    for label, sd in [("tools", SANDBOX_TOOLS), ("tasks", SANDBOX_TASKS), ("services", SANDBOX_SERVICES)]:
+        if not sd.exists():
+            continue
+        for py_file in sorted(sd.glob("*.py")):
+            if py_file.name.startswith("_"):
+                continue
+            sandbox_lines.append(f"  {py_file}")
+
+    if not sandbox_lines:
+        return "## Sandbox plugins\nNone yet. Use build_plugin to create one."
+
+    lines = ["## Sandbox plugins (use these full paths with read_file)"]
+    lines.extend(sandbox_lines)
+    return "\n".join(lines)
+
 
 def _database_tables(db) -> str:
     try:
@@ -107,7 +118,7 @@ def _database_tables(db) -> str:
     if not names:
         return "## Database\nNo tables yet."
 
-    return "## Database tables (for more info, call the sql_query tool)\n" + ", ".join(names)
+    return "## Database tables (use sql_query to explore)\n" + ", ".join(names)
 
 
 def _pipeline_status(db, orchestrator) -> str:
@@ -142,31 +153,6 @@ def _services_status(services: dict) -> str:
     return "## Services\n" + ", ".join(parts)
 
 
-def _available_tools(tool_registry) -> str:
-    if not tool_registry:
-        return ""
-    enabled = [t for t in tool_registry.tools.values() if t.agent_enabled]
-    disabled = [t for t in tool_registry.tools.values() if not t.agent_enabled]
-    lines = ["## Your tools"]
-    if enabled:
-        lines.append("These are the ONLY tools you can call via function calling:")
-        for tool in enabled:
-            desc = (tool.description or "").split("\n")[0]
-            tag = " [mutable]" if getattr(tool, '_mutable', False) else ""
-            lines.append(f"- **{tool.name}**{tag}: {desc}")
-    else:
-        lines.append("No tools are currently enabled.")
-    if disabled:
-        lines.append("")
-        lines.append(
-            "The following tools exist but are DISABLED (agent_enabled=False). "
-            "You cannot call them directly. They may be used internally by other tools."
-        )
-        for tool in disabled:
-            lines.append(f"- ~~{tool.name}~~")
-    return "\n".join(lines)
-
-
 def _file_inventory(db) -> str:
     file_stats = db.get_system_stats().get("files", {})
     total = sum(file_stats.values()) if file_stats else 0
@@ -183,38 +169,5 @@ def _file_inventory(db) -> str:
     exts = sorted(get_supported_extensions())
     if exts:
         lines.append("Supported extensions: " + " ".join(exts))
-
-    return "\n".join(lines)
-
-
-def _source_files() -> str:
-    from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES
-
-    lines = ["## Source files (use read_file to inspect, e.g. read_file(path='Stage_3/agent.py'))"]
-
-    # Baked-in source grouped by directory
-    seen = set()
-    for py_file in sorted(_PROJECT_ROOT.rglob("*.py")):
-        if any(part in _SKIP_DIRS for part in py_file.parts):
-            continue
-        rel = py_file.relative_to(_PROJECT_ROOT)
-        if rel not in seen:
-            seen.add(rel)
-            lines.append(str(rel))
-
-    # Sandbox plugins with full paths
-    sandbox_lines = []
-    for label, sd in [("tools", SANDBOX_TOOLS), ("tasks", SANDBOX_TASKS), ("services", SANDBOX_SERVICES)]:
-        if not sd.exists():
-            continue
-        for py_file in sorted(sd.glob("*.py")):
-            if py_file.name.startswith("_"):
-                continue
-            sandbox_lines.append(str(py_file))
-
-    if sandbox_lines:
-        lines.append("")
-        lines.append("Sandbox plugins (use these full paths with read_file):")
-        lines.extend(sandbox_lines)
 
     return "\n".join(lines)

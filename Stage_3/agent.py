@@ -78,6 +78,7 @@ class Agent:
         self._tool_call_counts.clear()
 
         compiled_image_paths = []
+        _prev_tool_count = len(tools) if tools else 0
 
         for round_num in range(self.max_tool_calls):
             if self.cancelled:
@@ -120,6 +121,14 @@ class Agent:
                 messages.append(tool_msg)
                 self.history.append(tool_msg)
                 self._fire_on_message(tool_msg)
+
+            # Refresh schemas if tools were added/removed (e.g. by build_plugin)
+            refreshed = self.tool_registry.get_all_schemas() or []
+            new_count = len(refreshed)
+            if new_count != _prev_tool_count:
+                tools = refreshed or None
+                _prev_tool_count = new_count
+                logger.info(f"Tool schemas refreshed — now {new_count} tool(s)")
 
         # Exceeded max rounds
         logger.warning(f"Agent hit max tool rounds ({self.max_tool_calls})")
