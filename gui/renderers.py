@@ -13,6 +13,8 @@ import base64
 import io
 import logging
 import os
+
+from paths import open_file
 from collections import defaultdict
 from pathlib import Path
 
@@ -356,12 +358,12 @@ def render_paths(paths: list[str], page: ft.Page, config: dict = None,
                     ft.PopupMenuItem(
                         text="Open File",
                         icon=ft.Icons.OPEN_IN_NEW_ROUNDED,
-                        on_click=lambda _, ref=current_ref, ri=rendered_items: os.startfile(ri[ref["idx"]][2]),
+                        on_click=lambda _, ref=current_ref, ri=rendered_items: open_file(ri[ref["idx"]][2]),
                     ),
                     ft.PopupMenuItem(
                         text="Open File Location",
                         icon=ft.Icons.FOLDER_OPEN_ROUNDED,
-                        on_click=lambda _, ref=current_ref, ri=rendered_items: os.startfile(str(Path(ri[ref["idx"]][2]).parent)),
+                        on_click=lambda _, ref=current_ref, ri=rendered_items: open_file(str(Path(ri[ref["idx"]][2]).parent)),
                     ),
                     ft.PopupMenuItem(
                         text="Copy Path",

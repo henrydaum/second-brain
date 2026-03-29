@@ -32,7 +32,7 @@ from gui.history import build_history_drawer
 from gui.log_handler import GuiLogHandler
 from gui.renderers import render_paths
 from gui.widgets import system_message, user_bubble, assistant_message, tool_call_card
-from paths import DATA_DIR
+from paths import DATA_DIR, open_file
 
 logger = logging.getLogger("GUI")
 
@@ -662,10 +662,10 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return None
 
         def _open_folder(path):
-            """Open a folder in Windows Explorer, creating it if needed."""
+            """Open a folder in the system file manager, creating it if needed."""
             p = Path(path)
             p.mkdir(parents=True, exist_ok=True)
-            os.startfile(str(p))
+            open_file(str(p))
             return f"Opened {p}"
 
         # --- GUI-specific command registration (overrides + additions) ---

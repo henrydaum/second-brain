@@ -4,6 +4,8 @@ and the unified preview card shell.
 """
 
 import os
+
+from paths import open_file
 from pathlib import Path
 
 import flet as ft
@@ -133,12 +135,12 @@ def preview_card(
             ft.PopupMenuItem(
                 text="Open File",
                 icon=ft.Icons.OPEN_IN_NEW_ROUNDED,
-                on_click=lambda _, p=file_path: os.startfile(p),
+                on_click=lambda _, p=file_path: open_file(p),
             ),
             ft.PopupMenuItem(
                 text="Open File Location",
                 icon=ft.Icons.FOLDER_OPEN_ROUNDED,
-                on_click=lambda _, p=file_path: os.startfile(str(Path(p).parent)),
+                on_click=lambda _, p=file_path: open_file(str(Path(p).parent)),
             ),
             ft.PopupMenuItem(
                 text="Copy Path",

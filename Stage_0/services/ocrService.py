@@ -126,4 +126,8 @@ class WindowsOCR(BaseService):
 
 
 def build_services(config: dict) -> dict:
+    import platform
+    if platform.system() != "Windows":
+        logger.info("OCR service skipped (Windows-only).")
+        return {}
     return {"ocr": WindowsOCR()}

@@ -19,7 +19,7 @@ SETTINGS_DATA = [
     # --- Directories ---
     ("Sync Directories", "sync_directories",
      "Folders to monitor for new and changed files. Sub-folders are included.",
-     ["C:\\Users\\henry\\Documents\\My_Code\\Test Database"],
+     [],
      {"type": "json_list"}),
 
     ("Database Path", "db_path",
