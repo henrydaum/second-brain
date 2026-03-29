@@ -42,6 +42,15 @@ class ToolResult:
     llm_summary: str = ""  # What the LLM will see as the tool result
     gui_display_paths: list[str] = field(default_factory=list)  # What the GUI will render as file previews
 
+    def to_dict(self) -> dict:
+        """Serialize for HTTP API responses."""
+        return {
+            "success": self.success,
+            "error": self.error,
+            "data": self.data,
+            "llm_summary": self.llm_summary,
+        }
+
     @staticmethod
     def failed(error: str) -> "ToolResult":
         return ToolResult(success=False, error=error)

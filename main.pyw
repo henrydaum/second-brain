@@ -96,6 +96,10 @@ def main():
 	# print(prompt)
 	# print("=" * 80 + "\n")
 
+	# --- 5c. Start API server ---
+	from api_server import start_api_server
+	api_server = start_api_server(tool_registry, database, config, services, orchestrator)
+
 	# --- 6. Initialize controller ---
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)
 
@@ -117,6 +121,7 @@ def main():
 		_shutdown.set()
 		logger.info("-----------------------------")
 		logger.info("Shutting down...")
+		api_server.shutdown()
 		watcher.stop()
 		orchestrator.stop()
 		for svc in services.values():

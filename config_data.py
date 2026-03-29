@@ -112,6 +112,17 @@ SETTINGS_DATA = [
      50,
      {"type": "slider", "range": (0, 200, 40), "is_float": False}),
 
+    # --- API ---
+    ("API Port", "api_port",
+     "Port for the REST API server (used by OpenClaw and other integrations). Requires app restart.",
+     5123,
+     {"type": "slider", "range": (1024, 65535, 64511), "is_float": False}),
+
+    ("API Token", "api_token",
+     "Bearer token for API authentication. Leave blank to allow unauthenticated local access.",
+     "",
+     {"type": "text"}),
+
     # --- Display ---
     ("Max Query Rows", "max_query_rows",
      "Maximum rows returned from database queries.",
