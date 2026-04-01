@@ -66,10 +66,43 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
     These are pure ctrl-wrapper commands with no UI-specific side effects.
     Each UI should call this first, then register/override its own commands.
     """
+    import json as _json
+    import config_manager as _cm
+    from config_data import SETTINGS_DATA as _SD
     from gui.formatters import (
         format_services, format_tasks,
         format_stats, format_tools,
     )
+
+    _setting_map = {name: (title, desc) for title, name, desc, _, __ in _SD}
+    _WATCHER_KEYS = {"sync_directories", "ignored_extensions", "ignored_folders", "skip_hidden_folders"}
+
+    def _cmd_config(arg):
+        arg = arg.strip()
+        if arg:
+            if arg not in _setting_map:
+                return f"Unknown setting '{arg}'. Run /config to see all settings."
+            title, desc = _setting_map[arg]
+            return f"{arg} = {ctrl.config.get(arg)}\n  {desc}"
+        lines = [f"  {name} = {ctrl.config.get(name)}" for name in _setting_map]
+        return "\n".join(lines)
+
+    def _cmd_configure(arg):
+        parts = arg.split(None, 1)
+        if len(parts) < 2:
+            return "Usage: /configure <key> <value>"
+        key, raw = parts
+        if key not in _setting_map:
+            return f"Unknown setting '{key}'. Run /config to see all settings."
+        try:
+            value = _json.loads(raw)
+        except _json.JSONDecodeError:
+            value = raw
+        ctrl.config[key] = value
+        _cm.save(ctrl.config)
+        if key in _WATCHER_KEYS and getattr(ctrl, 'watcher', None):
+            ctrl.watcher.rescan()
+        return f"Set {key} = {value}"
 
     # Lambdas (not static lists) so completions reflect hot-reloaded plugins.
     _task_names = lambda: list(ctrl.orchestrator.tasks.keys())
@@ -113,9 +146,13 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         CommandEntry("disable",  "Disable a tool",        "<tool>",
                      handler=lambda a: ctrl.disable_tool(a) if a else "Usage: /disable <tool>",
                      arg_completions=_tool_names),
-        CommandEntry("reload",   "Hot-reload tasks and tools",
+        CommandEntry("reload",    "Hot-reload tasks and tools",
                      handler=lambda _: ctrl.reload_plugins(root_dir)),
-        CommandEntry("stats",    "System overview",
+        CommandEntry("stats",     "System overview",
                      handler=lambda _: format_stats(ctrl.stats())),
+        CommandEntry("config",    "Show config settings",      "[key]",
+                     handler=_cmd_config),
+        CommandEntry("configure", "Update a config setting",   "<key> <value>",
+                     handler=_cmd_configure),
     ]:
         registry.register(entry)

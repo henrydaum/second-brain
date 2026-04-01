@@ -112,6 +112,7 @@ def main():
 
 	watcher = Watcher(orchestrator, database, config)
 	watcher.start()
+	ctrl.watcher = watcher
 	logger.info("-----------------------------")
 	logger.info(f"SecondBrain started in {time.time() - t_start:.2f}s. Type 'help' for commands, 'quit' to exit.")
 

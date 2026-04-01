@@ -74,6 +74,8 @@ Use REPL commands to manage the system. Available commands:
 | `disable` | `<tool>` | Disable a tool |
 | `reload` | | Hot-reload plugins |
 | `call` | `<tool> {json}` | Call a tool directly |
+| `config` | `[key]` | Show all config settings, or one setting by key |
+| `configure` | `<key> <value>` | Update a config setting (value is JSON or plain string) |
 
 Call `stats` or `services` to understand the current system state before taking action.
 
