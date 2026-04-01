@@ -42,13 +42,31 @@ class ToolResult:
     llm_summary: str = ""  # What the LLM will see as the tool result
     gui_display_paths: list[str] = field(default_factory=list)  # What the GUI will render as file previews
 
-    def to_dict(self) -> dict:
-        """Serialize for HTTP API responses."""
+    def to_dict(self, base_url: str = "") -> dict:
+        """Serialize for HTTP API responses.
+
+        Args:
+            base_url: If provided, each attachment gets a fetchable ``url``
+                      pointing at the ``/files`` endpoint (e.g. ``http://host:port``).
+        """
+        from pathlib import Path
+        from urllib.parse import quote
+        from Stage_1.registry import get_modality
+
+        attachments = []
+        for p in self.gui_display_paths:
+            modality = get_modality(Path(p).suffix)
+            att = {"path": p, "modality": modality}
+            if base_url:
+                att["url"] = f"{base_url}/files?path={quote(p, safe='')}"
+            attachments.append(att)
+
         return {
             "success": self.success,
             "error": self.error,
             "data": self.data,
             "llm_summary": self.llm_summary,
+            "attachments": attachments,
         }
 
     @staticmethod

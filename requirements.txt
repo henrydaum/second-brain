@@ -1,0 +1,39 @@
+# GUI
+flet
+
+# LLM / AI services
+openai
+lmstudio
+
+# Embeddings
+sentence-transformers
+numpy
+
+# Speech transcription
+faster-whisper
+torch
+
+# Image processing
+Pillow
+pillow-heif
+
+# Document parsing
+PyMuPDF
+python-docx
+python-pptx
+pandas
+
+# Archive parsing
+py7zr
+rarfile
+
+# HTTP
+requests
+
+# Google Drive
+google-auth
+google-auth-oauthlib
+google-api-python-client
+
+# Windows OCR (Windows only)
+winsdk

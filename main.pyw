@@ -96,12 +96,13 @@ def main():
 	# print(prompt)
 	# print("=" * 80 + "\n")
 
-	# --- 5c. Start API server ---
-	from api_server import start_api_server
-	api_server = start_api_server(tool_registry, database, config, services, orchestrator)
-
 	# --- 6. Initialize controller ---
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)
+
+	# --- 6b. Start API server (after ctrl so REPL commands are available) ---
+	from api_server import start_api_server
+	api_server = start_api_server(tool_registry, database, config, services, orchestrator,
+	                              ctrl, _ROOT)
 
 	# --- 7. Start orchestrator ---
 	orchestrator.start()
@@ -144,9 +145,18 @@ def main():
 	# --- 10. Parse CLI args ---
 	parser = argparse.ArgumentParser(description="Second Brain")
 	parser.add_argument("--no-gui", action="store_true", help="Run without GUI (REPL only)")
+	parser.add_argument("--headless", action="store_true",
+	                    help="Run without GUI or REPL (API server only)")
 	args = parser.parse_args()
 
-	# --- 11. Start REPL on its own thread (always, for debugging) ---
+	if args.headless:
+		# --- 11a. Headless: API server + pipeline only, no REPL ---
+		logger.info("Running in headless mode (API server only).")
+		while not _shutdown.is_set():
+			_shutdown.wait(timeout=1.0)
+		return
+
+	# --- 11. Start REPL on its own thread ---
 	repl_thread = threading.Thread(
 		target=run_repl,
 		args=(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT),
