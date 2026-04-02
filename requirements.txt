@@ -36,4 +36,7 @@ google-auth-oauthlib
 google-api-python-client
 
 # Windows OCR (Windows only)
-winsdk
+winsdk; sys_platform == "win32"
+
+# Syncing
+watchdog
