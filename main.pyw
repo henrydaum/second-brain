@@ -150,6 +150,9 @@ def main():
 	                    help="Run without GUI or REPL (API server only)")
 	args = parser.parse_args()
 
+	if sys.platform != "win32":
+		args.no_gui = True
+
 	if args.headless:
 		# --- 11a. Headless: API server + pipeline only, no REPL ---
 		logger.info("Running in headless mode (API server only).")
