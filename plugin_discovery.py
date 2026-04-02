@@ -77,6 +77,9 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
 
     # Baked-in
     for py_file in sorted(cfg["baked_in_dir"].glob(cfg["glob"])):
+        # Skip GUI-only renderer on non-Windows platforms
+        if py_file.name == "tool_render_files.py" and sys.platform != "win32":
+            continue
         module_name = cfg["baked_in_ns"].format(stem=py_file.stem)
         module = _load_baked_in(module_name, reload)
         if module is None:
