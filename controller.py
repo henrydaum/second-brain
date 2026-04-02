@@ -197,13 +197,112 @@ class Controller:
             return []
         return [
             {"name": name,
-             "description": (tool.description or "").split("\n")[0],
-             "agent_enabled": tool.agent_enabled,
-             "max_calls": tool.max_calls,
-             "requires_services": tool.requires_services,
-             "parameters": tool.parameters}
+                "description": (tool.description or "").split("\n")[0],
+                "agent_enabled": tool.agent_enabled,
+                "max_calls": tool.max_calls,
+                "requires_services": getattr(tool, 'requires_services', []),
+                "parameters": getattr(tool, 'parameters', {}),
+                "_source_path": getattr(tool, '_source_path', None),
+                "_mutable": getattr(tool, '_mutable', False),
+            }
             for name, tool in self.tool_registry.tools.items()
         ]
+
+    def list_locations(self) -> dict:
+        """Gather live locations and structure information for the project.
+
+        Returns a structured dict containing roots, baked_in, sandbox, registered, and stats.
+        """
+        from paths import ROOT_DIR, DATA_DIR, SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES
+        import plugin_discovery as _pd
+        import os
+        import inspect
+        from pathlib import Path
+
+        def _sample_files(dir_path: Path, pattern: str):
+            if not dir_path.exists():
+                return {"path": str(dir_path), "exists": False, "count": 0, "files": []}
+            files = [p for p in sorted(dir_path.glob(pattern)) if not p.name.startswith("_")]
+            names = [p.name for p in files]
+            return {"path": str(dir_path), "exists": True, "count": len(files), "files": names}
+
+        # Baked-in dirs from discovery configs
+        baked = {}
+        for label, cfg in [("tools", _pd._TOOL_CONFIG), ("tasks", _pd._TASK_CONFIG), ("services", _pd._SERVICE_CONFIG)]:
+            d = cfg["baked_in_dir"]
+            baked[label] = _sample_files(d, cfg.get("glob", "*.py"))
+
+        # Sandbox dirs
+        sandbox = {}
+        for label, sd in [("tools", SANDBOX_TOOLS), ("tasks", SANDBOX_TASKS), ("services", SANDBOX_SERVICES)]:
+            info = _sample_files(sd, "*.py")
+            if info["exists"]:
+                try:
+                    info["writable"] = os.access(sd, os.W_OK)
+                except Exception:
+                    info["writable"] = False
+                files = [str(p) for p in sorted(sd.glob("*.py")) if not p.name.startswith("_")]
+                info["files"] = files
+            else:
+                info["writable"] = None
+            sandbox[label] = info
+
+        # Registered plugin instances
+        registered = []
+
+        def _probe_source(obj):
+            sp = getattr(obj, "_source_path", None)
+            if sp:
+                return sp
+            try:
+                src = inspect.getsourcefile(type(obj)) or inspect.getsourcefile(obj)
+                if src:
+                    return str(Path(src))
+            except Exception:
+                pass
+            return None
+
+        # Tools
+        if self.tool_registry is not None:
+            for name, tool in self.tool_registry.tools.items():
+                registered.append({
+                    "name": name,
+                    "type": "tool",
+                    "_source_path": _probe_source(tool),
+                    "_mutable": getattr(tool, "_mutable", False),
+                })
+
+        # Tasks
+        for name, task in self.orchestrator.tasks.items():
+            registered.append({
+                "name": name,
+                "type": "task",
+                "_source_path": _probe_source(task),
+                "_mutable": getattr(task, "_mutable", False),
+            })
+
+        # Services
+        for name, svc in self.services.items():
+            registered.append({
+                "name": name,
+                "type": "service",
+                "_source_path": _probe_source(svc),
+                "_mutable": getattr(svc, "_mutable", False),
+            })
+
+        stats = {
+            "total_baked_in": sum(baked[k]["count"] for k in baked),
+            "total_sandbox": sum(sandbox[k]["count"] for k in sandbox),
+            "registered": len(registered),
+        }
+
+        return {
+            "roots": {"project_root": str(ROOT_DIR), "data_dir": str(DATA_DIR)},
+            "baked_in": baked,
+            "sandbox": sandbox,
+            "registered": registered,
+            "stats": stats,
+        }
 
     def call_tool(self, name: str, kwargs: dict):
         """Call a tool by name and return the ToolResult."""
