@@ -131,78 +131,32 @@ def format_help(commands: list[dict]) -> str:
 
 
 def format_locations(data: dict) -> str:
-    """Format the locations/structure dict into a human-readable string."""
-    from pathlib import Path
-    from paths import ROOT_DIR
+    """Format the locations data as a readable file tree."""
+    lines = []
 
-    lines = ["PROJECT STRUCTURE", ""]
-    roots = data.get("roots", {})
-    lines.append("Root Directory:")
-    lines.append(f"  Project: {roots.get('project_root')}")
-    lines.append(f"  Data:    {roots.get('data_dir')}")
+    root_path = data.get("root_path", "")
+    data_path = data.get("data_path", "")
+    root_tree = data.get("root_tree", [])
+    data_tree = data.get("data_tree", [])
+
+    lines.append(f"ROOT: {root_path}")
     lines.append("")
 
-    # Baked-in
-    lines.append("Baked-in Plugins (read-only):")
-    baked = data.get("baked_in", {})
-    for key in ("services", "tasks", "tools"):
-        info = baked.get(key, {})
-        path = info.get("path")
-        count = info.get("count", 0)
-        lines.append(f"  {key:<12} {path}  ({count} files)")
-        files = info.get("files", [])
-        if files:
-            sample = files[:10]
-            s = ", ".join(sample)
-            if len(files) > len(sample):
-                s += f" ... ({len(files) - len(sample)} more)"
-            lines.append(f"    {s}")
+    if root_tree:
+        for f in root_tree:
+            lines.append(f"  {f}")
+    else:
+        lines.append("  (empty)")
+
+    lines.append("")
+    lines.append(f"DATA_DIR: {data_path}")
     lines.append("")
 
-    # Sandbox
-    lines.append("Sandbox Plugins (mutable):")
-    sandbox = data.get("sandbox", {})
-    for key in ("tools", "tasks", "services"):
-        info = sandbox.get(key, {})
-        path = info.get("path")
-        exists = info.get("exists")
-        writable = info.get("writable")
-        count = info.get("count", 0)
-        if not exists:
-            lines.append(f"  {key:<12} {path}  (missing)")
-            continue
-        w = "writable" if writable else "read-only"
-        lines.append(f"  {key:<12} {path}  ({count} files, {w})")
-        files = info.get("files", [])
-        if files:
-            sample = files[:10]
-            s = ", ".join(sample)
-            if len(files) > len(sample):
-                s += f" ... ({len(files) - len(sample)} more)"
-            lines.append(f"    {s}")
-    lines.append("")
+    if data_tree:
+        for f in data_tree:
+            lines.append(f"  {f}")
+    else:
+        lines.append("  (empty)")
 
-    # Registered plugins
-    lines.append("Registered plugins:")
-    for entry in data.get("registered", []):
-        name = entry.get("name")
-        etype = entry.get("type")
-        sp = entry.get("_source_path") or "(unknown)"
-        mutable = entry.get("_mutable", False)
-        tag = "sandbox" if mutable else "baked-in"
-        if sp != "(unknown)" and not mutable:
-            try:
-                rel = str(Path(sp).relative_to(Path(__file__).parents[1]))
-            except Exception:
-                rel = sp
-            sp_display = rel
-        else:
-            sp_display = sp
-        lines.append(f"  {name:<30} {etype:<8} [{tag}] (path: {sp_display})")
-    lines.append("")
-
-    stats = data.get("stats", {})
-    lines.append(
-        f"Totals: baked-in={stats.get('total_baked_in',0)} sandbox={stats.get('total_sandbox',0)} registered={stats.get('registered',0)}"
-    )
     return "\n".join(lines)
+

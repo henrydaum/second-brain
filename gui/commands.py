@@ -105,36 +105,13 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         return f"Set {key} = {value}"
 
     def _cmd_locations(arg):
-        """Handler for /locations [baked|sandbox|registered|all]"""
+        """Handler for /locations [tools|tasks|services]"""
         mode = (arg or "").strip().lower()
-        data = ctrl.list_locations()
-        if not mode or mode == "all":
-            return format_locations(data)
-        if mode == "baked":
-            return format_locations({
-                "roots": data.get("roots"),
-                "baked_in": data.get("baked_in"),
-                "sandbox": {},
-                "registered": [],
-                "stats": data.get("stats"),
-            })
-        if mode == "sandbox":
-            return format_locations({
-                "roots": data.get("roots"),
-                "baked_in": {},
-                "sandbox": data.get("sandbox"),
-                "registered": [],
-                "stats": data.get("stats"),
-            })
-        if mode == "registered":
-            return format_locations({
-                "roots": data.get("roots"),
-                "baked_in": {},
-                "sandbox": {},
-                "registered": data.get("registered"),
-                "stats": data.get("stats"),
-            })
-        return "Usage: /locations [baked|sandbox|registered|all]"
+        filter_type = mode if mode in ("tools", "tasks", "services") else None
+        if mode and filter_type is None:
+            return "Usage: /locations [tools|tasks|services]"
+        data = ctrl.list_locations(filter_type)
+        return format_locations(data)
 
     # Lambdas (not static lists) so completions reflect hot-reloaded plugins.
     _task_names = lambda: list(ctrl.orchestrator.tasks.keys())
@@ -182,10 +159,10 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      handler=lambda _: ctrl.reload_plugins(root_dir)),
         CommandEntry("stats",     "System overview",
                      handler=lambda _: format_stats(ctrl.stats())),
-        CommandEntry("locations", "List project and sandbox locations",
-                 "[baked|sandbox|registered|all]",
+        CommandEntry("locations", "List file system locations",
+                 "[tools|tasks|services]",
                  handler=lambda a: _cmd_locations(a),
-                 arg_completions=lambda: ["baked", "sandbox", "registered", "all"]),
+                 arg_completions=lambda: ["tools", "tasks", "services"]),
         CommandEntry("config",    "Show config settings",      "[key]",
                      handler=_cmd_config),
         CommandEntry("configure", "Update a config setting",   "<key> <value>",
