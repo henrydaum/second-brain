@@ -365,5 +365,5 @@ def _call_build_services(module, module_name: str, config: dict) -> dict:
         built = build_fn(config)
         return built if built else {}
     except Exception as e:
-        logger.error(f"build_services() in {module_name} failed: {e}", exc_info=True)
+        logger.error(f"build_services() in {module_name} failed: {e}. Check config settings for this service with /config.", exc_info=True)
         return {}

@@ -188,7 +188,11 @@ def start_api_server(tool_registry, db, config, services, orchestrator,
     # (OpenClaw already has root-level system access)
     tool_registry.on_approve_command = lambda cmd, justification: True
 
-    server = HTTPServer(("127.0.0.1", port), _Handler)
+    try:
+        server = HTTPServer(("127.0.0.1", port), _Handler)
+    except OSError as e:
+        logger.error(f"API server failed to bind on port {port}: {e}. Check api_port in config.")
+        raise
     server.tool_registry = tool_registry
     server.command_registry = command_registry
     server.db = db

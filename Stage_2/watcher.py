@@ -69,7 +69,7 @@ class Watcher:
 	def start(self):
 		valid_dirs = [d for d in self.watch_dirs if d and os.path.exists(d)]
 		if not valid_dirs:
-			logger.error("No valid sync directories found. Watcher not starting.")
+			logger.error("No valid sync directories found — watcher not starting. Use /configure sync_directories to add a folder.")
 			return
 
 		handler = DebouncedHandler(self)
@@ -95,7 +95,7 @@ class Watcher:
 
 		valid_dirs = [d for d in self.watch_dirs if d and os.path.exists(d)]
 		if not valid_dirs:
-			logger.warning("No valid sync directories after rescan.")
+			logger.warning("No valid sync directories after rescan. Use /configure sync_directories to add a folder.")
 			return
 
 		# Tear down existing observer, create fresh one

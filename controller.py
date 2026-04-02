@@ -48,10 +48,10 @@ class Controller:
         try:
             success = svc.load()
         except Exception as e:
-            return f"Failed to load '{name}': {e}"
+            return f"Failed to load '{name}': {e}. Check service-related config settings with /config."
 
         if not success:
-            return f"Service '{name}' failed to load."
+            return f"Service '{name}' failed to load. Check service-related config settings with /config."
 
         # Clear skip log so orchestrator re-checks waiting tasks
         self.orchestrator.skip_cache.discard(name)
