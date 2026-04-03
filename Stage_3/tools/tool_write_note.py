@@ -1,5 +1,5 @@
 """
-Write File tool.
+Write Note tool.
 
 Writes a markdown (.md) file into a configured sync directory.
 Used by the agent to leave durable notes, summaries, and research
@@ -12,8 +12,8 @@ from pathlib import Path
 from Stage_3.BaseTool import BaseTool, ToolResult
 
 
-class WriteFile(BaseTool):
-    name = "write_file"
+class WriteNote(BaseTool):
+    name = "write_note"
     description = (
         "Write a markdown (.md) file to the sync directory. "
         "Use this to save notes, summaries, deep-dive results, or research "

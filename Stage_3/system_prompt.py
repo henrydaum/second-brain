@@ -55,7 +55,8 @@ def _authoring_guidance() -> str:
         "2. Read similar existing plugins for reference (sandbox paths listed below, baked-in paths use read_file with relative paths like 'Stage_3/tools/tool_hybrid_search.py')\n"
         "3. Create: build_plugin(plugin_type='tool', file_name='tool_foo.py', action='create', code='...')\n"
         "4. Fix errors: build_plugin(action='edit', search_block='...', replace_block='...')\n"
-        "5. Install packages if needed: run_command(command='pip install requests')\n\n"
+        "5. Install packages if needed: run_command(command='pip install requests')\n"
+        "6. If the plugin is a tool, test it out by calling it.\n\n"
         "Naming: tools are tool_<name>.py, tasks are task_<name>.py, services are only <name>.py\n"
         "Names must be unique — no collisions with baked-in plugins."
     )
