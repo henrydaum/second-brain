@@ -100,6 +100,33 @@ This is the exact format used by OpenAI function calling:
   }
 
 In run(), access these via kwargs: query = kwargs.get("query", "")
+
+
+CONFIG SETTINGS
+---------------
+Plugins can declare config settings that appear in the Settings UI and are
+stored in plugin_config.json. Values are accessible via context.config.get().
+
+  config_settings = [
+      ("My Setting Title", "my_setting_key",
+       "Description shown in the settings UI.",
+       "default_value",
+       {"type": "text"}),
+  ]
+
+Each entry is a tuple: (title, variable_name, description, default, type_info)
+
+type_info controls the UI widget:
+  {"type": "text"}                                          — text field
+  {"type": "bool"}                                          — checkbox
+  {"type": "json_list"}                                     — JSON array editor
+  {"type": "slider", "range": (min, max, divs), "is_float": False} — slider
+
+Add "reload_service": True to type_info if changing the setting should
+trigger a service rebuild (e.g. model names, API keys).
+
+Multiple plugins can declare the same variable_name — the value is shared.
+In run(), access via: context.config.get("my_setting_key", "default")
 """
 
 # =====================================================================
@@ -136,6 +163,9 @@ class BaseTool:
     # --- Agent controls ---
     agent_enabled: bool = True          # whether the LLM can see and call this tool
     max_calls: int = 3                  # max times the agent can call this tool per message
+
+    # --- Config settings ---
+    config_settings: list = []          # settings shown in the Settings UI
 
     def run(self, context, **kwargs) -> ToolResult:
         """Execute the tool. Return a ToolResult."""

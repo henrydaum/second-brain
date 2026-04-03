@@ -75,6 +75,25 @@ Return one TaskResult per input path:
   )
 
   TaskResult.failed("error message")  # shorthand for failures
+
+
+CONFIG SETTINGS
+---------------
+Tasks can declare config settings that appear in the Settings UI and are
+stored in plugin_config.json. Values are accessible via context.config.get().
+
+  config_settings = [
+      ("Chunk Overlap", "embed_chunk_overlap",
+       "Overlapping tokens between chunks.",
+       50,
+       {"type": "slider", "range": (0, 200, 40), "is_float": False}),
+  ]
+
+Each entry is a tuple: (title, variable_name, description, default, type_info)
+See tool_template.py for full type_info options.
+
+Multiple plugins can declare the same variable_name — the value is shared.
+In run(), access via: context.config.get("embed_chunk_overlap", 50)
 """
 
 # =====================================================================
@@ -121,6 +140,9 @@ class BaseTask:
     batch_size: int = 1                 # files per run() call
     max_workers: int = 0                # 0 = use global setting
     timeout: int = 300                  # seconds before considered stuck
+
+    # --- Config settings ---
+    config_settings: list = []          # settings shown in the Settings UI
 
     def setup(self, config: dict):
         """Called once at registration. Optional."""

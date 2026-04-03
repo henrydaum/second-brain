@@ -113,10 +113,10 @@ def show_settings(page, config, services, ctrl, watcher,
     def _save(e):
         """Validate, persist, and live-reload affected subsystems."""
         # -- Change detection: snapshot values that need special handling --
+        # Derive SERVICE_KEYS from plugin settings that declare reload_service
         SERVICE_KEYS = {
-            "llm_model_name", "llm_endpoint", "llm_api_key",
-            "embed_text_model_name", "embed_image_model_name",
-            "embed_use_cuda", "embed_chunk_size",
+            entry[1] for entry in plugin_settings
+            if entry[4].get("reload_service")
         }
         ORCH_KEYS = {"max_workers", "poll_interval"}
         old = {k: config.get(k) for k in SERVICE_KEYS | ORCH_KEYS | {"db_path"}}

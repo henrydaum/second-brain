@@ -37,6 +37,24 @@ class BaseLLM(BaseService):
 
     Subclasses convert to their native format internally.
     """
+        
+    config_settings = [
+        ("LLM Model Name", "llm_model_name",
+         "Model name for the language model API. Reloads the LLM service on save.",
+         "gpt-5-mini",
+         {"type": "text", "reload_service": True}),
+
+        ("LLM Endpoint", "llm_endpoint",
+         "Custom API endpoint URL. Leave blank for the default OpenAI endpoint. Reloads the LLM service on save.",
+         "",
+         {"type": "text", "reload_service": True}),
+
+        ("LLM API Key", "llm_api_key",
+         "API key or environment variable name for the LLM. Reloads the LLM service on save.",
+         "OPENAI_API_KEY",
+         {"type": "text", "reload_service": True}),
+    ]
+    
     def __init__(self):
         super().__init__()
         self.shared = True  # LLM clients are typically thread-safe
@@ -289,24 +307,6 @@ class LMStudioLLM(BaseLLM):
 # =====================================================================
 
 class OpenAILLM(BaseLLM):
-
-    config_settings = [
-        ("LLM Model Name", "llm_model_name",
-         "Model name for the language model API. Reloads the LLM service on save.",
-         "gpt-5-mini",
-         {"type": "text"}),
-
-        ("LLM Endpoint", "llm_endpoint",
-         "Custom API endpoint URL. Leave blank for the default OpenAI endpoint. Reloads the LLM service on save.",
-         "",
-         {"type": "text"}),
-
-        ("LLM API Key", "llm_api_key",
-         "API key or environment variable name for the LLM. Reloads the LLM service on save.",
-         "OPENAI_API_KEY",
-         {"type": "text"}),
-    ]
-
     def __init__(self, model_name, api_key=None, base_url=None):
         super().__init__()
         self.model_name = model_name
