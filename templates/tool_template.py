@@ -122,9 +122,6 @@ type_info controls the UI widget:
   {"type": "json_list"}                                     — JSON array editor
   {"type": "slider", "range": (min, max, divs), "is_float": False} — slider
 
-Add "reload_service": True to type_info if changing the setting should
-trigger a service rebuild (e.g. model names, API keys).
-
 Multiple plugins can declare the same variable_name — the value is shared.
 In run(), access via: context.config.get("my_setting_key", "default")
 """

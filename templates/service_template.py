@@ -64,7 +64,7 @@ stored in plugin_config.json. Values are passed to build_services(config).
       ("Whisper Model", "whisper_model_name",
        "Model size for transcription.",
        "base",
-       {"type": "text", "reload_service": True}),
+       {"type": "text"}),
   ]
 
 Each entry is a tuple: (title, variable_name, description, default, type_info)
@@ -74,9 +74,6 @@ type_info controls the UI widget:
   {"type": "bool"}                                          — checkbox
   {"type": "json_list"}                                     — JSON array editor
   {"type": "slider", "range": (min, max, divs), "is_float": False} — slider
-
-Add "reload_service": True to type_info if changing the setting should
-trigger a full service rebuild (e.g. model names, API keys, device prefs).
 
 Multiple plugins can declare the same variable_name — the value is shared.
 In build_services(), access via: config.get("whisper_model_name", "base")

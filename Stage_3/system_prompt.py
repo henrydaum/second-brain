@@ -63,7 +63,6 @@ def _authoring_guidance() -> str:
         "Plugins can declare config_settings to add user-configurable values to the Settings UI.\n"
         "Each entry: (title, variable_name, description, default, type_info).\n"
         "type_info options: {\"type\": \"text\"}, {\"type\": \"bool\"}, {\"type\": \"slider\", \"range\": (min, max, divs), \"is_float\": False}, {\"type\": \"json_list\"}.\n"
-        "Add \"reload_service\": True to type_info if changing the value should rebuild services.\n"
         "Values are stored in plugin_config.json and accessed via context.config.get(key).\n"
         "See the templates for full examples."
     )

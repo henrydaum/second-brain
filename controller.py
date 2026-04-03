@@ -76,6 +76,81 @@ class Controller:
 
         return f"Service '{name}' unloaded."
 
+    def reload_services_for_settings(self, changed_keys: set, root_dir: Path) -> list[str]:
+        """Rebuild only the services whose config_settings include a changed key.
+
+        Groups affected services by source module so that build_services()
+        is called once per module (it may return multiple services).
+
+        Returns a list of human-readable feedback strings.
+        """
+        from plugin_discovery import get_setting_service_map, discover_services
+
+        svc_map = get_setting_service_map()
+        affected: set[str] = set()
+        for key in changed_keys:
+            if key in svc_map:
+                affected.update(svc_map[key])
+
+        if not affected:
+            return []
+
+        feedback = []
+
+        # Group affected services by source module path.
+        # Baked-in services share a module path derived from their class.
+        module_groups: dict[str, list[str]] = {}
+        for svc_name in affected:
+            svc = self.services.get(svc_name)
+            if svc is None:
+                continue
+            src = getattr(svc, '_source_path', None) or svc.__class__.__module__
+            module_groups.setdefault(src, []).append(svc_name)
+
+        # Pause orchestrator to prevent dispatches during the swap
+        saved_pauses = set(self.orchestrator.paused)
+        self.orchestrator.paused.update(self.orchestrator.tasks.keys())
+
+        try:
+            for src_key, svc_names in module_groups.items():
+                # Snapshot which were loaded
+                previously_loaded = [
+                    n for n in svc_names
+                    if getattr(self.services.get(n), 'loaded', False)
+                ]
+
+                # Unload affected services from this module
+                for n in previously_loaded:
+                    try:
+                        self.services[n].unload()
+                    except Exception as ex:
+                        logger.warning(f"Failed to unload '{n}': {ex}")
+
+                # Rebuild all services from this source module.
+                # For baked-in, discover_services rebuilds everything;
+                # we cherry-pick only our affected names.
+                new_services = discover_services(root_dir, self.config)
+                for n in svc_names:
+                    if n in new_services:
+                        self.services[n] = new_services[n]
+
+                # Reload services that were previously loaded
+                for n in previously_loaded:
+                    svc = self.services.get(n)
+                    if svc:
+                        try:
+                            svc.load()
+                            feedback.append(f"'{n}' reloaded.")
+                        except Exception as ex:
+                            feedback.append(f"'{n}' failed to reload: {ex}")
+        finally:
+            # Restore orchestrator pauses + clear skip cache
+            self.orchestrator.paused.clear()
+            self.orchestrator.paused.update(saved_pauses)
+            self.orchestrator.skip_cache.clear()
+
+        return feedback
+
     # =================================================================
     # TASKS
     # =================================================================

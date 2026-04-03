@@ -23,24 +23,24 @@ class BaseEmbedder(BaseService):
 
     config_settings = [
         ("Text Embedding Model", "embed_text_model_name",
-         "SentenceTransformer model for text embeddings. Reloads the embedding service on save.",
+         "SentenceTransformer model for text embeddings.",
          "BAAI/bge-m3",
-         {"type": "text", "reload_service": True}),
+         {"type": "text"}),
 
         ("Image Embedding Model", "embed_image_model_name",
-         "CLIP model for image embeddings. Reloads the embedding service on save.",
+         "CLIP model for image embeddings.",
          "clip-ViT-L-14",
-         {"type": "text", "reload_service": True}),
+         {"type": "text"}),
 
         ("GPU Acceleration", "embed_use_cuda",
-         "Use GPU for embedding. Provides a significant speed-up. Reloads the embedding service on save.",
+         "Use GPU for embedding. Provides a significant speed-up.",
          True,
-         {"type": "bool", "reload_service": True}),
+         {"type": "bool"}),
 
         ("Chunk Size", "embed_chunk_size",
-         "Size in tokens for text splitting. Smaller chunks store specific facts; larger chunks preserve more context. Reloads the embedding service on save.",
+         "Size in tokens for text splitting. Smaller chunks store specific facts; larger chunks preserve more context.",
          512,
-         {"type": "slider", "range": (64, 2048, 31), "is_float": False, "reload_service": True}),
+         {"type": "slider", "range": (64, 2048, 31), "is_float": False}),
     ]
 
     def __init__(self, model_name, chunk_size=512, use_cuda=True):

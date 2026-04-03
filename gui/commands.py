@@ -69,40 +69,75 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
     import json as _json
     import config_manager as _cm
     from config_data import SETTINGS_DATA as _SD
+    from plugin_discovery import get_plugin_settings as _get_ps
     from gui.formatters import (
         format_services, format_tasks,
         format_stats, format_tools, format_locations,
     )
 
-    _setting_map = {name: (title, desc) for title, name, desc, _, __ in _SD}
+    # Build a unified setting map (core + plugin) at registration time.
+    # Plugin settings are added lazily on first use since discovery may
+    # not be complete at import time.
+    _core_map = {name: (title, desc) for title, name, desc, _, __ in _SD}
     _WATCHER_KEYS = {"sync_directories", "ignored_extensions", "ignored_folders", "skip_hidden_folders"}
 
+    def _all_setting_map():
+        """Return a merged map of core + plugin settings (title, desc) by key."""
+        merged = dict(_core_map)
+        for title, name, desc, _, __ in _get_ps():
+            if name not in merged:
+                merged[name] = (title, desc)
+        return merged
+
+    def _plugin_keys():
+        return {entry[1] for entry in _get_ps()}
+
     def _cmd_config(arg):
+        setting_map = _all_setting_map()
         arg = arg.strip()
         if arg:
-            if arg not in _setting_map:
+            if arg not in setting_map:
                 return f"Unknown setting '{arg}'. Run /config to see all settings."
-            title, desc = _setting_map[arg]
+            title, desc = setting_map[arg]
             return f"{arg} = {ctrl.config.get(arg)}\n  {desc}"
-        lines = [f"  {name} = {ctrl.config.get(name)}" for name in _setting_map]
+        lines = [f"  {name} = {ctrl.config.get(name)}" for name in setting_map]
         return "\n".join(lines)
 
     def _cmd_configure(arg):
+        setting_map = _all_setting_map()
         parts = arg.split(None, 1)
         if len(parts) < 2:
             return "Usage: /configure <key> <value>"
         key, raw = parts
-        if key not in _setting_map:
+        if key not in setting_map:
             return f"Unknown setting '{key}'. Run /config to see all settings."
         try:
             value = _json.loads(raw)
         except _json.JSONDecodeError:
             value = raw
+
+        old_val = ctrl.config.get(key)
         ctrl.config[key] = value
         _cm.save(ctrl.config)
+
+        # Persist plugin config separately if this is a plugin key
+        pk = _plugin_keys()
+        if key in pk:
+            existing = _cm.load_plugin_config()
+            existing[key] = value
+            _cm.save_plugin_config(existing)
+
+        # Watcher rescan for filesystem-related keys
         if key in _WATCHER_KEYS and getattr(ctrl, 'watcher', None):
             ctrl.watcher.rescan()
-        return f"Set {key} = {value}"
+
+        # Targeted service reload if the value actually changed
+        feedback_parts = [f"Set {key} = {value}"]
+        if value != old_val:
+            svc_feedback = ctrl.reload_services_for_settings({key}, root_dir)
+            feedback_parts.extend(f"  • {f}" for f in svc_feedback)
+
+        return "\n".join(feedback_parts)
 
     def _cmd_locations(arg):
         """Handler for /locations [tools|tasks|services]"""

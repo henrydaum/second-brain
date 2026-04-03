@@ -40,19 +40,19 @@ class BaseLLM(BaseService):
         
     config_settings = [
         ("LLM Model Name", "llm_model_name",
-         "Model name for the language model API. Reloads the LLM service on save.",
+         "Model name for the language model API.",
          "gpt-5-mini",
-         {"type": "text", "reload_service": True}),
+         {"type": "text"}),
 
         ("LLM Endpoint", "llm_endpoint",
-         "Custom API endpoint URL. Leave blank for the default OpenAI endpoint. Reloads the LLM service on save.",
+         "Custom API endpoint URL. Leave blank for the default OpenAI endpoint.",
          "",
-         {"type": "text", "reload_service": True}),
+         {"type": "text"}),
 
         ("LLM API Key", "llm_api_key",
-         "API key or environment variable name for the LLM. Reloads the LLM service on save.",
+         "API key or environment variable name for the LLM.",
          "OPENAI_API_KEY",
-         {"type": "text", "reload_service": True}),
+         {"type": "text"}),
     ]
     
     def __init__(self):

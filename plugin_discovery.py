@@ -32,15 +32,29 @@ logger = logging.getLogger("Discovery")
 _plugin_settings: list = []        # collected (title, var, desc, default, type_info) tuples
 _plugin_settings_keys: set = set() # variable_names already seen (first-wins dedup)
 
+# Reverse map: setting variable_name -> set of service names that declared it.
+# Only populated for services (not tools/tasks), enabling targeted reloads.
+_setting_to_services: dict[str, set[str]] = {}
+
 
 def get_plugin_settings() -> list:
     """Return the accumulated plugin config settings (read-only copy)."""
     return list(_plugin_settings)
 
 
-def _collect_config_settings(source):
+def get_setting_service_map() -> dict[str, set[str]]:
+    """Return a copy of the setting_key -> {service_names} map."""
+    return {k: set(v) for k, v in _setting_to_services.items()}
+
+
+def _collect_config_settings(source, service_names: list[str] | None = None):
     """Extract config_settings from a plugin instance or module and accumulate.
-    Deduplicates by variable_name — first plugin to declare a key wins."""
+    Deduplicates by variable_name — first plugin to declare a key wins.
+
+    If *service_names* is provided, each setting key is also recorded in
+    the _setting_to_services reverse map so we know which services to
+    rebuild when a setting changes.
+    """
     settings = getattr(source, "config_settings", None)
     if not settings:
         return
@@ -51,6 +65,9 @@ def _collect_config_settings(source):
         if var_name not in _plugin_settings_keys:
             _plugin_settings_keys.add(var_name)
             _plugin_settings.append(tuple(entry))
+        # Always record the service mapping (even if settings deduped)
+        if service_names:
+            _setting_to_services.setdefault(var_name, set()).update(service_names)
 
 
 # ── Per-type configuration ───────────────────────────────────────────
@@ -194,9 +211,10 @@ def discover_services(root_dir: Path, config: dict) -> dict:
         if module is None:
             continue
         built = _call_build_services(module, module_name, config)
+        built_names = list(built.keys())
         for svc_name, svc in built.items():
             svc._mutable = False
-            _collect_config_settings(svc)
+            _collect_config_settings(svc, service_names=built_names)
             services[svc_name] = svc
             baked_in_names.add(svc_name)
 
@@ -210,13 +228,14 @@ def discover_services(root_dir: Path, config: dict) -> dict:
             if module is None:
                 continue
             built = _call_build_services(module, module_name, config)
+            built_names = [n for n in built if n not in baked_in_names]
             for svc_name, svc in built.items():
                 if svc_name in baked_in_names:
                     logger.warning(f"Sandbox service '{svc_name}' collides with baked-in — skipped")
                     continue
                 svc._mutable = True
                 svc._source_path = str(py_file)
-                _collect_config_settings(svc)
+                _collect_config_settings(svc, service_names=built_names)
                 services[svc_name] = svc
 
     logger.info(f"Discovered {len(services)} service(s) in {time.time() - t0:.2f}s")
@@ -331,13 +350,12 @@ def _load_single_service(file_path: Path, services: dict, config: dict) -> tuple
     if not built:
         return None, f"build_services() returned nothing in {file_path.name}"
 
-    names = []
+    names = list(built.keys())
     for svc_name, svc in built.items():
         svc._mutable = True
         svc._source_path = str(file_path)
-        _collect_config_settings(svc)
+        _collect_config_settings(svc, service_names=names)
         services[svc_name] = svc
-        names.append(svc_name)
 
     return ", ".join(names), None
 

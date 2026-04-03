@@ -113,13 +113,9 @@ def show_settings(page, config, services, ctrl, watcher,
     def _save(e):
         """Validate, persist, and live-reload affected subsystems."""
         # -- Change detection: snapshot values that need special handling --
-        # Derive SERVICE_KEYS from plugin settings that declare reload_service
-        SERVICE_KEYS = {
-            entry[1] for entry in plugin_settings
-            if entry[4].get("reload_service")
-        }
         ORCH_KEYS = {"max_workers", "poll_interval"}
-        old = {k: config.get(k) for k in SERVICE_KEYS | ORCH_KEYS | {"db_path"}}
+        all_plugin_keys = {entry[1] for entry in plugin_settings}
+        old = {k: config.get(k) for k in all_plugin_keys | ORCH_KEYS | {"db_path"}}
 
         # -- Validate and write new values into the shared config dict --
         for key, info in fields.items():
@@ -152,46 +148,12 @@ def show_settings(page, config, services, ctrl, watcher,
         changed = {k for k, v in old.items() if config.get(k) != v}
         feedback = []
 
-        # -- Group A: Service settings -> rebuild services --
-        if changed & SERVICE_KEYS:
-            from plugin_discovery import discover_services
+        # -- Group A: Service settings -> targeted rebuild --
+        svc_feedback = ctrl.reload_services_for_settings(changed, root_dir)
+        feedback.extend(svc_feedback)
 
-            previously_loaded = [
-                name for name, svc in services.items()
-                if getattr(svc, "loaded", False)
-            ]
-
-            # Pause orchestrator to prevent dispatches during the swap
-            saved_pauses = set(ctrl.orchestrator.paused)
-            ctrl.orchestrator.paused.update(ctrl.orchestrator.tasks.keys())
-
-            # Unload all loaded services
-            for name in previously_loaded:
-                try:
-                    services[name].unload()
-                except Exception as ex:
-                    logger.warning(f"Failed to unload '{name}': {ex}")
-
-            # Rebuild all services from current config, swap in-place
-            new_services = discover_services(root_dir, config)
-            services.update(new_services)
-
-            # Reload services that were previously loaded
-            for name in previously_loaded:
-                svc = services.get(name)
-                if svc:
-                    try:
-                        svc.load()
-                        feedback.append(f"'{name}' reloaded.")
-                    except Exception as ex:
-                        feedback.append(f"'{name}' failed to reload: {ex}")
-
-            # Restore orchestrator pauses + clear skip cache
-            ctrl.orchestrator.paused.clear()
-            ctrl.orchestrator.paused.update(saved_pauses)
-            ctrl.orchestrator.skip_cache.clear()
-
-            # Recreate agent if LLM is loaded
+        # Recreate agent if LLM was reloaded
+        if any("'llm'" in f for f in svc_feedback):
             llm = services.get("llm")
             if llm and llm.loaded:
                 create_agent_fn()
