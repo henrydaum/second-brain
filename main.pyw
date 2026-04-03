@@ -99,10 +99,9 @@ def main():
 	# --- 6. Initialize controller ---
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)
 
-	# --- 6b. Start API server (after ctrl so REPL commands are available) ---
+	# --- 6b. Start API server ---
 	from api_server import start_api_server
-	api_server = start_api_server(tool_registry, database, config, services, orchestrator,
-	                              ctrl, _ROOT)
+	api_server = start_api_server(tool_registry, database, config, services, orchestrator)
 
 	# --- 7. Start orchestrator ---
 	orchestrator.start()
