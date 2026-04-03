@@ -100,9 +100,14 @@ class BaseTool:
     agent_enabled: bool = True   # Whether the LLM can see and call this tool
     max_calls: int = 3           # Max times the agent can call this tool per message
 
+    # --- Config settings this plugin needs ---
+    # List of tuples: (title, variable_name, description, default, type_info)
+    # Same format as SETTINGS_DATA in config_data.py.
+    config_settings: list = []
+
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        for attr in ("parameters", "requires_services"):
+        for attr in ("parameters", "requires_services", "config_settings"):
             value = getattr(cls, attr)
             if isinstance(value, (dict, list)):
                 setattr(cls, attr, value.copy())

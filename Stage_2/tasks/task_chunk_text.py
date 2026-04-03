@@ -133,6 +133,12 @@ class ChunkText(BaseTask):
 	reads = ["extracted_text"]
 	writes = ["text_chunks"]
 	requires_services = []
+	config_settings = [
+		("Chunk Overlap", "embed_chunk_overlap",
+		 "Number of overlapping tokens between chunks. Preserves continuity across chunk boundaries.",
+		 50,
+		 {"type": "slider", "range": (0, 200, 40), "is_float": False}),
+	]
 	output_schema = """
 		CREATE TABLE IF NOT EXISTS text_chunks (
 			path TEXT,

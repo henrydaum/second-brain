@@ -19,6 +19,12 @@ logger = logging.getLogger("SQLQuery")
 
 class SQLQuery(BaseTool):
     name = "sql_query"
+    config_settings = [
+        ("Max Query Rows", "max_query_rows",
+         "Maximum rows returned from database queries.",
+         25,
+         {"type": "slider", "range": (5, 100, 19), "is_float": False}),
+    ]
     description = (
         "Execute a read-only SQL query against the local file database. "
         "Use this to explore files, task status, extracted text, OCR results, "

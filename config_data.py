@@ -70,48 +70,6 @@ SETTINGS_DATA = [
      300,
      {"type": "slider", "range": (30, 3600, 119), "is_float": False}),
 
-    # --- LLM ---
-    ("LLM Model Name", "llm_model_name",
-     "Model name for the language model API. Reloads the LLM service on save.",
-     "gpt-5-mini",
-     {"type": "text"}),
-
-    ("LLM Endpoint", "llm_endpoint",
-     "Custom API endpoint URL. Leave blank for the default OpenAI endpoint. Reloads the LLM service on save.",
-     "",
-     {"type": "text"}),
-
-    ("LLM API Key", "llm_api_key",
-     "API key or environment variable name for the LLM. Reloads the LLM service on save.",
-     "OPENAI_API_KEY",
-     {"type": "text"}),
-
-    # --- Embedding ---
-    ("Text Embedding Model", "embed_text_model_name",
-     "SentenceTransformer model for text embeddings. Reloads the embedding service on save.",
-     "BAAI/bge-m3",
-     {"type": "text"}),
-
-    ("Image Embedding Model", "embed_image_model_name",
-     "CLIP model for image embeddings. Reloads the embedding service on save.",
-     "clip-ViT-L-14",
-     {"type": "text"}),
-
-    ("GPU Acceleration", "embed_use_cuda",
-     "Use GPU for embedding. Provides a significant speed-up. Reloads the embedding service on save.",
-     True,
-     {"type": "bool"}),
-
-    ("Chunk Size", "embed_chunk_size",
-     "Size in tokens for text splitting. Smaller chunks store specific facts; larger chunks preserve more context. Reloads the embedding service on save.",
-     512,
-     {"type": "slider", "range": (64, 2048, 31), "is_float": False}),
-
-    ("Chunk Overlap", "embed_chunk_overlap",
-     "Number of overlapping tokens between chunks. Preserves continuity across chunk boundaries.",
-     50,
-     {"type": "slider", "range": (0, 200, 40), "is_float": False}),
-
     # --- API ---
     ("API Port", "api_port",
      "Port for the REST API server (used by OpenClaw and other integrations). Requires app restart.",
@@ -123,9 +81,4 @@ SETTINGS_DATA = [
      "",
      {"type": "text"}),
 
-    # --- Display ---
-    ("Max Query Rows", "max_query_rows",
-     "Maximum rows returned from database queries.",
-     25,
-     {"type": "slider", "range": (5, 100, 19), "is_float": False}),
 ]

@@ -341,7 +341,7 @@ def _check_name_collision(tree: ast.Module, plugin_type: str, context, warnings:
 
 def _try_register(sandbox_path: Path, plugin_type: str, context, warnings: list):
     """Attempt to load and register the plugin. Appends to warnings on failure."""
-    from plugin_discovery import load_single_plugin
+    from plugin_discovery import load_single_plugin, get_plugin_settings
     name, error = load_single_plugin(
         plugin_type, sandbox_path,
         context.tool_registry, context.orchestrator,
@@ -349,6 +349,10 @@ def _try_register(sandbox_path: Path, plugin_type: str, context, warnings: list)
     )
     if error:
         warnings.append(f"Registration failed: {error}")
+    else:
+        # Reconcile any new config_settings into plugin_config.json + runtime config
+        import config_manager as cm
+        cm.reconcile_plugin_config(context.config, get_plugin_settings())
 
 
 def _extract_plugin_name(sandbox_path: Path, plugin_type: str) -> str | None:

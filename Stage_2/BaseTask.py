@@ -120,11 +120,16 @@ class BaseTask:
 	max_workers: int = 0  # 0 = use all available workers
 	timeout: int = 300  # Seconds before a PROCESSING entry is considered stuck. Make sure to keep in mind the batch size.
 
+	# --- Config settings this plugin needs ---
+	# List of tuples: (title, variable_name, description, default, type_info)
+	# Same format as SETTINGS_DATA in config_data.py.
+	config_settings: list = []
+
 	def __init_subclass__(cls, **kwargs):
 		super().__init_subclass__(**kwargs)
 		# Prevent subclasses from sharing mutable class attributes.
 		# Without .copy(), every subclass would mutate the same list object.
-		for attr in ("modalities", "reads", "writes", "requires_services"):
+		for attr in ("modalities", "reads", "writes", "requires_services", "config_settings"):
 			value = getattr(cls, attr)
 			if isinstance(value, (dict, list)):
 				setattr(cls, attr, value.copy())

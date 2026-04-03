@@ -24,7 +24,7 @@ from Stage_2.orchestrator import Orchestrator
 from Stage_2.watcher import Watcher
 from controller import Controller
 from Stage_3.tool_registry import ToolRegistry
-from plugin_discovery import discover_services, discover_tasks, discover_tools
+from plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
 from gui.repl import run_repl
 
 
@@ -49,6 +49,9 @@ def main():
 	from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES
 	for d in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES):
 		d.mkdir(parents=True, exist_ok=True)
+
+	# --- 1c. Load existing plugin config into runtime config ---
+	config_manager.load_plugin_config_early(config)
 
 	# --- 2. Initialize database ---
 	t0 = time.time()
@@ -86,6 +89,9 @@ def main():
 	tool_registry.orchestrator = orchestrator
 	discover_tools(_ROOT, tool_registry, config)
 	logger.info(f"Tools registered: {list(tool_registry.tools.keys())} ({time.time() - t0:.2f}s)")
+
+	# --- 5c. Reconcile plugin config (defaults + migration) ---
+	config_manager.reconcile_plugin_config(config, get_plugin_settings())
 
 	# --- Debug: print the full system prompt ---
 	from Stage_3.system_prompt import build_system_prompt
@@ -136,6 +142,11 @@ def main():
 					logger.debug(f"Model unload error: {e}")
 		logger.info("Saving config...")
 		config_manager.save(config)
+		# Save plugin config separately
+		plugin_keys = {entry[1] for entry in get_plugin_settings()}
+		plugin_vals = {k: v for k, v in config.items() if k in plugin_keys}
+		if plugin_vals:
+			config_manager.save_plugin_config(plugin_vals)
 		logger.info("Done.")
 		os._exit(0)
 

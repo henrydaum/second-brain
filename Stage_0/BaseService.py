@@ -28,6 +28,18 @@ class BaseService(ABC):
     model_name: str = ""
     shared: bool = True
 
+    # --- Config settings this plugin needs ---
+    # List of tuples: (title, variable_name, description, default, type_info)
+    # Same format as SETTINGS_DATA in config_data.py.
+    config_settings: list = []
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        for attr in ("config_settings",):
+            value = getattr(cls, attr)
+            if isinstance(value, (dict, list)):
+                setattr(cls, attr, value.copy())
+
     def __init__(self):
         self._loaded = False
 

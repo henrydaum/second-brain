@@ -27,6 +27,32 @@ from paths import ROOT_DIR, SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES
 logger = logging.getLogger("Discovery")
 
 
+# ── Plugin config settings accumulator ──────────────────────────────
+
+_plugin_settings: list = []        # collected (title, var, desc, default, type_info) tuples
+_plugin_settings_keys: set = set() # variable_names already seen (first-wins dedup)
+
+
+def get_plugin_settings() -> list:
+    """Return the accumulated plugin config settings (read-only copy)."""
+    return list(_plugin_settings)
+
+
+def _collect_config_settings(source):
+    """Extract config_settings from a plugin instance or module and accumulate.
+    Deduplicates by variable_name — first plugin to declare a key wins."""
+    settings = getattr(source, "config_settings", None)
+    if not settings:
+        return
+    for entry in settings:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 5:
+            continue
+        var_name = entry[1]
+        if var_name not in _plugin_settings_keys:
+            _plugin_settings_keys.add(var_name)
+            _plugin_settings.append(tuple(entry))
+
+
 # ── Per-type configuration ───────────────────────────────────────────
 
 _TOOL_CONFIG = {
@@ -87,6 +113,7 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
         for instance in _find_subclass_instances(module, BaseTool, module_name):
             instance._mutable = False
             tool_registry.register(instance)
+            _collect_config_settings(instance)
             baked_in_names.add(instance.name)
             count += 1
 
@@ -104,6 +131,7 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
                 instance._mutable = True
                 instance._source_path = str(py_file)
                 tool_registry.register(instance)
+                _collect_config_settings(instance)
                 count += 1
 
     logger.info(f"Discovered {count} tool(s) in {time.time() - t0:.2f}s")
@@ -126,6 +154,7 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
         for instance in _find_subclass_instances(module, BaseTask, module_name):
             instance._mutable = False
             orchestrator.register_task(instance)
+            _collect_config_settings(instance)
             baked_in_names.add(instance.name)
             count += 1
 
@@ -143,6 +172,7 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
                 instance._mutable = True
                 instance._source_path = str(py_file)
                 orchestrator.register_task(instance)
+                _collect_config_settings(instance)
                 count += 1
 
     logger.info(f"Discovered {count} task(s) in {time.time() - t0:.2f}s")
@@ -166,6 +196,7 @@ def discover_services(root_dir: Path, config: dict) -> dict:
         built = _call_build_services(module, module_name, config)
         for svc_name, svc in built.items():
             svc._mutable = False
+            _collect_config_settings(svc)
             services[svc_name] = svc
             baked_in_names.add(svc_name)
 
@@ -185,6 +216,7 @@ def discover_services(root_dir: Path, config: dict) -> dict:
                     continue
                 svc._mutable = True
                 svc._source_path = str(py_file)
+                _collect_config_settings(svc)
                 services[svc_name] = svc
 
     logger.info(f"Discovered {len(services)} service(s) in {time.time() - t0:.2f}s")
@@ -259,6 +291,7 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
     instance._mutable = True
     instance._source_path = str(file_path)
     tool_registry.register(instance)
+    _collect_config_settings(instance)
     return instance.name, None
 
 
@@ -279,6 +312,7 @@ def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str 
     instance._mutable = True
     instance._source_path = str(file_path)
     orchestrator.register_task(instance)
+    _collect_config_settings(instance)
     return instance.name, None
 
 
@@ -301,6 +335,7 @@ def _load_single_service(file_path: Path, services: dict, config: dict) -> tuple
     for svc_name, svc in built.items():
         svc._mutable = True
         svc._source_path = str(file_path)
+        _collect_config_settings(svc)
         services[svc_name] = svc
         names.append(svc_name)
 

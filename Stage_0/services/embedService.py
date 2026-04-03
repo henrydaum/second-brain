@@ -20,6 +20,29 @@ class BaseEmbedder(BaseService):
     Abstract base class for all embedding models.
     Enforces a standard interface for Loading, Unloading, and Encoding.
     """
+
+    config_settings = [
+        ("Text Embedding Model", "embed_text_model_name",
+         "SentenceTransformer model for text embeddings. Reloads the embedding service on save.",
+         "BAAI/bge-m3",
+         {"type": "text"}),
+
+        ("Image Embedding Model", "embed_image_model_name",
+         "CLIP model for image embeddings. Reloads the embedding service on save.",
+         "clip-ViT-L-14",
+         {"type": "text"}),
+
+        ("GPU Acceleration", "embed_use_cuda",
+         "Use GPU for embedding. Provides a significant speed-up. Reloads the embedding service on save.",
+         True,
+         {"type": "bool"}),
+
+        ("Chunk Size", "embed_chunk_size",
+         "Size in tokens for text splitting. Smaller chunks store specific facts; larger chunks preserve more context. Reloads the embedding service on save.",
+         512,
+         {"type": "slider", "range": (64, 2048, 31), "is_float": False}),
+    ]
+
     def __init__(self, model_name, chunk_size=512, use_cuda=True):
         super().__init__()
         self.model_name = model_name

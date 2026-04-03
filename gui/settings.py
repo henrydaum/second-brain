@@ -14,57 +14,96 @@ from gui.widgets import system_message
 logger = logging.getLogger("GUI")
 
 
+def _build_field(title, name, description, default, type_info, config):
+    """Build a single settings field control. Returns (field_info, container) or None."""
+    if name not in config:
+        return None
+    val = config[name]
+    control_type = type_info.get("type", "text")
+
+    if control_type == "bool":
+        control = ft.Checkbox(value=bool(val))
+    elif control_type == "slider":
+        if type_info.get("is_float"):
+            control = ft.TextField(
+                value=str(val), dense=True,
+                input_filter=ft.InputFilter(regex_string=r"[0-9.\-]"),
+            )
+        else:
+            control = ft.TextField(
+                value=str(val), dense=True,
+                input_filter=ft.NumbersOnlyInputFilter(),
+            )
+    elif control_type == "json_list":
+        control = ft.TextField(
+            value=json.dumps(val), dense=True,
+            multiline=True, min_lines=1,
+            hint_text="JSON array",
+        )
+    else:  # "text"
+        control = ft.TextField(value=str(val), dense=True)
+
+    field_info = {
+        "control": control,
+        "type": control_type,
+        "is_float": type_info.get("is_float", False),
+    }
+
+    container = ft.Container(
+        content=ft.Column(controls=[
+            ft.Text(title, size=13, weight=ft.FontWeight.W_500),
+            ft.Text(description, size=11, color=ft.Colors.ON_SURFACE_VARIANT),
+            control,
+        ], spacing=2),
+        padding=ft.padding.only(bottom=10, left=20, right=20),
+    )
+    return field_info, container
+
+
 def show_settings(page, config, services, ctrl, watcher,
                   message_list, agent_ref, create_agent_fn, root_dir):
-    """Build and display the settings editor overlay from SETTINGS_DATA."""
+    """Build and display the settings editor overlay from SETTINGS_DATA + plugin settings."""
     import config_manager as cm
     from config_data import SETTINGS_DATA
+    from plugin_discovery import get_plugin_settings
 
-    fields = {}
+    fields = {}          # name -> field_info (for both core + plugin)
+    plugin_fields = {}   # name -> field_info (plugin only, for separate save)
     field_rows = []
 
+    # --- Core settings ---
     for title, name, description, default, type_info in SETTINGS_DATA:
-        if name not in config:
+        result = _build_field(title, name, description, default, type_info, config)
+        if result is None:
             continue
-        val = config[name]
-        control_type = type_info.get("type", "text")
+        field_info, container = result
+        fields[name] = field_info
+        field_rows.append(container)
 
-        if control_type == "bool":
-            control = ft.Checkbox(value=bool(val))
-        elif control_type == "slider":
-            if type_info.get("is_float"):
-                control = ft.TextField(
-                    value=str(val), dense=True,
-                    input_filter=ft.InputFilter(regex_string=r"[0-9.\-]"),
-                )
-            else:
-                control = ft.TextField(
-                    value=str(val), dense=True,
-                    input_filter=ft.NumbersOnlyInputFilter(),
-                )
-        elif control_type == "json_list":
-            control = ft.TextField(
-                value=json.dumps(val), dense=True,
-                multiline=True, min_lines=1,
-                hint_text="JSON array",
-            )
-        else:  # "text"
-            control = ft.TextField(value=str(val), dense=True)
-
-        fields[name] = {
-            "control": control,
-            "type": control_type,
-            "is_float": type_info.get("is_float", False),
-        }
-
+    # --- Plugin settings ---
+    plugin_settings = get_plugin_settings()
+    if plugin_settings:
         field_rows.append(ft.Container(
             content=ft.Column(controls=[
-                ft.Text(title, size=13, weight=ft.FontWeight.W_500),
-                ft.Text(description, size=11, color=ft.Colors.ON_SURFACE_VARIANT),
-                control,
+                ft.Container(height=4),
+                ft.Divider(height=1, color=ft.Colors.OUTLINE_VARIANT),
+                ft.Container(height=4),
+                ft.Text("Plugin Settings", size=15, weight=ft.FontWeight.W_600),
             ], spacing=2),
             padding=ft.padding.only(bottom=10, left=20, right=20),
         ))
+
+        for title, name, description, default, type_info in plugin_settings:
+            # Ensure the value exists in config (use default if missing)
+            if name not in config:
+                config[name] = default
+            result = _build_field(title, name, description, default, type_info, config)
+            if result is None:
+                continue
+            field_info, container = result
+            fields[name] = field_info
+            plugin_fields[name] = field_info
+            field_rows.append(container)
 
     def _close(e=None):
         """Hide the settings overlay."""
@@ -102,6 +141,12 @@ def show_settings(page, config, services, ctrl, watcher,
                 return
 
         cm.save(config)
+
+        # -- Save plugin config separately (merge with existing to preserve unshown keys) --
+        if plugin_fields:
+            existing = cm.load_plugin_config()
+            existing.update({k: config[k] for k in plugin_fields if k in config})
+            cm.save_plugin_config(existing)
 
         # -- Detect what changed --
         changed = {k for k, v in old.items() if config.get(k) != v}
