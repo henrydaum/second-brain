@@ -107,7 +107,8 @@ def main():
 
 	# --- 6b. Start API server ---
 	from api_server import start_api_server
-	api_server = start_api_server(tool_registry, database, config, services, orchestrator)
+	api_server = start_api_server(tool_registry, database, config, services, orchestrator,
+	                              ctrl=ctrl, root_dir=_ROOT)
 
 	# --- 7. Start orchestrator ---
 	orchestrator.start()

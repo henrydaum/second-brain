@@ -60,11 +60,16 @@ def _build_help(registry: CommandRegistry) -> str:
     return "\n".join(lines)
 
 
-def register_core_commands(registry: CommandRegistry, ctrl, services, tool_registry, root_dir):
-    """Register commands shared by both GUI and REPL.
+def register_core_commands(registry: CommandRegistry, ctrl, services, tool_registry,
+                           root_dir, get_agent=None):
+    """Register commands shared by GUI, REPL, and API.
 
     These are pure ctrl-wrapper commands with no UI-specific side effects.
     Each UI should call this first, then register/override its own commands.
+
+    Parameters:
+        get_agent: Optional callable returning the current Agent instance
+                   (or None). Used by /call and /clear.
     """
     import json as _json
     import config_manager as _cm
@@ -73,6 +78,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
     from gui.formatters import (
         format_services, format_tasks,
         format_stats, format_tools, format_locations,
+        format_tool_result,
     )
 
     # Build a unified setting map (core + plugin) at registration time.
@@ -148,6 +154,28 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         data = ctrl.list_locations(filter_type)
         return format_locations(data)
 
+    def _cmd_call(arg):
+        """Handler for /call <tool_name> {"arg": "value"}"""
+        if not arg:
+            return ("Usage: /call <tool_name> {\"arg\": \"value\"}\n"
+                    "Example: /call sql_query {\"sql\": \"SELECT * FROM files LIMIT 5\"}")
+        parts = arg.split(maxsplit=1)
+        tool_name = parts[0]
+        raw_args = parts[1] if len(parts) > 1 else "{}"
+        try:
+            kwargs = _json.loads(raw_args)
+        except _json.JSONDecodeError as e:
+            return (f"Invalid JSON arguments: {e}\n"
+                    "Expected format: /call <tool_name> {\"key\": \"value\"}")
+        return format_tool_result(ctrl.call_tool(tool_name, kwargs))
+
+    def _cmd_clear(_arg):
+        """Handler for /clear — reset agent conversation history."""
+        agent = get_agent() if get_agent else None
+        if agent:
+            agent.reset()
+        return "(conversation history cleared)"
+
     # Lambdas (not static lists) so completions reflect hot-reloaded plugins.
     _task_names = lambda: list(ctrl.orchestrator.tasks.keys())
     _service_names = lambda: list(services.keys())
@@ -202,5 +230,9 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      handler=_cmd_config),
         CommandEntry("configure", "Update a config setting",   "<key> <value>",
                      handler=_cmd_configure),
+        CommandEntry("call",      "Call a tool directly",   "<tool> {json}",
+                     handler=_cmd_call, arg_completions=_tool_names),
+        CommandEntry("clear",     "Clear agent conversation history",
+                     handler=_cmd_clear),
     ]:
         registry.register(entry)

@@ -3,9 +3,12 @@ REPL.
 
 Simple command loop that maps user input to the shared CommandRegistry.
 Runs on its own daemon thread so it never blocks the dispatch loop.
+
+The ``/chat`` subcommand enters a natural-language chat mode that uses
+:func:`gui.dispatch.route_input` — the same channel as the GUI and API.
+Slash commands work inside chat mode too.
 """
 
-import json
 import logging
 import threading
 from pathlib import Path
@@ -13,7 +16,7 @@ from pathlib import Path
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
 from gui.commands import CommandEntry, CommandRegistry, register_core_commands
-from gui.formatters import format_tool_result
+from gui.dispatch import route_input
 
 logger = logging.getLogger("REPL")
 
@@ -42,25 +45,10 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     # --- Build command registry (shared + REPL-specific) ---
     registry = CommandRegistry()
-    register_core_commands(registry, ctrl, services, tool_registry, root_dir)
+    register_core_commands(registry, ctrl, services, tool_registry, root_dir,
+                           get_agent=lambda: agent)
 
     # --- REPL-specific commands ---
-
-    def _call_handler(arg):
-        if not arg:
-            return ("Usage: /call <tool_name> {\"arg\": \"value\"}\n"
-                    "Example: /call sql_query {\"sql\": \"SELECT * FROM files LIMIT 5\"}")
-
-        parts = arg.split(maxsplit=1)
-        tool_name = parts[0]
-        raw_args = parts[1] if len(parts) > 1 else "{}"
-
-        try:
-            kwargs = json.loads(raw_args)
-        except json.JSONDecodeError as e:
-            return f"Invalid JSON arguments: {e}\nExpected format: /call <tool_name> {{\"key\": \"value\"}}"
-
-        return format_tool_result(ctrl.call_tool(tool_name, kwargs))
 
     def _chat_handler(_arg):
         nonlocal agent
@@ -77,6 +65,7 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         logger.info("Agent initialized.")
 
         print("Entering chat mode. Type 'exit' to return to REPL.")
+        print("Slash commands (e.g. /services) work here too.")
         print("---")
 
         while not shutdown_event.is_set():
@@ -89,14 +78,13 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 continue
             if user_input.lower() in ("exit", "quit", "back"):
                 break
-            if user_input.lower() == "reset":
-                agent.reset()
-                print("(conversation history cleared)")
-                continue
 
             try:
-                response = agent.chat(user_input)
-                print(f"\nassistant> {response}\n")
+                result = route_input(user_input, registry, agent)
+                if result.type == "chat":
+                    print(f"\nassistant> {result.text}\n")
+                elif result.text:
+                    print(result.text)
             except Exception as e:
                 logger.error(f"Agent error: {e}")
                 print(f"Error: {e}")
@@ -110,12 +98,7 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         return None
 
     for entry in [
-        CommandEntry("call", "Call a tool directly", "<tool> {json}",
-                     handler=_call_handler,
-                     arg_completions=lambda: list(tool_registry.tools.keys())),
         CommandEntry("chat",  "Enter interactive chat mode", handler=_chat_handler),
-        CommandEntry("clear", "Clear chat conversation history",
-                     handler=lambda _: (agent.reset() if agent else None) or "(conversation history cleared)"),
         CommandEntry("quit",  "Shutdown", handler=_quit_handler),
         CommandEntry("exit",  "Shutdown", handler=_quit_handler),
     ]:

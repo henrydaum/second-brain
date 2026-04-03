@@ -1,15 +1,14 @@
 """
 HTTP API server for Second Brain.
 
-Exposes an agent chat endpoint and file serving over REST so
-external systems (e.g. OpenClaw) can operate Second Brain directly.
+Presents the same chat interface as the GUI: plain text goes to the
+agent, ``/slash`` commands control the system.  External callers like
+OpenClaw just send text and get text back.
 
 Endpoints:
-    GET  /tools              — list all tool schemas (OpenAI format)
-    GET  /tools/{name}       — single tool schema
-    POST /tools/{name}       — call a tool directly (JSON body = kwargs)
-    POST /agent/run          — send a message to the built-in agent (JSON body = {"message": "..."})
-    GET  /files?path=...     — serve a file from an indexed sync directory
+    POST /chat                — send ``{"message": "..."}``; get a response
+    GET  /files?path=...      — serve a file from an indexed sync directory
+    GET  /completions?prefix= — autocomplete slash commands
 
 Uses stdlib only — no Flask/FastAPI dependency.
 """
@@ -26,6 +25,8 @@ from urllib.parse import unquote, quote
 from Stage_1.registry import get_modality
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
+from gui.commands import CommandRegistry, register_core_commands
+from gui.dispatch import route_input
 
 logger = logging.getLogger("API")
 
@@ -33,7 +34,7 @@ CHUNK_SIZE = 64 * 1024  # 64 KB read chunks for file streaming
 
 
 class _Handler(BaseHTTPRequestHandler):
-    """Thin REST handler dispatching to ToolRegistry and the built-in Agent."""
+    """Thin REST handler: chat, file serving, and command autocomplete."""
 
     def log_message(self, fmt, *args):
         logger.debug(fmt % args)
@@ -53,7 +54,6 @@ class _Handler(BaseHTTPRequestHandler):
     # ------ helpers ------
 
     def _base_url(self) -> str:
-        """Build the base URL for attachment links."""
         host = self.headers.get("Host", f"127.0.0.1:{self.server.server_port}")
         return f"http://{host}"
 
@@ -72,33 +72,38 @@ class _Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length))
 
     def _is_path_allowed(self, file_path: Path) -> bool:
-        """Check that file_path lives inside a configured sync_directory."""
         resolved = file_path.resolve()
         for sd in self.server.config.get("sync_directories", []):
             if resolved.is_relative_to(Path(sd).resolve()):
                 return True
         return False
 
+    def _ensure_agent(self):
+        """Lazily create the agent on first chat message. Returns the agent or None."""
+        if self.server.agent is not None:
+            return self.server.agent
+
+        llm = self.server.services.get("llm")
+        if llm is None or not llm.loaded:
+            return None
+
+        self.server.agent = Agent(
+            llm,
+            self.server.tool_registry,
+            self.server.config,
+            system_prompt=lambda: build_system_prompt(
+                self.server.db,
+                self.server.orchestrator,
+                self.server.tool_registry,
+                self.server.services,
+            ),
+        )
+        return self.server.agent
+
     # ------ routes ------
 
     def do_GET(self):
         if not self._check_auth():
-            return
-
-        # GET /tools
-        if self.path == "/tools":
-            schemas = self.server.tool_registry.get_all_schemas()
-            self._send_json(200, schemas)
-            return
-
-        # GET /tools/{name}
-        m = re.fullmatch(r"/tools/([^/]+)", self.path)
-        if m:
-            schema = self.server.tool_registry.get_schema(m.group(1))
-            if schema is None:
-                self._send_json(404, {"error": f"Unknown tool: {m.group(1)}"})
-            else:
-                self._send_json(200, schema)
             return
 
         # GET /files?path=...
@@ -131,28 +136,28 @@ class _Handler(BaseHTTPRequestHandler):
                     self.wfile.write(chunk)
             return
 
+        # GET /completions?prefix=...
+        if self.path.startswith("/completions"):
+            m = re.search(r"[?&]prefix=([^&]*)", self.path)
+            prefix = unquote(m.group(1)) if m else ""
+            matches = self.server.registry.get_completions(prefix)
+            self._send_json(200, {
+                "completions": [
+                    {"name": cmd.name, "description": cmd.description,
+                     "arg_hint": cmd.arg_hint}
+                    for cmd in matches
+                ],
+            })
+            return
+
         self._send_json(404, {"error": "Not found"})
 
     def do_POST(self):
         if not self._check_auth():
             return
 
-        # POST /tools/{name}
-        m = re.fullmatch(r"/tools/([^/]+)", self.path)
-        if m:
-            tool_name = m.group(1)
-            try:
-                kwargs = self._read_body()
-            except json.JSONDecodeError as e:
-                self._send_json(400, {"error": f"Invalid JSON: {e}"})
-                return
-
-            result = self.server.tool_registry.call(tool_name, **kwargs)
-            self._send_json(200, result.to_dict(base_url=self._base_url()))
-            return
-
-        # POST /agent/run
-        if self.path == "/agent/run":
+        # POST /chat
+        if self.path == "/chat":
             try:
                 body = self._read_body()
             except json.JSONDecodeError as e:
@@ -164,57 +169,48 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "Missing 'message' field"})
                 return
 
-            llm = self.server.services.get("llm")
-            if llm is None or not llm.loaded:
+            agent = self._ensure_agent()
+
+            # For chat messages (non-commands), check that the agent is ready
+            if not message.startswith("/") and agent is None:
                 self._send_json(503, {"error": "LLM service not available"})
                 return
 
-            if self.server.agent is None:
-                self.server.agent = Agent(
-                    llm,
-                    self.server.tool_registry,
-                    self.server.config,
-                    system_prompt=lambda: build_system_prompt(
-                        self.server.db,
-                        self.server.orchestrator,
-                        self.server.tool_registry,
-                        self.server.services,
-                    ),
-                )
+            with self.server.chat_lock:
+                try:
+                    result = route_input(message, self.server.registry, agent)
+                except Exception as e:
+                    logger.error(f"/chat error: {e}")
+                    self._send_json(500, {"error": str(e)})
+                    return
 
-            collected_paths = []
-
-            def _collect(tool_name, result):
-                if result.gui_display_paths:
-                    collected_paths.extend(result.gui_display_paths)
-
-            self.server.agent.on_tool_result = _collect
-
-            try:
-                response = self.server.agent.chat(message)
-            except Exception as e:
-                logger.error(f"/agent/run error: {e}")
-                self._send_json(500, {"error": str(e)})
-                return
-
+            # Build response
             base_url = self._base_url()
             attachments = []
-            for p in collected_paths:
+            for p in result.attachments:
                 modality = get_modality(Path(p).suffix)
                 att = {"path": p, "modality": modality}
-                if base_url:
-                    att["url"] = f"{base_url}/files?path={quote(p, safe='')}"
+                att["url"] = f"{base_url}/files?path={quote(p, safe='')}"
                 attachments.append(att)
 
-            self._send_json(200, {"response": response, "attachments": attachments})
+            self._send_json(200, {
+                "type": result.type,
+                "response": result.text,
+                "attachments": attachments,
+            })
             return
 
         self._send_json(404, {"error": "Not found"})
 
 
-def start_api_server(tool_registry, db, config, services, orchestrator) -> HTTPServer:
+def start_api_server(tool_registry, db, config, services, orchestrator,
+                     ctrl=None, root_dir=None) -> HTTPServer:
     """
     Start the API server on a daemon thread. Returns the HTTPServer instance.
+
+    Parameters:
+        ctrl:     Controller instance (needed for slash commands).
+        root_dir: Project root path (needed for /reload command).
     """
     port = config.get("api_port", 5123)
     token = config.get("api_token", "")
@@ -234,7 +230,17 @@ def start_api_server(tool_registry, db, config, services, orchestrator) -> HTTPS
     server.services = services
     server.orchestrator = orchestrator
     server.api_token = token
-    server.agent = None  # created on first /agent/run call, then reused
+    server.agent = None  # created lazily on first chat message
+    server.chat_lock = threading.Lock()  # agent.chat() is not thread-safe
+
+    # Build command registry for the API (same commands as GUI/REPL)
+    registry = CommandRegistry()
+    if ctrl and root_dir is not None:
+        register_core_commands(
+            registry, ctrl, services, tool_registry, root_dir,
+            get_agent=lambda: server.agent,
+        )
+    server.registry = registry
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

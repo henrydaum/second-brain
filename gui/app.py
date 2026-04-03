@@ -27,6 +27,7 @@ import flet as ft
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
 from gui.commands import CommandEntry, CommandRegistry, register_core_commands
+from gui.dispatch import route_input
 from gui.formatters import format_tool_result
 from gui.history import build_history_drawer
 from gui.log_handler import GuiLogHandler
@@ -374,7 +375,8 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # COMMAND REGISTRY -- Shared core + GUI-specific overrides
         # =============================================================
         registry = CommandRegistry()
-        register_core_commands(registry, ctrl, services, tool_registry, root_dir)
+        register_core_commands(registry, ctrl, services, tool_registry, root_dir,
+                               get_agent=lambda: agent_ref["agent"])
 
         # --- GUI-specific command handlers (override or extend core) ---
 
@@ -976,7 +978,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # CHAT HANDLING -- Sends user text to agent in a background thread
         # =============================================================
         def send_chat(user_text: str):
-            """Run agent.chat() in a background thread, re-enable input on completion."""
+            """Run route_input() in a background thread, re-enable input on completion."""
             processing["value"] = True
             input_field.disabled = True
             send_button.visible = False
@@ -986,9 +988,9 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
             def run():
                 try:
-                    response = agent_ref["agent"].chat(user_text)
-                    if response is not None:
-                        message_list.controls.append(assistant_message(response))
+                    result = route_input(user_text, registry, agent_ref["agent"])
+                    if result.text:
+                        message_list.controls.append(assistant_message(result.text))
                 except Exception as e:
                     logger.error(f"Agent error: {e}")
                     message_list.controls.append(system_message(f"Error: {e}"))
@@ -1028,22 +1030,14 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             autocomplete_overlay.visible = False
 
             if text.startswith("/"):
-                # --- Slash command ---
-                cmd_text = text[1:]  # strip leading /
-                parts = cmd_text.split(maxsplit=1)
-                cmd_name = parts[0].lower() if parts else ""
-                arg = parts[1].strip() if len(parts) > 1 else ""
-
-                message_list.controls.append(
-                    system_message(f"> /{cmd_name}" + (f" {arg}" if arg else ""))
-                )
-
-                output = registry.dispatch(cmd_name, arg)
-                if output:
-                    message_list.controls.append(system_message(str(output)))
+                # --- Slash command (synchronous) ---
+                message_list.controls.append(system_message(f"> {text}"))
+                result = route_input(text, registry, agent_ref["agent"])
+                if result.text:
+                    message_list.controls.append(system_message(result.text))
                 page.update()
             else:
-                # --- Chat message to LLM ---
+                # --- Chat message to LLM (threaded) ---
                 if not agent_ref["agent"]:
                     message_list.controls.append(system_message(
                         "LLM is not loaded. Use /load llm to load it, "

@@ -1,83 +1,95 @@
 ---
 name: second-brain
-description: File intelligence toolkit — index, search, and query local files via REST API
+description: File intelligence toolkit — index, search, and query local files via chat interface
 metadata: {"openclaw":{"emoji":"🧠","requires":{"env":["SECOND_BRAIN_URL"]}}}
 ---
 
 # Second Brain
 
-Second Brain is your file intelligence toolkit. It indexes files on disk (documents, images, spreadsheets, code, audio, video), extracts content, builds search indexes, and exposes everything over a REST API. Use it to manage and query your sync directory like a personal knowledge base.
+Second Brain is your file intelligence toolkit. It indexes files on disk (documents, images, spreadsheets, code, audio, video), extracts content, builds search indexes, and exposes an agent over a REST API. Use it to manage and query your sync directory like a personal knowledge base.
 
 ## Configuration
 
 - `SECOND_BRAIN_URL` (required): Base URL of the running instance (e.g. `http://192.168.1.50:5123`)
 - `SECOND_BRAIN_TOKEN` (optional): Bearer token for auth. Include as `Authorization: Bearer <token>` if set.
 
-## Discovering tools
+## Chat interface
 
-Call `GET {SECOND_BRAIN_URL}/tools` to list all available tools with their names, descriptions, and parameter schemas. The tool set can change dynamically (sandbox plugins can be added at runtime).
-
-## Calling tools
+The API has one interaction endpoint. Send text, get text back — just like chatting with a person.
 
 ```
-POST {SECOND_BRAIN_URL}/tools/{tool_name}
+POST {SECOND_BRAIN_URL}/chat
 Content-Type: application/json
 
-{"param1": "value1", "param2": "value2"}
+{"message": "Find all files that mention quarterly revenue"}
 ```
 
 Response:
 
 ```json
 {
-  "success": true,
-  "error": null,
-  "data": {},
-  "llm_summary": "Human-readable summary of the result",
+  "type": "chat",
+  "response": "I found 3 files mentioning quarterly revenue...",
   "attachments": [
     {"path": "/path/to/file.png", "modality": "image", "url": "http://host:5123/files?path=..."}
   ]
 }
 ```
 
-- `llm_summary`: Read this to understand the result.
+- `type`: `"chat"` (agent response), `"command"` (slash command output), or `"error"`.
+- `response`: The text to read.
 - `attachments`: Files associated with the result. Each has a fetchable `url` and a `modality` (image, audio, video, tabular, text).
 
-## REPL commands (system administration)
+Plain text messages go to the AI agent. The agent has access to tools for searching, reading, and querying files.
+
+## Slash commands (system administration)
+
+Prefix a message with `/` to run a system command instead of chatting with the agent.
 
 ```
-POST {SECOND_BRAIN_URL}/repl
+POST {SECOND_BRAIN_URL}/chat
 Content-Type: application/json
 
-{"command": "load", "arg": "llm"}
+{"message": "/services"}
 ```
 
-Response: `{"output": "Loaded llm in 2.3s"}`
+Response: `{"type": "command", "response": "Services:\n  llm  LOADED ...", "attachments": []}`
 
-Use REPL commands to manage the system. Available commands:
+Available commands:
 
-| Command | Arg | Description |
-|---------|-----|-------------|
-| `help` | | List all available commands |
-| `stats` | | System overview (file counts, pipeline status) |
-| `services` | | List services and their load status |
-| `load` | `<service>` | Load a service (e.g. `llm`, `text_embedder`, `ocr`) |
-| `unload` | `<service>` | Unload a service |
-| `tasks` | | List tasks with status counts |
-| `pipeline` | | Show task dependency graph |
-| `pause` | `<task>` | Pause a task |
-| `unpause` | `<task>` | Unpause a task |
-| `reset` | `<task>` | Reset a task to pending |
-| `retry` | `<task>\|all` | Retry failed entries |
-| `tools` | | List registered tools |
-| `enable` | `<tool>` | Enable a tool for agent use |
-| `disable` | `<tool>` | Disable a tool |
-| `reload` | | Hot-reload plugins |
-| `call` | `<tool> {json}` | Call a tool directly |
-| `config` | `[key]` | Show all config settings, or one setting by key |
-| `configure` | `<key> <value>` | Update a config setting (value is JSON or plain string) |
+| Command | Description |
+|---------|-------------|
+| `/help` | List all available commands |
+| `/stats` | System overview (file counts, pipeline status) |
+| `/services` | List services and their load status |
+| `/load <service>` | Load a service (e.g. `llm`, `text_embedder`, `ocr`) |
+| `/unload <service>` | Unload a service |
+| `/tasks` | List tasks with status counts |
+| `/pipeline` | Show task dependency graph |
+| `/pause <task>` | Pause a task |
+| `/unpause <task>` | Unpause a task |
+| `/reset <task>` | Reset a task to pending |
+| `/retry <task>\|all` | Retry failed entries |
+| `/tools` | List registered tools |
+| `/enable <tool>` | Enable a tool for agent use |
+| `/disable <tool>` | Disable a tool |
+| `/reload` | Hot-reload plugins |
+| `/call <tool> {json}` | Call a tool directly (e.g. `/call sql_query {"sql": "SELECT count(*) FROM files"}`) |
+| `/clear` | Clear agent conversation history |
+| `/config [key]` | Show all config settings, or one setting by key |
+| `/configure <key> <value>` | Update a config setting (value is JSON or plain string) |
 
-Call `stats` or `services` to understand the current system state before taking action.
+Call `/stats` or `/services` to understand the current system state before taking action.
+
+## Command autocomplete
+
+```
+GET {SECOND_BRAIN_URL}/completions?prefix=se
+```
+
+Response: `{"completions": [{"name": "services", "description": "List services and status", "arg_hint": ""}]}`
+
+Use this to discover commands matching a prefix.
 
 ## Fetching files
 
@@ -94,8 +106,8 @@ When a response includes attachments, send relevant ones to the user:
 - **image**: Always send as an image attachment alongside your text reply.
 - **audio**: Send as audio attachment when relevant.
 - **video**: Send as video attachment when relevant.
-- **tabular**: Send as document attachment. Text summary is already in `llm_summary`.
-- **text**: Usually no need to attach — content is in `llm_summary`. Attach only if the user asks for the file.
+- **tabular**: Send as document attachment. Text summary is already in `response`.
+- **text**: Usually no need to attach — content is in `response`. Attach only if the user asks for the file.
 
 ## Error codes
 
@@ -105,7 +117,8 @@ When a response includes attachments, send relevant ones to the user:
 | 400  | Malformed JSON or missing required fields |
 | 401  | Bad or missing Bearer token |
 | 403  | File path outside allowed sync directories |
-| 404  | Unknown tool, endpoint, or file not found |
+| 404  | Endpoint or file not found |
+| 503  | LLM service not available (load it with `/load llm`) |
 | 500  | Internal error |
 
 ## When to use Second Brain
