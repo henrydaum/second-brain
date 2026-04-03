@@ -81,16 +81,6 @@ Available commands:
 
 Call `/stats` or `/services` to understand the current system state before taking action.
 
-## Command autocomplete
-
-```
-GET {SECOND_BRAIN_URL}/completions?prefix=se
-```
-
-Response: `{"completions": [{"name": "services", "description": "List services and status", "arg_hint": ""}]}`
-
-Use this to discover commands matching a prefix.
-
 ## Fetching files
 
 ```

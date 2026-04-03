@@ -8,7 +8,6 @@ OpenClaw just send text and get text back.
 Endpoints:
     POST /chat                — send ``{"message": "..."}``; get a response
     GET  /files?path=...      — serve a file from an indexed sync directory
-    GET  /completions?prefix= — autocomplete slash commands
 
 Uses stdlib only — no Flask/FastAPI dependency.
 """
@@ -134,20 +133,6 @@ class _Handler(BaseHTTPRequestHandler):
             with open(file_path, "rb") as f:
                 while chunk := f.read(CHUNK_SIZE):
                     self.wfile.write(chunk)
-            return
-
-        # GET /completions?prefix=...
-        if self.path.startswith("/completions"):
-            m = re.search(r"[?&]prefix=([^&]*)", self.path)
-            prefix = unquote(m.group(1)) if m else ""
-            matches = self.server.registry.get_completions(prefix)
-            self._send_json(200, {
-                "completions": [
-                    {"name": cmd.name, "description": cmd.description,
-                     "arg_hint": cmd.arg_hint}
-                    for cmd in matches
-                ],
-            })
             return
 
         self._send_json(404, {"error": "Not found"})
