@@ -4,3 +4,5 @@ config.json
 database.db*
 .VSCodeCounter
 .claude
+.DS_Store
+.git
