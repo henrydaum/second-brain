@@ -112,37 +112,32 @@ class Controller:
         self.orchestrator.paused.update(self.orchestrator.tasks.keys())
 
         try:
-            for src_key, svc_names in module_groups.items():
-                # Snapshot which were loaded
-                previously_loaded = [
-                    n for n in svc_names
-                    if getattr(self.services.get(n), 'loaded', False)
-                ]
-
-                # Unload affected services from this module
-                for n in previously_loaded:
-                    try:
-                        self.services[n].unload()
-                    except Exception as ex:
-                        logger.warning(f"Failed to unload '{n}': {ex}")
-
-                # Rebuild all services from this source module.
-                # For baked-in, discover_services rebuilds everything;
-                # we cherry-pick only our affected names.
-                new_services = discover_services(root_dir, self.config)
+            # Unload all affected services first
+            previously_loaded: list[str] = []
+            for svc_names in module_groups.values():
                 for n in svc_names:
-                    if n in new_services:
-                        self.services[n] = new_services[n]
-
-                # Reload services that were previously loaded
-                for n in previously_loaded:
-                    svc = self.services.get(n)
-                    if svc:
+                    if getattr(self.services.get(n), 'loaded', False):
+                        previously_loaded.append(n)
                         try:
-                            svc.load()
-                            feedback.append(f"'{n}' reloaded.")
+                            self.services[n].unload()
                         except Exception as ex:
-                            feedback.append(f"'{n}' failed to reload: {ex}")
+                            logger.warning(f"Failed to unload '{n}': {ex}")
+
+            # Single rediscovery — cherry-pick only the affected services
+            new_services = discover_services(root_dir, self.config)
+            for n in affected:
+                if n in new_services:
+                    self.services[n] = new_services[n]
+
+            # Reload services that were previously loaded
+            for n in previously_loaded:
+                svc = self.services.get(n)
+                if svc:
+                    try:
+                        svc.load()
+                        feedback.append(f"'{n}' reloaded.")
+                    except Exception as ex:
+                        feedback.append(f"'{n}' failed to reload: {ex}")
         finally:
             # Restore orchestrator pauses + clear skip cache
             self.orchestrator.paused.clear()
