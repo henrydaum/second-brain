@@ -24,7 +24,7 @@ from urllib.parse import unquote, quote
 from Stage_1.registry import get_modality
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
-from gui.commands import CommandRegistry, register_core_commands
+from gui.commands import CommandEntry, CommandRegistry, register_core_commands
 from gui.dispatch import route_input
 
 logger = logging.getLogger("API")
@@ -96,6 +96,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self.server.tool_registry,
                 self.server.services,
             ),
+            on_message=self.server.on_agent_message,
         )
         return self.server.agent
 
@@ -217,6 +218,26 @@ def start_api_server(tool_registry, db, config, services, orchestrator,
     server.api_token = token
     server.agent = None  # created lazily on first chat message
     server.chat_lock = threading.Lock()  # agent.chat() is not thread-safe
+    server.conversation_id = None  # current conversation DB id
+
+    def _on_agent_message(msg: dict):
+        """Persist every agent message to the conversations DB."""
+        role = msg.get("role", "")
+        content = msg.get("content") or ""
+        tool_call_id = msg.get("tool_call_id")
+        tool_name = msg.get("name")
+
+        if server.conversation_id is None:
+            title = content[:80].replace("\n", " ").strip() if role == "user" else "New conversation"
+            server.conversation_id = db.create_conversation(title)
+
+        if msg.get("tool_calls"):
+            content = json.dumps({"content": content, "tool_calls": msg["tool_calls"]})
+
+        db.save_message(server.conversation_id, role, content,
+                        tool_call_id=tool_call_id, tool_name=tool_name)
+
+    server.on_agent_message = _on_agent_message
 
     # Build command registry for the API (same commands as GUI/REPL)
     registry = CommandRegistry()
@@ -225,6 +246,16 @@ def start_api_server(tool_registry, db, config, services, orchestrator,
             registry, ctrl, services, tool_registry, root_dir,
             get_agent=lambda: server.agent,
         )
+
+    # Override /clear to also start a new conversation in the DB
+    def _api_clear(_arg):
+        server.conversation_id = None
+        if server.agent:
+            server.agent.reset()
+        return "(conversation history cleared)"
+
+    registry.register(CommandEntry("clear", "Clear agent conversation history",
+                                   handler=_api_clear))
     server.registry = registry
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)

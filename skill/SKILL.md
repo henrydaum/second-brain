@@ -73,6 +73,7 @@ Available commands:
 | `/tools` | List registered tools |
 | `/enable <tool>` | Enable a tool for agent use |
 | `/disable <tool>` | Disable a tool |
+| `/locations [tools\|tasks\|services]` | List file system locations (project root and data directory) |
 | `/reload` | Hot-reload plugins |
 | `/call <tool> {json}` | Call a tool directly (e.g. `/call sql_query {"sql": "SELECT count(*) FROM files"}`) |
 | `/clear` | Clear agent conversation history |
