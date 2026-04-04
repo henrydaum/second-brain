@@ -94,8 +94,8 @@ Returns raw file bytes with correct Content-Type. Use the `url` from attachments
 When a response includes attachments, send relevant ones to the user:
 
 - **image**: Always send as an image attachment alongside your text reply.
-- **audio**: Send as audio attachment when relevant.
-- **video**: Send as video attachment when relevant.
+- **audio**: Send as audio attachment when possible.
+- **video**: Send as video attachment when possible.
 - **tabular**: Send as document attachment. Text summary is already in `response`.
 - **text**: Usually no need to attach — content is in `response`. Attach only if the user asks for the file.
 
