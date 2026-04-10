@@ -9,7 +9,7 @@ import logging
 
 import flet as ft
 
-from gui.widgets import system_message
+from frontend.gui.widgets import system_message
 
 logger = logging.getLogger("GUI")
 

@@ -25,7 +25,7 @@ from Stage_2.watcher import Watcher
 from controller import Controller
 from Stage_3.tool_registry import ToolRegistry
 from plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
-from gui.repl import run_repl
+from frontend.repl.repl import run_repl
 
 
 _ROOT = Path(__file__).parent
@@ -106,7 +106,7 @@ def main():
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)
 
 	# --- 6b. Start API server ---
-	from api_server import start_api_server
+	from frontend.api.api_server import start_api_server
 	api_server = start_api_server(tool_registry, database, config, services, orchestrator,
 	                              ctrl=ctrl, root_dir=_ROOT)
 
@@ -114,9 +114,9 @@ def main():
 	mcp_server = None
 	if config.get("mcp_enabled", True):
 		try:
-			from mcp_server import start_mcp_server
+			from frontend.mcp.mcp_server import start_mcp_server
 			# Build a command registry for the MCP server to use
-			from gui.commands import CommandRegistry, register_core_commands
+			from frontend.shared.commands import CommandRegistry, register_core_commands
 			mcp_cmd_registry = CommandRegistry()
 			register_core_commands(
 				mcp_cmd_registry, ctrl, services, tool_registry, _ROOT,
@@ -128,6 +128,19 @@ def main():
 			)
 		except Exception as e:
 			logger.error(f"MCP server failed to start: {e}")
+
+	# --- 6d. Start backend WebSocket server ---
+	backend_server = None
+	if config.get("backend_enabled", True):
+		try:
+			from backend import start_backend_server
+			backend_server = start_backend_server(
+				db=database, config=config, services=services,
+				tool_registry=tool_registry, orchestrator=orchestrator,
+				ctrl=ctrl, root_dir=_ROOT,
+			)
+		except Exception as e:
+			logger.error(f"Backend WebSocket server failed to start: {e}")
 
 	# --- 7. Start orchestrator ---
 	orchestrator.start()
@@ -205,7 +218,7 @@ def main():
 			_shutdown.wait(timeout=1.0)
 	else:
 		# --- 12b. GUI mode: pystray + Flet ---
-		from gui.app import run_gui
+		from frontend.gui.app import run_gui
 
 		# Holds references for tray interaction
 		_page_ref = {"page": None, "close_app": None}

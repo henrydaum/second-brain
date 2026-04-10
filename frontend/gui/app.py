@@ -8,8 +8,9 @@ An autocomplete popup appears when typing /.
 Organisation
 ------------
 Formatters, message widgets, the log handler, and the settings overlay
-have been extracted into gui/formatters.py, gui/widgets.py,
-gui/log_handler.py, and gui/settings.py respectively.
+have been extracted into frontend/shared/formatters.py,
+frontend/gui/widgets.py, frontend/gui/log_handler.py, and
+frontend/gui/settings.py respectively.
 
 Nearly all GUI state lives inside the ``run_gui`` → ``main_view``
 closure so that inner functions can freely read and mutate shared
@@ -26,13 +27,13 @@ import flet as ft
 
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
-from gui.commands import CommandEntry, CommandRegistry, register_core_commands
-from gui.dispatch import route_input
-from gui.formatters import format_tool_result
-from gui.history import build_history_drawer
-from gui.log_handler import GuiLogHandler
-from gui.renderers import render_paths
-from gui.widgets import system_message, user_bubble, assistant_message, tool_call_card
+from frontend.shared.commands import CommandEntry, CommandRegistry, register_core_commands
+from frontend.shared.dispatch import route_input
+from frontend.shared.formatters import format_tool_result
+from frontend.gui.history import build_history_drawer
+from frontend.gui.log_handler import GuiLogHandler
+from frontend.gui.renderers import render_paths
+from frontend.gui.widgets import system_message, user_bubble, assistant_message, tool_call_card
 from paths import DATA_DIR, open_file
 
 logger = logging.getLogger("GUI")
@@ -1267,7 +1268,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # =============================================================
         def _show_settings():
             """Build and display the settings editor overlay."""
-            from gui.settings import show_settings
+            from frontend.gui.settings import show_settings
             show_settings(
                 page, config, services, ctrl, watcher,
                 message_list, agent_ref, create_agent, root_dir,

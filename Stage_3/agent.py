@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 
 from Stage_1.registry import get_modality
-from gui.token_stripper import strip_model_tokens
+from frontend.shared.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("Agent")
 
@@ -93,7 +93,7 @@ class Agent:
             logger.debug(f"LLM responded in {time.time() - t0:.2f}s")
 
             if not response.has_tool_calls:
-                clean, _ = strip_thinking(response.content)
+                clean, _ = strip_model_tokens(response.content)
                 assistant_msg = {"role": "assistant", "content": clean}
                 self.history.append(assistant_msg)
                 self._fire_on_message(assistant_msg)

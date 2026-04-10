@@ -75,7 +75,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
     import config_manager as _cm
     from config_data import SETTINGS_DATA as _SD
     from plugin_discovery import get_plugin_settings as _get_ps
-    from gui.formatters import (
+    from frontend.shared.formatters import (
         format_services, format_tasks,
         format_stats, format_tools, format_locations,
         format_tool_result,

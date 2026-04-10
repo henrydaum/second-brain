@@ -15,8 +15,8 @@ from pathlib import Path
 
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
-from gui.commands import CommandEntry, CommandRegistry, register_core_commands
-from gui.dispatch import route_input
+from frontend.shared.commands import CommandEntry, CommandRegistry, register_core_commands
+from frontend.shared.dispatch import route_input
 
 logger = logging.getLogger("REPL")
 

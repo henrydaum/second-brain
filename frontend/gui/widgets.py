@@ -10,7 +10,7 @@ from pathlib import Path
 
 import flet as ft
 
-from gui.token_stripper import strip_model_tokens
+from frontend.shared.token_stripper import strip_model_tokens
 
 
 def _truncate_path(path: str, max_len: int = 60) -> str:
@@ -84,7 +84,7 @@ def assistant_message(text: str) -> ft.Container:
     If the text contains ``<think>`` / ``<thinking>`` blocks, they are
     extracted and shown in a collapsible dropdown above the clean response.
     """
-    clean, blocks = strip_thinking(text)
+    clean, blocks = strip_model_tokens(text)
 
     # Build the main content from the clean text
     display = clean or text  # fallback if stripping left nothing

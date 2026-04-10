@@ -33,6 +33,9 @@ requests
 # MCP (Model Context Protocol)
 fastmcp>=3.0.0
 
+# Backend WebSocket server
+websockets>=13.0
+
 # Google Drive
 google-auth
 google-auth-oauthlib

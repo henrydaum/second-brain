@@ -24,9 +24,9 @@ from urllib.parse import unquote, quote
 from Stage_1.registry import get_modality
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
-from gui.commands import CommandEntry, CommandRegistry, register_core_commands
-from gui.dispatch import route_input
-from gui.token_stripper import strip_model_tokens
+from frontend.shared.commands import CommandEntry, CommandRegistry, register_core_commands
+from frontend.shared.dispatch import route_input
+from frontend.shared.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("API")
 
@@ -181,7 +181,7 @@ class _Handler(BaseHTTPRequestHandler):
                 attachments.append(att)
 
             # Strip thinking tokens — API callers get clean text only
-            clean_text, _ = strip_thinking(result.text)
+            clean_text, _ = strip_model_tokens(result.text)
 
             self._send_json(200, {
                 "type": result.type,

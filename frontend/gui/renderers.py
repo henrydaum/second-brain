@@ -21,7 +21,7 @@ from pathlib import Path
 import flet as ft
 
 from Stage_1.registry import parse, get_modality
-from gui.widgets import preview_card, build_nav_strip, _truncate_path
+from frontend.gui.widgets import preview_card, build_nav_strip, _truncate_path
 
 logger = logging.getLogger("Renderers")
 
