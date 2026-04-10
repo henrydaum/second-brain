@@ -26,7 +26,7 @@ from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
 from gui.commands import CommandEntry, CommandRegistry, register_core_commands
 from gui.dispatch import route_input
-from gui.thinking import strip_thinking
+from gui.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("API")
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import flet as ft
 
-from gui.thinking import strip_thinking
+from gui.token_stripper import strip_model_tokens
 
 
 def _truncate_path(path: str, max_len: int = 60) -> str:

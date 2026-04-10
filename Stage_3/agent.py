@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 
 from Stage_1.registry import get_modality
-from gui.thinking import strip_thinking
+from gui.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("Agent")
 
