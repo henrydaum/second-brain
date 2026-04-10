@@ -274,6 +274,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     ),
                     on_tool_result=on_tool_result,
                     on_message=_on_agent_message,
+                    approve_command=_approve_command,
                 )
 
         # -----------------------------------------------------------------
@@ -369,8 +370,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 page.overlay.remove(overlay)
             return approved["value"]
 
-        # Wire the approval callback into the tool registry
-        tool_registry.on_approve_command = _approve_command
+
 
         # =============================================================
         # COMMAND REGISTRY -- Shared core + GUI-specific overrides
@@ -567,7 +567,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
                 _close()
 
-                result = ctrl.call_tool(tool_name, kwargs)
+                result = ctrl.call_tool(tool_name, kwargs, approve_command=_approve_command)
                 if tool_name == "render_files" and result.gui_display_paths:
                     message_list.controls.append(
                         render_paths(result.gui_display_paths, page, config)

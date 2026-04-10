@@ -98,6 +98,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self.server.services,
             ),
             on_message=self.server.on_agent_message,
+            approve_command=lambda cmd, justification: True,
         )
         return self.server.agent
 
@@ -204,10 +205,6 @@ def start_api_server(tool_registry, db, config, services, orchestrator,
     """
     port = config.get("api_port", 5123)
     token = config.get("api_token", "")
-
-    # Auto-approve dangerous commands when called through the API
-    # (OpenClaw already has root-level system access)
-    tool_registry.on_approve_command = lambda cmd, justification: True
 
     try:
         server = HTTPServer(("127.0.0.1", port), _Handler)

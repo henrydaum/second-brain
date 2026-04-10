@@ -158,7 +158,10 @@ async def _handle_tool_call(cmd: ToolCallCmd, ws: "ServerConnection",
 
     from backend.bridge import run_sync
     result = await run_sync(
-        session.tool_registry.call, cmd.tool_name, **cmd.arguments,
+        lambda: session.tool_registry.call(
+            cmd.tool_name, approve_command=session._approve_command,
+            **cmd.arguments,
+        ),
     )
 
     await ws.send(serialize(AgentToolResult(

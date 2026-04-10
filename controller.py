@@ -354,12 +354,12 @@ class Controller:
             "data_tree": data_tree,
         }
 
-    def call_tool(self, name: str, kwargs: dict):
+    def call_tool(self, name: str, kwargs: dict, approve_command=None):
         """Call a tool by name and return the ToolResult."""
         if self.tool_registry is None:
             from Stage_3.BaseTool import ToolResult
             return ToolResult.failed("No tool registry available.")
-        return self.tool_registry.call(name, **kwargs)
+        return self.tool_registry.call(name, approve_command=approve_command, **kwargs)
 
     # =================================================================
     # PLUGINS

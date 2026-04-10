@@ -31,7 +31,6 @@ class ToolRegistry:
         self.services = services or {}
         self.tools: dict[str, BaseTool] = {}
         self._lock = threading.Lock()
-        self.on_approve_command = None  # callable(command, justification) -> bool
         self.orchestrator = None        # set after construction in main.pyw
 
     def register(self, tool: BaseTool):
@@ -47,7 +46,7 @@ class ToolRegistry:
         if removed:
             logger.info(f"Unregistered tool: {name}")
 
-    def call(self, name: str, mcp_context=None, **kwargs) -> ToolResult:
+    def call(self, name: str, mcp_context=None, approve_command=None, **kwargs) -> ToolResult:
         """
         Call a tool by name. This is the single dispatch point.
 
@@ -87,7 +86,7 @@ class ToolRegistry:
         # Build context with call_tool pointing back to this registry
         context = build_context(self.db, self.config, self.services,
                                 call_tool=self.call,
-                                approve_command=self.on_approve_command,
+                                approve_command=approve_command,
                                 tool_registry=self,
                                 orchestrator=self.orchestrator,
                                 sample_llm=_sample_wrapper)

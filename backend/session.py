@@ -94,9 +94,8 @@ class Session:
             ),
             on_tool_result=self._on_tool_result,
             on_message=self._on_message,
+            approve_command=self._approve_command,
         )
-        # Wire up approval callback for this session
-        self.tool_registry.on_approve_command = self._approve_command
         return self.agent
 
     # ------- broadcasting -------

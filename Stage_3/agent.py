@@ -30,7 +30,7 @@ logger = logging.getLogger("Agent")
 
 class Agent:
     def __init__(self, llm, tool_registry, config, system_prompt=None,
-                 on_tool_result=None, on_message=None):
+                 on_tool_result=None, on_message=None, approve_command=None):
         """
         Args:
             llm:            A BaseLLM instance that implements chat_with_tools().
@@ -43,11 +43,14 @@ class Agent:
                             fired after each tool execution, for GUI rendering.
             on_message:     Optional callback(msg: dict) fired after each message
                             is added to history, for conversation persistence.
+            approve_command: Optional callback(command: str, justification: str) -> bool
+                            for tools that need user approval (e.g. run_command).
         """
         self.llm = llm
         self.tool_registry = tool_registry
         self.on_tool_result = on_tool_result
         self.on_message = on_message
+        self.approve_command = approve_command
         self._default_prompt = (
             "You are a helpful assistant with access to a local file database. "
             "Use the available tools to search and retrieve information from the user's files. "
@@ -171,7 +174,7 @@ class Agent:
 
         logger.info(f"Tool call: {name}({args})")
 
-        result = self.tool_registry.call(name, **args)
+        result = self.tool_registry.call(name, approve_command=self.approve_command, **args)
         self._tool_call_counts[name] = self._tool_call_counts.get(name, 0) + 1
 
         if self.on_tool_result:

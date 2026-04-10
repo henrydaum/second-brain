@@ -70,7 +70,8 @@ def _make_dispatch_fn(tool_registry):
     from Stage_1.registry import get_modality as _get_modality
 
     def dispatch(tool_name: str, mcp_context: Context, kwargs: dict):
-        result = tool_registry.call(tool_name, mcp_context=mcp_context, **kwargs)
+        result = tool_registry.call(tool_name, mcp_context=mcp_context,
+                                    approve_command=lambda cmd, j: True, **kwargs)
         if not result.success:
             return json.dumps({"error": result.error})
 
@@ -368,9 +369,6 @@ def start_mcp_server(tool_registry, db, config, services, orchestrator,
 
     # 5. Hook tool registry for dynamic notifications
     hook_tool_registry(mcp, tool_registry)
-
-    # 6. Auto-approve commands (same policy as REST API)
-    tool_registry.on_approve_command = lambda cmd, justification: True
 
     # 7. Start on daemon thread
     def _run():
