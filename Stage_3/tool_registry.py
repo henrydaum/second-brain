@@ -47,7 +47,7 @@ class ToolRegistry:
         if removed:
             logger.info(f"Unregistered tool: {name}")
 
-    def call(self, name: str, **kwargs) -> ToolResult:
+    def call(self, name: str, mcp_context=None, **kwargs) -> ToolResult:
         """
         Call a tool by name. This is the single dispatch point.
 
@@ -69,13 +69,28 @@ class ToolRegistry:
                     not_ready.append(svc_name)
             if not_ready:
                 return ToolResult.failed(f"Required services not available: {not_ready}")
+        
+        # STRICTLY FOR MODEL CONTEXT PROTOCOL (SAMPLING):
+        def _sample_wrapper(prompt: str, max_tokens: int = 500) -> str:
+            if not mcp_context:
+                return "Error: Sampling not available outside of MCP host."
+            
+            import asyncio
+            async def _do_sample():
+                res = await mcp_context.session.create_message(
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=max_tokens
+                )
+                return res.content.text
+            return asyncio.run(_do_sample())
 
         # Build context with call_tool pointing back to this registry
         context = build_context(self.db, self.config, self.services,
                                 call_tool=self.call,
                                 approve_command=self.on_approve_command,
                                 tool_registry=self,
-                                orchestrator=self.orchestrator)
+                                orchestrator=self.orchestrator,
+                                sample_llm=_sample_wrapper)
 
         t0 = time.time()
         try:

@@ -23,10 +23,11 @@ class SecondBrainContext:
     approve_command: Any = None  # callable(command, justification) -> bool (tools only)
     tool_registry: Any = None    # ToolRegistry instance (tools only)
     orchestrator: Any = None     # Orchestrator instance (tools only)
+    sample_llm: Any = None       # callable(prompt, max_tokens) -> str
 
 
 def build_context(db, config: dict, services: dict, call_tool=None, approve_command=None,
-                   tool_registry=None, orchestrator=None) -> SecondBrainContext:
+                   tool_registry=None, orchestrator=None, sample_llm=None) -> SecondBrainContext:
     """
     Factory that wires up a fully functional context.
 
@@ -51,5 +52,6 @@ def build_context(db, config: dict, services: dict, call_tool=None, approve_comm
         approve_command=approve_command,
         tool_registry=tool_registry,
         orchestrator=orchestrator,
+        sample_llm=sample_llm,
     )
     

@@ -26,9 +26,12 @@ import logging
 import threading
 from pathlib import Path
 
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 from fastmcp.tools import Tool
 from fastmcp.utilities.types import Image, Audio, File
+from fastmcp.prompts import Prompt
+
+from Stage_3.system_prompt import build_system_prompt
 
 # Modality → MCP media helper mapping
 _MEDIA_MAP = {
@@ -66,8 +69,8 @@ def _make_dispatch_fn(tool_registry):
     """
     from Stage_1.registry import get_modality as _get_modality
 
-    def dispatch(tool_name: str, kwargs: dict):
-        result = tool_registry.call(tool_name, **kwargs)
+    def dispatch(tool_name: str, mcp_context: Context, kwargs: dict):
+        result = tool_registry.call(tool_name, mcp_context=mcp_context, **kwargs)
         if not result.success:
             return json.dumps({"error": result.error})
 
@@ -96,18 +99,11 @@ def _make_dispatch_fn(tool_registry):
 
 
 def _build_typed_handler(tool_name: str, dispatch_fn, parameters: dict, description: str):
-    """Dynamically build a function with typed parameters matching the
-    tool's JSON Schema.
-
-    FastMCP inspects function signatures for validation and schema
-    generation, so we need real typed parameters — not **kwargs.
-    The generated function just gathers locals() and delegates to the
-    dispatch function which calls ToolRegistry.call().
-    """
     properties = parameters.get("properties", {})
     required = set(parameters.get("required", []))
 
-    param_strs = []
+    param_strs = ["__ctx: Context = None"]  # Hidden FastMCP context parameter
+    dict_entries = [] # Used to build an explicit mapping
     for prop_name, prop_info in properties.items():
         py_type = _TYPE_MAP.get(prop_info.get("type", "string"), "str")
         if prop_name in required:
@@ -115,14 +111,20 @@ def _build_typed_handler(tool_name: str, dispatch_fn, parameters: dict, descript
         else:
             default = prop_info.get("default")
             param_strs.append(f"{prop_name}: {py_type} = {repr(default)}")
+        
+        # Explicitly map parameter names
+        dict_entries.append(f"{repr(prop_name)}: {prop_name}")
 
     sig = ", ".join(param_strs) if param_strs else ""
-    # Build the function source.  locals() captures all named params.
+    dict_str = "{" + ", ".join(dict_entries) + "}"
+
+    # Update return type to str | list and swap locals() for explicit kwargs
     code = (
-        f"def {tool_name}({sig}) -> str:\n"
-        f"    return _dispatch({tool_name!r}, {{k: v for k, v in locals().items() if v is not None}})\n"
+        f"def {tool_name}({sig}) -> str | list:\n"
+        f"    _kwargs = {dict_str}\n"
+        f"    return _dispatch({tool_name!r}, __ctx, {{k: v for k, v in _kwargs.items() if v is not None}})\n"
     )
-    ns = {"_dispatch": dispatch_fn}
+    ns = {"_dispatch": dispatch_fn, "Context": Context}
     exec(code, ns)
     fn = ns[tool_name]
     fn.__doc__ = description
@@ -248,7 +250,7 @@ def register_resources(mcp: FastMCP, ctrl, db):
         mime_type="application/json",
     )
     def resource_pipeline() -> str:
-        return json.dumps(ctrl.list_tasks(), indent=2, default=str)
+        return json.dumps(ctrl.pipeline_status(), indent=2, default=str)
 
     @mcp.resource(
         "secondbrain://schema/{table_name}",
@@ -294,6 +296,11 @@ def hook_tool_registry(mcp: FastMCP, tool_registry):
         _orig_register(tool)
         if tool.agent_enabled:
             try:
+                # Remove first to prevent FastMCP duplicate tool conflicts.
+                try:
+                    mcp.remove_tool(tool.name)
+                except Exception:
+                    pass
                 _register_one_tool(mcp, tool_registry, tool.name, tool)
                 logger.info(f"MCP: auto-registered tool '{tool.name}'")
             except Exception as e:
@@ -309,6 +316,17 @@ def hook_tool_registry(mcp: FastMCP, tool_registry):
 
     tool_registry.register = _patched_register
     tool_registry.unregister = _patched_unregister
+
+
+# ── System Prompt ─────────────────────────────────────────────────
+
+def register_prompts(mcp: FastMCP, db, orchestrator, tool_registry, services):
+    @mcp.prompt(
+        name="second_brain_identity",
+        description="Load the Second Brain persona, authoring guidance, and rules."
+    )
+    def prompt_second_brain() -> str:
+        return build_system_prompt(db, orchestrator, tool_registry, services)
 
 
 # ── Server lifecycle ─────────────────────────────────────────────────
@@ -330,7 +348,7 @@ def start_mcp_server(tool_registry, db, config, services, orchestrator,
         root_dir:         Project root (needed for /reload).
         command_registry: CommandRegistry with slash commands registered.
     """
-    port = config.get("mcp_port", 5124)
+    port = config.get("mcp_port", 5123)
 
     mcp = FastMCP("Second Brain")
 
@@ -345,13 +363,16 @@ def start_mcp_server(tool_registry, db, config, services, orchestrator,
     if ctrl:
         register_resources(mcp, ctrl, db)
 
-    # 4. Hook tool registry for dynamic notifications
+    # 4. Register system prompt
+    register_prompts(mcp, db, orchestrator, tool_registry, services)
+
+    # 5. Hook tool registry for dynamic notifications
     hook_tool_registry(mcp, tool_registry)
 
-    # 5. Auto-approve commands (same policy as REST API)
+    # 6. Auto-approve commands (same policy as REST API)
     tool_registry.on_approve_command = lambda cmd, justification: True
 
-    # 6. Start on daemon thread
+    # 7. Start on daemon thread
     def _run():
         try:
             mcp.run(transport="streamable-http", host="127.0.0.1", port=port)
