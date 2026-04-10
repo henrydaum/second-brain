@@ -49,6 +49,12 @@ SETTINGS_DATA = [
      ["web_search_provider"],
      {"type": "json_list"}),
 
+    # --- Frontends ---
+    ("Enabled Frontends", "enabled_frontends",
+     "Frontend modules to start on launch. Options: gui, repl, api, mcp. Requires app restart.",
+     ["gui", "repl", "api"],
+     {"type": "json_list"}),
+
     # --- Processing ---
     ("Max Workers", "max_workers",
      "Maximum parallel worker threads for task processing. Takes effect on save.",
@@ -82,10 +88,6 @@ SETTINGS_DATA = [
      {"type": "text"}),
 
     # --- MCP ---
-    ("MCP Enabled", "mcp_enabled",
-     "Enable the MCP (Model Context Protocol) server for external AI agent integrations.",
-     True,
-     {"type": "bool"}),
 
     ("MCP Port", "mcp_port",
      "Port for the MCP server (used by Claude Desktop, Cursor, Hermes Agent, etc.). Requires app restart.",

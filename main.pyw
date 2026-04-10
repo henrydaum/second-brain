@@ -1,4 +1,3 @@
-import argparse
 import logging
 import os
 import signal
@@ -25,7 +24,6 @@ from Stage_2.watcher import Watcher
 from controller import Controller
 from Stage_3.tool_registry import ToolRegistry
 from plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
-from frontend.repl.repl import run_repl
 
 
 _ROOT = Path(__file__).parent
@@ -105,22 +103,42 @@ def main():
 	# --- 6. Initialize controller ---
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)
 
-	# --- 6b. Start API server ---
-	from frontend.api.api_server import start_api_server
-	api_server = start_api_server(tool_registry, database, config, services, orchestrator,
-	                              ctrl=ctrl, root_dir=_ROOT)
+	# --- 6b. Determine which frontends to start ---
+	frontends = set(config.get("enabled_frontends", ["gui", "repl", "api"]))
+	if sys.platform != "win32" and "gui" in frontends:
+		logger.info("GUI not supported on this platform — skipping.")
+		frontends.discard("gui")
+	logger.info(f"Enabled frontends: {sorted(frontends)}")
 
-	# --- 6c. Start MCP server ---
+	# --- 6c. Start backend WebSocket server (infrastructure — always on) ---
+	backend_server = None
+	try:
+		from backend import start_backend_server
+		backend_server = start_backend_server(
+			db=database, config=config, services=services,
+			tool_registry=tool_registry, orchestrator=orchestrator,
+			ctrl=ctrl, root_dir=_ROOT,
+		)
+	except Exception as e:
+		logger.error(f"Backend WebSocket server failed to start: {e}")
+
+	# --- 6d. Start API server ---
+	api_server = None
+	if "api" in frontends:
+		from frontend.api.api_server import start_api_server
+		api_server = start_api_server(tool_registry, database, config, services, orchestrator,
+		                              ctrl=ctrl, root_dir=_ROOT)
+
+	# --- 6e. Start MCP server ---
 	mcp_server = None
-	if config.get("mcp_enabled", True):
+	if "mcp" in frontends:
 		try:
 			from frontend.mcp.mcp_server import start_mcp_server
-			# Build a command registry for the MCP server to use
 			from frontend.shared.commands import CommandRegistry, register_core_commands
 			mcp_cmd_registry = CommandRegistry()
 			register_core_commands(
 				mcp_cmd_registry, ctrl, services, tool_registry, _ROOT,
-				get_agent=lambda: None,  # MCP doesn't use the internal agent
+				get_agent=lambda: None,
 			)
 			mcp_server = start_mcp_server(
 				tool_registry, database, config, services, orchestrator,
@@ -128,19 +146,6 @@ def main():
 			)
 		except Exception as e:
 			logger.error(f"MCP server failed to start: {e}")
-
-	# --- 6d. Start backend WebSocket server ---
-	backend_server = None
-	if config.get("backend_enabled", True):
-		try:
-			from backend import start_backend_server
-			backend_server = start_backend_server(
-				db=database, config=config, services=services,
-				tool_registry=tool_registry, orchestrator=orchestrator,
-				ctrl=ctrl, root_dir=_ROOT,
-			)
-		except Exception as e:
-			logger.error(f"Backend WebSocket server failed to start: {e}")
 
 	# --- 7. Start orchestrator ---
 	orchestrator.start()
@@ -161,7 +166,8 @@ def main():
 		_shutdown.set()
 		logger.info("-----------------------------")
 		logger.info("Shutting down...")
-		api_server.shutdown()
+		if api_server:
+			api_server.shutdown()
 		# MCP server runs on a daemon thread — no explicit shutdown needed
 		watcher.stop()
 		orchestrator.stop()
@@ -187,37 +193,18 @@ def main():
 	signal.signal(signal.SIGINT, shutdown)
 	signal.signal(signal.SIGTERM, shutdown)
 
-	# --- 10. Parse CLI args ---
-	parser = argparse.ArgumentParser(description="Second Brain")
-	parser.add_argument("--no-gui", action="store_true", help="Run without GUI (REPL only)")
-	parser.add_argument("--headless", action="store_true",
-	                    help="Run without GUI or REPL (API server only)")
-	args = parser.parse_args()
+	# --- 10. Start REPL ---
+	if "repl" in frontends:
+		from frontend.repl.repl import run_repl
+		repl_thread = threading.Thread(
+			target=run_repl,
+			args=(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT),
+			daemon=True,
+		)
+		repl_thread.start()
 
-	if sys.platform != "win32":
-		args.no_gui = True
-
-	if args.headless:
-		# --- 11a. Headless: API server + pipeline only, no REPL ---
-		logger.info("Running in headless mode (API server only).")
-		while not _shutdown.is_set():
-			_shutdown.wait(timeout=1.0)
-		return
-
-	# --- 11. Start REPL on its own thread ---
-	repl_thread = threading.Thread(
-		target=run_repl,
-		args=(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT),
-		daemon=True,
-	)
-	repl_thread.start()
-
-	if args.no_gui:
-		# --- 12a. No GUI: main thread waits ---
-		while not _shutdown.is_set():
-			_shutdown.wait(timeout=1.0)
-	else:
-		# --- 12b. GUI mode: pystray + Flet ---
+	# --- 11. Start GUI or wait ---
+	if "gui" in frontends:
 		from frontend.gui.app import run_gui
 
 		# Holds references for tray interaction
@@ -233,7 +220,6 @@ def main():
 			import pystray
 			from PIL import Image as PILImage
 
-			# Load app icon
 			icon_img = PILImage.open(str(_ROOT / "icon.ico"))
 
 			def show_window(icon, item):
@@ -279,6 +265,10 @@ def main():
 					pass
 			if not _shutdown.is_set():
 				shutdown()
+	else:
+		# No GUI — main thread idles until shutdown
+		while not _shutdown.is_set():
+			_shutdown.wait(timeout=1.0)
 
 
 if __name__ == "__main__":
