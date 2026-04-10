@@ -26,6 +26,7 @@ from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
 from gui.commands import CommandEntry, CommandRegistry, register_core_commands
 from gui.dispatch import route_input
+from gui.thinking import strip_thinking
 
 logger = logging.getLogger("API")
 
@@ -159,7 +160,7 @@ class _Handler(BaseHTTPRequestHandler):
 
             # For chat messages (non-commands), check that the agent is ready
             if not message.startswith("/") and agent is None:
-                self._send_json(503, {"error": "LLM service not available"})
+                self._send_json(503, {"error": "LLM service not available. Try /load llm"})
                 return
 
             with self.server.chat_lock:
@@ -179,9 +180,12 @@ class _Handler(BaseHTTPRequestHandler):
                 att["url"] = f"{base_url}/files?path={quote(p, safe='')}"
                 attachments.append(att)
 
+            # Strip thinking tokens — API callers get clean text only
+            clean_text, _ = strip_thinking(result.text)
+
             self._send_json(200, {
                 "type": result.type,
-                "response": result.text,
+                "response": clean_text,
                 "attachments": attachments,
             })
             return

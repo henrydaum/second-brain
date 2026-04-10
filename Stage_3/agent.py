@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 from Stage_1.registry import get_modality
+from gui.thinking import strip_thinking
 
 logger = logging.getLogger("Agent")
 
@@ -92,10 +93,11 @@ class Agent:
             logger.debug(f"LLM responded in {time.time() - t0:.2f}s")
 
             if not response.has_tool_calls:
-                assistant_msg = {"role": "assistant", "content": response.content}
+                clean, _ = strip_thinking(response.content)
+                assistant_msg = {"role": "assistant", "content": clean}
                 self.history.append(assistant_msg)
                 self._fire_on_message(assistant_msg)
-                return response.content
+                return response.content  # raw — GUI renders thinking dropdown
 
             # Build the assistant message with tool calls for the conversation
             tool_names = [tc["name"] for tc in response.tool_calls]

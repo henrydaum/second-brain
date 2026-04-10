@@ -10,6 +10,8 @@ from pathlib import Path
 
 import flet as ft
 
+from gui.thinking import strip_thinking
+
 
 def _truncate_path(path: str, max_len: int = 60) -> str:
     """Left-truncate long paths: '...final\\parts\\of\\file.ext'."""
@@ -46,16 +48,64 @@ def user_bubble(text: str) -> ft.Container:
     )
 
 
+def thinking_dropdown(blocks: list[str]) -> ft.Container:
+    """A subtle, collapsible tile that reveals the model's thinking process."""
+    combined = "\n\n".join(blocks)
+    return ft.Container(
+        content=ft.ExpansionTile(
+            title=ft.Row(
+                controls=[
+                    ft.Icon(ft.Icons.PSYCHOLOGY, size=14,
+                            color=ft.Colors.ON_SURFACE_VARIANT),
+                    ft.Text("Thinking", size=12, italic=True,
+                            color=ft.Colors.ON_SURFACE_VARIANT),
+                ],
+                spacing=4,
+            ),
+            initially_expanded=False,
+            controls=[
+                ft.Container(
+                    content=ft.Text(
+                        combined, font_family="Consolas", size=11,
+                        selectable=True, color=ft.Colors.ON_SURFACE_VARIANT,
+                    ),
+                    padding=ft.padding.only(left=16, right=16, bottom=8, top=4),
+                ),
+            ],
+            dense=True,
+        ),
+        margin=ft.margin.only(bottom=2),
+    )
+
+
 def assistant_message(text: str) -> ft.Container:
-    """Left-aligned assistant message, no bubble — flush on page background."""
+    """Left-aligned assistant message, no bubble — flush on page background.
+
+    If the text contains ``<think>`` / ``<thinking>`` blocks, they are
+    extracted and shown in a collapsible dropdown above the clean response.
+    """
+    clean, blocks = strip_thinking(text)
+
+    # Build the main content from the clean text
+    display = clean or text  # fallback if stripping left nothing
     content = ft.Markdown(
-        value=text,
+        value=display,
         selectable=True,
         extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-    ) if any(m in text[:200] for m in ("# ", "**", "- ", "```", "| ")) else \
-        ft.Text(text, size=13, selectable=True)
+    ) if any(m in display[:200] for m in ("# ", "**", "- ", "```", "| ")) else \
+        ft.Text(display, size=13, selectable=True)
+
+    if blocks:
+        # Wrap thinking dropdown + clean text in a column
+        inner = ft.Column(
+            controls=[thinking_dropdown(blocks), content],
+            spacing=4,
+        )
+    else:
+        inner = content
+
     return ft.Container(
-        content=content,
+        content=inner,
         padding=ft.padding.only(left=14, right=80, top=6, bottom=6),
         margin=ft.margin.only(bottom=4),
     )
