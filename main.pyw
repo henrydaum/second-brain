@@ -110,6 +110,25 @@ def main():
 	api_server = start_api_server(tool_registry, database, config, services, orchestrator,
 	                              ctrl=ctrl, root_dir=_ROOT)
 
+	# --- 6c. Start MCP server ---
+	mcp_server = None
+	if config.get("mcp_enabled", True):
+		try:
+			from mcp_server import start_mcp_server
+			# Build a command registry for the MCP server to use
+			from gui.commands import CommandRegistry, register_core_commands
+			mcp_cmd_registry = CommandRegistry()
+			register_core_commands(
+				mcp_cmd_registry, ctrl, services, tool_registry, _ROOT,
+				get_agent=lambda: None,  # MCP doesn't use the internal agent
+			)
+			mcp_server = start_mcp_server(
+				tool_registry, database, config, services, orchestrator,
+				ctrl=ctrl, root_dir=_ROOT, command_registry=mcp_cmd_registry,
+			)
+		except Exception as e:
+			logger.error(f"MCP server failed to start: {e}")
+
 	# --- 7. Start orchestrator ---
 	orchestrator.start()
 
@@ -130,6 +149,7 @@ def main():
 		logger.info("-----------------------------")
 		logger.info("Shutting down...")
 		api_server.shutdown()
+		# MCP server runs on a daemon thread — no explicit shutdown needed
 		watcher.stop()
 		orchestrator.stop()
 		for svc in services.values():

@@ -30,6 +30,9 @@ rarfile
 # HTTP
 requests
 
+# MCP (Model Context Protocol)
+fastmcp>=3.0.0
+
 # Google Drive
 google-auth
 google-auth-oauthlib

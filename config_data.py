@@ -81,4 +81,15 @@ SETTINGS_DATA = [
      "",
      {"type": "text"}),
 
+    # --- MCP ---
+    ("MCP Enabled", "mcp_enabled",
+     "Enable the MCP (Model Context Protocol) server for external AI agent integrations.",
+     True,
+     {"type": "bool"}),
+
+    ("MCP Port", "mcp_port",
+     "Port for the MCP server (used by Claude Desktop, Cursor, Hermes Agent, etc.). Requires app restart.",
+     5124,
+     {"type": "slider", "range": (1024, 65535, 64511), "is_float": False}),
+
 ]
