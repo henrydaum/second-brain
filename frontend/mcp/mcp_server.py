@@ -27,6 +27,7 @@ import threading
 from pathlib import Path
 
 from fastmcp import FastMCP, Context
+from fastmcp.exceptions import ToolError
 from fastmcp.tools import Tool
 from fastmcp.utilities.types import Image, Audio, File
 from fastmcp.prompts import Prompt
@@ -87,7 +88,7 @@ def _make_dispatch_fn(tool_registry):
         result = tool_registry.call(tool_name, mcp_context=mcp_context,
                                     approve_command=_mcp_approve, **kwargs)
         if not result.success:
-            return json.dumps({"error": result.error})
+            raise ToolError(result.error)
 
         text = result.llm_summary or json.dumps(result.data, default=str)
 
