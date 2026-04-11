@@ -94,4 +94,10 @@ SETTINGS_DATA = [
      5124,
      {"type": "slider", "range": (1024, 65535, 64511), "is_float": False}),
 
+    ("MCP Auto-Approve Commands", "mcp_auto_approve_commands",
+     "Allow the MCP host to execute shell commands without user approval. "
+     "When off (default), run_command calls via MCP are denied.",
+     False,
+     {"type": "toggle"}),
+
 ]

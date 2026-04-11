@@ -69,9 +69,23 @@ def _make_dispatch_fn(tool_registry):
     """
     from Stage_1.registry import get_modality as _get_modality
 
+    def _mcp_approve(command: str, justification: str) -> bool:
+        """Approval gate for shell commands via MCP.
+
+        Controlled by the ``mcp_auto_approve_commands`` config flag.
+        When False (default), all commands are denied with a log warning.
+        """
+        if tool_registry.config.get("mcp_auto_approve_commands", False):
+            logger.warning(f"MCP: auto-approving command: {command}")
+            return True
+        logger.warning(
+            f"MCP: denied command (mcp_auto_approve_commands is off): {command}"
+        )
+        return False
+
     def dispatch(tool_name: str, mcp_context: Context, kwargs: dict):
         result = tool_registry.call(tool_name, mcp_context=mcp_context,
-                                    approve_command=lambda cmd, j: True, **kwargs)
+                                    approve_command=_mcp_approve, **kwargs)
         if not result.success:
             return json.dumps({"error": result.error})
 
@@ -103,23 +117,26 @@ def _build_typed_handler(tool_name: str, dispatch_fn, parameters: dict, descript
     properties = parameters.get("properties", {})
     required = set(parameters.get("required", []))
 
-    param_strs = ["__ctx: Context = None"]  # Hidden FastMCP context parameter
-    dict_entries = [] # Used to build an explicit mapping
+    # Build required params first, then optional, then Context at the end.
+    # Context must come last — putting a defaulted param before required
+    # params is a SyntaxError.  FastMCP detects Context by type annotation
+    # regardless of position.
+    required_strs = []
+    optional_strs = []
+    dict_entries = []
     for prop_name, prop_info in properties.items():
         py_type = _TYPE_MAP.get(prop_info.get("type", "string"), "str")
         if prop_name in required:
-            param_strs.append(f"{prop_name}: {py_type}")
+            required_strs.append(f"{prop_name}: {py_type}")
         else:
             default = prop_info.get("default")
-            param_strs.append(f"{prop_name}: {py_type} = {repr(default)}")
-        
-        # Explicitly map parameter names
+            optional_strs.append(f"{prop_name}: {py_type} = {repr(default)}")
         dict_entries.append(f"{repr(prop_name)}: {prop_name}")
 
-    sig = ", ".join(param_strs) if param_strs else ""
+    param_strs = required_strs + optional_strs + ["__ctx: Context = None"]
+    sig = ", ".join(param_strs)
     dict_str = "{" + ", ".join(dict_entries) + "}"
 
-    # Update return type to str | list and swap locals() for explicit kwargs
     code = (
         f"def {tool_name}({sig}) -> str | list:\n"
         f"    _kwargs = {dict_str}\n"
@@ -138,18 +155,20 @@ def register_tools_from_registry(mcp: FastMCP, tool_registry):
     Each tool gets a dynamically generated handler whose signature
     matches the tool's JSON Schema, so FastMCP validation works.
     """
+    dispatch = _make_dispatch_fn(tool_registry)
     for name, tool in tool_registry.tools.items():
         if not tool.agent_enabled:
             continue
         if name in _SKIP_TOOLS:
             logger.debug(f"Skipping GUI-only tool '{name}' for MCP")
             continue
-        _register_one_tool(mcp, tool_registry, name, tool)
+        _register_one_tool(mcp, tool_registry, name, tool, dispatch)
 
 
-def _register_one_tool(mcp: FastMCP, tool_registry, name: str, tool):
+def _register_one_tool(mcp: FastMCP, tool_registry, name: str, tool, dispatch=None):
     """Register a single Second Brain tool as an MCP tool."""
-    dispatch = _make_dispatch_fn(tool_registry)
+    if dispatch is None:
+        dispatch = _make_dispatch_fn(tool_registry)
     handler = _build_typed_handler(name, dispatch, tool.parameters, tool.description or name)
 
     mcp_tool = Tool.from_function(
