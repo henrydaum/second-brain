@@ -29,13 +29,13 @@ Features:
 - **Log viewer** — click the status bar to see the full log stream
 - **System tray** — the window minimizes to tray on close; right-click the tray icon to show/hide or quit
 
-A terminal REPL is also available and runs alongside the GUI by default. Configure which frontends start via the `enabled_frontends` setting.
+A terminal REPL is also available and runs alongside the GUI by default. Configure which frontends start via the `enabled_frontends` setting (options: `gui`, `repl`).
 
 ## Project Structure
 
 ```
 Second Brain/
-├── main.pyw              # Entry point — starts configured frontends (gui, repl, api, mcp)
+├── main.pyw              # Entry point — starts configured frontends (gui, repl)
 ├── plugin_discovery.py   # Unified plugin loader (tools, tasks, services) — baked-in + sandbox
 ├── paths.py              # Centralized path constants (ROOT_DIR, DATA_DIR, SANDBOX_*)
 ├── config_data.py        # Declarative settings schema (titles, types, defaults)
@@ -164,7 +164,7 @@ The GUI launches, the system scans your configured directories, indexes every su
 To run without the GUI, edit `enabled_frontends` in config.json (or via `/config`):
 
 ```json
-"enabled_frontends": ["repl", "api", "backend"]
+"enabled_frontends": ["repl"]
 ```
 
 ## Commands

@@ -46,12 +46,12 @@ class ToolRegistry:
         if removed:
             logger.info(f"Unregistered tool: {name}")
 
-    def call(self, name: str, mcp_context=None, approve_command=None, **kwargs) -> ToolResult:
+    def call(self, name: str, approve_command=None, **kwargs) -> ToolResult:
         """
         Call a tool by name. This is the single dispatch point.
 
         Used by:
-            - External callers (API, CLI, LLM)
+            - External callers (CLI, LLM)
             - Other tools via context.call_tool
         """
         with self._lock:
@@ -69,33 +69,12 @@ class ToolRegistry:
             if not_ready:
                 return ToolResult.failed(f"Required services not available: {not_ready}")
         
-        # STRICTLY FOR MODEL CONTEXT PROTOCOL (SAMPLING):
-        # Uses ctx.sample() — the high-level FastMCP API that handles the
-        # full tool-use loop and returns clean text.
-        #
-        # FastMCP runs sync tool handlers in a worker thread via
-        # anyio.to_thread.  To call async code back on the MCP event loop,
-        # we use anyio.from_thread.run() which automatically finds the
-        # parent loop that spawned this thread.
-        def _sample_wrapper(prompt: str, max_tokens: int = 500) -> str:
-            if not mcp_context:
-                return "Error: Sampling not available outside of MCP host."
-
-            from anyio.from_thread import run as anyio_run
-
-            async def _do_sample():
-                result = await mcp_context.sample(prompt, max_tokens=max_tokens)
-                return result.text
-
-            return anyio_run(_do_sample)
-
         # Build context with call_tool pointing back to this registry
         context = build_context(self.db, self.config, self.services,
                                 call_tool=self.call,
                                 approve_command=approve_command,
                                 tool_registry=self,
-                                orchestrator=self.orchestrator,
-                                sample_llm=_sample_wrapper)
+                                orchestrator=self.orchestrator)
 
         t0 = time.time()
         try:

@@ -5,18 +5,10 @@ A unified chat-first interface. Plain text goes to the LLM agent;
 slash-prefixed commands (e.g. /services, /load llm) control the system.
 An autocomplete popup appears when typing /.
 
-Architecture note — why the GUI does NOT use the WebSocket backend
-------------------------------------------------------------------
-The other frontends (REPL, API) connect to the backend WebSocket server
-as thin clients.  The GUI is different: it talks directly to the Agent,
-ToolRegistry, and Controller **in-process** via ``route_input()``.
-
-This is intentional.  Flet must own the main thread, and its rendering
-model relies on synchronous ``page.update()`` calls from callbacks that
-fire during tool execution (``on_tool_result``, ``_approve_command``).
-Routing those through a WebSocket event queue would add significant
-indirection (daemon thread + asyncio loop + polling timer) with no
-practical benefit — the GUI is always co-located with the backend.
+The GUI talks directly to the Agent, ToolRegistry, and Controller
+**in-process** via ``route_input()``.  Flet must own the main thread,
+and its rendering model relies on synchronous ``page.update()`` calls
+from callbacks that fire during tool execution.
 
 Organisation
 ------------

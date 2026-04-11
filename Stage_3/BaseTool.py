@@ -12,8 +12,8 @@ Tools become LLM function calls with zero translation:
     - description -> function description
     - parameters  -> JSON schema for arguments
 
-The same tool can be exposed via REST API, CLI, WebSocket, or LLM tool call.
-The interface is the same — only the transport layer changes.
+The same tool can be called from the CLI, GUI, or LLM tool call.
+The interface is the same regardless of the caller.
 """
 
 import logging

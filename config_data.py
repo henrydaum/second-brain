@@ -51,8 +51,8 @@ SETTINGS_DATA = [
 
     # --- Frontends ---
     ("Enabled Frontends", "enabled_frontends",
-     "Frontend modules to start on launch. Options: gui, repl, api, mcp. Requires app restart.",
-     ["gui", "repl", "api"],
+     "Frontend modules to start on launch. Options: gui, repl. Requires app restart.",
+     ["gui", "repl"],
      {"type": "json_list"}),
 
     # --- Processing ---
@@ -75,29 +75,5 @@ SETTINGS_DATA = [
      "Seconds between re-checking files for changes.",
      300,
      {"type": "slider", "range": (30, 3600, 119), "is_float": False}),
-
-    # --- API ---
-    ("API Port", "api_port",
-     "Port for the REST API server (used by OpenClaw and other integrations). Requires app restart.",
-     5123,
-     {"type": "slider", "range": (1024, 65535, 64511), "is_float": False}),
-
-    ("API Token", "api_token",
-     "Bearer token for API authentication. Leave blank to allow unauthenticated local access.",
-     "",
-     {"type": "text"}),
-
-    # --- MCP ---
-
-    ("MCP Port", "mcp_port",
-     "Port for the MCP server (used by Claude Desktop, Cursor, Hermes Agent, etc.). Requires app restart.",
-     5124,
-     {"type": "slider", "range": (1024, 65535, 64511), "is_float": False}),
-
-    ("MCP Auto-Approve Commands", "mcp_auto_approve_commands",
-     "Allow the MCP host to execute shell commands without user approval. "
-     "When off (default), run_command calls via MCP are denied.",
-     False,
-     {"type": "toggle"}),
 
 ]

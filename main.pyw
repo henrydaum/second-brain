@@ -104,48 +104,11 @@ def main():
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)
 
 	# --- 6b. Determine which frontends to start ---
-	frontends = set(config.get("enabled_frontends", ["gui", "repl", "api"]))
+	frontends = set(config.get("enabled_frontends", ["gui", "repl"]))
 	if sys.platform != "win32" and "gui" in frontends:
 		logger.info("GUI not supported on this platform — skipping.")
 		frontends.discard("gui")
 	logger.info(f"Enabled frontends: {sorted(frontends)}")
-
-	# --- 6c. Start backend WebSocket server (infrastructure — always on) ---
-	backend_server = None
-	try:
-		from backend import start_backend_server
-		backend_server = start_backend_server(
-			db=database, config=config, services=services,
-			tool_registry=tool_registry, orchestrator=orchestrator,
-			ctrl=ctrl, root_dir=_ROOT,
-		)
-	except Exception as e:
-		logger.error(f"Backend WebSocket server failed to start: {e}")
-
-	# --- 6d. Start API server ---
-	api_server = None
-	if "api" in frontends:
-		from frontend.api.api_server import start_api_server
-		api_server = start_api_server(tool_registry, database, config, services, orchestrator,
-		                              ctrl=ctrl, root_dir=_ROOT)
-
-	# --- 6e. Start MCP server ---
-	mcp_server = None
-	if "mcp" in frontends:
-		try:
-			from frontend.mcp.mcp_server import start_mcp_server
-			from frontend.shared.commands import CommandRegistry, register_core_commands
-			mcp_cmd_registry = CommandRegistry()
-			register_core_commands(
-				mcp_cmd_registry, ctrl, services, tool_registry, _ROOT,
-				get_agent=lambda: None,
-			)
-			mcp_server = start_mcp_server(
-				tool_registry, database, config, services, orchestrator,
-				ctrl=ctrl, root_dir=_ROOT, command_registry=mcp_cmd_registry,
-			)
-		except Exception as e:
-			logger.error(f"MCP server failed to start: {e}")
 
 	# --- 7. Start orchestrator ---
 	orchestrator.start()
@@ -179,9 +142,6 @@ def main():
 				gui_page.window.destroy()
 			except Exception:
 				pass
-		if api_server:
-			api_server.shutdown()
-		# MCP server runs on a daemon thread — no explicit shutdown needed
 		watcher.stop()
 		orchestrator.stop()
 		for svc in services.values():
