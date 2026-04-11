@@ -123,8 +123,11 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             """Actually close the window and exit Flet's event loop."""
             logging.getLogger().removeHandler(gui_handler)
             page.window.prevent_close = False
-            page.window.close()
-            page.update()
+            page.window.destroy()
+            # Trigger the full shutdown sequence (saves config, unloads
+            # services, etc.).  shutdown() is idempotent — safe if already
+            # called from another thread.
+            shutdown_fn()
 
         # Expose page and close function to caller for tray integration
         if on_page_ready:

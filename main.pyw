@@ -159,6 +159,9 @@ def main():
 	logger.info("-----------------------------")
 	logger.info(f"SecondBrain started in {time.time() - t_start:.2f}s. Type 'help' for commands, 'quit' to exit.")
 
+	# Holds GUI references for shutdown/tray (populated by on_page_ready)
+	_page_ref = {"page": None, "close_app": None}
+
 	# --- 9. Shutdown handler ---
 	def shutdown(sig=None, frame=None):
 		if _shutdown.is_set():
@@ -166,6 +169,16 @@ def main():
 		_shutdown.set()
 		logger.info("-----------------------------")
 		logger.info("Shutting down...")
+		# Kill the Flet window FIRST — page.window.destroy() bypasses
+		# prevent_close and works reliably from any thread, ensuring the
+		# renderer subprocess is torn down before we start cleanup.
+		gui_page = _page_ref.get("page")
+		if gui_page:
+			try:
+				gui_page.window.prevent_close = False
+				gui_page.window.destroy()
+			except Exception:
+				pass
 		if api_server:
 			api_server.shutdown()
 		# MCP server runs on a daemon thread — no explicit shutdown needed
@@ -206,9 +219,6 @@ def main():
 	# --- 11. Start GUI or wait ---
 	if "gui" in frontends:
 		from frontend.gui.app import run_gui
-
-		# Holds references for tray interaction
-		_page_ref = {"page": None, "close_app": None}
 
 		def on_page_ready(page, close_app):
 			_page_ref["page"] = page
