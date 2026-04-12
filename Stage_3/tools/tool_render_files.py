@@ -51,7 +51,6 @@ class RenderFiles(BaseTool):
         names = ", ".join(Path(p).name for p in valid)
         summary = (
             f"Rendered {len(valid)} file(s) to the user: {names}. "
-            "You have NOT seen the file contents — do not describe or summarize them."
         )
         if missing:
             summary += f" (Missing: {missing})"
