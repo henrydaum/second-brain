@@ -93,13 +93,13 @@ def main():
 	config_manager.reconcile_plugin_config(config, get_plugin_settings())
 
 	# --- Debug: print the full system prompt ---
-	from Stage_3.system_prompt import build_system_prompt
-	prompt = build_system_prompt(database, orchestrator, tool_registry, services)
-	print("\n" + "=" * 80)
-	print("SYSTEM PROMPT")
-	print("=" * 80)
-	print(prompt)
-	print("=" * 80 + "\n")
+	# from Stage_3.system_prompt import build_system_prompt
+	# prompt = build_system_prompt(database, orchestrator, tool_registry, services)
+	# print("\n" + "=" * 80)
+	# print("SYSTEM PROMPT")
+	# print("=" * 80)
+	# print(prompt)
+	# print("=" * 80 + "\n")
 
 	# --- 6. Initialize controller ---
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)

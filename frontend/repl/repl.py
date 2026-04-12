@@ -81,6 +81,10 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 result = route_input(user_input, registry, agent)
                 if result.type == "chat":
                     print(f"\nassistant> {result.text}\n")
+                    if result.attachments:
+                        print(f"  [{len(result.attachments)} attachment(s)]")
+                        for p in result.attachments:
+                            print(f"    • {p}")
                 elif result.text:
                     print(result.text)
             except Exception as e:

@@ -743,60 +743,40 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         try:
             await tg_file.download_to_drive(str(tmp_path))
             modality = get_modality(suffix) if suffix else "unknown"
+            is_image = modality == "image" or (msg.photo and modality == "unknown")
 
-            # Images → pass directly to the LLM via image_paths
-            if modality == "image" or (msg.photo and modality == "unknown"):
-                user_text = caption or "Describe this image."
-                image_paths = [str(tmp_path)]
+            # ── Build user_text and image_paths based on modality ──
+            user_text = caption or ""
+            send_image_paths = None
 
-                async with _chat_lock:
-                    stop_typing = asyncio.Event()
+            if is_image:
+                llm = services.get("llm")
+                has_vision = llm and llm.vision is not False
+                if has_vision:
+                    send_image_paths = [str(tmp_path)]
+                    user_text += f"\n\n[The user attached an image: {file_name}]"
+                else:
+                    user_text += (
+                        f"\n\n[The user attached an image: {file_name}. "
+                        "The current model does not support vision, "
+                        "so the image contents are not visible to you.]")
+                if not caption:
+                    user_text = user_text.lstrip()
 
-                    async def _typing_loop():
-                        while not stop_typing.is_set():
-                            try:
-                                await msg.chat.send_action(ChatAction.TYPING)
-                            except Exception:
-                                pass
-                            try:
-                                await asyncio.wait_for(stop_typing.wait(), timeout=4.0)
-                            except asyncio.TimeoutError:
-                                pass
-
-                    typing_task = asyncio.create_task(_typing_loop())
-                    try:
-                        loop = asyncio.get_running_loop()
-                        result = await loop.run_in_executor(
-                            None, lambda: route_input(
-                                user_text, registry, agent_ref["agent"],
-                                image_paths=image_paths))
-                        if result.text:
-                            converted = _md_to_tg_html(result.text)
-                            await _send_long_message(chat_id, converted, use_html=True)
-                        if result.attachments:
-                            await _send_attachments(chat_id, result.attachments)
-                    except Exception as e:
-                        logger.error(f"Attachment handler error: {e}")
-                        await msg.reply_text(f"Error: {e}")
-                    finally:
-                        stop_typing.set()
-                        await typing_task
-                return
-
-            # Text / tabular → parse and append content to the message
-            if modality in ("text", "tabular"):
+            elif modality in ("text", "tabular"):
+                # Parse and inline the content
+                content = ""
+                truncated = False
                 try:
-                    result = parse(str(tmp_path), config={"max_chars": _MAX_ATTACHMENT_TEXT})
-                    content = ""
-                    truncated = False
-                    if result.output:
-                        if isinstance(result.output, str):
-                            raw = result.output
-                        elif isinstance(result.output, dict):
-                            df = result.output.get("default")
-                            raw = df.to_string(max_rows=50) if df is not None else str(result.output)
+                    pr = parse(str(tmp_path), config={"max_chars": _MAX_ATTACHMENT_TEXT})
+                    if pr.output:
+                        if isinstance(pr.output, str):
+                            raw = pr.output
+                        elif isinstance(pr.output, dict):
+                            df = pr.output.get("default")
+                            raw = df.to_string(max_rows=50) if df is not None else str(pr.output)
                         else:
-                            raw = str(result.output)
+                            raw = str(pr.output)
                         if len(raw) > _MAX_ATTACHMENT_TEXT:
                             content = raw[:_MAX_ATTACHMENT_TEXT]
                             truncated = True
@@ -804,54 +784,55 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                             content = raw
                 except Exception as e:
                     logger.warning(f"Failed to parse attachment {file_name}: {e}")
-                    content = ""
 
-                if not content:
-                    await msg.reply_text(f"Could not extract text from {file_name}.")
-                    return
+                if content:
+                    user_text += f"\n\n[The user attached a file: {file_name}]\n{content}"
+                    if truncated:
+                        user_text += "\n(Content truncated — only the first ~4000 characters are shown.)"
+                else:
+                    user_text += f"\n\n[The user attached a file: {file_name}, but its contents could not be extracted.]"
+                if not caption:
+                    user_text = user_text.lstrip()
 
-                user_text = caption or f"I'm sharing a file: {file_name}"
-                user_text += f"\n\n--- Attached file: {file_name} ---\n{content}"
-                if truncated:
-                    user_text += "\n\n(Content truncated — only the first ~4000 characters are shown.)"
+            else:
+                # Audio, video, unknown — can't process, but still tell the LLM
+                user_text += f"\n\n[The user attached a file: {file_name} (type: {modality}). This file type cannot be processed.]"
+                if not caption:
+                    user_text = user_text.lstrip()
 
-                async with _chat_lock:
-                    stop_typing = asyncio.Event()
+            # ── Send to agent ──────────────────────────────────────
+            async with _chat_lock:
+                stop_typing = asyncio.Event()
 
-                    async def _typing_loop():
-                        while not stop_typing.is_set():
-                            try:
-                                await msg.chat.send_action(ChatAction.TYPING)
-                            except Exception:
-                                pass
-                            try:
-                                await asyncio.wait_for(stop_typing.wait(), timeout=4.0)
-                            except asyncio.TimeoutError:
-                                pass
+                async def _typing_loop():
+                    while not stop_typing.is_set():
+                        try:
+                            await msg.chat.send_action(ChatAction.TYPING)
+                        except Exception:
+                            pass
+                        try:
+                            await asyncio.wait_for(stop_typing.wait(), timeout=4.0)
+                        except asyncio.TimeoutError:
+                            pass
 
-                    typing_task = asyncio.create_task(_typing_loop())
-                    try:
-                        loop = asyncio.get_running_loop()
-                        result = await loop.run_in_executor(
-                            None, lambda: route_input(
-                                user_text, registry, agent_ref["agent"]))
-                        if result.text:
-                            converted = _md_to_tg_html(result.text)
-                            await _send_long_message(chat_id, converted, use_html=True)
-                        if result.attachments:
-                            await _send_attachments(chat_id, result.attachments)
-                    except Exception as e:
-                        logger.error(f"Attachment handler error: {e}")
-                        await msg.reply_text(f"Error: {e}")
-                    finally:
-                        stop_typing.set()
-                        await typing_task
-                return
-
-            # Audio / video / unknown → not supported
-            await msg.reply_text(
-                f"Attachment type '{modality}' is not supported. "
-                "Send images, text files, or documents.")
+                typing_task = asyncio.create_task(_typing_loop())
+                try:
+                    loop = asyncio.get_running_loop()
+                    result = await loop.run_in_executor(
+                        None, lambda: route_input(
+                            user_text, registry, agent_ref["agent"],
+                            image_paths=send_image_paths))
+                    if result.text:
+                        converted = _md_to_tg_html(result.text)
+                        await _send_long_message(chat_id, converted, use_html=True)
+                    if result.attachments:
+                        await _send_attachments(chat_id, result.attachments)
+                except Exception as e:
+                    logger.error(f"Attachment handler error: {e}")
+                    await msg.reply_text(f"Error: {e}")
+                finally:
+                    stop_typing.set()
+                    await typing_task
 
         finally:
             # Clean up temp file

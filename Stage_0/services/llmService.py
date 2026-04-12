@@ -58,6 +58,7 @@ class BaseLLM(BaseService):
     def __init__(self):
         super().__init__()
         self.shared = True  # LLM clients are typically thread-safe
+        self.vision = None  # True/False/None (None = unknown)
 
     def _load(self):
         raise NotImplementedError
