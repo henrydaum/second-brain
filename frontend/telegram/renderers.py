@@ -42,9 +42,14 @@ _GOOGLE_LINK_MAP = {
     ".gform":   "https://docs.google.com/forms/d/{doc_id}",
 }
 
+TABULAR_EXTENSIONS = {".csv", ".tsv", ".xlsx", ".xls", ".parquet", ".feather"}
+
 _INLINE_TEXT_MAX = 3000   # bytes — small text files rendered inline
 _MEDIA_GROUP_MAX = 10     # Telegram limit per media group
 _PHOTO_MAX_SIZE = 10 * 1024 * 1024  # 10 MB — Telegram photo upload limit
+_TABLE_PREVIEW_ROWS = 5
+_TABLE_PREVIEW_COLS = 6
+_TABLE_COL_WIDTH = 20     # narrower than GUI (30) for mobile screens
 
 
 # ===================================================================
@@ -123,13 +128,65 @@ def _google_link(path: Path) -> str | None:
 
 
 # ===================================================================
+# TABULAR PREVIEW
+# ===================================================================
+
+def _tabular_preview(path: Path, config: dict = None, services: dict = None) -> str | None:
+    """Parse a tabular file and return a monospace preview string, or None on failure."""
+    from Stage_1.registry import parse
+    result = parse(str(path), config=config, services=services)
+    if not result.success:
+        return None
+
+    tables = result.output if isinstance(result.output, dict) else {"default": result.output}
+    first_name = next(iter(tables))
+    df = tables[first_name]
+
+    total_rows, total_cols = len(df), len(df.columns)
+    show_rows = min(total_rows, _TABLE_PREVIEW_ROWS)
+    show_cols = min(total_cols, _TABLE_PREVIEW_COLS)
+    display = df.iloc[:show_rows, :show_cols]
+
+    # Build padded columns
+    headers = [str(h)[:_TABLE_COL_WIDTH] for h in display.columns]
+    rows = [[str(v)[:_TABLE_COL_WIDTH] for v in row] for _, row in display.iterrows()]
+
+    # Calculate column widths
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    def _fmt_row(cells):
+        return "  ".join(c.ljust(w) for c, w in zip(cells, widths))
+
+    lines = [_fmt_row(headers), "  ".join("─" * w for w in widths)]
+    for row in rows:
+        lines.append(_fmt_row(row))
+
+    # Footer
+    footer_parts = []
+    if total_rows > _TABLE_PREVIEW_ROWS:
+        footer_parts.append(f"{show_rows} of {total_rows} rows")
+    if total_cols > _TABLE_PREVIEW_COLS:
+        footer_parts.append(f"{show_cols} of {total_cols} cols")
+    if len(tables) > 1:
+        footer_parts.append(f"sheet \"{first_name}\" of {len(tables)}")
+    if footer_parts:
+        lines.append(f"({', '.join(footer_parts)})")
+
+    return "\n".join(lines)
+
+
+# ===================================================================
 # CLASSIFICATION
 # ===================================================================
 
 def _classify(path: Path) -> str:
     """Classify a file path into a Telegram send category.
 
-    Returns one of: "photo", "video", "audio", "text", "document", "google_link"
+    Returns one of: "photo", "video", "audio", "text", "tabular",
+    "document", "google_link"
     """
     ext = path.suffix.lower()
     if ext in _GOOGLE_LINK_MAP:
@@ -142,6 +199,8 @@ def _classify(path: Path) -> str:
         return "audio"
     if ext in UNSUPPORTED_IMAGE_EXTENSIONS:
         return "document"
+    if ext in TABULAR_EXTENSIONS:
+        return "tabular"
     # Small text files get inlined
     from Stage_1.registry import get_modality
     modality = get_modality(ext)
@@ -209,6 +268,19 @@ def prepare_media_actions(
                 ))
             else:
                 skipped.append(f"{p.name} (could not extract Google link)")
+            continue
+
+        if category == "tabular":
+            preview = _tabular_preview(p)
+            if preview:
+                escaped = html.escape(preview)
+                header = f"<b>{html.escape(p.name)}</b>\n<pre>"
+                footer = "</pre>"
+                text_actions.append(SendAction(
+                    method="text",
+                    text_content=header + escaped + footer,
+                ))
+            documents.append(p)
             continue
 
         if category == "photo" or category == "video":

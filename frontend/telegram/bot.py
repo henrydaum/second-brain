@@ -421,8 +421,24 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
         param = state["params"][idx]
         req = " (required)" if param["required"] else " (optional, send /skip)"
-        desc = f"\n{param['description']}" if param["description"] else ""
-        text = f"<b>{html.escape(param['name'])}</b> ({param['type']}){req}{html.escape(desc)}"
+        desc = f"\n{html.escape(param['description'])}" if param["description"] else ""
+
+        # Type-specific input hint
+        ptype = param["type"]
+        if ptype == "string":
+            hint = "\nType your value as plain text (no quotes needed)."
+        elif ptype == "integer":
+            hint = "\nType a whole number, e.g. <code>42</code>"
+        elif ptype == "number":
+            hint = "\nType a number, e.g. <code>3.14</code>"
+        elif ptype == "array":
+            hint = "\nSend each item on its own line, e.g.:\n<code>first item\nsecond item</code>"
+        elif ptype == "object":
+            hint = "\nSend as JSON, e.g. <code>{\"key\": \"value\"}</code>"
+        else:
+            hint = ""
+
+        text = f"<b>{html.escape(param['name'])}</b> ({ptype}){req}{desc}{hint}"
 
         # Enum → inline keyboard
         if param.get("enum"):
@@ -475,7 +491,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             try:
                 return json.loads(raw)
             except json.JSONDecodeError:
-                return [item.strip() for item in raw.split(",")]
+                # Newline-separated (primary) or comma-separated (fallback)
+                if "\n" in raw:
+                    return [line.strip() for line in raw.splitlines() if line.strip()]
+                return [item.strip() for item in raw.split(",") if item.strip()]
         elif param_type == "object":
             return json.loads(raw)
         return raw
@@ -564,14 +583,22 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return
 
         # Everything else → ask for text input
-        _pending_configures[chat_id] = key
+        _pending_configures[chat_id] = (key, widget_type)
         current_str = json.dumps(current, default=str) if isinstance(current, (list, dict)) else str(current)
+
+        if widget_type == "json_list":
+            hint = "Send each item on its own line, e.g.:\n<code>first item\nsecond item</code>"
+        elif widget_type == "slider":
+            hint = "Type a number."
+        else:
+            hint = "Type your value as plain text (no quotes needed)."
+
         await _app.bot.send_message(
             chat_id,
             f"<b>{html.escape(title)}</b>\n"
             f"{html.escape(desc)}\n\n"
             f"Current: <code>{html.escape(current_str)}</code>\n\n"
-            f"Send the new value (or /cancel):",
+            f"{hint}\n\nSend the new value (or /cancel):",
             parse_mode="HTML")
 
     # ── Handlers ─────────────────────────────────────────────────────
@@ -689,7 +716,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
         # Check for pending /configure value input
         if chat_id in _pending_configures:
-            key = _pending_configures.pop(chat_id)
+            key, widget_type = _pending_configures.pop(chat_id)
+            # Convert newline-separated input to JSON array for list settings
+            if widget_type == "json_list":
+                try:
+                    json.loads(text)  # already valid JSON? use as-is
+                except json.JSONDecodeError:
+                    items = [line.strip() for line in text.splitlines() if line.strip()]
+                    text = json.dumps(items)
             loop = asyncio.get_running_loop()
             output = await loop.run_in_executor(
                 None, lambda: registry.dispatch("configure", f"{key} {text}"))
