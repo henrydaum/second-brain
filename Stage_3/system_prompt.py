@@ -24,6 +24,7 @@ def build_system_prompt(db, orchestrator, tool_registry, services: dict) -> str:
         _services_status(services),
         _pipeline_status(db, orchestrator),
         _file_inventory(db),
+        _agent_memory(),
     ]
     return "\n\n".join(s for s in sections if s)
 
@@ -178,3 +179,13 @@ def _file_inventory(db) -> str:
         lines.append("Supported extensions: " + " ".join(exts))
 
     return "\n".join(lines)
+
+
+def _agent_memory() -> str:
+    """memory.md is developed by the agent using tool_update_memory"""
+    from paths import DATA_DIR
+    mem_path = DATA_DIR / "memory.md"
+    if mem_path.exists():
+        content = mem_path.read_text()
+        return f"\n\n## Memory (from memory.md — please use tool_update_memory to save important facts, such as user info, to here)\n{content}"
+    return ""
