@@ -117,6 +117,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     conversation_ref: dict = {"id": None}
     _pending_approvals: dict = {}       # callback_id -> (Event, result_dict)
     _pending_calls: dict = {}           # chat_id -> {tool, params, collected, current_idx}
+    _pending_configures: dict = {}      # chat_id -> setting_key (waiting for value)
     _chat_lock = asyncio.Lock()
     _loop: asyncio.AbstractEventLoop     # set once the loop is running
     _app: Application                    # set once built
@@ -455,6 +456,94 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return json.loads(raw)
         return raw
 
+    async def _start_call_form(chat_id: int, tool_name: str):
+        """Begin interactive /call parameter collection for a tool."""
+        params = _get_tool_params(tool_name)
+        if params is None:
+            await _app.bot.send_message(chat_id, f"Unknown tool: {tool_name}")
+            return
+        if not params:
+            # No parameters — execute immediately
+            await _app.bot.send_message(chat_id, f"Calling {tool_name}...")
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None, lambda: ctrl.call_tool(tool_name, {}))
+            output = format_tool_result(result)
+            await _send_long_message(chat_id, output)
+            return
+        _pending_calls[chat_id] = {
+            "tool": tool_name,
+            "params": params,
+            "collected": {},
+            "current_idx": 0,
+        }
+        await _app.bot.send_message(
+            chat_id,
+            f"<b>{html.escape(tool_name)}</b> — fill in parameters:\n"
+            f"Send /skip for optional params, /cancel to abort.",
+            parse_mode="HTML")
+        await _ask_next_param(chat_id)
+
+    async def _show_configure_menu(chat_id: int):
+        """Show inline keyboard with all config settings."""
+        from config_data import SETTINGS_DATA
+        from plugin_discovery import get_plugin_settings
+
+        all_settings = list(SETTINGS_DATA) + list(get_plugin_settings())
+        buttons = []
+        for title, key, _desc, _default, _type_info in all_settings:
+            # Telegram callback_data max 64 bytes — use key directly
+            if len(f"cfg:{key}") <= 64:
+                buttons.append([InlineKeyboardButton(title, callback_data=f"cfg:{key}")])
+        if not buttons:
+            await _app.bot.send_message(chat_id, "No settings available.")
+            return
+        await _app.bot.send_message(
+            chat_id, "Choose a setting to configure:",
+            reply_markup=InlineKeyboardMarkup(buttons))
+
+    async def _ask_configure_value(chat_id: int, key: str):
+        """Show current value and ask for new value."""
+        from config_data import SETTINGS_DATA
+        from plugin_discovery import get_plugin_settings
+
+        all_settings = {k: (t, d, ti) for t, k, d, _, ti in
+                        list(SETTINGS_DATA) + list(get_plugin_settings())}
+        info = all_settings.get(key)
+        if not info:
+            await _app.bot.send_message(chat_id, f"Unknown setting: {key}")
+            return
+
+        title, desc, type_info = info
+        current = config.get(key)
+        widget_type = type_info.get("type", "text")
+
+        # Bool → inline keyboard
+        if widget_type == "bool":
+            buttons = [[
+                InlineKeyboardButton("Yes", callback_data=f"cfgval:{key}:true"),
+                InlineKeyboardButton("No", callback_data=f"cfgval:{key}:false"),
+            ]]
+            await _app.bot.send_message(
+                chat_id,
+                f"<b>{html.escape(title)}</b>\n"
+                f"{html.escape(desc)}\n\n"
+                f"Current: <code>{html.escape(str(current))}</code>",
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode="HTML")
+            return
+
+        # Everything else → ask for text input
+        _pending_configures[chat_id] = key
+        current_str = json.dumps(current, default=str) if isinstance(current, (list, dict)) else str(current)
+        await _app.bot.send_message(
+            chat_id,
+            f"<b>{html.escape(title)}</b>\n"
+            f"{html.escape(desc)}\n\n"
+            f"Current: <code>{html.escape(current_str)}</code>\n\n"
+            f"Send the new value (or /cancel):",
+            parse_mode="HTML")
+
     # ── Handlers ─────────────────────────────────────────────────────
 
     async def handle_command(update: Update, _ctx):
@@ -468,10 +557,16 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         arg = parts[1].strip() if len(parts) > 1 else ""
         chat_id = update.message.chat_id
 
-        # /cancel — clear any pending /call form
+        # /cancel — clear any pending form
         if cmd_name == "cancel":
+            cancelled = False
             if chat_id in _pending_calls:
                 _pending_calls.pop(chat_id)
+                cancelled = True
+            if chat_id in _pending_configures:
+                _pending_configures.pop(chat_id)
+                cancelled = True
+            if cancelled:
                 await update.message.reply_text("Cancelled.")
                 return
 
@@ -488,33 +583,31 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await update.message.reply_text("This parameter is required.")
                     return
 
-        # /call with tool name but no JSON → start interactive form
-        if cmd_name == "call" and arg and not arg.lstrip().startswith("{"):
-            tool_name = arg.split()[0]
-            params = _get_tool_params(tool_name)
-            if params is None:
-                await update.message.reply_text(f"Unknown tool: {tool_name}")
+        # /call — show tool menu or start interactive form
+        if cmd_name == "call":
+            if not arg:
+                # No arg → show menu of ALL tools
+                all_tools = list(tool_registry.tools.keys())
+                if not all_tools:
+                    await update.message.reply_text("No tools registered.")
+                    return
+                buttons = [[InlineKeyboardButton(t, callback_data=f"cmd:call:{t}")]
+                           for t in all_tools[:30]]
+                await update.message.reply_text(
+                    "Choose a tool to call:",
+                    reply_markup=InlineKeyboardMarkup(buttons))
                 return
-            if not params:
-                # No parameters — execute immediately
-                loop = asyncio.get_running_loop()
-                result = await loop.run_in_executor(
-                    None, lambda: ctrl.call_tool(tool_name, {}))
-                output = format_tool_result(result)
-                await _send_long_message(chat_id, output)
+            elif not arg.lstrip().startswith("{"):
+                # Tool name given but no JSON → interactive form
+                tool_name = arg.split()[0]
+                await _start_call_form(chat_id, tool_name)
                 return
-            _pending_calls[chat_id] = {
-                "tool": tool_name,
-                "params": params,
-                "collected": {},
-                "current_idx": 0,
-            }
-            await update.message.reply_text(
-                f"<b>{html.escape(tool_name)}</b> — fill in parameters:\n"
-                f"Send /skip for optional params, /cancel to abort.",
-                parse_mode="HTML")
-            await _ask_next_param(chat_id)
-            return
+
+        # /configure — show settings menu or accept key+value
+        if cmd_name == "configure":
+            if not arg:
+                await _show_configure_menu(chat_id)
+                return
 
         # Dynamic menu: if command has arg_completions and no arg given
         entry = registry._commands.get(cmd_name)
@@ -560,6 +653,16 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await update.message.reply_text(
                         f"Invalid value for {param['name']} ({param['type']}): {e}\nTry again.")
                 return
+
+        # Check for pending /configure value input
+        if chat_id in _pending_configures:
+            key = _pending_configures.pop(chat_id)
+            loop = asyncio.get_running_loop()
+            output = await loop.run_in_executor(
+                None, lambda: registry.dispatch("configure", f"{key} {text}"))
+            if output:
+                await _send_long_message(chat_id, output)
+            return
 
         async with _chat_lock:
             # Typing indicator loop
@@ -607,11 +710,41 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     _, cmd_name, arg = parts
                     await update.callback_query.answer()
                     await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                    chat_id = update.callback_query.message.chat_id
+
+                    # /call menu → start interactive form instead of raw dispatch
+                    if cmd_name == "call":
+                        await _start_call_form(chat_id, arg)
+                        return
+
                     loop = asyncio.get_running_loop()
                     output = await loop.run_in_executor(
                         None, lambda: registry.dispatch(cmd_name, arg))
                     if output:
-                        chat_id = update.callback_query.message.chat_id
+                        await _send_long_message(chat_id, output)
+                return
+
+            # ── Configure setting selection (cfg:<key>) ──
+            if data.startswith("cfg:"):
+                key = data[4:]
+                await update.callback_query.answer()
+                await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                chat_id = update.callback_query.message.chat_id
+                await _ask_configure_value(chat_id, key)
+                return
+
+            # ── Configure bool value (cfgval:<key>:<value>) ──
+            if data.startswith("cfgval:"):
+                parts = data.split(":", 2)
+                if len(parts) == 3:
+                    _, key, raw_val = parts
+                    await update.callback_query.answer()
+                    await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                    chat_id = update.callback_query.message.chat_id
+                    loop = asyncio.get_running_loop()
+                    output = await loop.run_in_executor(
+                        None, lambda: registry.dispatch("configure", f"{key} {raw_val}"))
+                    if output:
                         await _send_long_message(chat_id, output)
                 return
 
