@@ -30,6 +30,9 @@ rarfile
 # HTTP
 requests
 
+# Telegram bot
+python-telegram-bot
+
 # Google Drive
 google-auth
 google-auth-oauthlib

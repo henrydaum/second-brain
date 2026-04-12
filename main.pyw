@@ -176,6 +176,16 @@ def main():
 		)
 		repl_thread.start()
 
+	# --- 10b. Start Telegram bot ---
+	if "telegram" in frontends:
+		from frontend.telegram.bot import run_telegram_bot
+		telegram_thread = threading.Thread(
+			target=run_telegram_bot,
+			args=(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT),
+			daemon=True,
+		)
+		telegram_thread.start()
+
 	# --- 11. Start GUI or wait ---
 	if "gui" in frontends:
 		from frontend.gui.app import run_gui

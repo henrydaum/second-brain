@@ -51,7 +51,7 @@ SETTINGS_DATA = [
 
     # --- Frontends ---
     ("Enabled Frontends", "enabled_frontends",
-     "Frontend modules to start on launch. Options: gui, repl. Requires app restart.",
+     "Frontend modules to start on launch. Options: gui, repl, telegram. Requires app restart.",
      ["gui", "repl"],
      {"type": "json_list"}),
 
@@ -75,5 +75,17 @@ SETTINGS_DATA = [
      "Seconds between re-checking files for changes.",
      300,
      {"type": "slider", "range": (30, 3600, 119), "is_float": False}),
+
+    # --- Telegram ---
+    ("Telegram Bot Token", "telegram_bot_token",
+     "Bot token from @BotFather. Required for Telegram frontend.",
+     "",
+     {"type": "text"}),
+
+    ("Telegram Allowed User ID", "telegram_allowed_user_id",
+     "Your Telegram user ID (integer). Only this user can interact with the bot. "
+     "Send /start to @userinfobot to find yours.",
+     0,
+     {"type": "text"}),
 
 ]
