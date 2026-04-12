@@ -11,9 +11,13 @@ into a single collage (Photo/Video, Audio, or Document).
 """
 
 import html
+import io
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from PIL import Image
 
 logger = logging.getLogger("TelegramRenderers")
 
@@ -29,8 +33,18 @@ AUDIO_EXTENSIONS = {".mp3", ".ogg", ".wav", ".flac", ".m4a", ".aac"}
 # These image formats can't be sent as Telegram photos — fall back to document
 UNSUPPORTED_IMAGE_EXTENSIONS = {".heic", ".heif", ".tiff", ".tif", ".svg"}
 
-_INLINE_TEXT_MAX = 3000  # bytes — small text files rendered inline
-_MEDIA_GROUP_MAX = 10    # Telegram limit per media group
+# Google proxy files — JSON shortcuts with a doc_id, rendered as links
+_GOOGLE_LINK_MAP = {
+    ".gdoc":    "https://docs.google.com/document/d/{doc_id}",
+    ".gsheet":  "https://docs.google.com/spreadsheets/d/{doc_id}",
+    ".gslides": "https://docs.google.com/presentation/d/{doc_id}",
+    ".gdraw":   "https://docs.google.com/drawings/d/{doc_id}",
+    ".gform":   "https://docs.google.com/forms/d/{doc_id}",
+}
+
+_INLINE_TEXT_MAX = 3000   # bytes — small text files rendered inline
+_MEDIA_GROUP_MAX = 10     # Telegram limit per media group
+_PHOTO_MAX_SIZE = 10 * 1024 * 1024  # 10 MB — Telegram photo upload limit
 
 
 # ===================================================================
@@ -49,15 +63,77 @@ class SendAction:
 
 
 # ===================================================================
+# PHOTO RESIZING
+# ===================================================================
+
+def prepare_photo_bytes(path: Path) -> io.BytesIO:
+    """Return a BytesIO ready for Telegram's send_photo.
+
+    If the file is under 10 MB, returns the raw bytes.
+    If over 10 MB, progressively downscales until it fits.
+    """
+    size = path.stat().st_size
+    if size <= _PHOTO_MAX_SIZE:
+        buf = io.BytesIO(path.read_bytes())
+        buf.name = path.name
+        return buf
+
+    logger.info(f"Resizing {path.name} ({size / 1024 / 1024:.1f} MB) to fit 10 MB photo limit")
+    img = Image.open(path)
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+
+    # Shrink by 25% each pass until it fits
+    quality = 85
+    for scale in [0.75, 0.5, 0.35, 0.25]:
+        w, h = img.size
+        resized = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        buf = io.BytesIO()
+        resized.save(buf, format="JPEG", quality=quality)
+        if buf.tell() <= _PHOTO_MAX_SIZE:
+            buf.seek(0)
+            buf.name = path.stem + ".jpg"
+            logger.info(f"Resized to {buf.tell() / 1024 / 1024:.1f} MB ({int(w * scale)}x{int(h * scale)})")
+            return buf
+
+    # Last resort: very small
+    buf.seek(0)
+    buf.name = path.stem + ".jpg"
+    return buf
+
+
+# ===================================================================
+# GOOGLE PROXY LINKS
+# ===================================================================
+
+def _google_link(path: Path) -> str | None:
+    """If *path* is a Google proxy file, return its web URL. Otherwise None."""
+    ext = path.suffix.lower()
+    template = _GOOGLE_LINK_MAP.get(ext)
+    if not template:
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        doc_id = data.get("doc_id") or data.get("url", "").split("/d/")[-1].split("/")[0]
+        if doc_id:
+            return template.format(doc_id=doc_id)
+    except Exception as e:
+        logger.warning(f"Could not read Google proxy file {path.name}: {e}")
+    return None
+
+
+# ===================================================================
 # CLASSIFICATION
 # ===================================================================
 
 def _classify(path: Path) -> str:
     """Classify a file path into a Telegram send category.
 
-    Returns one of: "photo", "video", "audio", "text", "document"
+    Returns one of: "photo", "video", "audio", "text", "document", "google_link"
     """
     ext = path.suffix.lower()
+    if ext in _GOOGLE_LINK_MAP:
+        return "google_link"
     if ext in PHOTO_EXTENSIONS:
         return "photo"
     if ext in VIDEO_EXTENSIONS:
@@ -104,6 +180,7 @@ def prepare_media_actions(
     audio: list[Path] = []
     documents: list[Path] = []
     text_actions: list[SendAction] = []
+    skipped: list[str] = []
 
     for path_str in paths:
         p = Path(path_str)
@@ -114,13 +191,25 @@ def prepare_media_actions(
             logger.info(f"Skipping non-file: {p}")
             continue
         try:
-            if p.stat().st_size > max_file_size:
-                logger.warning(f"Skipping oversized file ({p.stat().st_size} bytes): {p.name}")
+            size = p.stat().st_size
+            if size > max_file_size:
+                skipped.append(f"{p.name} ({size / 1024 / 1024:.1f} MB — exceeds 50 MB limit)")
                 continue
         except OSError:
             continue
 
         category = _classify(p)
+
+        if category == "google_link":
+            url = _google_link(p)
+            if url:
+                text_actions.append(SendAction(
+                    method="text",
+                    text_content=f'<a href="{html.escape(url)}">{html.escape(p.stem)}</a>',
+                ))
+            else:
+                skipped.append(f"{p.name} (could not extract Google link)")
+            continue
 
         if category == "photo" or category == "video":
             photo_video.append(p)
@@ -160,6 +249,11 @@ def prepare_media_actions(
 
     # Inline text actions (always individual)
     actions.extend(text_actions)
+
+    # Notify about skipped files
+    if skipped:
+        note = "Skipped files:\n" + "\n".join(f"- {s}" for s in skipped)
+        actions.append(SendAction(method="text", text_content=note))
 
     return actions
 

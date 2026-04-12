@@ -117,7 +117,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     from telegram.ext import (
         Application, CallbackQueryHandler, MessageHandler, filters,
     )
-    from frontend.telegram.renderers import prepare_media_actions, SendAction, VIDEO_EXTENSIONS
+    from frontend.telegram.renderers import (
+        prepare_media_actions, prepare_photo_bytes, SendAction, VIDEO_EXTENSIONS,
+    )
 
     # ── State ────────────────────────────────────────────────────────
     agent_ref: dict = {"agent": None}
@@ -352,7 +354,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                             if ext in VIDEO_EXTENSIONS:
                                 media.append(InputMediaVideo(open(f, "rb")))
                             else:
-                                media.append(InputMediaPhoto(open(f, "rb")))
+                                media.append(InputMediaPhoto(prepare_photo_bytes(f)))
                         elif action.group_type == "audio":
                             media.append(InputMediaAudio(open(f, "rb"), title=f.stem))
                         else:
@@ -360,7 +362,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await _app.bot.send_media_group(chat_id, media)
 
                 elif action.method == "photo":
-                    await _app.bot.send_photo(chat_id, photo=open(action.files[0], "rb"))
+                    await _app.bot.send_photo(chat_id, photo=prepare_photo_bytes(action.files[0]))
 
                 elif action.method == "video":
                     await _app.bot.send_video(chat_id, video=open(action.files[0], "rb"))
