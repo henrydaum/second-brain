@@ -231,7 +231,9 @@ def _require_approval(context, action_summary: str, detail: str) -> ToolResult |
         logger.error(f"Approval callback failed: {e}")
         return ToolResult.failed(f"Approval dialog error: {e}")
     if not approved:
-        return ToolResult.failed("Plugin action denied by user.")
+        return ToolResult.failed(
+            "Plugin action denied by user. STOP — do not retry this action. "
+            "Ask the user what they would like you to do instead.")
     return None
 
 

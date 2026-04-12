@@ -227,7 +227,9 @@ class RunCommand(BaseTool):
                 return ToolResult.failed(f"Approval dialog error: {e}")
 
             if not approved:
-                return ToolResult.failed("Command denied by user.")
+                return ToolResult.failed(
+                    "Command denied by user. STOP — do not retry this command. "
+                    "Ask the user what they would like you to do instead.")
 
         # ── Execute ──────────────────────────────────────────────
         logger.info(f"Running ({category}): {command}")
