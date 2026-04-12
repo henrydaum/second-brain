@@ -92,7 +92,26 @@ class Agent:
                 f"LLM call (round {round_num + 1}), history size: {len(self.history)} messages"
             )
             t0 = time.time()
-            response = self.llm.chat_with_tools(messages, tools, image_paths=compiled_image_paths or None)
+            try:
+                response = self.llm.chat_with_tools(messages, tools, image_paths=compiled_image_paths or None)
+            except Exception as e:
+                error_str = str(e).lower()
+                if any(k in error_str for k in ("context", "token", "length", "maximum", "too long", "max_tokens")):
+                    logger.warning(f"Context limit hit, trimming history: {e}")
+                    keep = max(2, len(self.history) // 2)
+                    self.history = self.history[-keep:]
+                    messages = [{"role": "system", "content": prompt}]
+                    messages.extend(self.history)
+                    compiled_image_paths.clear()
+                    try:
+                        response = self.llm.chat_with_tools(messages, tools, image_paths=None)
+                    except Exception:
+                        fallback = "Context limit reached even after trimming. Use /new to start fresh."
+                        self.history.append({"role": "assistant", "content": fallback})
+                        self._fire_on_message({"role": "assistant", "content": fallback})
+                        return fallback
+                else:
+                    raise
             logger.debug(f"LLM responded in {time.time() - t0:.2f}s")
 
             if not response.has_tool_calls:

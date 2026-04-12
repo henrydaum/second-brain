@@ -8,6 +8,8 @@ slash command; everything else is sent to the agent as a chat message.
 
 from dataclasses import dataclass, field
 
+from frontend.shared.token_stripper import strip_model_tokens
+
 
 @dataclass
 class InputResult:
@@ -74,4 +76,5 @@ def route_input(text, registry, agent):
     finally:
         agent.on_tool_result = original_callback
 
-    return InputResult("chat", response or "", collected_paths)
+    clean, _ = strip_model_tokens(response or "")
+    return InputResult("chat", clean, collected_paths)

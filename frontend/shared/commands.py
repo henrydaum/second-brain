@@ -232,7 +232,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      handler=_cmd_configure),
         CommandEntry("call",      "Call a tool directly",   "<tool> {json}",
                      handler=_cmd_call, arg_completions=_tool_names),
-        CommandEntry("clear",     "Clear agent conversation history",
+        CommandEntry("clear",     "Clear agent memory (keeps conversation)",
                      handler=_cmd_clear),
     ]:
         registry.register(entry)

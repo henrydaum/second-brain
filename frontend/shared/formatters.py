@@ -2,6 +2,7 @@
 Plain-text formatters for command output.
 
 Used by both the GUI (app.py) and the terminal REPL (repl.py).
+Compact mode is used by the Telegram frontend for mobile-friendly output.
 """
 
 import json
@@ -47,10 +48,17 @@ def format_tool_result(result) -> str:
         return str(data)
 
 
-def format_services(services: list[dict]) -> str:
+def format_services(services: list[dict], compact: bool = False) -> str:
     """Format the service list showing name, loaded/unloaded status, and model."""
     if not services:
         return "No services registered."
+    if compact:
+        lines = []
+        for s in services:
+            status = "LOADED" if s["loaded"] else "unloaded"
+            model = f" ({s['model_name']})" if s["model_name"] else ""
+            lines.append(f"{s['name']}: {status}{model}")
+        return "Services:\n" + "\n".join(lines)
     lines = []
     for s in services:
         status = "LOADED" if s["loaded"] else "unloaded"
@@ -58,10 +66,20 @@ def format_services(services: list[dict]) -> str:
     return "Services:\n" + "\n".join(lines)
 
 
-def format_tasks(tasks: list[dict]) -> str:
+def format_tasks(tasks: list[dict], compact: bool = False) -> str:
     """Format task list with queue counts (Pending/Processing/Done/Failed)."""
     if not tasks:
         return "No tasks registered."
+    if compact:
+        lines = []
+        for t in tasks:
+            c = t["counts"]
+            paused = " [PAUSED]" if t["paused"] else ""
+            lines.append(
+                f"{t['name']}{paused}\n"
+                f"  P:{c['PENDING']} R:{c['PROCESSING']} D:{c['DONE']} F:{c['FAILED']}"
+            )
+        return "Tasks:\n" + "\n".join(lines)
     lines = []
     for t in tasks:
         c = t["counts"]
@@ -75,36 +93,52 @@ def format_tasks(tasks: list[dict]) -> str:
     return "Tasks:\n" + "\n".join(lines)
 
 
-def format_stats(stats: dict) -> str:
+def format_stats(stats: dict, compact: bool = False) -> str:
     """Format system overview: file counts by modality + task queue summaries."""
     lines = ["Files by modality:"]
     files = stats.get("files", {})
     if files:
         for mod, count in sorted(files.items()):
-            lines.append(f"  {mod:<12} {count}")
+            lines.append(f"  {mod}: {count}" if compact else f"  {mod:<12} {count}")
     else:
         lines.append("  (none)")
-    lines.append(f"  {'total':<12} {sum(files.values()) if files else 0}")
+    lines.append(f"  total: {sum(files.values()) if files else 0}")
     lines.append("")
     lines.append("Task queue:")
     tasks = stats.get("tasks", {})
     if tasks:
         for name, counts in sorted(tasks.items()):
             paused = " [PAUSED]" if counts.get("paused") else ""
-            lines.append(
-                f"  {name:<22} "
-                f"P:{counts['PENDING']:<8} R:{counts['PROCESSING']:<8} "
-                f"D:{counts['DONE']:<8} F:{counts['FAILED']:<8}{paused}"
-            )
+            if compact:
+                lines.append(
+                    f"  {name}{paused}\n"
+                    f"    P:{counts['PENDING']} R:{counts['PROCESSING']} "
+                    f"D:{counts['DONE']} F:{counts['FAILED']}"
+                )
+            else:
+                lines.append(
+                    f"  {name:<22} "
+                    f"P:{counts['PENDING']:<8} R:{counts['PROCESSING']:<8} "
+                    f"D:{counts['DONE']:<8} F:{counts['FAILED']:<8}{paused}"
+                )
     else:
         lines.append("  (empty)")
     return "\n".join(lines)
 
 
-def format_tools(tools: list[dict]) -> str:
+def format_tools(tools: list[dict], compact: bool = False) -> str:
     """Format tool list with enabled/disabled status, descriptions, and parameters."""
     if not tools:
         return "No tools registered."
+    if compact:
+        lines = []
+        for t in tools:
+            status = " [DISABLED]" if not t["agent_enabled"] else ""
+            desc = t["description"]
+            if len(desc) > 100:
+                desc = desc[:97] + "..."
+            lines.append(f"{t['name']}{status}\n  {desc}")
+        return "Tools:\n" + "\n".join(lines)
     lines = []
     for t in tools:
         status = "" if t["agent_enabled"] else " [DISABLED]"
@@ -159,4 +193,3 @@ def format_locations(data: dict) -> str:
         lines.append("  (empty)")
 
     return "\n".join(lines)
-
