@@ -1013,7 +1013,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         nonlocal _loop, _app
 
         _loop = asyncio.get_running_loop()
-        _app = Application.builder().token(token).build()
+        _app = Application.builder().token(token).concurrent_updates(True).build()
 
         _app.add_handler(MessageHandler(filters.COMMAND, handle_command))
         _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
