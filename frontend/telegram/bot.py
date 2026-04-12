@@ -197,9 +197,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             escaped_cmd = html.escape(command)
             escaped_reason = html.escape(justification)
             text = (
-                f"<b>Agent wants to run a command:</b>\n"
+                f"<b>Agent requests approval:</b>\n"
                 f"<code>{escaped_cmd}</code>\n\n"
-                f"Reason: {escaped_reason}"
+                f"<pre>{escaped_reason}</pre>"
             )
             chat_id = int(config.get("telegram_allowed_user_id", 0))
             if chat_id:

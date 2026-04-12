@@ -133,6 +133,11 @@ class BuildPlugin(BaseTool):
                 f"or action='delete' then action='create' to rewrite from scratch."
             )
 
+        denied = _require_approval(
+            context, f"Create {plugin_type}: {file_name}", code)
+        if denied:
+            return denied
+
         warnings = _validate_code(code, file_name, plugin_type, context)
         sandbox_path.write_text(code, encoding="utf-8")
 
@@ -164,6 +169,12 @@ class BuildPlugin(BaseTool):
                 f"Add more surrounding lines to the search block for context."
             )
 
+        diff = f"--- FIND ---\n{search_block}\n--- REPLACE WITH ---\n{replace_block}"
+        denied = _require_approval(
+            context, f"Edit {plugin_type}: {file_name}", diff)
+        if denied:
+            return denied
+
         # Apply the replacement
         new_content = content.replace(search_block, replace_block, 1)
 
@@ -180,6 +191,12 @@ class BuildPlugin(BaseTool):
         if not sandbox_path.exists():
             return ToolResult.failed(f"'{file_name}' does not exist in the sandbox.")
 
+        denied = _require_approval(
+            context, f"Delete {plugin_type}: {file_name}",
+            "This will unregister and permanently delete the plugin file.")
+        if denied:
+            return denied
+
         # Unregister before deleting
         from plugin_discovery import unload_plugin
         plugin_name = _extract_plugin_name(sandbox_path, plugin_type)
@@ -194,6 +211,28 @@ class BuildPlugin(BaseTool):
         return ToolResult(
             llm_summary=f"Deleted and unregistered '{file_name}'.",
         )
+
+
+# ── Approval ─────────────────────────────────────────────────────────
+
+def _require_approval(context, action_summary: str, detail: str) -> ToolResult | None:
+    """Ask the user for approval, reusing the approve_command callback.
+
+    Returns a failed ToolResult if denied or unavailable, None if approved.
+    """
+    approve_fn = context.approve_command
+    if approve_fn is None:
+        return ToolResult.failed(
+            "Plugin building is not available — no approval handler is configured."
+        )
+    try:
+        approved = approve_fn(action_summary, detail)
+    except Exception as e:
+        logger.error(f"Approval callback failed: {e}")
+        return ToolResult.failed(f"Approval dialog error: {e}")
+    if not approved:
+        return ToolResult.failed("Plugin action denied by user.")
+    return None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
