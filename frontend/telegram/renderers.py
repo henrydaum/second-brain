@@ -205,7 +205,7 @@ def prepare_media_actions(
             if url:
                 text_actions.append(SendAction(
                     method="text",
-                    text_content=f'<a href="{html.escape(url)}">{html.escape(p.stem)}</a>',
+                    text_content=f'<a href="{html.escape(url)}">{html.escape(p.name)}</a>',
                 ))
             else:
                 skipped.append(f"{p.name} (could not extract Google link)")
