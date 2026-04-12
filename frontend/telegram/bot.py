@@ -821,38 +821,38 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         _app.add_handler(CallbackQueryHandler(handle_callback_query))
 
-        async with _app:
-            await _app.initialize()
-            await _app.start()
-            await _app.updater.start_polling()
+        await _app.initialize()
+        await _app.start()
+        await _app.updater.start_polling()
 
-            # Register commands for autocomplete
+        # Register commands for autocomplete
+        try:
+            await _register_bot_commands()
+        except Exception as e:
+            logger.warning(f"Failed to register bot commands: {e}")
+
+        # Auto-create agent if LLM is already loaded
+        _create_agent()
+
+        # Send startup message
+        user_id = int(config.get("telegram_allowed_user_id", 0))
+        if user_id:
+            status = "Agent ready." if agent_ref["agent"] else "LLM not loaded \u2014 use /load llm."
             try:
-                await _register_bot_commands()
+                await _app.bot.send_message(user_id, f"Second Brain online. {status}")
             except Exception as e:
-                logger.warning(f"Failed to register bot commands: {e}")
+                logger.warning(f"Could not send startup message: {e}")
 
-            # Auto-create agent if LLM is already loaded
-            _create_agent()
+        logger.info("Telegram bot started.")
 
-            # Send startup message
-            user_id = int(config.get("telegram_allowed_user_id", 0))
-            if user_id:
-                status = "Agent ready." if agent_ref["agent"] else "LLM not loaded \u2014 use /load llm."
-                try:
-                    await _app.bot.send_message(user_id, f"Second Brain online. {status}")
-                except Exception as e:
-                    logger.warning(f"Could not send startup message: {e}")
+        # Wait for shutdown
+        while not shutdown_event.is_set():
+            await asyncio.sleep(1.0)
 
-            logger.info("Telegram bot started.")
-
-            # Wait for shutdown
-            while not shutdown_event.is_set():
-                await asyncio.sleep(1.0)
-
-            logger.info("Telegram bot shutting down...")
-            await _app.updater.stop()
-            await _app.stop()
+        logger.info("Telegram bot shutting down...")
+        await _app.updater.stop()
+        await _app.stop()
+        await _app.shutdown()
 
     # ── Run ──────────────────────────────────────────────────────────
 
