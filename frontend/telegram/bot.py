@@ -2,7 +2,8 @@
 Telegram bot frontend for Second Brain.
 
 Mirrors the Flet GUI experience: agent auto-ready, slash commands with
-autocomplete, and gui_display_paths rendered as native Telegram media.
+autocomplete. The render_files tool sends files as Telegram media groups;
+other tools do not auto-render gui_display_paths.
 Runs on a daemon thread with its own asyncio event loop.
 """
 
@@ -110,11 +111,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     # Late imports so the dependency is only required when the frontend is enabled
     from telegram import (
         BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update,
+        InputMediaPhoto, InputMediaVideo, InputMediaAudio, InputMediaDocument,
     )
     from telegram.constants import ChatAction
     from telegram.ext import (
         Application, CallbackQueryHandler, MessageHandler, filters,
     )
+    from frontend.telegram.renderers import prepare_media_actions, SendAction, VIDEO_EXTENSIONS
 
     # ── State ────────────────────────────────────────────────────────
     agent_ref: dict = {"agent": None}
@@ -152,12 +155,24 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         )
 
     def _on_tool_result(tool_name: str, result):
-        """Send a brief tool notification to the user."""
+        """Handle tool results — render_files sends media inline, others get a brief notification."""
         logger.info(f"tool: {tool_name} [{'ok' if result.success else 'fail'}]")
-        icon = "\u2705" if result.success else "\u274c"
-        text = f"{icon} {tool_name}"
         chat_id = int(config.get("telegram_allowed_user_id", 0))
-        if chat_id:
+        if not chat_id:
+            return
+
+        if tool_name == "render_files" and result.gui_display_paths:
+            # Render files inline via Telegram media groups
+            async def _send_rendered():
+                actions = prepare_media_actions(result.gui_display_paths)
+                await _execute_send_actions(chat_id, actions)
+            try:
+                asyncio.run_coroutine_threadsafe(_send_rendered(), _loop).result(timeout=30)
+            except Exception as e:
+                logger.error(f"Failed to render files: {e}")
+        else:
+            icon = "\u2705" if result.success else "\u274c"
+            text = f"{icon} {tool_name}"
             async def _send():
                 await _app.bot.send_message(chat_id, text)
             try:
@@ -325,53 +340,48 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 if parse_mode:
                     await _app.bot.send_message(chat_id, chunk)
 
-    async def _send_attachments(chat_id: int, paths: list[str]):
-        """Send gui_display_paths as native Telegram media."""
-        for path_str in paths:
-            p = Path(path_str)
-            if not p.exists():
-                continue
-            if p.stat().st_size > _MAX_FILE_SIZE:
-                await _app.bot.send_message(
-                    chat_id, f"(File too large for Telegram: {p.name})")
-                continue
-
-            modality = get_modality(p.suffix)
+    async def _execute_send_actions(chat_id: int, actions: list[SendAction]):
+        """Execute a list of SendActions via the Telegram Bot API."""
+        for action in actions:
             try:
-                if modality == "image":
-                    await _app.bot.send_photo(chat_id, photo=open(p, "rb"))
-                elif modality == "audio":
-                    await _app.bot.send_audio(chat_id, audio=open(p, "rb"),
-                                              title=p.stem)
-                elif modality == "video":
-                    await _app.bot.send_video(chat_id, video=open(p, "rb"))
-                elif modality == "text":
-                    size = p.stat().st_size
-                    if size <= 3000:
-                        content = p.read_text(encoding="utf-8", errors="replace")
-                        escaped = html.escape(content)
-                        header = f"<b>{html.escape(p.name)}</b>\n<pre>"
-                        footer = "</pre>"
-                        available = _TG_MAX_LEN - len(header) - len(footer)
-                        if len(escaped) > available:
-                            escaped = escaped[:available - 20] + "\n... (truncated)"
-                        await _app.bot.send_message(
-                            chat_id, header + escaped + footer,
-                            parse_mode="HTML")
-                    else:
-                        await _app.bot.send_document(
-                            chat_id, document=open(p, "rb"), filename=p.name)
-                else:
-                    # tabular, container, unknown — send as document
-                    if p.is_file():
-                        await _app.bot.send_document(
-                            chat_id, document=open(p, "rb"), filename=p.name)
-                    else:
-                        await _app.bot.send_message(chat_id, f"(folder: {p})")
+                if action.method == "media_group":
+                    media = []
+                    for f in action.files:
+                        ext = f.suffix.lower()
+                        if action.group_type == "photo_video":
+                            if ext in VIDEO_EXTENSIONS:
+                                media.append(InputMediaVideo(open(f, "rb")))
+                            else:
+                                media.append(InputMediaPhoto(open(f, "rb")))
+                        elif action.group_type == "audio":
+                            media.append(InputMediaAudio(open(f, "rb"), title=f.stem))
+                        else:
+                            media.append(InputMediaDocument(open(f, "rb"), filename=f.name))
+                    await _app.bot.send_media_group(chat_id, media)
+
+                elif action.method == "photo":
+                    await _app.bot.send_photo(chat_id, photo=open(action.files[0], "rb"))
+
+                elif action.method == "video":
+                    await _app.bot.send_video(chat_id, video=open(action.files[0], "rb"))
+
+                elif action.method == "audio":
+                    await _app.bot.send_audio(chat_id, audio=open(action.files[0], "rb"),
+                                              title=action.files[0].stem)
+
+                elif action.method == "document":
+                    await _app.bot.send_document(chat_id, document=open(action.files[0], "rb"),
+                                                 filename=action.files[0].name)
+
+                elif action.method == "text":
+                    await _app.bot.send_message(chat_id, action.text_content,
+                                                parse_mode="HTML")
+
             except Exception as e:
-                logger.error(f"Failed to send {p.name}: {e}")
+                names = ", ".join(f.name for f in action.files) if action.files else "(text)"
+                logger.error(f"Failed to send {names}: {e}")
                 await _app.bot.send_message(
-                    chat_id, f"(Failed to send file: {p.name})")
+                    chat_id, f"(Failed to send: {names})")
 
     # ── Interactive /call form ───────────────────────────────────────
 
@@ -442,8 +452,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         result = await loop.run_in_executor(
             None, lambda: ctrl.call_tool(tool_name, kwargs))
         logger.info(f"tool: {tool_name} [{'ok' if result.success else 'fail'}]")
-        output = format_tool_result(result)
-        await _send_long_message(chat_id, output)
+        if result.gui_display_paths:
+            actions = prepare_media_actions(result.gui_display_paths)
+            await _execute_send_actions(chat_id, actions)
+            if result.llm_summary:
+                await _send_long_message(chat_id, result.llm_summary)
+        else:
+            output = format_tool_result(result)
+            await _send_long_message(chat_id, output)
 
     def _coerce_param_value(raw: str, param_type: str):
         """Convert a raw string to the appropriate Python type."""
@@ -474,8 +490,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None, lambda: ctrl.call_tool(tool_name, {}))
-            output = format_tool_result(result)
-            await _send_long_message(chat_id, output)
+            if result.gui_display_paths:
+                actions = prepare_media_actions(result.gui_display_paths)
+                await _execute_send_actions(chat_id, actions)
+                if result.llm_summary:
+                    await _send_long_message(chat_id, result.llm_summary)
+            else:
+                output = format_tool_result(result)
+                await _send_long_message(chat_id, output)
             return
         _pending_calls[chat_id] = {
             "tool": tool_name,
@@ -699,8 +721,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     converted = _md_to_tg_html(result.text)
                     await _send_long_message(chat_id, converted, use_html=True)
                     logger.info(f"-> {len(result.text)} chars")
-                if result.attachments:
-                    await _send_attachments(chat_id, result.attachments)
             except Exception as e:
                 logger.error(f"Message handler error: {e}")
                 await update.message.reply_text(f"Error: {e}")
@@ -826,8 +846,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     if result.text:
                         converted = _md_to_tg_html(result.text)
                         await _send_long_message(chat_id, converted, use_html=True)
-                    if result.attachments:
-                        await _send_attachments(chat_id, result.attachments)
                 except Exception as e:
                     logger.error(f"Attachment handler error: {e}")
                     await msg.reply_text(f"Error: {e}")
