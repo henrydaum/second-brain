@@ -9,6 +9,7 @@ from pathlib import Path
 # Silence noisy libraries
 logging.getLogger("PIL").setLevel(logging.WARNING)
 logging.getLogger("fitz").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.basicConfig(
 	level=logging.INFO,
 	format="%(asctime)s | %(name)-12s | %(levelname)-5s | %(message)s",

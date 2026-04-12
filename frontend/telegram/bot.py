@@ -149,6 +149,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     def _on_tool_result(tool_name: str, result):
         """Send a brief tool notification to the user."""
+        logger.info(f"tool: {tool_name} [{'ok' if result.success else 'fail'}]")
         icon = "\u2705" if result.success else "\u274c"
         text = f"{icon} {tool_name}"
         chat_id = int(config.get("telegram_allowed_user_id", 0))
@@ -436,6 +437,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None, lambda: ctrl.call_tool(tool_name, kwargs))
+        logger.info(f"tool: {tool_name} [{'ok' if result.success else 'fail'}]")
         output = format_tool_result(result)
         await _send_long_message(chat_id, output)
 
@@ -556,6 +558,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         cmd_name = parts[0][1:].split("@")[0].lower() if parts else ""
         arg = parts[1].strip() if len(parts) > 1 else ""
         chat_id = update.message.chat_id
+        logger.info(f"← /{cmd_name}{' ' + arg if arg else ''}")
 
         # /cancel — clear any pending form
         if cmd_name == "cancel":
@@ -637,6 +640,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         if not text:
             return
         chat_id = update.message.chat_id
+        preview = text[:60] + ("..." if len(text) > 60 else "")
+        logger.info(f'<- "{preview}"')
 
         # Check for pending /call form input
         if chat_id in _pending_calls:
@@ -689,6 +694,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 if result.text:
                     converted = _md_to_tg_html(result.text)
                     await _send_long_message(chat_id, converted, use_html=True)
+                    logger.info(f"-> {len(result.text)} chars")
                 if result.attachments:
                     await _send_attachments(chat_id, result.attachments)
             except Exception as e:
