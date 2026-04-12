@@ -36,8 +36,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     # Late imports so the dependency is only required when the frontend is enabled
     from telegram import (
-        BotCommand, ChatAction, InlineKeyboardButton, InlineKeyboardMarkup, Update,
+        BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update,
     )
+    from telegram.constants import ChatAction
     from telegram.ext import (
         Application, CallbackQueryHandler, MessageHandler, filters,
     )
