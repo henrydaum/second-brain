@@ -11,11 +11,12 @@ import html
 import json
 import logging
 import re
+import tempfile
 import threading
 import uuid
 from pathlib import Path
 
-from Stage_1.registry import get_modality
+from Stage_1.registry import get_modality, parse
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
 from frontend.shared.commands import CommandEntry, CommandRegistry, register_core_commands
@@ -29,13 +30,16 @@ logger = logging.getLogger("Telegram")
 
 _TG_MAX_LEN = 4096
 _MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB Telegram bot API limit
+_MAX_ATTACHMENT_TEXT = 4000         # Max chars of parsed text to append from attachments
 
 _TELEGRAM_SUFFIX = (
     "\n\n## Telegram frontend\n"
     "You are connected via the Telegram mobile app. Keep responses concise.\n"
     "Telegram supports: **bold**, *italic*, `inline code`, and ```code blocks```.\n"
     "Do NOT use markdown tables, headers (#), horizontal rules (---), or bullet "
-    "lists with -. Use plain numbered lists or line breaks for structure."
+    "lists with -. Use plain numbered lists or line breaks for structure.\n"
+    "The user can send you images and documents. Images are passed to you directly. "
+    "Text and tabular files are parsed and their content is appended to the message."
 )
 
 
@@ -704,6 +708,158 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 stop_typing.set()
                 await typing_task
 
+    async def handle_attachment(update: Update, _ctx):
+        """Handle incoming photos and documents — parse ephemerally for the agent."""
+        if not _check_user(update):
+            return
+        msg = update.message
+        chat_id = msg.chat_id
+        caption = (msg.caption or "").strip()
+
+        # Determine which file to download
+        tg_file = None
+        file_name = "attachment"
+        if msg.photo:
+            # Photo array: last element is the largest resolution
+            tg_file = await msg.photo[-1].get_file()
+            file_name = "photo.jpg"
+        elif msg.document:
+            if msg.document.file_size and msg.document.file_size > _MAX_FILE_SIZE:
+                await msg.reply_text("File too large (50 MB limit).")
+                return
+            tg_file = await msg.document.get_file()
+            file_name = msg.document.file_name or "document"
+
+        if tg_file is None:
+            return
+
+        # Download to a temp file, preserving the extension
+        suffix = Path(file_name).suffix or ""
+        tmp = tempfile.NamedTemporaryFile(
+            delete=False, suffix=suffix, prefix="tg_attach_")
+        tmp_path = Path(tmp.name)
+        tmp.close()
+
+        try:
+            await tg_file.download_to_drive(str(tmp_path))
+            modality = get_modality(suffix) if suffix else "unknown"
+
+            # Images → pass directly to the LLM via image_paths
+            if modality == "image" or (msg.photo and modality == "unknown"):
+                user_text = caption or "Describe this image."
+                image_paths = [str(tmp_path)]
+
+                async with _chat_lock:
+                    stop_typing = asyncio.Event()
+
+                    async def _typing_loop():
+                        while not stop_typing.is_set():
+                            try:
+                                await msg.chat.send_action(ChatAction.TYPING)
+                            except Exception:
+                                pass
+                            try:
+                                await asyncio.wait_for(stop_typing.wait(), timeout=4.0)
+                            except asyncio.TimeoutError:
+                                pass
+
+                    typing_task = asyncio.create_task(_typing_loop())
+                    try:
+                        loop = asyncio.get_running_loop()
+                        result = await loop.run_in_executor(
+                            None, lambda: route_input(
+                                user_text, registry, agent_ref["agent"],
+                                image_paths=image_paths))
+                        if result.text:
+                            converted = _md_to_tg_html(result.text)
+                            await _send_long_message(chat_id, converted, use_html=True)
+                        if result.attachments:
+                            await _send_attachments(chat_id, result.attachments)
+                    except Exception as e:
+                        logger.error(f"Attachment handler error: {e}")
+                        await msg.reply_text(f"Error: {e}")
+                    finally:
+                        stop_typing.set()
+                        await typing_task
+                return
+
+            # Text / tabular → parse and append content to the message
+            if modality in ("text", "tabular"):
+                try:
+                    result = parse(str(tmp_path), config={"max_chars": _MAX_ATTACHMENT_TEXT})
+                    content = ""
+                    truncated = False
+                    if result.output:
+                        if isinstance(result.output, str):
+                            raw = result.output
+                        elif isinstance(result.output, dict):
+                            df = result.output.get("default")
+                            raw = df.to_string(max_rows=50) if df is not None else str(result.output)
+                        else:
+                            raw = str(result.output)
+                        if len(raw) > _MAX_ATTACHMENT_TEXT:
+                            content = raw[:_MAX_ATTACHMENT_TEXT]
+                            truncated = True
+                        else:
+                            content = raw
+                except Exception as e:
+                    logger.warning(f"Failed to parse attachment {file_name}: {e}")
+                    content = ""
+
+                if not content:
+                    await msg.reply_text(f"Could not extract text from {file_name}.")
+                    return
+
+                user_text = caption or f"I'm sharing a file: {file_name}"
+                user_text += f"\n\n--- Attached file: {file_name} ---\n{content}"
+                if truncated:
+                    user_text += "\n\n(Content truncated — only the first ~4000 characters are shown.)"
+
+                async with _chat_lock:
+                    stop_typing = asyncio.Event()
+
+                    async def _typing_loop():
+                        while not stop_typing.is_set():
+                            try:
+                                await msg.chat.send_action(ChatAction.TYPING)
+                            except Exception:
+                                pass
+                            try:
+                                await asyncio.wait_for(stop_typing.wait(), timeout=4.0)
+                            except asyncio.TimeoutError:
+                                pass
+
+                    typing_task = asyncio.create_task(_typing_loop())
+                    try:
+                        loop = asyncio.get_running_loop()
+                        result = await loop.run_in_executor(
+                            None, lambda: route_input(
+                                user_text, registry, agent_ref["agent"]))
+                        if result.text:
+                            converted = _md_to_tg_html(result.text)
+                            await _send_long_message(chat_id, converted, use_html=True)
+                        if result.attachments:
+                            await _send_attachments(chat_id, result.attachments)
+                    except Exception as e:
+                        logger.error(f"Attachment handler error: {e}")
+                        await msg.reply_text(f"Error: {e}")
+                    finally:
+                        stop_typing.set()
+                        await typing_task
+                return
+
+            # Audio / video / unknown → not supported
+            await msg.reply_text(
+                f"Attachment type '{modality}' is not supported. "
+                "Send images, text files, or documents.")
+
+        finally:
+            # Clean up temp file
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
     async def handle_callback_query(update: Update, _ctx):
         """Handle inline keyboard responses (approval, commands, /call form)."""
         data = update.callback_query.data or ""
@@ -825,6 +981,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
         _app.add_handler(MessageHandler(filters.COMMAND, handle_command))
         _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        _app.add_handler(MessageHandler(
+            filters.PHOTO | filters.Document.ALL, handle_attachment))
         _app.add_handler(CallbackQueryHandler(handle_callback_query))
 
         await _app.initialize()

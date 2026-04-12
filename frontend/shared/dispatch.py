@@ -26,14 +26,16 @@ class InputResult:
     attachments: list = field(default_factory=list)
 
 
-def route_input(text, registry, agent):
+def route_input(text, registry, agent, image_paths=None):
     """Route user text to either a slash command or the agent.
 
     Parameters:
-        text:     Raw user input string.
-        registry: A :class:`CommandRegistry` instance.
-        agent:    An :class:`Agent` instance, or ``None`` if the LLM is
-                  not loaded.
+        text:         Raw user input string.
+        registry:     A :class:`CommandRegistry` instance.
+        agent:        An :class:`Agent` instance, or ``None`` if the LLM is
+                      not loaded.
+        image_paths:  Optional list of local image file paths to pass to the
+                      agent for vision (e.g. Telegram photo uploads).
 
     Returns:
         An :class:`InputResult` with the response.
@@ -72,7 +74,7 @@ def route_input(text, registry, agent):
 
     agent.on_tool_result = _collecting_wrapper
     try:
-        response = agent.chat(text)
+        response = agent.chat(text, image_paths=image_paths)
     finally:
         agent.on_tool_result = original_callback
 

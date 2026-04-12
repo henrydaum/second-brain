@@ -62,10 +62,15 @@ class Agent:
         self._tool_call_counts: dict[str, int] = {}
         self.cancelled = False
 
-    def chat(self, message: str) -> str:
+    def chat(self, message: str, image_paths: list[str] = None) -> str:
         """
         Send a message and get a response. Handles tool calls automatically.
         Maintains conversation history across calls.
+
+        Args:
+            message:      The user's text message.
+            image_paths:  Optional list of local image file paths to include
+                          with the first LLM call (e.g. Telegram photo uploads).
 
         Returns the assistant's final text response.
         """
@@ -81,7 +86,7 @@ class Agent:
         tools = self.tool_registry.get_all_schemas() or None
         self._tool_call_counts.clear()
 
-        compiled_image_paths = []
+        compiled_image_paths = list(image_paths) if image_paths else []
         _prev_tool_count = len(tools) if tools else 0
 
         for round_num in range(self.max_tool_calls):
