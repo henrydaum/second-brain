@@ -768,7 +768,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 content = ""
                 truncated = False
                 try:
-                    pr = parse(str(tmp_path), config={"max_chars": _MAX_ATTACHMENT_TEXT})
+                    pr = parse(str(tmp_path), config={"max_chars": _MAX_ATTACHMENT_TEXT},
+                              services=services)
                     if pr.output:
                         if isinstance(pr.output, str):
                             raw = pr.output
