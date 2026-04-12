@@ -10,6 +10,7 @@ class RenderFiles(BaseTool):
     description = (
         "Display one or more files to the user in the chat. "
         "Accepts any file path — images, text, audio, video, tabular data, etc. "
+        "Maximum 10 files per call (the display limit). "
         "Use whenever the user says these trigger words: 'show me', 'display', 'render' 'let me see', etc.—use often. "
         'Example input: {"paths": ["C:/Users/user/Documents/report.pdf", "C:/Users/user/Pictures/photo.jpg"]}'
     )
@@ -43,7 +44,15 @@ class RenderFiles(BaseTool):
         if not valid:
             return ToolResult.failed(f"None of the provided paths exist: {missing}")
 
-        summary = "Successfully rendered file paths to the user."
+        # Cap at 10 files (display limit)
+        if len(valid) > 10:
+            valid = valid[:10]
+
+        names = ", ".join(Path(p).name for p in valid)
+        summary = (
+            f"Rendered {len(valid)} file(s) to the user: {names}. "
+            "You have NOT seen the file contents — do not describe or summarize them."
+        )
         if missing:
             summary += f" (Missing: {missing})"
 

@@ -449,8 +449,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                                         parse_mode="HTML")
         elif param["type"] == "boolean":
             buttons = [[
-                InlineKeyboardButton("Yes", callback_data=f"call:{chat_id}:{param['name']}:true"),
-                InlineKeyboardButton("No", callback_data=f"call:{chat_id}:{param['name']}:false"),
+                InlineKeyboardButton("True", callback_data=f"call:{chat_id}:{param['name']}:true"),
+                InlineKeyboardButton("False", callback_data=f"call:{chat_id}:{param['name']}:false"),
             ]]
             await _app.bot.send_message(chat_id, text,
                                         reply_markup=InlineKeyboardMarkup(buttons),
@@ -570,8 +570,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # Bool → inline keyboard
         if widget_type == "bool":
             buttons = [[
-                InlineKeyboardButton("Yes", callback_data=f"cfgval:{key}:true"),
-                InlineKeyboardButton("No", callback_data=f"cfgval:{key}:false"),
+                InlineKeyboardButton("True", callback_data=f"cfgval:{key}:true"),
+                InlineKeyboardButton("False", callback_data=f"cfgval:{key}:false"),
             ]]
             await _app.bot.send_message(
                 chat_id,
