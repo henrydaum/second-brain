@@ -29,11 +29,9 @@ class HybridSearch(BaseTool):
     description = (
         "Search for files using both keyword and semantic similarity, then "
         "fuse the results for higher accuracy. Combines BM25 lexical search "
-        "with vector similarity search across all available embedding streams "
-        "(text, image, and any future modalities).\n\n"
-        "Results are ranked using Reciprocal Rank Fusion (RRF) and grouped "
-        "by modality (text, image, etc.). Documents found by multiple methods "
-        'are marked as "Hybrid" and ranked higher.'
+        "with vector similarity search.\n\n"
+        "Results are ranked using Reciprocal Rank Fusion (RRF). Documents "
+        'found by multiple methods are marked as "Hybrid" and ranked higher.'
     )
     parameters = {
         "type": "object",
@@ -42,28 +40,19 @@ class HybridSearch(BaseTool):
                 "type": "string",
                 "description": "The search query.",
             },
-            "top_k": {
+            "max_results": {
                 "type": "integer",
-                "description": "Maximum results per modality in the final output. Default 5.",
+                "description": "Maximum total results to return. Default 5.",
                 "default": 5,
             },
             "folder": {
                 "type": "string",
                 "description": "Filter results to files under this folder path.",
             },
-            "sources": {
-                "type": "array",
-                "items": {"type": "string"},
+            "modality": {
+                "type": "string",
                 "description": (
-                    "Filter lexical results by content source. "
-                    'E.g. "extracted", "ocr".'
-                ),
-            },
-            "streams": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": (
-                    "Which semantic embedding streams to search. "
+                    "Filter results to a specific file modality. "
                     'E.g. "text", "image". Omit to search all.'
                 ),
             },
@@ -74,27 +63,25 @@ class HybridSearch(BaseTool):
 
     def run(self, context, **kwargs):
         query = kwargs.get("query", "").strip()
-        top_k = kwargs.get("top_k", 5)
+        max_results = kwargs.get("max_results", 5)
         folder = kwargs.get("folder", None)
-        sources = kwargs.get("sources", None)
-        streams = kwargs.get("streams", None)
+        modality = kwargs.get("modality", None)
 
         if not query:
             return ToolResult.failed("No query provided.")
 
         # --- 1. Fetch from sub-tools ---
         # Over-fetch to give RRF enough candidates to fuse meaningfully.
-        fetch_limit = max(200, top_k * 10)
+        fetch_limit = max(200, max_results * 10)
 
         lex_kwargs = {"query": query, "top_k": fetch_limit}
         sem_kwargs = {"query": query, "top_k": fetch_limit}
         if folder:
             lex_kwargs["folder"] = folder
             sem_kwargs["folder"] = folder
-        if sources:
-            lex_kwargs["sources"] = sources
-        if streams:
-            sem_kwargs["streams"] = streams
+        if modality:
+            # Map modality to the corresponding semantic embedding stream
+            sem_kwargs["streams"] = [modality]
 
         t0 = time.time()
         lex_result = context.call_tool("lexical_search", **lex_kwargs)
@@ -105,6 +92,11 @@ class HybridSearch(BaseTool):
         sem_data = sem_result.data if sem_result.success and sem_result.data else []
 
         all_raw = lex_data + sem_data
+
+        # Filter by modality if requested (lexical search doesn't filter by
+        # modality natively, so we apply the filter here after the fact)
+        if modality:
+            all_raw = [r for r in all_raw if r.get("modality") == modality]
 
         if not all_raw:
             return ToolResult(data={}, llm_summary=f'No results found for "{query}".')
@@ -122,32 +114,24 @@ class HybridSearch(BaseTool):
         # --- 4. RRF across streams ---
         merged_docs, rrf_scores = _apply_rrf(deduped_streams)
 
-        # --- 5. Group by modality and take top_k ---
-        by_modality = defaultdict(list)
+        # --- 5. Sort globally and take max_results ---
         for path, doc in merged_docs.items():
             doc["score"] = rrf_scores[path]
-            by_modality[doc["modality"]].append(doc)
 
-        final = {}
-        total = 0
-        for modality, docs in by_modality.items():
-            docs.sort(key=lambda x: x["score"], reverse=True)
-            final[modality] = docs[:top_k]
-            total += len(final[modality])
+        flat_results = sorted(
+            merged_docs.values(),
+            key=lambda d: d["score"],
+            reverse=True,
+        )[:max_results]
 
         logger.info(
             f"Hybrid search: {len(by_stream)} streams, "
-            f"{len(merged_docs)} unique docs, {total} returned"
+            f"{len(merged_docs)} unique docs, {len(flat_results)} returned"
         )
 
-        flat_results = sorted(
-            [doc for docs in final.values() for doc in docs],
-            key=lambda d: d["score"],
-            reverse=True,
-        )
         paths = [d["path"] for d in flat_results]
         return ToolResult(
-            data=final,
+            data=flat_results,
             llm_summary=_search_summary(query, flat_results),
             gui_display_paths=paths,
         )

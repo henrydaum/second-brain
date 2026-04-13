@@ -15,6 +15,7 @@ Allowed commands:
 import logging
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 from Stage_3.BaseTool import BaseTool, ToolResult
@@ -94,6 +95,30 @@ def _check_paths_in_bounds(tokens: list[str]) -> str | None:
                     f"Commands are scoped to the project root and data directory."
                 )
     return None
+
+
+def _rewrite_for_current_python(command: str) -> str:
+    """Rewrite python/pip commands to use the running interpreter.
+
+    Ensures 'pip install foo' becomes '"/path/to/python" -m pip install foo',
+    so commands always target the same environment that is hosting the app —
+    whether that's a system Python on Windows or a .venv on Mac.
+    """
+    base, tokens = _parse_command(command)
+    if not tokens:
+        return command
+
+    py = sys.executable  # always the right interpreter
+
+    # pip ... / pip3 ... → python -m pip ...
+    if base in ("pip", "pip3"):
+        return f'"{py}" -m pip ' + " ".join(tokens[1:])
+
+    # python -m pip ... / python3 -m pip ...
+    if base in ("python", "python3"):
+        return f'"{py}" ' + " ".join(tokens[1:])
+
+    return command
 
 
 def _classify(command: str) -> tuple[str, bool, str | None]:
@@ -232,10 +257,11 @@ class RunCommand(BaseTool):
                     "Ask the user what they would like you to do instead.")
 
         # ── Execute ──────────────────────────────────────────────
-        logger.info(f"Running ({category}): {command}")
+        resolved = _rewrite_for_current_python(command)
+        logger.info(f"Running ({category}): {resolved}")
         try:
             result = subprocess.run(
-                command,
+                resolved,
                 shell=True,
                 capture_output=True,
                 text=True,

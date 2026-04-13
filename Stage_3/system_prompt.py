@@ -7,6 +7,7 @@ Built fresh each time the user sends a message so the LLM always sees
 current state (e.g. newly registered plugins, service status changes).
 """
 
+from datetime import datetime
 from pathlib import Path
 
 from Stage_1.registry import get_supported_extensions
@@ -17,6 +18,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def build_system_prompt(db, orchestrator, tool_registry, services: dict) -> str:
     sections = [
         _identity(),
+        _current_datetime(),
         _available_tools(tool_registry),
         _authoring_guidance(),
         _sandbox_files(),
@@ -45,6 +47,11 @@ def _identity() -> str:
         "- The tool call limit is per-message, not per-session. "
         "If you hit the limit on one tool, you can still call others."
     )
+
+
+def _current_datetime() -> str:
+    now = datetime.now()
+    return f"Current date and time: {now.strftime('%A, %B %d, %Y %I:%M %p')}"
 
 
 def _authoring_guidance() -> str:
