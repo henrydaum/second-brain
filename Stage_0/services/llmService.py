@@ -123,7 +123,8 @@ class BaseLLM(BaseService):
 #
 # Uses the lmstudio Python SDK for model lifecycle and inference.
 # Manages VRAM directly — load() loads weights, unload() frees them.
-# Does NOT support tool calling (use OpenAILLM with base_url for that).
+# Does NOT support tool calling (use OpenAILLM pointed at the LM Studio
+# OpenAI-compatible endpoint instead — see Developer tab for the URL).
 # =====================================================================
 
 class LMStudioLLM(BaseLLM):
@@ -172,9 +173,9 @@ class LMStudioLLM(BaseLLM):
             content = msg.get("content", "")
 
             if role in ("system", "developer"):
-                chat.add_system_message(content)
+                chat.add_system_prompt(content)
             elif role == "assistant":
-                chat.add_assistant_message(content)
+                chat.add_assistant_response(content)
             elif role == "user":
                 # Attach images to the last user message only
                 is_last_user = not any(
@@ -306,13 +307,13 @@ class LMStudioLLM(BaseLLM):
         """
         LM Studio native SDK does not support function calling.
         Falls back to a plain invoke() call, ignoring any tools.
-        For tool calling with LM Studio models, use OpenAILLM with
-        base_url="http://localhost:1234/v1".
+        For tool calling with LM Studio models, use OpenAILLM pointed
+        at the LM Studio OpenAI-compatible endpoint (see Developer tab).
         """
         if tools and not getattr(self, "_tools_warning_logged", False):
             logger.warning("LM Studio native SDK does not support tool calling — "
                            "tools will be ignored. For tool support, use OpenAILLM "
-                           "with base_url='http://localhost:1234/v1' instead.")
+                           "pointed at the LM Studio OpenAI-compatible endpoint.")
             self._tools_warning_logged = True
         # Strip tool-related kwargs that invoke() doesn't understand
         kwargs.pop("tools", None)
