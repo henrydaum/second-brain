@@ -57,7 +57,9 @@ class BaseLLM(BaseService):
 
         ("LLM Context Size", "llm_context_size",
          "Max context window in tokens. Auto-detected for LM Studio models. "
-         "Set manually for OpenAI-compatible endpoints. 0 = no limit tracking.",
+         "Set manually for OpenAI-compatible endpoints. When set, the agent "
+         "proactively compacts the conversation at 80% usage. When 0, the agent "
+         "still compacts reactively when a context-limit error is hit.",
          0,
          {"type": "text"}),
     ]
