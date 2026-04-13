@@ -305,12 +305,18 @@ class LMStudioLLM(BaseLLM):
     def chat_with_tools(self, messages, tools=None, **kwargs):
         """
         LM Studio native SDK does not support function calling.
+        Falls back to a plain invoke() call, ignoring any tools.
         For tool calling with LM Studio models, use OpenAILLM with
         base_url="http://localhost:1234/v1".
         """
-        logger.error("LM Studio native SDK does not support tool calling. "
-                      "Use OpenAILLM with base_url='http://localhost:1234/v1' instead.")
-        return LLMResponse(content="Error: tool calling not supported via LM Studio native SDK")
+        if tools and not getattr(self, "_tools_warning_logged", False):
+            logger.warning("LM Studio native SDK does not support tool calling — "
+                           "tools will be ignored. For tool support, use OpenAILLM "
+                           "with base_url='http://localhost:1234/v1' instead.")
+            self._tools_warning_logged = True
+        # Strip tool-related kwargs that invoke() doesn't understand
+        kwargs.pop("tools", None)
+        return self.invoke(messages, **kwargs)
 
 
 # =====================================================================
