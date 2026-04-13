@@ -270,12 +270,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             agent_ref["agent"].reset()
         return "New conversation started."
 
-    def _clear_handler(_arg):
-        conversation_ref["id"] = None
-        if agent_ref["agent"]:
-            agent_ref["agent"].reset()
-        return "Conversation cleared."
-
     for entry in [
         CommandEntry("load", "Load a service", "<service>",
                      handler=_load_handler,
@@ -284,8 +278,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                      handler=_unload_handler,
                      arg_completions=lambda: list(services.keys())),
         CommandEntry("new", "Start a new conversation", handler=_new_handler),
-        CommandEntry("clear", "Start fresh (clears memory and conversation)",
-                     handler=_clear_handler),
         CommandEntry("start", "Welcome message",
                      handler=lambda _: "Second Brain is online. Send a message to chat, or /help for commands."),
         CommandEntry("cancel", "Cancel current operation",
