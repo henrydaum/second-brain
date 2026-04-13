@@ -600,7 +600,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     _MODEL_ADD_PARAMS = [
         {"name": "llm_model_name", "description": "The model identifier sent to the API (e.g. gpt-4, llama-3.1-8b, gemini-2.5-flash).", "required": True},
-        {"name": "llm_endpoint", "description": "Custom API endpoint URL. Leave blank for the default OpenAI endpoint. For LM Studio use http://localhost:1234/v1.", "required": False, "default": ""},
+        {"name": "llm_endpoint", "description": "Custom API endpoint URL. Leave blank for the default OpenAI endpoint. For LM Studio, see developer tab.", "required": False, "default": ""},
         {"name": "llm_api_key", "description": "API key or environment variable name (e.g. OPENAI_API_KEY). Leave blank for local models.", "required": False, "default": ""},
         {"name": "llm_context_size", "description": "Max context window in tokens. Set 0 for reactive-only compaction.", "required": False, "default": "0", "type": "integer"},
         {"name": "llm_service_class", "description": "Which LLM backend to use.", "required": True, "enum": ["OpenAILLM", "LMStudioLLM"]},
