@@ -280,8 +280,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         CommandEntry("new", "Start a new conversation", handler=_new_handler),
         CommandEntry("start", "Welcome message",
                      handler=lambda _: "Second Brain is online. Send a message to chat, or /help for commands."),
-        CommandEntry("cancel", "Cancel current operation",
-                     handler=lambda _: "Nothing to cancel."),
         # Compact formatter overrides
         CommandEntry("services", "List services and status",
                      handler=lambda _: format_services(ctrl.list_services(), compact=True)),

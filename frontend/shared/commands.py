@@ -69,7 +69,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
 
     Parameters:
         get_agent: Optional callable returning the current Agent instance
-                   (or None). Used by /call, /new, and /stop.
+                   (or None). Used by /call, /new, and /cancel.
     """
     import json as _json
     import config_manager as _cm
@@ -176,13 +176,13 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             agent.reset()
         return "(new conversation started)"
 
-    def _cmd_stop(_arg):
-        """Handler for /stop — interrupt the agent at the next opportunity."""
+    def _cmd_cancel(_arg):
+        """Handler for /cancel — interrupt the agent at the next opportunity."""
         agent = get_agent() if get_agent else None
         if agent:
             agent.cancelled = True
-            return "(stopping agent...)"
-        return "No active agent to stop."
+            return "(cancelling...)"
+        return "No active agent to cancel."
 
     # Lambdas (not static lists) so completions reflect hot-reloaded plugins.
     _task_names = lambda: list(ctrl.orchestrator.tasks.keys())
@@ -242,7 +242,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      handler=_cmd_call, arg_completions=_tool_names),
         CommandEntry("new",       "Start a new conversation",
                      handler=_cmd_new),
-        CommandEntry("stop",      "Interrupt the agent",
-                     handler=_cmd_stop),
+        CommandEntry("cancel",    "Interrupt the agent",
+                     handler=_cmd_cancel),
     ]:
         registry.register(entry)
