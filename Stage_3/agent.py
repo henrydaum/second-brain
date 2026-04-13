@@ -102,16 +102,15 @@ class Agent:
             except Exception as e:
                 error_str = str(e).lower()
                 if any(k in error_str for k in ("context", "token", "length", "maximum", "too long", "max_tokens")):
-                    logger.warning(f"Context limit hit, trimming history: {e}")
-                    keep = max(2, len(self.history) // 2)
-                    self.history = self.history[-keep:]
+                    logger.warning(f"Context limit hit, compacting: {e}")
+                    self._compact(prompt)
                     messages = [{"role": "system", "content": prompt}]
                     messages.extend(self.history)
                     compiled_image_paths.clear()
                     try:
                         response = self.llm.chat_with_tools(messages, tools, image_paths=None)
                     except Exception:
-                        fallback = "Context limit reached even after trimming. Use /new to start fresh."
+                        fallback = "Context limit reached even after compacting. Use /new to start fresh."
                         self.history.append({"role": "assistant", "content": fallback})
                         self._fire_on_message({"role": "assistant", "content": fallback})
                         return fallback
@@ -124,6 +123,10 @@ class Agent:
                 assistant_msg = {"role": "assistant", "content": clean}
                 self.history.append(assistant_msg)
                 self._fire_on_message(assistant_msg)
+                # Proactive compaction — compact now (between turns) so the
+                # next user message doesn't blow up the context window.
+                if self._should_compact(response):
+                    self._compact(prompt)
                 return response.content  # raw — GUI renders thinking dropdown
 
             # Build the assistant message with tool calls for the conversation
@@ -170,6 +173,100 @@ class Agent:
     def reset(self):
         """Clear conversation history."""
         self.history.clear()
+
+    # ── Context compaction ──────────────────────────────────────────
+
+    _COMPACT_THRESHOLD = 0.80  # compact when prompt tokens exceed this fraction of context_size
+
+    _COMPACT_PROMPT = (
+        "You are a conversation summarizer. Below is the conversation so far between "
+        "a user and an AI assistant with tool-calling capabilities.\n\n"
+        "Write a detailed summary that preserves:\n"
+        "- All key facts, decisions, and conclusions reached\n"
+        "- Important tool results and data the user may refer back to\n"
+        "- The user's current goals and any open questions\n"
+        "- Any instructions or preferences the user has stated\n\n"
+        "Be thorough — this summary will replace the conversation history, "
+        "so anything not included will be lost. Write in a neutral, factual tone."
+    )
+
+    def _should_compact(self, response) -> bool:
+        """Check if the conversation is getting too long for the context window."""
+        ctx = self.llm.context_size
+        tok = response.prompt_tokens
+        if not ctx or not tok:
+            return False
+        ratio = tok / ctx
+        if ratio >= self._COMPACT_THRESHOLD:
+            logger.info(f"Context usage: {tok}/{ctx} ({ratio:.0%}) — compacting")
+            return True
+        return False
+
+    def _compact(self, system_prompt: str):
+        """Summarize the conversation history via the LLM and replace it."""
+        if len(self.history) <= 2:
+            # Already minimal — nothing to compact
+            return
+
+        # Build a transcript of the conversation for the summarizer.
+        # Aggressively truncate individual messages so the summary request
+        # itself doesn't exceed the context window.
+        transcript_lines = []
+        for msg in self.history:
+            role = msg["role"].upper()
+            if role == "TOOL":
+                name = msg.get("name", "unknown")
+                content = msg.get("content", "")
+                if len(content) > 300:
+                    content = content[:300] + "... [truncated]"
+                transcript_lines.append(f"[TOOL: {name}] {content}")
+            elif role == "ASSISTANT" and msg.get("tool_calls"):
+                names = [tc["function"]["name"] for tc in msg["tool_calls"]]
+                text = msg.get("content") or ""
+                transcript_lines.append(f"ASSISTANT: {text} [called tools: {', '.join(names)}]")
+            else:
+                content = msg.get("content", "") or ""
+                if len(content) > 1000:
+                    content = content[:1000] + "... [truncated]"
+                transcript_lines.append(f"{role}: {content}")
+
+        # Cap total transcript length to stay well within context limits
+        transcript = "\n".join(transcript_lines)
+        max_transcript = 20000
+        if len(transcript) > max_transcript:
+            transcript = transcript[:max_transcript] + "\n... [earlier messages truncated]"
+
+        summary_messages = [
+            {"role": "system", "content": self._COMPACT_PROMPT},
+            {"role": "user", "content": transcript},
+        ]
+
+        try:
+            response = self.llm.chat_with_tools(summary_messages, tools=None)
+            summary = response.content.strip()
+        except Exception as e:
+            logger.error(f"Compact summarization failed: {e}")
+            # Fallback: drop all but the last user+assistant exchange
+            self._fallback_trim()
+            return
+
+        # Replace history with the summary as a single user/assistant pair
+        self.history = [
+            {"role": "user", "content": f"[Conversation summary from earlier]\n{summary}"},
+            {"role": "assistant", "content": "Understood. I have the context from our previous conversation. How can I help?"},
+        ]
+        self._fire_on_message({"role": "system", "content": "(conversation compacted)"})
+        logger.info(f"Compacted conversation into {len(summary)} char summary")
+
+    def _fallback_trim(self):
+        """Last-resort trim: keep only the most recent user message and response."""
+        # Walk backwards to find the last user message
+        for i in range(len(self.history) - 1, -1, -1):
+            if self.history[i]["role"] == "user":
+                self.history = self.history[i:]
+                return
+        # Nothing found — just keep the last 2
+        self.history = self.history[-2:] if len(self.history) >= 2 else self.history
 
     def _fire_on_message(self, msg: dict):
         """Notify the on_message callback, if set."""

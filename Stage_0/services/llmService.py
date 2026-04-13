@@ -19,6 +19,7 @@ class LLMResponse:
     content: str = ""
     tool_calls: list[dict] = field(default_factory=list)
     # Each tool_call dict: {"id": str, "name": str, "arguments": str (JSON)}
+    prompt_tokens: int | None = None   # tokens used by the prompt in this call
 
     @property
     def has_tool_calls(self) -> bool:
@@ -53,12 +54,19 @@ class BaseLLM(BaseService):
          "API key or environment variable name for the LLM.",
          "OPENAI_API_KEY",
          {"type": "text"}),
+
+        ("LLM Context Size", "llm_context_size",
+         "Max context window in tokens. Auto-detected for LM Studio models. "
+         "Set manually for OpenAI-compatible endpoints. 0 = no limit tracking.",
+         0,
+         {"type": "text"}),
     ]
     
     def __init__(self):
         super().__init__()
         self.shared = True  # LLM clients are typically thread-safe
         self.vision = None  # True/False/None (None = unknown)
+        self.context_size = None  # Max context window in tokens (auto-detected or from config)
 
     def _load(self):
         raise NotImplementedError
@@ -128,8 +136,14 @@ class LMStudioLLM(BaseLLM):
         try:
             import lmstudio as lms
             self.model = lms.llm(self.model_name)
-            self.vision = self.model.get_info().vision
+            info = self.model.get_info()
+            self.vision = info.vision
             logger.info(f"Model has vision support: {self.vision}")
+            # Auto-detect context size
+            ctx = getattr(info, "max_context_length", None) or getattr(info, "context_length", None)
+            if ctx:
+                self.context_size = int(ctx)
+                logger.info(f"Context size: {self.context_size} tokens")
             self.loaded = True
             return True
         except Exception as e:
@@ -407,6 +421,8 @@ class OpenAILLM(BaseLLM):
             )
             logger.debug(f"OpenAI responded in {time.time() - t0:.2f}s")
             choice = response.choices[0]
+            usage = getattr(response, "usage", None)
+            prompt_tok = getattr(usage, "prompt_tokens", None) if usage else None
 
             if choice.message.tool_calls:
                 return LLMResponse(
@@ -419,9 +435,10 @@ class OpenAILLM(BaseLLM):
                         }
                         for tc in choice.message.tool_calls
                     ],
+                    prompt_tokens=prompt_tok,
                 )
 
-            return LLMResponse(content=choice.message.content or "")
+            return LLMResponse(content=choice.message.content or "", prompt_tokens=prompt_tok)
 
         except Exception as e:
             logger.error(f"OpenAI Invoke Error: {e}")
@@ -457,10 +474,12 @@ class OpenAILLM(BaseLLM):
 def build_services(config: dict) -> dict:
     api_key = config.get("llm_api_key", "OPENAI_API_KEY")
     resolved_key = os.environ.get(api_key, api_key) if api_key else None
-    return {
-        "llm": OpenAILLM(
-            model_name=config.get("llm_model_name", "gemma-3-4b-it"),
-            api_key=resolved_key,
-            base_url=config.get("llm_endpoint", "http://localhost:1234/v1"),
-        ),
-    }
+    llm = OpenAILLM(
+        model_name=config.get("llm_model_name", "gemma-3-4b-it"),
+        api_key=resolved_key,
+        base_url=config.get("llm_endpoint", "http://localhost:1234/v1"),
+    )
+    ctx = int(config.get("llm_context_size", 0))
+    if ctx > 0:
+        llm.context_size = ctx
+    return {"llm": llm}
