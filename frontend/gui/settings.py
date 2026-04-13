@@ -16,6 +16,8 @@ logger = logging.getLogger("GUI")
 
 def _build_field(title, name, description, default, type_info, config):
     """Build a single settings field control. Returns (field_info, container) or None."""
+    if type_info.get("hidden"):
+        return None
     if name not in config:
         return None
     val = config[name]

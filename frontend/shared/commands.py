@@ -248,6 +248,120 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             return "(cancelling...)"
         return "No active agent to cancel."
 
+    def _cmd_model(arg):
+        """Handler for /model — manage LLM profiles."""
+        from Stage_0.services.llmService import LLMRouter
+
+        router = services.get("llm")
+        if not isinstance(router, LLMRouter):
+            return "LLM service is not a profile router."
+
+        parts = arg.strip().split(None, 1) if arg.strip() else []
+        sub = parts[0].lower() if parts else "list"
+        rest = parts[1] if len(parts) > 1 else ""
+
+        if sub in ("list", "ls"):
+            infos = router.list_profiles()
+            if not infos:
+                return "No LLM profiles configured. Use /model add <name> <json> to create one."
+            lines = ["LLM Profiles:"]
+            for p in infos:
+                marker = " *" if p["active"] else ""
+                status = "loaded" if p["loaded"] else "unloaded"
+                lines.append(f"  {p['name']}{marker}  ({p['class']}: {p['model']}) [{status}]")
+            return "\n".join(lines)
+
+        elif sub == "switch":
+            name = rest.strip()
+            if not name:
+                return "Usage: /model switch <profile_name>"
+            result = router.switch(name)
+            ctrl.config["active_llm_profile"] = name
+            _cm.save(ctrl.config)
+            pk = _plugin_keys()
+            if "active_llm_profile" in pk:
+                existing = _cm.load_plugin_config()
+                existing["active_llm_profile"] = name
+                _cm.save_plugin_config(existing)
+            return result
+
+        elif sub == "add":
+            add_parts = rest.split(None, 1)
+            name = add_parts[0] if add_parts else ""
+            json_str = add_parts[1] if len(add_parts) > 1 else ""
+            if not name:
+                return ("Usage: /model add <name> {json}\n"
+                        "Keys: llm_model_name, llm_endpoint, llm_api_key, "
+                        "llm_context_size, llm_service_class (OpenAILLM|LMStudioLLM)")
+            if not json_str:
+                return ("Usage: /model add <name> {json}\n"
+                        "Example: /model add mymodel "
+                        '{\"llm_model_name\": \"gpt-4\", \"llm_endpoint\": \"\", '
+                        '\"llm_api_key\": \"OPENAI_API_KEY\", \"llm_context_size\": 0, '
+                        '\"llm_service_class\": \"OpenAILLM\"}')
+            try:
+                profile = _json.loads(json_str)
+            except _json.JSONDecodeError as e:
+                return f"Invalid JSON: {e}"
+
+            profiles = ctrl.config.setdefault("llm_profiles", {})
+            profiles[name] = profile
+            router.add_profile(name, profile)
+            _cm.save(ctrl.config)
+            pk = _plugin_keys()
+            if "llm_profiles" in pk:
+                existing = _cm.load_plugin_config()
+                existing["llm_profiles"] = profiles
+                _cm.save_plugin_config(existing)
+
+            # If first profile or no active, make it active
+            if not ctrl.config.get("active_llm_profile"):
+                ctrl.config["active_llm_profile"] = name
+                router.switch(name)
+                _cm.save(ctrl.config)
+                return f"Profile '{name}' added and set as active."
+            return f"Profile '{name}' added."
+
+        elif sub == "remove":
+            name = rest.strip()
+            if not name:
+                return "Usage: /model remove <profile_name>"
+            profiles = ctrl.config.get("llm_profiles", {})
+            if name not in profiles:
+                return f"Unknown profile: '{name}'"
+            router.remove_profile(name)
+            del profiles[name]
+            if ctrl.config.get("active_llm_profile") == name:
+                remaining = list(profiles.keys())
+                if remaining:
+                    ctrl.config["active_llm_profile"] = remaining[0]
+                    router.switch(remaining[0])
+                else:
+                    ctrl.config["active_llm_profile"] = ""
+            _cm.save(ctrl.config)
+            pk = _plugin_keys()
+            if "llm_profiles" in pk:
+                existing = _cm.load_plugin_config()
+                existing["llm_profiles"] = profiles
+                _cm.save_plugin_config(existing)
+            return f"Profile '{name}' removed."
+
+        elif sub == "show":
+            name = rest.strip()
+            if not name:
+                return "Usage: /model show <profile_name>"
+            profiles = ctrl.config.get("llm_profiles", {})
+            if name not in profiles:
+                return f"Unknown profile: '{name}'"
+            return f"{name}:\n{_json.dumps(profiles[name], indent=2)}"
+
+        return f"Unknown subcommand '{sub}'. Use: list, switch, add, remove, show."
+
+    _model_completions = lambda: (
+        ["list", "switch", "add", "remove", "show"]
+        + list(ctrl.config.get("llm_profiles", {}).keys())
+    )
+
     # Lambdas (not static lists) so completions reflect hot-reloaded plugins.
     _task_names = lambda: list(ctrl.orchestrator.tasks.keys())
     _service_names = lambda: list(services.keys())
@@ -310,5 +424,8 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      handler=_cmd_new),
         CommandEntry("cancel",    "Interrupt the agent",
                      handler=_cmd_cancel),
+        CommandEntry("model",     "Manage LLM profiles",
+                     "[list|switch|add|remove|show] [args]",
+                     handler=_cmd_model, arg_completions=_model_completions),
     ]:
         registry.register(entry)

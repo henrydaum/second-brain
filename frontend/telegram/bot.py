@@ -675,6 +675,36 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 await _start_call_form(chat_id, tool_name)
                 return
 
+        # /model — show subcommand menu or profile picker
+        if cmd_name == "model":
+            if not arg:
+                # Show subcommand menu
+                buttons = [
+                    [InlineKeyboardButton("List profiles", callback_data="mdl:list")],
+                    [InlineKeyboardButton("Switch active", callback_data="mdl:pick:switch")],
+                    [InlineKeyboardButton("Show profile", callback_data="mdl:pick:show")],
+                    [InlineKeyboardButton("Remove profile", callback_data="mdl:pick:remove")],
+                ]
+                await update.message.reply_text(
+                    "LLM Profile Manager:",
+                    reply_markup=InlineKeyboardMarkup(buttons))
+                return
+            # If arg is a subcommand needing a profile, show picker
+            sub = arg.strip().split(None, 1)[0].lower()
+            if sub in ("switch", "remove", "show") and len(arg.strip().split()) == 1:
+                profiles = config.get("llm_profiles", {})
+                if not profiles:
+                    await update.message.reply_text("No LLM profiles configured.")
+                    return
+                buttons = [[InlineKeyboardButton(
+                    f"{'* ' if config.get('active_llm_profile') == n else ''}{n}",
+                    callback_data=f"mdl:{sub}:{n}")]
+                    for n in profiles]
+                await update.message.reply_text(
+                    f"Choose a profile to {sub}:",
+                    reply_markup=InlineKeyboardMarkup(buttons))
+                return
+
         # /configure — show settings menu or accept key+value
         if cmd_name == "configure":
             if not arg:
@@ -932,6 +962,43 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     loop = asyncio.get_running_loop()
                     output = await loop.run_in_executor(
                         None, lambda: registry.dispatch(cmd_name, arg))
+                    if output:
+                        await _send_long_message(chat_id, output)
+                return
+
+            # ── Model profile callbacks (mdl:<action>[:<name>]) ──
+            if data.startswith("mdl:"):
+                parts = data.split(":", 2)
+                action = parts[1] if len(parts) > 1 else ""
+                name = parts[2] if len(parts) > 2 else ""
+                await update.callback_query.answer()
+                await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                chat_id = update.callback_query.message.chat_id
+
+                if action == "list":
+                    loop = asyncio.get_running_loop()
+                    output = await loop.run_in_executor(
+                        None, lambda: registry.dispatch("model", "list"))
+                    if output:
+                        await _send_long_message(chat_id, output)
+                elif action == "pick":
+                    # Show profile picker for the subcommand in `name`
+                    sub = name
+                    profiles = config.get("llm_profiles", {})
+                    if not profiles:
+                        await _app.bot.send_message(chat_id, "No LLM profiles configured.")
+                    else:
+                        buttons = [[InlineKeyboardButton(
+                            f"{'* ' if config.get('active_llm_profile') == n else ''}{n}",
+                            callback_data=f"mdl:{sub}:{n}")]
+                            for n in profiles]
+                        await _app.bot.send_message(
+                            chat_id, f"Choose a profile to {sub}:",
+                            reply_markup=InlineKeyboardMarkup(buttons))
+                elif action in ("switch", "remove", "show"):
+                    loop = asyncio.get_running_loop()
+                    output = await loop.run_in_executor(
+                        None, lambda: registry.dispatch("model", f"{action} {name}"))
                     if output:
                         await _send_long_message(chat_id, output)
                 return
