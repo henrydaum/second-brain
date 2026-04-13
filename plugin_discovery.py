@@ -194,6 +194,7 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
 
 def discover_services(root_dir: Path, config: dict) -> dict:
     """Discover all services (baked-in + sandbox). Returns {name: instance}."""
+    _setting_to_services.clear()
     cfg = _SERVICE_CONFIG
     t0 = time.time()
     services = {}

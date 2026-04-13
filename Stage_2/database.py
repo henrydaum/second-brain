@@ -1,9 +1,12 @@
 import logging
+import re
 import sqlite3
 import threading
 import time
 
 logger = logging.getLogger("Database")
+
+_VALID_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 """
 Database for the task pipeline.
@@ -28,6 +31,12 @@ class Database:
 		self.conn.row_factory = sqlite3.Row  # dict-like access on rows
 		self.lock = threading.Lock()
 		self._setup()
+
+	@staticmethod
+	def _validate_identifier(name: str):
+		"""Ensure a table/column name is a safe SQL identifier."""
+		if not _VALID_IDENTIFIER.match(name):
+			raise ValueError(f"Invalid SQL identifier: {name!r}")
 
 	def _setup(self):
 		# WAL mode allows concurrent readers while one writer holds the lock —
@@ -346,6 +355,8 @@ class Database:
 
 	def clean_output_tables(self, path, table_names):
 		"""Remove a file's data from multiple output tables."""
+		for table in table_names:
+			self._validate_identifier(table)
 		with self.lock:
 			for table in table_names:
 				try:
@@ -361,6 +372,8 @@ class Database:
 		are deleted. INSERT OR REPLACE fires DELETE triggers in SQLite, so
 		this automatically cascades when an upstream task re-runs for a file.
 		"""
+		self._validate_identifier(upstream_table)
+		self._validate_identifier(downstream_table)
 		trigger_name = f"cascade_delete_{upstream_table}_to_{downstream_table}"
 		sql = f"""
 			CREATE TRIGGER IF NOT EXISTS {trigger_name}
@@ -445,6 +458,7 @@ class Database:
 		"""Batch insert. rows is a list of dicts (all same keys)."""
 		if not rows:
 			return
+		self._validate_identifier(table_name)
 		columns = ", ".join(rows[0].keys())
 		placeholders = ", ".join("?" * len(rows[0]))
 		t0 = time.time()
@@ -459,6 +473,7 @@ class Database:
 
 	def get_task_output(self, table_name, path):
 		"""Retrieve output for a single file from any output table."""
+		self._validate_identifier(table_name)
 		with self.lock:
 			try:
 				cur = self.conn.execute(
@@ -470,6 +485,7 @@ class Database:
 
 	def drop_task_data(self, table_name):
 		"""Nuclear option — drop an entire output table."""
+		self._validate_identifier(table_name)
 		with self.lock:
 			try:
 				self.conn.execute(f"DROP TABLE IF EXISTS {table_name}")

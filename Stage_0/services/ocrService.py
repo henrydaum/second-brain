@@ -24,8 +24,9 @@ class WindowsOCR(BaseService):
 
     def _load(self):
         """Just imports stuff and checks if library is present and enables the flag."""
-        # Must import this before other .dlls
-        import torch
+        # Torch must be imported before winrt — its greedy DLL loading
+        # conflicts with winrt's DLLs if loaded second, causing crashes.
+        import torch  # noqa: F401
 
         self.loaded = True
         return True

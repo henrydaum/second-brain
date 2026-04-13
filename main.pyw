@@ -169,7 +169,12 @@ def main():
 
 	# --- 10. Start REPL ---
 	if "repl" in frontends:
-		from frontend.repl.repl import run_repl
+		try:
+			from frontend.repl.repl import run_repl
+		except ImportError:
+			logger.warning("REPL frontend not available (frontend/repl/ missing?) — skipping.")
+			frontends.discard("repl")
+	if "repl" in frontends:
 		repl_thread = threading.Thread(
 			target=run_repl,
 			args=(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT),
@@ -179,7 +184,12 @@ def main():
 
 	# --- 10b. Start Telegram bot ---
 	if "telegram" in frontends:
-		from frontend.telegram.bot import run_telegram_bot
+		try:
+			from frontend.telegram.bot import run_telegram_bot
+		except ImportError:
+			logger.warning("Telegram frontend not available (frontend/telegram/ missing?) — skipping.")
+			frontends.discard("telegram")
+	if "telegram" in frontends:
 		telegram_thread = threading.Thread(
 			target=run_telegram_bot,
 			args=(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT),
@@ -189,7 +199,12 @@ def main():
 
 	# --- 11. Start GUI or wait ---
 	if "gui" in frontends:
-		from frontend.gui.app import run_gui
+		try:
+			from frontend.gui.app import run_gui
+		except ImportError:
+			logger.warning("GUI frontend not available (frontend/gui/ missing?) — skipping.")
+			frontends.discard("gui")
+	if "gui" in frontends:
 
 		def on_page_ready(page, close_app):
 			_page_ref["page"] = page

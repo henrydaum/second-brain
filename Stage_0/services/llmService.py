@@ -227,6 +227,19 @@ class LMStudioLLM(BaseLLM):
 
         return image_handles, valid_file_names, temp_files
 
+    @staticmethod
+    def _annotate_messages_with_images(messages: list[dict], valid_names: list[str]) -> list[dict]:
+        """Copy messages and append image references to the last user message."""
+        if not valid_names:
+            return messages
+        messages = [msg.copy() for msg in messages]
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i]["role"] == "user":
+                img_ref = "\n".join(f"<Image {j+1}: {n}>" for j, n in enumerate(valid_names))
+                messages[i]["content"] += f"\n\nThe following images are provided:\n{img_ref}"
+                break
+        return messages
+
     def _cleanup_temp_files(self, temp_files: list[str]):
         for f_path in temp_files:
             try:
@@ -243,15 +256,7 @@ class LMStudioLLM(BaseLLM):
         temp_files = []
         try:
             image_handles, valid_names, temp_files = self._prepare_images(image_paths)
-
-            # Append image references to the last user message
-            if valid_names:
-                messages = [msg.copy() for msg in messages]
-                for i in range(len(messages) - 1, -1, -1):
-                    if messages[i]["role"] == "user":
-                        img_ref = "\n".join(f"<Image {j+1}: {n}>" for j, n in enumerate(valid_names))
-                        messages[i]["content"] += f"\n\nThe following images are provided:\n{img_ref}"
-                        break
+            messages = self._annotate_messages_with_images(messages, valid_names)
 
             chat = self._messages_to_chat(messages, image_handles)
             config = {}
@@ -281,14 +286,7 @@ class LMStudioLLM(BaseLLM):
         temp_files = []
         try:
             image_handles, valid_names, temp_files = self._prepare_images(image_paths)
-
-            if valid_names:
-                messages = [msg.copy() for msg in messages]
-                for i in range(len(messages) - 1, -1, -1):
-                    if messages[i]["role"] == "user":
-                        img_ref = "\n".join(f"<Image {j+1}: {n}>" for j, n in enumerate(valid_names))
-                        messages[i]["content"] += f"\n\nThe following images are provided:\n{img_ref}"
-                        break
+            messages = self._annotate_messages_with_images(messages, valid_names)
 
             chat = self._messages_to_chat(messages, image_handles)
             config = {}

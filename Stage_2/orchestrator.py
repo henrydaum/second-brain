@@ -66,6 +66,14 @@ class Orchestrator:
 		# Track which tasks were skipped last cycle (avoid log spam)
 		self.skip_cache: set[str] = set()
 
+	def clear_skip_cache(self, name: str = None):
+		"""Clear skip tracking so the orchestrator re-checks tasks.
+		If name is given, clear only that entry; otherwise clear all."""
+		if name:
+			self.skip_cache.discard(name)
+		else:
+			self.skip_cache.clear()
+
 		# Dependency graph — built by _build_graph() after all tasks are registered
 		self.table_producers: dict[str, str] = {}    # table -> task name that writes it
 		self.upstream: dict[str, list[str]] = {}      # task name -> upstream task names

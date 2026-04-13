@@ -2,8 +2,7 @@
 Controller.
 
 The command layer between user input and the system. Exposes every
-control action as a plain method. The terminal REPL calls these,
-and the GUI will call the same methods later.
+control action as a plain method. The terminal REPL calls these, as well as other frontends.
 
 The controller never prints — it returns structured data or status strings.
 The caller decides how to display them.
@@ -53,10 +52,8 @@ class Controller:
         if not success:
             return f"Service '{name}' failed to load. Check service-related config settings with /config."
 
-        # Clear skip log so orchestrator re-checks waiting tasks
-        self.orchestrator.skip_cache.discard(name)
-        # Clear all task skip flags — services changed, recheck everything
-        self.orchestrator.skip_cache.clear()
+        # Clear skip cache so orchestrator re-checks waiting tasks
+        self.orchestrator.clear_skip_cache()
 
         return f"Service '{name}' loaded."
 
@@ -142,7 +139,7 @@ class Controller:
             # Restore orchestrator pauses + clear skip cache
             self.orchestrator.paused.clear()
             self.orchestrator.paused.update(saved_pauses)
-            self.orchestrator.skip_cache.clear()
+            self.orchestrator.clear_skip_cache()
 
         return feedback
 
