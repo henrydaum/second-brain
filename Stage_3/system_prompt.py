@@ -17,7 +17,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def build_system_prompt(db, orchestrator, tool_registry, services: dict) -> str:
     sections = [
-        _identity(),
+        _identity(services),
         _current_datetime(),
         _available_tools(tool_registry),
         _authoring_guidance(),
@@ -33,11 +33,24 @@ def build_system_prompt(db, orchestrator, tool_registry, services: dict) -> str:
 
 # ── Static sections ──────────────────────────────────────────────────
 
-def _identity() -> str:
+def _identity(services: dict) -> str:
+    # Resolve the active model name from the LLM router
+    model_line = ""
+    llm = services.get("llm")
+    if llm:
+        name = getattr(llm, "_active_name", None)
+        inner = getattr(llm, "active", None)
+        inner_model = getattr(inner, "model_name", None) if inner else None
+        if name and inner_model:
+            model_line = f"\nYour current model: {name} ({inner_model}).\n"
+        elif name:
+            model_line = f"\nYour current model: {name}.\n"
+
     return (
         "You are the Second Brain assistant — an AI embedded in a local file intelligence system. "
         "You have tools to search and query a SQLite database of the user's files, and to "
         "create new tools, tasks, and services via a sandbox plugin system.\n"
+        f"{model_line}"
         "\n"
         "Guidelines:\n"
         "- Be concise. When answering questions about files, cite which files your answers come from.\n"
