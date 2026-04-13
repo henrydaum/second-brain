@@ -12,8 +12,9 @@ scrub all structural tokens to return clean text for the UI.
 import re
 
 # Matches <think>...</think> and <thinking>...</thinking>.
+# Opening tag is optional — Qwen models may omit it and only emit </think>.
 _THINKING_PATTERN = re.compile(
-    r"<(?:think|thinking)>(.*?)</(?:think|thinking)>",
+    r"(?:<(?:think|thinking)>)?(.*?)</(?:think|thinking)>",
     re.DOTALL,
 )
 
