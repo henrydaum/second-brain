@@ -127,6 +127,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     _pending_approvals: dict = {}       # callback_id -> (Event, result_dict)
     _pending_calls: dict = {}           # chat_id -> {tool, params, collected, current_idx}
     _pending_configures: dict = {}      # chat_id -> setting_key (waiting for value)
+    _pending_model_adds: dict = {}      # chat_id -> {name, params, collected, current_idx}
     _chat_lock = asyncio.Lock()
     _loop: asyncio.AbstractEventLoop     # set once the loop is running
     _app: Application                    # set once built
@@ -595,6 +596,82 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             f"{hint}\n\nSend the new value (or /cancel):",
             parse_mode="HTML")
 
+    # ── /model add interactive form ─────────────────────────────────
+
+    _MODEL_ADD_PARAMS = [
+        {"name": "llm_model_name", "description": "The model identifier sent to the API (e.g. gpt-4, llama-3.1-8b, gemini-2.5-flash).", "required": True},
+        {"name": "llm_endpoint", "description": "Custom API endpoint URL. Leave blank for the default OpenAI endpoint. For LM Studio use http://localhost:1234/v1.", "required": False, "default": ""},
+        {"name": "llm_api_key", "description": "API key or environment variable name (e.g. OPENAI_API_KEY). Leave blank for local models.", "required": False, "default": ""},
+        {"name": "llm_context_size", "description": "Max context window in tokens. Set 0 for reactive-only compaction.", "required": False, "default": "0", "type": "integer"},
+        {"name": "llm_service_class", "description": "Which LLM backend to use.", "required": True, "enum": ["OpenAILLM", "LMStudioLLM"]},
+    ]
+
+    async def _start_model_add_form(chat_id: int, profile_name: str):
+        """Begin interactive /model add parameter collection."""
+        _pending_model_adds[chat_id] = {
+            "name": profile_name,
+            "params": _MODEL_ADD_PARAMS,
+            "collected": {},
+            "current_idx": 0,
+        }
+        await _app.bot.send_message(
+            chat_id,
+            f"<b>New LLM profile: {html.escape(profile_name)}</b>\n"
+            f"Fill in the parameters below.\n"
+            f"Send /skip for optional params, /cancel to abort.",
+            parse_mode="HTML")
+        await _ask_next_model_param(chat_id)
+
+    async def _ask_next_model_param(chat_id: int):
+        """Prompt for the next parameter in a /model add form."""
+        state = _pending_model_adds.get(chat_id)
+        if not state:
+            return
+        idx = state["current_idx"]
+        if idx >= len(state["params"]):
+            await _execute_model_add(chat_id)
+            return
+
+        param = state["params"][idx]
+        req = " (required)" if param.get("required") else " (optional, send /skip)"
+        desc = f"\n{html.escape(param['description'])}" if param.get("description") else ""
+
+        text = f"<b>{html.escape(param['name'])}</b>{req}{desc}"
+
+        if param.get("enum"):
+            buttons = [[InlineKeyboardButton(v, callback_data=f"mdladd:{chat_id}:{param['name']}:{v}")]
+                       for v in param["enum"]]
+            await _app.bot.send_message(chat_id, text,
+                                        reply_markup=InlineKeyboardMarkup(buttons),
+                                        parse_mode="HTML")
+        else:
+            await _app.bot.send_message(chat_id, text, parse_mode="HTML")
+
+    async def _execute_model_add(chat_id: int):
+        """Finish the /model add form and register the profile."""
+        state = _pending_model_adds.pop(chat_id, None)
+        if not state:
+            return
+        profile_name = state["name"]
+        collected = state["collected"]
+
+        # Apply defaults for skipped optional params
+        for param in _MODEL_ADD_PARAMS:
+            if param["name"] not in collected:
+                collected[param["name"]] = param.get("default", "")
+
+        # Coerce context size to int
+        try:
+            collected["llm_context_size"] = int(collected.get("llm_context_size", 0))
+        except (ValueError, TypeError):
+            collected["llm_context_size"] = 0
+
+        loop = asyncio.get_running_loop()
+        output = await loop.run_in_executor(
+            None, lambda: registry.dispatch("model", f"add {profile_name} {json.dumps(collected)}"))
+        if output:
+            await _send_long_message(chat_id, output)
+
     # ── Handlers ─────────────────────────────────────────────────────
 
     async def handle_command(update: Update, _ctx):
@@ -617,6 +694,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 cancelled = True
             if chat_id in _pending_configures:
                 _pending_configures.pop(chat_id)
+                cancelled = True
+            if chat_id in _pending_model_adds:
+                _pending_model_adds.pop(chat_id)
                 cancelled = True
             if cancelled:
                 await update.message.reply_text("Cancelled.")
@@ -654,6 +734,16 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 else:
                     await update.message.reply_text("This parameter is required.")
                     return
+            state = _pending_model_adds.get(chat_id)
+            if state:
+                idx = state["current_idx"]
+                if idx < len(state["params"]) and not state["params"][idx].get("required"):
+                    state["current_idx"] += 1
+                    await _ask_next_model_param(chat_id)
+                    return
+                else:
+                    await update.message.reply_text("This parameter is required.")
+                    return
 
         # /call — show tool menu or start interactive form
         if cmd_name == "call":
@@ -682,6 +772,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 buttons = [
                     [InlineKeyboardButton("List profiles", callback_data="mdl:list")],
                     [InlineKeyboardButton("Switch active", callback_data="mdl:pick:switch")],
+                    [InlineKeyboardButton("Add profile", callback_data="mdl:add")],
                     [InlineKeyboardButton("Show profile", callback_data="mdl:pick:show")],
                     [InlineKeyboardButton("Remove profile", callback_data="mdl:pick:remove")],
                 ]
@@ -757,6 +848,36 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await update.message.reply_text(
                         f"Invalid value for {param['name']} ({param['type']}): {e}\nTry again.")
                 return
+
+        # Check for pending /model add form input
+        if chat_id in _pending_model_adds:
+            state = _pending_model_adds[chat_id]
+            if state.get("awaiting_name"):
+                # Validate profile name
+                profile_name = text.strip()
+                if not profile_name or " " in profile_name:
+                    await update.message.reply_text("Profile name must be a single word with no spaces. Try again.")
+                    return
+                existing = config.get("llm_profiles", {})
+                if profile_name in existing:
+                    await update.message.reply_text(f"Profile '{profile_name}' already exists. Choose a different name.")
+                    return
+                await _start_model_add_form(chat_id, profile_name)
+                return
+            idx = state["current_idx"]
+            if idx < len(state["params"]):
+                param = state["params"][idx]
+                ptype = param.get("type", "string")
+                try:
+                    if ptype == "integer":
+                        int(text)  # validate
+                    state["collected"][param["name"]] = text
+                    state["current_idx"] += 1
+                    await _ask_next_model_param(chat_id)
+                except ValueError:
+                    await update.message.reply_text(
+                        f"Invalid value for {param['name']} — expected a number. Try again.")
+            return
 
         # Check for pending /configure value input
         if chat_id in _pending_configures:
@@ -981,6 +1102,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         None, lambda: registry.dispatch("model", "list"))
                     if output:
                         await _send_long_message(chat_id, output)
+                elif action == "add":
+                    # Ask for profile name, then start interactive form
+                    _pending_model_adds[chat_id] = {"awaiting_name": True}
+                    await _app.bot.send_message(
+                        chat_id,
+                        "Enter a name for the new profile (e.g. <code>openai-gpt4</code>, "
+                        "<code>local-llama</code>):\n\nSend /cancel to abort.",
+                        parse_mode="HTML")
                 elif action == "pick":
                     # Show profile picker for the subcommand in `name`
                     sub = name
@@ -1001,6 +1130,21 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         None, lambda: registry.dispatch("model", f"{action} {name}"))
                     if output:
                         await _send_long_message(chat_id, output)
+                return
+
+            # ── Model add form enum callbacks (mdladd:<chat_id>:<param>:<value>) ──
+            if data.startswith("mdladd:"):
+                parts = data.split(":", 3)
+                if len(parts) == 4:
+                    _, cid_str, param_name, value = parts
+                    cid = int(cid_str)
+                    await update.callback_query.answer()
+                    await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                    state = _pending_model_adds.get(cid)
+                    if state and not state.get("awaiting_name"):
+                        state["collected"][param_name] = value
+                        state["current_idx"] += 1
+                        await _ask_next_model_param(cid)
                 return
 
             # ── History conversation selection (hist:<id>) ──
