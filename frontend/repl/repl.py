@@ -28,6 +28,35 @@ logger = logging.getLogger("REPL")
 def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
              tool_registry, services, config, root_dir: Path):
     agent = None
+    conversation_ref = {"id": None}
+
+    # --- Conversation persistence ---
+    def _set_conversation_id(conv_id):
+        conversation_ref["id"] = conv_id
+
+    def _on_agent_message(msg: dict):
+        """Persist conversation messages to DB (same pattern as GUI/Telegram)."""
+        import json
+        role = msg.get("role", "")
+        content = msg.get("content") or ""
+
+        if conversation_ref["id"] is None:
+            title = (content[:80].replace("\n", " ").strip()
+                     if role == "user" else "New conversation")
+            conversation_ref["id"] = ctrl.db.create_conversation(title)
+
+        save_content = content
+        if msg.get("tool_calls"):
+            save_content = json.dumps({
+                "content": content,
+                "tool_calls": msg["tool_calls"],
+            })
+
+        ctrl.db.save_message(
+            conversation_ref["id"], role, save_content,
+            tool_call_id=msg.get("tool_call_id"),
+            tool_name=msg.get("name"),
+        )
 
     # --- Console-based approval for run_command (fallback; GUI overrides) ---
     def _repl_approve_command(command: str, justification: str) -> bool:
@@ -43,7 +72,8 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
     # --- Build command registry (shared + REPL-specific) ---
     registry = CommandRegistry()
     register_core_commands(registry, ctrl, services, tool_registry, root_dir,
-                           get_agent=lambda: agent)
+                           get_agent=lambda: agent,
+                           set_conversation_id=_set_conversation_id)
 
     # --- REPL-specific commands ---
 
@@ -53,11 +83,13 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         if llm is None or not llm.loaded:
             return "LLM service not loaded. Run '/load llm' first."
 
+        conversation_ref["id"] = None  # fresh conversation on /chat entry
         agent = Agent(
             llm, tool_registry, config,
             system_prompt=lambda: build_system_prompt(
                 ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services
             ),
+            on_message=_on_agent_message,
             approve_command=_repl_approve_command,
         )
         logger.info("Agent initialized.")

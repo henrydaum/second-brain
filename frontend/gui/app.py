@@ -391,7 +391,8 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # =============================================================
         registry = CommandRegistry()
         register_core_commands(registry, ctrl, services, tool_registry, root_dir,
-                               get_agent=lambda: agent_ref["agent"])
+                               get_agent=lambda: agent_ref["agent"],
+                               set_conversation_id=lambda cid: conversation_ref.__setitem__("id", cid))
 
         # --- GUI-specific command handlers (override or extend core) ---
 

@@ -61,16 +61,19 @@ def _build_help(registry: CommandRegistry) -> str:
 
 
 def register_core_commands(registry: CommandRegistry, ctrl, services, tool_registry,
-                           root_dir, get_agent=None):
+                           root_dir, get_agent=None, set_conversation_id=None):
     """Register commands shared by GUI, REPL, and API.
 
     These are pure ctrl-wrapper commands with no UI-specific side effects.
     Each UI should call this first, then register/override its own commands.
 
     Parameters:
-        get_agent: Optional callable returning the current Agent instance
-                   (or None). Used by /call, /new, and /cancel.
+        get_agent:           Optional callable returning the current Agent instance
+                             (or None). Used by /call, /new, /cancel, and /history.
+        set_conversation_id: Optional callable(int | None) to update the current
+                             conversation ID. Used by /history and /new.
     """
+    _set_conversation_id = set_conversation_id
     import json as _json
     import config_manager as _cm
     from config_data import SETTINGS_DATA as _SD
@@ -169,8 +172,69 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                     "Expected format: /call <tool_name> {\"key\": \"value\"}")
         return format_tool_result(ctrl.call_tool(tool_name, kwargs))
 
+    def _cmd_history(arg):
+        """Handler for /history — list or load past conversations."""
+        from datetime import datetime
+
+        arg = arg.strip()
+
+        # /history <id> — load a specific conversation
+        if arg.isdigit():
+            conv_id = int(arg)
+            messages = ctrl.db.get_conversation_messages(conv_id)
+            if not messages:
+                return f"Conversation {conv_id} not found or is empty."
+            agent = get_agent() if get_agent else None
+            if agent:
+                agent_history = []
+                for msg in messages:
+                    role = msg["role"]
+                    content = msg["content"] or ""
+                    if role == "assistant":
+                        try:
+                            parsed = _json.loads(content)
+                            if isinstance(parsed, dict) and "tool_calls" in parsed:
+                                agent_history.append({
+                                    "role": "assistant",
+                                    "content": parsed.get("content"),
+                                    "tool_calls": parsed["tool_calls"],
+                                })
+                                continue
+                        except (_json.JSONDecodeError, TypeError):
+                            pass
+                        agent_history.append({"role": "assistant", "content": content})
+                    elif role == "tool":
+                        agent_history.append({
+                            "role": "tool",
+                            "tool_call_id": msg.get("tool_call_id"),
+                            "content": content,
+                        })
+                    else:
+                        agent_history.append({"role": role, "content": content})
+                agent.history = agent_history
+            # Update the conversation ref if a callback is available
+            if _set_conversation_id:
+                _set_conversation_id(conv_id)
+            return f"(loaded conversation {conv_id})"
+
+        # /history — list recent conversations
+        conversations = ctrl.db.list_conversations(limit=10)
+        if not conversations:
+            return "No conversations yet."
+
+        lines = ["Recent conversations:"]
+        for conv in conversations:
+            title = (conv["title"] or "New conversation").replace("\n", " ")[:50]
+            ts = conv.get("updated_at")
+            time_str = datetime.fromtimestamp(ts).strftime("%b %d, %I:%M %p") if ts else ""
+            lines.append(f"  [{conv['id']}] {title}  ({time_str})")
+        lines.append("\nUse /history <id> to load a conversation.")
+        return "\n".join(lines)
+
     def _cmd_new(_arg):
         """Handler for /new — reset agent conversation history."""
+        if _set_conversation_id:
+            _set_conversation_id(None)
         agent = get_agent() if get_agent else None
         if agent:
             agent.reset()
@@ -240,6 +304,8 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      handler=_cmd_configure),
         CommandEntry("call",      "Call a tool directly",   "<tool> {json}",
                      handler=_cmd_call, arg_completions=_tool_names),
+        CommandEntry("history",   "List or load past conversations", "[id]",
+                     handler=_cmd_history),
         CommandEntry("new",       "Start a new conversation",
                      handler=_cmd_new),
         CommandEntry("cancel",    "Interrupt the agent",

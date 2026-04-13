@@ -243,9 +243,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     # ── Command registry ─────────────────────────────────────────────
 
+    def _set_conversation_id(conv_id):
+        conversation_ref["id"] = conv_id
+
     registry = CommandRegistry()
     register_core_commands(registry, ctrl, services, tool_registry, root_dir,
-                           get_agent=lambda: agent_ref["agent"])
+                           get_agent=lambda: agent_ref["agent"],
+                           set_conversation_id=_set_conversation_id)
 
     # Telegram-specific overrides
     def _load_handler(arg):
@@ -618,6 +622,26 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 await update.message.reply_text("Cancelled.")
                 return
 
+        # /history — show inline keyboard of recent conversations
+        if cmd_name == "history" and not arg:
+            from datetime import datetime
+            conversations = ctrl.db.list_conversations(limit=10)
+            if not conversations:
+                await update.message.reply_text("No conversations yet.")
+                return
+            buttons = []
+            for conv in conversations:
+                title = (conv["title"] or "New conversation").replace("\n", " ")[:40]
+                ts = conv.get("updated_at")
+                time_str = datetime.fromtimestamp(ts).strftime("%b %d") if ts else ""
+                label = f"{title}  ({time_str})" if time_str else title
+                buttons.append([InlineKeyboardButton(
+                    label, callback_data=f"hist:{conv['id']}")])
+            await update.message.reply_text(
+                "Recent conversations:",
+                reply_markup=InlineKeyboardMarkup(buttons))
+            return
+
         # /skip — skip optional parameter in /call form
         if cmd_name == "skip":
             state = _pending_calls.get(chat_id)
@@ -910,6 +934,19 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         None, lambda: registry.dispatch(cmd_name, arg))
                     if output:
                         await _send_long_message(chat_id, output)
+                return
+
+            # ── History conversation selection (hist:<id>) ──
+            if data.startswith("hist:"):
+                conv_id_str = data[5:]
+                await update.callback_query.answer()
+                await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                chat_id = update.callback_query.message.chat_id
+                loop = asyncio.get_running_loop()
+                output = await loop.run_in_executor(
+                    None, lambda: registry.dispatch("history", conv_id_str))
+                if output:
+                    await _send_long_message(chat_id, output)
                 return
 
             # ── Configure setting selection (cfg:<key>) ──
