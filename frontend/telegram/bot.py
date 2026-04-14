@@ -157,31 +157,52 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             tool_name=msg.get("name"),
         )
 
+    # FIFO of pending status message_ids — pushed on tool_start, popped on tool_result.
+    # Agent executes tools serially, so this stays ordered.
+    _pending_status_msgs: list[int] = []
+
+    def _on_tool_start(tool_name: str):
+        """Send a pending status message; _on_tool_result will edit it to the final state."""
+        chat_id = int(config.get("telegram_allowed_user_id", 0))
+        if not chat_id:
+            return
+        text = f"\u23f3 {tool_name}"
+        async def _send():
+            msg = await _app.bot.send_message(chat_id, text, disable_notification=True)
+            return msg.message_id
+        try:
+            msg_id = asyncio.run_coroutine_threadsafe(_send(), _loop).result(timeout=5)
+            _pending_status_msgs.append(msg_id)
+        except Exception:
+            _pending_status_msgs.append(None)
+
     def _on_tool_result(tool_name: str, result):
-        """Handle tool results — render_files sends media inline, others get a brief notification."""
+        """Edit the pending status message to the final state; render_files also sends media."""
         logger.info(f"tool: {tool_name} [{'ok' if result.success else 'fail'}]")
         chat_id = int(config.get("telegram_allowed_user_id", 0))
         if not chat_id:
             return
 
-        if tool_name == "render_files" and result.gui_display_paths:
-            # Render files inline via Telegram media groups
-            async def _send_rendered():
+        msg_id = _pending_status_msgs.pop(0) if _pending_status_msgs else None
+        icon = "\u2705" if result.success else "\u274c"
+        text = f"{icon} {tool_name}"
+
+        async def _finalize():
+            if msg_id is not None:
+                try:
+                    await _app.bot.edit_message_text(text, chat_id=chat_id, message_id=msg_id)
+                except Exception:
+                    await _app.bot.send_message(chat_id, text, disable_notification=True)
+            else:
+                await _app.bot.send_message(chat_id, text, disable_notification=True)
+            if tool_name == "render_files" and result.gui_display_paths:
                 actions = prepare_media_actions(result.gui_display_paths)
                 await _execute_send_actions(chat_id, actions)
-            try:
-                asyncio.run_coroutine_threadsafe(_send_rendered(), _loop).result(timeout=30)
-            except Exception as e:
-                logger.error(f"Failed to render files: {e}")
-        else:
-            icon = "\u2705" if result.success else "\u274c"
-            text = f"{icon} {tool_name}"
-            async def _send():
-                await _app.bot.send_message(chat_id, text)
-            try:
-                asyncio.run_coroutine_threadsafe(_send(), _loop).result(timeout=5)
-            except Exception:
-                pass
+
+        try:
+            asyncio.run_coroutine_threadsafe(_finalize(), _loop).result(timeout=30)
+        except Exception as e:
+            logger.error(f"Failed to finalize tool status: {e}")
 
     def _approve_command(command: str, justification: str) -> bool:
         """Sync callback called from agent thread — bridges to async Telegram."""
@@ -227,6 +248,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services
                 ) + _TELEGRAM_SUFFIX,
                 on_tool_result=_on_tool_result,
+                on_tool_start=_on_tool_start,
                 on_message=_on_agent_message,
                 approve_command=_approve_command,
             )
@@ -460,7 +482,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return
         tool_name = state["tool"]
         kwargs = state["collected"]
-        await _app.bot.send_message(chat_id, f"Calling {tool_name}...")
+        await _app.bot.send_message(chat_id, f"Calling {tool_name}...", disable_notification=True)
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None, lambda: ctrl.call_tool(tool_name, kwargs))
@@ -502,7 +524,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return
         if not params:
             # No parameters — execute immediately
-            await _app.bot.send_message(chat_id, f"Calling {tool_name}...")
+            await _app.bot.send_message(chat_id, f"Calling {tool_name}...", disable_notification=True)
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None, lambda: ctrl.call_tool(tool_name, {}))

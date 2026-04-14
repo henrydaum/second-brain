@@ -30,7 +30,8 @@ logger = logging.getLogger("Agent")
 
 class Agent:
     def __init__(self, llm, tool_registry, config, system_prompt=None,
-                 on_tool_result=None, on_message=None, approve_command=None):
+                 on_tool_result=None, on_message=None, approve_command=None,
+                 on_tool_start=None):
         """
         Args:
             llm:            A BaseLLM instance that implements chat_with_tools().
@@ -49,6 +50,7 @@ class Agent:
         self.llm = llm
         self.tool_registry = tool_registry
         self.on_tool_result = on_tool_result
+        self.on_tool_start = on_tool_start
         self.on_message = on_message
         self.approve_command = approve_command
         self._default_prompt = (
@@ -294,6 +296,12 @@ class Agent:
                 return json.dumps({"error": f"Tool '{name}' has reached its call limit ({tool.max_calls}). Try a different approach."}), []
 
         logger.info(f"Tool call: {name}({args})")
+
+        if self.on_tool_start:
+            try:
+                self.on_tool_start(name)
+            except Exception as e:
+                logger.debug(f"on_tool_start callback error: {e}")
 
         result = self.tool_registry.call(name, approve_command=self.approve_command, **args)
         self._tool_call_counts[name] = self._tool_call_counts.get(name, 0) + 1
