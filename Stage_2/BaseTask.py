@@ -101,6 +101,12 @@ class BaseTask:
 	# --- Identity ---
 	name: str = ""
 
+	# --- Trigger kind ---
+	# "path"  = keyed by file path, dispatched from watcher/path-graph (default)
+	# "event" = keyed by run_id, dispatched from EventTrigger on declared bus channels
+	trigger: str = "path"
+	trigger_channels: list[str] = []   # bus channels this event task subscribes to
+
 	# --- Routing ---
 	modalities: list[str] = []
 
@@ -129,7 +135,7 @@ class BaseTask:
 		super().__init_subclass__(**kwargs)
 		# Prevent subclasses from sharing mutable class attributes.
 		# Without .copy(), every subclass would mutate the same list object.
-		for attr in ("modalities", "reads", "writes", "requires_services", "config_settings"):
+		for attr in ("modalities", "reads", "writes", "requires_services", "config_settings", "trigger_channels"):
 			value = getattr(cls, attr)
 			if isinstance(value, (dict, list)):
 				setattr(cls, attr, value.copy())
@@ -144,6 +150,17 @@ class BaseTask:
 
 	def run(self, paths: list[str], context) -> list[TaskResult]:
 		"""
+		Path-keyed task entry point.
 		Process multiple files. Return a list of TaskResult objects, one per input path.
+		Override this for trigger="path" tasks (the default).
 		"""
 		return [TaskResult.failed("Not implemented") for path in paths]
+
+	def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
+		"""
+		Event-keyed task entry point.
+		Called once per triggered run. Return a single TaskResult.
+		Rows in result.data must include run_id.
+		Override this for trigger="event" tasks.
+		"""
+		return TaskResult.failed("Not implemented")

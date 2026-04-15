@@ -95,6 +95,27 @@ class Database:
 			)
 		""")
 
+		# Event-task runs — one row per triggered run for trigger="event" tasks.
+		# Path-keyed tasks use task_queue; event-keyed tasks use this table.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS task_runs (
+				run_id        TEXT PRIMARY KEY,
+				task_name     TEXT NOT NULL,
+				status        TEXT NOT NULL DEFAULT 'PENDING',
+				triggered_by  TEXT,
+				parent_run_id TEXT,
+				payload_json  TEXT,
+				created_at    REAL,
+				started_at    REAL,
+				finished_at   REAL,
+				error         TEXT
+			)
+		""")
+		self.conn.execute("""
+			CREATE INDEX IF NOT EXISTS idx_runs_dispatch
+			ON task_runs (task_name, status)
+		""")
+
 		# Conversation history — persists agent chat sessions
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS conversations (
@@ -348,6 +369,95 @@ class Database:
 				"SELECT path FROM task_queue WHERE task_name = ? AND status = ?",
 				(task_name, status))
 			return [row["path"] for row in cur.fetchall()]
+
+	# =================================================================
+	# TASK RUNS (event-triggered tasks)
+	# =================================================================
+
+	def create_run(self, run_id, task_name, triggered_by=None,
+				   payload_json=None, parent_run_id=None):
+		"""Enqueue a new event-task run as PENDING."""
+		now = time.time()
+		with self.lock:
+			self.conn.execute("""
+				INSERT INTO task_runs
+				(run_id, task_name, status, triggered_by, parent_run_id, payload_json, created_at)
+				VALUES (?, ?, 'PENDING', ?, ?, ?, ?)
+			""", (run_id, task_name, triggered_by, parent_run_id, payload_json, now))
+			self.conn.commit()
+
+	def claim_runs(self, task_name, batch_size=1):
+		"""Atomically grab up to N PENDING runs. Returns list of (run_id, payload_json)."""
+		with self.lock:
+			cur = self.conn.execute("""
+				UPDATE task_runs
+				SET status = 'PROCESSING', started_at = ?
+				WHERE run_id IN (
+					SELECT run_id FROM task_runs
+					WHERE task_name = ? AND status = 'PENDING'
+					LIMIT ?
+				)
+				RETURNING run_id, payload_json
+			""", (time.time(), task_name, batch_size))
+			rows = cur.fetchall()
+			self.conn.commit()
+			return [(row["run_id"], row["payload_json"]) for row in rows]
+
+	def complete_run(self, run_id):
+		with self.lock:
+			self.conn.execute("""
+				UPDATE task_runs
+				SET status = 'DONE', finished_at = ?
+				WHERE run_id = ?
+			""", (time.time(), run_id))
+			self.conn.commit()
+
+	def fail_run(self, run_id, error=""):
+		with self.lock:
+			self.conn.execute("""
+				UPDATE task_runs
+				SET status = 'FAILED', finished_at = ?, error = ?
+				WHERE run_id = ?
+			""", (time.time(), error, run_id))
+			self.conn.commit()
+
+	def unclaim_run(self, run_id):
+		"""Return a claimed run to PENDING (e.g. task was paused after claim)."""
+		with self.lock:
+			self.conn.execute("""
+				UPDATE task_runs
+				SET status = 'PENDING', started_at = NULL
+				WHERE run_id = ?
+			""", (run_id,))
+			self.conn.commit()
+
+	def reset_stuck_runs_for(self, task_name: str, timeout_seconds: int) -> int:
+		"""Reset PROCESSING runs back to PENDING if running longer than timeout."""
+		cutoff = time.time() - timeout_seconds
+		with self.lock:
+			cur = self.conn.execute("""
+				UPDATE task_runs
+				SET status = 'PENDING', started_at = NULL
+				WHERE task_name = ? AND status = 'PROCESSING' AND started_at < ?
+			""", (task_name, cutoff))
+			self.conn.commit()
+			return cur.rowcount
+
+	def get_runs(self, task_name=None, limit=50):
+		"""List recent runs, newest first, optionally filtered by task."""
+		with self.lock:
+			if task_name:
+				cur = self.conn.execute("""
+					SELECT * FROM task_runs
+					WHERE task_name = ?
+					ORDER BY created_at DESC LIMIT ?
+				""", (task_name, limit))
+			else:
+				cur = self.conn.execute("""
+					SELECT * FROM task_runs
+					ORDER BY created_at DESC LIMIT ?
+				""", (limit,))
+			return [dict(row) for row in cur.fetchall()]
 
 	# =================================================================
 	# OUTPUT TABLES

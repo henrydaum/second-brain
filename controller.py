@@ -211,6 +211,26 @@ class Controller:
             self.db.invalidate_tasks_for_paths(downstream, failed_paths)
         return f"Task '{name}' — failed entries reset to PENDING."
 
+    def trigger_event_task(self, name: str, payload: dict | None = None) -> str:
+        """Manually fire an event-triggered task by emitting on its first
+        declared channel. Convenience wrapper for tools/REPL — direct
+        bus.emit works identically."""
+        task = self.orchestrator.tasks.get(name)
+        if task is None:
+            return f"Unknown task: '{name}'."
+        if getattr(task, "trigger", "path") != "event":
+            return f"Task '{name}' is not event-triggered (trigger='{getattr(task, 'trigger', 'path')}')."
+        channels = getattr(task, "trigger_channels", []) or []
+        if not channels:
+            return f"Task '{name}' has no trigger_channels declared."
+        from event_bus import bus
+        bus.emit(channels[0], payload or {})
+        return f"Emitted '{channels[0]}' for task '{name}'."
+
+    def list_runs(self, task_name: str | None = None, limit: int = 50) -> list[dict]:
+        """List recent event-task runs, newest first."""
+        return self.db.get_runs(task_name=task_name, limit=limit)
+
     def retry_all(self) -> str:
         """Retry all FAILED entries across all tasks, invalidating downstream."""
         for name in self.orchestrator.tasks:

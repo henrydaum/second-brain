@@ -79,9 +79,12 @@ class Orchestrator:
 		else:
 			self.skip_cache.clear()
 
-		# Dependency graph — built by _build_graph() after all tasks are registered
+		# Dependency graph — built by _build_graph() after all tasks are registered.
+		# Two graphs: path-keyed and event-keyed. Cross-kind reads are ambient
+		# SQL joins inside run(), NOT edges in either graph.
 		self.table_producers: dict[str, str] = {}    # table -> task name that writes it
-		self.upstream: dict[str, list[str]] = {}      # task name -> upstream task names
+		self.upstream: dict[str, list[str]] = {}      # path-keyed: task -> upstream path tasks
+		self.event_upstream: dict[str, list[str]] = {}  # event-keyed: task -> upstream event tasks
 
 	# =================================================================
 	# TASK REGISTRATION
@@ -135,23 +138,38 @@ class Orchestrator:
 
 		# Phase 2: For each task, find which other tasks must complete first.
 		# If task B reads from table X, and task A writes to table X, then B depends on A.
+		# Split into path and event graphs: cross-kind reads are silently ignored here;
+		# they become ambient SQL joins inside run(), not graph edges.
 		self.upstream = {}
+		self.event_upstream = {}
 		for task in self.tasks.values():
-			deps = set()
+			kind = getattr(task, "trigger", "path")
+			same_kind_deps = set()
 			for table in task.reads:
-				producer = self.table_producers.get(table)
-				if producer:
-					deps.add(producer)
-			self.upstream[task.name] = list(deps)
-			if deps:
-				logger.debug(f"Dependencies for '{task.name}': {list(deps)}")
+				producer_name = self.table_producers.get(table)
+				if not producer_name:
+					continue
+				producer = self.tasks.get(producer_name)
+				if producer is None:
+					continue
+				if getattr(producer, "trigger", "path") == kind:
+					same_kind_deps.add(producer_name)
+			if kind == "event":
+				self.event_upstream[task.name] = list(same_kind_deps)
 			else:
-				logger.debug(f"Root task (no dependencies): '{task.name}'")
+				self.upstream[task.name] = list(same_kind_deps)
+			if same_kind_deps:
+				logger.debug(f"Dependencies for '{task.name}' ({kind}): {list(same_kind_deps)}")
+			else:
+				logger.debug(f"Root task (no same-kind dependencies): '{task.name}' ({kind})")
 
 	def _backfill_tasks(self):
-		"""Enqueue all existing files for tasks whose deps are already met."""
+		"""Enqueue all existing files for tasks whose deps are already met.
+		Event tasks are never backfilled — they only fire on triggers."""
 		total_enqueued = 0
 		for task in self.tasks.values():
+			if getattr(task, "trigger", "path") != "path":
+				continue
 			enqueued = 0
 			if task.modalities:
 				# Root task — find files by modality
@@ -193,7 +211,12 @@ class Orchestrator:
 			return len(done) > 0
 
 	def get_all_downstream(self, task_name: str) -> list[str]:
-		"""Return all task names that transitively depend on task_name."""
+		"""Return all path-keyed task names that transitively depend on task_name.
+		Used for path-pipeline invalidation. Cross-kind edges are excluded."""
+		root = self.tasks.get(task_name)
+		root_kind = getattr(root, "trigger", "path") if root else "path"
+		if root_kind != "path":
+			return []
 		downstream = []
 		frontier = [task_name]
 		while frontier:
@@ -203,6 +226,8 @@ class Orchestrator:
 				continue
 			for table in current_task.writes:
 				for task in self.tasks.values():
+					if getattr(task, "trigger", "path") != "path":
+						continue
 					if table in task.reads and task.name not in downstream:
 						downstream.append(task.name)
 						frontier.append(task.name)
@@ -253,6 +278,8 @@ class Orchestrator:
 
 	def on_file_discovered(self, path: str, extension: str, modality: str):
 		for task in self.tasks.values():
+			if getattr(task, "trigger", "path") != "path":
+				continue
 			if modality in task.modalities:
 				if self._deps_met(path, task):
 					self.db.re_enqueue_task(path, task.name)
@@ -303,6 +330,8 @@ class Orchestrator:
 		triggered = []
 		for table in completed_task.writes:
 			for task in self.tasks.values():
+				if getattr(task, "trigger", "path") != "path":
+					continue
 				if table in task.reads:
 					if self._deps_met(path, task):
 						self.db.re_enqueue_task(path, task.name)
@@ -315,6 +344,8 @@ class Orchestrator:
 	def on_also_contains(self, path: str, modalities: list[str]):
 		for modality in modalities:
 			for task in self.tasks.values():
+				if getattr(task, "trigger", "path") != "path":
+					continue
 				if modality in task.modalities:
 					if self._deps_met(path, task):
 						self.db.re_enqueue_task(path, task.name)
@@ -322,6 +353,16 @@ class Orchestrator:
 							f"Multi-modal: {Path(path).name} also contains "
 							f"'{modality}' → enqueued '{task.name}'"
 						)
+
+	# =================================================================
+	# EVENT RUNS
+	# =================================================================
+
+	def on_run_enqueued(self, run_id: str, task_name: str):
+		"""Called by EventTrigger after a new run is persisted as PENDING.
+		Clear the skip cache so the next dispatch tick re-checks this task."""
+		self.clear_skip_cache(task_name)
+		logger.debug(f"Run enqueued: {run_id}")
 
 	def on_paths_discovered(self, child_paths: list[str]):
 		from Stage_1.registry import get_modality, get_supported_extensions
@@ -396,14 +437,19 @@ class Orchestrator:
 		cascade could delete rows from other writers. For those, INSERT OR
 		REPLACE with composite keys handles correctness.
 		"""
-		# Detect shared tables (written by multiple tasks)
+		# Detect shared tables (written by multiple tasks). Only path tasks
+		# participate — cascade triggers assume a `path` column.
 		table_writers: dict[str, list[str]] = {}
 		for task in self.tasks.values():
+			if getattr(task, "trigger", "path") != "path":
+				continue
 			for table in task.writes:
 				table_writers.setdefault(table, []).append(task.name)
 		shared_tables = {t for t, writers in table_writers.items() if len(writers) > 1}
 
 		for task in self.tasks.values():
+			if getattr(task, "trigger", "path") != "path":
+				continue
 			if not task.reads:
 				continue
 			for input_table in task.reads:
@@ -493,7 +539,10 @@ class Orchestrator:
 			now = time.time()
 			if now - last_stuck_check >= stuck_check_interval:
 				for task in self.tasks.values():
-					count = self.db.reset_stuck_tasks_for(task.name, task.timeout)
+					if getattr(task, "trigger", "path") == "event":
+						count = self.db.reset_stuck_runs_for(task.name, task.timeout)
+					else:
+						count = self.db.reset_stuck_tasks_for(task.name, task.timeout)
 					if count > 0:
 						logger.warning(
 							f"Reset {count} stuck '{task.name}' entries "
@@ -502,6 +551,10 @@ class Orchestrator:
 				last_stuck_check = now
 
 			for task in self.tasks.values():
+				# Event tasks dispatched in the second pass below
+				if getattr(task, "trigger", "path") == "event":
+					continue
+
 				# Gate 1: Skip paused tasks — work stays PENDING until unpaused
 				if task.name in self.paused:
 					continue
@@ -544,8 +597,128 @@ class Orchestrator:
 				logger.info(f"Dispatching {task.name}: {len(paths)} file(s)")
 				self.executor.submit(self._execute_wrapper, task, paths, sem)
 
+			# Second pass: event-triggered tasks
+			if self._dispatch_event_runs():
+				dispatched_any = True
+
 			if not dispatched_any:
 				time.sleep(self.poll_interval)
+
+	def _dispatch_event_runs(self) -> bool:
+		"""Dispatch claimed event-task runs. Mirrors the path-pass gating
+		(paused, services, per-task semaphore) but claims from task_runs."""
+		dispatched = False
+		for task in self.tasks.values():
+			if getattr(task, "trigger", "path") != "event":
+				continue
+			if task.name in self.paused:
+				continue
+			if not self._services_ready(task):
+				continue
+
+			sem = self.task_semaphores[task.name]
+			if not sem.acquire(blocking=False):
+				logger.debug(f"Skipping '{task.name}': all worker slots busy")
+				continue
+
+			runs = self.db.claim_runs(task.name, batch_size=1)
+			if not runs:
+				sem.release()
+				continue
+
+			run_id, payload_json = runs[0]
+			dispatched = True
+			logger.info(f"Dispatching event run {run_id}")
+			self.executor.submit(self._execute_event_run_wrapper,
+								 task, run_id, payload_json, sem)
+		return dispatched
+
+	def _execute_event_run_wrapper(self, task, run_id, payload_json, sem):
+		try:
+			self._execute_event_run(task, run_id, payload_json)
+		finally:
+			sem.release()
+
+	def _execute_event_run(self, task: BaseTask, run_id: str, payload_json: str):
+		"""Execute a single event-task run. Mirrors _execute for path tasks."""
+		import json as _json
+		if task.name in self.paused:
+			self.db.unclaim_run(run_id)
+			logger.info(f"Task '{task.name}' paused — returned run {run_id} to PENDING")
+			return
+
+		try:
+			payload = _json.loads(payload_json) if payload_json else {}
+		except Exception:
+			payload = {}
+
+		context = build_context(self.db, self.config, self.services)
+
+		t0 = time.time()
+		try:
+			result = task.run_event(run_id, payload, context)
+		except Exception as e:
+			elapsed = time.time() - t0
+			logger.error(f"Event task '{task.name}' (run {run_id}) failed after {elapsed:.2f}s: {e}")
+			self.db.fail_run(run_id, str(e))
+			bus.emit(TASK_FAILED, {"task_name": task.name, "run_id": run_id, "error": str(e)})
+			return
+
+		elapsed = time.time() - t0
+
+		if not result.success:
+			self.db.fail_run(run_id, result.error)
+			logger.warning(f"Event task '{task.name}' (run {run_id}) failed: {result.error}")
+			bus.emit(TASK_FAILED, {"task_name": task.name, "run_id": run_id, "error": result.error})
+			return
+
+		if result.data and task.writes:
+			try:
+				for table in task.writes:
+					self.db.write_outputs(table, result.data)
+			except Exception as e:
+				logger.error(f"Write failed for '{task.name}' (run {run_id}): {e}")
+				self.db.fail_run(run_id, f"Write failed: {e}")
+				bus.emit(TASK_FAILED, {"task_name": task.name, "run_id": run_id, "error": f"Write failed: {e}"})
+				return
+
+		self.db.complete_run(run_id)
+		logger.debug(f"Event task '{task.name}' (run {run_id}) done in {elapsed:.2f}s")
+
+		bus.emit(TASK_COMPLETED, {
+			"task_name": task.name,
+			"run_id": run_id,
+			"rows_written": len(result.data) if result.data else 0,
+			"duration_s": elapsed,
+		})
+
+		# Event-graph fan-out: enqueue downstream event tasks with parent_run_id.
+		self._enqueue_event_downstream(task, run_id, payload)
+
+	def _enqueue_event_downstream(self, parent_task: BaseTask, parent_run_id: str, payload: dict):
+		"""For each event-keyed task that reads from parent_task's writes,
+		create a new run linked via parent_run_id."""
+		import json as _json
+		from uuid import uuid4
+		for table in parent_task.writes:
+			for task in self.tasks.values():
+				if getattr(task, "trigger", "path") != "event":
+					continue
+				if task.name == parent_task.name:
+					continue
+				if table in task.reads:
+					run_id = f"{task.name}:{uuid4().hex[:12]}"
+					self.db.create_run(
+						run_id, task.name,
+						triggered_by=f"upstream:{parent_task.name}",
+						payload_json=_json.dumps(payload or {}),
+						parent_run_id=parent_run_id,
+					)
+					self.on_run_enqueued(run_id, task.name)
+					logger.debug(
+						f"Event chain: '{parent_task.name}' → enqueued '{task.name}' "
+						f"(run {run_id}, parent {parent_run_id})"
+					)
 
 	def _execute_wrapper(self, task, paths, sem):
 		try:

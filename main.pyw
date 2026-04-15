@@ -22,6 +22,7 @@ import config_manager
 from Stage_2.database import Database
 from Stage_2.orchestrator import Orchestrator
 from Stage_2.watcher import Watcher
+from Stage_2.event_trigger import EventTrigger
 from controller import Controller
 from Stage_3.tool_registry import ToolRegistry
 from plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
@@ -120,6 +121,11 @@ def main():
 	watcher = Watcher(orchestrator, database, config)
 	watcher.start()
 	ctrl.watcher = watcher
+
+	# --- 8b. Start event trigger (bus-driven run enqueue for event tasks) ---
+	event_trigger = EventTrigger(orchestrator, database, config)
+	event_trigger.start()
+	ctrl.event_trigger = event_trigger
 	logger.info("-----------------------------")
 	logger.info(f"SecondBrain started in {time.time() - t_start:.2f}s. Type 'help' for commands, 'quit' to exit.")
 
@@ -143,6 +149,7 @@ def main():
 				gui_page.window.destroy()
 			except Exception:
 				pass
+		event_trigger.stop()
 		watcher.stop()
 		orchestrator.stop()
 		for svc in services.values():
