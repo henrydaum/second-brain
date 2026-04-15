@@ -57,6 +57,7 @@ def _identity(services: dict) -> str:
         "- Past conversations are stored in the database (conversations, conversation_messages tables) and can be recalled with sql_query.\n"
         "- If a question can't be answered with existing plugins, and it seems doable, suggest creating a new one with tool_build_plugin.\n"
         "- For architecture details and design philosophy, use read_file(path='README.md').\n"
+        "- Use tool_update_memory and tool_render_files proactively, even if the user doesn't explicitly ask you to."
         "- The tool call limit is per-message, not per-session. "
         "If you hit the limit on one tool, you can still call others."
     )
