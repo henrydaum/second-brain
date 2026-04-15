@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from context import build_context
 from Stage_1.registry import get_modality
 from Stage_2.BaseTask import BaseTask, TaskResult
+from event_bus import bus
+from event_channels import TASK_COMPLETED, TASK_FAILED, SERVICE_LOADED
 
 logger = logging.getLogger("Orchestrator")
 
@@ -65,6 +67,9 @@ class Orchestrator:
 
 		# Track which tasks were skipped last cycle (avoid log spam)
 		self.skip_cache: set[str] = set()
+
+		# Re-check service-blocked tasks whenever a service finishes loading.
+		bus.subscribe(SERVICE_LOADED, lambda payload: self.clear_skip_cache())
 
 	def clear_skip_cache(self, name: str = None):
 		"""Clear skip tracking so the orchestrator re-checks tasks.
@@ -564,21 +569,23 @@ class Orchestrator:
 			logger.error(f"Task '{task.name}' batch failed after {time.time() - t0:.2f}s: {e}")
 			for path in paths:
 				self.db.fail_task(path, task.name, str(e))
+				bus.emit(TASK_FAILED, {"task_name": task.name, "path": path, "error": str(e)})
 			self._invalidate_downstream(task.name, paths)
 			return
 
 		elapsed = time.time() - t0
+		per_path = elapsed / len(paths) if paths else 0.0
 		logger.debug(f"Task '{task.name}' ran {len(paths)} file(s) in {elapsed:.2f}s")
 
 		failed_paths = []
 		for path, result in zip(paths, results):
-			self._process_result(task, path, result, failed_paths)
+			self._process_result(task, path, result, failed_paths, per_path)
 		if failed_paths:
 			self._invalidate_downstream(task.name, failed_paths)
 
-	def _process_result(self, task, path, result, failed_paths):
+	def _process_result(self, task, path, result, failed_paths, duration_s=0.0):
 		if result.success:
-			if not self._handle_success(task, path, result):
+			if not self._handle_success(task, path, result, duration_s):
 				failed_paths.append(path)
 		else:
 			self.db.fail_task(path, task.name, result.error)
@@ -586,8 +593,9 @@ class Orchestrator:
 			logger.warning(
 				f"Task '{task.name}' failed on {Path(path).name}: {result.error}"
 			)
+			bus.emit(TASK_FAILED, {"task_name": task.name, "path": path, "error": result.error})
 
-	def _handle_success(self, task, path, result):
+	def _handle_success(self, task, path, result, duration_s=0.0):
 		"""Write outputs, verify deps, complete task, and cascade. Returns False on write failure."""
 		# NOTE: writes same data to all tables — assumes one write table per task
 		if result.data and task.writes:
@@ -597,6 +605,7 @@ class Orchestrator:
 			except Exception as e:
 				logger.error(f"Write failed for '{task.name}' on {Path(path).name}: {e}")
 				self.db.fail_task(path, task.name, f"Write failed: {e}")
+				bus.emit(TASK_FAILED, {"task_name": task.name, "path": path, "error": f"Write failed: {e}"})
 				return False
 
 		# Safety: verify deps are still met before completing.
@@ -610,6 +619,13 @@ class Orchestrator:
 
 		self.db.complete_task(path, task.name)
 		self.on_task_completed(path, task.name)
+
+		bus.emit(TASK_COMPLETED, {
+			"task_name": task.name,
+			"path": path,
+			"rows_written": len(result.data) if result.data else 0,
+			"duration_s": duration_s,
+		})
 
 		if result.also_contains:
 			self.on_also_contains(path, result.also_contains)

@@ -30,7 +30,7 @@ logger = logging.getLogger("Agent")
 
 class Agent:
     def __init__(self, llm, tool_registry, config, system_prompt=None,
-                 on_tool_result=None, on_message=None, approve_command=None,
+                 on_tool_result=None, on_message=None,
                  on_tool_start=None):
         """
         Args:
@@ -44,15 +44,15 @@ class Agent:
                             fired after each tool execution, for GUI rendering.
             on_message:     Optional callback(msg: dict) fired after each message
                             is added to history, for conversation persistence.
-            approve_command: Optional callback(command: str, justification: str) -> bool
-                            for tools that need user approval (e.g. run_command).
+
+        Tool approval prompts (previously wired via approve_command) now flow
+        through the event bus — frontends subscribe to APPROVAL_REQUESTED.
         """
         self.llm = llm
         self.tool_registry = tool_registry
         self.on_tool_result = on_tool_result
         self.on_tool_start = on_tool_start
         self.on_message = on_message
-        self.approve_command = approve_command
         self._default_prompt = (
             "You are a helpful assistant with access to a local file database. "
             "Use the available tools to search and retrieve information from the user's files. "
@@ -303,7 +303,7 @@ class Agent:
             except Exception as e:
                 logger.debug(f"on_tool_start callback error: {e}")
 
-        result = self.tool_registry.call(name, approve_command=self.approve_command, **args)
+        result = self.tool_registry.call(name, **args)
         self._tool_call_counts[name] = self._tool_call_counts.get(name, 0) + 1
 
         if self.on_tool_result:

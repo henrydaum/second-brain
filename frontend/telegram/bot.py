@@ -26,6 +26,8 @@ from frontend.shared.formatters import (
     format_services, format_tasks, format_stats, format_tools,
     format_tool_result,
 )
+from event_bus import bus
+from event_channels import APPROVAL_REQUESTED
 
 logger = logging.getLogger("Telegram")
 
@@ -204,8 +206,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         except Exception as e:
             logger.error(f"Failed to finalize tool status: {e}")
 
-    def _approve_command(command: str, justification: str) -> bool:
-        """Sync callback called from agent thread — bridges to async Telegram."""
+    def _approve_handler(payload):
+        """Bus subscriber for approval. Bridges to async Telegram and blocks
+        its own handler thread until the user taps a button (or times out)."""
+        if payload["reply"].is_set():
+            return  # another subscriber already answered
+        command = payload["command"]
+        justification = payload["reason"]
         callback_id = f"approve_{uuid.uuid4().hex[:8]}"
         result_event = threading.Event()
         approved = {"value": False}
@@ -233,11 +240,16 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             asyncio.run_coroutine_threadsafe(_send(), _loop).result(timeout=10)
         except Exception as e:
             logger.error(f"Failed to send approval request: {e}")
-            return False
+            payload["result"][0] = False
+            payload["reply"].set()
+            return
 
         result_event.wait(timeout=120)
         _pending_approvals.pop(callback_id, None)
-        return approved["value"] if result_event.is_set() else False
+        payload["result"][0] = approved["value"] if result_event.is_set() else False
+        payload["reply"].set()
+
+    bus.subscribe(APPROVAL_REQUESTED, _approve_handler)
 
     def _create_agent():
         llm = services.get("llm")
@@ -250,7 +262,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 on_tool_result=_on_tool_result,
                 on_tool_start=_on_tool_start,
                 on_message=_on_agent_message,
-                approve_command=_approve_command,
             )
             logger.info("Agent ready (Telegram).")
             return True

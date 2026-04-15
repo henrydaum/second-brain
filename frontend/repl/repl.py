@@ -17,6 +17,8 @@ from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
 from frontend.shared.commands import CommandEntry, CommandRegistry, register_core_commands
 from frontend.shared.dispatch import route_input
+from event_bus import bus
+from event_channels import APPROVAL_REQUESTED
 
 logger = logging.getLogger("REPL")
 
@@ -58,16 +60,22 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
             tool_name=msg.get("name"),
         )
 
-    # --- Console-based approval for run_command (fallback; GUI overrides) ---
-    def _repl_approve_command(command: str, justification: str) -> bool:
+    # --- Console-based approval (bus subscriber). GUI subscriber wins if present. ---
+    def _repl_approve_handler(payload):
+        if payload["reply"].is_set():
+            return  # another subscriber already answered
         print(f"\n--- Agent wants to run a command ---")
-        print(f"  Command:  {command}")
-        print(f"  Reason:   {justification}")
+        print(f"  Command:  {payload['command']}")
+        print(f"  Reason:   {payload['reason']}")
         try:
             response = input("  Allow? [y/N]: ").strip().lower()
+            approved = response in ("y", "yes")
         except (KeyboardInterrupt, EOFError):
-            return False
-        return response in ("y", "yes")
+            approved = False
+        payload["result"][0] = approved
+        payload["reply"].set()
+
+    bus.subscribe(APPROVAL_REQUESTED, _repl_approve_handler)
 
     # --- Build command registry (shared + REPL-specific) ---
     registry = CommandRegistry()
@@ -90,7 +98,6 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services
             ),
             on_message=_on_agent_message,
-            approve_command=_repl_approve_command,
         )
         logger.info("Agent initialized.")
 

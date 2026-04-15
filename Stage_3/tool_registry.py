@@ -46,7 +46,7 @@ class ToolRegistry:
         if removed:
             logger.info(f"Unregistered tool: {name}")
 
-    def call(self, name: str, approve_command=None, **kwargs) -> ToolResult:
+    def call(self, name: str, **kwargs) -> ToolResult:
         """
         Call a tool by name. This is the single dispatch point.
 
@@ -69,10 +69,10 @@ class ToolRegistry:
             if not_ready:
                 return ToolResult.failed(f"Required services not available: {not_ready}")
         
-        # Build context with call_tool pointing back to this registry
+        # Build context with call_tool pointing back to this registry.
+        # approve_command is auto-wired to the event bus inside build_context.
         context = build_context(self.db, self.config, self.services,
                                 call_tool=self.call,
-                                approve_command=approve_command,
                                 tool_registry=self,
                                 orchestrator=self.orchestrator)
 

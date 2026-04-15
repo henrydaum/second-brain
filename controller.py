@@ -52,8 +52,9 @@ class Controller:
         if not success:
             return f"Service '{name}' failed to load. Check service-related config settings with /config."
 
-        # Clear skip cache so orchestrator re-checks waiting tasks
-        self.orchestrator.clear_skip_cache()
+        from event_bus import bus
+        from event_channels import SERVICE_LOADED
+        bus.emit(SERVICE_LOADED, {"name": name, "loaded": True})
 
         return f"Service '{name}' loaded."
 
@@ -70,6 +71,10 @@ class Controller:
             svc.unload()
         except Exception as e:
             return f"Error unloading '{name}': {e}"
+
+        from event_bus import bus
+        from event_channels import SERVICE_LOADED
+        bus.emit(SERVICE_LOADED, {"name": name, "loaded": False})
 
         return f"Service '{name}' unloaded."
 
@@ -136,10 +141,12 @@ class Controller:
                     except Exception as ex:
                         feedback.append(f"'{n}' failed to reload: {ex}")
         finally:
-            # Restore orchestrator pauses + clear skip cache
+            # Restore orchestrator pauses + notify listeners
             self.orchestrator.paused.clear()
             self.orchestrator.paused.update(saved_pauses)
-            self.orchestrator.clear_skip_cache()
+            from event_bus import bus
+            from event_channels import SERVICE_LOADED
+            bus.emit(SERVICE_LOADED, {"name": None, "loaded": True})
 
         return feedback
 
@@ -351,12 +358,14 @@ class Controller:
             "data_tree": data_tree,
         }
 
-    def call_tool(self, name: str, kwargs: dict, approve_command=None):
-        """Call a tool by name and return the ToolResult."""
+    def call_tool(self, name: str, kwargs: dict):
+        """Call a tool by name and return the ToolResult.
+        Approval prompts for destructive tools flow through the event bus
+        (APPROVAL_REQUESTED), not a callback threaded through here."""
         if self.tool_registry is None:
             from Stage_3.BaseTool import ToolResult
             return ToolResult.failed("No tool registry available.")
-        return self.tool_registry.call(name, approve_command=approve_command, **kwargs)
+        return self.tool_registry.call(name, **kwargs)
 
     # =================================================================
     # PLUGINS

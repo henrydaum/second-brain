@@ -31,6 +31,8 @@ from pathlib import Path
 import flet as ft
 
 from Stage_3.agent import Agent
+from event_bus import bus
+from event_channels import APPROVAL_REQUESTED
 from Stage_3.system_prompt import build_system_prompt
 from frontend.shared.commands import CommandEntry, CommandRegistry, register_core_commands
 from frontend.shared.dispatch import route_input
@@ -282,7 +284,6 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     ),
                     on_tool_result=on_tool_result,
                     on_message=_on_agent_message,
-                    approve_command=_approve_command,
                 )
 
         # -----------------------------------------------------------------
@@ -316,24 +317,36 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     message_list.controls.pop()
 
         # -----------------------------------------------------------------
-        # COMMAND APPROVAL DIALOG (for run_command tool)
+        # COMMAND APPROVAL DIALOG (bus subscriber — APPROVAL_REQUESTED)
         # -----------------------------------------------------------------
-        def _approve_command(command: str, justification: str) -> bool:
-            """Show a confirmation dialog for run_command. Blocks until user responds."""
-            result_event = threading.Event()
-            approved = {"value": False}
+        def _on_approval_requested(payload):
+            """Show a confirmation dialog. Non-blocking: the click handlers
+            write into payload['result'] and signal payload['reply'];
+            bus.request() on the tool side does the waiting."""
+            # First-wins guard: if another subscriber (REPL/Telegram) already
+            # answered, skip showing the dialog.
+            if payload["reply"].is_set():
+                return
+            command = payload["command"]
+            justification = payload["reason"]
+            reply = payload["reply"]
+            result = payload["result"]
+
+            def _cleanup():
+                overlay.visible = False
+                if overlay in page.overlay:
+                    page.overlay.remove(overlay)
+                page.update()
 
             def _allow(e):
-                approved["value"] = True
-                overlay.visible = False
-                page.update()
-                result_event.set()
+                result[0] = True
+                _cleanup()
+                reply.set()
 
             def _deny(e):
-                approved["value"] = False
-                overlay.visible = False
-                page.update()
-                result_event.set()
+                result[0] = False
+                _cleanup()
+                reply.set()
 
             overlay = ft.Container(
                 expand=True,
@@ -379,10 +392,8 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             )
             page.overlay.append(overlay)
             page.update()
-            result_event.wait()  # blocks the tool's thread
-            if overlay in page.overlay:
-                page.overlay.remove(overlay)
-            return approved["value"]
+
+        bus.subscribe(APPROVAL_REQUESTED, _on_approval_requested)
 
 
 
@@ -582,7 +593,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
                 _close()
 
-                result = ctrl.call_tool(tool_name, kwargs, approve_command=_approve_command)
+                result = ctrl.call_tool(tool_name, kwargs)
                 if tool_name == "render_files" and result.gui_display_paths:
                     message_list.controls.append(
                         render_paths(result.gui_display_paths, page, config)

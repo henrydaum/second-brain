@@ -14,6 +14,9 @@ class SecondBrainContext:
                 Usage: context.parse("report.pdf", "text") -> ParseResult
     call_tool:  Invoke another tool by name. Only populated for tools.
                 Usage: context.call_tool("keyword_search", query="revenue") -> ToolResult
+    approve_command: Request human approval for a destructive action.
+                Tools-only. None if no UI is subscribed (tools should treat
+                that as auto-deny). Backed by the event bus (APPROVAL_REQUESTED).
     """
     db: Any = None
     config: dict = field(default_factory=dict)
@@ -25,13 +28,17 @@ class SecondBrainContext:
     orchestrator: Any = None     # Orchestrator instance (tools only)
 
 
-def build_context(db, config: dict, services: dict, call_tool=None, approve_command=None,
+def build_context(db, config: dict, services: dict, call_tool=None,
                    tool_registry=None, orchestrator=None) -> SecondBrainContext:
     """
     Factory that wires up a fully functional context.
 
     The parse callable is built here, with services baked in, so callers
     don't need to import Stage_1.registry or build the lambda themselves.
+
+    approve_command is auto-wired to the event bus. If no subscriber is
+    registered on APPROVAL_REQUESTED (e.g. headless/REPL mode), the field
+    stays None so tools can detect "no UI available" and auto-deny.
 
     Usage:
         # In orchestrator (tasks — no call_tool):
@@ -41,6 +48,18 @@ def build_context(db, config: dict, services: dict, call_tool=None, approve_comm
         context = build_context(self.db, self.config, self.services, call_tool=self.call)
     """
     from Stage_1.registry import parse as _parse
+    from event_bus import bus
+    from event_channels import APPROVAL_REQUESTED
+
+    approve_command = None
+    if call_tool is not None and bus.has_subscribers(APPROVAL_REQUESTED):
+        def approve_command(command: str, justification: str) -> bool:
+            reply = bus.request(
+                APPROVAL_REQUESTED,
+                {"command": command, "reason": justification},
+                timeout=300.0,
+            )
+            return bool(reply)
 
     return SecondBrainContext(
         db=db,
@@ -52,4 +71,3 @@ def build_context(db, config: dict, services: dict, call_tool=None, approve_comm
         tool_registry=tool_registry,
         orchestrator=orchestrator,
     )
-    
