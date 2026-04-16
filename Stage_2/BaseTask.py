@@ -164,7 +164,7 @@ class BaseTask:
 	def run(self, paths: list[str], context) -> list[TaskResult]:
 		"""
 		Path-keyed task entry point.
-		Process multiple files. Return a list of TaskResult objects, one per input path.
+		Process multiple files [batching]. Return a list of TaskResult objects, one per input path.
 		Override this for trigger="path" tasks (the default).
 		"""
 		return [TaskResult.failed("Not implemented") for path in paths]

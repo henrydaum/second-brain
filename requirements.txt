@@ -30,6 +30,10 @@ rarfile
 # HTTP
 requests
 
+# Scheduling
+croniter
+cron-descriptor
+
 # Telegram bot
 python-telegram-bot
 

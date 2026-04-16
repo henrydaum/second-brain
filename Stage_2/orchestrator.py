@@ -68,6 +68,14 @@ class Orchestrator:
 		# Track which tasks were skipped last cycle (avoid log spam)
 		self.skip_cache: set[str] = set()
 
+		# Dependency graph — built by _build_graph() after all tasks are registered.
+		# Two graphs: path-keyed and event-keyed. Cross-kind reads are ambient
+		# SQL joins inside run(), NOT edges in either graph.
+		self.table_producers: dict[str, str] = {}      # table -> task name that writes it
+		self.upstream: dict[str, list[str]] = {}       # path-keyed: task -> upstream path tasks
+		self.event_upstream: dict[str, list[str]] = {} # event-keyed: task -> upstream event tasks
+		self.event_trigger = None
+
 		# Re-check service-blocked tasks whenever a service finishes loading.
 		bus.subscribe(SERVICE_LOADED, lambda payload: self.clear_skip_cache())
 
@@ -78,13 +86,6 @@ class Orchestrator:
 			self.skip_cache.discard(name)
 		else:
 			self.skip_cache.clear()
-
-		# Dependency graph — built by _build_graph() after all tasks are registered.
-		# Two graphs: path-keyed and event-keyed. Cross-kind reads are ambient
-		# SQL joins inside run(), NOT edges in either graph.
-		self.table_producers: dict[str, str] = {}    # table -> task name that writes it
-		self.upstream: dict[str, list[str]] = {}      # path-keyed: task -> upstream path tasks
-		self.event_upstream: dict[str, list[str]] = {}  # event-keyed: task -> upstream event tasks
 
 	# =================================================================
 	# TASK REGISTRATION
@@ -107,6 +108,8 @@ class Orchestrator:
 			self.tasks[task.name] = task
 			max_w = task.max_workers if task.max_workers > 0 else self.max_workers
 			self.task_semaphores[task.name] = threading.Semaphore(max_w)
+		self._build_graph()
+		self.refresh_event_subscriptions()
 		logger.info(f"Registered task: {task.name}")
 
 	def unregister_task(self, name: str):
@@ -116,7 +119,13 @@ class Orchestrator:
 			self.task_semaphores.pop(name, None)
 		if removed:
 			self._build_graph()
+			self.refresh_event_subscriptions()
 			logger.info(f"Unregistered task: {name}")
+
+	def refresh_event_subscriptions(self):
+		"""Refresh event-task bus subscriptions when task definitions change."""
+		if self.event_trigger is not None:
+			self.event_trigger.refresh()
 
 	def _build_graph(self):
 		"""Derive the dependency graph from reads/writes declarations.

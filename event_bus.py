@@ -3,22 +3,27 @@ Event bus — minimal pub/sub for distant subsystems.
 
 Use when the producer and consumer are architecturally far apart and have no
 natural reason to know about each other (e.g. a tool in a worker thread asking
-the GUI thread for human approval). For anything on the hot path (dispatch
-loop, DB writes, file watcher -> orchestrator), keep the direct wiring.
+the Telegram frontend for human approval). For anything on the hot path
+(dispatch loop, DB writes, file watcher -> orchestrator), keep the direct
+wiring.
 
 Channel names live in event_channels.py. Don't sprinkle ad-hoc strings.
 
 Usage:
     from event_bus import bus
-    from event_channels import TASK_COMPLETED
+    from event_channels import TASK_COMPLETED, APPROVAL_REQUESTED
+    from approval_request import ApprovalRequest
 
     bus.subscribe(TASK_COMPLETED, lambda p: print(p["task_name"]))
     bus.emit(TASK_COMPLETED, {"task_name": "embed", "rows_written": 3})
 
-    # Sync round-trip (producer needs a reply):
-    reply = bus.request(APPROVAL_REQUESTED,
-                        {"command": "rm -rf /", "reason": "clean temp"},
-                        timeout=120.0)
+    # Object-based interactive request:
+    req = ApprovalRequest("rm -rf /", "clean temp")
+    bus.emit(APPROVAL_REQUESTED, req)
+    req.wait(timeout=120.0)
+
+    # Generic sync round-trip is still available:
+    reply = bus.request("some.channel", {"question": "ping"}, timeout=5.0)
 """
 
 import logging

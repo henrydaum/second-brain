@@ -18,7 +18,7 @@ from Stage_3.system_prompt import build_system_prompt
 from frontend.shared.commands import CommandEntry, CommandRegistry, register_core_commands
 from frontend.shared.dispatch import route_input
 from event_bus import bus
-from event_channels import APPROVAL_REQUESTED
+from event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED
 
 logger = logging.getLogger("REPL")
 
@@ -80,7 +80,7 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
             print(f"\n(Request resolved via another frontend)\n> ", end="", flush=True)
 
     bus.subscribe(APPROVAL_REQUESTED, _repl_approve_handler)
-    bus.subscribe("approval_resolved", _on_approval_resolved)
+    bus.subscribe(APPROVAL_RESOLVED, _on_approval_resolved)
 
     # --- Build command registry (shared + REPL-specific) ---
     registry = CommandRegistry()

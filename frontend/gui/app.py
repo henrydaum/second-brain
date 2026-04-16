@@ -32,7 +32,7 @@ import flet as ft
 
 from Stage_3.agent import Agent
 from event_bus import bus
-from event_channels import APPROVAL_REQUESTED
+from event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED
 from Stage_3.system_prompt import build_system_prompt
 from frontend.shared.commands import CommandEntry, CommandRegistry, register_core_commands
 from frontend.shared.dispatch import route_input
@@ -400,7 +400,7 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 page.update()
 
         bus.subscribe(APPROVAL_REQUESTED, _on_approval_requested)
-        bus.subscribe("approval_resolved", _on_approval_resolved)
+        bus.subscribe(APPROVAL_RESOLVED, _on_approval_resolved)
 
 
 

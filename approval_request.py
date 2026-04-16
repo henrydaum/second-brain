@@ -1,25 +1,25 @@
-import threading
-import uuid
+from ui_request import InteractiveRequest
 
-class ApprovalRequest:
+
+class ApprovalRequest(InteractiveRequest):
     """
     Object-oriented tracking for agent approval requests.
-    
+
     Replaces the raw dictionary payload on the event bus, giving frontends
     a clean API to interact with standard thread synchronization primitives
     without needing to understand them.
     """
+    kind = "approval_request"
+
     def __init__(self, command: str, reason: str):
-        self.id = uuid.uuid4().hex
+        super().__init__(
+            title="Agent requests approval",
+            body=reason,
+            metadata={"command": command, "reason": reason},
+        )
         self.command = command
         self.reason = reason
         self.approved = False
-        self._event = threading.Event()
-
-    @property
-    def is_resolved(self) -> bool:
-        """Returns True if this request has already been handled by a frontend."""
-        return self._event.is_set()
 
     def resolve(self, approved: bool):
         """
@@ -27,20 +27,11 @@ class ApprovalRequest:
         Automatically broadcasts an APPROVAL_RESOLVED event to notify other
         frontends that they can clean up their UI placeholders.
         """
-        if self._event.is_set():
-            return
-        
         self.approved = approved
-        self._event.set()
-        
+        super().resolve(approved)
+
+    def on_resolved(self):
         # Avoid circular imports at module load time by importing bus here
         from event_bus import bus
         from event_channels import APPROVAL_RESOLVED
         bus.emit(APPROVAL_RESOLVED, self)
-
-    def wait(self, timeout: float = 300.0) -> bool:
-        """
-        Block the current thread until another thread calls .resolve().
-        Returns True if resolved in time, False if it timed out.
-        """
-        return self._event.wait(timeout=timeout)

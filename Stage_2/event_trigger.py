@@ -33,8 +33,20 @@ class EventTrigger:
         self.db = db
         self.config = config
         self._unsubs: list = []
+        self._started = False
+        self._subscriptions: dict[tuple[str, str], callable] = {}
+        self.orchestrator.event_trigger = self
 
     def start(self):
+        self._started = True
+        self.refresh()
+
+    def refresh(self):
+        if not self._started:
+            return
+
+        self.stop(clear_started=False)
+
         for task in self.orchestrator.tasks.values():
             if getattr(task, "trigger", "path") != "event":
                 continue
@@ -47,6 +59,7 @@ class EventTrigger:
             for channel in channels:
                 unsub = bus.subscribe(channel, self._make_handler(task, channel))
                 self._unsubs.append(unsub)
+                self._subscriptions[(task.name, channel)] = unsub
                 logger.info(f"'{task.name}' subscribed to '{channel}'")
 
     def _make_handler(self, task, channel):
@@ -65,11 +78,14 @@ class EventTrigger:
             self.orchestrator.on_run_enqueued(run_id, task.name)
         return handler
 
-    def stop(self):
+    def stop(self, clear_started: bool = True):
         for unsub in self._unsubs:
             try:
                 unsub()
             except Exception:
                 pass
         self._unsubs.clear()
+        self._subscriptions.clear()
+        if clear_started:
+            self._started = False
         logger.info("EventTrigger stopped.")

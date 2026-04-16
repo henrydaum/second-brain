@@ -396,6 +396,7 @@ class Controller:
         from plugin_discovery import discover_tasks, discover_tools
         discover_tasks(root_dir, self.orchestrator, self.config, reload=True)
         discover_tools(root_dir, self.tool_registry, self.config, reload=True)
+        self.orchestrator.refresh_event_subscriptions()
         return "Plugins reloaded."
 
     # =================================================================
