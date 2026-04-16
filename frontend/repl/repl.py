@@ -138,21 +138,25 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         return None
 
     def _allow_handler(_arg):
+        while _pending_approvals and _pending_approvals[0]["reply"].is_set():
+            _pending_approvals.pop(0)
+            
         if not _pending_approvals:
             return "No pending approvals."
+            
         payload = _pending_approvals.pop(0)
-        if payload["reply"].is_set():
-            return "Request already handled by another frontend."
         payload["result"][0] = True
         payload["reply"].set()
         return "Command allowed."
 
     def _deny_handler(_arg):
+        while _pending_approvals and _pending_approvals[0]["reply"].is_set():
+            _pending_approvals.pop(0)
+            
         if not _pending_approvals:
             return "No pending approvals."
+            
         payload = _pending_approvals.pop(0)
-        if payload["reply"].is_set():
-            return "Request already handled by another frontend."
         payload["result"][0] = False
         payload["reply"].set()
         return "Command denied."
