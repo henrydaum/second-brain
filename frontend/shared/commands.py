@@ -148,6 +148,8 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         if value != old_val:
             svc_feedback = ctrl.reload_services_for_settings({key}, root_dir)
             feedback_parts.extend(f"  • {f}" for f in svc_feedback)
+            runtime_feedback = ctrl.apply_runtime_config_changes({key})
+            feedback_parts.extend(f"  • {f}" for f in runtime_feedback)
 
         return "\n".join(feedback_parts)
 

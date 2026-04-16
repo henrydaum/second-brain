@@ -150,6 +150,37 @@ class Controller:
 
         return feedback
 
+    def apply_runtime_config_changes(self, changed_keys: set[str]) -> list[str]:
+        """Apply config changes that can take effect without a restart."""
+        feedback = []
+
+        if "poll_interval" in changed_keys:
+            self.orchestrator.poll_interval = self.config["poll_interval"]
+            feedback.append(f"Poll interval -> {self.config['poll_interval']}s")
+
+        if "max_workers" in changed_keys:
+            import threading
+            from concurrent.futures import ThreadPoolExecutor
+
+            old_executor = self.orchestrator.executor
+            self.orchestrator.max_workers = self.config["max_workers"]
+            self.orchestrator.executor = ThreadPoolExecutor(
+                max_workers=self.config["max_workers"],
+                thread_name_prefix="Worker",
+            )
+
+            # Tasks with max_workers=0 inherit the global worker limit.
+            for name, task in self.orchestrator.tasks.items():
+                if task.max_workers <= 0:
+                    self.orchestrator.task_semaphores[name] = threading.Semaphore(
+                        self.config["max_workers"]
+                    )
+
+            old_executor.shutdown(wait=False)
+            feedback.append(f"Worker pool -> {self.config['max_workers']} threads")
+
+        return feedback
+
     # =================================================================
     # TASKS
     # =================================================================
@@ -394,9 +425,32 @@ class Controller:
     def reload_plugins(self, root_dir: Path) -> str:
         """Re-discover tasks and tools from all plugin directories."""
         from plugin_discovery import discover_tasks, discover_tools
-        discover_tasks(root_dir, self.orchestrator, self.config, reload=True)
-        discover_tools(root_dir, self.tool_registry, self.config, reload=True)
-        self.orchestrator.refresh_event_subscriptions()
+
+        saved_pauses = set(self.orchestrator.paused)
+        self.orchestrator.paused.update(self.orchestrator.tasks.keys())
+
+        try:
+            mutable_task_names = [
+                name for name, task in list(self.orchestrator.tasks.items())
+                if getattr(task, "_mutable", False)
+            ]
+            for name in mutable_task_names:
+                self.orchestrator.unregister_task(name)
+
+            mutable_tool_names = [
+                name for name, tool in list(self.tool_registry.tools.items())
+                if getattr(tool, "_mutable", False)
+            ]
+            for name in mutable_tool_names:
+                self.tool_registry.unregister(name)
+
+            discover_tasks(root_dir, self.orchestrator, self.config, reload=True)
+            discover_tools(root_dir, self.tool_registry, self.config, reload=True)
+            self.orchestrator.refresh_event_subscriptions()
+        finally:
+            self.orchestrator.paused.clear()
+            self.orchestrator.paused.update(saved_pauses)
+
         return "Plugins reloaded."
 
     # =================================================================

@@ -31,6 +31,7 @@ logger = logging.getLogger("Discovery")
 
 _plugin_settings: list = []        # collected (title, var, desc, default, type_info) tuples
 _plugin_settings_keys: set = set() # variable_names already seen (first-wins dedup)
+_plugin_setting_types: dict[str, str] = {}  # variable_name -> plugin type that first declared it
 
 # Reverse map: setting variable_name -> set of service names that declared it.
 # Only populated for services (not tools/tasks), enabling targeted reloads.
@@ -47,7 +48,8 @@ def get_setting_service_map() -> dict[str, set[str]]:
     return {k: set(v) for k, v in _setting_to_services.items()}
 
 
-def _collect_config_settings(source, service_names: list[str] | None = None):
+def _collect_config_settings(source, service_names: list[str] | None = None,
+                             plugin_type: str | None = None):
     """Extract config_settings from a plugin instance or module and accumulate.
     Deduplicates by variable_name — first plugin to declare a key wins.
 
@@ -65,9 +67,42 @@ def _collect_config_settings(source, service_names: list[str] | None = None):
         if var_name not in _plugin_settings_keys:
             _plugin_settings_keys.add(var_name)
             _plugin_settings.append(tuple(entry))
+            if plugin_type:
+                _plugin_setting_types[var_name] = plugin_type
         # Always record the service mapping (even if settings deduped)
         if service_names:
             _setting_to_services.setdefault(var_name, set()).update(service_names)
+
+
+def _purge_plugin_settings(plugin_types: set[str]):
+    """Remove accumulated settings for the given plugin types.
+
+    Used before a full rediscovery so deleted plugins don't leave stale
+    settings behind in the runtime config UI.
+    """
+    if not plugin_types:
+        return
+
+    kept = []
+    kept_keys = set()
+    kept_types = {}
+
+    for entry in _plugin_settings:
+        var_name = entry[1]
+        owner_type = _plugin_setting_types.get(var_name)
+        if owner_type in plugin_types:
+            _setting_to_services.pop(var_name, None)
+            continue
+        kept.append(entry)
+        kept_keys.add(var_name)
+        if owner_type:
+            kept_types[var_name] = owner_type
+
+    _plugin_settings[:] = kept
+    _plugin_settings_keys.clear()
+    _plugin_settings_keys.update(kept_keys)
+    _plugin_setting_types.clear()
+    _plugin_setting_types.update(kept_types)
 
 
 # ── Per-type configuration ───────────────────────────────────────────
@@ -118,6 +153,9 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
     count = 0
     baked_in_names = set()
 
+    if reload:
+        _purge_plugin_settings({"tool"})
+
     # Baked-in
     for py_file in sorted(cfg["baked_in_dir"].glob(cfg["glob"])):
         module_name = cfg["baked_in_ns"].format(stem=py_file.stem)
@@ -127,7 +165,7 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
         for instance in _find_subclass_instances(module, BaseTool, module_name):
             instance._mutable = False
             tool_registry.register(instance)
-            _collect_config_settings(instance)
+            _collect_config_settings(instance, plugin_type="tool")
             baked_in_names.add(instance.name)
             count += 1
 
@@ -145,7 +183,7 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
                 instance._mutable = True
                 instance._source_path = str(py_file)
                 tool_registry.register(instance)
-                _collect_config_settings(instance)
+                _collect_config_settings(instance, plugin_type="tool")
                 count += 1
 
     logger.info(f"Discovered {count} tool(s) in {time.time() - t0:.2f}s")
@@ -159,6 +197,9 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
     count = 0
     baked_in_names = set()
 
+    if reload:
+        _purge_plugin_settings({"task"})
+
     # Baked-in
     for py_file in sorted(cfg["baked_in_dir"].glob(cfg["glob"])):
         module_name = cfg["baked_in_ns"].format(stem=py_file.stem)
@@ -168,7 +209,7 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
         for instance in _find_subclass_instances(module, BaseTask, module_name):
             instance._mutable = False
             orchestrator.register_task(instance)
-            _collect_config_settings(instance)
+            _collect_config_settings(instance, plugin_type="task")
             baked_in_names.add(instance.name)
             count += 1
 
@@ -186,7 +227,7 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
                 instance._mutable = True
                 instance._source_path = str(py_file)
                 orchestrator.register_task(instance)
-                _collect_config_settings(instance)
+                _collect_config_settings(instance, plugin_type="task")
                 count += 1
 
     logger.info(f"Discovered {count} task(s) in {time.time() - t0:.2f}s")
@@ -195,6 +236,7 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
 def discover_services(root_dir: Path, config: dict) -> dict:
     """Discover all services (baked-in + sandbox). Returns {name: instance}."""
     _setting_to_services.clear()
+    _purge_plugin_settings({"service"})
     cfg = _SERVICE_CONFIG
     t0 = time.time()
     services = {}
@@ -212,7 +254,7 @@ def discover_services(root_dir: Path, config: dict) -> dict:
         built_names = list(built.keys())
         for svc_name, svc in built.items():
             svc._mutable = False
-            _collect_config_settings(svc, service_names=built_names)
+            _collect_config_settings(svc, service_names=built_names, plugin_type="service")
             services[svc_name] = svc
             baked_in_names.add(svc_name)
 
@@ -233,7 +275,7 @@ def discover_services(root_dir: Path, config: dict) -> dict:
                     continue
                 svc._mutable = True
                 svc._source_path = str(py_file)
-                _collect_config_settings(svc, service_names=built_names)
+                _collect_config_settings(svc, service_names=built_names, plugin_type="service")
                 services[svc_name] = svc
 
     logger.info(f"Discovered {len(services)} service(s) in {time.time() - t0:.2f}s")
@@ -308,7 +350,7 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
     instance._mutable = True
     instance._source_path = str(file_path)
     tool_registry.register(instance)
-    _collect_config_settings(instance)
+    _collect_config_settings(instance, plugin_type="tool")
     return instance.name, None
 
 
@@ -329,7 +371,7 @@ def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str 
     instance._mutable = True
     instance._source_path = str(file_path)
     orchestrator.register_task(instance)
-    _collect_config_settings(instance)
+    _collect_config_settings(instance, plugin_type="task")
     return instance.name, None
 
 
@@ -352,7 +394,7 @@ def _load_single_service(file_path: Path, services: dict, config: dict) -> tuple
     for svc_name, svc in built.items():
         svc._mutable = True
         svc._source_path = str(file_path)
-        _collect_config_settings(svc, service_names=names)
+        _collect_config_settings(svc, service_names=names, plugin_type="service")
         services[svc_name] = svc
 
     return ", ".join(names), None

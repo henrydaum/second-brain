@@ -84,8 +84,6 @@ class Database:
 		""")
 
 		# Task registry — remembers which tasks are registered across restarts
-		# Drop and recreate to handle schema migrations cleanly
-		self.conn.execute("DROP TABLE IF EXISTS registered_tasks")
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS registered_tasks (
 				task_name    TEXT PRIMARY KEY,

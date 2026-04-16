@@ -163,20 +163,7 @@ def show_settings(page, config, services, ctrl, watcher,
                 agent_ref["agent"] = None
 
         # -- Group B: Orchestrator settings --
-        if "poll_interval" in changed:
-            ctrl.orchestrator.poll_interval = config["poll_interval"]
-            feedback.append(f"Poll interval -> {config['poll_interval']}s")
-
-        if "max_workers" in changed:
-            from concurrent.futures import ThreadPoolExecutor
-            old_executor = ctrl.orchestrator.executor
-            ctrl.orchestrator.max_workers = config["max_workers"]
-            ctrl.orchestrator.executor = ThreadPoolExecutor(
-                max_workers=config["max_workers"],
-                thread_name_prefix="Worker",
-            )
-            old_executor.shutdown(wait=False)
-            feedback.append(f"Worker pool -> {config['max_workers']} threads")
+        feedback.extend(ctrl.apply_runtime_config_changes(changed))
 
         # -- Group C: db_path (restart required) --
         if "db_path" in changed:
