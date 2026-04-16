@@ -171,8 +171,8 @@ class TimekeeperService(BaseService):
                 return
 
             if current["one_time"]:
-                current["enabled"] = False
-                self._next_fire_at[name] = None
+                self._jobs.pop(name, None)
+                self._next_fire_at.pop(name, None)
                 self._persist_jobs()
             else:
                 self._next_fire_at[name] = self._compute_next_fire(current, from_time=scheduled_for)
