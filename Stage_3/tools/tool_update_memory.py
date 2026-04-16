@@ -75,7 +75,7 @@ class UpdateMemory(BaseTool):
         if len(new_content) > MAX_MEMORY_LENGTH:
             return ToolResult.failed(
                 f"memory.md would exceed the {MAX_MEMORY_LENGTH}-character limit (would be {len(new_content)} chars). "
-                f"Please shorten your changes to keep the file under {MAX_MEMORY_LENGTH} characters."
+                f"Please shorten your changes to keep the file under {MAX_MEMORY_LENGTH} characters. You are encouraged to compact the entire content as needed."
             )
 
         # Write back

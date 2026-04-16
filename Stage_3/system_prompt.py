@@ -57,9 +57,8 @@ def _identity(services: dict) -> str:
         "- Past conversations are stored in the database (conversations, conversation_messages tables) and can be recalled with sql_query.\n"
         "- If a question can't be answered with existing plugins, and it seems doable, suggest creating a new one with tool_build_plugin.\n"
         "- For architecture details and design philosophy, use read_file(path='README.md').\n"
-        "- Use tool_update_memory and tool_render_files proactively, even if the user doesn't explicitly ask you to."
-        "- The tool call limit is per-message, not per-session. "
-        "If you hit the limit on one tool, you can still call others."
+        "- Use tool_update_memory and tool_render_files proactively, even if the user doesn't ask you to."
+        "- The tool call limit is per-message, not per-session. If you hit the limit on one tool, you can still call others."
     )
 
 
@@ -208,5 +207,5 @@ def _agent_memory() -> str:
     mem_path = DATA_DIR / "memory.md"
     if mem_path.exists():
         content = mem_path.read_text()
-        return f"\n\n## Memory (from memory.md — please use tool_update_memory to save important facts, such as user info, to here)\n{content}"
+        return f"\n\n## Your Memory (from memory.md — when you learn a lesson, put it here.)\n{content}"
     return ""
