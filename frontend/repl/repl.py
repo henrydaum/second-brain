@@ -64,16 +64,23 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
     def _repl_approve_handler(payload):
         if payload["reply"].is_set():
             return  # another subscriber already answered
-        print(f"\n--- Agent wants to run a command ---")
-        print(f"  Command:  {payload['command']}")
-        print(f"  Reason:   {payload['reason']}")
-        try:
-            response = input("  Allow? [y/N]: ").strip().lower()
-            approved = response in ("y", "yes")
-        except (KeyboardInterrupt, EOFError):
-            approved = False
-        payload["result"][0] = approved
-        payload["reply"].set()
+            
+        def _handle():
+            print(f"\n--- Agent wants to run a command ---")
+            print(f"  Command:  {payload['command']}")
+            print(f"  Reason:   {payload['reason']}")
+            try:
+                # Wait for user input
+                response = input("  Allow? [y/N]: ").strip().lower()
+                approved = response in ("y", "yes")
+            except (KeyboardInterrupt, EOFError):
+                approved = False
+                
+            if not payload["reply"].is_set():
+                payload["result"][0] = approved
+                payload["reply"].set()
+                
+        threading.Thread(target=_handle, daemon=True).start()
 
     bus.subscribe(APPROVAL_REQUESTED, _repl_approve_handler)
 
