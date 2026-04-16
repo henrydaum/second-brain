@@ -207,47 +207,62 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             logger.error(f"Failed to finalize tool status: {e}")
 
     def _approve_handler(payload):
-        """Bus subscriber for approval. Bridges to async Telegram and blocks
-        its own handler thread until the user taps a button (or times out)."""
+        """Bus subscriber for approval. Runs in a background thread to prevent
+        blocking the event bus and the caller's thread."""
         if payload["reply"].is_set():
             return  # another subscriber already answered
-        command = payload["command"]
-        justification = payload["reason"]
-        callback_id = f"approve_{uuid.uuid4().hex[:8]}"
-        result_event = threading.Event()
-        approved = {"value": False}
-        _pending_approvals[callback_id] = (result_event, approved)
+            
+        def _handle():
+            command = payload["command"]
+            justification = payload["reason"]
+            callback_id = f"approve_{uuid.uuid4().hex[:8]}"
+            result_event = threading.Event()
+            approved = {"value": False}
+            _pending_approvals[callback_id] = (result_event, approved)
 
-        async def _send():
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("\u274c Deny", callback_data=f"{callback_id}:deny"),
-                InlineKeyboardButton("\u2705 Allow", callback_data=f"{callback_id}:allow"),
-            ]])
-            escaped_cmd = html.escape(command)
-            escaped_reason = html.escape(justification)
-            text = (
-                f"<b>Agent requests approval:</b>\n"
-                f"<code>{escaped_cmd}</code>\n\n"
-                f"<pre>{escaped_reason}</pre>"
-            )
-            chat_id = int(config.get("telegram_allowed_user_id", 0))
-            if chat_id:
-                await _app.bot.send_message(chat_id, text,
-                                            reply_markup=keyboard,
-                                            parse_mode="HTML")
+            async def _send():
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("❌ Deny", callback_data=f"{callback_id}:deny"),
+                    InlineKeyboardButton("✅ Allow", callback_data=f"{callback_id}:allow"),
+                ]])
+                
+                # Truncate justification if too long for Telegram (4096 chars total)
+                max_len = 3500
+                display_reason = justification
+                if len(display_reason) > max_len:
+                    display_reason = display_reason[:max_len] + "...\n[Truncated]"
+                    
+                escaped_cmd = html.escape(command)
+                escaped_reason = html.escape(display_reason)
+                text = (
+                    f"<b>Agent requests approval:</b>\n"
+                    f"<code>{escaped_cmd}</code>\n\n"
+                    f"<pre>{escaped_reason}</pre>"
+                )
+                chat_id = int(config.get("telegram_allowed_user_id", 0))
+                if chat_id:
+                    await _app.bot.send_message(chat_id, text,
+                                                reply_markup=keyboard,
+                                                parse_mode="HTML")
 
-        try:
-            asyncio.run_coroutine_threadsafe(_send(), _loop).result(timeout=10)
-        except Exception as e:
-            logger.error(f"Failed to send approval request: {e}")
-            payload["result"][0] = False
-            payload["reply"].set()
-            return
+            try:
+                asyncio.run_coroutine_threadsafe(_send(), _loop).result(timeout=10)
+            except Exception as e:
+                logger.error(f"Failed to send approval request: {e}")
+                # Do NOT set reply or result here, let other frontends handle it
+                # or let it time out if no frontend succeeds
+                _pending_approvals.pop(callback_id, None)
+                return
 
-        result_event.wait(timeout=120)
-        _pending_approvals.pop(callback_id, None)
-        payload["result"][0] = approved["value"] if result_event.is_set() else False
-        payload["reply"].set()
+            result_event.wait(timeout=120)
+            _pending_approvals.pop(callback_id, None)
+            
+            # Only set the result if another frontend hasn't answered yet
+            if not payload["reply"].is_set():
+                payload["result"][0] = approved["value"] if result_event.is_set() else False
+                payload["reply"].set()
+                
+        threading.Thread(target=_handle, daemon=True).start()
 
     bus.subscribe(APPROVAL_REQUESTED, _approve_handler)
 
