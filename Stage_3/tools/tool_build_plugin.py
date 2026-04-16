@@ -87,6 +87,7 @@ class BuildPlugin(BaseTool):
     requires_services = []
     agent_enabled = True
     max_calls = 10
+    background_safe = False
 
     def run(self, context, **kwargs) -> ToolResult:
         plugin_type = kwargs.get("plugin_type", "")

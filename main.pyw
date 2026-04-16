@@ -87,6 +87,7 @@ def main():
 	t0 = time.time()
 	tool_registry = ToolRegistry(database, config, services)
 	tool_registry.orchestrator = orchestrator
+	orchestrator.tool_registry = tool_registry
 	discover_tools(_ROOT, tool_registry, config)
 	logger.info(f"Tools registered: {list(tool_registry.tools.keys())} ({time.time() - t0:.2f}s)")
 

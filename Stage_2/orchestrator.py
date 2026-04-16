@@ -75,6 +75,7 @@ class Orchestrator:
 		self.upstream: dict[str, list[str]] = {}       # path-keyed: task -> upstream path tasks
 		self.event_upstream: dict[str, list[str]] = {} # event-keyed: task -> upstream event tasks
 		self.event_trigger = None
+		self.tool_registry = None
 
 		# Re-check service-blocked tasks whenever a service finishes loading.
 		bus.subscribe(SERVICE_LOADED, lambda payload: self.clear_skip_cache())
@@ -661,7 +662,11 @@ class Orchestrator:
 		except Exception:
 			payload = {}
 
-		context = build_context(self.db, self.config, self.services)
+		context = build_context(
+			self.db, self.config, self.services,
+			tool_registry=self.tool_registry,
+			orchestrator=self,
+		)
 
 		t0 = time.time()
 		try:
@@ -742,7 +747,11 @@ class Orchestrator:
 			logger.info(f"Task '{task.name}' is paused — returned {len(paths)} path(s) to PENDING")
 			return
 
-		context = build_context(self.db, self.config, self.services)
+		context = build_context(
+			self.db, self.config, self.services,
+			tool_registry=self.tool_registry,
+			orchestrator=self,
+		)
 
 		t0 = time.time()
 		try:

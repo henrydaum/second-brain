@@ -52,6 +52,15 @@ Payload:
     name:   str   — service name (may be None for bulk events)
     loaded: bool  — True after load, False after unload"""
 
+SUBAGENT_MESSAGE_PUSHED = "subagent_message_pushed"
+"""A scheduled subagent wants to proactively send a note to the user.
+Payload:
+    run_id:   str
+    job_name: str
+    kind:     str
+    title:    str
+    message:  str"""
+
 
 # ── Reserved (not yet emitted) ─────────────────────────────────────
 # Documented here so future work has an obvious home instead of inventing

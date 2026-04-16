@@ -27,7 +27,7 @@ from frontend.shared.formatters import (
     format_tool_result,
 )
 from event_bus import bus
-from event_channels import APPROVAL_REQUESTED
+from event_channels import APPROVAL_REQUESTED, SUBAGENT_MESSAGE_PUSHED
 
 logger = logging.getLogger("Telegram")
 
@@ -131,8 +131,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     _pending_configures: dict = {}      # chat_id -> setting_key (waiting for value)
     _pending_model_adds: dict = {}      # chat_id -> {name, params, collected, current_idx}
     _chat_lock = asyncio.Lock()
-    _loop: asyncio.AbstractEventLoop     # set once the loop is running
-    _app: Application                    # set once built
+    _loop: asyncio.AbstractEventLoop | None = None
+    _app: Application | None = None
 
     # ── Agent lifecycle ──────────────────────────────────────────────
 
@@ -374,6 +374,45 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             except Exception:
                 if parse_mode:
                     await _app.bot.send_message(chat_id, chunk)
+
+    def _subagent_message_handler(payload: dict):
+        if not payload:
+            return
+        if _loop is None or _app is None:
+            logger.info("Telegram not ready yet; dropping subagent push message.")
+            return
+
+        chat_id = int(config.get("telegram_allowed_user_id", 0))
+        if not chat_id:
+            return
+
+        title = str(payload.get("title") or "").strip()
+        kind = str(payload.get("kind") or "note").strip()
+        message = str(payload.get("message") or "").strip()
+        job_name = str(payload.get("job_name") or "").strip()
+        if not message:
+            return
+
+        lines = []
+        if title:
+            lines.append(f"**{title}**")
+        elif kind:
+            lines.append(f"**{kind.title()}**")
+        if job_name:
+            lines.append(f"_From {job_name}_")
+        lines.append(message)
+
+        rendered = _md_to_tg_html("\n\n".join(lines))
+
+        try:
+            asyncio.run_coroutine_threadsafe(
+                _send_long_message(chat_id, rendered, use_html=True),
+                _loop,
+            ).result(timeout=30)
+        except Exception as e:
+            logger.error(f"Failed to send subagent message: {e}")
+
+    bus.subscribe(SUBAGENT_MESSAGE_PUSHED, _subagent_message_handler)
 
     async def _execute_send_actions(chat_id: int, actions: list[SendAction]):
         """Execute a list of SendActions via the Telegram Bot API."""
