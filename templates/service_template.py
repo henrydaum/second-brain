@@ -44,6 +44,36 @@ SERVICE LIFECYCLE
 Services can be loaded/unloaded at runtime from the GUI or CLI.
 
 
+TRIGGERING EVENT TASKS FROM A SERVICE
+-------------------------------------
+Services can fire event-triggered tasks by emitting on the bus. This is
+how a cron-like service drives periodic work: emit on a channel the task
+subscribes to, and the orchestrator enqueues a run on its next tick.
+
+    from event_bus import bus
+
+    class SchedulerService(BaseService):
+        model_name = "scheduler"
+
+        def _load(self):
+            import threading
+            self._stop = threading.Event()
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
+            return True
+
+        def _loop(self):
+            while not self._stop.wait(timeout=86400):   # every 24h
+                bus.emit("schedule.tick.daily", {"source": "scheduler"})
+
+        def unload(self):
+            self._stop.set()
+            self.loaded = False
+
+The service never imports the orchestrator or the tasks — it just emits.
+Any task declaring trigger_channels=["schedule.tick.daily"] will fire.
+
+
 SHARED vs PER-CALL
 ------------------
   shared = True  (default) — One instance used by all threads.

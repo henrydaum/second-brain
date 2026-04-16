@@ -20,18 +20,27 @@ Payload (before bus.request enriches it):
 Reply: subscriber sets result[0] = bool (True=allow, False=deny), then reply.set()."""
 
 TASK_COMPLETED = "task_completed"
-"""A task finished successfully on a path.
-Payload:
+"""A task finished successfully.
+Payload (path-triggered tasks):
     task_name:    str
     path:         str
+    rows_written: int
+    duration_s:   float
+Payload (event-triggered tasks):
+    task_name:    str
+    run_id:       str
     rows_written: int
     duration_s:   float"""
 
 TASK_FAILED = "task_failed"
-"""A task failed on a path.
-Payload:
+"""A task failed.
+Payload (path-triggered tasks):
     task_name: str
     path:      str
+    error:     str
+Payload (event-triggered tasks):
+    task_name: str
+    run_id:    str
     error:     str"""
 
 SERVICE_LOADED = "service_loaded"

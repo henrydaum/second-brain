@@ -416,6 +416,8 @@ class Controller:
             {"command": "reset <n>", "description": "Reset all entries for a task to PENDING"},
             {"command": "retry <n>", "description": "Retry failed entries for a task"},
             {"command": "retry all", "description": "Retry all failed across all tasks"},
+            {"command": "trigger <n> [json]", "description": "Manually fire an event-triggered task"},
+            {"command": "runs [task] [limit]", "description": "List recent event-task runs"},
             {"command": "", "description": ""},
             {"command": "tools", "description": "List registered tools"},
             {"command": "enable <n>", "description": "Enable a tool for agent use"},

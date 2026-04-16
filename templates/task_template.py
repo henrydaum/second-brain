@@ -29,16 +29,40 @@ AUTO-DISCOVERY RULES
 - One task class per file (recommended)
 
 
+TRIGGER KINDS
+-------------
+Every task picks ONE trigger kind:
+
+  trigger = "path"   (default) — keyed by file path. Root tasks (reads=[])
+                     fire on file discovery; downstream tasks fire when
+                     upstream completes. Implements run(paths, context)
+                     returning a list[TaskResult] (one per path).
+
+  trigger = "event"  — keyed by run_id. Fires whenever a declared bus
+                     channel emits. Use this for cron-like jobs,
+                     tool-triggered work, or anything that isn't per-file.
+                     Must also set trigger_channels = ["chan1", ...].
+                     Implements run_event(run_id, payload, context) and
+                     returns a single TaskResult. Rows in result.data
+                     must include the run_id.
+
+
 DEPENDENCY GRAPH
 ----------------
 Tasks never reference each other by name. Dependencies are derived
-automatically from reads/writes:
+automatically from reads/writes — but ONLY between tasks of the same
+trigger kind:
 
-  If TaskA writes to "text_chunks" and TaskB reads from "text_chunks",
-  then TaskB depends on TaskA. The orchestrator figures this out.
+  If TaskA (path) writes "text_chunks" and TaskB (path) reads it,
+  TaskB is downstream of TaskA in the path graph.
 
-Root tasks (reads=[]) are triggered directly by file discovery.
-Downstream tasks are triggered when their upstream dependencies complete.
+  If TaskA (event) writes "daily_summary" and TaskB (event) reads it,
+  TaskB auto-fires after TaskA completes, with parent_run_id set.
+
+Cross-kind reads are AMBIENT SQL JOINS, not graph edges. An event task
+that reads a path-keyed table just SELECTs it at run time. Path-data
+changes do NOT auto-invalidate event runs. If a path task wants to
+kick off an event run, it can bus.emit(...) explicitly.
 
 
 CONTEXT OBJECT
@@ -122,8 +146,12 @@ class BaseTask:
     # --- Identity ---
     name: str = ""
 
+    # --- Trigger kind ---
+    trigger: str = "path"               # "path" | "event"
+    trigger_channels: list[str] = []    # bus channels (event tasks only)
+
     # --- Routing ---
-    modalities: list[str] = []          # file types (root tasks only). e.g. ["text", "image"]
+    modalities: list[str] = []          # file types (root path tasks only). e.g. ["text", "image"]
 
     # --- Data flow ---
     reads: list[str] = []               # input tables (dependencies derived automatically)
@@ -153,8 +181,13 @@ class BaseTask:
         pass
 
     def run(self, paths: list[str], context) -> list[TaskResult]:
-        """Process files. Return one TaskResult per input path."""
+        """Path-keyed entry point. Override for trigger='path' (default)."""
         return [TaskResult.failed("Not implemented") for _ in paths]
+
+    def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
+        """Event-keyed entry point. Override for trigger='event'.
+        Rows in the returned TaskResult.data must include run_id."""
+        return TaskResult.failed("Not implemented")
 
 
 # =====================================================================
@@ -252,3 +285,44 @@ class BaseTask:
 #             ]
 #             results.append(TaskResult(success=True, data=data))
 #         return results
+
+
+# =====================================================================
+# EXAMPLE: An event-triggered task (cron-like / tool-triggered)
+# =====================================================================
+
+# import time
+# from Stage_2.BaseTask import BaseTask, TaskResult
+#
+#
+# class ClusterEmbeddings(BaseTask):
+#     name = "cluster_embeddings"
+#     trigger = "event"
+#     trigger_channels = ["schedule.tick.daily", "trigger.cluster_now"]
+#     reads = ["text_embeddings"]         # ambient read (path-keyed) — SQL join at run time
+#     writes = ["embedding_clusters"]
+#     requires_services = []
+#     output_schema = """
+#         CREATE TABLE IF NOT EXISTS embedding_clusters (
+#             run_id TEXT,
+#             cluster_id INTEGER,
+#             path TEXT,
+#             chunk_index INTEGER,
+#             created_at REAL,
+#             PRIMARY KEY (run_id, path, chunk_index)
+#         );
+#     """
+#
+#     def run_event(self, run_id, payload, context):
+#         # Cross-kind read: pull all embeddings as an ambient SQL join.
+#         with context.db.lock:
+#             rows = context.db.conn.execute(
+#                 "SELECT path, chunk_index, embedding FROM text_embeddings"
+#             ).fetchall()
+#         # ... run your clustering here ...
+#         data = [
+#             {"run_id": run_id, "cluster_id": 0, "path": r[0],
+#              "chunk_index": r[1], "created_at": time.time()}
+#             for r in rows
+#         ]
+#         return TaskResult(success=True, data=data)

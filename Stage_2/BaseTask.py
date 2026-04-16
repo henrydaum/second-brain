@@ -7,21 +7,30 @@ logger = logging.getLogger("BaseTask")
 """
 Task interface.
 
-Every task in the system inherits from BaseTask and implements run().
-The orchestrator dispatches tasks without knowing what they do —
-it only knows the interface defined here.
+Every task in the system inherits from BaseTask. The orchestrator
+dispatches tasks without knowing what they do — it only knows the
+interface defined here.
+
+There are two trigger kinds:
+	- trigger="path"  (default): keyed by file path, dispatched from the
+	  watcher and path-dependency graph. Implements run(paths, context).
+	- trigger="event": keyed by run_id, dispatched from EventTrigger
+	  whenever a declared bus channel fires. Implements
+	  run_event(run_id, payload, context).
 
 A task declares:
-	- What files it works on (modalities)
-	- What tables it reads from (reads) — the orchestrator derives dependencies
-	  automatically by matching reads to writes across all tasks
+	- Trigger kind (trigger) and, for event tasks, trigger_channels
+	- What files it works on (modalities) — path tasks only
+	- What tables it reads from (reads) — dependencies are derived
+	  automatically by matching reads to writes across tasks of the
+	  SAME trigger kind. Cross-kind reads are ambient SQL joins, not
+	  graph edges: path-data changes do NOT auto-invalidate event runs.
 	- What tables it writes to (writes)
 	- Whether it needs ALL inputs or ANY input (require_all_inputs)
 	- What shared services must be loaded (requires_services)
-	- How to execute (run)
 
-The dependency graph is built automatically from reads/writes declarations,
-like Factorio's crafting tree. Tasks never reference each other by name.
+The dependency graph is built automatically from reads/writes — one
+graph per trigger kind. Tasks never reference each other by name.
 
 Example concrete task:
 
@@ -76,9 +85,13 @@ class BaseTask:
 
 	Class attributes (override these):
 		name              Unique identifier. "embed_text", "ocr", etc.
+		trigger           "path" (default) or "event". Picks which run
+		                  signature the orchestrator calls and which
+		                  dependency graph this task participates in.
+		trigger_channels  (event tasks) bus channels that enqueue runs.
 		modalities        File types this task processes. Required for root
-		                  tasks (no reads). Downstream tasks leave this empty —
-		                  they're triggered by upstream completion.
+		                  path tasks (no reads). Downstream path tasks leave
+		                  this empty — they're triggered by upstream completion.
 		reads             Input tables. Dependencies are derived automatically
 		                  by matching reads to other tasks' writes.
 		writes            Output tables this task writes to.

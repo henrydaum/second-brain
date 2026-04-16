@@ -148,6 +148,35 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
 
         return "\n".join(feedback_parts)
 
+    def _cmd_trigger(arg):
+        parts = arg.split(None, 1)
+        if not parts:
+            return "Usage: /trigger <task> [json_payload]"
+        name = parts[0]
+        payload = None
+        if len(parts) > 1:
+            try:
+                payload = _json.loads(parts[1])
+            except _json.JSONDecodeError:
+                return "Payload must be valid JSON (or omit it)."
+        return ctrl.trigger_event_task(name, payload)
+
+    def _cmd_runs(arg):
+        parts = arg.split()
+        task_name = None
+        limit = 50
+        for p in parts:
+            if p.isdigit():
+                limit = int(p)
+            else:
+                task_name = p
+        rows = ctrl.list_runs(task_name=task_name, limit=limit)
+        if not rows:
+            return "No runs."
+        lines = [f"{r.get('run_id','?')}  {r.get('task_name','?')}  {r.get('status','?')}  "
+                 f"by={r.get('triggered_by','?')}" for r in rows]
+        return "\n".join(lines)
+
     def _cmd_locations(arg):
         """Handler for /locations [tools|tasks|services]"""
         mode = (arg or "").strip().lower()
@@ -396,6 +425,12 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      handler=lambda a: ctrl.retry_all() if a and a.lower() == "all"
                              else ctrl.retry_task(a) if a else "Usage: /retry <task>|all",
                      arg_completions=_retry_names),
+        CommandEntry("trigger",  "Manually fire an event-triggered task", "<task> [json]",
+                     handler=lambda a: _cmd_trigger(a),
+                     arg_completions=_task_names),
+        CommandEntry("runs",     "List recent event-task runs", "[task] [limit]",
+                     handler=lambda a: _cmd_runs(a),
+                     arg_completions=_task_names),
         CommandEntry("tools",    "List registered tools",
                      handler=lambda _: format_tools(ctrl.list_tools())),
         CommandEntry("enable",   "Enable a tool for agent use", "<tool>",
