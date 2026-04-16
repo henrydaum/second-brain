@@ -50,16 +50,16 @@ def build_context(db, config: dict, services: dict, call_tool=None,
     from Stage_1.registry import parse as _parse
     from event_bus import bus
     from event_channels import APPROVAL_REQUESTED
+    from approval_request import ApprovalRequest
 
     approve_command = None
     if call_tool is not None and bus.has_subscribers(APPROVAL_REQUESTED):
         def approve_command(command: str, justification: str) -> bool:
-            reply = bus.request(
-                APPROVAL_REQUESTED,
-                {"command": command, "reason": justification},
-                timeout=300.0,
-            )
-            return bool(reply)
+            req = ApprovalRequest(command, justification)
+            bus.emit(APPROVAL_REQUESTED, req)
+            if not req.wait(timeout=300.0):
+                return False
+            return req.approved
 
     return SecondBrainContext(
         db=db,

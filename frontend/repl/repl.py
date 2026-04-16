@@ -63,18 +63,24 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
     # --- Console-based approval (bus subscriber). GUI subscriber wins if present. ---
     _pending_approvals = []
     
-    def _repl_approve_handler(payload):
-        if payload["reply"].is_set():
+    def _repl_approve_handler(req: 'ApprovalRequest'):
+        if req.is_resolved:
             return  # another subscriber already answered
             
         print(f"\n\n--- Agent wants to run a command ---")
-        print(f"  Command:  {payload['command']}")
-        print(f"  Reason:   {payload['reason']}")
+        print(f"  Command:  {req.command}")
+        print(f"  Reason:   {req.reason}")
         print(f"  (Type '/allow' or '/deny' to respond)")
         print("> ", end="", flush=True)
-        _pending_approvals.append(payload)
+        _pending_approvals.append(req)
+
+    def _on_approval_resolved(req: 'ApprovalRequest'):
+        if req in _pending_approvals:
+            _pending_approvals.remove(req)
+            print(f"\n(Request resolved via another frontend)\n> ", end="", flush=True)
 
     bus.subscribe(APPROVAL_REQUESTED, _repl_approve_handler)
+    bus.subscribe("approval_resolved", _on_approval_resolved)
 
     # --- Build command registry (shared + REPL-specific) ---
     registry = CommandRegistry()
@@ -138,27 +144,25 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         return None
 
     def _allow_handler(_arg):
-        while _pending_approvals and _pending_approvals[0]["reply"].is_set():
+        while _pending_approvals and _pending_approvals[0].is_resolved:
             _pending_approvals.pop(0)
             
         if not _pending_approvals:
             return "No pending approvals."
             
-        payload = _pending_approvals.pop(0)
-        payload["result"][0] = True
-        payload["reply"].set()
+        req = _pending_approvals.pop(0)
+        req.resolve(True)
         return "Command allowed."
 
     def _deny_handler(_arg):
-        while _pending_approvals and _pending_approvals[0]["reply"].is_set():
+        while _pending_approvals and _pending_approvals[0].is_resolved:
             _pending_approvals.pop(0)
             
         if not _pending_approvals:
             return "No pending approvals."
             
-        payload = _pending_approvals.pop(0)
-        payload["result"][0] = False
-        payload["reply"].set()
+        req = _pending_approvals.pop(0)
+        req.resolve(False)
         return "Command denied."
 
     for entry in [

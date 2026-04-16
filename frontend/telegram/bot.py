@@ -206,19 +206,17 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         except Exception as e:
             logger.error(f"Failed to finalize tool status: {e}")
 
-    def _approve_handler(payload):
+    def _approve_handler(req: 'ApprovalRequest'):
         """Bus subscriber for approval. Runs in a background thread to prevent
         blocking the event bus and the caller's thread."""
-        if payload["reply"].is_set():
+        if req.is_resolved:
             return  # another subscriber already answered
             
         def _handle():
-            command = payload["command"]
-            justification = payload["reason"]
-            callback_id = f"approve_{uuid.uuid4().hex[:8]}"
-            result_event = threading.Event()
-            approved = {"value": False}
-            _pending_approvals[callback_id] = (result_event, approved)
+            command = req.command
+            justification = req.reason
+            callback_id = req.id
+            _pending_approvals[callback_id] = req
 
             async def _send():
                 keyboard = InlineKeyboardMarkup([[
@@ -246,21 +244,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                                                 parse_mode="HTML")
 
             try:
+                # Dispatch the send coroutine and wait briefly for it to be sent
                 asyncio.run_coroutine_threadsafe(_send(), _loop).result(timeout=10)
             except Exception as e:
                 logger.error(f"Failed to send approval request: {e}")
-                # Do NOT set reply or result here, let other frontends handle it
-                # or let it time out if no frontend succeeds
+                # We do not resolve the request here due to error; let other frontends handle it
                 _pending_approvals.pop(callback_id, None)
                 return
-
-            result_event.wait(timeout=120)
-            _pending_approvals.pop(callback_id, None)
-            
-            # Only set the result if another frontend hasn't answered yet
-            if not payload["reply"].is_set():
-                payload["result"][0] = approved["value"] if result_event.is_set() else False
-                payload["reply"].set()
                 
         threading.Thread(target=_handle, daemon=True).start()
 
@@ -1256,16 +1246,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 return
 
             callback_id, action = data.rsplit(":", 1)
-            pending = _pending_approvals.get(callback_id)
-            if pending is None:
-                await update.callback_query.answer("Expired")
+            pending_req = _pending_approvals.pop(callback_id, None)
+            if pending_req is None or pending_req.is_resolved:
+                await update.callback_query.answer("Expired or already handled.")
                 return
 
-            result_event, approved = pending
-            approved["value"] = (action == "allow")
-            result_event.set()
+            pending_req.resolve(action == "allow")
 
-            verdict = "Allowed" if approved["value"] else "Denied"
+            verdict = "Allowed" if pending_req.approved else "Denied"
             await update.callback_query.answer(verdict)
             try:
                 await update.callback_query.edit_message_reply_markup(reply_markup=None)

@@ -13,11 +13,12 @@ Payload shapes are documented here, not enforced at runtime.
 # ── Active channels ────────────────────────────────────────────────
 
 APPROVAL_REQUESTED = "approval_requested"
-"""Tool needs human approval for a destructive action. Sync round-trip.
-Payload (before bus.request enriches it):
-    command:  str  — the action being proposed (e.g. shell command, plugin op)
-    reason:   str  — justification the agent gave
-Reply: subscriber sets result[0] = bool (True=allow, False=deny), then reply.set()."""
+"""Tool needs human approval for a destructive action.
+Payload: an ApprovalRequest object."""
+
+APPROVAL_RESOLVED = "approval_resolved"
+"""Tool approval was resolved (allowed or denied) by some frontend.
+Payload: the resolved ApprovalRequest object."""
 
 TASK_COMPLETED = "task_completed"
 """A task finished successfully.

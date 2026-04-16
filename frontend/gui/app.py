@@ -319,34 +319,31 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # -----------------------------------------------------------------
         # COMMAND APPROVAL DIALOG (bus subscriber — APPROVAL_REQUESTED)
         # -----------------------------------------------------------------
-        def _on_approval_requested(payload):
+        
+        # Track active dialogs by req.id so they can be closed remotely
+        _active_overlays = {}
+
+        def _on_approval_requested(req: 'ApprovalRequest'):
             """Show a confirmation dialog. Non-blocking: the click handlers
-            write into payload['result'] and signal payload['reply'];
-            bus.request() on the tool side does the waiting."""
-            # First-wins guard: if another subscriber (REPL/Telegram) already
-            # answered, skip showing the dialog.
-            if payload["reply"].is_set():
+            call req.resolve() which signals the producer thread."""
+            if req.is_resolved:
                 return
-            command = payload["command"]
-            justification = payload["reason"]
-            reply = payload["reply"]
-            result = payload["result"]
 
             def _cleanup():
-                overlay.visible = False
-                if overlay in page.overlay:
-                    page.overlay.remove(overlay)
-                page.update()
+                if req.id in _active_overlays:
+                    ov = _active_overlays.pop(req.id)
+                    ov.visible = False
+                    if ov in page.overlay:
+                        page.overlay.remove(ov)
+                    page.update()
 
             def _allow(e):
-                result[0] = True
+                req.resolve(True)
                 _cleanup()
-                reply.set()
 
             def _deny(e):
-                result[0] = False
+                req.resolve(False)
                 _cleanup()
-                reply.set()
 
             overlay = ft.Container(
                 expand=True,
@@ -365,14 +362,14 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                             bgcolor=ft.Colors.SURFACE,
                             border_radius=8,
                             padding=12,
-                            content=ft.Text(command, font_family="Consolas", size=13, selectable=True),
+                            content=ft.Text(req.command, font_family="Consolas", size=13, selectable=True),
                         ),
                         ft.Container(height=8),
                         ft.Container(
                             bgcolor=ft.Colors.SURFACE,
                             border_radius=8,
                             padding=12,
-                            content=ft.Text(justification, font_family="Consolas", size=12,
+                            content=ft.Text(req.reason, font_family="Consolas", size=12,
                                             selectable=True, max_lines=20,
                                             overflow=ft.TextOverflow.ELLIPSIS),
                         ),
@@ -390,10 +387,20 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 ),
                 alignment=ft.alignment.center,
             )
+            _active_overlays[req.id] = overlay
             page.overlay.append(overlay)
             page.update()
+            
+        def _on_approval_resolved(req: 'ApprovalRequest'):
+            if req.id in _active_overlays:
+                ov = _active_overlays.pop(req.id)
+                ov.visible = False
+                if ov in page.overlay:
+                    page.overlay.remove(ov)
+                page.update()
 
         bus.subscribe(APPROVAL_REQUESTED, _on_approval_requested)
+        bus.subscribe("approval_resolved", _on_approval_resolved)
 
 
 
