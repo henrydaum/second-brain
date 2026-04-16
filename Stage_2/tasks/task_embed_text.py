@@ -71,7 +71,7 @@ class EmbedText(BaseTask):
 		# than encoding per-file, because the GPU can batch efficiently.
 		embeddings = None
 		if pool_texts:
-			logger.debug(f"Encoding {len(pool_texts)} text chunks across {len(paths)} files...")
+			logger.debug(f"Encoding {len(pool_texts)} text chunks across {len(paths)} file(s)...")
 			try:
 				embeddings = embedder.encode(pool_texts)
 			except Exception as e:
@@ -111,5 +111,5 @@ class EmbedText(BaseTask):
 			total_embedded += len(data)
 			results.append(TaskResult(success=True, data=data))
 
-		logger.info(f"Embedded {total_embedded} chunks across {len(paths)} files")
+		logger.info(f"Embedded {total_embedded} chunks across {len(paths)} file(s)")
 		return results
