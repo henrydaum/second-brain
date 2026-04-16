@@ -6,3 +6,4 @@ database.db*
 .claude
 .DS_Store
 .git
+.vscode
