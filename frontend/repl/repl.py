@@ -61,26 +61,18 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         )
 
     # --- Console-based approval (bus subscriber). GUI subscriber wins if present. ---
+    _pending_approvals = []
+    
     def _repl_approve_handler(payload):
         if payload["reply"].is_set():
             return  # another subscriber already answered
             
-        def _handle():
-            print(f"\n--- Agent wants to run a command ---")
-            print(f"  Command:  {payload['command']}")
-            print(f"  Reason:   {payload['reason']}")
-            try:
-                # Wait for user input
-                response = input("  Allow? [y/N]: ").strip().lower()
-                approved = response in ("y", "yes")
-            except (KeyboardInterrupt, EOFError):
-                approved = False
-                
-            if not payload["reply"].is_set():
-                payload["result"][0] = approved
-                payload["reply"].set()
-                
-        threading.Thread(target=_handle, daemon=True).start()
+        print(f"\n\n--- Agent wants to run a command ---")
+        print(f"  Command:  {payload['command']}")
+        print(f"  Reason:   {payload['reason']}")
+        print(f"  (Type '/allow' or '/deny' to respond)")
+        print("> ", end="", flush=True)
+        _pending_approvals.append(payload)
 
     bus.subscribe(APPROVAL_REQUESTED, _repl_approve_handler)
 
@@ -145,10 +137,32 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         shutdown_fn()
         return None
 
+    def _allow_handler(_arg):
+        if not _pending_approvals:
+            return "No pending approvals."
+        payload = _pending_approvals.pop(0)
+        if payload["reply"].is_set():
+            return "Request already handled by another frontend."
+        payload["result"][0] = True
+        payload["reply"].set()
+        return "Command allowed."
+
+    def _deny_handler(_arg):
+        if not _pending_approvals:
+            return "No pending approvals."
+        payload = _pending_approvals.pop(0)
+        if payload["reply"].is_set():
+            return "Request already handled by another frontend."
+        payload["result"][0] = False
+        payload["reply"].set()
+        return "Command denied."
+
     for entry in [
         CommandEntry("chat",  "Enter interactive chat mode", handler=_chat_handler),
         CommandEntry("quit",  "Shutdown", handler=_quit_handler),
         CommandEntry("exit",  "Shutdown", handler=_quit_handler),
+        CommandEntry("allow", "Approve a pending command", handler=_allow_handler, hide_from_help=True),
+        CommandEntry("deny",  "Deny a pending command", handler=_deny_handler, hide_from_help=True),
     ]:
         registry.register(entry)
 

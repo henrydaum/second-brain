@@ -21,6 +21,7 @@ class CommandEntry:
     arg_hint: str = ""      # e.g. "<service_name>" — shown in autocomplete
     handler: Callable = None  # fn(arg: str) -> str | None
     arg_completions: Callable = None  # () -> list[str] — dynamic arg suggestions
+    hide_from_help: bool = False      # if True, omit from /help output
 
 
 class CommandRegistry:
@@ -54,6 +55,8 @@ def _build_help(registry: CommandRegistry) -> str:
     """Format the /help output from all registered commands."""
     lines = ["Commands:"]
     for cmd in registry.all_commands():
+        if getattr(cmd, "hide_from_help", False):
+            continue
         hint = f" {cmd.arg_hint}" if cmd.arg_hint else ""
         label = f"/{cmd.name}{hint}"
         lines.append(f"  {label:<22} {cmd.description}")
