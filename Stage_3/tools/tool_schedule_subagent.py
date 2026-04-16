@@ -94,6 +94,7 @@ class ScheduleSubagent(BaseTool):
     requires_services = ["timekeeper"]
     agent_enabled = True
     max_calls = 8
+    background_safe = False
 
     def run(self, context, **kwargs):
         action = (kwargs.get("action") or "").strip().lower()
@@ -113,11 +114,29 @@ class ScheduleSubagent(BaseTool):
             if current is None:
                 return ToolResult.failed(f"Unknown subagent job: '{job_name}'.")
             if action == "delete":
+                denied = _require_schedule_approval(
+                    context,
+                    action="delete",
+                    job_name=job_name,
+                    job=current,
+                    schedule_text=self._describe_candidate_job(svc, current),
+                )
+                if denied:
+                    return denied
                 removed = svc.remove_job(job_name)
                 if not removed:
                     return ToolResult.failed(f"Unknown subagent job: '{job_name}'.")
                 return ToolResult(llm_summary=f"Deleted subagent job '{job_name}'.")
             enabled = action == "enable"
+            denied = _require_schedule_approval(
+                context,
+                action=action,
+                job_name=job_name,
+                job=current,
+                schedule_text=self._describe_candidate_job(svc, current),
+            )
+            if denied:
+                return denied
             try:
                 job = svc.enable_job(job_name, enabled=enabled)
             except ValueError as e:
@@ -143,6 +162,16 @@ class ScheduleSubagent(BaseTool):
                 require_prompt=(action == "create"),
                 current_job=current_job,
             )
+            denied = _require_schedule_approval(
+                context,
+                action=action,
+                job_name=job_name,
+                job=job_def,
+                schedule_text=self._describe_candidate_job(svc, job_def),
+            )
+            if denied:
+                return denied
+            _ensure_timekeeper_autoload(context)
             try:
                 job = svc.create_job(job_name, job_def) if action == "create" else svc.update_job(job_name, job_def)
             except ValueError as e:
@@ -181,6 +210,17 @@ class ScheduleSubagent(BaseTool):
             if kwargs.get(key) is not None:
                 job_def[key] = bool(kwargs.get(key))
         return job_def
+
+    def _describe_candidate_job(self, svc, job: dict) -> str:
+        if job.get("one_time"):
+            return f"One-time at {job.get('run_at')}"
+        cron = str(job.get("cron") or "").strip()
+        if not cron:
+            return "No schedule configured."
+        try:
+            return svc.cron_to_text(cron)
+        except Exception:
+            return f"Cron: {cron}"
 
     def _list_jobs(self, svc) -> ToolResult:
         jobs = {
@@ -245,3 +285,44 @@ class ScheduleSubagent(BaseTool):
             },
             llm_summary="\n".join(lines),
         )
+
+
+def _require_schedule_approval(context, action: str, job_name: str, job: dict, schedule_text: str) -> ToolResult | None:
+    approve_fn = context.approve_command
+    if approve_fn is None:
+        return ToolResult.failed(
+            "Scheduling changes are not available — no approval handler is configured."
+        )
+
+    payload = deepcopy(job.get("payload") or {})
+    prompt = str(payload.get("prompt") or "").strip()
+    title = str(payload.get("title") or "").strip()
+    input_paths = payload.get("input_paths") or []
+    state = "enabled" if job.get("enabled", True) else "disabled"
+
+    lines = [
+        f"Action: {action}",
+        f"Job: {job_name}",
+        f"State: {state}",
+        f"Schedule: {schedule_text}",
+    ]
+    if title:
+        lines.append(f"Title: {title}")
+    if prompt:
+        lines.append(f"Prompt: {prompt}")
+    if input_paths:
+        lines.append("Inputs: " + ", ".join(str(p) for p in input_paths))
+    if job.get("description"):
+        lines.append(f"Description: {job['description']}")
+
+    try:
+        approved = approve_fn(f"Schedule subagent job: {action} {job_name}", "\n".join(lines))
+    except Exception as e:
+        return ToolResult.failed(f"Approval dialog error: {e}")
+
+    if not approved:
+        return ToolResult.failed(
+            "Scheduling action denied by user. STOP — do not retry this action. "
+            "Ask the user what they would like you to do instead."
+        )
+    return None
