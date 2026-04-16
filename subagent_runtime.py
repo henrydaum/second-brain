@@ -19,7 +19,11 @@ class SubagentPushRecord:
 
 class PushSubagentMessageTool(BaseTool):
     name = "push_subagent_message"
-    description = "Send a note from the background subagent to the user's chat."
+    description = (
+        "Send a message to the user's chat. This is the background subagent's "
+        "main way to directly communicate something the user should actually "
+        "see, such as a reminder, brief, alert, or finding."
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -86,5 +90,5 @@ class PushSubagentMessageTool(BaseTool):
                 "message": message,
                 "sent_at": sent_at,
             },
-            llm_summary="Sent the note to the user's chat.",
+            llm_summary="Sent a user-visible message to the chat.",
         )

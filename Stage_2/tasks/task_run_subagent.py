@@ -147,7 +147,13 @@ class RunSubagent(BaseTask):
             + "\n\n## Scheduled subagent\n"
             + "You are running unattended on a schedule.\n"
             + "You cannot rely on permission dialogs or human follow-up during this run.\n"
-            + "Use push_subagent_message when you want to proactively send a note to the user's chat.\n"
+            + "push_subagent_message is the only direct, user-visible way to communicate something to the user during this run.\n"
+            + "If you do not call push_subagent_message, this run is effectively invisible to the user except for logs and stored history.\n"
+            + "Use push_subagent_message for reminders, alerts, daily briefs, findings, check-ins, or anything the user should actually see in chat.\n"
+            + "If the user asked to be reminded, notified, briefed, or updated, you should usually call push_subagent_message before finishing.\n"
+            + "It is acceptable to stay silent only when the job is meant to run completely in the background and no user-facing update is needed.\n"
+            + "Do not use update_memory as a substitute for messaging the user. Memory is for durable facts, preferences, or long-term context that should shape future behavior across sessions.\n"
+            + "A one-off reminder, grocery nudge, daily brief, or status update belongs in push_subagent_message, not memory.\n"
             + "Finish with a concise final answer that can be stored and reviewed later."
         )
 
