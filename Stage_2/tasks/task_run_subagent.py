@@ -178,8 +178,8 @@ class RunSubagent(BaseTask):
             + "Use push_subagent_message for reminders, alerts, briefs, findings, check-ins, or anything the user should actually see in chat.\n"
             + "If the user asked to be reminded, notified, briefed, or updated, you should usually call push_subagent_message before finishing.\n"
             + "Stay silent only when the job is intentionally background-only and no user-facing update is needed.\n"
-            + "Do not use update_memory as a substitute for messaging the user. Memory is for durable preferences, standing instructions, and long-term context that should shape future behavior across sessions.\n"
-            + "A one-off reminder, brief, nudge, or status update belongs in push_subagent_message, not memory.\n"
+            + "push_subagent_message is how you reach the user during this run. update_memory stores durable lessons for future sessions but does not notify anyone — never use it in place of push_subagent_message when the user is expecting to hear from you.\n"
+            + "A one-off reminder, brief, nudge, or status update belongs in push_subagent_message.\n"
             + "Finish with a concise final answer that can be stored and reviewed later.\n"            
         )
 

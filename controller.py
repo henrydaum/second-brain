@@ -45,18 +45,21 @@ class Controller:
     # =================================================================
 
     _TITLE_MAX_LEN = 80
-    _TITLE_PROMPT = (
-        "Write a short, specific title for this conversation.\n"
+    _TITLE_SYSTEM_PROMPT = "You label conversations with short, concrete titles. You output only the title — never a sentence, greeting, or explanation."
+    _TITLE_USER_TEMPLATE = (
+        "<conversation>\n"
+        "{transcript}\n"
+        "</conversation>\n\n"
+        "Write a 2-6 word title summarizing what the conversation is about.\n"
         "Rules:\n"
-        "- Return only the title text\n"
-        "- No quotes, markdown, labels, or explanations\n"
-        "- Prefer 2 to 6 words\n"
-        "- Be concrete and distinct, not generic\n"
-        "- Use plain English\n"
-        "- Don't ask questions because the user can't respond to you. If something doesn't make sense, just do your best.\n"
-        "- Do not include markdown formatting or special characters\n\n"
-        "Bad title example: 'Based on my search results, a **standard Rolls-Royce Cullinan** starts at approx'\n"
-        "Good title example: 'Cullinan Price'"
+        "- Output only the title, no preamble, no quotes, no markdown\n"
+        "- Be concrete and specific, not generic\n"
+        "- Use title case\n\n"
+        "Examples:\n"
+        "Conversation about Rolls-Royce Cullinan pricing -> Cullinan Price\n"
+        "Conversation planning a Virginia holiday -> Virginia Holiday Getaway\n"
+        "Conversation debugging a SQLite migration -> SQLite Migration Bug\n\n"
+        "Title:"
     )
 
     def maybe_generate_conversation_title_async(self, conversation_id: int):
@@ -115,8 +118,8 @@ class Controller:
             return
 
         response = llm.invoke([
-            {"role": "system", "content": self._TITLE_PROMPT},
-            {"role": "user", "content": transcript},
+            {"role": "system", "content": self._TITLE_SYSTEM_PROMPT},
+            {"role": "user", "content": self._TITLE_USER_TEMPLATE.format(transcript=transcript)},
         ])
         if getattr(response, "error", None):
             return

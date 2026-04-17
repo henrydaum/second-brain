@@ -13,10 +13,13 @@ MAX_MEMORY_LENGTH = 1000
 class UpdateMemory(BaseTool):
     name = "update_memory"
     description = (
-        "Update persistent memory stored in memory.md using exact search-and-replace. "
-        "Use this for durable preferences, standing instructions, and lessons that "
-        "should shape future behavior across sessions. Do not use it for one-off "
-        "reminders or transient task state. If memory.md does not exist, it will be created."
+        "Update persistent memory in memory.md (survives across sessions) using exact search-and-replace. "
+        "Call this proactively whenever you learn something worth remembering for future conversations: "
+        "facts about the user, lessons about how a tool behaves, corrections the user gave you, "
+        "failure modes you want to avoid next time, or useful patterns you discovered. "
+        "Be rigorous — a short note now saves a repeated mistake later. "
+        "Skip only transient task state that won't matter after this conversation. "
+        "If memory.md does not exist, it will be created automatically."
     )
     parameters = {
         "type": "object",
