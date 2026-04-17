@@ -240,6 +240,8 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             messages = ctrl.db.get_conversation_messages(conv_id)
             if not messages:
                 return f"Conversation {conv_id} not found or is empty."
+            conversation = ctrl.db.get_conversation(conv_id)
+            conversation_title = ((conversation or {}).get("title") or "").strip() or "New conversation"
             agent = get_agent() if get_agent else None
             if agent:
                 agent_history = []
@@ -271,7 +273,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             # Update the conversation ref if a callback is available
             if _set_conversation_id:
                 _set_conversation_id(conv_id)
-            return f"(loaded conversation)"
+            return f"Loaded conversation: {conversation_title}"
 
         # /history — list recent conversations
         conversations = ctrl.db.list_conversations(limit=10)
