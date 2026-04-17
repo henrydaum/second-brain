@@ -54,6 +54,9 @@ class Controller:
         "- Be concrete and distinct, not generic\n"
         "- Use plain English\n"
         "- Don't ask questions because the user can't respond to you. If something doesn't make sense, just do your best.\n"
+        "- Do not include markdown formatting or special characters\n\n"
+        "Bad title example: 'Based on my search results, a **standard Rolls-Royce Cullinan** starts at approx'\n"
+        "Good title example: 'Cullinan Price'"
     )
 
     def maybe_generate_conversation_title_async(self, conversation_id: int):

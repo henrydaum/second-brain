@@ -117,9 +117,12 @@ class Agent:
                     try:
                         response = self._invoke_llm(messages, tools, image_paths=None)
                     except Exception as retry_error:
-                        if not is_context_limit_error(retry_error):
+                        if is_context_limit_error(retry_error):
+                            fallback = "Context limit reached even after compacting. Use /new to start fresh."
+                        elif isinstance(retry_error, LLMProviderError):
+                            fallback = f"LLM request failed after compaction: {retry_error}"
+                        else:
                             raise
-                        fallback = "Context limit reached even after compacting. Use /new to start fresh."
                         self.history.append({"role": "assistant", "content": fallback})
                         self._fire_on_message({"role": "assistant", "content": fallback})
                         return fallback
@@ -268,10 +271,14 @@ class Agent:
             self._fallback_trim()
             return
 
-        # Replace history with the summary as a single user/assistant pair
+        # Replace history with the summary, then a user prompt that directs the
+        # LLM to continue. Ending on role=user is critical: some providers treat
+        # a trailing assistant message as a prefill rather than a cue to respond,
+        # which caused mid-task subagent runs to stall after compaction.
         self.history = [
             {"role": "user", "content": f"[Conversation summary from earlier]\n{summary}"},
-            {"role": "assistant", "content": "Understood. I have the earlier context and can continue from here."},
+            {"role": "assistant", "content": "Understood — I have the earlier context."},
+            {"role": "user", "content": "Continue with the task. Call the next tool or provide the final answer."},
         ]
         self._fire_on_notice("(conversation compacted)")
         logger.info(f"Compacted conversation into {len(summary)} char summary")

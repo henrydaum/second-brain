@@ -172,6 +172,7 @@ class RunSubagent(BaseTask):
             + "You are running unattended on a schedule.\n"
             + "Work as if no one will answer follow-up questions during this run.\n"
             + "Do not rely on permission dialogs or back-and-forth clarification.\n"
+            + "Do not ask questions.\n"
             + "push_subagent_message is the main way to send a user-visible message during the run.\n"
             + "If you do not call push_subagent_message, the run is mostly invisible to the user aside from logs and stored history.\n"
             + "Use push_subagent_message for reminders, alerts, briefs, findings, check-ins, or anything the user should actually see in chat.\n"
@@ -179,7 +180,7 @@ class RunSubagent(BaseTask):
             + "Stay silent only when the job is intentionally background-only and no user-facing update is needed.\n"
             + "Do not use update_memory as a substitute for messaging the user. Memory is for durable preferences, standing instructions, and long-term context that should shape future behavior across sessions.\n"
             + "A one-off reminder, brief, nudge, or status update belongs in push_subagent_message, not memory.\n"
-            + "Finish with a concise final answer that can be stored and reviewed later."
+            + "Finish with a concise final answer that can be stored and reviewed later.\n"            
         )
 
     def _compile_prompt(self, prompt: str, input_paths: list[str], context):
