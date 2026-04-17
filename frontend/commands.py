@@ -143,13 +143,25 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
     # Build a unified setting map (core + plugin) at registration time.
     # Plugin settings are added lazily on first use since discovery may
     # not be complete at import time.
-    _core_map = {name: (title, desc) for title, name, desc, _, __ in _SD}
+    def _is_hidden(type_info):
+        return isinstance(type_info, dict) and type_info.get("hidden") is True
+
+    _core_map = {name: (title, desc) for title, name, desc, _, ti in _SD
+                 if not _is_hidden(ti)}
     _WATCHER_KEYS = {"sync_directories", "ignored_extensions", "ignored_folders", "skip_hidden_folders"}
 
     def _all_setting_map():
-        """Return a merged map of core + plugin settings (title, desc) by key."""
+        """Return a merged map of core + plugin settings (title, desc) by key.
+
+        Settings flagged ``"hidden": True`` in their type_info are excluded —
+        these keys (e.g. ``llm_profiles``, ``scheduled_jobs``) have dedicated
+        commands (``/model``, ``/schedule``) and should not appear in
+        ``/config`` or ``/configure``.
+        """
         merged = dict(_core_map)
-        for title, name, desc, _, __ in _get_ps():
+        for title, name, desc, _, ti in _get_ps():
+            if _is_hidden(ti):
+                continue
             if name not in merged:
                 merged[name] = (title, desc)
         return merged

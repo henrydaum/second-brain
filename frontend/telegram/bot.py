@@ -719,6 +719,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         all_settings = list(SETTINGS_DATA) + list(get_plugin_settings())
         buttons = []
         for title, key, _desc, _default, _type_info in all_settings:
+            # Skip settings with dedicated commands (/model, /schedule).
+            if isinstance(_type_info, dict) and _type_info.get("hidden") is True:
+                continue
             # Telegram callback_data max 64 bytes — use key directly
             if len(f"cfg:{key}") <= 64:
                 buttons.append([InlineKeyboardButton(title, callback_data=f"cfg:{key}")])
