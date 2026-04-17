@@ -20,9 +20,9 @@ from pathlib import Path
 from Stage_1.registry import get_modality, parse
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
-from frontend.shared.commands import CommandEntry, CommandRegistry, register_core_commands
-from frontend.shared.dispatch import route_input
-from frontend.shared.formatters import (
+from frontend.commands import CommandEntry, CommandRegistry, register_core_commands
+from frontend.dispatch import route_input
+from frontend.formatters import (
     format_services, format_tasks, format_stats, format_tools,
     format_tool_result,
 )

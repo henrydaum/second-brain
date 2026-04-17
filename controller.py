@@ -12,7 +12,7 @@ import logging
 import threading
 from pathlib import Path
 
-from frontend.shared.token_stripper import strip_model_tokens
+from frontend.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("Controller")
 

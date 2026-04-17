@@ -8,7 +8,7 @@ slash command; everything else is sent to the agent as a chat message.
 
 from dataclasses import dataclass, field
 
-from frontend.shared.token_stripper import strip_model_tokens
+from frontend.token_stripper import strip_model_tokens
 
 
 @dataclass

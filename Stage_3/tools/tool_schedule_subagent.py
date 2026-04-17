@@ -2,7 +2,7 @@ from copy import deepcopy
 
 import config_manager
 from Stage_3.BaseTool import BaseTool, ToolResult
-from subagent_runtime import SUBAGENT_RUN_CHANNEL
+from Stage_3.subagent_runtime import SUBAGENT_RUN_CHANNEL
 
 
 def _coerce_input_paths(value) -> list[str]:

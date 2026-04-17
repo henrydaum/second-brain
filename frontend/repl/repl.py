@@ -5,7 +5,7 @@ Simple command loop that maps user input to the shared CommandRegistry.
 Runs on its own daemon thread so it never blocks the dispatch loop.
 
 The ``/chat`` subcommand enters a natural-language chat mode that uses
-:func:`frontend.shared.dispatch.route_input` — the same channel used by
+:func:`frontend.dispatch.route_input` — the same channel used by
 Telegram and the API.
 Slash commands work inside chat mode too.
 """
@@ -16,8 +16,8 @@ from pathlib import Path
 
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
-from frontend.shared.commands import CommandEntry, CommandRegistry, register_core_commands
-from frontend.shared.dispatch import route_input
+from frontend.commands import CommandEntry, CommandRegistry, register_core_commands
+from frontend.dispatch import route_input
 from event_bus import bus
 from event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED
 

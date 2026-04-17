@@ -8,8 +8,8 @@ from Stage_2.BaseTask import BaseTask, TaskResult
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
 from Stage_3.tool_registry import ToolRegistry
-from frontend.shared.token_stripper import strip_model_tokens
-from subagent_runtime import (
+from frontend.token_stripper import strip_model_tokens
+from Stage_3.subagent_runtime import (
     PushSubagentMessageTool,
     SubagentPushRecord,
     SUBAGENT_RUN_CHANNEL,
