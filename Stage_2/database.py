@@ -716,6 +716,14 @@ class Database:
 				(title, conversation_id))
 			self.conn.commit()
 
+	def get_conversation(self, conversation_id):
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT * FROM conversations WHERE id = ?",
+				(conversation_id,))
+			row = cur.fetchone()
+			return dict(row) if row else None
+
 	def list_conversations(self, limit=50):
 		with self.lock:
 			cur = self.conn.execute(

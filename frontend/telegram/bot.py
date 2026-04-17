@@ -159,6 +159,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             tool_name=msg.get("name"),
         )
 
+        if role == "assistant" and not msg.get("tool_calls"):
+            ctrl.maybe_generate_conversation_title_async(conversation_ref["id"])
+
     # FIFO of pending status message_ids — pushed on tool_start, popped on tool_result.
     # Agent executes tools serially, so this stays ordered.
     _pending_status_msgs: list[int] = []

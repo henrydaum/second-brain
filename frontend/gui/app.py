@@ -186,6 +186,9 @@ def run_gui(ctrl, shutdown_fn, shutdown_event: threading.Event,
             ctrl.db.save_message(conv_id, role, content,
                                  tool_call_id=tool_call_id, tool_name=tool_name)
 
+            if role == "assistant" and not msg.get("tool_calls"):
+                ctrl.maybe_generate_conversation_title_async(conv_id)
+
         def _start_new_conversation():
             """Reset the UI for a fresh conversation. DB row is created lazily
             on the first message so that empty conversations never pile up."""

@@ -60,6 +60,9 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
             tool_name=msg.get("name"),
         )
 
+        if role == "assistant" and not msg.get("tool_calls"):
+            ctrl.maybe_generate_conversation_title_async(conversation_ref["id"])
+
     # --- Console-based approval (bus subscriber). GUI subscriber wins if present. ---
     _pending_approvals = []
     

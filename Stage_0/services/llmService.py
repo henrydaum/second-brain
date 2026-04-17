@@ -3,10 +3,88 @@ from dataclasses import dataclass, field
 import os
 import logging
 import time
+import json
 
 from Stage_0.BaseService import BaseService
 
 logger = logging.getLogger("LLMClass")
+
+
+_CONTEXT_LIMIT_HINTS = (
+    "context window",
+    "context length",
+    "context_length",
+    "maximum context",
+    "max context",
+    "too many tokens",
+    "too long",
+    "max_tokens",
+    "prompt is too long",
+    "prompt tokens",
+    "exceeds limit",
+    "exceeds limits",
+    "exceeded limit",
+    "token limit",
+    "request too large",
+)
+
+_CONTEXT_RELATED_TERMS = ("context", "token", "prompt", "input")
+_LIMIT_RELATED_TERMS = ("limit", "limits", "length", "maximum", "max", "too long", "too many", "exceed", "exceeds", "exceeded")
+
+
+def _stringify_error_detail(value) -> str:
+    """Best-effort conversion of SDK error payloads into searchable text."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, default=str)
+    except Exception:
+        return str(value)
+
+
+def extract_llm_error_text(error) -> str:
+    """Flatten provider exceptions and response payloads into one text blob."""
+    if error is None:
+        return ""
+
+    parts = [str(error)]
+    for attr in ("message", "body", "response", "error", "errors"):
+        value = getattr(error, attr, None)
+        text = _stringify_error_detail(value)
+        if text:
+            parts.append(text)
+
+    return " | ".join(part for part in parts if part)
+
+
+def is_context_limit_error(error) -> bool:
+    """Heuristic classifier for provider-specific context overflow failures."""
+    text = extract_llm_error_text(error).lower()
+    if not text:
+        return False
+
+    if any(hint in text for hint in _CONTEXT_LIMIT_HINTS):
+        return True
+
+    has_context_signal = any(term in text for term in _CONTEXT_RELATED_TERMS)
+    has_limit_signal = any(term in text for term in _LIMIT_RELATED_TERMS)
+    if has_context_signal and has_limit_signal:
+        return True
+
+    if "invalid params" in text and "window" in text and "limit" in text:
+        return True
+
+    return False
+
+
+class LLMProviderError(RuntimeError):
+    """Structured provider error surfaced from a model backend."""
+
+    def __init__(self, message: str, code: str = "provider_error"):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -20,10 +98,22 @@ class LLMResponse:
     tool_calls: list[dict] = field(default_factory=list)
     # Each tool_call dict: {"id": str, "name": str, "arguments": str (JSON)}
     prompt_tokens: int | None = None   # tokens used by the prompt in this call
+    error: str | None = None
+    error_code: str | None = None
 
     @property
     def has_tool_calls(self) -> bool:
         return len(self.tool_calls) > 0
+
+    @property
+    def is_error(self) -> bool:
+        return bool(self.error)
+
+    @property
+    def is_context_limit_error(self) -> bool:
+        if self.error_code == "context_limit":
+            return True
+        return is_context_limit_error(self.error or self.content)
 
 
 class BaseLLM(BaseService):
@@ -252,7 +342,11 @@ class LMStudioLLM(BaseLLM):
     def invoke(self, messages, image_paths=None, **kwargs):
         if not self.loaded or not self.model:
             logger.error("Model not loaded. Call load() first.")
-            return LLMResponse(content="Error: model not loaded")
+            return LLMResponse(
+                content="Error: model not loaded",
+                error="model not loaded",
+                error_code="not_loaded",
+            )
 
         temp_files = []
         try:
@@ -272,8 +366,15 @@ class LMStudioLLM(BaseLLM):
             logger.debug(f"LM Studio responded in {time.time() - t0:.2f}s")
             return LLMResponse(content=response.content)
         except Exception as e:
-            logger.error(f"LM Studio Invoke Error: {e}")
-            return LLMResponse(content=f"Error: {e}")
+            message = extract_llm_error_text(e)
+            logger.error(f"LM Studio Invoke Error: {message}")
+            if is_context_limit_error(e):
+                raise LLMProviderError(message, code="context_limit") from e
+            return LLMResponse(
+                content=f"Error: {message}",
+                error=message,
+                error_code="provider_error",
+            )
         finally:
             if temp_files:
                 time.sleep(0.1)
@@ -408,7 +509,11 @@ class OpenAILLM(BaseLLM):
     def invoke(self, messages, image_paths=None, **kwargs):
         if not self.loaded or not self.client:
             logger.error("Model not loaded. Call load() first.")
-            return LLMResponse(content="Error: model not loaded")
+            return LLMResponse(
+                content="Error: model not loaded",
+                error="model not loaded",
+                error_code="not_loaded",
+            )
 
         try:
             messages = self._inject_images(messages, image_paths)
@@ -446,8 +551,15 @@ class OpenAILLM(BaseLLM):
             return LLMResponse(content=choice.message.content or "", prompt_tokens=prompt_tok)
 
         except Exception as e:
-            logger.error(f"OpenAI Invoke Error: {e}")
-            return LLMResponse(content=f"Error: {e}")
+            message = extract_llm_error_text(e)
+            logger.error(f"OpenAI Invoke Error: {message}")
+            if is_context_limit_error(e):
+                raise LLMProviderError(message, code="context_limit") from e
+            return LLMResponse(
+                content=f"Error: {message}",
+                error=message,
+                error_code="provider_error",
+            )
 
     def stream(self, messages, image_paths=None, **kwargs):
         if not self.loaded or not self.client:
@@ -639,7 +751,11 @@ class LLMRouter(BaseLLM):
 
     def invoke(self, messages, image_paths=None, **kwargs):
         if not self.active or not self.active.loaded:
-            return LLMResponse(content="Error: no active LLM profile loaded")
+            return LLMResponse(
+                content="Error: no active LLM profile loaded",
+                error="no active LLM profile loaded",
+                error_code="not_loaded",
+            )
         return self.active.invoke(messages, image_paths, **kwargs)
 
     def stream(self, messages, image_paths=None, **kwargs):
@@ -649,7 +765,11 @@ class LLMRouter(BaseLLM):
 
     def chat_with_tools(self, messages, tools=None, **kwargs):
         if not self.active or not self.active.loaded:
-            return LLMResponse(content="Error: no active LLM profile loaded")
+            return LLMResponse(
+                content="Error: no active LLM profile loaded",
+                error="no active LLM profile loaded",
+                error_code="not_loaded",
+            )
         return self.active.chat_with_tools(messages, tools, **kwargs)
 
 

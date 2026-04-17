@@ -22,6 +22,7 @@ import logging
 import time
 from pathlib import Path
 
+from Stage_0.services.llmService import LLMProviderError, is_context_limit_error
 from Stage_1.registry import get_modality
 from frontend.shared.token_stripper import strip_model_tokens
 
@@ -100,22 +101,28 @@ class Agent:
             )
             t0 = time.time()
             try:
-                response = self.llm.chat_with_tools(messages, tools, image_paths=compiled_image_paths or None)
+                response = self._invoke_llm(messages, tools, image_paths=compiled_image_paths or None)
             except Exception as e:
-                error_str = str(e).lower()
-                if any(k in error_str for k in ("context", "token", "length", "maximum", "too long", "max_tokens")):
+                if is_context_limit_error(e):
                     logger.warning(f"Context limit hit, compacting: {e}")
                     self._compact(prompt)
                     messages = [{"role": "system", "content": prompt}]
                     messages.extend(self.history)
                     compiled_image_paths.clear()
                     try:
-                        response = self.llm.chat_with_tools(messages, tools, image_paths=None)
-                    except Exception:
+                        response = self._invoke_llm(messages, tools, image_paths=None)
+                    except Exception as retry_error:
+                        if not is_context_limit_error(retry_error):
+                            raise
                         fallback = "Context limit reached even after compacting. Use /new to start fresh."
                         self.history.append({"role": "assistant", "content": fallback})
                         self._fire_on_message({"role": "assistant", "content": fallback})
                         return fallback
+                elif isinstance(e, LLMProviderError):
+                    fallback = f"LLM request failed: {e}"
+                    self.history.append({"role": "assistant", "content": fallback})
+                    self._fire_on_message({"role": "assistant", "content": fallback})
+                    return fallback
                 else:
                     raise
             logger.debug(f"LLM responded in {time.time() - t0:.2f}s")
@@ -244,11 +251,16 @@ class Agent:
         ]
 
         try:
-            response = self.llm.chat_with_tools(summary_messages, tools=None)
+            response = self._invoke_llm(summary_messages, tools=None)
             summary = response.content.strip()
         except Exception as e:
             logger.error(f"Compact summarization failed: {e}")
             # Fallback: drop all but the last user+assistant exchange
+            self._fallback_trim()
+            return
+
+        if not summary:
+            logger.error("Compact summarization returned an empty summary.")
             self._fallback_trim()
             return
 
@@ -277,6 +289,16 @@ class Agent:
                 self.on_message(msg)
             except Exception as e:
                 logger.debug(f"on_message callback error: {e}")
+
+    def _invoke_llm(self, messages: list[dict], tools=None, image_paths: list[str] = None):
+        """Normalize LLM backends so provider failures are not mistaken for replies."""
+        response = self.llm.chat_with_tools(messages, tools, image_paths=image_paths)
+        if getattr(response, "is_error", False):
+            raise LLMProviderError(
+                response.error or response.content or "Unknown LLM provider error.",
+                code=response.error_code or "provider_error",
+            )
+        return response
 
     def _execute_tool_call(self, tool_call: dict) -> tuple[str, list[str]]:
         """Execute a single tool call via the registry, return (result_string, image_paths)."""

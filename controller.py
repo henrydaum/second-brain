@@ -9,6 +9,7 @@ The caller decides how to display them.
 """
 
 import logging
+import threading
 from pathlib import Path
 
 logger = logging.getLogger("Controller")
@@ -21,6 +22,8 @@ class Controller:
         self.services = services
         self.config = config
         self.tool_registry = tool_registry
+        self._title_generation_lock = threading.Lock()
+        self._pending_title_generations: set[int] = set()
 
     # =================================================================
     # SERVICES
@@ -33,6 +36,164 @@ class Controller:
              "model_name": getattr(svc, 'model_name', '')}
             for name, svc in self.services.items()
         ]
+
+    # =================================================================
+    # CONVERSATION TITLES
+    # =================================================================
+
+    _TITLE_MAX_LEN = 80
+    _TITLE_PROMPT = (
+        "Write a short, memorable, specific title for this conversation.\n"
+        "Rules:\n"
+        "- Return only the title text\n"
+        "- No quotes, markdown, labels, or explanations\n"
+        "- Prefer 2 to 6 words\n"
+        "- Be concrete and distinct, not generic\n"
+        "- Use plain English\n"
+    )
+
+    def maybe_generate_conversation_title_async(self, conversation_id: int):
+        """Best-effort async title generation for conversations.
+
+        Runs only when the conversation still has an auto-generated fallback
+        title, so manual or already-upgraded titles are left untouched.
+        """
+        if not conversation_id:
+            return
+
+        with self._title_generation_lock:
+            if conversation_id in self._pending_title_generations:
+                return
+            self._pending_title_generations.add(conversation_id)
+
+        thread = threading.Thread(
+            target=self._generate_conversation_title_worker,
+            args=(conversation_id,),
+            daemon=True,
+            name=f"TitleGen-{conversation_id}",
+        )
+        thread.start()
+
+    def _generate_conversation_title_worker(self, conversation_id: int):
+        try:
+            self._generate_conversation_title(conversation_id)
+        except Exception as e:
+            logger.debug(f"Conversation title generation failed for {conversation_id}: {e}")
+        finally:
+            with self._title_generation_lock:
+                self._pending_title_generations.discard(conversation_id)
+
+    def _generate_conversation_title(self, conversation_id: int):
+        conversation = self.db.get_conversation(conversation_id)
+        if not conversation:
+            return
+
+        messages = self.db.get_conversation_messages(conversation_id)
+        if len(messages) < 2:
+            return
+
+        current_title = self._normalize_title(conversation.get("title"))
+        fallback_title = self._fallback_conversation_title(messages)
+        if not self._should_replace_conversation_title(current_title, fallback_title):
+            return
+
+        llm = self.services.get("llm")
+        if llm is None or not getattr(llm, "loaded", False):
+            return
+        if getattr(llm, "active", None) is None and hasattr(llm, "active"):
+            return
+
+        transcript = self._title_generation_transcript(messages)
+        if not transcript:
+            return
+
+        response = llm.invoke([
+            {"role": "system", "content": self._TITLE_PROMPT},
+            {"role": "user", "content": transcript},
+        ])
+        if getattr(response, "error", None):
+            return
+
+        title = self._sanitize_generated_title(getattr(response, "content", ""))
+        if not title:
+            return
+
+        latest = self.db.get_conversation(conversation_id)
+        if not latest:
+            return
+        latest_title = self._normalize_title(latest.get("title"))
+        if not self._should_replace_conversation_title(latest_title, fallback_title):
+            return
+
+        self.db.update_conversation_title(conversation_id, title)
+        logger.info(f"Updated conversation {conversation_id} title to '{title}'")
+
+    def _title_generation_transcript(self, messages: list[dict]) -> str:
+        lines = []
+        for msg in messages[:6]:
+            role = (msg.get("role") or "").upper()
+            if role == "TOOL":
+                continue
+
+            content = msg.get("content") or ""
+            if role == "ASSISTANT":
+                try:
+                    import json
+                    parsed = json.loads(content)
+                    if isinstance(parsed, dict) and "tool_calls" in parsed:
+                        content = parsed.get("content") or ""
+                except Exception:
+                    pass
+
+            content = " ".join(content.split()).strip()
+            if not content:
+                continue
+            if len(content) > 300:
+                content = content[:300].rstrip() + "..."
+            lines.append(f"{role}: {content}")
+
+        return "\n".join(lines)
+
+    def _fallback_conversation_title(self, messages: list[dict]) -> str:
+        for msg in messages:
+            if (msg.get("role") or "") == "user":
+                return self._truncate_title(msg.get("content") or "")
+        return "New conversation"
+
+    def _should_replace_conversation_title(self, current_title: str, fallback_title: str) -> bool:
+        if not current_title:
+            return True
+        lowered = current_title.casefold()
+        if lowered in {"new conversation", "conversation", "new chat", "chat"}:
+            return True
+        if current_title == fallback_title:
+            return True
+        return False
+
+    def _truncate_title(self, text: str) -> str:
+        text = " ".join((text or "").replace("\n", " ").split()).strip()
+        if not text:
+            return "New conversation"
+        return text[:self._TITLE_MAX_LEN]
+
+    def _normalize_title(self, text: str | None) -> str:
+        return " ".join((text or "").replace("\n", " ").split()).strip()
+
+    def _sanitize_generated_title(self, text: str) -> str:
+        title = (text or "").strip()
+        if not title:
+            return ""
+
+        title = title.splitlines()[0].strip()
+        title = title.strip().strip("\"'`*#-: ")
+        title = " ".join(title.split())
+        title = title[:self._TITLE_MAX_LEN].strip()
+
+        generic = {"new conversation", "conversation", "chat", "untitled", "title"}
+        if not title or title.casefold() in generic:
+            return ""
+
+        return title
 
     def load_service(self, name: str) -> str:
         """Load a service and re-check blocked tasks."""
