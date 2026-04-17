@@ -8,6 +8,31 @@ Compact mode is used by the Telegram frontend for mobile-friendly output.
 import json
 
 
+# ── Canonical status labels ─────────────────────────────────────────
+# Use these everywhere so wording stays consistent across frontends.
+
+def status_badge(loaded: bool) -> str:
+    return "Loaded" if loaded else "Unloaded"
+
+
+def enabled_badge(enabled: bool) -> str:
+    return "Enabled" if enabled else "Disabled"
+
+
+def paused_suffix(paused: bool) -> str:
+    return "  (paused)" if paused else ""
+
+
+TASK_STATE_LABELS = {
+    "PENDING": "Pending", "PROCESSING": "Running",
+    "DONE": "Done", "FAILED": "Failed",
+}
+TASK_STATE_ABBR = {
+    "PENDING": "P", "PROCESSING": "R",
+    "DONE": "D", "FAILED": "F",
+}
+
+
 def truncate_cell(text: str, max_len: int = 60) -> str:
     """Truncate *text* to *max_len*, appending '...' if clipped."""
     if len(text) <= max_len:
@@ -52,18 +77,30 @@ def format_services(services: list[dict], compact: bool = False) -> str:
     """Format the service list showing name, loaded/unloaded status, and model."""
     if not services:
         return "No services registered."
+
     if compact:
         lines = []
         for s in services:
-            status = "LOADED" if s["loaded"] else "unloaded"
             model = f" ({s['model_name']})" if s["model_name"] else ""
-            lines.append(f"{s['name']}: {status}{model}")
+            lines.append(f"{s['name']}: {status_badge(s['loaded'])}{model}")
         return "Services:\n" + "\n".join(lines)
-    lines = []
-    for s in services:
-        status = "LOADED" if s["loaded"] else "unloaded"
-        lines.append(f"  {s['name']:<20} {status:<10} {s['model_name']}")
-    return "Services:\n" + "\n".join(lines)
+
+    loaded = [s for s in services if s["loaded"]]
+    unloaded = [s for s in services if not s["loaded"]]
+    lines = ["Services:"]
+    if loaded:
+        lines.append("  Loaded:")
+        for s in loaded:
+            model = s['model_name'] or ""
+            lines.append(f"    {s['name']:<20} {model}")
+    if unloaded:
+        if loaded:
+            lines.append("")
+        lines.append("  Unloaded:")
+        for s in unloaded:
+            model = s['model_name'] or ""
+            lines.append(f"    {s['name']:<20} {model}")
+    return "\n".join(lines)
 
 
 def _task_sections(tasks) -> list[tuple[str, list[dict]]]:
@@ -102,11 +139,11 @@ def _task_sections(tasks) -> list[tuple[str, list[dict]]]:
     ]
 
     sections = [
-        ("Path-Driven Tasks", path_tasks),
-        ("Event-Driven Tasks", event_tasks),
+        ("Path-driven tasks", path_tasks),
+        ("Event-driven tasks", event_tasks),
     ]
     if other_tasks:
-        sections.append(("Other Tasks", other_tasks))
+        sections.append(("Other tasks", other_tasks))
     return sections
 
 
@@ -137,11 +174,12 @@ def format_tasks(tasks: list[dict], compact: bool = False) -> str:
                 continue
             for task in section:
                 counts = task["counts"]
-                paused = " [PAUSED]" if task["paused"] else ""
-                lines.append(f"{task['name']}{paused}")
+                lines.append(f"{task['name']}{paused_suffix(task['paused'])}")
                 lines.append(
-                    f"  P:{counts['PENDING']} R:{counts['PROCESSING']} "
-                    f"D:{counts['DONE']} F:{counts['FAILED']}"
+                    f"  {TASK_STATE_ABBR['PENDING']}:{counts['PENDING']} "
+                    f"{TASK_STATE_ABBR['PROCESSING']}:{counts['PROCESSING']} "
+                    f"{TASK_STATE_ABBR['DONE']}:{counts['DONE']} "
+                    f"{TASK_STATE_ABBR['FAILED']}:{counts['FAILED']}"
                 )
                 for detail in _task_detail_lines(task):
                     lines.append(f"  {detail}")
@@ -155,11 +193,13 @@ def format_tasks(tasks: list[dict], compact: bool = False) -> str:
             continue
         for task in section:
             counts = task["counts"]
-            paused = " [PAUSED]" if task["paused"] else ""
             lines.append(
                 f"  {task['name']:<22} "
-                f"P:{counts['PENDING']:<8} R:{counts['PROCESSING']:<8} "
-                f"D:{counts['DONE']:<8} F:{counts['FAILED']:<8}{paused}"
+                f"{TASK_STATE_LABELS['PENDING']}: {counts['PENDING']:<6} "
+                f"{TASK_STATE_LABELS['PROCESSING']}: {counts['PROCESSING']:<6} "
+                f"{TASK_STATE_LABELS['DONE']}: {counts['DONE']:<6} "
+                f"{TASK_STATE_LABELS['FAILED']}: {counts['FAILED']:<6}"
+                f"{paused_suffix(task['paused'])}"
             )
             for detail in _task_detail_lines(task):
                 lines.append(f"    {detail}")
@@ -173,7 +213,7 @@ def format_tools(tools: list[dict], compact: bool = False) -> str:
     if compact:
         lines = []
         for t in tools:
-            status = " [DISABLED]" if not t["agent_enabled"] else ""
+            status = "" if t["agent_enabled"] else f"  ({enabled_badge(False).lower()})"
             desc = t["description"]
             if len(desc) > 100:
                 desc = desc[:97] + "..."
@@ -181,7 +221,7 @@ def format_tools(tools: list[dict], compact: bool = False) -> str:
         return "Tools:\n" + "\n".join(lines)
     lines = []
     for t in tools:
-        status = "" if t["agent_enabled"] else " [DISABLED]"
+        status = "" if t["agent_enabled"] else f"  ({enabled_badge(False).lower()})"
         svc = f"  needs: {t['requires_services']}" if t["requires_services"] else ""
         lines.append(f"  {t['name']}{status}{svc}")
         desc = t["description"]
@@ -213,7 +253,7 @@ def format_locations(data: dict) -> str:
     root_tree = data.get("root_tree", [])
     data_tree = data.get("data_tree", [])
 
-    lines.append(f"ROOT: {root_path}")
+    lines.append(f"Project root: {root_path}")
     lines.append("")
 
     if root_tree:
@@ -223,7 +263,7 @@ def format_locations(data: dict) -> str:
         lines.append("  (empty)")
 
     lines.append("")
-    lines.append(f"DATA_DIR: {data_path}")
+    lines.append(f"Data directory: {data_path}")
     lines.append("")
 
     if data_tree:
@@ -232,4 +272,46 @@ def format_locations(data: dict) -> str:
     else:
         lines.append("  (empty)")
 
+    return "\n".join(lines)
+
+
+# ── Scheduled jobs ───────────────────────────────────────────────────
+
+def _format_schedule_summary(job: dict, timekeeper=None) -> str:
+    """Return a human-readable schedule description for a job."""
+    if job.get("one_time"):
+        run_at = job.get("run_at") or "?"
+        return f"once at {run_at}"
+    cron = job.get("cron") or ""
+    if timekeeper is not None:
+        try:
+            return timekeeper.cron_to_text(cron).lower()
+        except Exception:
+            pass
+    return cron
+
+
+def format_scheduled_jobs(jobs: dict, timekeeper=None) -> str:
+    """Format the scheduled-jobs dict as an aligned status list."""
+    if not jobs:
+        return "No scheduled jobs. Use /schedule create to add one."
+
+    rows = []
+    for name, job in sorted(jobs.items()):
+        enabled = job.get("enabled", True)
+        schedule = _format_schedule_summary(job, timekeeper)
+        title = (job.get("payload", {}).get("title")
+                 or job.get("description") or "").strip()
+        rows.append((name, enabled_badge(enabled), schedule, title))
+
+    name_w = max((len(r[0]) for r in rows), default=4)
+    badge_w = max((len(r[1]) for r in rows), default=8)
+    sched_w = max((len(r[2]) for r in rows), default=16)
+
+    lines = ["Scheduled jobs:"]
+    for name, badge, schedule, title in rows:
+        suffix = f'  "{title}"' if title else ""
+        lines.append(
+            f"  {name:<{name_w}}  {badge:<{badge_w}}  {schedule:<{sched_w}}{suffix}"
+        )
     return "\n".join(lines)

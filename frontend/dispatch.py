@@ -57,7 +57,7 @@ def route_input(text, registry, agent, image_paths=None):
     if agent is None:
         return InputResult(
             "error",
-            "LLM is not loaded. Use /load llm to load it, "
+            "LLM service is not loaded. Run /load llm to load it, "
             "or /services to check status.",
         )
 

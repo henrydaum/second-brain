@@ -318,22 +318,29 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         return "New conversation started."
 
     for entry in [
-        CommandEntry("load", "Load a service", "<service>",
+        CommandEntry("load", "Load a service", "<service_name>",
                      handler=_load_handler,
-                     arg_completions=lambda: sorted(services.keys())),
-        CommandEntry("unload", "Unload a service", "<service>",
+                     arg_completions=lambda: sorted(services.keys()),
+                     category="Services & Tools"),
+        CommandEntry("unload", "Unload a service", "<service_name>",
                      handler=_unload_handler,
-                     arg_completions=lambda: sorted(services.keys())),
-        CommandEntry("new", "Start a new conversation", handler=_new_handler),
+                     arg_completions=lambda: sorted(services.keys()),
+                     category="Services & Tools"),
+        CommandEntry("new", "Start a new conversation", handler=_new_handler,
+                     category="Conversation"),
         CommandEntry("start", "Welcome message",
-                     handler=lambda _: "Second Brain is online. Send a message to chat, or /help for commands."),
-        # Compact formatter overrides
+                     handler=lambda _: "Second Brain is online. Send a message to chat, or /help for commands.",
+                     hide_from_help=True),
+        # Compact formatter overrides (used when called with an arg or via pickers).
         CommandEntry("services", "List services and status",
-                     handler=lambda _: format_services(ctrl.list_services(), compact=True)),
+                     handler=lambda _: format_services(ctrl.list_services(), compact=True),
+                     category="Services & Tools"),
         CommandEntry("tasks", "List path-driven and event-driven tasks",
-                     handler=lambda _: format_tasks(ctrl.list_tasks(), compact=True)),
+                     handler=lambda _: format_tasks(ctrl.list_tasks(), compact=True),
+                     category="Tasks"),
         CommandEntry("tools", "List registered tools",
-                     handler=lambda _: format_tools(ctrl.list_tools(), compact=True)),
+                     handler=lambda _: format_tools(ctrl.list_tools(), compact=True),
+                     category="Services & Tools"),
     ]:
         registry.register(entry)
 
@@ -848,6 +855,404 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         if output:
             await _send_long_message(chat_id, output)
 
+    # ── Picker menus for list commands ───────────────────────────────
+    #
+    # Pattern: /<cmd> with no arg → compact text status + picker buttons.
+    # Tapping a picker row opens an action menu; tapping an action dispatches
+    # the underlying registry command and refreshes the picker.
+    #
+    # Callback prefix scheme:
+    #   svc:pick:<name>      — open service action menu
+    #   svc:load:<name>      — load, then refresh picker
+    #   svc:unload:<name>    — unload, then refresh picker
+    #   svc:back             — return to picker
+    #   tsk:pick:<name>      — open task action menu
+    #   tsk:{pause|unpause|reset|retry|trigger}:<name>
+    #   tsk:back
+    #   tool:pick:<name>     — open tool action menu
+    #   tool:{enable|disable|call}:<name>
+    #   tool:back
+    #   loc:<filter>         — /locations tools|tasks|services|all
+    #   sch:pick:<name>      — open job action menu
+    #   sch:{run|enable|disable|show|delete|confirmdel}:<name>
+    #   sch:new              — start job create form
+    #   sch:back             — return to picker
+
+    def _services_picker_keyboard():
+        """Build an inline picker for /services: one row per service."""
+        buttons = []
+        for s in ctrl.list_services():
+            marker = "✓" if s["loaded"] else "·"
+            buttons.append([InlineKeyboardButton(
+                f"{marker} {s['name']}", callback_data=f"svc:pick:{s['name']}")])
+        return InlineKeyboardMarkup(buttons) if buttons else None
+
+    async def _show_services_picker(chat_id: int, header: str | None = None):
+        text = header or format_services(ctrl.list_services(), compact=True)
+        kb = _services_picker_keyboard()
+        if kb is None:
+            await _app.bot.send_message(chat_id, "No services registered.")
+            return
+        await _app.bot.send_message(chat_id, text, reply_markup=kb)
+
+    async def _show_service_actions(chat_id: int, name: str):
+        services_list = {s["name"]: s for s in ctrl.list_services()}
+        svc = services_list.get(name)
+        if not svc:
+            await _app.bot.send_message(
+                chat_id, f"Unknown service: '{name}'. Run /services to see all services.")
+            return
+        status = "Loaded" if svc["loaded"] else "Unloaded"
+        model = f"  ({svc['model_name']})" if svc["model_name"] else ""
+        text = f"<b>{html.escape(name)}</b>{html.escape(model)}\nStatus: {status}"
+        action_button = (InlineKeyboardButton("Unload", callback_data=f"svc:unload:{name}")
+                         if svc["loaded"]
+                         else InlineKeyboardButton("Load", callback_data=f"svc:load:{name}"))
+        kb = InlineKeyboardMarkup([
+            [action_button],
+            [InlineKeyboardButton("◀ Back", callback_data="svc:back")],
+        ])
+        await _app.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
+
+    def _tasks_picker_keyboard():
+        """Build an inline picker for /tasks: one row per task with state abbr."""
+        buttons = []
+        for task in ctrl.list_tasks():
+            counts = task.get("counts", {})
+            running = counts.get("PROCESSING", 0)
+            failed = counts.get("FAILED", 0)
+            if failed:
+                marker = "✗"
+            elif running:
+                marker = "▶"
+            elif task.get("paused"):
+                marker = "⏸"
+            else:
+                marker = "·"
+            buttons.append([InlineKeyboardButton(
+                f"{marker} {task['name']}", callback_data=f"tsk:pick:{task['name']}")])
+        return InlineKeyboardMarkup(buttons) if buttons else None
+
+    async def _show_tasks_picker(chat_id: int):
+        tasks = ctrl.list_tasks()
+        if not tasks:
+            await _app.bot.send_message(chat_id, "No tasks registered.")
+            return
+        running = sum(t["counts"].get("PROCESSING", 0) for t in tasks)
+        failed = sum(t["counts"].get("FAILED", 0) for t in tasks)
+        summary = f"Tasks — {running} running, {failed} failed"
+        kb = _tasks_picker_keyboard()
+        await _app.bot.send_message(chat_id, summary, reply_markup=kb)
+
+    async def _show_task_actions(chat_id: int, name: str):
+        task = next((t for t in ctrl.list_tasks() if t["name"] == name), None)
+        if task is None:
+            await _app.bot.send_message(
+                chat_id, f"Unknown task: '{name}'. Run /tasks to see all tasks.")
+            return
+        counts = task["counts"]
+        trigger = task.get("trigger", "path")
+        paused = task.get("paused", False)
+        lines = [
+            f"<b>{html.escape(name)}</b>",
+            f"Trigger: {trigger}" + ("  (paused)" if paused else ""),
+            (f"Pending: {counts['PENDING']}  "
+             f"Running: {counts['PROCESSING']}  "
+             f"Done: {counts['DONE']}  "
+             f"Failed: {counts['FAILED']}"),
+        ]
+        text = "\n".join(lines)
+
+        pause_btn = (InlineKeyboardButton("Unpause", callback_data=f"tsk:unpause:{name}")
+                     if paused
+                     else InlineKeyboardButton("Pause", callback_data=f"tsk:pause:{name}"))
+        rows = [[pause_btn]]
+        if trigger == "path":
+            rows.append([
+                InlineKeyboardButton("Reset", callback_data=f"tsk:reset:{name}"),
+                InlineKeyboardButton("Retry failed", callback_data=f"tsk:retry:{name}"),
+            ])
+        elif trigger == "event":
+            rows.append([InlineKeyboardButton(
+                "Trigger…", callback_data=f"tsk:trigger:{name}")])
+        rows.append([InlineKeyboardButton("◀ Back", callback_data="tsk:back")])
+
+        await _app.bot.send_message(
+            chat_id, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+
+    def _tools_picker_keyboard():
+        """Build an inline picker for /tools: one row per tool."""
+        buttons = []
+        for t in ctrl.list_tools():
+            marker = "✓" if t["agent_enabled"] else "·"
+            buttons.append([InlineKeyboardButton(
+                f"{marker} {t['name']}", callback_data=f"tool:pick:{t['name']}")])
+        return InlineKeyboardMarkup(buttons) if buttons else None
+
+    async def _show_tools_picker(chat_id: int):
+        tools = ctrl.list_tools()
+        if not tools:
+            await _app.bot.send_message(chat_id, "No tools registered.")
+            return
+        enabled_count = sum(1 for t in tools if t["agent_enabled"])
+        summary = f"Tools — {enabled_count} of {len(tools)} enabled"
+        kb = _tools_picker_keyboard()
+        await _app.bot.send_message(chat_id, summary, reply_markup=kb)
+
+    async def _show_tool_actions(chat_id: int, name: str):
+        tool = next((t for t in ctrl.list_tools() if t["name"] == name), None)
+        if tool is None:
+            await _app.bot.send_message(
+                chat_id, f"Unknown tool: '{name}'. Run /tools to see all tools.")
+            return
+        desc = (tool.get("description") or "").split("\n")[0]
+        if len(desc) > 300:
+            desc = desc[:297] + "..."
+        status = "Enabled" if tool["agent_enabled"] else "Disabled"
+        text = f"<b>{html.escape(name)}</b>\nStatus: {status}\n{html.escape(desc)}"
+        toggle_btn = (InlineKeyboardButton("Disable", callback_data=f"tool:disable:{name}")
+                      if tool["agent_enabled"]
+                      else InlineKeyboardButton("Enable", callback_data=f"tool:enable:{name}"))
+        kb = InlineKeyboardMarkup([
+            [toggle_btn, InlineKeyboardButton("Call…", callback_data=f"tool:call:{name}")],
+            [InlineKeyboardButton("◀ Back", callback_data="tool:back")],
+        ])
+        await _app.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
+
+    async def _show_locations_picker(chat_id: int):
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("All", callback_data="loc:all"),
+            InlineKeyboardButton("Tools", callback_data="loc:tools"),
+        ], [
+            InlineKeyboardButton("Tasks", callback_data="loc:tasks"),
+            InlineKeyboardButton("Services", callback_data="loc:services"),
+        ]])
+        await _app.bot.send_message(chat_id, "Choose a location view:", reply_markup=kb)
+
+    # ── /schedule picker + create form ───────────────────────────────
+
+    _pending_schedule_creates: dict = {}   # chat_id -> schedule-create state
+
+    _SCHEDULE_CREATE_STEPS = [
+        "job_name", "schedule_type", "schedule_value",
+        "channel", "prompt", "title", "description",
+    ]
+
+    def _schedule_jobs_picker_keyboard():
+        """Build the /schedule picker: one row per job + [+ New job]."""
+        timekeeper = services.get("timekeeper")
+        if timekeeper is None or not getattr(timekeeper, "loaded", False):
+            return None
+        jobs = timekeeper.list_jobs()
+        buttons = []
+        for name, job in sorted(jobs.items()):
+            marker = "✓" if job.get("enabled", True) else "·"
+            buttons.append([InlineKeyboardButton(
+                f"{marker} {name}", callback_data=f"sch:pick:{name}")])
+        buttons.append([InlineKeyboardButton("+ New job", callback_data="sch:new")])
+        return InlineKeyboardMarkup(buttons)
+
+    async def _show_schedule_picker(chat_id: int):
+        from frontend.formatters import format_scheduled_jobs
+        timekeeper = services.get("timekeeper")
+        if timekeeper is None or not getattr(timekeeper, "loaded", False):
+            await _app.bot.send_message(
+                chat_id,
+                "Timekeeper service is not loaded. Run /load timekeeper to start it.")
+            return
+        text = format_scheduled_jobs(timekeeper.list_jobs(), timekeeper)
+        kb = _schedule_jobs_picker_keyboard()
+        await _app.bot.send_message(chat_id, text, reply_markup=kb)
+
+    async def _show_schedule_job_actions(chat_id: int, name: str):
+        timekeeper = services.get("timekeeper")
+        if timekeeper is None:
+            await _app.bot.send_message(chat_id, "Timekeeper service is not loaded.")
+            return
+        job = timekeeper.get_job(name)
+        if job is None:
+            await _app.bot.send_message(
+                chat_id, f"Unknown job: '{name}'. Run /schedule list to see all jobs.")
+            return
+        enabled = job.get("enabled", True)
+        try:
+            schedule_desc = timekeeper.describe_job(name)
+        except Exception:
+            schedule_desc = job.get("cron") or job.get("run_at") or "?"
+        title = (job.get("payload", {}).get("title")
+                 or job.get("description") or "").strip()
+        lines = [
+            f"<b>{html.escape(name)}</b>",
+            f"Status: {'Enabled' if enabled else 'Disabled'}",
+            f"Schedule: {html.escape(schedule_desc)}",
+        ]
+        if title:
+            lines.append(f"Title: {html.escape(title)}")
+        text = "\n".join(lines)
+
+        toggle_btn = (InlineKeyboardButton("Disable", callback_data=f"sch:disable:{name}")
+                      if enabled
+                      else InlineKeyboardButton("Enable", callback_data=f"sch:enable:{name}"))
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("▶ Run now", callback_data=f"sch:run:{name}"),
+             toggle_btn],
+            [InlineKeyboardButton("Show", callback_data=f"sch:show:{name}"),
+             InlineKeyboardButton("Delete", callback_data=f"sch:delete:{name}")],
+            [InlineKeyboardButton("◀ Back", callback_data="sch:back")],
+        ])
+        await _app.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
+
+    async def _start_schedule_create(chat_id: int):
+        _pending_schedule_creates[chat_id] = {
+            "step": 0,          # index into _SCHEDULE_CREATE_STEPS
+            "collected": {},
+        }
+        await _app.bot.send_message(
+            chat_id,
+            "<b>New scheduled job</b>\n"
+            "Answer each prompt. Send /cancel to abort.",
+            parse_mode="HTML")
+        await _ask_schedule_step(chat_id)
+
+    async def _ask_schedule_step(chat_id: int):
+        state = _pending_schedule_creates.get(chat_id)
+        if not state:
+            return
+        step = state["step"]
+        if step >= len(_SCHEDULE_CREATE_STEPS):
+            await _finalize_schedule_create(chat_id)
+            return
+        field = _SCHEDULE_CREATE_STEPS[step]
+        collected = state["collected"]
+
+        if field == "job_name":
+            await _app.bot.send_message(
+                chat_id,
+                "<b>job_name</b> (required)\n"
+                "A unique identifier, e.g. <code>daily_digest</code>.",
+                parse_mode="HTML")
+            return
+
+        if field == "schedule_type":
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("Recurring (cron)", callback_data="sch:type:recurring"),
+                InlineKeyboardButton("One-time", callback_data="sch:type:one_time"),
+            ]])
+            await _app.bot.send_message(
+                chat_id, "<b>schedule_type</b> (required)",
+                reply_markup=kb, parse_mode="HTML")
+            return
+
+        if field == "schedule_value":
+            if collected.get("schedule_type") == "one_time":
+                await _app.bot.send_message(
+                    chat_id,
+                    "<b>run_at</b> (required)\n"
+                    "ISO datetime, e.g. <code>2026-04-20T09:00:00</code>.",
+                    parse_mode="HTML")
+            else:
+                await _app.bot.send_message(
+                    chat_id,
+                    "<b>cron</b> (required)\n"
+                    "Cron expression, e.g. <code>0 8 * * *</code> (daily at 08:00).",
+                    parse_mode="HTML")
+            return
+
+        if field == "channel":
+            # Seed with subagent_run + any channels currently in use
+            seen = {"subagent_run"}
+            timekeeper = services.get("timekeeper")
+            if timekeeper and getattr(timekeeper, "loaded", False):
+                for job in timekeeper.list_jobs().values():
+                    ch = (job.get("channel") or "").strip()
+                    if ch:
+                        seen.add(ch)
+            rows = [[InlineKeyboardButton(ch, callback_data=f"sch:ch:{ch}")]
+                    for ch in sorted(seen)]
+            rows.append([InlineKeyboardButton("Other…", callback_data="sch:ch:__other__")])
+            await _app.bot.send_message(
+                chat_id,
+                "<b>channel</b> (required)\n"
+                "The event bus channel to emit when this job fires.",
+                reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+            return
+
+        if field == "prompt":
+            if collected.get("channel") != "subagent_run":
+                # Skip for non-subagent channels
+                state["step"] += 1
+                await _ask_schedule_step(chat_id)
+                return
+            await _app.bot.send_message(
+                chat_id,
+                "<b>prompt</b> (required for subagent_run)\n"
+                "The instruction sent to the subagent, e.g. "
+                "<code>Summarize yesterday's inbox into 5 bullet points.</code>",
+                parse_mode="HTML")
+            return
+
+        if field == "title":
+            await _app.bot.send_message(
+                chat_id,
+                "<b>title</b> (optional — send /skip to omit)\n"
+                "Short label shown when the job fires.",
+                parse_mode="HTML")
+            return
+
+        if field == "description":
+            await _app.bot.send_message(
+                chat_id,
+                "<b>description</b> (optional — send /skip to omit)\n"
+                "Longer description of the job.",
+                parse_mode="HTML")
+            return
+
+    async def _finalize_schedule_create(chat_id: int):
+        state = _pending_schedule_creates.pop(chat_id, None)
+        if not state:
+            return
+        c = state["collected"]
+
+        definition: dict = {
+            "channel": c.get("channel", "").strip(),
+            "one_time": c.get("schedule_type") == "one_time",
+            "payload": {},
+            "enabled": True,
+        }
+        if definition["one_time"]:
+            definition["run_at"] = c.get("schedule_value")
+        else:
+            definition["cron"] = c.get("schedule_value")
+        if c.get("description"):
+            definition["description"] = c["description"]
+
+        payload = definition["payload"]
+        if c.get("channel") == "subagent_run":
+            payload["prompt"] = c.get("prompt", "")
+        if c.get("title"):
+            payload["title"] = c["title"]
+
+        timekeeper = services.get("timekeeper")
+        if timekeeper is None:
+            await _app.bot.send_message(chat_id, "Timekeeper service is not loaded.")
+            return
+
+        try:
+            timekeeper.create_job(c["job_name"], definition)
+        except ValueError as e:
+            # Roll back to the relevant step so the user can retry.
+            await _app.bot.send_message(chat_id, f"Failed to create job: {e}")
+            # Re-open the create form at the schedule_value step so the user can fix
+            # the most common failure (bad cron / duplicate name).
+            _pending_schedule_creates[chat_id] = state
+            state["step"] = 0
+            await _ask_schedule_step(chat_id)
+            return
+
+        await _app.bot.send_message(
+            chat_id, f"Job '{c['job_name']}' created.")
+        await _show_schedule_picker(chat_id)
+
     # ── Handlers ─────────────────────────────────────────────────────
 
     async def handle_command(update: Update, _ctx):
@@ -876,6 +1281,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 cancelled = True
             if chat_id in _pending_triggers:
                 _pending_triggers.pop(chat_id)
+                cancelled = True
+            if chat_id in _pending_schedule_creates:
+                _pending_schedule_creates.pop(chat_id)
                 cancelled = True
             if cancelled:
                 await update.message.reply_text("Cancelled.")
@@ -933,6 +1341,37 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 else:
                     await update.message.reply_text("This parameter is required.")
                     return
+            state = _pending_schedule_creates.get(chat_id)
+            if state:
+                step = state["step"]
+                field = (_SCHEDULE_CREATE_STEPS[step]
+                         if step < len(_SCHEDULE_CREATE_STEPS) else "")
+                if field in ("title", "description"):
+                    state["step"] += 1
+                    await _ask_schedule_step(chat_id)
+                    return
+                else:
+                    await update.message.reply_text("This field is required.")
+                    return
+
+        # /services, /tasks, /tools, /locations — picker menus with no arg
+        if cmd_name == "services" and not arg:
+            await _show_services_picker(chat_id)
+            return
+        if cmd_name == "tasks" and not arg:
+            await _show_tasks_picker(chat_id)
+            return
+        if cmd_name == "tools" and not arg:
+            await _show_tools_picker(chat_id)
+            return
+        if cmd_name == "locations" and not arg:
+            await _show_locations_picker(chat_id)
+            return
+
+        # /schedule — picker menu with no arg, or subcommand dispatch with arg
+        if cmd_name == "schedule" and not arg:
+            await _show_schedule_picker(chat_id)
+            return
 
         # /call — show tool menu or start interactive form
         if cmd_name == "call":
@@ -1091,6 +1530,41 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 except ValueError:
                     await update.message.reply_text(
                         f"Invalid value for {param['name']} — expected a number. Try again.")
+            return
+
+        # Check for pending /schedule create form input
+        if chat_id in _pending_schedule_creates:
+            state = _pending_schedule_creates[chat_id]
+            step = state["step"]
+            if step >= len(_SCHEDULE_CREATE_STEPS):
+                await _finalize_schedule_create(chat_id)
+                return
+            field = _SCHEDULE_CREATE_STEPS[step]
+            value = text.strip()
+
+            if field == "job_name":
+                if not value or " " in value:
+                    await update.message.reply_text(
+                        "Job name must be a single word with no spaces. Try again.")
+                    return
+                timekeeper = services.get("timekeeper")
+                if timekeeper and timekeeper.get_job(value) is not None:
+                    await update.message.reply_text(
+                        f"Job '{value}' already exists. Choose a different name.")
+                    return
+                state["collected"]["job_name"] = value
+            elif field == "schedule_value":
+                state["collected"]["schedule_value"] = value
+            elif field in ("prompt", "title", "description"):
+                state["collected"][field] = value
+            elif field == "channel":
+                # channel is normally chosen via buttons; free text = "Other" entry
+                state["collected"]["channel"] = value
+            else:
+                state["collected"][field] = value
+
+            state["step"] += 1
+            await _ask_schedule_step(chat_id)
             return
 
         # Check for pending /configure value input
@@ -1435,6 +1909,152 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                             state["collected"][param_name] = _coerce_param_value(value, param["type"])
                             state["current_idx"] += 1
                             await _ask_next_trigger_param(chat_id)
+                return
+
+            # ── /services picker (svc:pick|load|unload|back[:name]) ──
+            if data.startswith("svc:"):
+                parts = data.split(":", 2)
+                action = parts[1] if len(parts) > 1 else ""
+                name = parts[2] if len(parts) > 2 else ""
+                await update.callback_query.answer()
+                await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                chat_id = update.callback_query.message.chat_id
+                loop = asyncio.get_running_loop()
+
+                if action == "pick":
+                    await _show_service_actions(chat_id, name)
+                elif action in ("load", "unload"):
+                    output = await loop.run_in_executor(
+                        None, lambda: registry.dispatch(action, name))
+                    if output:
+                        await _send_long_message(chat_id, output)
+                    await _show_services_picker(chat_id)
+                elif action == "back":
+                    await _show_services_picker(chat_id)
+                return
+
+            # ── /tasks picker (tsk:pick|pause|unpause|reset|retry|trigger|back[:name]) ──
+            if data.startswith("tsk:"):
+                parts = data.split(":", 2)
+                action = parts[1] if len(parts) > 1 else ""
+                name = parts[2] if len(parts) > 2 else ""
+                await update.callback_query.answer()
+                await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                chat_id = update.callback_query.message.chat_id
+                loop = asyncio.get_running_loop()
+
+                if action == "pick":
+                    await _show_task_actions(chat_id, name)
+                elif action == "trigger":
+                    await _start_trigger_form(chat_id, name)
+                elif action in ("pause", "unpause", "reset", "retry"):
+                    output = await loop.run_in_executor(
+                        None, lambda: registry.dispatch(action, name))
+                    if output:
+                        await _send_long_message(chat_id, output)
+                    await _show_tasks_picker(chat_id)
+                elif action == "back":
+                    await _show_tasks_picker(chat_id)
+                return
+
+            # ── /tools picker (tool:pick|enable|disable|call|back[:name]) ──
+            if data.startswith("tool:"):
+                parts = data.split(":", 2)
+                action = parts[1] if len(parts) > 1 else ""
+                name = parts[2] if len(parts) > 2 else ""
+                await update.callback_query.answer()
+                await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                chat_id = update.callback_query.message.chat_id
+                loop = asyncio.get_running_loop()
+
+                if action == "pick":
+                    await _show_tool_actions(chat_id, name)
+                elif action == "call":
+                    await _start_call_form(chat_id, name)
+                elif action in ("enable", "disable"):
+                    output = await loop.run_in_executor(
+                        None, lambda: registry.dispatch(action, name))
+                    if output:
+                        await _send_long_message(chat_id, output)
+                    await _show_tools_picker(chat_id)
+                elif action == "back":
+                    await _show_tools_picker(chat_id)
+                return
+
+            # ── /locations filter buttons (loc:<filter>) ──
+            if data.startswith("loc:"):
+                filt = data[4:]
+                await update.callback_query.answer()
+                await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                chat_id = update.callback_query.message.chat_id
+                arg = "" if filt == "all" else filt
+                loop = asyncio.get_running_loop()
+                output = await loop.run_in_executor(
+                    None, lambda: registry.dispatch("locations", arg))
+                if output:
+                    await _send_long_message(chat_id, output)
+                return
+
+            # ── /schedule picker + create form (sch:...) ──
+            if data.startswith("sch:"):
+                parts = data.split(":", 2)
+                action = parts[1] if len(parts) > 1 else ""
+                tail = parts[2] if len(parts) > 2 else ""
+                await update.callback_query.answer()
+                await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                chat_id = update.callback_query.message.chat_id
+                loop = asyncio.get_running_loop()
+
+                if action == "pick":
+                    await _show_schedule_job_actions(chat_id, tail)
+                elif action == "new":
+                    await _start_schedule_create(chat_id)
+                elif action == "back":
+                    await _show_schedule_picker(chat_id)
+                elif action in ("run", "enable", "disable", "show"):
+                    output = await loop.run_in_executor(
+                        None, lambda: registry.dispatch(
+                            "schedule", f"{action} {tail}"))
+                    if output:
+                        await _send_long_message(chat_id, output)
+                    if action != "show":
+                        await _show_schedule_picker(chat_id)
+                elif action == "delete":
+                    kb = InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            "Confirm delete",
+                            callback_data=f"sch:confirmdel:{tail}"),
+                        InlineKeyboardButton("Cancel", callback_data="sch:back"),
+                    ]])
+                    await _app.bot.send_message(
+                        chat_id,
+                        f"Delete scheduled job '{tail}'? This cannot be undone.",
+                        reply_markup=kb)
+                elif action == "confirmdel":
+                    output = await loop.run_in_executor(
+                        None, lambda: registry.dispatch("schedule", f"delete {tail}"))
+                    if output:
+                        await _send_long_message(chat_id, output)
+                    await _show_schedule_picker(chat_id)
+                elif action == "type":
+                    # Schedule-type enum from the create form
+                    state = _pending_schedule_creates.get(chat_id)
+                    if state:
+                        state["collected"]["schedule_type"] = tail
+                        state["step"] += 1
+                        await _ask_schedule_step(chat_id)
+                elif action == "ch":
+                    # Channel enum from the create form
+                    state = _pending_schedule_creates.get(chat_id)
+                    if state:
+                        if tail == "__other__":
+                            await _app.bot.send_message(
+                                chat_id,
+                                "Enter the channel name as text.")
+                            return
+                        state["collected"]["channel"] = tail
+                        state["step"] += 1
+                        await _ask_schedule_step(chat_id)
                 return
 
             # ── Approval callbacks (approve_xxx:allow/deny) ──

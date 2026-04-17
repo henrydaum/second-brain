@@ -210,7 +210,7 @@ class Controller:
         """Load a service and re-check blocked tasks."""
         svc = self.services.get(name)
         if svc is None:
-            return f"Unknown service: '{name}'. Use 'services' to see available."
+            return f"Unknown service: '{name}'. Run /services to see all services."
 
         if getattr(svc, 'loaded', False):
             return f"Service '{name}' is already loaded."
@@ -219,10 +219,10 @@ class Controller:
         try:
             success = svc.load()
         except Exception as e:
-            return f"Failed to load '{name}': {e}. Check service-related config settings with /config."
+            return f"Failed to load '{name}': {e}. Run /config to review service-related settings."
 
         if not success:
-            return f"Service '{name}' failed to load. Check service-related config settings with /config."
+            return f"Service '{name}' failed to load. Run /config to review service-related settings."
 
         from event_bus import bus
         from event_channels import SERVICE_LOADED
@@ -234,7 +234,7 @@ class Controller:
         """Unload a service to free resources."""
         svc = self.services.get(name)
         if svc is None:
-            return f"Unknown service: '{name}'."
+            return f"Unknown service: '{name}'. Run /services to see all services."
 
         if not getattr(svc, 'loaded', False):
             return f"Service '{name}' is already unloaded."
@@ -390,7 +390,7 @@ class Controller:
     def pause_task(self, name: str) -> str:
         """Pause a task. It stays PENDING but won't be dispatched."""
         if name not in self.orchestrator.tasks:
-            return f"Unknown task: '{name}'. Use 'tasks' to see available."
+            return f"Unknown task: '{name}'. Run /tasks to see all tasks."
 
         if name in self.orchestrator.paused:
             return f"Task '{name}' is already paused."
@@ -401,7 +401,7 @@ class Controller:
     def unpause_task(self, name: str) -> str:
         """Unpause a task. Pending work will resume on next dispatch cycle."""
         if name not in self.orchestrator.tasks:
-            return f"Unknown task: '{name}'."
+            return f"Unknown task: '{name}'. Run /tasks to see all tasks."
 
         if name not in self.orchestrator.paused:
             return f"Task '{name}' is not paused."
@@ -412,29 +412,31 @@ class Controller:
     def reset_task(self, name: str) -> str:
         """Reset ALL entries for a task back to PENDING, including downstream tasks."""
         if name not in self.orchestrator.tasks:
-            return f"Unknown task: '{name}'."
+            return f"Unknown task: '{name}'. Run /tasks to see all tasks."
         if getattr(self.orchestrator.tasks[name], "trigger", "path") != "path":
-            return f"Task '{name}' is event-triggered. Use /tasks to inspect event-driven tasks."
+            return (f"Task '{name}' is event-triggered — only path-driven tasks can be reset. "
+                    f"Run /trigger {name} to fire it instead.")
 
         self.db.reset_task(name)
         downstream = self.orchestrator.get_all_downstream(name)
         if downstream:
             self.db.invalidate_tasks_bulk(downstream)
-        return f"Task '{name}' reset — all entries back to PENDING (+ {len(downstream)} downstream)."
+        return f"Task '{name}' reset to Pending (+ {len(downstream)} downstream)."
 
     def retry_task(self, name: str) -> str:
         """Retry only FAILED entries for a task, invalidating their downstream tasks."""
         if name not in self.orchestrator.tasks:
-            return f"Unknown task: '{name}'."
+            return f"Unknown task: '{name}'. Run /tasks to see all tasks."
         if getattr(self.orchestrator.tasks[name], "trigger", "path") != "path":
-            return f"Task '{name}' is event-triggered. Use /trigger to start a new run instead."
+            return (f"Task '{name}' is event-triggered — only path-driven tasks can be retried. "
+                    f"Run /trigger {name} to fire a new run instead.")
 
         failed_paths = self.db.get_paths_for_task_status(name, "FAILED")
         self.db.reset_failed_tasks(name)
         downstream = self.orchestrator.get_all_downstream(name)
         if downstream and failed_paths:
             self.db.invalidate_tasks_for_paths(downstream, failed_paths)
-        return f"Task '{name}' — failed entries reset to PENDING."
+        return f"Task '{name}' — failed entries reset to Pending."
 
     def trigger_event_task(self, name: str, payload: dict | None = None) -> str:
         """Manually fire an event-triggered task by emitting on its first
@@ -442,12 +444,12 @@ class Controller:
         bus.emit works identically."""
         task = self.orchestrator.tasks.get(name)
         if task is None:
-            return f"Unknown task: '{name}'."
+            return f"Unknown task: '{name}'. Run /tasks to see all tasks."
         if getattr(task, "trigger", "path") != "event":
-            return f"Task '{name}' is not event-triggered (trigger='{getattr(task, 'trigger', 'path')}')."
+            return f"Task '{name}' is not event-triggered. Run /tasks to see event-driven tasks."
         channels = getattr(task, "trigger_channels", []) or []
         if not channels:
-            return f"Task '{name}' has no trigger_channels declared."
+            return f"Task '{name}' has no trigger channels declared."
         payload = payload or {}
         if not isinstance(payload, dict):
             return "Trigger payload must be a JSON object."
@@ -478,7 +480,7 @@ class Controller:
                 if downstream:
                     self.db.invalidate_tasks_for_paths(downstream, failed_paths)
         self.db.reset_failed_tasks()
-        return "All failed path-driven tasks reset to PENDING."
+        return "All failed path-driven tasks reset to Pending."
 
     # =================================================================
     # TOOLS
@@ -490,19 +492,19 @@ class Controller:
             return "No tool registry available."
         tool = self.tool_registry.tools.get(name)
         if tool is None:
-            return f"Unknown tool: '{name}'. Use 'tools' to see available."
+            return f"Unknown tool: '{name}'. Run /tools to see all tools."
         if tool.agent_enabled:
             return f"Tool '{name}' is already enabled."
         tool.agent_enabled = True
         return f"Tool '{name}' enabled for agent use."
 
     def disable_tool(self, name: str) -> str:
-        """Disable a tool from agent use (still callable via 'call')."""
+        """Disable a tool from agent use (still callable via /call)."""
         if self.tool_registry is None:
             return "No tool registry available."
         tool = self.tool_registry.tools.get(name)
         if tool is None:
-            return f"Unknown tool: '{name}'. Use 'tools' to see available."
+            return f"Unknown tool: '{name}'. Run /tools to see all tools."
         if not tool.agent_enabled:
             return f"Tool '{name}' is already disabled."
         tool.agent_enabled = False

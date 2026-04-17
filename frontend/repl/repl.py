@@ -70,18 +70,18 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
     def _repl_approve_handler(req: 'ApprovalRequest'):
         if req.is_resolved:
             return  # another subscriber already answered
-            
-        print(f"\n\n--- Agent wants to run a command ---")
+
+        print(f"\n\n[approval needed] Agent wants to run a command")
         print(f"  Command:  {req.command}")
         print(f"  Reason:   {req.reason}")
-        print(f"  (Type '/allow' or '/deny' to respond)")
+        print(f"  Respond with /allow or /deny.")
         print("> ", end="", flush=True)
         _pending_approvals.append(req)
 
     def _on_approval_resolved(req: 'ApprovalRequest'):
         if req in _pending_approvals:
             _pending_approvals.remove(req)
-            print(f"\n(Request resolved via another frontend)\n> ", end="", flush=True)
+            print(f"\n[approval resolved via another frontend]\n> ", end="", flush=True)
 
     bus.subscribe(APPROVAL_REQUESTED, _repl_approve_handler)
     bus.subscribe(APPROVAL_RESOLVED, _on_approval_resolved)
@@ -98,7 +98,7 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         nonlocal agent
         llm = services.get("llm")
         if llm is None or not llm.loaded:
-            return "LLM service not loaded. Run '/load llm' first."
+            return "LLM service is not loaded. Run /load llm to load it."
 
         conversation_ref["id"] = None  # fresh conversation on /chat entry
         agent = Agent(
@@ -179,6 +179,8 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         registry.register(entry)
 
     # --- Main loop ---
+
+    print("Second Brain REPL ready. Type /help for commands, /chat for agent mode, /quit to exit.")
 
     while not shutdown_event.is_set():
         try:
