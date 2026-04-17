@@ -278,7 +278,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             return f"Loaded conversation: {conversation_title}"
 
         # /history — list recent conversations
-        conversations = ctrl.db.list_conversations(limit=10)
+        conversations = ctrl.db.list_user_conversations(limit=10)
         if not conversations:
             return "No conversations yet."
 

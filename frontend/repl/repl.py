@@ -156,7 +156,7 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
             
         req = _pending_approvals.pop(0)
         req.resolve(True)
-        return "Command allowed."
+        return "Approval granted."
 
     def _deny_handler(_arg):
         while _pending_approvals and _pending_approvals[0].is_resolved:
@@ -167,7 +167,7 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
             
         req = _pending_approvals.pop(0)
         req.resolve(False)
-        return "Command denied."
+        return "Approval denied."
 
     for entry in [
         CommandEntry("chat",  "Enter interactive chat mode", handler=_chat_handler),

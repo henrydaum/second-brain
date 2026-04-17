@@ -884,7 +884,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # /history — show inline keyboard of recent conversations
         if cmd_name == "history" and not arg:
             from datetime import datetime
-            conversations = ctrl.db.list_conversations(limit=10)
+            conversations = ctrl.db.list_user_conversations(limit=10)
             if not conversations:
                 await update.message.reply_text("No conversations yet.")
                 return

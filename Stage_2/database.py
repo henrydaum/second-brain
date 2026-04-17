@@ -138,6 +138,23 @@ class Database:
 			CREATE INDEX IF NOT EXISTS idx_conv_msg_conv
 			ON conversation_messages(conversation_id)
 		""")
+		# Scheduled subagent runs link back to conversations, which lets
+		# user-facing history views exclude background-run threads.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS subagent_runs (
+				run_id TEXT PRIMARY KEY,
+				job_name TEXT,
+				conversation_id INTEGER,
+				title TEXT,
+				prompt TEXT,
+				final_answer TEXT,
+				created_at REAL
+			)
+		""")
+		self.conn.execute("""
+			CREATE INDEX IF NOT EXISTS idx_subagent_runs_conversation
+			ON subagent_runs(conversation_id)
+		""")
 		# Enable foreign key enforcement (needed for ON DELETE CASCADE)
 		self.conn.execute("PRAGMA foreign_keys = ON")
 
@@ -744,6 +761,23 @@ class Database:
 		with self.lock:
 			cur = self.conn.execute(
 				"SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?",
+				(limit,))
+			return [dict(row) for row in cur.fetchall()]
+
+	def list_user_conversations(self, limit=50):
+		with self.lock:
+			cur = self.conn.execute(
+				"""
+				SELECT *
+				FROM conversations c
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM subagent_runs sr
+					WHERE sr.conversation_id = c.id
+				)
+				ORDER BY c.updated_at DESC
+				LIMIT ?
+				""",
 				(limit,))
 			return [dict(row) for row in cur.fetchall()]
 
