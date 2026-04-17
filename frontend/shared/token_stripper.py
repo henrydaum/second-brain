@@ -24,6 +24,10 @@ _STRUCTURAL_PATTERN = re.compile(
     re.DOTALL,
 )
 
+# Handles malformed or partial thinking tags that arrive without a matching pair,
+# e.g. a title response that is only "<think>".
+_THINKING_TAG_PATTERN = re.compile(r"</?(?:think|thinking)>")
+
 
 def strip_model_tokens(text: str) -> tuple[str, list[str]]:
     """Remove thinking blocks and tool call tokens from *text*.
@@ -41,6 +45,9 @@ def strip_model_tokens(text: str) -> tuple[str, list[str]]:
     clean = _THINKING_PATTERN.sub("", text)
     
     # Strip tool calls and leaked EOS tokens
-    clean = _STRUCTURAL_PATTERN.sub("", clean).strip()
+    clean = _STRUCTURAL_PATTERN.sub("", clean)
+
+    # Strip any leftover unmatched thinking tags.
+    clean = _THINKING_TAG_PATTERN.sub("", clean).strip()
     
     return clean, blocks

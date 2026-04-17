@@ -12,6 +12,8 @@ import logging
 import threading
 from pathlib import Path
 
+from frontend.shared.token_stripper import strip_model_tokens
+
 logger = logging.getLogger("Controller")
 
 
@@ -180,7 +182,8 @@ class Controller:
         return " ".join((text or "").replace("\n", " ").split()).strip()
 
     def _sanitize_generated_title(self, text: str) -> str:
-        title = (text or "").strip()
+        title, _ = strip_model_tokens(text or "")
+        title = title.strip()
         if not title:
             return ""
 
