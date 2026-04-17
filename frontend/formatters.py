@@ -166,45 +166,6 @@ def format_tasks(tasks: list[dict], compact: bool = False) -> str:
     return "\n".join(lines)
 
 
-def format_stats(stats: dict, compact: bool = False) -> str:
-    """Format system overview: file counts by modality + task queue summaries."""
-    lines = ["Files by modality:"]
-    files = stats.get("files", {})
-    if files:
-        for mod, count in sorted(files.items()):
-            lines.append(f"  {mod}: {count}" if compact else f"  {mod:<12} {count}")
-    else:
-        lines.append("  (none)")
-    lines.append(f"  total: {sum(files.values()) if files else 0}")
-    lines.append("")
-    lines.append("Task queue:")
-    tasks = stats.get("tasks", [])
-    if tasks:
-        for title, section in _task_sections(tasks):
-            lines.append(title + ":")
-            if not section:
-                lines.append("  (none)")
-                continue
-            for task in section:
-                counts = task["counts"]
-                paused = " [PAUSED]" if task["paused"] else ""
-                if compact:
-                    lines.append(
-                        f"  {task['name']}{paused}\n"
-                        f"    P:{counts['PENDING']} R:{counts['PROCESSING']} "
-                        f"D:{counts['DONE']} F:{counts['FAILED']}"
-                    )
-                else:
-                    lines.append(
-                        f"  {task['name']:<22} "
-                        f"P:{counts['PENDING']:<8} R:{counts['PROCESSING']:<8} "
-                        f"D:{counts['DONE']:<8} F:{counts['FAILED']:<8}{paused}"
-                    )
-    else:
-        lines.append("  (empty)")
-    return "\n".join(lines)
-
-
 def format_tools(tools: list[dict], compact: bool = False) -> str:
     """Format tool list with enabled/disabled status, descriptions, and parameters."""
     if not tools:

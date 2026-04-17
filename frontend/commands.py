@@ -87,7 +87,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
     from plugin_discovery import get_plugin_settings as _get_ps
     from frontend.formatters import (
         format_services, format_tasks,
-        format_stats, format_tools, format_locations,
+        format_tools, format_locations,
         format_tool_result,
     )
 
@@ -404,7 +404,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         CommandEntry("unload",   "Unload a service",      "<service>",
                      handler=lambda a: ctrl.unload_service(a) if a else "Usage: /unload <service>",
                      arg_completions=_service_names),
-        CommandEntry("tasks",    "List path-driven and event-driven tasks",
+        CommandEntry("tasks",    "List all tasks",
                      handler=lambda _: _render_tasks()),
         CommandEntry("pipeline", "Show the path-driven task dependency graph",
                      handler=lambda _: ctrl.orchestrator.dependency_pipeline_graph()),
@@ -437,8 +437,6 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      arg_completions=_tool_names),
         CommandEntry("reload",    "Hot-reload tasks and tools",
                      handler=lambda _: ctrl.reload_plugins(root_dir)),
-        CommandEntry("stats",     "System overview",
-                     handler=lambda _: format_stats(ctrl.stats())),
         CommandEntry("locations", "List file system locations",
                  "[tools|tasks|services]",
                  handler=lambda a: _cmd_locations(a),

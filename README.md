@@ -481,7 +481,6 @@ Available in the REPL and as slash commands in Telegram.
 | `retry <task>` | Retry failed entries for a path-driven task |
 | `retry all` | Retry failed entries across all path-driven tasks |
 | `services` | List services and load state |
-| `stats` | Show system-wide stats |
 | `tasks` | List path-driven and event-driven tasks |
 | `tools` | List registered tools |
 | `trigger <task> [json]` | Manually fire an event-triggered task |

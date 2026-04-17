@@ -460,18 +460,6 @@ class Controller:
         return "All failed path-driven tasks reset to PENDING."
 
     # =================================================================
-    # STATS
-    # =================================================================
-
-    def stats(self) -> dict:
-        """System overview as structured data."""
-        s = self.db.get_system_stats()
-        return {
-            "files": s.get("files", {}),
-            "tasks": self.list_tasks(),
-        }
-
-    # =================================================================
     # TOOLS
     # =================================================================
 
@@ -655,7 +643,6 @@ class Controller:
             {"command": "retry <n>", "description": "Retry failed entries for a path-driven task"},
             {"command": "retry all", "description": "Retry all failed across all path-driven tasks"},
             {"command": "services", "description": "List services and status"},
-            {"command": "stats", "description": "System overview"},
             {"command": "tasks", "description": "List path-driven and event-driven tasks"},
             {"command": "tools", "description": "List registered tools"},
             {"command": "trigger <n> [json]", "description": "Manually fire an event-triggered task"},

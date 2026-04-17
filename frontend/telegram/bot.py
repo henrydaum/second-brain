@@ -23,7 +23,7 @@ from Stage_3.system_prompt import build_system_prompt
 from frontend.commands import CommandEntry, CommandRegistry, register_core_commands
 from frontend.dispatch import route_input
 from frontend.formatters import (
-    format_services, format_tasks, format_stats, format_tools,
+    format_services, format_tasks, format_tools,
     format_tool_result,
 )
 from event_bus import bus
@@ -331,8 +331,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                      handler=lambda _: format_services(ctrl.list_services(), compact=True)),
         CommandEntry("tasks", "List path-driven and event-driven tasks",
                      handler=lambda _: format_tasks(ctrl.list_tasks(), compact=True)),
-        CommandEntry("stats", "System overview",
-                     handler=lambda _: format_stats(ctrl.stats(), compact=True)),
         CommandEntry("tools", "List registered tools",
                      handler=lambda _: format_tools(ctrl.list_tools(), compact=True)),
     ]:
