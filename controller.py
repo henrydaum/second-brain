@@ -351,17 +351,35 @@ class Controller:
     # TASKS
     # =================================================================
 
-    def list_tasks(self) -> list[dict]:
-        """List all tasks with status counts and paused state."""
+    def list_tasks(self, trigger: str | None = None) -> list[dict]:
+        """List tasks with counts, paused state, and trigger metadata."""
         stats = self.db.get_system_stats()
-        task_stats = stats.get("tasks", {})
-        return [
-            {"name": name,
-             "counts": task_stats.get(name, {"PENDING": 0, "PROCESSING": 0, "DONE": 0, "FAILED": 0}),
-             "paused": name in self.orchestrator.paused,
-             "requires_services": task.requires_services}
-            for name, task in self.orchestrator.tasks.items()
-        ]
+        path_task_stats = stats.get("tasks", {})
+        event_task_stats = self.db.get_run_stats()
+        empty_counts = {"PENDING": 0, "PROCESSING": 0, "DONE": 0, "FAILED": 0}
+
+        tasks = []
+        for name, task in self.orchestrator.tasks.items():
+            task_trigger = getattr(task, "trigger", "path")
+            if trigger and task_trigger != trigger:
+                continue
+
+            count_source = event_task_stats if task_trigger == "event" else path_task_stats
+            counts = {**empty_counts, **count_source.get(name, {})}
+            tasks.append({
+                "name": name,
+                "trigger": task_trigger,
+                "trigger_channels": list(getattr(task, "trigger_channels", []) or []),
+                "counts": counts,
+                "paused": name in self.orchestrator.paused,
+                "requires_services": list(getattr(task, "requires_services", []) or []),
+            })
+
+        return sorted(tasks, key=lambda item: item["name"])
+
+    def list_task_names(self, trigger: str | None = None) -> list[str]:
+        """Return task names, optionally filtered by trigger kind."""
+        return [task["name"] for task in self.list_tasks(trigger=trigger)]
 
     def pause_task(self, name: str) -> str:
         """Pause a task. It stays PENDING but won't be dispatched."""
@@ -389,6 +407,8 @@ class Controller:
         """Reset ALL entries for a task back to PENDING, including downstream tasks."""
         if name not in self.orchestrator.tasks:
             return f"Unknown task: '{name}'."
+        if getattr(self.orchestrator.tasks[name], "trigger", "path") != "path":
+            return f"Task '{name}' is event-triggered. Use /tasks to inspect event-driven tasks."
 
         self.db.reset_task(name)
         downstream = self.orchestrator.get_all_downstream(name)
@@ -400,6 +420,8 @@ class Controller:
         """Retry only FAILED entries for a task, invalidating their downstream tasks."""
         if name not in self.orchestrator.tasks:
             return f"Unknown task: '{name}'."
+        if getattr(self.orchestrator.tasks[name], "trigger", "path") != "path":
+            return f"Task '{name}' is event-triggered. Use /trigger to start a new run instead."
 
         failed_paths = self.db.get_paths_for_task_status(name, "FAILED")
         self.db.reset_failed_tasks(name)
@@ -424,20 +446,18 @@ class Controller:
         bus.emit(channels[0], payload or {})
         return f"Emitted '{channels[0]}' for task '{name}'."
 
-    def list_runs(self, task_name: str | None = None, limit: int = 50) -> list[dict]:
-        """List recent event-task runs, newest first."""
-        return self.db.get_runs(task_name=task_name, limit=limit)
-
     def retry_all(self) -> str:
-        """Retry all FAILED entries across all tasks, invalidating downstream."""
-        for name in self.orchestrator.tasks:
+        """Retry all FAILED path-task entries, invalidating downstream."""
+        for name, task in self.orchestrator.tasks.items():
+            if getattr(task, "trigger", "path") != "path":
+                continue
             failed_paths = self.db.get_paths_for_task_status(name, "FAILED")
             if failed_paths:
                 downstream = self.orchestrator.get_all_downstream(name)
                 if downstream:
                     self.db.invalidate_tasks_for_paths(downstream, failed_paths)
         self.db.reset_failed_tasks()
-        return "All failed tasks reset to PENDING."
+        return "All failed path-driven tasks reset to PENDING."
 
     # =================================================================
     # STATS
@@ -448,10 +468,7 @@ class Controller:
         s = self.db.get_system_stats()
         return {
             "files": s.get("files", {}),
-            "tasks": {
-                name: {**counts, "paused": name in self.orchestrator.paused}
-                for name, counts in s.get("tasks", {}).items()
-            },
+            "tasks": self.list_tasks(),
         }
 
     # =================================================================
@@ -626,27 +643,22 @@ class Controller:
     def help(self) -> list[dict]:
         """Command list for the REPL."""
         return [
-            {"command": "services", "description": "List services and status"},
-            {"command": "load <n>", "description": "Load a service"},
-            {"command": "unload <n>", "description": "Unload a service"},
-            {"command": "", "description": ""},
-            {"command": "tasks", "description": "List tasks with status counts"},
-            {"command": "pipeline", "description": "Show task dependency graph"},
-            {"command": "pause <n>", "description": "Pause a task"},
-            {"command": "unpause <n>", "description": "Unpause a task"},
-            {"command": "reset <n>", "description": "Reset all entries for a task to PENDING"},
-            {"command": "retry <n>", "description": "Retry failed entries for a task"},
-            {"command": "retry all", "description": "Retry all failed across all tasks"},
-            {"command": "trigger <n> [json]", "description": "Manually fire an event-triggered task"},
-            {"command": "runs [task] [limit]", "description": "List recent event-task runs"},
-            {"command": "", "description": ""},
-            {"command": "tools", "description": "List registered tools"},
-            {"command": "enable <n>", "description": "Enable a tool for agent use"},
-            {"command": "disable <n>", "description": "Disable a tool from agent use"},
             {"command": "call <tool> <json>", "description": "Call a tool directly"},
-            {"command": "", "description": ""},
-            {"command": "reload", "description": "Hot-reload tasks and tools"},
-            {"command": "", "description": ""},
-            {"command": "stats", "description": "System overview"},
+            {"command": "disable <n>", "description": "Disable a tool from agent use"},
+            {"command": "enable <n>", "description": "Enable a tool for agent use"},
+            {"command": "load <n>", "description": "Load a service"},
+            {"command": "pause <n>", "description": "Pause a task"},
+            {"command": "pipeline", "description": "Show the path-driven task dependency graph"},
             {"command": "quit / exit", "description": "Shutdown"},
+            {"command": "reload", "description": "Hot-reload tasks and tools"},
+            {"command": "reset <n>", "description": "Reset all entries for a path-driven task"},
+            {"command": "retry <n>", "description": "Retry failed entries for a path-driven task"},
+            {"command": "retry all", "description": "Retry all failed across all path-driven tasks"},
+            {"command": "services", "description": "List services and status"},
+            {"command": "stats", "description": "System overview"},
+            {"command": "tasks", "description": "List path-driven and event-driven tasks"},
+            {"command": "tools", "description": "List registered tools"},
+            {"command": "trigger <n> [json]", "description": "Manually fire an event-triggered task"},
+            {"command": "unload <n>", "description": "Unload a service"},
+            {"command": "unpause <n>", "description": "Unpause a task"},
         ]

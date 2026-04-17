@@ -66,31 +66,104 @@ def format_services(services: list[dict], compact: bool = False) -> str:
     return "Services:\n" + "\n".join(lines)
 
 
+def _task_sections(tasks) -> list[tuple[str, list[dict]]]:
+    """Group task records into path-driven and event-driven sections."""
+    empty_counts = {"PENDING": 0, "PROCESSING": 0, "DONE": 0, "FAILED": 0}
+    normalized = []
+
+    if isinstance(tasks, dict):
+        for name, counts in tasks.items():
+            normalized.append({
+                "name": name,
+                "trigger": "path",
+                "counts": {**empty_counts, **counts},
+                "paused": bool(counts.get("paused")),
+                "requires_services": [],
+                "trigger_channels": [],
+            })
+    else:
+        for task in tasks or []:
+            normalized.append({
+                "name": task["name"],
+                "trigger": task.get("trigger", "path"),
+                "counts": {**empty_counts, **task.get("counts", {})},
+                "paused": bool(task.get("paused")),
+                "requires_services": task.get("requires_services", []),
+                "trigger_channels": task.get("trigger_channels", []),
+            })
+
+    normalized.sort(key=lambda task: task["name"])
+
+    path_tasks = [task for task in normalized if task["trigger"] == "path"]
+    event_tasks = [task for task in normalized if task["trigger"] == "event"]
+    other_tasks = [
+        task for task in normalized
+        if task["trigger"] not in {"path", "event"}
+    ]
+
+    sections = [
+        ("Path-Driven Tasks", path_tasks),
+        ("Event-Driven Tasks", event_tasks),
+    ]
+    if other_tasks:
+        sections.append(("Other Tasks", other_tasks))
+    return sections
+
+
+def _task_detail_lines(task: dict) -> list[str]:
+    """Return extra metadata lines for a task listing."""
+    details = []
+    channels = task.get("trigger_channels") or []
+    if channels:
+        details.append(f"channels: {', '.join(channels)}")
+    services = task.get("requires_services") or []
+    if services:
+        details.append(f"needs: {services}")
+    return details
+
+
 def format_tasks(tasks: list[dict], compact: bool = False) -> str:
-    """Format task list with queue counts (Pending/Processing/Done/Failed)."""
+    """Format task list with separate path-driven and event-driven sections."""
     if not tasks:
         return "No tasks registered."
+    sections = _task_sections(tasks)
+    lines = ["Tasks:"]
     if compact:
-        lines = []
-        for t in tasks:
-            c = t["counts"]
-            paused = " [PAUSED]" if t["paused"] else ""
+        for title, section in sections:
+            lines.append("")
+            lines.append(f"{title}:")
+            if not section:
+                lines.append("  (none)")
+                continue
+            for task in section:
+                counts = task["counts"]
+                paused = " [PAUSED]" if task["paused"] else ""
+                lines.append(f"{task['name']}{paused}")
+                lines.append(
+                    f"  P:{counts['PENDING']} R:{counts['PROCESSING']} "
+                    f"D:{counts['DONE']} F:{counts['FAILED']}"
+                )
+                for detail in _task_detail_lines(task):
+                    lines.append(f"  {detail}")
+        return "\n".join(lines)
+
+    for title, section in sections:
+        lines.append("")
+        lines.append(f"{title}:")
+        if not section:
+            lines.append("  (none)")
+            continue
+        for task in section:
+            counts = task["counts"]
+            paused = " [PAUSED]" if task["paused"] else ""
             lines.append(
-                f"{t['name']}{paused}\n"
-                f"  P:{c['PENDING']} R:{c['PROCESSING']} D:{c['DONE']} F:{c['FAILED']}"
+                f"  {task['name']:<22} "
+                f"P:{counts['PENDING']:<8} R:{counts['PROCESSING']:<8} "
+                f"D:{counts['DONE']:<8} F:{counts['FAILED']:<8}{paused}"
             )
-        return "Tasks:\n" + "\n".join(lines)
-    lines = []
-    for t in tasks:
-        c = t["counts"]
-        paused = " [PAUSED]" if t["paused"] else ""
-        svc = f"  needs: {t['requires_services']}" if t["requires_services"] else ""
-        lines.append(
-            f"  {t['name']:<22} "
-            f"P:{c['PENDING']:<8} R:{c['PROCESSING']:<8} "
-            f"D:{c['DONE']:<8} F:{c['FAILED']:<8}{paused}{svc}"
-        )
-    return "Tasks:\n" + "\n".join(lines)
+            for detail in _task_detail_lines(task):
+                lines.append(f"    {detail}")
+    return "\n".join(lines)
 
 
 def format_stats(stats: dict, compact: bool = False) -> str:
@@ -105,22 +178,28 @@ def format_stats(stats: dict, compact: bool = False) -> str:
     lines.append(f"  total: {sum(files.values()) if files else 0}")
     lines.append("")
     lines.append("Task queue:")
-    tasks = stats.get("tasks", {})
+    tasks = stats.get("tasks", [])
     if tasks:
-        for name, counts in sorted(tasks.items()):
-            paused = " [PAUSED]" if counts.get("paused") else ""
-            if compact:
-                lines.append(
-                    f"  {name}{paused}\n"
-                    f"    P:{counts['PENDING']} R:{counts['PROCESSING']} "
-                    f"D:{counts['DONE']} F:{counts['FAILED']}"
-                )
-            else:
-                lines.append(
-                    f"  {name:<22} "
-                    f"P:{counts['PENDING']:<8} R:{counts['PROCESSING']:<8} "
-                    f"D:{counts['DONE']:<8} F:{counts['FAILED']:<8}{paused}"
-                )
+        for title, section in _task_sections(tasks):
+            lines.append(title + ":")
+            if not section:
+                lines.append("  (none)")
+                continue
+            for task in section:
+                counts = task["counts"]
+                paused = " [PAUSED]" if task["paused"] else ""
+                if compact:
+                    lines.append(
+                        f"  {task['name']}{paused}\n"
+                        f"    P:{counts['PENDING']} R:{counts['PROCESSING']} "
+                        f"D:{counts['DONE']} F:{counts['FAILED']}"
+                    )
+                else:
+                    lines.append(
+                        f"  {task['name']:<22} "
+                        f"P:{counts['PENDING']:<8} R:{counts['PROCESSING']:<8} "
+                        f"D:{counts['DONE']:<8} F:{counts['FAILED']:<8}{paused}"
+                    )
     else:
         lines.append("  (empty)")
     return "\n".join(lines)

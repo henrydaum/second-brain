@@ -59,7 +59,7 @@ the controller helper which emits on the task's first channel:
 
 This enqueues a run in task_runs; the orchestrator dispatches it on its
 next tick. The tool returns immediately — it doesn't wait for the run
-to complete. Inspect results via ctrl.list_runs("cluster_embeddings").
+to complete. Inspect results in the event-driven section of /tasks.
 
 
 CONTEXT OBJECT

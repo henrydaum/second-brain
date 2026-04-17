@@ -462,32 +462,31 @@ Available in the REPL and as slash commands in Telegram.
 
 | Command | Description |
 |---|---|
-| `help` | Show all commands |
-| `services` | List services and load state |
-| `load <service>` | Load a service |
-| `unload <service>` | Unload a service |
-| `tasks` | List tasks and status counts |
-| `pipeline` | Show the dependency graph |
-| `pause <task>` | Pause a task |
-| `unpause <task>` | Resume a task |
-| `reset <task>` | Reset all entries for a task |
-| `retry <task>` | Retry failed entries for a task |
-| `retry all` | Retry failed entries across all tasks |
-| `trigger <task> [json]` | Manually fire an event-triggered task |
-| `runs [task] [limit]` | List recent event-task runs |
-| `tools` | List registered tools |
-| `enable <tool>` | Enable a tool for agent use |
-| `disable <tool>` | Disable a tool for agent use |
 | `call <tool> {json}` | Call a tool directly |
-| `reload` | Hot-reload sandbox tasks and tools |
-| `locations [tools|tasks|services]` | Inspect plugin-related file locations |
+| `cancel` | Interrupt the active agent |
 | `config [key]` | Show config values |
 | `configure <key> <value>` | Update config |
+| `disable <tool>` | Disable a tool for agent use |
+| `enable <tool>` | Enable a tool for agent use |
+| `help` | Show all commands |
 | `history [id]` | List or load saved conversations |
-| `new` | Start a new conversation |
-| `cancel` | Interrupt the active agent |
+| `load <service>` | Load a service |
+| `locations [tools|tasks|services]` | Inspect plugin-related file locations |
 | `model ...` | Manage LLM profiles |
+| `new` | Start a new conversation |
+| `pause <task>` | Pause a task |
+| `pipeline` | Show the path-driven dependency graph |
+| `reload` | Hot-reload sandbox tasks and tools |
+| `reset <task>` | Reset all entries for a path-driven task |
+| `retry <task>` | Retry failed entries for a path-driven task |
+| `retry all` | Retry failed entries across all path-driven tasks |
+| `services` | List services and load state |
 | `stats` | Show system-wide stats |
+| `tasks` | List path-driven and event-driven tasks |
+| `tools` | List registered tools |
+| `trigger <task> [json]` | Manually fire an event-triggered task |
+| `unload <service>` | Unload a service |
+| `unpause <task>` | Resume a task |
 
 ## Scheduling and Calendar-Like Workflows
 

@@ -457,6 +457,22 @@ class Database:
 				""", (limit,))
 			return [dict(row) for row in cur.fetchall()]
 
+	def get_run_stats(self):
+		"""Return per-event-task status counts from task_runs."""
+		with self.lock:
+			cur = self.conn.execute("""
+				SELECT task_name, status, COUNT(*) as count
+				FROM task_runs
+				GROUP BY task_name, status
+			""")
+			run_stats = {}
+			for row in cur.fetchall():
+				name = row["task_name"]
+				if name not in run_stats:
+					run_stats[name] = {"PENDING": 0, "PROCESSING": 0, "DONE": 0, "FAILED": 0}
+				run_stats[name][row["status"]] = row["count"]
+			return run_stats
+
 	# =================================================================
 	# OUTPUT TABLES
 	# =================================================================

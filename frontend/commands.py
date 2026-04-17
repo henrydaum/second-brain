@@ -20,7 +20,7 @@ class CommandEntry:
     arg_hint: str = ""      # e.g. "<service_name>" — shown in autocomplete
     handler: Callable = None  # fn(arg: str) -> str | None
     arg_completions: Callable = None  # () -> list[str] — dynamic arg suggestions
-    hide_from_help: bool = False      # if True, omit from /help output
+    hide_from_help: bool = False      # if True, omit from /help and command menus
 
 
 class CommandRegistry:
@@ -33,10 +33,10 @@ class CommandRegistry:
     def get_completions(self, prefix: str) -> list[CommandEntry]:
         """Return commands whose name starts with *prefix* (case-insensitive)."""
         prefix = prefix.lower()
-        return [
+        return sorted([
             cmd for cmd in self._commands.values()
             if cmd.name.startswith(prefix)
-        ]
+        ], key=lambda cmd: cmd.name)
 
     def dispatch(self, name: str, arg: str) -> str | None:
         """Look up a command by name and call its handler. Returns output string or None."""
@@ -46,16 +46,21 @@ class CommandRegistry:
         return entry.handler(arg)
 
     def all_commands(self) -> list[CommandEntry]:
-        """Return all registered commands in insertion order."""
-        return list(self._commands.values())
+        """Return all registered commands in alphabetical order."""
+        return sorted(self._commands.values(), key=lambda cmd: cmd.name)
+
+    def visible_commands(self) -> list[CommandEntry]:
+        """Return help/menu-visible commands in alphabetical order."""
+        return [
+            cmd for cmd in self.all_commands()
+            if not getattr(cmd, "hide_from_help", False)
+        ]
 
 
 def _build_help(registry: CommandRegistry) -> str:
     """Format the /help output from all registered commands."""
     lines = ["Commands:"]
-    for cmd in registry.all_commands():
-        if getattr(cmd, "hide_from_help", False):
-            continue
+    for cmd in registry.visible_commands():
         hint = f" {cmd.arg_hint}" if cmd.arg_hint else ""
         label = f"/{cmd.name}{hint}"
         lines.append(f"  {label:<22} {cmd.description}")
@@ -164,22 +169,6 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             except _json.JSONDecodeError:
                 return "Payload must be valid JSON (or omit it)."
         return ctrl.trigger_event_task(name, payload)
-
-    def _cmd_runs(arg):
-        parts = arg.split()
-        task_name = None
-        limit = 50
-        for p in parts:
-            if p.isdigit():
-                limit = int(p)
-            else:
-                task_name = p
-        rows = ctrl.list_runs(task_name=task_name, limit=limit)
-        if not rows:
-            return "No runs."
-        lines = [f"{r.get('run_id','?')}  {r.get('task_name','?')}  {r.get('status','?')}  "
-                 f"by={r.get('triggered_by','?')}" for r in rows]
-        return "\n".join(lines)
 
     def _cmd_locations(arg):
         """Handler for /locations [tools|tasks|services]"""
@@ -392,14 +381,17 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
 
     _model_completions = lambda: (
         ["list", "switch", "add", "remove", "show"]
-        + list(ctrl.config.get("llm_profiles", {}).keys())
+        + sorted(ctrl.config.get("llm_profiles", {}).keys())
     )
 
     # Lambdas (not static lists) so completions reflect hot-reloaded plugins.
-    _task_names = lambda: list(ctrl.orchestrator.tasks.keys())
-    _service_names = lambda: list(services.keys())
-    _tool_names = lambda: list(tool_registry.tools.keys())
-    _retry_names = lambda: _task_names() + ["all"]
+    _all_task_names = lambda: ctrl.list_task_names()
+    _path_task_names = lambda: ctrl.list_task_names(trigger="path")
+    _event_task_names = lambda: ctrl.list_task_names(trigger="event")
+    _service_names = lambda: sorted(services.keys())
+    _tool_names = lambda: sorted(tool_registry.tools.keys())
+    _retry_names = lambda: ["all"] + _path_task_names()
+    _render_tasks = lambda: format_tasks(ctrl.list_tasks())
 
     for entry in [
         CommandEntry("help",     "Show available commands",
@@ -412,29 +404,29 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         CommandEntry("unload",   "Unload a service",      "<service>",
                      handler=lambda a: ctrl.unload_service(a) if a else "Usage: /unload <service>",
                      arg_completions=_service_names),
-        CommandEntry("tasks",    "List tasks with status counts",
-                     handler=lambda _: format_tasks(ctrl.list_tasks())),
-        CommandEntry("pipeline", "Show task dependency graph",
+        CommandEntry("tasks",    "List path-driven and event-driven tasks",
+                     handler=lambda _: _render_tasks()),
+        CommandEntry("pipeline", "Show the path-driven task dependency graph",
                      handler=lambda _: ctrl.orchestrator.dependency_pipeline_graph()),
         CommandEntry("pause",    "Pause a task",          "<task>",
                      handler=lambda a: ctrl.pause_task(a) if a else "Usage: /pause <task>",
-                     arg_completions=_task_names),
+                     arg_completions=_all_task_names),
         CommandEntry("unpause",  "Unpause a task",        "<task>",
                      handler=lambda a: ctrl.unpause_task(a) if a else "Usage: /unpause <task>",
-                     arg_completions=_task_names),
-        CommandEntry("reset",    "Reset a task to PENDING", "<task>",
+                     arg_completions=_all_task_names),
+        CommandEntry("reset",    "Reset a path-driven task to PENDING", "<task>",
                      handler=lambda a: ctrl.reset_task(a) if a else "Usage: /reset <task>",
-                     arg_completions=_task_names),
-        CommandEntry("retry",    "Retry failed entries",  "<task>|all",
+                     arg_completions=_path_task_names),
+        CommandEntry("retry",    "Retry failed path-driven task entries",  "<task>|all",
                      handler=lambda a: ctrl.retry_all() if a and a.lower() == "all"
                              else ctrl.retry_task(a) if a else "Usage: /retry <task>|all",
                      arg_completions=_retry_names),
         CommandEntry("trigger",  "Manually fire an event-triggered task", "<task> [json]",
                      handler=lambda a: _cmd_trigger(a),
-                     arg_completions=_task_names),
-        CommandEntry("runs",     "List recent event-task runs", "[task] [limit]",
-                     handler=lambda a: _cmd_runs(a),
-                     arg_completions=_task_names),
+                     arg_completions=_event_task_names),
+        CommandEntry("runs",     "Alias for /tasks",
+                     handler=lambda _: _render_tasks(),
+                     hide_from_help=True),
         CommandEntry("tools",    "List registered tools",
                      handler=lambda _: format_tools(ctrl.list_tools())),
         CommandEntry("enable",   "Enable a tool for agent use", "<tool>",

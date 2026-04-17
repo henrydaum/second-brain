@@ -319,17 +319,17 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     for entry in [
         CommandEntry("load", "Load a service", "<service>",
                      handler=_load_handler,
-                     arg_completions=lambda: list(services.keys())),
+                     arg_completions=lambda: sorted(services.keys())),
         CommandEntry("unload", "Unload a service", "<service>",
                      handler=_unload_handler,
-                     arg_completions=lambda: list(services.keys())),
+                     arg_completions=lambda: sorted(services.keys())),
         CommandEntry("new", "Start a new conversation", handler=_new_handler),
         CommandEntry("start", "Welcome message",
                      handler=lambda _: "Second Brain is online. Send a message to chat, or /help for commands."),
         # Compact formatter overrides
         CommandEntry("services", "List services and status",
                      handler=lambda _: format_services(ctrl.list_services(), compact=True)),
-        CommandEntry("tasks", "List tasks with status counts",
+        CommandEntry("tasks", "List path-driven and event-driven tasks",
                      handler=lambda _: format_tasks(ctrl.list_tasks(), compact=True)),
         CommandEntry("stats", "System overview",
                      handler=lambda _: format_stats(ctrl.stats(), compact=True)),
@@ -1318,7 +1318,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     async def _register_bot_commands():
         """Push slash commands to Telegram for the / autocomplete menu."""
         commands = []
-        for cmd in registry.all_commands():
+        for cmd in registry.visible_commands():
             # Telegram: name max 32 chars (lowercase, no spaces), desc max 256 chars
             name = cmd.name[:32]
             desc = cmd.description[:256]

@@ -460,11 +460,11 @@ class Orchestrator:
 					logger.info(f"Cascade trigger: {input_table} -> {output_table}")
 
 	def dependency_pipeline_graph(self):
-		"""Return a human-readable view of the current path pipeline."""
+		"""Return a human-readable view of the current path-task pipeline."""
 		if not self.tasks:
 			return
 
-		lines = ["Pipeline:"]
+		lines = ["Path Pipeline:"]
 
 		# Pre-compute downstream children for each task.
 		children: dict[str, list[str]] = {name: [] for name in self.tasks}
