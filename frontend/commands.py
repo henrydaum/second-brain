@@ -162,12 +162,46 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         if not parts:
             return "Usage: /trigger <task> [json_payload]"
         name = parts[0]
+        task = ctrl.orchestrator.tasks.get(name)
+        if task is None:
+            return f"Unknown task: '{name}'."
+        if getattr(task, "trigger", "path") != "event":
+            return f"Task '{name}' is not event-triggered."
+
+        schema = getattr(task, "event_payload_schema", {}) or {}
+        props = schema.get("properties", {})
+        required = list(schema.get("required", []))
         payload = None
         if len(parts) > 1:
             try:
                 payload = _json.loads(parts[1])
             except _json.JSONDecodeError:
                 return "Payload must be valid JSON (or omit it)."
+        elif required:
+            example = {}
+            for field in required:
+                info = props.get(field, {})
+                field_type = info.get("type", "string")
+                if field_type == "array":
+                    example[field] = ["value"]
+                elif field_type == "object":
+                    example[field] = {"key": "value"}
+                elif field_type == "integer":
+                    example[field] = 1
+                elif field_type == "number":
+                    example[field] = 1.0
+                elif field_type == "boolean":
+                    example[field] = True
+                else:
+                    example[field] = f"your {field}"
+
+            lines = [f"Task '{name}' requires a payload."]
+            lines.append(f"Required: {', '.join(required)}")
+            optional = [field for field in props if field not in required]
+            if optional:
+                lines.append(f"Optional: {', '.join(optional)}")
+            lines.append(f"Example: /trigger {name} {_json.dumps(example)}")
+            return "\n".join(lines)
         return ctrl.trigger_event_task(name, payload)
 
     def _cmd_locations(arg):
@@ -404,7 +438,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         CommandEntry("unload",   "Unload a service",      "<service>",
                      handler=lambda a: ctrl.unload_service(a) if a else "Usage: /unload <service>",
                      arg_completions=_service_names),
-        CommandEntry("tasks",    "List all tasks",
+        CommandEntry("tasks",    "List path-driven and event-driven tasks",
                      handler=lambda _: _render_tasks()),
         CommandEntry("pipeline", "Show the path-driven task dependency graph",
                      handler=lambda _: ctrl.orchestrator.dependency_pipeline_graph()),
@@ -424,9 +458,6 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         CommandEntry("trigger",  "Manually fire an event-triggered task", "<task> [json]",
                      handler=lambda a: _cmd_trigger(a),
                      arg_completions=_event_task_names),
-        CommandEntry("runs",     "Alias for /tasks",
-                     handler=lambda _: _render_tasks(),
-                     hide_from_help=True),
         CommandEntry("tools",    "List registered tools",
                      handler=lambda _: format_tools(ctrl.list_tools())),
         CommandEntry("enable",   "Enable a tool for agent use", "<tool>",

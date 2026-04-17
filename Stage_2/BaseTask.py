@@ -13,12 +13,13 @@ There are two trigger kinds:
   keyed by run_id, dispatched from EventTrigger whenever a subscribed
   bus channel fires. Implement run_event(run_id, payload, context).
 
-A task declares:
-- its trigger kind and, for event tasks, trigger_channels
-- the file modalities it roots on, for root path tasks
-- the tables it reads and writes
-- whether readiness is AND or OR across declared inputs
-- which shared services must be loaded first
+	A task declares:
+	- its trigger kind and, for event tasks, trigger_channels
+	- optional event_payload_schema metadata for guided manual triggering
+	- the file modalities it roots on, for root path tasks
+	- the tables it reads and writes
+	- whether readiness is AND or OR across declared inputs
+	- which shared services must be loaded first
 
 Dependencies are derived automatically from reads and writes within the
 same trigger kind. Cross-kind reads are ambient database reads at run
@@ -95,6 +96,10 @@ class BaseTask:
 		    point and the dependency graph the task participates in.
 		trigger_channels:
 		    For event tasks, bus channels that enqueue runs.
+		event_payload_schema:
+		    Optional JSON-schema-like object describing payload fields for
+		    manual triggering in frontends. Uses the same
+		    {"type":"object","properties":...,"required":[...]} shape as tools.
 		modalities:
 		    File types this task roots on. Required for root path tasks.
 		    Downstream path tasks usually leave this empty.
@@ -132,6 +137,7 @@ class BaseTask:
 	#           bus channels
 	trigger: str = "path"
 	trigger_channels: list[str] = []   # bus channels this event task subscribes to
+	event_payload_schema: dict = {}
 
 	# --- Routing ---
 	modalities: list[str] = []
@@ -162,7 +168,7 @@ class BaseTask:
 		super().__init_subclass__(**kwargs)
 		# Prevent subclasses from sharing mutable class attributes.
 		# Without .copy(), every subclass would mutate the same list object.
-		for attr in ("modalities", "reads", "writes", "requires_services", "config_settings", "trigger_channels"):
+		for attr in ("modalities", "reads", "writes", "requires_services", "config_settings", "trigger_channels", "event_payload_schema"):
 			value = getattr(cls, attr)
 			if isinstance(value, (dict, list)):
 				setattr(cls, attr, value.copy())

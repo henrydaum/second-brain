@@ -442,8 +442,23 @@ class Controller:
         channels = getattr(task, "trigger_channels", []) or []
         if not channels:
             return f"Task '{name}' has no trigger_channels declared."
+        payload = payload or {}
+        if not isinstance(payload, dict):
+            return "Trigger payload must be a JSON object."
+        schema = getattr(task, "event_payload_schema", {}) or {}
+        required = schema.get("required", [])
+        missing = []
+        for field in required:
+            value = payload.get(field)
+            if value is None:
+                missing.append(field)
+            elif isinstance(value, str) and not value.strip():
+                missing.append(field)
+        if missing:
+            missing_str = ", ".join(missing)
+            return f"Task '{name}' requires payload fields: {missing_str}."
         from event_bus import bus
-        bus.emit(channels[0], payload or {})
+        bus.emit(channels[0], payload)
         return f"Emitted '{channels[0]}' for task '{name}'."
 
     def retry_all(self) -> str:

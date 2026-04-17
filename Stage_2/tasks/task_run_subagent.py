@@ -24,6 +24,28 @@ class RunSubagent(BaseTask):
     name = "run_subagent"
     trigger = "event"
     trigger_channels = [SUBAGENT_RUN_CHANNEL]
+    event_payload_schema = {
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "What the scheduled subagent should do.",
+            },
+            "title": {
+                "type": "string",
+                "description": "Optional user-facing title for the run.",
+            },
+            "job_name": {
+                "type": "string",
+                "description": "Optional stable internal name for the run.",
+            },
+            "input_paths": {
+                "type": "array",
+                "description": "Optional list of file paths to include as inputs.",
+            },
+        },
+        "required": ["prompt"],
+    }
     requires_services = ["llm"]
     writes = []
     output_schema = """

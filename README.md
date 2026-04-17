@@ -483,7 +483,7 @@ Available in the REPL and as slash commands in Telegram.
 | `services` | List services and load state |
 | `tasks` | List path-driven and event-driven tasks |
 | `tools` | List registered tools |
-| `trigger <task> [json]` | Manually fire an event-triggered task |
+| `trigger <task> [json]` | Manually fire an event-triggered task with an optional JSON payload |
 | `unload <service>` | Unload a service |
 | `unpause <task>` | Resume a task |
 

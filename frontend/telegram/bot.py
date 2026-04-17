@@ -130,6 +130,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     _pending_calls: dict = {}           # chat_id -> {tool, params, collected, current_idx}
     _pending_configures: dict = {}      # chat_id -> setting_key (waiting for value)
     _pending_model_adds: dict = {}      # chat_id -> {name, params, collected, current_idx}
+    _pending_triggers: dict = {}        # chat_id -> {task, params, collected, current_idx}
     _chat_lock = asyncio.Lock()
     _loop: asyncio.AbstractEventLoop | None = None
     _app: Application | None = None
@@ -460,14 +461,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     # ── Interactive /call form ───────────────────────────────────────
 
-    def _get_tool_params(tool_name: str) -> list[dict] | None:
-        """Extract parameter info from a tool's JSON schema."""
-        tool = tool_registry.tools.get(tool_name)
-        if not tool:
-            return None
-        schema = tool.parameters or {}
-        props = schema.get("properties", {})
-        required = set(schema.get("required", []))
+    def _schema_to_params(schema: dict) -> list[dict]:
+        """Extract ordered parameter info from a JSON-schema-like object."""
+        props = schema.get("properties", {}) if schema else {}
+        required = set(schema.get("required", [])) if schema else set()
         if not props:
             return []
         params = []
@@ -480,6 +477,22 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 "enum": info.get("enum"),
             })
         return params
+
+    def _get_tool_params(tool_name: str) -> list[dict] | None:
+        """Extract parameter info from a tool's JSON schema."""
+        tool = tool_registry.tools.get(tool_name)
+        if not tool:
+            return None
+        return _schema_to_params(tool.parameters or {})
+
+    def _get_trigger_params(task_name: str) -> list[dict] | None:
+        """Extract interactive trigger params from an event task schema."""
+        task = ctrl.orchestrator.tasks.get(task_name)
+        if not task:
+            return None
+        if getattr(task, "trigger", "path") != "event":
+            return None
+        return _schema_to_params(getattr(task, "event_payload_schema", {}) or {})
 
     async def _ask_next_param(chat_id: int):
         """Send a prompt for the next parameter in a pending /call form."""
@@ -551,6 +564,94 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         else:
             output = format_tool_result(result)
             await _send_long_message(chat_id, output)
+
+    async def _ask_next_trigger_param(chat_id: int):
+        """Send a prompt for the next parameter in a pending /trigger form."""
+        state = _pending_triggers.get(chat_id)
+        if not state:
+            return
+        idx = state["current_idx"]
+        if idx >= len(state["params"]):
+            await _execute_pending_trigger(chat_id)
+            return
+
+        param = state["params"][idx]
+        req = " (required)" if param["required"] else " (optional, send /skip)"
+        desc = f"\n{html.escape(param['description'])}" if param["description"] else ""
+
+        ptype = param["type"]
+        if ptype == "string":
+            hint = "\nType your value as plain text (no quotes needed)."
+        elif ptype == "integer":
+            hint = "\nType a whole number, e.g. <code>42</code>"
+        elif ptype == "number":
+            hint = "\nType a number, e.g. <code>3.14</code>"
+        elif ptype == "array":
+            hint = "\nSend each item on its own line, e.g.:\n<code>first item\nsecond item</code>"
+        elif ptype == "object":
+            hint = "\nSend as JSON, e.g. <code>{\"key\": \"value\"}</code>"
+        else:
+            hint = ""
+
+        text = f"<b>{html.escape(param['name'])}</b> ({ptype}){req}{desc}{hint}"
+
+        if param.get("enum"):
+            buttons = [[InlineKeyboardButton(str(v), callback_data=f"trigger:{chat_id}:{param['name']}:{v}")]
+                       for v in param["enum"]]
+            await _app.bot.send_message(chat_id, text,
+                                        reply_markup=InlineKeyboardMarkup(buttons),
+                                        parse_mode="HTML")
+        elif param["type"] == "boolean":
+            buttons = [[
+                InlineKeyboardButton("True", callback_data=f"trigger:{chat_id}:{param['name']}:true"),
+                InlineKeyboardButton("False", callback_data=f"trigger:{chat_id}:{param['name']}:false"),
+            ]]
+            await _app.bot.send_message(chat_id, text,
+                                        reply_markup=InlineKeyboardMarkup(buttons),
+                                        parse_mode="HTML")
+        else:
+            await _app.bot.send_message(chat_id, text, parse_mode="HTML")
+
+    async def _execute_pending_trigger(chat_id: int):
+        """Execute a completed /trigger form."""
+        state = _pending_triggers.pop(chat_id, None)
+        if not state:
+            return
+        task_name = state["task"]
+        payload = state["collected"]
+        await _app.bot.send_message(chat_id, f"Triggering {task_name}...", disable_notification=True)
+        loop = asyncio.get_running_loop()
+        output = await loop.run_in_executor(
+            None, lambda: ctrl.trigger_event_task(task_name, payload))
+        if output:
+            await _send_long_message(chat_id, output)
+
+    async def _start_trigger_form(chat_id: int, task_name: str) -> bool:
+        """Begin interactive /trigger payload collection for an event task."""
+        params = _get_trigger_params(task_name)
+        if params is None:
+            await _app.bot.send_message(chat_id, f"Unknown or non-event task: {task_name}")
+            return True
+        if not params:
+            loop = asyncio.get_running_loop()
+            output = await loop.run_in_executor(
+                None, lambda: ctrl.trigger_event_task(task_name, {}))
+            if output:
+                await _send_long_message(chat_id, output)
+            return True
+        _pending_triggers[chat_id] = {
+            "task": task_name,
+            "params": params,
+            "collected": {},
+            "current_idx": 0,
+        }
+        await _app.bot.send_message(
+            chat_id,
+            f"<b>{html.escape(task_name)}</b> — fill in the trigger payload:\n"
+            f"Send /skip for optional params, /cancel to abort.",
+            parse_mode="HTML")
+        await _ask_next_trigger_param(chat_id)
+        return True
 
     def _coerce_param_value(raw: str, param_type: str):
         """Convert a raw string to the appropriate Python type."""
@@ -776,6 +877,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             if chat_id in _pending_model_adds:
                 _pending_model_adds.pop(chat_id)
                 cancelled = True
+            if chat_id in _pending_triggers:
+                _pending_triggers.pop(chat_id)
+                cancelled = True
             if cancelled:
                 await update.message.reply_text("Cancelled.")
                 return
@@ -812,6 +916,16 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 else:
                     await update.message.reply_text("This parameter is required.")
                     return
+            state = _pending_triggers.get(chat_id)
+            if state:
+                idx = state["current_idx"]
+                if idx < len(state["params"]) and not state["params"][idx]["required"]:
+                    state["current_idx"] += 1
+                    await _ask_next_trigger_param(chat_id)
+                    return
+                else:
+                    await update.message.reply_text("This parameter is required.")
+                    return
             state = _pending_model_adds.get(chat_id)
             if state:
                 idx = state["current_idx"]
@@ -842,6 +956,15 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 tool_name = arg.split()[0]
                 await _start_call_form(chat_id, tool_name)
                 return
+
+        if cmd_name == "trigger":
+            trigger_parts = arg.split(maxsplit=1) if arg else []
+            has_inline_json = len(trigger_parts) > 1 and trigger_parts[1].lstrip().startswith("{")
+            if trigger_parts and not has_inline_json:
+                task_name = trigger_parts[0]
+                started = await _start_trigger_form(chat_id, task_name)
+                if started:
+                    return
 
         # /model — show subcommand menu or profile picker
         if cmd_name == "model":
@@ -922,6 +1045,22 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     state["collected"][param["name"]] = value
                     state["current_idx"] += 1
                     await _ask_next_param(chat_id)
+                except (ValueError, json.JSONDecodeError) as e:
+                    await update.message.reply_text(
+                        f"Invalid value for {param['name']} ({param['type']}): {e}\nTry again.")
+                return
+
+        # Check for pending /trigger form input
+        if chat_id in _pending_triggers:
+            state = _pending_triggers[chat_id]
+            idx = state["current_idx"]
+            if idx < len(state["params"]):
+                param = state["params"][idx]
+                try:
+                    value = _coerce_param_value(text, param["type"])
+                    state["collected"][param["name"]] = value
+                    state["current_idx"] += 1
+                    await _ask_next_trigger_param(chat_id)
                 except (ValueError, json.JSONDecodeError) as e:
                     await update.message.reply_text(
                         f"Invalid value for {param['name']} ({param['type']}): {e}\nTry again.")
@@ -1157,6 +1296,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     if cmd_name == "call":
                         await _start_call_form(chat_id, arg)
                         return
+                    if cmd_name == "trigger":
+                        await _start_trigger_form(chat_id, arg)
+                        return
 
                     loop = asyncio.get_running_loop()
                     output = await loop.run_in_executor(
@@ -1278,6 +1420,24 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                             state["collected"][param_name] = _coerce_param_value(value, param["type"])
                             state["current_idx"] += 1
                             await _ask_next_param(chat_id)
+                return
+
+            # ── /trigger form callbacks (trigger:<chat_id>:<param>:<value>) ──
+            if data.startswith("trigger:"):
+                parts = data.split(":", 3)
+                if len(parts) == 4:
+                    _, cid_str, param_name, value = parts
+                    chat_id = int(cid_str)
+                    await update.callback_query.answer()
+                    await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                    state = _pending_triggers.get(chat_id)
+                    if state:
+                        idx = state["current_idx"]
+                        if idx < len(state["params"]):
+                            param = state["params"][idx]
+                            state["collected"][param_name] = _coerce_param_value(value, param["type"])
+                            state["current_idx"] += 1
+                            await _ask_next_trigger_param(chat_id)
                 return
 
             # ── Approval callbacks (approve_xxx:allow/deny) ──
