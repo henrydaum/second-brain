@@ -260,6 +260,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     bus.subscribe(APPROVAL_REQUESTED, _approve_handler)
 
+    def _on_agent_notice(text: str):
+        """Surface agent breadcrumbs (e.g. compaction) in the Telegram chat."""
+        bus.emit(CHAT_MESSAGE_PUSHED, {
+            "message": text,
+            "kind": "notice",
+            "source": "agent",
+        })
+
     def _create_agent():
         llm = services.get("llm")
         if llm and llm.loaded:
@@ -271,6 +279,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 on_tool_result=_on_tool_result,
                 on_tool_start=_on_tool_start,
                 on_message=_on_agent_message,
+                on_notice=_on_agent_notice,
             )
             logger.info("Agent ready (Telegram).")
             return True

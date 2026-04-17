@@ -280,8 +280,8 @@ class Agent:
             {"role": "assistant", "content": "Understood — I have the earlier context."},
             {"role": "user", "content": "Continue with the task. Call the next tool or provide the final answer."},
         ]
-        self._fire_on_notice("(conversation compacted)")
-        logger.info(f"Compacted conversation into {len(summary)} char summary")
+        self._fire_on_notice(f"Compacted conversation into {len(summary)} characters.")
+        logger.info(f"Compacted conversation into {len(summary)} characters.")
 
     def _fallback_trim(self):
         """Last-resort trim: keep only the most recent user message and response."""

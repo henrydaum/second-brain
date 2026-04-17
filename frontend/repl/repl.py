@@ -101,12 +101,17 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return "LLM service is not loaded. Run /load llm to load it."
 
         conversation_ref["id"] = None  # fresh conversation on /chat entry
+
+        def _on_notice(text):
+            print(f"\n[{text}]", flush=True)
+
         agent = Agent(
             llm, tool_registry, config,
             system_prompt=lambda: build_system_prompt(
                 ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services
             ),
             on_message=_on_agent_message,
+            on_notice=_on_notice,
         )
         logger.info("Agent initialized.")
 
