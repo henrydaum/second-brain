@@ -1,129 +1,373 @@
 # Second Brain
 
-A local-first file intelligence pipeline that watches your directories, parses every file it finds, and makes them searchable and queryable through a self-extending LLM agent. Think of it as a personal data warehouse that builds itself — and an agent that can extend its own capabilities at runtime.
+Second Brain is a local-first personal data engine.
 
-## How It Works
+It watches your folders, parses what it finds, builds a structured index in SQLite, and gives an LLM the tools to search, reason, act, schedule work, remember things, and extend the system itself.
 
-The system is organized into four stages, inspired by the layered transport systems in Factorio: simple, reliable pipelines at the bottom; intelligent, adaptive agents at the top.
+This is not just "chat with your files." It is a private, always-on AI runtime for your data:
 
-**Stage 0 — Services** are shared model backends (LLM, embeddings, OCR, Whisper, Google Drive). They have a load/unload lifecycle so you can bring resources up and down without restarting. New services can be added at runtime by the agent.
+- a searchable file index
+- a natural-language analyst
+- a background scheduler
+- an event-driven automation system
+- a Telegram assistant
+- a memory-backed agent
+- a plugin platform that can author new tools, tasks, and services at runtime
 
-**Stage 1 — Parsers** read files and produce standardized output. A registry maps file extensions to parser functions, so adding support for a new format is a single `register()` call. Parsers handle text, images, audio, video, tabular data, and container formats (ZIP, PDF with embedded images, etc.). Each parser also reports what *else* is in the file (`also_contains`), enabling multi-modal discovery — a PDF might yield text *and* flag that it contains images worth OCR-ing.
+If you want the short version: Second Brain is what happens when file intelligence, cron, a tool-using agent, and a local plugin runtime are built as one system instead of four separate products.
 
-**Stage 2 — Pipeline** is the automated backbone. A file watcher monitors your configured directories, debounces filesystem events, and keeps a SQLite database in sync with what's on disk. When files appear or change, the orchestrator figures out which tasks apply (based on modality and dependency chains) and dispatches them to a thread pool. Eight built-in tasks — text extraction, OCR, chunking, text & image embedding, container extraction, tabular textualization, and full-text indexing — run in the background without any user intervention. The orchestrator handles batching, concurrency limits, service gating, task versioning, and dependency resolution. New tasks can be added at runtime by the agent (see Sandbox Plugins below).
+## Why It Matters
 
-**Stage 3 — Agent** is the query and authoring layer. Tools wrap database queries, search indexes, and file rendering behind a uniform interface that doubles as LLM function-calling schemas. An agent loop connects a local LLM to the tool registry, so you can ask natural-language questions about your files and get grounded answers. But the agent can also *extend itself*: a `build_plugin` tool lets the LLM create, edit, and delete new tools, tasks, and services at runtime — writing Python files to a sandbox directory and registering them immediately without a restart. A `run_command` tool gives the agent shell access to read source code, install packages, and inspect the system. Tools, tasks, and services are all auto-discovered from both the source tree (read-only) and the sandbox (agent-writable).
+Most AI apps are stateless. Most file indexers are passive. Most automation tools are brittle. Second Brain is none of those.
 
-A shared `SecondBrainContext` object flows through every layer, giving tasks and tools access to the database, config, services, parsers, tool registry, orchestrator, and (for tools) the ability to call other tools.
+It can:
+
+- index your documents, code, PDFs, slides, spreadsheets, archives, images, audio, and video
+- answer questions grounded in your own files with citations
+- search by keyword, semantics, or a hybrid of both
+- remember durable facts and preferences across sessions
+- search the web when local knowledge is not enough
+- run proactive subagents on schedules
+- fire tasks from events, not just file changes
+- push reminders, findings, daily briefs, and alerts into Telegram
+- hot-load new tools, tasks, and services without a restart
+
+It can be a private research assistant. It can be a file intelligence layer for your whole machine. It can be a reminder system. It can be a daily briefing engine. It can absolutely function like a personal AI calendar and operator for recurring work.
+
+## Core Capabilities
+
+### 1. Index Your World
+
+Point it at one or more directories and it will continuously watch them, parse supported files, and keep the database in sync as files appear, change, or disappear.
+
+Built-in indexing pipeline includes:
+
+- text extraction
+- OCR for images
+- archive/container extraction
+- chunking for embedding
+- text embeddings
+- image embeddings
+- lexical full-text indexing
+- tabular textualization for spreadsheets and data files
+
+The result is a live knowledge base over your local files, not a one-shot import.
+
+### 2. Search Like a Real System
+
+Second Brain ships with multiple retrieval modes:
+
+- `lexical_search` for exact terms and keyword-heavy queries
+- `semantic_search` for meaning-based retrieval over embeddings
+- `hybrid_search` for fused lexical + semantic ranking
+- `sql_query` for direct inspection of the underlying SQLite database
+
+You can ask normal-language questions, but you can also inspect the system with precision when you want to.
+
+### 3. Run Background Subagents
+
+Second Brain can schedule background agents to run later or run repeatedly.
+
+That means you can create jobs like:
+
+- "Every weekday at 8:00 AM, send me a briefing on new files in my research folder."
+- "At 6:00 PM, remind me what is still unfinished."
+- "Every hour, search the web for updates on a topic and send me only important changes."
+- "On April 30 at 9:00 AM, review this folder and message me the top risks."
+
+Jobs can be:
+
+- one-time with an ISO datetime
+- recurring with cron
+- enabled or disabled without deleting them
+- backed by input files you explicitly attach to the job
+
+Scheduled subagents keep their own stored run history and can proactively push user-visible messages into chat.
+
+### 4. Event-Driven Tasks
+
+The system is no longer only file-driven.
+
+Tasks can now be triggered by events through the internal event bus. That opens the door to workflows like:
+
+- scheduled event emissions from the timekeeper service
+- chained background runs
+- approval workflows
+- proactive notifications
+- future external integrations that emit events into the system
+
+Path-triggered tasks and event-triggered tasks share the same orchestration model, which makes the whole platform much more general.
+
+### 5. Telegram Is a First-Class Frontend
+
+Flet is gone.
+
+Second Brain now ships with two primary frontends:
+
+- Telegram bot
+- Terminal REPL
+
+Telegram is not an afterthought. It supports:
+
+- slash commands
+- autocomplete
+- mobile-friendly responses
+- file and media delivery
+- interactive tool invocation
+- approval prompts for sensitive actions
+- proactive subagent push messages
+
+This means your local system can act like a private mobile AI assistant without becoming a cloud SaaS product.
+
+### 6. Durable Memory
+
+Second Brain includes agent memory through `memory.md` in the data directory.
+
+The agent can update that memory intentionally with `update_memory`, which makes it useful for:
+
+- preferences
+- standing instructions
+- durable facts
+- recurring context that should shape future behavior
+
+On top of that, conversation history is stored in SQLite and can be revisited later.
+
+### 7. Web Search
+
+Second Brain can search the public web through the built-in `web_search` tool.
+
+It supports:
+
+- Brave Search
+- Brave Answers
+- DuckDuckGo fallback when a Brave Search key is not configured
+
+That means the agent is not trapped inside the local corpus. It can blend your private knowledge with current public information when appropriate.
+
+### 8. Self-Extending Runtime
+
+One of the most unusual parts of the project is that the agent can build new capabilities inside a sandbox at runtime.
+
+With `build_plugin`, it can create, edit, or delete:
+
+- tools
+- tasks
+- services
+
+Those plugins are hot-registered immediately. No restart needed.
+
+This is a big deal. It means Second Brain is not just a fixed assistant. It is an assistant that can grow new limbs.
+
+## What You Can Use It For
+
+- Personal search engine for your entire document corpus
+- Codebase analyst over local repositories
+- Research assistant that combines file search with live web search
+- Daily briefings pushed to Telegram
+- Reminder and recurring-task system powered by scheduled subagents
+- AI calendar-like workflows using one-time and recurring jobs
+- Archive and media intelligence across PDFs, images, video, audio, and spreadsheets
+- Private long-term assistant with memory and conversation history
+- Agentic automation that can build its own plugins when the right tool does not exist yet
+
+## Architecture
+
+The system is organized into four stages, with an event bus connecting long-lived components.
+
+### Stage 0: Services
+
+Shared backends with explicit load and unload lifecycles.
+
+Built-in services include:
+
+- `llm` - routed LLM service with named profiles
+- `web_search_provider` - Brave Search / Brave Answers / DuckDuckGo fallback
+- `timekeeper` - cron and one-time scheduling
+- `ocr` - Windows OCR
+- `whisper` - speech-to-text
+- `text_embedder` - text embeddings
+- `image_embedder` - image embeddings
+- `google_drive` - Drive integration
+
+The LLM layer supports profile routing, so you can switch models without changing the rest of the system.
+
+### Stage 1: Parsers
+
+Extension-driven parsers normalize raw files into structured outputs.
+
+Supported modalities include:
+
+- text
+- image
+- audio
+- video
+- tabular
+- container
+
+Parsers can also report `also_contains` hints, which allows multi-modal follow-up work. For example, a file can yield text and still announce that it contains images worth OCRing.
+
+### Stage 2: Pipeline + Orchestration
+
+This is the always-on execution layer.
+
+It includes:
+
+- a filesystem watcher
+- a SQLite-backed task queue
+- an event-trigger runner
+- automatic dependency resolution from task reads/writes
+- concurrency controls
+- task pause, retry, reset, and timeout recovery
+- downstream invalidation when upstream outputs change
+
+There are now two kinds of work in the system:
+
+- path-keyed tasks for files
+- event-keyed tasks for runs triggered by bus events
+
+That split is what enables both continuous file indexing and scheduled/proactive agents to coexist in one architecture.
+
+### Stage 3: Agent + Tools
+
+This is the reasoning and action layer.
+
+The agent gets a dynamically rebuilt system prompt that includes:
+
+- current tools
+- current services
+- current task pipeline state
+- current file inventory
+- current memory
+- current sandbox plugins
+
+Built-in tools include:
+
+| Tool | Purpose |
+|---|---|
+| `hybrid_search` | Best general search over local knowledge |
+| `lexical_search` | Exact-term and keyword search |
+| `semantic_search` | Meaning-based retrieval |
+| `sql_query` | Direct read-only SQL inspection |
+| `read_file` | Read source files, templates, or local text files |
+| `render_files` | Send files back to the user |
+| `run_command` | Run whitelisted development commands |
+| `build_plugin` | Create, edit, and delete sandbox plugins |
+| `update_memory` | Edit durable agent memory |
+| `web_search` | Search the public web |
+| `schedule_subagent` | Create and manage scheduled background agents |
 
 ## Frontends
 
-Second Brain now ships with two interactive frontends:
-- **Telegram bot** — the primary chat interface, with slash-command autocomplete, mobile-friendly output, media sending, and file-aware conversations
-- **Terminal REPL** — a local console interface for commands and interactive chat mode
+Current frontends:
 
-Features:
-- **Chat with your files** — ask the agent natural-language questions and get grounded answers with source citations
-- **Slash commands** — manage services, tasks, tools, and config from Telegram or the REPL
-- **Interactive tool calls in Telegram** — `/call <tool>` walks required parameters step by step
-- **Attachment rendering** — file-producing tools can send images, documents, audio, and video back through Telegram
+- `repl` - local terminal interface
+- `telegram` - private bot frontend
 
-Fresh configs enable both frontends by default. Configure startup modules with `enabled_frontends` (options: `repl`, `telegram`).
+Fresh configs enable both by default.
+
+The Telegram frontend is especially useful because it makes the system feel less like a dev tool and more like a personal AI operator that can reach out to you when something matters.
 
 ## Project Structure
 
-```
+```text
 Second Brain/
-├── main.pyw              # Entry point — starts configured frontends (repl, telegram)
-├── plugin_discovery.py   # Unified plugin loader (tools, tasks, services) — baked-in + sandbox
-├── paths.py              # Centralized path constants (ROOT_DIR, DATA_DIR, SANDBOX_*)
-├── config_data.py        # Declarative settings schema (titles, types, defaults)
-├── config_manager.py     # Loads/saves config.json, merges defaults, migration
-├── context.py            # SecondBrainContext — shared context for tasks & tools
-├── controller.py         # Command layer between user input and the system
+├── main.py                 # Cross-platform entry point
+├── main.pyw                # Canonical startup script
+├── controller.py           # Command/control surface used by frontends
+├── context.py              # Shared runtime context for tools and tasks
+├── plugin_discovery.py     # Built-in + sandbox discovery and hot registration
+├── paths.py                # Root/data/sandbox path definitions
+├── event_bus.py            # Internal pub/sub bus
+├── event_channels.py       # Event channel registry
+├── config_data.py          # Core config schema
+├── config_manager.py       # Config + plugin-config persistence
 │
 ├── frontend/
 │   ├── repl/
-│   │   └── repl.py       # Terminal REPL and chat mode
-│   ├── shared/
-│   │   ├── commands.py   # Shared slash-command registry
-│   │   └── dispatch.py   # Shared chat/command routing
-│   └── telegram/
-│       ├── bot.py        # Telegram bot frontend
-│       └── renderers.py  # Telegram media/attachment rendering
+│   │   └── repl.py         # Terminal frontend
+│   ├── telegram/
+│   │   ├── bot.py          # Telegram bot frontend
+│   │   └── renderers.py    # Telegram media sending
+│   └── shared/
+│       ├── commands.py     # Shared slash command registry
+│       ├── dispatch.py     # Shared input routing
+│       └── formatters.py   # Shared formatting helpers
 │
-├── Stage_0/              # Services (shared model backends)
-│   ├── BaseService.py    # Service interface with load/unload lifecycle
+├── Stage_0/
+│   ├── BaseService.py
 │   └── services/
-│       ├── llmService.py       # OpenAI-compatible LLM (LM Studio, OpenAI, etc.)
-│       ├── embedService.py     # SentenceTransformer (text) + CLIP (image) embeddings
-│       ├── ocrService.py       # Windows native OCR
-│       ├── whisperService.py   # Whisper speech-to-text
-│       └── driveService.py     # Google Drive sync
+│       ├── llmService.py
+│       ├── embedService.py
+│       ├── ocrService.py
+│       ├── whisperService.py
+│       ├── webSearchService.py
+│       ├── timekeeperService.py
+│       └── driveService.py
 │
-├── Stage_1/              # Parsers
-│   ├── registry.py       # Extension → parser mapping, main parse() entry point
-│   ├── ParseResult.py    # Standardized parser output dataclass
+├── Stage_1/
+│   ├── registry.py
+│   ├── ParseResult.py
 │   └── parsers/
-│       ├── parse_text.py       # Plain text, PDF, DOCX, PPTX, code, Google Docs
-│       ├── parse_image.py      # PNG, JPEG, HEIC, etc. → PIL.Image
-│       ├── parse_audio.py      # WAV, MP3, FLAC, etc. → numpy array
-│       ├── parse_video.py      # MP4, MKV, etc. → av.Container (lazy)
-│       ├── parse_tabular.py    # CSV, XLSX, Parquet, SQLite → pandas DataFrame
-│       └── parse_container.py  # ZIP, TAR, RAR, 7z → extracted child paths
 │
-├── Stage_2/              # Pipeline
-│   ├── database.py       # SQLite: files table, task_queue, dynamic output tables
-│   ├── watcher.py        # Filesystem watcher (watchdog) with debouncing & ghost cleanup
-│   ├── orchestrator.py   # Task dispatcher — modality routing, deps, concurrency
-│   ├── BaseTask.py       # Task interface + TaskResult dataclass
+├── Stage_2/
+│   ├── database.py
+│   ├── watcher.py
+│   ├── event_trigger.py
+│   ├── orchestrator.py
+│   ├── BaseTask.py
 │   └── tasks/
-│       ├── task_extract_text.py       # Parse text content, store in DB
-│       ├── task_extract_container.py  # Unpack archives, register child files
-│       ├── task_ocr_images.py         # OCR images via Windows OCR service
-│       ├── task_chunk_text.py         # Split extracted text into chunks for embedding
-│       ├── task_embed_text.py         # Generate text embeddings (SentenceTransformer)
-│       ├── task_embed_images.py       # Generate image embeddings (CLIP)
-│       ├── task_textualize_tabular.py # Convert tabular data to searchable text
-│       └── task_lexical_index.py      # Build FTS5 full-text search index
+│       ├── task_extract_text.py
+│       ├── task_extract_container.py
+│       ├── task_ocr_images.py
+│       ├── task_chunk_text.py
+│       ├── task_embed_text.py
+│       ├── task_embed_images.py
+│       ├── task_textualize_tabular.py
+│       ├── task_lexical_index.py
+│       └── task_run_subagent.py
 │
-├── Stage_3/              # Agent
-│   ├── BaseTool.py       # Tool interface, ToolResult, ToolRegistry
-│   ├── tool_registry.py  # Thread-safe tool registry with call dispatch
-│   ├── agent.py          # LLM ↔ tool loop with conversation history
-│   ├── system_prompt.py  # Dynamic system prompt builder (refreshed every message)
-│   ├── SearchResult.py   # Search result dataclass
+├── Stage_3/
+│   ├── agent.py
+│   ├── BaseTool.py
+│   ├── tool_registry.py
+│   ├── system_prompt.py
+│   ├── SearchResult.py
 │   └── tools/
-│       ├── tool_hybrid_search.py      # Fused lexical + semantic via Reciprocal Rank Fusion
-│       ├── tool_lexical_search.py     # BM25 keyword search via SQLite FTS5
-│       ├── tool_semantic_search.py    # Vector similarity search over embeddings
-│       ├── tool_sql_query.py          # Direct SQL queries against the database
-│       ├── tool_render_files.py       # Display files to user (images, audio, video, etc.)
-│       ├── tool_build_plugin.py       # Create/edit/delete sandbox plugins at runtime
-│       └── tool_run_command.py        # Shell access for reading code, installing packages
+│       ├── tool_hybrid_search.py
+│       ├── tool_lexical_search.py
+│       ├── tool_semantic_search.py
+│       ├── tool_sql_query.py
+│       ├── tool_read_file.py
+│       ├── tool_render_files.py
+│       ├── tool_run_command.py
+│       ├── tool_build_plugin.py
+│       ├── tool_update_memory.py
+│       ├── tool_web_search.py
+│       └── tool_schedule_subagent.py
 │
-├── templates/            # Plugin templates the agent reads before authoring
+├── templates/
 │   ├── tool_template.py
 │   ├── task_template.py
 │   └── service_template.py
 │
-└── DATA_DIR/             # %LOCALAPPDATA%/Second Brain/ (created at runtime)
+└── DATA_DIR/
     ├── config.json
+    ├── plugin_config.json
     ├── database.db
-    └── sandbox/          # Agent-writable plugins, hot-registered on create/edit
-        ├── tools/        # tool_*.py — sandbox tools
-        ├── tasks/        # task_*.py — sandbox tasks
-        └── services/     # *.py — sandbox services
+    ├── memory.md
+    ├── sandbox_tools/
+    ├── sandbox_tasks/
+    └── sandbox_services/
 ```
 
 ## Setup
 
-### Prerequisites
+### Requirements
 
 - Python 3.11+
-- For LLM features: a local model server like [LM Studio](https://lmstudio.ai/) running an OpenAI-compatible endpoint, or an OpenAI API key.
-- For OCR: Windows (uses the native Windows OCR engine).
-- For Google Drive sync: a Google Cloud service account or OAuth credentials.
+- A configured LLM if you want agent features
+- Windows if you want the built-in native OCR service
+- Telegram bot token and allowed user ID if you want the Telegram frontend
 
 ### Install
 
@@ -133,177 +377,190 @@ cd "Second Brain"
 pip install -r requirements.txt
 ```
 
-Key dependencies include `python-telegram-bot`, `watchdog`, `PyMuPDF (fitz)`, `python-docx`, `python-pptx`, `Pillow`, `pandas`, `sentence-transformers`, `openai`, `av` (PyAV), and `py7zr`.
+Key dependencies include:
+
+- `openai`
+- `lmstudio`
+- `sentence-transformers`
+- `faster-whisper`
+- `PyMuPDF`
+- `python-docx`
+- `python-pptx`
+- `pandas`
+- `watchdog`
+- `python-telegram-bot`
+- `croniter`
+- `cron-descriptor`
 
 ### Configure
 
-On first run, the system creates a `config.json` in the data directory (`%LOCALAPPDATA%/Second Brain/`) with sensible defaults. The main thing you need to set is `sync_directories` — the folders you want the system to watch. You can edit `config.json` directly (use `/open_data` to find it) or inspect/update settings with `/config` and `/configure`.
+On first run, Second Brain creates its data directory automatically:
+
+- Windows: `%LOCALAPPDATA%/Second Brain/`
+- macOS: `~/Library/Application Support/Second Brain/`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/Second Brain/`
+
+The most important setting is `sync_directories`.
+
+Minimal example:
 
 ```json
 {
-    "sync_directories": ["C:/Users/you/Documents", "D:/Projects"],
-    "db_path": "database.db",
-    "max_workers": 4,
-    "llm_model_name": "your-model-name",
-    "llm_endpoint": "http://127.0.0.1:1234",
-    "embed_text_model_name": "BAAI/bge-m3",
-    "embed_image_model_name": "clip-ViT-L-14",
-    "embed_use_cuda": true,
-    "embed_chunk_size": 512,
-    "embed_chunk_overlap": 50,
-    "ignored_folders": ["node_modules", "__pycache__", ".git", ".venv", "venv"],
-    "skip_hidden_folders": true
+  "sync_directories": [
+    "C:/Users/you/Documents",
+    "D:/Projects"
+  ],
+  "enabled_frontends": ["repl", "telegram"],
+  "autoload_services": ["web_search_provider", "timekeeper"],
+  "telegram_bot_token": "",
+  "telegram_allowed_user_id": 0,
+  "llm_profiles": {
+    "local": {
+      "llm_model_name": "gpt-4.1-mini",
+      "llm_endpoint": "http://127.0.0.1:1234/v1",
+      "llm_api_key": "lm-studio",
+      "llm_context_size": 128000,
+      "llm_service_class": "OpenAILLM"
+    }
+  },
+  "active_llm_profile": "local"
 }
 ```
+
+Notes:
+
+- If you want tool-calling with LM Studio, point `OpenAILLM` at LM Studio's OpenAI-compatible endpoint.
+- `LLMRouter` supports multiple named profiles and switching between them with `/model`.
+- `timekeeper` and `web_search_provider` are good defaults to autoload because they power scheduling and web search.
+- Brave Search and Brave Answers are optional and configured through plugin settings.
 
 ### Run
 
 ```bash
-python main.pyw
+python main.py
 ```
 
-The configured frontends start, the system scans your configured directories, indexes every supported file, and starts watching for changes. The LLM loads automatically in the background when configured.
+On startup, the system:
 
-For a REPL-only setup:
-
-```json
-"enabled_frontends": ["repl"]
-```
+1. loads config
+2. creates sandbox directories if needed
+3. initializes the database
+4. discovers services, tasks, and tools
+5. starts the orchestrator
+6. starts the filesystem watcher
+7. starts the event-trigger runner
+8. launches the enabled frontends
 
 ## Commands
 
-Available as slash commands in Telegram or as plain commands in the REPL.
+Available in the REPL and as slash commands in Telegram.
 
 | Command | Description |
 |---|---|
-| `help` | Show all available commands |
-| `services` | List all services and their loaded/unloaded status |
-| `load <name>` | Load a service (e.g. `load llm`, `load text_embedder`) |
-| `unload <name>` | Unload a service to free resources |
-| `tasks` | List all tasks with pending/processing/done/failed counts |
-| `pipeline` | Show the task dependency graph |
-| `pause <name>` | Pause a task — work stays queued but won't dispatch |
-| `unpause <name>` | Resume a paused task |
-| `reset <name>` | Reset all entries for a task back to PENDING |
-| `retry <name>` | Retry only FAILED entries for a task |
-| `retry all` | Retry all FAILED entries across every task |
-| `tools` | List registered tools with enabled/disabled status |
-| `enable <name>` | Enable a tool for agent use |
-| `disable <name>` | Disable a tool |
-| `call <tool>` | Call a tool directly (interactive form in Telegram, JSON in REPL) |
-| `reload` | Re-discover all plugins (tools, tasks, services) from disk |
-| `stats` | System-wide statistics |
-| `config` / `settings` | Show config values |
-| `open_data` | Open the data folder in Explorer |
-| `open_root` | Open the project root in Explorer |
-| `clear` | Clear chat conversation history |
-| `quit` / `exit` | Graceful shutdown |
+| `help` | Show all commands |
+| `services` | List services and load state |
+| `load <service>` | Load a service |
+| `unload <service>` | Unload a service |
+| `tasks` | List tasks and status counts |
+| `pipeline` | Show the dependency graph |
+| `pause <task>` | Pause a task |
+| `unpause <task>` | Resume a task |
+| `reset <task>` | Reset all entries for a task |
+| `retry <task>` | Retry failed entries for a task |
+| `retry all` | Retry failed entries across all tasks |
+| `trigger <task> [json]` | Manually fire an event-triggered task |
+| `runs [task] [limit]` | List recent event-task runs |
+| `tools` | List registered tools |
+| `enable <tool>` | Enable a tool for agent use |
+| `disable <tool>` | Disable a tool for agent use |
+| `call <tool> {json}` | Call a tool directly |
+| `reload` | Hot-reload sandbox tasks and tools |
+| `locations [tools|tasks|services]` | Inspect plugin-related file locations |
+| `config [key]` | Show config values |
+| `configure <key> <value>` | Update config |
+| `history [id]` | List or load saved conversations |
+| `new` | Start a new conversation |
+| `cancel` | Interrupt the active agent |
+| `model ...` | Manage LLM profiles |
+| `stats` | Show system-wide stats |
+
+## Scheduling and Calendar-Like Workflows
+
+The easiest way to understand the new scheduler is this:
+
+Second Brain can now operate proactively, not just reactively.
+
+You can use `schedule_subagent` to create jobs that behave like:
+
+- reminders
+- recurring reviews
+- daily briefings
+- weekly planning prompts
+- periodic research tasks
+- "check this folder and notify me if something important changed"
+
+That is why it is fair to describe the system as calendar-capable, even though it is not trying to be a traditional calendar UI. It can manage time-based work, recurring schedules, and proactive messaging in a way that is often more useful than a normal calendar event.
 
 ## Extending the System
 
-There are two ways to add functionality: **baked-in plugins** (committed to the source tree, read-only at runtime) and **sandbox plugins** (written by the agent or by hand to `DATA_DIR/sandbox/`, mutable at runtime).
+Second Brain supports two extension modes:
 
-### Sandbox Plugins (Agent-Authored)
+- built-in plugins committed to the repo
+- sandbox plugins that can be created live
 
-The LLM agent can create, edit, and delete plugins at runtime using the `build_plugin` tool. Ask it in natural language — e.g. *"Build me a tool that fetches the weather"* — and it will:
+### Sandbox Plugins
 
-1. Read the appropriate template (`templates/tool_template.py`, etc.)
-2. Write the plugin file to the sandbox directory
-3. Validate the code (syntax, structure, import checks, name collision detection)
-4. Register it immediately — no restart or `/reload` needed
+Sandbox plugins live in the mutable data directory and are safe from overwriting built-in code.
 
-The agent can also edit plugins via search/replace blocks and delete them, with proper unregistration (including service unloading to free GPU/models). Sandbox plugins are namespaced separately so they can never overwrite baked-in ones.
+The agent can:
 
-Sandbox directories live in `DATA_DIR/sandbox/`:
-- `sandbox/tools/` — tool plugins (`tool_*.py`)
-- `sandbox/tasks/` — task plugins (`task_*.py`)
-- `sandbox/services/` — service plugins (`*.py`)
+- create them
+- edit them with exact search/replace patches
+- delete them
+- register them immediately
 
-### Baked-In Plugins (Developer-Authored)
+This gives you a very unusual loop:
 
-For permanent additions committed to the repo, drop files into the appropriate source directory.
+1. ask the assistant for a new capability
+2. let it author a plugin
+3. approve the change
+4. use the new capability immediately
 
-**Parser** — create a function that takes `(path, config, services)` and returns a `ParseResult`:
+### Built-In Plugins
 
-```python
-# Stage_1/parsers/parse_my_format.py
-from Stage_1.ParseResult import ParseResult
-import Stage_1.registry as registry
+If you want permanent source-controlled additions, add files in:
 
-def parse_my_format(path, config, services=None):
-    content = do_your_thing(path)
-    return ParseResult(modality="text", output=content)
+- `Stage_0/services/`
+- `Stage_2/tasks/`
+- `Stage_3/tools/`
 
-registry.register(".myext", "text", parse_my_format)
-```
-
-**Task** — create `task_*.py` in `Stage_2/tasks/` with a `BaseTask` subclass:
-
-```python
-# Stage_2/tasks/task_summarize.py
-from Stage_2.BaseTask import BaseTask, TaskResult
-
-class Summarize(BaseTask):
-    name = "summarize"
-    version = 1
-    modalities = ["text"]
-    depends_on = ["extract_text"]
-    requires_services = ["llm"]
-    output_tables = ["summaries"]
-    output_schema = """
-        CREATE TABLE IF NOT EXISTS summaries (
-            path TEXT PRIMARY KEY,
-            summary TEXT
-        );
-    """
-    batch_size = 4
-
-    def run(self, paths, context):
-        llm = context.services["llm"]
-        results = []
-        for path in paths:
-            text = context.db.get_extracted_text(path)
-            summary = llm.invoke([{"role": "user", "content": f"Summarize: {text}"}])
-            results.append(TaskResult(success=True, data=[{"path": path, "summary": summary.content}]))
-        return results
-```
-
-The orchestrator handles the rest — it won't dispatch until `extract_text` is done and the `llm` service is loaded.
-
-**Tool** — create `tool_*.py` in `Stage_3/tools/` with a `BaseTool` subclass. The schema you define becomes the LLM's function-calling interface automatically:
-
-```python
-# Stage_3/tools/tool_file_info.py
-from Stage_3.BaseTool import BaseTool, ToolResult
-
-class FileInfo(BaseTool):
-    name = "file_info"
-    description = "Get metadata about a file in the database."
-    parameters = {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string", "description": "File path to look up"}
-        },
-        "required": ["path"]
-    }
-
-    def run(self, context, **kwargs):
-        info = context.db.get_file(kwargs["path"])
-        return ToolResult(data=info) if info else ToolResult.failed("File not found")
-```
-
-All plugin types (baked-in and sandbox) are discovered at startup by `plugin_discovery.py`. Use `/reload` as a manual escape hatch to re-discover everything from disk.
+Parsers live in `Stage_1/parsers/` and are registered by extension.
 
 ## Supported File Types
 
-| Modality | Extensions |
+| Modality | Examples |
 |---|---|
-| Text | `.txt`, `.md`, `.py`, `.js`, `.ts`, `.html`, `.css`, `.json`, `.yaml`, `.toml`, `.xml`, `.pdf`, `.docx`, `.pptx`, `.gdoc`, and more |
+| Text | `.txt`, `.md`, `.py`, `.js`, `.ts`, `.html`, `.css`, `.json`, `.yaml`, `.toml`, `.xml`, `.pdf`, `.docx`, `.pptx`, `.gdoc` |
 | Image | `.png`, `.jpg`, `.jpeg`, `.webp`, `.tiff`, `.bmp`, `.ico`, `.heic`, `.heif` |
 | Audio | `.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`, `.aac`, `.wma` |
 | Video | `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, `.wmv`, `.flv` |
 | Tabular | `.csv`, `.tsv`, `.xlsx`, `.xls`, `.parquet`, `.feather`, `.sqlite`, `.db` |
 | Container | `.zip`, `.tar`, `.gz`, `.7z`, `.rar` |
+
+## Design Philosophy
+
+Second Brain is built around a few strong ideas:
+
+- Local-first by default
+- Structured data before vibes
+- Retrieval and automation in the same runtime
+- Agents should be able to act, not just answer
+- Background intelligence matters
+- Extensibility should be part of the product, not an afterthought
+
+The goal is not to make a prettier chatbot.
+
+The goal is to make a personal AI system that is actually operational.
 
 ## License
 

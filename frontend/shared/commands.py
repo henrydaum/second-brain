@@ -248,7 +248,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             # Update the conversation ref if a callback is available
             if _set_conversation_id:
                 _set_conversation_id(conv_id)
-            return f"(loaded conversation {conv_id})"
+            return f"(loaded conversation)"
 
         # /history — list recent conversations
         conversations = ctrl.db.list_conversations(limit=10)
