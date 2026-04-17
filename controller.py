@@ -53,6 +53,7 @@ class Controller:
         "- Prefer 2 to 6 words\n"
         "- Be concrete and distinct, not generic\n"
         "- Use plain English\n"
+        "- Don't ask questions because the user can't respond to you. If something doesn't make sense, just do your best.\n"
     )
 
     def maybe_generate_conversation_title_async(self, conversation_id: int):
