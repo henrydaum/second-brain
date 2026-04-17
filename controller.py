@@ -619,7 +619,7 @@ class Controller:
     # =================================================================
 
     def help(self) -> list[dict]:
-        """Command list for the REPL. The GUI generates its own help from the command registry."""
+        """Command list for the REPL."""
         return [
             {"command": "services", "description": "List services and status"},
             {"command": "load <n>", "description": "Load a service"},

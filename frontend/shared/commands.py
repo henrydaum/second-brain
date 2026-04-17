@@ -5,9 +5,8 @@ Each command is a CommandEntry with a name, description, argument hint,
 and handler callable. The registry provides autocomplete filtering and
 dispatch.
 
-``register_core_commands()`` registers the shared commands that are
-identical between the GUI and REPL. Each UI then adds its own
-UI-specific commands (or overrides) on top.
+``register_core_commands()`` registers the shared commands used by the
+frontends and API. Each frontend can add overrides on top.
 """
 
 from dataclasses import dataclass
@@ -65,7 +64,7 @@ def _build_help(registry: CommandRegistry) -> str:
 
 def register_core_commands(registry: CommandRegistry, ctrl, services, tool_registry,
                            root_dir, get_agent=None, set_conversation_id=None):
-    """Register commands shared by GUI, REPL, and API.
+    """Register commands shared by Telegram, REPL, and API.
 
     These are pure ctrl-wrapper commands with no UI-specific side effects.
     Each UI should call this first, then register/override its own commands.

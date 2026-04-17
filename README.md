@@ -16,26 +16,25 @@ The system is organized into four stages, inspired by the layered transport syst
 
 A shared `SecondBrainContext` object flows through every layer, giving tasks and tools access to the database, config, services, parsers, tool registry, orchestrator, and (for tools) the ability to call other tools.
 
-## The GUI
+## Frontends
 
-The default interface is a Flet-based desktop app with a chat-first design. Plain text goes to the LLM agent; slash-prefixed commands (e.g. `/services`, `/load llm`) control the system. An autocomplete popup appears when typing `/`.
+Second Brain now ships with two interactive frontends:
+- **Telegram bot** — the primary chat interface, with slash-command autocomplete, mobile-friendly output, media sending, and file-aware conversations
+- **Terminal REPL** — a local console interface for commands and interactive chat mode
 
 Features:
 - **Chat with your files** — ask the agent natural-language questions and get grounded answers with source citations
-- **Slash commands** — manage services, tasks, tools, and config without leaving the window
-- **Tool form overlay** — `/call <tool>` opens a dynamic form auto-generated from the tool's JSON schema
-- **Rich rendering** — query results display images, audio players, video players, tabular data, and text previews inline
-- **Settings panel** — `/config` opens a GUI settings editor
-- **Log viewer** — click the status bar to see the full log stream
-- **System tray** — the window minimizes to tray on close; right-click the tray icon to show/hide or quit
+- **Slash commands** — manage services, tasks, tools, and config from Telegram or the REPL
+- **Interactive tool calls in Telegram** — `/call <tool>` walks required parameters step by step
+- **Attachment rendering** — file-producing tools can send images, documents, audio, and video back through Telegram
 
-A terminal REPL is also available and runs alongside the GUI by default. Configure which frontends start via the `enabled_frontends` setting (options: `gui`, `repl`).
+Fresh configs enable both frontends by default. Configure startup modules with `enabled_frontends` (options: `repl`, `telegram`).
 
 ## Project Structure
 
 ```
 Second Brain/
-├── main.pyw              # Entry point — starts configured frontends (gui, repl)
+├── main.pyw              # Entry point — starts configured frontends (repl, telegram)
 ├── plugin_discovery.py   # Unified plugin loader (tools, tasks, services) — baked-in + sandbox
 ├── paths.py              # Centralized path constants (ROOT_DIR, DATA_DIR, SANDBOX_*)
 ├── config_data.py        # Declarative settings schema (titles, types, defaults)
@@ -43,11 +42,15 @@ Second Brain/
 ├── context.py            # SecondBrainContext — shared context for tasks & tools
 ├── controller.py         # Command layer between user input and the system
 │
-├── gui/
-│   ├── app.py            # Flet GUI — chat, commands, overlays, log viewer
-│   ├── commands.py       # CommandEntry dataclass + CommandRegistry
-│   ├── repl.py           # Terminal REPL (runs as background thread, or standalone)
-│   └── renderers.py      # Modality renderers (image/audio/video/text/tabular carousel)
+├── frontend/
+│   ├── repl/
+│   │   └── repl.py       # Terminal REPL and chat mode
+│   ├── shared/
+│   │   ├── commands.py   # Shared slash-command registry
+│   │   └── dispatch.py   # Shared chat/command routing
+│   └── telegram/
+│       ├── bot.py        # Telegram bot frontend
+│       └── renderers.py  # Telegram media/attachment rendering
 │
 ├── Stage_0/              # Services (shared model backends)
 │   ├── BaseService.py    # Service interface with load/unload lifecycle
@@ -130,11 +133,11 @@ cd "Second Brain"
 pip install -r requirements.txt
 ```
 
-Key dependencies include `flet`, `pystray`, `watchdog`, `PyMuPDF (fitz)`, `python-docx`, `python-pptx`, `Pillow`, `pandas`, `sentence-transformers`, `openai`, `av` (PyAV), and `py7zr`.
+Key dependencies include `python-telegram-bot`, `watchdog`, `PyMuPDF (fitz)`, `python-docx`, `python-pptx`, `Pillow`, `pandas`, `sentence-transformers`, `openai`, `av` (PyAV), and `py7zr`.
 
 ### Configure
 
-On first run, the system creates a `config.json` in the data directory (`%LOCALAPPDATA%/Second Brain/`) with sensible defaults. The main thing you need to set is `sync_directories` — the folders you want the system to watch. You can edit `config.json` directly (use `/open_data` to find it) or use `/config` in the GUI.
+On first run, the system creates a `config.json` in the data directory (`%LOCALAPPDATA%/Second Brain/`) with sensible defaults. The main thing you need to set is `sync_directories` — the folders you want the system to watch. You can edit `config.json` directly (use `/open_data` to find it) or inspect/update settings with `/config` and `/configure`.
 
 ```json
 {
@@ -159,9 +162,9 @@ On first run, the system creates a `config.json` in the data directory (`%LOCALA
 python main.pyw
 ```
 
-The GUI launches, the system scans your configured directories, indexes every supported file, and starts watching for changes. The LLM loads automatically in the background.
+The configured frontends start, the system scans your configured directories, indexes every supported file, and starts watching for changes. The LLM loads automatically in the background when configured.
 
-To run without the GUI, edit `enabled_frontends` in config.json (or via `/config`):
+For a REPL-only setup:
 
 ```json
 "enabled_frontends": ["repl"]
@@ -169,7 +172,7 @@ To run without the GUI, edit `enabled_frontends` in config.json (or via `/config
 
 ## Commands
 
-Available as slash commands in the GUI (with autocomplete) or as plain commands in the REPL.
+Available as slash commands in Telegram or as plain commands in the REPL.
 
 | Command | Description |
 |---|---|
@@ -187,10 +190,10 @@ Available as slash commands in the GUI (with autocomplete) or as plain commands 
 | `tools` | List registered tools with enabled/disabled status |
 | `enable <name>` | Enable a tool for agent use |
 | `disable <name>` | Disable a tool |
-| `call <tool>` | Call a tool directly (opens a form in GUI, takes JSON in REPL) |
+| `call <tool>` | Call a tool directly (interactive form in Telegram, JSON in REPL) |
 | `reload` | Re-discover all plugins (tools, tasks, services) from disk |
 | `stats` | System-wide statistics |
-| `config` / `settings` | Open the settings panel (GUI) |
+| `config` / `settings` | Show config values |
 | `open_data` | Open the data folder in Explorer |
 | `open_root` | Open the project root in Explorer |
 | `clear` | Clear chat conversation history |

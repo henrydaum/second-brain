@@ -1,9 +1,9 @@
 """
 Telegram bot frontend for Second Brain.
 
-Mirrors the Flet GUI experience: agent auto-ready, slash commands with
-autocomplete. The render_files tool sends files as Telegram media groups;
-other tools do not auto-render gui_display_paths.
+Provides a chat-first mobile interface with auto-ready agent behavior and
+slash command autocomplete. The render_files tool sends files as Telegram
+media groups; other tools do not auto-render attachment paths.
 Runs on a daemon thread with its own asyncio event loop.
 """
 
@@ -107,7 +107,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     token = config.get("telegram_bot_token", "").strip()
     if not token:
-        logger.warning("telegram_bot_token not configured — skipping Telegram frontend.")
+        logger.info("telegram_bot_token not configured — Telegram frontend disabled.")
         return
 
     # Late imports so the dependency is only required when the frontend is enabled
@@ -137,7 +137,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     # ── Agent lifecycle ──────────────────────────────────────────────
 
     def _on_agent_message(msg: dict):
-        """Persist conversation messages to DB (same pattern as GUI)."""
+        """Persist conversation messages to DB."""
         role = msg.get("role", "")
         content = msg.get("content") or ""
 
@@ -200,8 +200,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await _app.bot.send_message(chat_id, text, disable_notification=True)
             else:
                 await _app.bot.send_message(chat_id, text, disable_notification=True)
-            if tool_name == "render_files" and result.gui_display_paths:
-                actions = prepare_media_actions(result.gui_display_paths)
+            if tool_name == "render_files" and result.attachment_paths:
+                actions = prepare_media_actions(result.attachment_paths)
                 await _execute_send_actions(chat_id, actions)
 
         try:
@@ -545,8 +545,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         result = await loop.run_in_executor(
             None, lambda: ctrl.call_tool(tool_name, kwargs))
         logger.info(f"tool: {tool_name} [{'ok' if result.success else 'fail'}]")
-        if result.gui_display_paths:
-            actions = prepare_media_actions(result.gui_display_paths)
+        if result.attachment_paths:
+            actions = prepare_media_actions(result.attachment_paths)
             await _execute_send_actions(chat_id, actions)
             if result.llm_summary:
                 await _send_long_message(chat_id, result.llm_summary)
@@ -586,8 +586,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None, lambda: ctrl.call_tool(tool_name, {}))
-            if result.gui_display_paths:
-                actions = prepare_media_actions(result.gui_display_paths)
+            if result.attachment_paths:
+                actions = prepare_media_actions(result.attachment_paths)
                 await _execute_send_actions(chat_id, actions)
                 if result.llm_summary:
                     await _send_long_message(chat_id, result.llm_summary)

@@ -42,7 +42,7 @@ class Agent:
                             so the LLM always sees current state (e.g. after
                             plugins are added/removed via hot-reload).
             on_tool_result: Optional callback(tool_name: str, tool_result: ToolResult)
-                            fired after each tool execution, for GUI rendering.
+                            fired after each tool execution for frontend rendering.
             on_message:     Optional callback(msg: dict) fired after each message
                             is added to history, for conversation persistence.
 
@@ -136,7 +136,7 @@ class Agent:
                 # next user message doesn't blow up the context window.
                 if self._should_compact(response):
                     self._compact(prompt)
-                return response.content  # raw — GUI renders thinking dropdown
+                return response.content
 
             # Build the assistant message with tool calls for the conversation
             tool_names = [tc["name"] for tc in response.tool_calls]
@@ -336,8 +336,11 @@ class Agent:
 
         if result.success:
             image_paths = []
-            if result.gui_display_paths:
-                image_paths = [p for p in result.gui_display_paths if get_modality(Path(p).suffix) == "image"]
+            if result.attachment_paths:
+                image_paths = [
+                    p for p in result.attachment_paths
+                    if get_modality(Path(p).suffix) == "image"
+                ]
 
             try:
                 result_str = result.llm_summary or json.dumps(result.data, default=str)

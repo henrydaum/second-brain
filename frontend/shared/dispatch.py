@@ -1,7 +1,7 @@
 """
 Shared input routing for all Second Brain frontends.
 
-``route_input()`` is the single channel that GUI, REPL, and API all use
+``route_input()`` is the single channel that Telegram, REPL, and API all use
 for chat-style interaction: text starting with ``/`` is dispatched as a
 slash command; everything else is sent to the agent as a chat message.
 """
@@ -18,7 +18,7 @@ class InputResult:
     Attributes:
         type:        ``"command"``, ``"chat"``, or ``"error"``
         text:        Response text (command output or agent reply).
-        attachments: File paths collected from tool ``gui_display_paths``
+        attachments: File paths collected from tool ``attachment_paths``
                      during agent chat. Empty for commands and errors.
     """
     type: str
@@ -61,14 +61,14 @@ def route_input(text, registry, agent, image_paths=None):
             "or /services to check status.",
         )
 
-    # Temporarily wrap on_tool_result to collect gui_display_paths
-    # while preserving any existing callback (e.g. the GUI renderer).
+    # Temporarily wrap on_tool_result to collect attachment_paths
+    # while preserving any existing callback.
     original_callback = agent.on_tool_result
     collected_paths = []
 
     def _collecting_wrapper(tool_name, result):
-        if result.gui_display_paths:
-            collected_paths.extend(result.gui_display_paths)
+        if result.attachment_paths:
+            collected_paths.extend(result.attachment_paths)
         if original_callback:
             original_callback(tool_name, result)
 

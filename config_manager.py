@@ -21,6 +21,23 @@ DEFAULTS = {name: default for (_, name, _, default, _) in SETTINGS_DATA}
 
 _DEFAULT_CONFIG_PATH = str(DATA_DIR / "config.json")
 _DEFAULT_PLUGIN_CONFIG_PATH = str(DATA_DIR / "plugin_config.json")
+_SUPPORTED_FRONTENDS = ("repl", "telegram")
+
+
+def _normalize_frontends(value) -> list[str]:
+    """Normalize enabled_frontends to the supported runtime set."""
+    if not isinstance(value, list):
+        return list(DEFAULTS["enabled_frontends"])
+
+    normalized = []
+    seen = set()
+    for item in value:
+        name = str(item).strip().lower()
+        if name == "gui" or name not in _SUPPORTED_FRONTENDS or name in seen:
+            continue
+        seen.add(name)
+        normalized.append(name)
+    return normalized
 
 
 def load(path: str = None) -> dict:
@@ -42,6 +59,9 @@ def load(path: str = None) -> dict:
     # If new settings are added, this adds them to the existing config.json
     merged = dict(DEFAULTS)
     merged.update(user_config)
+    merged["enabled_frontends"] = _normalize_frontends(
+        merged.get("enabled_frontends", DEFAULTS["enabled_frontends"])
+    )
 
     return merged
 

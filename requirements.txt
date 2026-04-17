@@ -1,6 +1,3 @@
-# GUI
-flet
-
 # LLM / AI services
 openai
 lmstudio

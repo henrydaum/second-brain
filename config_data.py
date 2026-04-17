@@ -2,13 +2,13 @@
 Single source of truth for all configuration settings.
 
 Each entry: (title, variable_name, description, default, type_info)
-  - title:       Human-readable label shown in the settings UI
+  - title:       Human-readable label shown in frontend config views
   - variable_name: The config key stored in config.json
   - description: Help text shown below the setting
   - default:     Default value (determines type for the config creator)
   - type_info:   Dict controlling the UI widget:
                    {"type": "text"}       — single-line text field
-                   {"type": "bool"}       — checkbox / switch
+                   {"type": "bool"}       — boolean toggle control
                    {"type": "json_list"}  — multiline text field expecting a JSON array
                    {"type": "slider", "range": (min, max, divisions), "is_float": bool}
 """
@@ -51,8 +51,8 @@ SETTINGS_DATA = [
 
     # --- Frontends ---
     ("Enabled Frontends", "enabled_frontends",
-     "Frontend modules to start on launch. Options: gui, repl, telegram. Requires app restart.",
-     ["gui", "repl"],
+     "Frontend modules to start on launch. Options: repl, telegram. Requires app restart.",
+     ["repl", "telegram"],
      {"type": "json_list"}),
 
     # --- Processing ---

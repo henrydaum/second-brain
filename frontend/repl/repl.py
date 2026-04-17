@@ -5,7 +5,8 @@ Simple command loop that maps user input to the shared CommandRegistry.
 Runs on its own daemon thread so it never blocks the dispatch loop.
 
 The ``/chat`` subcommand enters a natural-language chat mode that uses
-:func:`gui.dispatch.route_input` — the same channel as the GUI and API.
+:func:`frontend.shared.dispatch.route_input` — the same channel used by
+Telegram and the API.
 Slash commands work inside chat mode too.
 """
 
@@ -37,7 +38,7 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         conversation_ref["id"] = conv_id
 
     def _on_agent_message(msg: dict):
-        """Persist conversation messages to DB (same pattern as GUI/Telegram)."""
+        """Persist conversation messages to DB."""
         import json
         role = msg.get("role", "")
         content = msg.get("content") or ""
@@ -63,7 +64,7 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         if role == "assistant" and not msg.get("tool_calls"):
             ctrl.maybe_generate_conversation_title_async(conversation_ref["id"])
 
-    # --- Console-based approval (bus subscriber). GUI subscriber wins if present. ---
+    # --- Console-based approval fallback for REPL sessions. ---
     _pending_approvals = []
     
     def _repl_approve_handler(req: 'ApprovalRequest'):

@@ -107,10 +107,7 @@ def main():
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)
 
 	# --- 6b. Determine which frontends to start ---
-	frontends = set(config.get("enabled_frontends", ["gui", "repl"]))
-	if sys.platform != "win32" and "gui" in frontends:
-		logger.info("GUI not supported on this platform — skipping.")
-		frontends.discard("gui")
+	frontends = set(config.get("enabled_frontends", ["repl", "telegram"]))
 	logger.info(f"Enabled frontends: {sorted(frontends)}")
 
 	# --- 7. Start orchestrator ---
@@ -130,9 +127,6 @@ def main():
 	logger.info("-----------------------------")
 	logger.info(f"SecondBrain started in {time.time() - t_start:.2f}s. Type 'help' for commands, 'quit' to exit.")
 
-	# Holds GUI references for shutdown/tray (populated by on_page_ready)
-	_page_ref = {"page": None, "close_app": None}
-
 	# --- 9. Shutdown handler ---
 	def shutdown(sig=None, frame=None):
 		if _shutdown.is_set():
@@ -140,16 +134,6 @@ def main():
 		_shutdown.set()
 		logger.info("-----------------------------")
 		logger.info("Shutting down...")
-		# Kill the Flet window FIRST — page.window.destroy() bypasses
-		# prevent_close and works reliably from any thread, ensuring the
-		# renderer subprocess is torn down before we start cleanup.
-		gui_page = _page_ref.get("page")
-		if gui_page:
-			try:
-				gui_page.window.prevent_close = False
-				gui_page.window.destroy()
-			except Exception:
-				pass
 		event_trigger.stop()
 		watcher.stop()
 		orchestrator.stop()
@@ -205,74 +189,9 @@ def main():
 		)
 		telegram_thread.start()
 
-	# --- 11. Start GUI or wait ---
-	if "gui" in frontends:
-		try:
-			from frontend.gui.app import run_gui
-		except ImportError:
-			logger.warning("GUI frontend not available (frontend/gui/ missing?) — skipping.")
-			frontends.discard("gui")
-	if "gui" in frontends:
-
-		def on_page_ready(page, close_app):
-			_page_ref["page"] = page
-			_page_ref["close_app"] = close_app
-
-		# System tray icon via pystray (run_detached)
-		tray_icon = None
-		try:
-			import pystray
-			from PIL import Image as PILImage
-
-			icon_img = PILImage.open(str(_ROOT / "icon.ico"))
-
-			def show_window(icon, item):
-				"""Bring Flet window back to front."""
-				p = _page_ref.get("page")
-				if p:
-					p.window.visible = True
-					p.update()
-
-			def quit_app(icon, item):
-				icon.stop()
-				close_fn = _page_ref.get("close_app")
-				if close_fn:
-					close_fn()
-				else:
-					shutdown()
-
-			tray_icon = pystray.Icon(
-				"SecondBrain",
-				icon_img,
-				"Second Brain",
-				menu=pystray.Menu(
-					pystray.MenuItem("Show Window", show_window, default=True),
-					pystray.MenuItem("Quit", quit_app),
-				),
-			)
-			tray_icon.run_detached()
-			logger.info("System tray icon active.")
-		except ImportError:
-			logger.warning("pystray not installed — no system tray icon.")
-		except Exception as e:
-			logger.warning(f"Failed to start tray icon: {e}")
-
-		# Flet on main thread (blocks until window closes)
-		try:
-			run_gui(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT,
-			        on_page_ready=on_page_ready, watcher=watcher)
-		finally:
-			if tray_icon:
-				try:
-					tray_icon.stop()
-				except Exception:
-					pass
-			if not _shutdown.is_set():
-				shutdown()
-	else:
-		# No GUI — main thread idles until shutdown
-		while not _shutdown.is_set():
-			_shutdown.wait(timeout=1.0)
+	# --- 11. Main thread idles until shutdown ---
+	while not _shutdown.is_set():
+		_shutdown.wait(timeout=1.0)
 
 
 if __name__ == "__main__":

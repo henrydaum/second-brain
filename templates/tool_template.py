@@ -86,9 +86,9 @@ Return a ToolResult from run():
 
   ToolResult(
       success=True,
-      data=any_structured_data,    # for GUI display (never sent to LLM)
+      data=any_structured_data,    # for frontend display (never sent to LLM)
       llm_summary="text for LLM", # what the LLM sees as the tool result
-      gui_display_paths=["path"], # file paths for GUI preview rendering
+      attachment_paths=["path"],  # file paths for frontend attachment rendering
   )
 
   ToolResult.failed("error message")  # shorthand for failures
@@ -120,12 +120,12 @@ In run(), access these via kwargs: query = kwargs.get("query", "")
 
 CONFIG SETTINGS
 ---------------
-Plugins can declare config settings that appear in the Settings UI and are
+Plugins can declare config settings that appear in frontend config views and are
 stored in plugin_config.json. Values are accessible via context.config.get().
 
   config_settings = [
       ("My Setting Title", "my_setting_key",
-       "Description shown in the settings UI.",
+       "Description shown in frontend config views.",
        "default_value",
        {"type": "text"}),
   ]
@@ -157,7 +157,7 @@ class ToolResult:
     error: str = ""
     data: Any = None
     llm_summary: str = ""
-    gui_display_paths: list[str] = field(default_factory=list)
+    attachment_paths: list[str] = field(default_factory=list)
 
     @staticmethod
     def failed(error: str) -> "ToolResult":
@@ -178,7 +178,7 @@ class BaseTool:
     max_calls: int = 3                  # max times the agent can call this tool per message
 
     # --- Config settings ---
-    config_settings: list = []          # settings shown in the Settings UI
+    config_settings: list = []          # settings shown in frontend config views
 
     def run(self, context, **kwargs) -> ToolResult:
         """Execute the tool. Return a ToolResult."""

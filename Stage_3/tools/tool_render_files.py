@@ -57,5 +57,5 @@ class RenderFiles(BaseTool):
 
         return ToolResult(
             llm_summary=summary,
-            gui_display_paths=valid,
+            attachment_paths=valid,
         )

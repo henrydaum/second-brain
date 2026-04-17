@@ -133,7 +133,7 @@ class HybridSearch(BaseTool):
         return ToolResult(
             data=flat_results,
             llm_summary=_search_summary(query, flat_results),
-            gui_display_paths=paths,
+            attachment_paths=paths,
         )
 
 

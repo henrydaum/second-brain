@@ -152,7 +152,7 @@ class SemanticSearch(BaseTool):
         return ToolResult(
             data=all_results,
             llm_summary=_search_summary(query, all_results),
-            gui_display_paths=paths,
+            attachment_paths=paths,
         )
 
     def _search_stream(self, context, stream_name, query, top_k, folder):

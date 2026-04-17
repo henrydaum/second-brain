@@ -138,7 +138,7 @@ class LexicalSearch(BaseTool):
         return ToolResult(
             data=results,
             llm_summary=_search_summary(query, results),
-            gui_display_paths=paths,
+            attachment_paths=paths,
         )
 
     # --- Helpers ---

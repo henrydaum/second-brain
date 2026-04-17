@@ -1,4 +1,6 @@
 __pycache__/
+.pytest_cache/
+pytest-cache-files-*/
 *.tmp
 config.json
 database.db*

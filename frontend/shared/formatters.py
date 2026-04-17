@@ -1,7 +1,7 @@
 """
 Plain-text formatters for command output.
 
-Used by both the GUI (app.py) and the terminal REPL (repl.py).
+Used by the Telegram frontend and the terminal REPL.
 Compact mode is used by the Telegram frontend for mobile-friendly output.
 """
 

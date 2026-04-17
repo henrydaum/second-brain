@@ -41,7 +41,7 @@ SERVICE LIFECYCLE
   3. The service is used by tasks/tools via context.services.get("name")
   4. unload() is called to free resources (GPU memory, connections, etc.)
 
-Services can be loaded/unloaded at runtime from the GUI or CLI.
+Services can be loaded/unloaded at runtime from the Telegram frontend or REPL.
 
 
 TRIGGERING EVENT TASKS FROM A SERVICE
@@ -119,7 +119,7 @@ from abc import ABC, abstractmethod
 
 
 class BaseService(ABC):
-    model_name: str = ""    # human-readable name shown in CLI/GUI
+    model_name: str = ""    # human-readable name shown in frontends
     shared: bool = True     # True = one instance for all threads
     config_settings: list = []  # settings shown in the Settings UI
 
