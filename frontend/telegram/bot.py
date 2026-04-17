@@ -27,7 +27,7 @@ from frontend.formatters import (
     format_tool_result,
 )
 from event_bus import bus
-from event_channels import APPROVAL_REQUESTED, SUBAGENT_MESSAGE_PUSHED
+from event_channels import APPROVAL_REQUESTED, CHAT_MESSAGE_PUSHED
 
 logger = logging.getLogger("Telegram")
 
@@ -377,11 +377,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 if parse_mode:
                     await _app.bot.send_message(chat_id, chunk)
 
-    def _subagent_message_handler(payload: dict):
+    def _chat_message_handler(payload: dict):
         if not payload:
             return
         if _loop is None or _app is None:
-            logger.info("Telegram not ready yet; dropping subagent push message.")
+            logger.info("Telegram not ready yet; dropping pushed chat message.")
             return
 
         chat_id = int(config.get("telegram_allowed_user_id", 0))
@@ -389,9 +389,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return
 
         title = str(payload.get("title") or "").strip()
-        kind = str(payload.get("kind") or "note").strip()
+        kind = str(payload.get("kind") or "").strip()
         message = str(payload.get("message") or "").strip()
-        job_name = str(payload.get("job_name") or "").strip()
         if not message:
             return
 
@@ -400,8 +399,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             lines.append(f"**{title}**")
         elif kind:
             lines.append(f"**{kind.title()}**")
-        if job_name:
-            lines.append(f"_From {job_name}_")
         lines.append(message)
 
         rendered = _md_to_tg_html("\n\n".join(lines))
@@ -412,9 +409,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 _loop,
             ).result(timeout=30)
         except Exception as e:
-            logger.error(f"Failed to send subagent message: {e}")
+            logger.error(f"Failed to send pushed chat message: {e}")
 
-    bus.subscribe(SUBAGENT_MESSAGE_PUSHED, _subagent_message_handler)
+    bus.subscribe(CHAT_MESSAGE_PUSHED, _chat_message_handler)
 
     async def _execute_send_actions(chat_id: int, actions: list[SendAction]):
         """Execute a list of SendActions via the Telegram Bot API."""

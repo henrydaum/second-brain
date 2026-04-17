@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from Stage_3.BaseTool import BaseTool, ToolResult
 from event_bus import bus
-from event_channels import SUBAGENT_MESSAGE_PUSHED
+from event_channels import CHAT_MESSAGE_PUSHED
 
 SUBAGENT_RUN_CHANNEL = "subagent.run"
 SUBAGENT_PUSH_KINDS = ["note", "finding", "brief", "alert"]
@@ -73,12 +73,13 @@ class PushSubagentMessageTool(BaseTool):
         )
         self._recorder(record)
 
-        bus.emit(SUBAGENT_MESSAGE_PUSHED, {
-            "run_id": self._run_id,
-            "job_name": self._job_name,
-            "kind": kind,
-            "title": title,
+        bus.emit(CHAT_MESSAGE_PUSHED, {
             "message": message,
+            "title": title,
+            "kind": kind,
+            "source": "subagent",
+            "source_id": self._run_id,
+            "job_name": self._job_name,
         })
 
         return ToolResult(
