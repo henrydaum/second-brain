@@ -247,6 +247,8 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                 agent_history = []
                 for msg in messages:
                     role = msg["role"]
+                    if role == "system":
+                        continue
                     content = msg["content"] or ""
                     if role == "assistant":
                         try:

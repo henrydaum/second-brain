@@ -32,7 +32,7 @@ logger = logging.getLogger("Agent")
 class Agent:
     def __init__(self, llm, tool_registry, config, system_prompt=None,
                  on_tool_result=None, on_message=None,
-                 on_tool_start=None):
+                 on_tool_start=None, on_notice=None):
         """
         Args:
             llm:            A BaseLLM instance that implements chat_with_tools().
@@ -45,6 +45,9 @@ class Agent:
                             fired after each tool execution for frontend rendering.
             on_message:     Optional callback(msg: dict) fired after each message
                             is added to history, for conversation persistence.
+            on_notice:      Optional callback(text: str) for UI-only breadcrumbs
+                            (e.g. "(conversation compacted)"). Not part of chat
+                            history — must never be persisted or sent to the LLM.
 
         Tool approval prompts (previously wired via approve_command) now flow
         through the event bus — frontends subscribe to APPROVAL_REQUESTED.
@@ -54,6 +57,7 @@ class Agent:
         self.on_tool_result = on_tool_result
         self.on_tool_start = on_tool_start
         self.on_message = on_message
+        self.on_notice = on_notice
         self._default_prompt = (
             "You are Second Brain, a helpful assistant with access to a local file database and tool layer. "
             "Use the available tools to inspect the system, answer from evidence, and cite the files or data sources you relied on."
@@ -80,10 +84,12 @@ class Agent:
         self.history.append(user_msg)
         self._fire_on_message(user_msg)
 
-        # Build full message list with system prompt (re-evaluated if callable)
+        # Build full message list with system prompt (re-evaluated if callable).
+        # Strip any stray role=system entries from history — the only system
+        # message sent to the provider is the one we construct at index 0.
         prompt = self.system_prompt() if callable(self.system_prompt) else self.system_prompt
         messages = [{"role": "system", "content": prompt}]
-        messages.extend(self.history)
+        messages.extend(m for m in self.history if m.get("role") != "system")
 
         tools = self.tool_registry.get_all_schemas() or None
         self._tool_call_counts.clear()
@@ -106,7 +112,7 @@ class Agent:
                     logger.warning(f"Context limit hit, compacting: {e}")
                     self._compact(prompt)
                     messages = [{"role": "system", "content": prompt}]
-                    messages.extend(self.history)
+                    messages.extend(m for m in self.history if m.get("role") != "system")
                     compiled_image_paths.clear()
                     try:
                         response = self._invoke_llm(messages, tools, image_paths=None)
@@ -267,7 +273,7 @@ class Agent:
             {"role": "user", "content": f"[Conversation summary from earlier]\n{summary}"},
             {"role": "assistant", "content": "Understood. I have the earlier context and can continue from here."},
         ]
-        self._fire_on_message({"role": "system", "content": "(conversation compacted)"})
+        self._fire_on_notice("(conversation compacted)")
         logger.info(f"Compacted conversation into {len(summary)} char summary")
 
     def _fallback_trim(self):
@@ -287,6 +293,14 @@ class Agent:
                 self.on_message(msg)
             except Exception as e:
                 logger.debug(f"on_message callback error: {e}")
+
+    def _fire_on_notice(self, text: str):
+        """Notify the on_notice callback with a UI-only breadcrumb, if set."""
+        if self.on_notice:
+            try:
+                self.on_notice(text)
+            except Exception as e:
+                logger.debug(f"on_notice callback error: {e}")
 
     def _invoke_llm(self, messages: list[dict], tools=None, image_paths: list[str] = None):
         """Normalize LLM backends so provider failures are not mistaken for replies."""

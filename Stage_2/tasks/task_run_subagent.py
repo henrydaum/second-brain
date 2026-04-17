@@ -112,6 +112,8 @@ class RunSubagent(BaseTask):
 
         def _on_message(msg: dict):
             role = msg.get("role", "")
+            if role not in {"user", "assistant", "tool"}:
+                return
             content = msg.get("content") or ""
             save_content = content
             if msg.get("tool_calls"):
