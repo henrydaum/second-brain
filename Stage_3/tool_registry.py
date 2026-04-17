@@ -1,8 +1,9 @@
 """
-Tool registry — manages tool registration, dispatch, and schema export.
+Tool registry.
 
-Separated from BaseTool.py so that the tool template stays clean for
-LLM consumption. Only infrastructure code lives here.
+Owns tool registration, dispatch, and schema export. Separated from
+BaseTool.py so the base contract stays lightweight and the tool template
+can focus on authoring guidance instead of runtime plumbing.
 """
 
 import logging
@@ -17,12 +18,12 @@ logger = logging.getLogger("Tool")
 
 class ToolRegistry:
     """
-    Manages all registered tools and handles dispatch.
+    Registry and execution entry point for tools.
 
-    The registry:
-        1. Stores tool instances by name
-        2. Dispatches calls (including tool-to-tool calls via context.call_tool)
-        3. Exports schemas for LLM function calling
+    Responsibilities:
+        1. Store tool instances by name
+        2. Dispatch tool calls, including tool-to-tool composition
+        3. Export LLM-visible schemas for agent use
     """
 
     def __init__(self, db, config: dict, services: dict = None):
@@ -48,10 +49,10 @@ class ToolRegistry:
 
     def call(self, name: str, **kwargs) -> ToolResult:
         """
-        Call a tool by name. This is the single dispatch point.
+        Execute a tool by name.
 
         Used by:
-            - External callers (CLI, LLM)
+            - External callers such as the REPL, API, or agent
             - Other tools via context.call_tool
         """
         with self._lock:
@@ -59,7 +60,7 @@ class ToolRegistry:
         if tool is None:
             return ToolResult.failed(f"Unknown tool: {name}")
 
-        # Check service requirements
+        # Gate on required services before building a runtime context.
         if tool.requires_services:
             not_ready = []
             for svc_name in tool.requires_services:
@@ -69,8 +70,8 @@ class ToolRegistry:
             if not_ready:
                 return ToolResult.failed(f"Required services not available: {not_ready}")
         
-        # Build context with call_tool pointing back to this registry.
-        # approve_command is auto-wired to the event bus inside build_context.
+        # Build a fresh runtime context for this invocation. call_tool points
+        # back to the registry, and approve_command is wired inside build_context.
         context = build_context(self.db, self.config, self.services,
                                 call_tool=self.call,
                                 tool_registry=self,
@@ -87,11 +88,11 @@ class ToolRegistry:
 
     @property
     def max_tool_calls(self) -> int:
-        """Total tool call budget for the agent (sum of per-tool max_calls)."""
+        """Return the agent's total tool-call budget for one message."""
         return sum(t.max_calls for t in self.tools.values() if t.agent_enabled)
 
     def get_all_schemas(self) -> list[dict]:
-        """Export tool schemas for LLM function calling (agent_enabled tools only)."""
+        """Export schemas for agent-enabled tools."""
         return [tool.to_schema() for tool in self.tools.values() if tool.agent_enabled]
 
     def get_schema(self, name: str) -> dict | None:

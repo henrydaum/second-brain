@@ -4,6 +4,12 @@ TOOL TEMPLATE
 This file is a self-contained reference for creating new tools.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
+Write tools in the same voice the system expects elsewhere:
+- grounded and practical
+- explicit about what the tool does
+- clear about when to use it
+- clear about important limits or safety constraints
+
 To create a new tool:
   1. Use build_plugin(plugin_type="tool", file_name="tool_<your_name>.py",
      action="create", code="...") to write the file to the sandbox.
@@ -80,6 +86,22 @@ Every tool receives a `context` object with:
                     Returns a ToolResult.
 
 
+WRITING GOOD TOOL DESCRIPTIONS
+------------------------------
+`description` becomes the tool description shown to the LLM.
+Write it like short operational documentation:
+
+- say what the tool does
+- say when the tool is the right choice
+- mention the most important limits or constraints
+- avoid vague hype or trigger-word instructions
+
+Good pattern:
+  "Search indexed files using both keyword and semantic retrieval. Use this
+   when you need the best default search over local files. Optional filters
+   can narrow the search."
+
+
 TOOL RESULT
 -----------
 Return a ToolResult from run():
@@ -87,11 +109,15 @@ Return a ToolResult from run():
   ToolResult(
       success=True,
       data=any_structured_data,    # for frontend display (never sent to LLM)
-      llm_summary="text for LLM", # what the LLM sees as the tool result
+      llm_summary="text for LLM",  # what the LLM sees as the tool result
       attachment_paths=["path"],  # file paths for frontend attachment rendering
   )
 
   ToolResult.failed("error message")  # shorthand for failures
+
+`llm_summary` should be concise but informative. Include the facts the model
+needs to act on next: what was found, what was changed, what failed, and any
+important paths, counts, or constraints.
 
 
 PARAMETERS (JSON Schema)
@@ -104,7 +130,7 @@ This is the exact format used by OpenAI function calling:
       "properties": {
           "query": {
               "type": "string",
-              "description": "What to search for.",
+              "description": "What to search for in the indexed local files.",
           },
           "top_k": {
               "type": "integer",
@@ -205,13 +231,13 @@ class BaseTool:
 #
 # class SQLQuery(BaseTool):
 #     name = "sql_query"
-#     description = "Run a read-only SQL query against the database."
+#     description = "Execute a read-only SQL query against the local database."
 #     parameters = {
 #         "type": "object",
 #         "properties": {
 #             "sql": {
 #                 "type": "string",
-#                 "description": "A SELECT or PRAGMA statement.",
+#                 "description": "A read-only SQL query. Only SELECT and PRAGMA statements are allowed.",
 #             },
 #         },
 #         "required": ["sql"],
@@ -251,11 +277,14 @@ class BaseTool:
 #
 # class HybridSearch(BaseTool):
 #     name = "hybrid_search"
-#     description = "Search using both keyword and semantic search, then fuse results."
+#     description = (
+#         "Search indexed files using both keyword and semantic retrieval. "
+#         "Use this when you need the best default search over local files."
+#     )
 #     parameters = {
 #         "type": "object",
 #         "properties": {
-#             "query": {"type": "string", "description": "Search query."},
+#             "query": {"type": "string", "description": "What to search for in the indexed local files."},
 #             "top_k": {"type": "integer", "description": "Max results.", "default": 5},
 #         },
 #         "required": ["query"],

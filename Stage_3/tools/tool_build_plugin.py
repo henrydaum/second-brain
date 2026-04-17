@@ -42,9 +42,9 @@ class BuildPlugin(BaseTool):
     name = "build_plugin"
     description = (
         "Create, edit, or delete a sandbox plugin (tool, task, or service). "
-        "Use action='create' with full source code to create a new plugin. "
-        "Use action='edit' with search_block/replace_block for targeted edits. "
-        "Use action='delete' to remove a plugin file."
+        "Use action='create' with full source code, action='edit' with exact "
+        "search_block and replace_block text, and action='delete' to remove a "
+        "sandbox plugin. Built-in plugins are read-only."
     )
     parameters = {
         "type": "object",
@@ -56,7 +56,7 @@ class BuildPlugin(BaseTool):
             },
             "file_name": {
                 "type": "string",
-                "description": "File name (e.g. tool_get_weather.py). Must follow naming convention.",
+                "description": "File name such as tool_get_weather.py. It must follow the naming convention.",
             },
             "action": {
                 "type": "string",
@@ -70,14 +70,14 @@ class BuildPlugin(BaseTool):
             "search_block": {
                 "type": "string",
                 "description": (
-                    "Exact text to find in the existing file. Required for 'edit' action; leave blank for other actions. "
+                    "Exact text to find in the existing file. Required for 'edit'. "
                     "Whitespace and indentation must match exactly."
                 ),
             },
             "replace_block": {
                 "type": "string",
                 "description": (
-                    "Text to replace the search_block with. Required for 'edit' action; leave blank for other actions. "
+                    "Text to replace the search_block with. Required for 'edit'. "
                     "Can be empty string to delete the matched block."
                 ),
             },

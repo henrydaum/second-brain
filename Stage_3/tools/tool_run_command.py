@@ -182,7 +182,10 @@ def _classify(command: str) -> tuple[str, bool, str | None]:
 class RunCommand(BaseTool):
     name = "run_command"
     description = (
-        "Run a whitelisted terminal command for plugin development. "
+        "Run a small set of whitelisted terminal commands for plugin development "
+        "and environment inspection. Prefer purpose-built tools when they already "
+        "cover the task. Every command requires a justification, and package-changing "
+        "commands also require user approval.\n\n"
         "Allowed commands:\n"
         "- pip install <pkg> / pip uninstall <pkg> — install or remove Python packages (requires user approval)\n"
         "- pip list / pip show <pkg> / pip freeze — check installed packages\n"
@@ -190,7 +193,7 @@ class RunCommand(BaseTool):
         "- grep / findstr — search code within the project directory\n"
         "- dir / ls / tree — list files within the project directory\n"
         "\n"
-        "NOT allowed (use the right tool instead):\n"
+        "Use another tool instead when possible:\n"
         "- Reading files → use read_file\n"
         "- Creating/editing/deleting plugins → use build_plugin\n"
         "- Searching your indexed files → use hybrid_search, lexical_search, or semantic_search\n"
@@ -201,17 +204,17 @@ class RunCommand(BaseTool):
         "properties": {
             "command": {
                 "type": "string",
-                "description": "Shell command to execute (must be from the allowed list).",
+                "description": "Terminal command to execute. It must be one of the allowed commands.",
             },
             "justification": {
                 "type": "string",
-                "description": "Plain English explanation of what this command does and why.",
+                "description": "Short plain-English reason for running the command.",
             },
             "timeout": {
                 "type": "integer",
                 "description": (
-                    "Max seconds to wait. Defaults to 30. "
-                    "Use higher values for pip install (300+). Max 600."
+                    "Maximum seconds to wait. Defaults to 30. "
+                    "Use higher values for pip install. Max 600."
                 ),
             },
         },

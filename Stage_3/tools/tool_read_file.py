@@ -16,16 +16,16 @@ MAX_CHARS = 20_000
 class ReadFile(BaseTool):
     name = "read_file"
     description = (
-        "Read the contents of a file by path. Use this to read templates, "
-        "source code, and sandbox plugins. Paths can be absolute or relative "
-        "to the project root."
+        "Read a text file by path. Use this when you need the exact contents of "
+        "source code, templates, docs, or sandbox plugins. Paths may be absolute "
+        "or relative to the project root."
     )
     parameters = {
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": "File path to read (absolute, or relative to project root).",
+                "description": "File path to read, either absolute or relative to the project root.",
             },
         },
         "required": ["path"],

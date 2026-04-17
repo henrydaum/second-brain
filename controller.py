@@ -1,8 +1,9 @@
 """
 Controller.
 
-The command layer between user input and the system. Exposes every
-control action as a plain method. The terminal REPL calls these, as well as other frontends.
+The user-facing command layer between frontends and the core runtime.
+It exposes control actions as plain methods so the REPL, Telegram, and
+other frontends can all drive the same behavior.
 
 The controller never prints — it returns structured data or status strings.
 The caller decides how to display them.
@@ -45,7 +46,7 @@ class Controller:
 
     _TITLE_MAX_LEN = 80
     _TITLE_PROMPT = (
-        "Write a short, memorable, specific title for this conversation.\n"
+        "Write a short, specific title for this conversation.\n"
         "Rules:\n"
         "- Return only the title text\n"
         "- No quotes, markdown, labels, or explanations\n"

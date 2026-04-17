@@ -123,14 +123,16 @@ This means your local system can act like a private mobile AI assistant without 
 
 Second Brain includes agent memory through `memory.md` in the data directory.
 
-The agent can update that memory intentionally with `update_memory`, which makes it useful for:
+The agent can update that memory intentionally with `update_memory`. It is meant for durable context such as:
 
 - preferences
 - standing instructions
 - durable facts
 - recurring context that should shape future behavior
 
-On top of that, conversation history is stored in SQLite and can be revisited later.
+It is not meant for one-off reminders, transient task state, or short-lived updates that only matter in the moment.
+
+On top of that, conversation history is stored in SQLite and can be revisited later with read-only SQL.
 
 ### 7. Web Search
 
@@ -148,7 +150,7 @@ That means the agent is not trapped inside the local corpus. It can blend your p
 
 One of the most unusual parts of the project is that the agent can build new capabilities inside a sandbox at runtime.
 
-With `build_plugin`, it can create, edit, or delete:
+If the current toolset cannot reasonably complete a task, the agent can use `build_plugin` to create, edit, or delete:
 
 - tools
 - tasks
@@ -156,7 +158,7 @@ With `build_plugin`, it can create, edit, or delete:
 
 Those plugins are hot-registered immediately. No restart needed.
 
-This is a big deal. It means Second Brain is not just a fixed assistant. It is an assistant that can grow new limbs.
+This means Second Brain is not just a fixed assistant. It can inspect its own architecture, generate a focused extension, and use that new capability right away.
 
 ## What You Can Use It For
 
@@ -233,28 +235,31 @@ This is the reasoning and action layer.
 
 The agent gets a dynamically rebuilt system prompt that includes:
 
+- current date and time
 - current tools
 - current services
 - current task pipeline state
 - current file inventory
-- current memory
+- current durable memory
 - current sandbox plugins
+
+That prompt pushes the assistant toward concise, grounded behavior: inspect the system first, prefer local evidence, and cite the files, tables, or tool results it relied on.
 
 Built-in tools include:
 
 | Tool | Purpose |
 |---|---|
-| `hybrid_search` | Best general search over local knowledge |
+| `hybrid_search` | Best default search over indexed local files |
 | `lexical_search` | Exact-term and keyword search |
 | `semantic_search` | Meaning-based retrieval |
-| `sql_query` | Direct read-only SQL inspection |
-| `read_file` | Read source files, templates, or local text files |
-| `render_files` | Send files back to the user |
-| `run_command` | Run whitelisted development commands |
-| `build_plugin` | Create, edit, and delete sandbox plugins |
-| `update_memory` | Edit durable agent memory |
-| `web_search` | Search the public web |
-| `schedule_subagent` | Create and manage scheduled background agents |
+| `sql_query` | Inspect the SQLite database with read-only SQL |
+| `read_file` | Read exact contents of local text files |
+| `render_files` | Display local files directly in chat |
+| `run_command` | Run whitelisted plugin-development commands |
+| `build_plugin` | Create, edit, or delete sandbox plugins |
+| `update_memory` | Update durable memory in `memory.md` |
+| `web_search` | Search the public web when local data is not enough |
+| `schedule_subagent` | Create and manage scheduled background subagent jobs |
 
 ## Frontends
 

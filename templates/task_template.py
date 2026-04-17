@@ -4,6 +4,9 @@ TASK TEMPLATE
 This file is a self-contained reference for creating new tasks.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
+Write tasks in a practical, explicit style. A task should make its trigger,
+inputs, outputs, and failure modes easy to inspect from code and database rows.
+
 To create a new task:
   1. Use build_plugin(plugin_type="task", file_name="task_<your_name>.py",
      action="create", code="...") to write the file to the sandbox.
@@ -99,6 +102,9 @@ Return one TaskResult per input path:
   )
 
   TaskResult.failed("error message")  # shorthand for failures
+
+Keep TaskResult.data explicit and inspection-friendly. Prefer rows with clear,
+stable column names so downstream tasks, SQL inspection, and debugging stay easy.
 
 
 CONFIG SETTINGS

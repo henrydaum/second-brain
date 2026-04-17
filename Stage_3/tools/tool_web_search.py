@@ -6,19 +6,20 @@ import urllib.error
 class WebSearch(BaseTool):
     name = "web_search"
     description = (
-        "Search the public web with Brave. Simple by default: returns readable, ranked results. "
-        "Can also call Brave Answers for grounded answer generation when mode='answers' or mode='auto'."
+        "Search the public web for information that is not already available in the "
+        "local file system, especially current facts, external references, or verification. "
+        "Uses Brave search by default and can use Brave Answers when mode='answers' or mode='auto'."
     )
     parameters = {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "What to search for.",
+                "description": "What to search for on the public web.",
             },
             "mode": {
                 "type": "string",
-                "description": "Search mode. 'auto' uses Answers for question-like prompts and Search otherwise.",
+                "description": "Search mode. 'auto' uses Answers for question-like queries and Search otherwise.",
                 "enum": ["auto", "search", "answers"],
                 "default": "auto",
             },

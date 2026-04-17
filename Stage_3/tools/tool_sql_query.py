@@ -27,8 +27,8 @@ class SQLQuery(BaseTool):
     ]
     description = (
         "Execute a read-only SQL query against the local file database. "
-        "Use this to explore files, task status, extracted text, OCR results, "
-        "and any other data in the system. Only SELECT and PRAGMA statements "
+        "Use this to inspect schema, file metadata, pipeline state, extracted text, "
+        "OCR results, and stored conversations. Only SELECT and PRAGMA statements "
         "are allowed. Results are capped at 100 rows.\n\n"
         "Useful queries:\n"
         "- SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\n"
@@ -44,7 +44,7 @@ class SQLQuery(BaseTool):
         "properties": {
             "sql": {
                 "type": "string",
-                "description": "A read-only SQL query (SELECT or PRAGMA only).",
+                "description": "A read-only SQL query. Only SELECT and PRAGMA statements are allowed.",
             }
         },
         "required": ["sql"],

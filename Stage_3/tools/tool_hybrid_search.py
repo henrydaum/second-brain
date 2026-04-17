@@ -27,18 +27,17 @@ RRF_K = 60
 class HybridSearch(BaseTool):
     name = "hybrid_search"
     description = (
-        "Search for files using both keyword and semantic similarity, then "
-        "fuse the results for higher accuracy. Combines BM25 lexical search "
-        "with vector similarity search.\n\n"
-        "Results are ranked using Reciprocal Rank Fusion (RRF). Documents "
-        'found by multiple methods are marked as "Hybrid" and ranked higher.'
+        "Search indexed files using both keyword and semantic retrieval, then "
+        "fuse the results for better ranking. This is the best default tool when "
+        "you are trying to find relevant local files or excerpts. Optional folder "
+        "and modality filters can narrow the search."
     )
     parameters = {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "The search query.",
+                "description": "What to search for in the indexed local files.",
             },
             "max_results": {
                 "type": "integer",

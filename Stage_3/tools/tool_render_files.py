@@ -8,11 +8,10 @@ from Stage_3.BaseTool import BaseTool, ToolResult
 class RenderFiles(BaseTool):
     name = "render_files"
     description = (
-        "Display one or more files to the user in the chat. "
-        "Accepts any file path — images, text, audio, video, tabular data, etc. "
-        "Maximum 10 files per call (the display limit). "
-        "Use whenever the user says these trigger words: 'show me', 'display', 'render' 'let me see', etc.—use often. "
-        'Example input: {"paths": ["C:/Users/user/Documents/report.pdf", "C:/Users/user/Pictures/photo.jpg"]}'
+        "Display one or more local files to the user in chat. Use this when the "
+        "user should inspect the file directly instead of only hearing a summary. "
+        "Accepts existing file paths for images, text, audio, video, tabular data, "
+        "and other supported file types. Maximum 10 files per call."
     )
     parameters = {
         "type": "object",
@@ -20,7 +19,7 @@ class RenderFiles(BaseTool):
             "paths": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "List of absolute file paths to display.",
+                "description": "List of file paths to display.",
             }
         },
         "required": ["paths"],

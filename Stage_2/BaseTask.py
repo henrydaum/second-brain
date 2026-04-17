@@ -1,36 +1,28 @@
-import logging
-from dataclasses import dataclass, field
-from typing import Any
-
-logger = logging.getLogger("BaseTask")
-
 """
 Task interface.
 
-Every task in the system inherits from BaseTask. The orchestrator
-dispatches tasks without knowing what they do — it only knows the
-interface defined here.
+Tasks are the background processing layer of Second Brain. The
+orchestrator does not need to know what a task means semantically; it
+only relies on the interface defined here.
 
 There are two trigger kinds:
-	- trigger="path"  (default): keyed by file path, dispatched from the
-	  watcher and path-dependency graph. Implements run(paths, context).
-	- trigger="event": keyed by run_id, dispatched from EventTrigger
-	  whenever a declared bus channel fires. Implements
-	  run_event(run_id, payload, context).
+- trigger="path":
+  keyed by file path, dispatched from file discovery and the path
+  dependency graph. Implement run(paths, context).
+- trigger="event":
+  keyed by run_id, dispatched from EventTrigger whenever a subscribed
+  bus channel fires. Implement run_event(run_id, payload, context).
 
 A task declares:
-	- Trigger kind (trigger) and, for event tasks, trigger_channels
-	- What files it works on (modalities) — path tasks only
-	- What tables it reads from (reads) — dependencies are derived
-	  automatically by matching reads to writes across tasks of the
-	  SAME trigger kind. Cross-kind reads are ambient SQL joins, not
-	  graph edges: path-data changes do NOT auto-invalidate event runs.
-	- What tables it writes to (writes)
-	- Whether it needs ALL inputs or ANY input (require_all_inputs)
-	- What shared services must be loaded (requires_services)
+- its trigger kind and, for event tasks, trigger_channels
+- the file modalities it roots on, for root path tasks
+- the tables it reads and writes
+- whether readiness is AND or OR across declared inputs
+- which shared services must be loaded first
 
-The dependency graph is built automatically from reads/writes — one
-graph per trigger kind. Tasks never reference each other by name.
+Dependencies are derived automatically from reads and writes within the
+same trigger kind. Cross-kind reads are ambient database reads at run
+time, not graph edges. Tasks never reference each other by name.
 
 Example concrete task:
 
@@ -39,7 +31,7 @@ Example concrete task:
 		modalities = ["text"]
 		reads = ["text_chunks"]
 		writes = ["text_embeddings"]
-		requires_services = ["embedder"]
+		requires_services = ["text_embedder"]
 		output_schema = \"""
 			CREATE TABLE IF NOT EXISTS text_embeddings (
 				path TEXT,
@@ -51,22 +43,34 @@ Example concrete task:
 		batch_size = 16
 
 		def run(self, paths, context):
-			embedder = context.services.get("embedder")
+			embedder = context.services.get("text_embedder")
 			...
 """
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any
+
+logger = logging.getLogger("BaseTask")
 
 
 @dataclass
 class TaskResult:
 	"""
-	What a task hands back after processing one file.
+	The standardized result returned by a task.
 
-	The orchestrator reads success to decide DONE vs FAILED.
-	The data dict is passed to db.write_outputs() if non-empty.
-	also_contains is forwarded from the parser for multi-modal discovery.
-	discovered_paths is for tasks that produce new files (e.g. container
-	extraction). The orchestrator registers these as first-class files
-	and queues tasks for them, just like the watcher would.
+	success:
+	    Whether processing succeeded for this path or run.
+	error:
+	    Human-readable failure reason when success is False.
+	data:
+	    Rows to write into the task's declared output tables.
+	also_contains:
+	    Additional modalities discovered during parsing, used for
+	    multi-modal fan-out.
+	discovered_paths:
+	    Newly created or extracted files that should be registered as
+	    first-class files and fed back into the pipeline.
 	"""
 	success: bool = True
 	error: str = ""
@@ -84,26 +88,33 @@ class BaseTask:
 	The contract every task implements.
 
 	Class attributes (override these):
-		name              Unique identifier. "embed_text", "ocr", etc.
-		trigger           "path" (default) or "event". Picks which run
-		                  signature the orchestrator calls and which
-		                  dependency graph this task participates in.
-		trigger_channels  (event tasks) bus channels that enqueue runs.
-		modalities        File types this task processes. Required for root
-		                  path tasks (no reads). Downstream path tasks leave
-		                  this empty — they're triggered by upstream completion.
-		reads             Input tables. Dependencies are derived automatically
-		                  by matching reads to other tasks' writes.
-		writes            Output tables this task writes to.
-		require_all_inputs True (default) = AND: all input tables must have
-		                  upstream data. False = OR: at least one suffices.
-		requires_services List of service names that must be loaded before dispatch.
-		                  In manual mode, task sits in queue until user loads the service.
-		                  In auto mode, system loads the service before dispatch.
-		                  Empty list = no service requirements (e.g. extract_text).
-		output_schema     Raw SQL to create the output table(s).
-		batch_size        How many files to process per run() call.
-		max_workers       0 = use global max. >0 = limit concurrent workers for this task.
+		name:
+		    Stable identifier used in the pipeline and database.
+		trigger:
+		    "path" (default) or "event". This selects the execution entry
+		    point and the dependency graph the task participates in.
+		trigger_channels:
+		    For event tasks, bus channels that enqueue runs.
+		modalities:
+		    File types this task roots on. Required for root path tasks.
+		    Downstream path tasks usually leave this empty.
+		reads:
+		    Input tables. Dependencies are derived automatically by
+		    matching reads to other tasks' writes.
+		writes:
+		    Output tables this task writes to.
+		require_all_inputs:
+		    True means all declared inputs must be ready. False means any
+		    declared input is enough to run.
+		requires_services:
+		    Service names that must be loaded before dispatch.
+		output_schema:
+		    Raw SQL to create the output table or tables.
+		batch_size:
+		    How many files to process per run() call.
+		max_workers:
+		    0 uses the global worker limit. Values greater than 0 cap
+		    concurrency for this task.
 
 	Methods (override these):
 		setup(config)         Called once at registration.
@@ -115,8 +126,10 @@ class BaseTask:
 	name: str = ""
 
 	# --- Trigger kind ---
-	# "path"  = keyed by file path, dispatched from watcher/path-graph (default)
-	# "event" = keyed by run_id, dispatched from EventTrigger on declared bus channels
+	# "path"  = keyed by file path, dispatched from file discovery and
+	#           the path dependency graph (default)
+	# "event" = keyed by run_id, dispatched from EventTrigger on declared
+	#           bus channels
 	trigger: str = "path"
 	trigger_channels: list[str] = []   # bus channels this event task subscribes to
 
@@ -136,11 +149,12 @@ class BaseTask:
 
 	# --- Execution ---
 	batch_size: int = 1
-	max_workers: int = 0  # 0 = use all available workers
-	timeout: int = 300  # Seconds before a PROCESSING entry is considered stuck. Make sure to keep in mind the batch size.
+	max_workers: int = 0  # 0 = use the global worker limit
+	timeout: int = 300  # Seconds before a PROCESSING entry is considered stuck; choose a value that matches expected batch size and runtime.
 
 	# --- Config settings this plugin needs ---
-	# List of tuples: (title, variable_name, description, default, type_info)
+	# Each entry is a tuple:
+	# (title, variable_name, description, default, type_info)
 	# Same format as SETTINGS_DATA in config_data.py.
 	config_settings: list = []
 
@@ -154,26 +168,28 @@ class BaseTask:
 				setattr(cls, attr, value.copy())
 
 	def setup(self, config: dict):
-		"""Called once when the task is registered. Load models, warm caches."""
+		"""Called once at registration time. Override for setup work."""
 		pass
 
 	def teardown(self):
-		"""Called on shutdown. Release GPU memory, close connections."""
+		"""Called on shutdown. Override to release resources."""
 		pass
 
 	def run(self, paths: list[str], context) -> list[TaskResult]:
 		"""
 		Path-keyed task entry point.
-		Process multiple files [batching]. Return a list of TaskResult objects, one per input path.
-		Override this for trigger="path" tasks (the default).
+
+		Process a batch of file paths and return one TaskResult per input
+		path. Override this for trigger="path" tasks.
 		"""
 		return [TaskResult.failed("Not implemented") for path in paths]
 
 	def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
 		"""
 		Event-keyed task entry point.
-		Called once per triggered run. Return a single TaskResult.
-		Rows in result.data must include run_id.
-		Override this for trigger="event" tasks.
+
+		Called once per triggered run. Return a single TaskResult. Rows in
+		result.data must include run_id. Override this for trigger="event"
+		tasks.
 		"""
 		return TaskResult.failed("Not implemented")

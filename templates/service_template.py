@@ -4,6 +4,9 @@ SERVICE TEMPLATE
 This file is a self-contained reference for creating new services.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
+Write services so their role is obvious: what capability they provide, what
+config they need, when they are loaded, and how callers should access them.
+
 To create a new service:
   1. Use build_plugin(plugin_type="service", file_name="<name>Service.py",
      action="create", code="...") to write the file to the sandbox.
@@ -83,6 +86,9 @@ SHARED vs PER-CALL
   shared = False           — Callers use get_client() for thread safety.
                  Good for: API clients with auth state (Google Drive).
                  Override get_client() to return a fresh client.
+
+Choose the simplest access pattern that matches the service's real concurrency
+model, and document it clearly in method names and comments.
 
 
 CONFIG SETTINGS

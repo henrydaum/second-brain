@@ -20,16 +20,16 @@ class SubagentPushRecord:
 class PushSubagentMessageTool(BaseTool):
     name = "push_subagent_message"
     description = (
-        "Send a message to the user's chat. This is the background subagent's "
-        "main way to directly communicate something the user should actually "
-        "see, such as a reminder, brief, alert, or finding."
+        "Send a user-visible message to chat from a scheduled subagent run. "
+        "Use this for reminders, briefs, alerts, findings, or any update the "
+        "user should actually see during an unattended job."
     )
     parameters = {
         "type": "object",
         "properties": {
             "message": {
                 "type": "string",
-                "description": "The message to send.",
+                "description": "The message to send to chat.",
             },
             "kind": {
                 "type": "string",

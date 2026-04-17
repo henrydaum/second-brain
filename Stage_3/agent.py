@@ -1,10 +1,10 @@
 """
 Agent.
 
-The thin loop that connects a caller to the tool layer via LLM
-function calling. Receives an LLM instance from the ServiceManager
-and a ToolRegistry — owns no clients, no config, no state beyond
-conversation history.
+The reasoning loop that connects chat history, system prompt, tool
+schemas, and the LLM. The agent owns conversation state and tool-call
+bookkeeping, but it does not own the underlying service clients or the
+tool implementations themselves.
 
 Usage:
     llm = service_manager.get("llm")        # OpenAILLM with chat_with_tools()
@@ -55,9 +55,8 @@ class Agent:
         self.on_tool_start = on_tool_start
         self.on_message = on_message
         self._default_prompt = (
-            "You are a helpful assistant with access to a local file database. "
-            "Use the available tools to search and retrieve information from the user's files. "
-            "Be concise and cite which files your answers come from."
+            "You are Second Brain, a helpful assistant with access to a local file database and tool layer. "
+            "Use the available tools to inspect the system, answer from evidence, and cite the files or data sources you relied on."
         )
         self.system_prompt = system_prompt or self._default_prompt
         self.max_tool_calls = tool_registry.max_tool_calls
@@ -188,15 +187,14 @@ class Agent:
     _COMPACT_THRESHOLD = 0.80  # compact when prompt tokens exceed this fraction of context_size
 
     _COMPACT_PROMPT = (
-        "You are a conversation summarizer. Below is the conversation so far between "
-        "a user and an AI assistant with tool-calling capabilities.\n\n"
+        "You are summarizing a conversation for Second Brain so the assistant can continue later with minimal loss.\n\n"
         "Write a detailed summary that preserves:\n"
         "- All key facts, decisions, and conclusions reached\n"
         "- Important tool results and data the user may refer back to\n"
         "- The user's current goals and any open questions\n"
-        "- Any instructions or preferences the user has stated\n\n"
-        "Be thorough — this summary will replace the conversation history, "
-        "so anything not included will be lost. Write in a neutral, factual tone."
+        "- Any instructions, preferences, or durable constraints the user has stated\n\n"
+        "Be thorough. This summary will replace the earlier conversation history, "
+        "so anything omitted may be lost. Write in a neutral, factual tone."
     )
 
     def _should_compact(self, response) -> bool:
@@ -267,7 +265,7 @@ class Agent:
         # Replace history with the summary as a single user/assistant pair
         self.history = [
             {"role": "user", "content": f"[Conversation summary from earlier]\n{summary}"},
-            {"role": "assistant", "content": "Understood. I have the context from our previous conversation. How can I help?"},
+            {"role": "assistant", "content": "Understood. I have the earlier context and can continue from here."},
         ]
         self._fire_on_message({"role": "system", "content": "(conversation compacted)"})
         logger.info(f"Compacted conversation into {len(summary)} char summary")

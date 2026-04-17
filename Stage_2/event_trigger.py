@@ -1,18 +1,18 @@
 """
 EventTrigger.
 
-The bus-side analog of the file Watcher. Where the watcher notices files
-and asks the orchestrator to enqueue path-keyed work, EventTrigger
+The event-side counterpart to the file watcher. Where the watcher notices
+files and asks the orchestrator to enqueue path-keyed work, EventTrigger
 subscribes to declared bus channels and enqueues run-id-keyed work in
-the task_runs table.
+task_runs.
 
 An event task declares:
     trigger          = "event"
     trigger_channels = ["some.channel", ...]
 
-When any of those channels fires, EventTrigger creates a PENDING row in
-task_runs and notifies the orchestrator, which picks it up on its next
-dispatch tick.
+When any subscribed channel fires, EventTrigger creates a PENDING row in
+task_runs and notifies the orchestrator. The orchestrator claims that run
+on its next dispatch tick.
 
 Manual/tool-driven runs are just bus.emit(channel, payload) — no
 separate code path needed.

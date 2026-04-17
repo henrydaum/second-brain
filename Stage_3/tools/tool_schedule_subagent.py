@@ -42,22 +42,26 @@ def _get_subagent_job_or_none(svc, job_name: str) -> dict | None:
 
 class ScheduleSubagent(BaseTool):
     name = "schedule_subagent"
-    description = "Schedule a background subagent job. Use this for reminders, daily briefs, or recurring research."
+    description = (
+        "Create and manage scheduled background subagent jobs. Use this for "
+        "reminders, recurring briefs, periodic checks, or unattended research. "
+        "Mutating actions require user approval."
+    )
     parameters = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
                 "enum": ["create", "update", "delete", "get", "list", "enable", "disable"],
-                "description": "What to do.",
+                "description": "What to do with the scheduled subagent job.",
             },
             "job_name": {
                 "type": "string",
-                "description": "Job name.",
+                "description": "Stable name for the job.",
             },
             "prompt": {
                 "type": "string",
-                "description": "Prompt the background subagent should run.",
+                "description": "Prompt the background subagent should run when the job fires.",
             },
             "cron": {
                 "type": "string",

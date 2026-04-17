@@ -13,23 +13,21 @@ MAX_MEMORY_LENGTH = 1000
 class UpdateMemory(BaseTool):
     name = "update_memory"
     description = (
-        "Edit the memory.md file in the DATA_DIR using search-and-replace. "
-        "Provide the exact text block to find (search_block) and the text to "
-        "replace it with (replace_block). If memory.md does not exist, it will "
-        "be created with a placeholder. This file is automatically loaded into "
-        "the system prompt memory and can be used to persist notes, reminders, "
-        "or custom context across sessions."
+        "Update persistent memory stored in memory.md using exact search-and-replace. "
+        "Use this for durable preferences, standing instructions, and lessons that "
+        "should shape future behavior across sessions. Do not use it for one-off "
+        "reminders or transient task state. If memory.md does not exist, it will be created."
     )
     parameters = {
         "type": "object",
         "properties": {
             "search_block": {
                 "type": "string",
-                "description": "Exact text block in memory.md to find and replace. Must match whitespace exactly.",
+                "description": "Exact text block in memory.md to find and replace. Whitespace must match exactly.",
             },
             "replace_block": {
                 "type": "string",
-                "description": "Text to insert in place of the matched search_block.",
+                "description": "Replacement text to insert in place of the matched search_block.",
             },
         },
         "required": ["search_block", "replace_block"],

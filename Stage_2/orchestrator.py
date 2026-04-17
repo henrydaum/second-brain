@@ -1,3 +1,18 @@
+"""
+Orchestrator.
+
+Central dispatcher for background tasks. The orchestrator does not need
+task-specific logic; it only relies on the BaseTask contract and the
+reads/writes graph declared by each task.
+
+It is responsible for:
+- registering tasks and building same-kind dependency graphs
+- backfilling eligible work for already-known files
+- gating dispatch on pause state, service readiness, and worker limits
+- claiming work from the database and routing it to workers
+- re-enqueueing downstream work and recovering stuck entries
+"""
+
 import logging
 import os
 from pathlib import Path
@@ -12,32 +27,6 @@ from event_bus import bus
 from event_channels import TASK_COMPLETED, TASK_FAILED, SERVICE_LOADED
 
 logger = logging.getLogger("Orchestrator")
-
-"""
-Orchestrator.
-
-The generic dispatcher. Zero knowledge of what any task does.
-It only knows the BaseTask interface: modalities, reads, writes,
-requires_services, batch_size, run().
-
-Dependencies are derived automatically from reads/writes declarations.
-If task A writes to table X, and task B reads from table X, then B
-depends on A. No explicit wiring needed.
-
-Flow:
-	Watcher detects file -> on_file_discovered()
-		-> checks which tasks accept this modality
-		-> if no deps or all deps met, enqueue
-
-	Worker completes task -> on_task_completed()
-		-> walks the graph: which tasks read from this task's output tables?
-		-> if deps now met (AND/OR), enqueue
-
-	Dispatch loop:
-		-> for each task, check paused, services, semaphore
-		-> skip if not ready (task stays PENDING)
-		-> claim work from DB, route to thread pool
-"""
 
 
 class Orchestrator:
@@ -81,8 +70,11 @@ class Orchestrator:
 		bus.subscribe(SERVICE_LOADED, lambda payload: self.clear_skip_cache())
 
 	def clear_skip_cache(self, name: str = None):
-		"""Clear skip tracking so the orchestrator re-checks tasks.
-		If name is given, clear only that entry; otherwise clear all."""
+		"""Clear service-skip tracking so tasks are checked again.
+
+		If name is given, clear only that task; otherwise clear all cached
+		skip state.
+		"""
 		if name:
 			self.skip_cache.discard(name)
 		else:
@@ -129,12 +121,11 @@ class Orchestrator:
 			self.event_trigger.refresh()
 
 	def _build_graph(self):
-		"""Derive the dependency graph from reads/writes declarations.
-		Called once after all tasks are registered, before start()."""
+		"""Build same-kind dependency graphs from task reads and writes."""
 
-		# Phase 1: Map each output table to the task that produces it.
-		# If multiple tasks write the same table (e.g. lexical_content), we keep
-		# the first writer here but downstream logic uses reads-matching anyway.
+		# Phase 1: map each output table to one producing task. If multiple
+		# tasks write the same table, we log it and keep the first writer
+		# here; downstream logic still relies on reads matching at runtime.
 		self.table_producers = {}
 		for task in self.tasks.values():
 			for table in task.writes:
@@ -146,10 +137,9 @@ class Orchestrator:
 				else:
 					self.table_producers[table] = task.name
 
-		# Phase 2: For each task, find which other tasks must complete first.
-		# If task B reads from table X, and task A writes to table X, then B depends on A.
-		# Split into path and event graphs: cross-kind reads are silently ignored here;
-		# they become ambient SQL joins inside run(), not graph edges.
+		# Phase 2: for each task, find same-kind upstream producers. Split
+		# into path and event graphs; cross-kind reads are ignored here
+		# because they behave as ambient SQL reads inside task code.
 		self.upstream = {}
 		self.event_upstream = {}
 		for task in self.tasks.values():
@@ -174,8 +164,10 @@ class Orchestrator:
 				logger.debug(f"Root task (no same-kind dependencies): '{task.name}' ({kind})")
 
 	def _backfill_tasks(self):
-		"""Enqueue all existing files for tasks whose deps are already met.
-		Event tasks are never backfilled — they only fire on triggers."""
+		"""Enqueue existing files for eligible path tasks.
+
+		Event tasks are never backfilled; they only run when triggered.
+		"""
 		total_enqueued = 0
 		for task in self.tasks.values():
 			if getattr(task, "trigger", "path") != "path":
@@ -203,14 +195,12 @@ class Orchestrator:
 			logger.info(f"Backfill: {total_enqueued} total entries enqueued across all tasks")
 
 	def _get_backfill_paths(self, task):
-		"""Get paths where at least one upstream task is DONE."""
+		"""Return paths where at least one upstream task is already DONE."""
 		upstream_tasks = self.upstream.get(task.name, [])
 		return self.db.get_paths_with_any_task_done(upstream_tasks)
 
 	def _deps_met(self, path: str, task: BaseTask) -> bool:
-		"""Check if upstream dependencies are satisfied for a path.
-		AND mode: all upstream tasks must be DONE.
-		OR mode: at least one upstream task must be DONE."""
+		"""Return whether upstream dependencies are satisfied for a path."""
 		upstream_tasks = self.upstream.get(task.name, [])
 		if not upstream_tasks:
 			return True
@@ -221,8 +211,7 @@ class Orchestrator:
 			return len(done) > 0
 
 	def get_all_downstream(self, task_name: str) -> list[str]:
-		"""Return all path-keyed task names that transitively depend on task_name.
-		Used for path-pipeline invalidation. Cross-kind edges are excluded."""
+		"""Return all path-keyed tasks that transitively depend on task_name."""
 		root = self.tasks.get(task_name)
 		root_kind = getattr(root, "trigger", "path") if root else "path"
 		if root_kind != "path":
@@ -244,7 +233,7 @@ class Orchestrator:
 		return downstream
 
 	def _invalidate_downstream(self, task_name: str, paths: list[str]):
-		"""Reset downstream tasks to PENDING for specific paths."""
+		"""Reset downstream path tasks to PENDING for the given paths."""
 		downstream = self.get_all_downstream(task_name)
 		if downstream:
 			logger.debug(
@@ -369,8 +358,10 @@ class Orchestrator:
 	# =================================================================
 
 	def on_run_enqueued(self, run_id: str, task_name: str):
-		"""Called by EventTrigger after a new run is persisted as PENDING.
-		Clear the skip cache so the next dispatch tick re-checks this task."""
+		"""Handle a newly enqueued event-task run.
+
+		Clears the skip cache so the next dispatch tick re-checks the task.
+		"""
 		self.clear_skip_cache(task_name)
 		logger.debug(f"Run enqueued: {run_id}")
 
@@ -435,20 +426,18 @@ class Orchestrator:
 
 	def _create_cascade_triggers(self):
 		"""
-		Auto-create SQL DELETE cascade triggers from the reads/writes graph.
+		Create SQL DELETE cascade triggers from the path-task graph.
 
-		For each task that reads from a table, create a trigger so that
-		deleting (or replacing) rows in the upstream table automatically
-		cleans the downstream task's output table. INSERT OR REPLACE fires
-		DELETE triggers in SQLite, so re-running an upstream task cascades
-		cleanup through the entire chain automatically.
+		When upstream rows are deleted or replaced, SQLite triggers remove
+		downstream rows automatically. This keeps derived path-task outputs
+		in sync when earlier pipeline stages are rerun.
 
-		Shared output tables (written by multiple tasks) are skipped —
-		cascade could delete rows from other writers. For those, INSERT OR
-		REPLACE with composite keys handles correctness.
+		Shared output tables are skipped because a cascade could delete rows
+		from another writer. Those tables must rely on their own keys and
+		replacement behavior for correctness.
 		"""
-		# Detect shared tables (written by multiple tasks). Only path tasks
-		# participate — cascade triggers assume a `path` column.
+		# Detect shared tables written by multiple path tasks. Cascade
+		# triggers assume a `path` column and a single logical writer.
 		table_writers: dict[str, list[str]] = {}
 		for task in self.tasks.values():
 			if getattr(task, "trigger", "path") != "path":
@@ -471,13 +460,13 @@ class Orchestrator:
 					logger.info(f"Cascade trigger: {input_table} -> {output_table}")
 
 	def dependency_pipeline_graph(self):
-		"""Log a visual representation of the pipeline at startup."""
+		"""Return a human-readable view of the current path pipeline."""
 		if not self.tasks:
 			return
 
 		lines = ["Pipeline:"]
 
-		# Pre-compute children (downstream tasks) for each task
+		# Pre-compute downstream children for each task.
 		children: dict[str, list[str]] = {name: [] for name in self.tasks}
 		for task in self.tasks.values():
 			for table in task.writes:
@@ -485,10 +474,10 @@ class Orchestrator:
 					if table in downstream.reads and downstream.name not in children[task.name]:
 						children[task.name].append(downstream.name)
 
-		# Find root tasks (no upstream dependencies)
+		# Root tasks have no upstream path dependencies.
 		roots = [t.name for t in self.tasks.values() if not self.upstream.get(t.name)]
 
-		# BFS to find orphans (unreachable from roots)
+		# Walk from roots to detect orphaned tasks that are not reachable.
 		reachable = set()
 		queue = list(roots)
 		while queue:
@@ -508,7 +497,7 @@ class Orchestrator:
 			connector = "└── " if is_last else "├── "
 
 			if task_name in visited:
-				# Cross-reference: show the edge but mark as already printed
+				# Cross-reference: show the edge but do not expand twice.
 				mode = " (OR)" if (task.reads and not task.require_all_inputs) else ""
 				lines.append(f"{prefix}{connector}{task_name}{mode} *")
 				return
@@ -538,10 +527,10 @@ class Orchestrator:
 		logger.info("Orchestrator stopped")
 
 	def _dispatch_loop(self):
-		# Periodic stuck-task recovery — tasks stuck in PROCESSING longer than
-		# their timeout are reset to PENDING so they get retried.
-		stuck_check_interval = 60  # How often (seconds) to sweep for stuck tasks
-		last_stuck_check = 0.0     # Force an immediate first check
+		# Periodically sweep for stuck PROCESSING entries and reset them to
+		# PENDING so the pipeline can make forward progress again.
+		stuck_check_interval = 60  # seconds between recovery sweeps
+		last_stuck_check = 0.0     # force an immediate first check
 
 		while self.running:
 			dispatched_any = False
@@ -561,35 +550,32 @@ class Orchestrator:
 				last_stuck_check = now
 
 			for task in self.tasks.values():
-				# Event tasks dispatched in the second pass below
+				# Event tasks are dispatched in the second pass below.
 				if getattr(task, "trigger", "path") == "event":
 					continue
 
-				# Gate 1: Skip paused tasks — work stays PENDING until unpaused
+				# Gate 1: paused tasks keep their work in PENDING.
 				if task.name in self.paused:
 					continue
 
-				# Gate 2: Skip if required services aren't loaded yet
+				# Gate 2: required services must be ready.
 				if not self._services_ready(task):
 					continue
 
-				# Gate 3: Skip if this task already has max concurrent workers running.
-				# Non-blocking acquire: if all worker slots are taken, move on.
+				# Gate 3: respect this task's concurrency limit.
 				sem = self.task_semaphores[task.name]
 				if not sem.acquire(blocking=False):
 					logger.debug(f"Skipping '{task.name}': all worker slots busy")
 					continue
 
-				# Gate 4: Atomically claim PENDING work from DB.
-				# If nothing is PENDING, release the semaphore and move on.
+				# Gate 4: atomically claim PENDING work from the database.
 				paths = self.db.claim_tasks(task.name, task.batch_size)
 				if not paths:
 					sem.release()
 					continue
 
-				# Gate 5: Double-check dependencies right before dispatch.
-				# Protects against a race where an upstream task was invalidated
-				# between the DB claim and now.
+				# Gate 5: re-check dependencies right before dispatch in case an
+				# upstream task was invalidated after the DB claim.
 				if task.reads:
 					ready = [p for p in paths if self._deps_met(p, task)]
 					not_ready = [p for p in paths if p not in ready]
@@ -615,8 +601,7 @@ class Orchestrator:
 				time.sleep(self.poll_interval)
 
 	def _dispatch_event_runs(self) -> bool:
-		"""Dispatch claimed event-task runs. Mirrors the path-pass gating
-		(paused, services, per-task semaphore) but claims from task_runs."""
+		"""Dispatch event-task runs using the same gating logic as path tasks."""
 		dispatched = False
 		for task in self.tasks.values():
 			if getattr(task, "trigger", "path") != "event":
@@ -650,7 +635,7 @@ class Orchestrator:
 			sem.release()
 
 	def _execute_event_run(self, task: BaseTask, run_id: str, payload_json: str):
-		"""Execute a single event-task run. Mirrors _execute for path tasks."""
+		"""Execute one claimed event-task run."""
 		import json as _json
 		if task.name in self.paused:
 			self.db.unclaim_run(run_id)
@@ -710,8 +695,7 @@ class Orchestrator:
 		self._enqueue_event_downstream(task, run_id, payload)
 
 	def _enqueue_event_downstream(self, parent_task: BaseTask, parent_run_id: str, payload: dict):
-		"""For each event-keyed task that reads from parent_task's writes,
-		create a new run linked via parent_run_id."""
+		"""Enqueue downstream event tasks that depend on this task's outputs."""
 		import json as _json
 		from uuid import uuid4
 		for table in parent_task.writes:
@@ -741,7 +725,7 @@ class Orchestrator:
 			sem.release()
 
 	def _execute(self, task: BaseTask, paths: list[str]):
-		# If task was paused after dispatch, return paths to PENDING
+		# If the task was paused after dispatch, return the claim to PENDING.
 		if task.name in self.paused:
 			self.db.unclaim_tasks(task.name, paths)
 			logger.info(f"Task '{task.name}' is paused — returned {len(paths)} path(s) to PENDING")
@@ -787,8 +771,9 @@ class Orchestrator:
 			bus.emit(TASK_FAILED, {"task_name": task.name, "path": path, "error": result.error})
 
 	def _handle_success(self, task, path, result, duration_s=0.0):
-		"""Write outputs, verify deps, complete task, and cascade. Returns False on write failure."""
-		# NOTE: writes same data to all tables — assumes one write table per task
+		"""Persist a successful result and trigger downstream effects."""
+		# Most tasks write to a single table, but the interface allows more
+		# than one declared output table.
 		if result.data and task.writes:
 			try:
 				for table in task.writes:
@@ -799,14 +784,14 @@ class Orchestrator:
 				bus.emit(TASK_FAILED, {"task_name": task.name, "path": path, "error": f"Write failed: {e}"})
 				return False
 
-		# Safety: verify deps are still met before completing.
-		# Handles the race where upstream was invalidated mid-execution.
+		# Re-check dependencies before marking complete in case upstream work
+		# was invalidated while this task was running.
 		if task.reads and not self._deps_met(path, task):
 			self.db.re_enqueue_task(path, task.name)
 			logger.warning(
 				f"Deps no longer met for '{task.name}' on {Path(path).name}, re-enqueued"
 			)
-			return True  # not a failure, just re-queued
+			return True  # not a failure; the task was safely re-queued
 
 		self.db.complete_task(path, task.name)
 		self.on_task_completed(path, task.name)

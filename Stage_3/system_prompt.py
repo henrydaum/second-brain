@@ -47,18 +47,21 @@ def _identity(services: dict) -> str:
             model_line = f"\nYour current model: {name}.\n"
 
     return (
-        "You are the Second Brain assistant — an AI embedded in a local file intelligence system. "
-        "You have tools to search and query a SQLite database of the user's files, and to "
-        "create new tools, tasks, and services via a sandbox plugin system.\n"
+        "You are Second Brain, the assistant inside the user's local file intelligence system. "
+        "Your job is to help the user work with their files, database, tools, and automations. "
+        "You can inspect local files, query the SQLite database, and extend the system through sandbox plugins.\n"
         f"{model_line}"
         "\n"
-        "Guidelines:\n"
-        "- Be concise. When answering questions about files, cite which files your answers come from.\n"
-        "- Past conversations are stored in the database (conversations, conversation_messages tables) and can be recalled with sql_query.\n"
-        "- If a question can't be answered with existing plugins, and it seems doable, suggest creating a new one with tool_build_plugin.\n"
-        "- For architecture details and design philosophy, use read_file(path='README.md').\n"
-        "- Use tool_update_memory and tool_render_files proactively, even if the user doesn't ask you to."
-        "- The tool call limit is per-message, not per-session. If you hit the limit on one tool, you can still call others."
+        "Guiding principles:\n"
+        "- Be concise, grounded, and practical.\n"
+        "- Prefer local evidence. When answering about files or code, cite the relevant file paths, table names, or tool results you used.\n"
+        "- Use the built-in tools to inspect the system before making assumptions.\n"
+        "- Past conversations live in the database (especially the conversations and conversation_messages tables) and can be recalled with sql_query.\n"
+        "- For architecture or design intent, read README.md with read_file.\n"
+        "- If the current tools cannot reasonably complete a task, suggest creating a sandbox plugin with build_plugin.\n"
+        "- Use render_files when the user would benefit from seeing a file directly.\n"
+        "- Use update_memory only for durable preferences, standing instructions, or lessons that should shape future behavior across sessions.\n"
+        "- Tool call limits are per message, not per session. If one tool reaches its limit, you may still use other tools."
     )
 
 
@@ -70,16 +73,19 @@ def _current_datetime() -> str:
 def _authoring_guidance() -> str:
     return (
         "## Building plugins\n"
-        "You can extend the system by creating sandbox plugins (tools, tasks, services).\n\n"
-        "Workflow:\n"
-        "1. Read the template: read_file(path='templates/tool_template.py') (or task_template.py, service_template.py)\n"
-        "2. Read similar existing plugins for reference (sandbox paths listed below, baked-in paths use read_file with relative paths like 'Stage_3/tools/tool_hybrid_search.py')\n"
-        "3. Create: build_plugin(plugin_type='tool', file_name='tool_foo.py', action='create', code='...')\n"
-        "4. Fix errors: build_plugin(action='edit', search_block='...', replace_block='...')\n"
-        "5. Install packages if needed: run_command(command='pip install requests')\n"
-        "6. If the plugin is a tool, test it out by calling it.\n\n"
-        "Naming: tools are tool_<name>.py, tasks are task_<name>.py, services are only <name>.py\n"
-        "Names must be unique — no collisions with baked-in plugins.\n\n"
+        "You can extend the system by creating sandbox plugins (tools, tasks, and services).\n\n"
+        "Recommended workflow:\n"
+        "1. Read the relevant template with read_file(path='templates/tool_template.py') (or task_template.py / service_template.py).\n"
+        "2. Read a similar existing plugin for reference. Sandbox plugin paths are listed below; built-in plugins can be read with paths like 'Stage_3/tools/tool_hybrid_search.py'.\n"
+        "3. Create a new plugin with build_plugin(action='create', ...).\n"
+        "4. Refine it with build_plugin(action='edit', search_block='...', replace_block='...').\n"
+        "5. If needed, install packages with run_command.\n"
+        "6. If you created a tool, call it to verify behavior.\n\n"
+        "Naming:\n"
+        "- Tools use tool_<name>.py\n"
+        "- Tasks use task_<name>.py\n"
+        "- Services use <name>.py\n"
+        "- Names must be unique and must not collide with built-in plugins.\n\n"
         "Config settings:\n"
         "Plugins can declare config_settings to add user-configurable values to the Settings UI.\n"
         "Each entry: (title, variable_name, description, default, type_info).\n"
@@ -96,7 +102,7 @@ def _available_tools(tool_registry) -> str:
         return ""
     enabled = [t for t in tool_registry.tools.values() if t.agent_enabled]
     disabled = [t for t in tool_registry.tools.values() if not t.agent_enabled]
-    lines = ["## Your tools (call via function calling)"]
+    lines = ["## Available tools"]
     if enabled:
         for tool in enabled:
             desc = (tool.description or "").strip()
@@ -129,7 +135,7 @@ def _sandbox_files() -> str:
     if not sandbox_lines:
         return "## Sandbox plugins\nNone yet. Use build_plugin to create one."
 
-    lines = ["## Sandbox plugins (use these full paths with read_file)"]
+    lines = ["## Sandbox plugins (read these exact paths with read_file)"]
     lines.extend(sandbox_lines)
     return "\n".join(lines)
 
@@ -146,7 +152,7 @@ def _database_tables(db) -> str:
     if not names:
         return "## Database\nNo tables yet."
 
-    return "## Database tables (use sql_query to explore)\n" + ", ".join(names)
+    return "## Database tables (inspect with sql_query)\n" + ", ".join(names)
 
 
 def _pipeline_status(db, orchestrator) -> str:
@@ -207,5 +213,5 @@ def _agent_memory() -> str:
     mem_path = DATA_DIR / "memory.md"
     if mem_path.exists():
         content = mem_path.read_text()
-        return f"\n\n## Your Memory (from memory.md — when you learn a lesson, put it here.)\n{content}"
+        return f"\n\n## Memory (from memory.md)\nUse this for durable lessons, preferences, and standing context.\n{content}"
     return ""

@@ -1,19 +1,20 @@
 """
 Tool interface.
 
-Tools are the query layer — they accept arguments, read from the database
-and parsers, call other tools, and return structured results.
+Tools are the on-demand action and retrieval layer of Second Brain.
+A tool accepts structured input, inspects local state or external systems,
+and returns a ToolResult that is useful both to frontends and to the LLM.
 
-Unlike tasks (which run in the background on every file), tools are
-called on demand and return results immediately to a caller.
+Unlike tasks, tools do not run automatically over every file. They are
+called explicitly by the agent, the UI, or other tools and return
+immediately.
 
-Tools become LLM function calls with zero translation:
+Tool schemas map directly into LLM function calling:
     - name        -> function name
     - description -> function description
     - parameters  -> JSON schema for arguments
 
-The same tool can be called from the REPL, Telegram, or LLM tool call.
-The interface is the same regardless of the caller.
+The same tool contract is used everywhere: REPL, Telegram, HTTP, and agent.
 """
 
 import logging
@@ -26,17 +27,22 @@ logger = logging.getLogger("Tool")
 @dataclass(init=False)
 class ToolResult:
     """
-    What a tool returns.
+    The standardized result returned by every tool.
 
-    success:     Did it work?
-    error:       Error message if failed.
-    data:        Rich result payload for frontend display (tables, lists, etc.).
-                 Never sent to Claude directly.
-    llm_summary: Text sent to the LLM. All tools must populate this.
-                 Standardized human-readable format regardless of tool type.
-    attachment_paths: Flat list of file paths for frontend attachment rendering.
-                      Never sent to the LLM, unless the file path is an image,
-                      since the LLM can receive those.
+    success:
+        Whether the tool call succeeded.
+    error:
+        Human-readable failure reason when success is False.
+    data:
+        Structured payload for frontends, tables, or debugging. This is not
+        sent directly to the LLM.
+    llm_summary:
+        Concise model-facing summary of what happened. On success, this should
+        carry the facts, changes, paths, counts, or constraints the model
+        needs for its next step.
+    attachment_paths:
+        Local file paths for frontend rendering. These are not sent directly to
+        the LLM, although image paths may later be passed back on a model call.
     """
     success: bool = True
     error: str = ""
@@ -121,10 +127,16 @@ class BaseTool:
     The contract every tool implements.
 
     Class attributes (override these):
-        name              Unique identifier. "keyword_search", "vector_search", etc.
-        description       Natural language description. Doubles as the LLM tool description.
-        parameters        JSON schema dict describing the input arguments.
-        requires_services List of services that must be loaded. Same as tasks.
+        name:
+            Stable identifier used everywhere the tool is referenced.
+        description:
+            Short operational description. This is also the LLM-visible tool
+            description, so it should explain what the tool does, when to use
+            it, and any important limits.
+        parameters:
+            JSON Schema describing the input arguments.
+        requires_services:
+            Service names that must be loaded before the tool can run.
 
     Methods (override these):
         run(context, **kwargs) -> ToolResult
@@ -144,7 +156,8 @@ class BaseTool:
     background_safe: bool = True # Whether unattended subagents may call this tool
 
     # --- Config settings this plugin needs ---
-    # List of tuples: (title, variable_name, description, default, type_info)
+    # Each entry is a tuple:
+    # (title, variable_name, description, default, type_info)
     # Same format as SETTINGS_DATA in config_data.py.
     config_settings: list = []
 
@@ -159,7 +172,7 @@ class BaseTool:
         raise NotImplementedError(f"Tool '{self.name}' must implement run()")
 
     def to_schema(self) -> dict:
-        """Export as an OpenAI-compatible function schema."""
+        """Export the tool as an OpenAI-compatible function schema."""
         return {
             "type": "function",
             "function": {
