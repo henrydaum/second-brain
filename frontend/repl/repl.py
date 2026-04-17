@@ -75,13 +75,12 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         print(f"  Command:  {req.command}")
         print(f"  Reason:   {req.reason}")
         print(f"  Respond with /allow or /deny.")
-        print("> ", end="", flush=True)
         _pending_approvals.append(req)
 
     def _on_approval_resolved(req: 'ApprovalRequest'):
         if req in _pending_approvals:
             _pending_approvals.remove(req)
-            print(f"\n[approval resolved via another frontend]\n> ", end="", flush=True)
+            print(f"\n[approval resolved via another frontend]\n")
 
     bus.subscribe(APPROVAL_REQUESTED, _repl_approve_handler)
     bus.subscribe(APPROVAL_RESOLVED, _on_approval_resolved)
@@ -189,7 +188,7 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     while not shutdown_event.is_set():
         try:
-            raw = input("\n> ").strip()
+            raw = input("\n").strip()
             if not raw:
                 continue
 
