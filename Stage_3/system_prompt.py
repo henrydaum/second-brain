@@ -46,6 +46,9 @@ def _identity(services: dict) -> str:
         elif name:
             model_line = f"\nYour current model: {name}.\n"
 
+    from paths import DATA_DIR
+    log_path = DATA_DIR / "app.log"
+
     return (
         "You are Second Brain, the assistant inside the user's local file intelligence system. "
         "Your job is to help the user work with their files, database, tools, and automations. "
@@ -62,6 +65,7 @@ def _identity(services: dict) -> str:
         "- Use the built-in tools to inspect the system before making assumptions.\n"
         "- Past conversations live in the database (conversations and conversation_messages tables) and can be recalled with sql_query.\n"
         "- For architecture or design intent, read README.md with read_file.\n"
+        f"- A debug log for the current session is at {log_path} — read it with read_file if you need to investigate an error.\n"
         "- Use render_files when the user would benefit from seeing a file directly.\n"
         "- If the current tools cannot reasonably complete a task, suggest creating a sandbox plugin with build_plugin.\n"
         "- Call update_memory proactively and often. Triggers:\n"

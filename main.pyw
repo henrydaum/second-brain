@@ -6,15 +6,23 @@ import threading
 import time
 from pathlib import Path
 
+from paths import DATA_DIR
+
 # Silence noisy libraries
 logging.getLogger("PIL").setLevel(logging.WARNING)
 logging.getLogger("fitz").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.basicConfig(
-	level=logging.INFO,
-	format="%(asctime)s | %(name)-12s | %(levelname)-5s | %(message)s",
-	datefmt="%I:%M%p",
-)
+
+_LOG_FORMAT = "%(asctime)s | %(name)-12s | %(levelname)-5s | %(message)s"
+_LOG_DATEFMT = "%I:%M%p"
+
+logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT, datefmt=_LOG_DATEFMT)
+
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = DATA_DIR / "app.log"
+_file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
+_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
+logging.getLogger().addHandler(_file_handler)
 
 logger = logging.getLogger("Main")
 
