@@ -67,6 +67,8 @@ def format_tool_result(result) -> str:
         if data.get("truncated"):
             lines.append("  ... (results capped at 100 rows)")
         return "\n".join(lines)
+    if data is None:
+        return result.llm_summary or "(no output)"
     try:
         return json.dumps(data, indent=2, default=str)
     except Exception:
