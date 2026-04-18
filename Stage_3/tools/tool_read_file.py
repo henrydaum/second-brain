@@ -56,6 +56,15 @@ class ReadFile(BaseTool):
             return ToolResult.failed(f"Read error: {e}")
 
         if len(content) > MAX_CHARS:
-            content = content[:MAX_CHARS] + f"\n\n... truncated ({len(content)} chars total)"
+            total = len(content)
+            if target.suffix == ".log":
+                # Log files want the most recent lines, not the oldest.
+                tail = content[-MAX_CHARS:]
+                nl = tail.find("\n")
+                if nl != -1:
+                    tail = tail[nl + 1:]
+                content = f"... (earlier lines truncated, {total} chars total)\n\n" + tail
+            else:
+                content = content[:MAX_CHARS] + f"\n\n... truncated ({total} chars total)"
 
         return ToolResult(llm_summary=content)
