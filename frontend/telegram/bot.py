@@ -131,9 +131,27 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     _pending_configures: dict = {}      # chat_id -> setting_key (waiting for value)
     _pending_model_adds: dict = {}      # chat_id -> {name, params, collected, current_idx}
     _pending_triggers: dict = {}        # chat_id -> {task, params, collected, current_idx}
-    _chat_lock = asyncio.Lock()
+    # Busy flag with a generation counter so /restart can safely unstick an
+    # in-flight handler without the zombie's finally-clause clobbering the
+    # flag of a newer message. Any clear tagged with a stale gen is a no-op.
+    _busy_ref: dict = {"v": False, "gen": 0}
     _loop: asyncio.AbstractEventLoop | None = None
     _app: Application | None = None
+
+    def _mark_busy() -> int:
+        gen = _busy_ref["gen"]
+        _busy_ref["v"] = True
+        return gen
+
+    def _clear_busy(gen: int):
+        if _busy_ref["gen"] == gen:
+            _busy_ref["v"] = False
+
+    def _force_unbusy():
+        """Called by /restart — bump generation, release the flag so the next
+        user message routes immediately."""
+        _busy_ref["gen"] += 1
+        _busy_ref["v"] = False
 
     # ── Agent lifecycle ──────────────────────────────────────────────
 
@@ -285,6 +303,16 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return True
         return False
 
+    def _restart_agent():
+        """Called by /restart — rebuild the agent and release the busy flag so
+        the next message routes immediately, even if the previous handler is
+        still spinning in a stuck tool."""
+        _create_agent()
+        _force_unbusy()
+        # Drop any orphaned approval-status messages; their generations are gone.
+        _pending_status_msgs.clear()
+        logger.info("Agent restarted (Telegram).")
+
     # ── Security ─────────────────────────────────────────────────────
 
     def _check_user(update: Update) -> bool:
@@ -301,7 +329,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     registry = CommandRegistry()
     register_core_commands(registry, ctrl, services, tool_registry, root_dir,
                            get_agent=lambda: agent_ref["agent"],
-                           set_conversation_id=_set_conversation_id)
+                           set_conversation_id=_set_conversation_id,
+                           restart_agent=_restart_agent)
 
     # Telegram-specific overrides
     def _load_handler(arg):
@@ -1596,38 +1625,54 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 await _send_long_message(chat_id, output)
             return
 
-        async with _chat_lock:
-            # Typing indicator loop
-            stop_typing = asyncio.Event()
+        if _busy_ref["v"]:
+            await update.message.reply_text(
+                "Still working on the previous message — send /restart to abort.")
+            return
 
-            async def _typing_loop():
-                while not stop_typing.is_set():
-                    try:
-                        await update.message.chat.send_action(ChatAction.TYPING)
-                    except Exception:
-                        pass
-                    try:
-                        await asyncio.wait_for(stop_typing.wait(), timeout=4.0)
-                    except asyncio.TimeoutError:
-                        pass
+        gen = _mark_busy()
+        stop_typing = asyncio.Event()
 
-            typing_task = asyncio.create_task(_typing_loop())
+        async def _typing_loop():
+            while not stop_typing.is_set():
+                try:
+                    await update.message.chat.send_action(ChatAction.TYPING)
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(stop_typing.wait(), timeout=4.0)
+                except asyncio.TimeoutError:
+                    pass
 
-            try:
-                loop = asyncio.get_running_loop()
-                result = await loop.run_in_executor(
-                    None, lambda: route_input(text, registry, agent_ref["agent"]))
+        typing_task = asyncio.create_task(_typing_loop())
 
-                if result.text:
-                    converted = _md_to_tg_html(result.text)
-                    await _send_long_message(chat_id, converted, use_html=True)
-                    logger.info(f"-> {len(result.text)} chars")
-            except Exception as e:
-                logger.error(f"Message handler error: {e}")
-                await update.message.reply_text(f"Error: {e}")
-            finally:
-                stop_typing.set()
-                await typing_task
+        try:
+            loop = asyncio.get_running_loop()
+            # Outer 15-min safety net: if the whole pipeline (including LLM
+            # calls themselves, not just tools) wedges, release the handler
+            # so the bot stays responsive. Tool-level timeouts (Layer 1) are
+            # usually tighter, but this catches everything else.
+            result = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None, lambda: route_input(text, registry, agent_ref["agent"])),
+                timeout=900)
+
+            if result.text:
+                converted = _md_to_tg_html(result.text)
+                await _send_long_message(chat_id, converted, use_html=True)
+                logger.info(f"-> {len(result.text)} chars")
+        except asyncio.TimeoutError:
+            logger.error("Message handler exceeded 15 min — restarting agent")
+            await update.message.reply_text(
+                "Previous tool call abandoned after 15 min. Agent restarted.")
+            _restart_agent()
+        except Exception as e:
+            logger.error(f"Message handler error: {e}")
+            await update.message.reply_text(f"Error: {e}")
+        finally:
+            stop_typing.set()
+            await typing_task
+            _clear_busy(gen)
 
     async def handle_attachment(update: Update, _ctx):
         """Handle incoming photos and documents — parse ephemerally for the agent."""
@@ -1723,36 +1768,49 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     user_text = user_text.lstrip()
 
             # ── Send to agent ──────────────────────────────────────
-            async with _chat_lock:
-                stop_typing = asyncio.Event()
+            if _busy_ref["v"]:
+                await msg.reply_text(
+                    "Still working on the previous message — send /restart to abort.")
+                return
 
-                async def _typing_loop():
-                    while not stop_typing.is_set():
-                        try:
-                            await msg.chat.send_action(ChatAction.TYPING)
-                        except Exception:
-                            pass
-                        try:
-                            await asyncio.wait_for(stop_typing.wait(), timeout=4.0)
-                        except asyncio.TimeoutError:
-                            pass
+            gen = _mark_busy()
+            stop_typing = asyncio.Event()
 
-                typing_task = asyncio.create_task(_typing_loop())
-                try:
-                    loop = asyncio.get_running_loop()
-                    result = await loop.run_in_executor(
+            async def _typing_loop():
+                while not stop_typing.is_set():
+                    try:
+                        await msg.chat.send_action(ChatAction.TYPING)
+                    except Exception:
+                        pass
+                    try:
+                        await asyncio.wait_for(stop_typing.wait(), timeout=4.0)
+                    except asyncio.TimeoutError:
+                        pass
+
+            typing_task = asyncio.create_task(_typing_loop())
+            try:
+                loop = asyncio.get_running_loop()
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(
                         None, lambda: route_input(
                             user_text, registry, agent_ref["agent"],
-                            image_paths=send_image_paths))
-                    if result.text:
-                        converted = _md_to_tg_html(result.text)
-                        await _send_long_message(chat_id, converted, use_html=True)
-                except Exception as e:
-                    logger.error(f"Attachment handler error: {e}")
-                    await msg.reply_text(f"Error: {e}")
-                finally:
-                    stop_typing.set()
-                    await typing_task
+                            image_paths=send_image_paths)),
+                    timeout=900)
+                if result.text:
+                    converted = _md_to_tg_html(result.text)
+                    await _send_long_message(chat_id, converted, use_html=True)
+            except asyncio.TimeoutError:
+                logger.error("Attachment handler exceeded 15 min — restarting agent")
+                await msg.reply_text(
+                    "Previous tool call abandoned after 15 min. Agent restarted.")
+                _restart_agent()
+            except Exception as e:
+                logger.error(f"Attachment handler error: {e}")
+                await msg.reply_text(f"Error: {e}")
+            finally:
+                stop_typing.set()
+                await typing_task
+                _clear_busy(gen)
 
         finally:
             # Clean up temp file

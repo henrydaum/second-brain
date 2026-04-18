@@ -85,11 +85,38 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
     bus.subscribe(APPROVAL_REQUESTED, _repl_approve_handler)
     bus.subscribe(APPROVAL_RESOLVED, _on_approval_resolved)
 
+    def _on_notice(text):
+        print(f"\n[{text}]", flush=True)
+
+    def _build_agent():
+        """Construct a fresh Agent with the current LLM and callbacks."""
+        llm = services.get("llm")
+        if llm is None or not llm.loaded:
+            return None
+        return Agent(
+            llm, tool_registry, config,
+            system_prompt=lambda: build_system_prompt(
+                ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services
+            ),
+            on_message=_on_agent_message,
+            on_notice=_on_notice,
+        )
+
+    def _restart_agent():
+        """Rebuild the agent. Called by /restart; history rebinding is handled
+        by the /restart command handler itself."""
+        nonlocal agent
+        rebuilt = _build_agent()
+        if rebuilt is not None:
+            agent = rebuilt
+            logger.info("Agent rebuilt via /restart.")
+
     # --- Build command registry (shared + REPL-specific) ---
     registry = CommandRegistry()
     register_core_commands(registry, ctrl, services, tool_registry, root_dir,
                            get_agent=lambda: agent,
-                           set_conversation_id=_set_conversation_id)
+                           set_conversation_id=_set_conversation_id,
+                           restart_agent=_restart_agent)
 
     # --- REPL-specific commands ---
 
@@ -101,17 +128,7 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
         conversation_ref["id"] = None  # fresh conversation on /chat entry
 
-        def _on_notice(text):
-            print(f"\n[{text}]", flush=True)
-
-        agent = Agent(
-            llm, tool_registry, config,
-            system_prompt=lambda: build_system_prompt(
-                ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services
-            ),
-            on_message=_on_agent_message,
-            on_notice=_on_notice,
-        )
+        agent = _build_agent()
         logger.info("Agent initialized.")
 
         print("Entering chat mode. Type 'exit' to return to REPL.")

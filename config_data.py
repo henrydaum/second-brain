@@ -71,6 +71,11 @@ SETTINGS_DATA = [
      300,
      {"type": "slider", "range": (30, 600, 57), "is_float": False}),
 
+    ("Tool Timeout", "tool_timeout",
+     "Seconds before an agent tool call is forcibly abandoned and reported to the LLM as a timeout error.",
+     600,
+     {"type": "slider", "range": (30, 1800, 59), "is_float": False}),
+
     ("Reprocess Interval", "reprocess_interval",
      "Seconds between re-checking files for changes.",
      300,

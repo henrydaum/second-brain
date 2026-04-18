@@ -117,7 +117,8 @@ def _describe_profile(name: str, profile: dict, active: bool, loaded: bool = Fal
 
 
 def register_core_commands(registry: CommandRegistry, ctrl, services, tool_registry,
-                           root_dir, get_agent=None, set_conversation_id=None):
+                           root_dir, get_agent=None, set_conversation_id=None,
+                           restart_agent=None):
     """Register commands shared by Telegram and REPL.
 
     These are pure ctrl-wrapper commands with no UI-specific side effects.
@@ -128,12 +129,17 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                              (or None). Used by /call, /new, /cancel, and /history.
         set_conversation_id: Optional callable(int | None) to update the current
                              conversation ID. Used by /history and /new.
+        restart_agent:       Optional callable() that rebuilds the frontend's Agent
+                             instance, preserving conversation history. Used by
+                             /restart to recover from a stuck tool call.
     """
     _set_conversation_id = set_conversation_id
+    _restart_agent = restart_agent
     import json as _json
     import config_manager as _cm
     from config_data import SETTINGS_DATA as _SD
     from plugin_discovery import get_plugin_settings as _get_ps
+    from Stage_3.history_utils import heal_orphan_tool_calls
     from frontend.formatters import (
         format_services, format_tasks,
         format_tools, format_locations,
@@ -336,6 +342,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                         })
                     else:
                         agent_history.append({"role": role, "content": content})
+                heal_orphan_tool_calls(agent_history)
                 agent.history = agent_history
             # Update the conversation ref if a callback is available
             if _set_conversation_id:
@@ -372,6 +379,27 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             agent.cancelled = True
             return "Cancelling..."
         return "No active agent to cancel."
+
+    def _cmd_restart(_arg):
+        """Handler for /restart — forcibly rebuild the agent, preserving history.
+
+        Use when /cancel isn't enough — e.g. a tool is wedged and the agent
+        loop is stuck. Marks the old agent cancelled (best-effort), rebuilds
+        a fresh agent via the frontend's restart_agent callback, and heals
+        any orphan tool_calls left behind by the interrupted turn.
+        """
+        old_agent = get_agent() if get_agent else None
+        old_history = list(old_agent.history) if old_agent else []
+        if old_agent:
+            old_agent.cancelled = True
+        if not _restart_agent:
+            return "Restart is not supported in this frontend."
+        _restart_agent()
+        new_agent = get_agent() if get_agent else None
+        if new_agent is not None and old_history:
+            new_agent.history = old_history
+            heal_orphan_tool_calls(new_agent.history)
+        return "Restarted. Previous tool call was abandoned."
 
     def _cmd_model(arg):
         """Handler for /model — manage LLM profiles."""
@@ -620,6 +648,9 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      category="Conversation"),
         CommandEntry("cancel", "Interrupt the agent",
                      handler=_cmd_cancel,
+                     category="Conversation"),
+        CommandEntry("restart", "Force-rebuild the agent when a tool is stuck",
+                     handler=_cmd_restart,
                      category="Conversation"),
         CommandEntry("history", "List or load past conversations", "[id]",
                      handler=_cmd_history,

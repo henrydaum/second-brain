@@ -6,6 +6,7 @@ BaseTool.py so the base contract stays lightweight and the tool template
 can focus on authoring guidance instead of runtime plumbing.
 """
 
+import concurrent.futures
 import logging
 import threading
 import time
@@ -14,6 +15,11 @@ from context import build_context
 from Stage_3.BaseTool import BaseTool, ToolResult
 
 logger = logging.getLogger("Tool")
+
+# Thread-local flag so reentrant tool calls (tool -> context.call_tool -> tool)
+# skip the timeout wrapper. Only top-level calls get wrapped, otherwise nested
+# calls would consume extra executor threads and could deadlock.
+_exec_state = threading.local()
 
 
 class ToolRegistry:
@@ -78,13 +84,46 @@ class ToolRegistry:
                                 orchestrator=self.orchestrator)
 
         t0 = time.time()
+
+        # Reentrant calls (tool -> call_tool -> tool) run inline — the outer
+        # call already owns a timeout budget, and a nested submit would double
+        # the thread count without adding safety.
+        if getattr(_exec_state, "in_tool", False):
+            try:
+                result = tool.run(context, **kwargs)
+                logger.debug(f"Tool '{name}' completed in {time.time() - t0:.3f}s")
+                return result
+            except Exception as e:
+                logger.error(f"Tool '{name}' failed after {time.time() - t0:.3f}s: {e}")
+                return ToolResult.failed(str(e))
+
+        timeout = int(self.config.get("tool_timeout", 600))
+        executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix=f"sb-tool-{name}")
+
+        def _run_with_flag():
+            _exec_state.in_tool = True
+            try:
+                return tool.run(context, **kwargs)
+            finally:
+                _exec_state.in_tool = False
+
         try:
-            result = tool.run(context, **kwargs)
-            logger.debug(f"Tool '{name}' completed in {time.time() - t0:.3f}s")
-            return result
-        except Exception as e:
-            logger.error(f"Tool '{name}' failed after {time.time() - t0:.3f}s: {e}")
-            return ToolResult.failed(str(e))
+            future = executor.submit(_run_with_flag)
+            try:
+                result = future.result(timeout=timeout)
+                logger.debug(f"Tool '{name}' completed in {time.time() - t0:.3f}s")
+                return result
+            except concurrent.futures.TimeoutError:
+                logger.error(f"Tool '{name}' timed out after {timeout}s — abandoning thread")
+                # Don't wait for the zombie thread — it may never finish.
+                return ToolResult.failed(
+                    f"Tool '{name}' timed out after {timeout}s and was abandoned.")
+            except Exception as e:
+                logger.error(f"Tool '{name}' failed after {time.time() - t0:.3f}s: {e}")
+                return ToolResult.failed(str(e))
+        finally:
+            executor.shutdown(wait=False)
 
     @property
     def max_tool_calls(self) -> int:
