@@ -39,7 +39,7 @@ class FrontendRuntime:
         self.presenter = FrontendPresenter()
         self.adapters = {}
         self._states = {}
-        self._approval_lock = threading.Lock()
+        self._approval_lock = threading.RLock()
         self._pending_approvals = {}
         self._pending_approval_order = {}
         bus.subscribe(APPROVAL_REQUESTED, self._on_approval_requested)
