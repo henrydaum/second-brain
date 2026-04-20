@@ -27,6 +27,11 @@ SANDBOX_TOOLS    = DATA_DIR / "sandbox_tools"
 SANDBOX_TASKS    = DATA_DIR / "sandbox_tasks"
 SANDBOX_SERVICES = DATA_DIR / "sandbox_services"
 
+# Attachment cache: files dropped in from frontends (e.g. Telegram).
+# Registered as a sync_directory by default so the Stage_2 pipeline indexes them.
+ATTACHMENT_CACHE = DATA_DIR / "attachment_cache"
+ATTACHMENT_CACHE.mkdir(parents=True, exist_ok=True)
+
 
 def open_file(path):
     """Open a file or folder with the system's default handler."""

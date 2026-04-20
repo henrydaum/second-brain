@@ -13,19 +13,24 @@ Each entry: (title, variable_name, description, default, type_info)
                    {"type": "slider", "range": (min, max, divisions), "is_float": bool}
 """
 
-from paths import DATA_DIR
+from paths import DATA_DIR, ATTACHMENT_CACHE
 
 SETTINGS_DATA = [
     # --- Directories ---
     ("Sync Directories", "sync_directories",
      "Folders to monitor for new and changed files. Sub-folders are included.",
-     [],
+     [str(ATTACHMENT_CACHE)],
      {"type": "json_list"}),
 
     ("Database Path", "db_path",
      "Path to the SQLite database file. Requires app restart to take effect.",
      str(DATA_DIR / "database.db"),
      {"type": "text"}),
+
+    ("Attachment Cache Size (GB)", "attachment_cache_size_gb",
+     "Maximum size of the attachment cache folder. When exceeded, oldest files are evicted (LRU by modification time).",
+     2.0,
+     {"type": "slider", "range": (0.1, 20.0, 199), "is_float": True}),
 
     # --- File Filtering ---
     ("Ignored Extensions", "ignored_extensions",

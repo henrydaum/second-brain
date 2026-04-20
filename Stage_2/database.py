@@ -4,7 +4,24 @@ import sqlite3
 import threading
 import time
 
+from paths import ATTACHMENT_CACHE
+
 logger = logging.getLogger("Database")
+
+# Paths under these roots are enqueued with elevated priority so the user
+# doesn't wait behind a backlog for files they just handed the agent.
+_PRIORITY_ROOTS: tuple[str, ...] = (str(ATTACHMENT_CACHE).rstrip("\\/"),)
+_HIGH_PRIORITY = 100
+_DEFAULT_PRIORITY = 0
+
+
+def _priority_for(path: str) -> int:
+    norm = str(path).replace("\\", "/").rstrip("/")
+    for root in _PRIORITY_ROOTS:
+        root_n = root.replace("\\", "/").rstrip("/")
+        if norm == root_n or norm.startswith(root_n + "/"):
+            return _HIGH_PRIORITY
+    return _DEFAULT_PRIORITY
 
 _VALID_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
@@ -71,6 +88,7 @@ class Database:
 				path         TEXT,
 				task_name    TEXT,
 				status       TEXT DEFAULT 'PENDING',
+				priority     INTEGER DEFAULT 0,
 				created_at   REAL,
 				started_at   REAL,
 				completed_at REAL,
@@ -78,9 +96,17 @@ class Database:
 				PRIMARY KEY (path, task_name)
 			)
 		""")
+		# Migration: add priority column for existing databases
+		try:
+			self.conn.execute("ALTER TABLE task_queue ADD COLUMN priority INTEGER DEFAULT 0")
+		except sqlite3.OperationalError:
+			pass  # column already exists
+		# Drop the old index (pre-priority schema) so the recreated one below
+		# can include the priority column used by claim_tasks.
+		self.conn.execute("DROP INDEX IF EXISTS idx_queue_dispatch")
 		self.conn.execute("""
 			CREATE INDEX IF NOT EXISTS idx_queue_dispatch
-			ON task_queue (task_name, status)
+			ON task_queue (task_name, status, priority DESC, created_at)
 		""")
 
 		# Task registry — remembers which tasks are registered across restarts
@@ -230,30 +256,38 @@ class Database:
 	def enqueue_task(self, path, task_name):
 		"""Add a task to the queue. Skips if already exists."""
 		now = time.time()
+		prio = _priority_for(path)
 		with self.lock:
 			self.conn.execute("""
-				INSERT OR IGNORE INTO task_queue (path, task_name, status, created_at)
-				VALUES (?, ?, 'PENDING', ?)
-			""", (path, task_name, now))
+				INSERT OR IGNORE INTO task_queue (path, task_name, status, priority, created_at)
+				VALUES (?, ?, 'PENDING', ?, ?)
+			""", (path, task_name, prio, now))
 			self.conn.commit()
 
 	def re_enqueue_task(self, path, task_name):
 		"""Enqueue a task, resetting it to PENDING if it already exists."""
 		now = time.time()
+		prio = _priority_for(path)
 		with self.lock:
 			self.conn.execute("""
-				INSERT INTO task_queue (path, task_name, status, created_at)
-				VALUES (?, ?, 'PENDING', ?)
+				INSERT INTO task_queue (path, task_name, status, priority, created_at)
+				VALUES (?, ?, 'PENDING', ?, ?)
 				ON CONFLICT(path, task_name) DO UPDATE SET
 					status = 'PENDING',
+					priority = excluded.priority,
 					started_at = NULL,
 					completed_at = NULL,
 					error = NULL
-			""", (path, task_name, now))
+			""", (path, task_name, prio, now))
 			self.conn.commit()
 
 	def claim_tasks(self, task_name, batch_size):
-		"""Atomically grab up to N PENDING tasks. Returns list of paths. Can be used with batch_size=1 for single tasks."""
+		"""Atomically grab up to N PENDING tasks. Returns list of paths. Can be used with batch_size=1 for single tasks.
+
+		Higher-priority paths (e.g. attachments dropped in via the frontend) are
+		claimed first. Ties are broken by creation time (FIFO) so normal workload
+		still flows in order.
+		"""
 		with self.lock:
 			cur = self.conn.execute("""
 				UPDATE task_queue
@@ -261,6 +295,7 @@ class Database:
 				WHERE rowid IN (
 					SELECT rowid FROM task_queue
 					WHERE task_name = ? AND status = 'PENDING'
+					ORDER BY priority DESC, created_at ASC
 					LIMIT ?
 				)
 				RETURNING path

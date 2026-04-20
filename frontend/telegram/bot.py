@@ -12,11 +12,11 @@ import html
 import json
 import logging
 import re
-import tempfile
 import threading
 import uuid
 from pathlib import Path
 
+from Stage_1.attachment_cache import save as save_attachment
 from Stage_1.registry import get_modality, parse
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt
@@ -42,7 +42,9 @@ _TELEGRAM_SUFFIX = (
     "Do NOT use markdown tables, headers (#), horizontal rules (---), or bullet "
     "lists with -. Use plain numbered lists or line breaks for structure.\n"
     "The user can send you images and documents. Images are passed to you directly. "
-    "Text and tabular files are parsed and their content is appended to the message."
+    "Text and tabular files are parsed and their content is appended to the message. "
+    "All attachments are saved to an attachment cache folder (indexed by the Second Brain "
+    "pipeline), so you can re-read or search them later via read_file and the search tools."
 )
 
 
@@ -1675,7 +1677,12 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             _clear_busy(gen)
 
     async def handle_attachment(update: Update, _ctx):
-        """Handle incoming photos and documents — parse ephemerally for the agent."""
+        """Save incoming photos/documents to the attachment cache, then hand off to the agent.
+
+        The cache folder is a sync_directory, so Stage_2 indexes files asynchronously.
+        Text/image modalities still get inlined for fast first-turn context; the
+        agent is always told the cache path so it can re-access the file later.
+        """
         if not _check_user(update):
             return
         msg = update.message
@@ -1699,125 +1706,122 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         if tg_file is None:
             return
 
-        # Download to a temp file, preserving the extension
+        # Download bytes, then persist to the attachment cache. The cache folder is
+        # a sync_directory, so Stage_2 will index the file in the background.
         suffix = Path(file_name).suffix or ""
-        tmp = tempfile.NamedTemporaryFile(
-            delete=False, suffix=suffix, prefix="tg_attach_")
-        tmp_path = Path(tmp.name)
-        tmp.close()
+        data = bytes(await tg_file.download_as_bytearray())
+        cache_path = save_attachment(
+            file_name, data,
+            size_cap_gb=float(config.get("attachment_cache_size_gb", 2.0)))
 
-        try:
-            await tg_file.download_to_drive(str(tmp_path))
-            modality = get_modality(suffix) if suffix else "unknown"
-            is_image = modality == "image" or (msg.photo and modality == "unknown")
+        modality = get_modality(suffix) if suffix else "unknown"
+        is_image = modality == "image" or (msg.photo and modality == "unknown")
 
-            # ── Build user_text and image_paths based on modality ──
-            user_text = caption or ""
-            send_image_paths = None
+        # ── Build user_text and image_paths based on modality ──
+        user_text = caption or ""
+        send_image_paths = None
 
-            if is_image:
-                llm = services.get("llm")
-                has_vision = llm and llm.vision is not False
-                if has_vision:
-                    send_image_paths = [str(tmp_path)]
-                    user_text += f"\n\n[The user attached an image: {file_name}]"
-                else:
-                    user_text += (
-                        f"\n\n[The user attached an image: {file_name}. "
-                        "The current model does not support vision, "
-                        "so the image contents are not visible to you.]")
-                if not caption:
-                    user_text = user_text.lstrip()
-
-            elif modality in ("text", "tabular"):
-                # Parse and inline the content
-                content = ""
-                truncated = False
-                try:
-                    pr = parse(str(tmp_path), config={"max_chars": _MAX_ATTACHMENT_TEXT},
-                              services=services)
-                    if pr.output:
-                        if isinstance(pr.output, str):
-                            raw = pr.output
-                        elif isinstance(pr.output, dict):
-                            df = pr.output.get("default")
-                            raw = df.to_string(max_rows=50) if df is not None else str(pr.output)
-                        else:
-                            raw = str(pr.output)
-                        if len(raw) > _MAX_ATTACHMENT_TEXT:
-                            content = raw[:_MAX_ATTACHMENT_TEXT]
-                            truncated = True
-                        else:
-                            content = raw
-                except Exception as e:
-                    logger.warning(f"Failed to parse attachment {file_name}: {e}")
-
-                if content:
-                    user_text += f"\n\n[The user attached a file: {file_name}]\n{content}"
-                    if truncated:
-                        user_text += "\n(Content truncated — only the first ~4000 characters are shown.)"
-                else:
-                    user_text += f"\n\n[The user attached a file: {file_name}, but its contents could not be extracted.]"
-                if not caption:
-                    user_text = user_text.lstrip()
-
+        if is_image:
+            llm = services.get("llm")
+            has_vision = llm and llm.vision is not False
+            if has_vision:
+                send_image_paths = [str(cache_path)]
+                user_text += f"\n\n[The user attached an image: {file_name} (cached at {cache_path})]"
             else:
-                # Audio, video, unknown — can't process, but still tell the LLM
-                user_text += f"\n\n[The user attached a file: {file_name} (type: {modality}). This file type cannot be processed.]"
-                if not caption:
-                    user_text = user_text.lstrip()
+                user_text += (
+                    f"\n\n[The user attached an image: {file_name} (cached at {cache_path}). "
+                    "The current model does not support vision, "
+                    "so the image contents are not visible to you.]")
+            if not caption:
+                user_text = user_text.lstrip()
 
-            # ── Send to agent ──────────────────────────────────────
-            if _busy_ref["v"]:
-                await msg.reply_text(
-                    "Still working on the previous message — send /refresh to abort.")
-                return
-
-            gen = _mark_busy()
-            stop_typing = asyncio.Event()
-
-            async def _typing_loop():
-                while not stop_typing.is_set():
-                    try:
-                        await msg.chat.send_action(ChatAction.TYPING)
-                    except Exception:
-                        pass
-                    try:
-                        await asyncio.wait_for(stop_typing.wait(), timeout=4.0)
-                    except asyncio.TimeoutError:
-                        pass
-
-            typing_task = asyncio.create_task(_typing_loop())
+        elif modality in ("text", "tabular"):
+            # Parse and inline for fast first-turn context. Indexing happens async.
+            content = ""
+            truncated = False
             try:
-                loop = asyncio.get_running_loop()
-                result = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None, lambda: route_input(
-                            user_text, registry, agent_ref["agent"],
-                            image_paths=send_image_paths)),
-                    timeout=900)
-                if result.text:
-                    converted = _md_to_tg_html(result.text)
-                    await _send_long_message(chat_id, converted, use_html=True)
-            except asyncio.TimeoutError:
-                logger.error("Attachment handler exceeded 15 min — refreshing agent")
-                await msg.reply_text(
-                    "Previous tool call abandoned after 15 min. Agent refreshed.")
-                _refresh_agent()
+                pr = parse(str(cache_path), config={"max_chars": _MAX_ATTACHMENT_TEXT},
+                          services=services)
+                if pr.output:
+                    if isinstance(pr.output, str):
+                        raw = pr.output
+                    elif isinstance(pr.output, dict):
+                        df = pr.output.get("default")
+                        raw = df.to_string(max_rows=50) if df is not None else str(pr.output)
+                    else:
+                        raw = str(pr.output)
+                    if len(raw) > _MAX_ATTACHMENT_TEXT:
+                        content = raw[:_MAX_ATTACHMENT_TEXT]
+                        truncated = True
+                    else:
+                        content = raw
             except Exception as e:
-                logger.error(f"Attachment handler error: {e}")
-                await msg.reply_text(f"Error: {e}")
-            finally:
-                stop_typing.set()
-                await typing_task
-                _clear_busy(gen)
+                logger.warning(f"Failed to parse attachment {file_name}: {e}")
 
+            if content:
+                user_text += f"\n\n[The user attached a file: {file_name} (cached at {cache_path})]\n{content}"
+                if truncated:
+                    user_text += f"\n(Content truncated — only the first ~{_MAX_ATTACHMENT_TEXT} characters are shown. Use read_file on the cached path for more.)"
+            else:
+                user_text += f"\n\n[The user attached a file: {file_name} (cached at {cache_path}). Inline extraction failed — use read_file on the cached path.]"
+            if not caption:
+                user_text = user_text.lstrip()
+
+        else:
+            # Audio, video, unknown: file is saved and the Stage_2 pipeline will
+            # index whatever it can. The agent can use read_file / search tools
+            # to access it, or write a new parser plugin for novel extensions.
+            user_text += (
+                f"\n\n[The user attached a file: {file_name} (type: {modality}, "
+                f"cached at {cache_path}). Indexing in background — use read_file "
+                "or search tools to access it.]")
+            if not caption:
+                user_text = user_text.lstrip()
+
+        # ── Send to agent ──────────────────────────────────────
+        if _busy_ref["v"]:
+            await msg.reply_text(
+                "Still working on the previous message — send /refresh to abort.")
+            return
+
+        gen = _mark_busy()
+        stop_typing = asyncio.Event()
+
+        async def _typing_loop():
+            while not stop_typing.is_set():
+                try:
+                    await msg.chat.send_action(ChatAction.TYPING)
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(stop_typing.wait(), timeout=4.0)
+                except asyncio.TimeoutError:
+                    pass
+
+        typing_task = asyncio.create_task(_typing_loop())
+        try:
+            loop = asyncio.get_running_loop()
+            result = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None, lambda: route_input(
+                        user_text, registry, agent_ref["agent"],
+                        image_paths=send_image_paths)),
+                timeout=900)
+            if result.text:
+                converted = _md_to_tg_html(result.text)
+                await _send_long_message(chat_id, converted, use_html=True)
+        except asyncio.TimeoutError:
+            logger.error("Attachment handler exceeded 15 min — refreshing agent")
+            await msg.reply_text(
+                "Previous tool call abandoned after 15 min. Agent refreshed.")
+            _refresh_agent()
+        except Exception as e:
+            logger.error(f"Attachment handler error: {e}")
+            await msg.reply_text(f"Error: {e}")
         finally:
-            # Clean up temp file
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
+            stop_typing.set()
+            await typing_task
+            _clear_busy(gen)
 
     async def handle_callback_query(update: Update, _ctx):
         """Handle inline keyboard responses (approval, commands, /call form)."""
