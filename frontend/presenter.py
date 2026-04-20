@@ -49,7 +49,7 @@ class FrontendPresenter:
                           adapter_name: str) -> FrontendAction:
         verdict = "\u2705 Allowed" if approved else "\u274c Denied"
         if resolved_by and resolved_by != adapter_name:
-            note = f"{verdict} (resolved via {resolved_by})"
+            note = f"{verdict} (resolved via {resolved_by})\n"
         else:
             note = verdict
         return FrontendAction(

@@ -1700,6 +1700,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 return
 
             callback_id, action = data.rsplit(":", 1)
+            verdict = "Allowed" if action == "allow" else "Denied"
+            await update.callback_query.answer(verdict)
             result = await _dispatch_frontend_event(FrontendEvent(
                 type="approval_response",
                 session=_session(update.callback_query.message.chat_id),
@@ -1707,15 +1709,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 payload={"approved": action == "allow", "resolved_by": "telegram"},
             ))
             if result.text == "Expired or already handled.":
-                await update.callback_query.answer(result.text)
                 try:
                     await update.callback_query.edit_message_reply_markup(reply_markup=None)
                 except Exception:
                     pass
                 return
-
-            verdict = "Allowed" if action == "allow" else "Denied"
-            await update.callback_query.answer(verdict)
 
         except Exception as e:
             logger.error(f"Callback query error: {e}")
