@@ -24,6 +24,7 @@ from pathlib import Path
 
 from Stage_0.services.llmService import LLMProviderError, is_context_limit_error
 from Stage_1.registry import get_modality
+from Stage_3.history_utils import heal_orphan_tool_calls
 from frontend.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("Agent")
@@ -80,6 +81,8 @@ class Agent:
 
         Returns the assistant's final text response.
         """
+        self.cancelled = False
+        heal_orphan_tool_calls(self.history)
         user_msg = {"role": "user", "content": message}
         self.history.append(user_msg)
         self._fire_on_message(user_msg)
@@ -190,6 +193,7 @@ class Agent:
     def reset(self):
         """Clear conversation history."""
         self.history.clear()
+        self.cancelled = False
 
     # ── Context compaction ──────────────────────────────────────────
 
