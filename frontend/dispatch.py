@@ -78,5 +78,8 @@ def route_input(text, registry, agent, image_paths=None):
     finally:
         agent.on_tool_result = original_callback
 
+    if response is None and agent.cancelled:
+        return InputResult("chat", "Cancelled.", collected_paths)
+
     clean, _ = strip_model_tokens(response or "")
     return InputResult("chat", clean, collected_paths)

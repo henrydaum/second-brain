@@ -406,7 +406,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         if new_agent is not None and old_history:
             new_agent.history = old_history
             heal_orphan_tool_calls(new_agent.history)
-        return "Restarted. Previous tool call was abandoned."
+        return "Restarted."
 
     def _cmd_model(arg):
         """Handler for /model — manage LLM profiles."""
