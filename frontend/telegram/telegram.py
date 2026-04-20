@@ -34,7 +34,7 @@ from frontend.telegram.forms import (
 )
 from frontend.telegram.renderers import prepare_media_actions
 from frontend.telegram.transport import TelegramTransport
-from frontend.types import FrontendSession
+from frontend.types import FrontendEvent, FrontendSession
 
 logger = logging.getLogger("Telegram")
 
@@ -150,6 +150,12 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         if chat_id is None:
             return runtime.get_last_session("telegram") or base_session
         return FrontendSession(platform="telegram", user_id=str(chat_id), chat_id=str(chat_id))
+
+    async def _dispatch_frontend_event(event: FrontendEvent, prompt_suffix: str = ""):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: runtime.handle_frontend_event(event, registry, prompt_suffix=prompt_suffix)
+        )
 
     def _create_agent():
         runtime.set_prompt_suffix(base_session, _TELEGRAM_SUFFIX)
@@ -462,11 +468,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         except (ValueError, TypeError):
             collected["llm_context_size"] = 0
 
-        loop = asyncio.get_running_loop()
-        output = await loop.run_in_executor(
-            None, lambda: registry.dispatch("model", f"add {profile_name} {json.dumps(collected)}"))
-        if output:
-            await transport.send_long_message(chat_id, output)
+        result = await _dispatch_frontend_event(FrontendEvent(
+            type="slash_command",
+            session=_session(chat_id),
+            command_name="model",
+            command_arg=f"add {profile_name} {json.dumps(collected)}",
+        ))
+        if result.text:
+            await transport.send_long_message(chat_id, result.text)
 
     # ── Picker menus for list commands ───────────────────────────────
     #
@@ -1037,12 +1046,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 return
 
         # Standard dispatch
-        loop = asyncio.get_running_loop()
-        output = await loop.run_in_executor(
-            None, lambda: registry.dispatch(cmd_name, arg))
-
-        if output:
-            await transport.send_long_message(chat_id, output)
+        result = await _dispatch_frontend_event(FrontendEvent(
+            type="slash_command",
+            session=_session(chat_id),
+            command_name=cmd_name,
+            command_arg=arg,
+        ))
+        if result.text:
+            await transport.send_long_message(chat_id, result.text)
 
     async def handle_message(update: Update, _ctx):
         """Handle plain text — route to agent via route_input()."""
@@ -1146,11 +1157,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 except json.JSONDecodeError:
                     items = [line.strip() for line in text.splitlines() if line.strip()]
                     text = json.dumps(items)
-            loop = asyncio.get_running_loop()
-            output = await loop.run_in_executor(
-                None, lambda: registry.dispatch("configure", f"{key} {text}"))
-            if output:
-                await transport.send_long_message(chat_id, output)
+            result = await _dispatch_frontend_event(FrontendEvent(
+                type="slash_command",
+                session=_session(chat_id),
+                command_name="configure",
+                command_arg=f"{key} {text}",
+            ))
+            if result.text:
+                await transport.send_long_message(chat_id, result.text)
             return
 
         chat_session = _session(chat_id)
@@ -1180,15 +1194,16 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         typing_task = asyncio.create_task(_typing_loop())
 
         try:
-            loop = asyncio.get_running_loop()
             # Outer 15-min safety net: if the whole pipeline (including LLM
             # calls themselves, not just tools) wedges, release the handler
             # so the bot stays responsive. Tool-level timeouts (Layer 1) are
             # usually tighter, but this catches everything else.
             result = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None, lambda: runtime.route_event(
-                        chat_session, registry, text, prompt_suffix=_TELEGRAM_SUFFIX)),
+                _dispatch_frontend_event(FrontendEvent(
+                    type="chat_message",
+                    session=chat_session,
+                    text=text,
+                ), prompt_suffix=_TELEGRAM_SUFFIX),
                 timeout=900)
 
             if result.text:
@@ -1338,12 +1353,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
         typing_task = asyncio.create_task(_typing_loop())
         try:
-            loop = asyncio.get_running_loop()
             result = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None, lambda: runtime.route_event(
-                        chat_session, registry, user_text,
-                        image_paths=send_image_paths, prompt_suffix=_TELEGRAM_SUFFIX)),
+                _dispatch_frontend_event(FrontendEvent(
+                    type="attachment_message",
+                    session=chat_session,
+                    text=user_text,
+                    attachments=[str(cache_path)],
+                    payload={"image_paths": send_image_paths or []},
+                ), prompt_suffix=_TELEGRAM_SUFFIX),
                 timeout=900)
             if result.text:
                 converted = _md_to_tg_html(result.text)
@@ -1384,11 +1401,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         await _start_trigger_form(chat_id, arg)
                         return
 
-                    loop = asyncio.get_running_loop()
-                    output = await loop.run_in_executor(
-                        None, lambda: registry.dispatch(cmd_name, arg))
-                    if output:
-                        await transport.send_long_message(chat_id, output)
+                    result = await _dispatch_frontend_event(FrontendEvent(
+                        type="callback_response",
+                        session=_session(chat_id),
+                        payload={"kind": "command", "command_name": cmd_name, "command_arg": arg},
+                    ))
+                    if result.text:
+                        await transport.send_long_message(chat_id, result.text)
                 return
 
             # ── Model profile callbacks (mdl:<action>[:<name>]) ──
@@ -1401,11 +1420,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 chat_id = update.callback_query.message.chat_id
 
                 if action == "list":
-                    loop = asyncio.get_running_loop()
-                    output = await loop.run_in_executor(
-                        None, lambda: registry.dispatch("model", "list"))
-                    if output:
-                        await transport.send_long_message(chat_id, output)
+                    result = await _dispatch_frontend_event(FrontendEvent(
+                        type="callback_response",
+                        session=_session(chat_id),
+                        payload={"kind": "command", "command_name": "model", "command_arg": "list"},
+                    ))
+                    if result.text:
+                        await transport.send_long_message(chat_id, result.text)
                 elif action == "add":
                     # Ask for profile name, then start interactive form
                     _pending_model_adds[chat_id] = PendingParamForm(awaiting_name=True)
@@ -1429,11 +1450,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                             chat_id, f"Choose a profile to {sub}:",
                             reply_markup=InlineKeyboardMarkup(buttons))
                 elif action in ("switch", "remove", "show"):
-                    loop = asyncio.get_running_loop()
-                    output = await loop.run_in_executor(
-                        None, lambda: registry.dispatch("model", f"{action} {name}"))
-                    if output:
-                        await transport.send_long_message(chat_id, output)
+                    result = await _dispatch_frontend_event(FrontendEvent(
+                        type="callback_response",
+                        session=_session(chat_id),
+                        payload={"kind": "command", "command_name": "model", "command_arg": f"{action} {name}"},
+                    ))
+                    if result.text:
+                        await transport.send_long_message(chat_id, result.text)
                 return
 
             # ── Model add form enum callbacks (mdladd:<chat_id>:<param>:<value>) ──
@@ -1456,11 +1479,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 await update.callback_query.answer()
                 await update.callback_query.edit_message_reply_markup(reply_markup=None)
                 chat_id = update.callback_query.message.chat_id
-                loop = asyncio.get_running_loop()
-                output = await loop.run_in_executor(
-                    None, lambda: registry.dispatch("history", conv_id_str))
-                if output:
-                    await transport.send_long_message(chat_id, output)
+                result = await _dispatch_frontend_event(FrontendEvent(
+                    type="callback_response",
+                    session=_session(chat_id),
+                    payload={"kind": "history", "conversation_id": conv_id_str},
+                ))
+                if result.text:
+                    await transport.send_long_message(chat_id, result.text)
                 return
 
             # ── Configure setting selection (cfg:<key>) ──
@@ -1480,11 +1505,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await update.callback_query.answer()
                     await update.callback_query.edit_message_reply_markup(reply_markup=None)
                     chat_id = update.callback_query.message.chat_id
-                    loop = asyncio.get_running_loop()
-                    output = await loop.run_in_executor(
-                        None, lambda: registry.dispatch("configure", f"{key} {raw_val}"))
-                    if output:
-                        await transport.send_long_message(chat_id, output)
+                    result = await _dispatch_frontend_event(FrontendEvent(
+                        type="callback_response",
+                        session=_session(chat_id),
+                        payload={"kind": "command", "command_name": "configure", "command_arg": f"{key} {raw_val}"},
+                    ))
+                    if result.text:
+                        await transport.send_long_message(chat_id, result.text)
                 return
 
             # ── /call form callbacks (call:<chat_id>:<param>:<value>) ──
@@ -1525,15 +1552,17 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 await update.callback_query.answer()
                 await update.callback_query.edit_message_reply_markup(reply_markup=None)
                 chat_id = update.callback_query.message.chat_id
-                loop = asyncio.get_running_loop()
 
                 if action == "pick":
                     await _show_service_actions(chat_id, name)
                 elif action in ("load", "unload"):
-                    output = await loop.run_in_executor(
-                        None, lambda: registry.dispatch(action, name))
-                    if output:
-                        await transport.send_long_message(chat_id, output)
+                    result = await _dispatch_frontend_event(FrontendEvent(
+                        type="callback_response",
+                        session=_session(chat_id),
+                        payload={"kind": "command", "command_name": action, "command_arg": name},
+                    ))
+                    if result.text:
+                        await transport.send_long_message(chat_id, result.text)
                     await _show_services_picker(chat_id)
                 elif action == "back":
                     await _show_services_picker(chat_id)
@@ -1547,17 +1576,19 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 await update.callback_query.answer()
                 await update.callback_query.edit_message_reply_markup(reply_markup=None)
                 chat_id = update.callback_query.message.chat_id
-                loop = asyncio.get_running_loop()
 
                 if action == "pick":
                     await _show_task_actions(chat_id, name)
                 elif action == "trigger":
                     await _start_trigger_form(chat_id, name)
                 elif action in ("pause", "unpause", "reset", "retry"):
-                    output = await loop.run_in_executor(
-                        None, lambda: registry.dispatch(action, name))
-                    if output:
-                        await transport.send_long_message(chat_id, output)
+                    result = await _dispatch_frontend_event(FrontendEvent(
+                        type="callback_response",
+                        session=_session(chat_id),
+                        payload={"kind": "command", "command_name": action, "command_arg": name},
+                    ))
+                    if result.text:
+                        await transport.send_long_message(chat_id, result.text)
                     await _show_tasks_picker(chat_id)
                 elif action == "back":
                     await _show_tasks_picker(chat_id)
@@ -1571,17 +1602,19 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 await update.callback_query.answer()
                 await update.callback_query.edit_message_reply_markup(reply_markup=None)
                 chat_id = update.callback_query.message.chat_id
-                loop = asyncio.get_running_loop()
 
                 if action == "pick":
                     await _show_tool_actions(chat_id, name)
                 elif action == "call":
                     await _start_call_form(chat_id, name)
                 elif action in ("enable", "disable"):
-                    output = await loop.run_in_executor(
-                        None, lambda: registry.dispatch(action, name))
-                    if output:
-                        await transport.send_long_message(chat_id, output)
+                    result = await _dispatch_frontend_event(FrontendEvent(
+                        type="callback_response",
+                        session=_session(chat_id),
+                        payload={"kind": "command", "command_name": action, "command_arg": name},
+                    ))
+                    if result.text:
+                        await transport.send_long_message(chat_id, result.text)
                     await _show_tools_picker(chat_id)
                 elif action == "back":
                     await _show_tools_picker(chat_id)
@@ -1594,11 +1627,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 await update.callback_query.edit_message_reply_markup(reply_markup=None)
                 chat_id = update.callback_query.message.chat_id
                 arg = "" if filt == "all" else filt
-                loop = asyncio.get_running_loop()
-                output = await loop.run_in_executor(
-                    None, lambda: registry.dispatch("locations", arg))
-                if output:
-                    await transport.send_long_message(chat_id, output)
+                result = await _dispatch_frontend_event(FrontendEvent(
+                    type="callback_response",
+                    session=_session(chat_id),
+                    payload={"kind": "command", "command_name": "locations", "command_arg": arg},
+                ))
+                if result.text:
+                    await transport.send_long_message(chat_id, result.text)
                 return
 
             # ── /schedule picker + create form (sch:...) ──
@@ -1609,7 +1644,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 await update.callback_query.answer()
                 await update.callback_query.edit_message_reply_markup(reply_markup=None)
                 chat_id = update.callback_query.message.chat_id
-                loop = asyncio.get_running_loop()
 
                 if action == "pick":
                     await _show_schedule_job_actions(chat_id, tail)
@@ -1618,10 +1652,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 elif action == "back":
                     await _show_schedule_picker(chat_id)
                 elif action in ("run", "enable", "disable", "show"):
-                    output = await loop.run_in_executor(
-                        None, lambda: registry.dispatch("schedule", f"{action} {tail}"))
-                    if output:
-                        await transport.send_long_message(chat_id, output)
+                    result = await _dispatch_frontend_event(FrontendEvent(
+                        type="callback_response",
+                        session=_session(chat_id),
+                        payload={"kind": "command", "command_name": "schedule", "command_arg": f"{action} {tail}"},
+                    ))
+                    if result.text:
+                        await transport.send_long_message(chat_id, result.text)
                     if action != "show":
                         await _show_schedule_picker(chat_id)
                 elif action == "delete":
@@ -1634,10 +1671,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         f"Delete scheduled job '{tail}'? This cannot be undone.",
                         reply_markup=kb)
                 elif action == "confirmdel":
-                    output = await loop.run_in_executor(
-                        None, lambda: registry.dispatch("schedule", f"delete {tail}"))
-                    if output:
-                        await transport.send_long_message(chat_id, output)
+                    result = await _dispatch_frontend_event(FrontendEvent(
+                        type="callback_response",
+                        session=_session(chat_id),
+                        payload={"kind": "command", "command_name": "schedule", "command_arg": f"delete {tail}"},
+                    ))
+                    if result.text:
+                        await transport.send_long_message(chat_id, result.text)
                     await _show_schedule_picker(chat_id)
                 elif action == "type":
                     state = _pending_schedule_creates.get(chat_id)
@@ -1662,8 +1702,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 return
 
             callback_id, action = data.rsplit(":", 1)
-            if not runtime.resolve_approval(callback_id, action == "allow", resolved_by="telegram"):
-                await update.callback_query.answer("Expired or already handled.")
+            result = await _dispatch_frontend_event(FrontendEvent(
+                type="approval_response",
+                session=_session(update.callback_query.message.chat_id),
+                callback_id=callback_id,
+                payload={"approved": action == "allow", "resolved_by": "telegram"},
+            ))
+            if result.text == "Expired or already handled.":
+                await update.callback_query.answer(result.text)
                 return
 
             verdict = "Allowed" if action == "allow" else "Denied"
@@ -1673,7 +1719,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             except Exception:
                 pass
             try:
-                await update.callback_query.message.reply_text(f"Command {verdict.lower()}.")
+                await update.callback_query.message.reply_text(result.text or f"Command {verdict.lower()}.")
             except Exception:
                 pass
 

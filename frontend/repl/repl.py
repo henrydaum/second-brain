@@ -7,7 +7,7 @@ from pathlib import Path
 from frontend.commands import CommandEntry
 from frontend.platforms.platform_repl import ReplPlatformAdapter
 from frontend.runtime import FrontendRuntime
-from frontend.types import FrontendSession
+from frontend.types import FrontendEvent, FrontendSession
 
 logger = logging.getLogger("REPL")
 
@@ -56,7 +56,11 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 break
 
             try:
-                result = runtime.route_event(session, registry, user_input)
+                result = runtime.handle_frontend_event(FrontendEvent(
+                    type="slash_command" if user_input.startswith("/") else "chat_message",
+                    session=session,
+                    text=user_input,
+                ), registry)
                 if result.type == "chat":
                     print(f"\nassistant> {result.text}\n")
                     if result.attachments:
@@ -78,14 +82,18 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         return None
 
     def _allow_handler(_arg):
-        if not runtime.resolve_next_approval(session, True):
-            return "No pending approvals."
-        return "Approval granted."
+        return runtime.handle_frontend_event(FrontendEvent(
+            type="approval_response",
+            session=session,
+            payload={"approved": True},
+        ), registry).text
 
     def _deny_handler(_arg):
-        if not runtime.resolve_next_approval(session, False):
-            return "No pending approvals."
-        return "Approval denied."
+        return runtime.handle_frontend_event(FrontendEvent(
+            type="approval_response",
+            session=session,
+            payload={"approved": False},
+        ), registry).text
 
     for entry in [
         CommandEntry("chat",  "Enter interactive chat mode", handler=_chat_handler),
@@ -106,17 +114,13 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
             if not raw:
                 continue
 
-            # Strip leading / if present (commands work with or without it)
-            if raw.startswith("/"):
-                raw = raw[1:]
-
-            parts = raw.split(maxsplit=1)
-            cmd_name = parts[0].lower()
-            arg = parts[1].strip() if len(parts) > 1 else ""
-
-            output = registry.dispatch(cmd_name, arg)
-            if output:
-                print(output)
+            result = runtime.handle_frontend_event(FrontendEvent(
+                type="slash_command",
+                session=session,
+                text=raw,
+            ), registry)
+            if result.text:
+                print(result.text)
 
         except KeyboardInterrupt:
             shutdown_fn()

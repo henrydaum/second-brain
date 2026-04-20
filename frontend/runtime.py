@@ -11,9 +11,9 @@ from Stage_3.system_prompt import build_system_prompt
 from event_bus import bus
 from event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED, CHAT_MESSAGE_PUSHED
 from frontend.commands import CommandRegistry, register_core_commands
-from frontend.dispatch import route_input
+from frontend.dispatch import InputResult, route_input
 from frontend.presenter import FrontendPresenter
-from frontend.types import FrontendSession
+from frontend.types import FrontendEvent, FrontendSession
 
 logger = logging.getLogger("FrontendRuntime")
 
@@ -148,6 +148,62 @@ class FrontendRuntime:
         agent = self.ensure_agent(session)
         return route_input(text, registry, agent, image_paths=image_paths)
 
+    def handle_frontend_event(self, event: FrontendEvent, registry: CommandRegistry,
+                              prompt_suffix: str = "") -> InputResult:
+        if event.type == "chat_message":
+            return self.route_event(event.session, registry, event.text, prompt_suffix=prompt_suffix)
+        if event.type == "attachment_message":
+            return self.route_event(
+                event.session,
+                registry,
+                event.text,
+                image_paths=list(event.payload.get("image_paths") or []),
+                prompt_suffix=prompt_suffix,
+            )
+        if event.type == "slash_command":
+            command_name, command_arg = self._event_command_parts(event)
+            return InputResult("command", registry.dispatch(command_name, command_arg) or "")
+        if event.type == "approval_response":
+            approved = bool(event.payload.get("approved"))
+            request_id = event.callback_id or event.payload.get("request_id")
+            if request_id:
+                ok = self.resolve_approval(
+                    request_id, approved,
+                    resolved_by=event.payload.get("resolved_by") or event.session.platform,
+                )
+                if not ok:
+                    return InputResult("command", "Expired or already handled.")
+            elif not self.resolve_next_approval(event.session, approved):
+                return InputResult("command", "No pending approvals.")
+            return InputResult("command", "Approval granted." if approved else "Approval denied.")
+        if event.type == "callback_response":
+            callback_kind = str(event.payload.get("kind") or "").strip().lower()
+            if callback_kind == "command":
+                return self.handle_frontend_event(FrontendEvent(
+                    type="slash_command",
+                    session=event.session,
+                    command_name=event.payload.get("command_name"),
+                    command_arg=event.payload.get("command_arg"),
+                ), registry, prompt_suffix=prompt_suffix)
+            if callback_kind == "history":
+                return self.handle_frontend_event(FrontendEvent(
+                    type="slash_command",
+                    session=event.session,
+                    command_name="history",
+                    command_arg=str(event.payload.get("conversation_id") or event.callback_value or ""),
+                ), registry, prompt_suffix=prompt_suffix)
+            if callback_kind == "approval":
+                return self.handle_frontend_event(FrontendEvent(
+                    type="approval_response",
+                    session=event.session,
+                    callback_id=event.payload.get("request_id") or event.callback_id,
+                    payload={
+                        "approved": event.payload.get("approved"),
+                        "resolved_by": event.payload.get("resolved_by") or event.session.platform,
+                    },
+                ), registry, prompt_suffix=prompt_suffix)
+        return InputResult("error", f"Unsupported frontend event: {event.type}")
+
     def reset_session(self, session: FrontendSession):
         state = self.get_state(session)
         state.conversation_id = None
@@ -168,6 +224,16 @@ class FrontendRuntime:
     def render_tool_result(self, result):
         from frontend.formatters import format_tool_result
         return format_tool_result(result)
+
+    @staticmethod
+    def _event_command_parts(event: FrontendEvent) -> tuple[str, str]:
+        if event.command_name:
+            return event.command_name.strip().lower(), (event.command_arg or "").strip()
+        text = (event.text or "").strip()
+        if text.startswith("/"):
+            text = text[1:]
+        parts = text.split(maxsplit=1)
+        return (parts[0].lower() if parts else "", parts[1].strip() if len(parts) > 1 else "")
 
     def resolve_approval(self, request_id: str, approved: bool, resolved_by: str | None = None) -> bool:
         with self._approval_lock:
