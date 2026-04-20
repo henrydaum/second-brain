@@ -22,6 +22,7 @@ def build_system_prompt(db, orchestrator, tool_registry, services: dict) -> str:
         _available_tools(tool_registry),
         _authoring_guidance(),
         _sandbox_files(),
+        _attachments(),
         _database_tables(db),
         _services_status(services),
         _pipeline_status(db, orchestrator),
@@ -152,6 +153,24 @@ def _sandbox_files() -> str:
     lines = ["## Sandbox plugins (read these exact paths with read_file)"]
     lines.extend(sandbox_lines)
     return "\n".join(lines)
+
+
+def _attachments() -> str:
+    from paths import ATTACHMENT_CACHE
+    return (
+        "## Attachments\n"
+        f"Files the user sends via a frontend (e.g. Telegram photos/documents) are persisted to {ATTACHMENT_CACHE} "
+        "and indexed by the normal Stage_2 pipeline (extracted, chunked, embedded, OCR'd, lexical-indexed). "
+        "They're claimed ahead of regular files in the task queue (priority 100 vs. 0), so indexing typically finishes within seconds of upload.\n"
+        "\n"
+        "Finding recent attachments via sql_query:\n"
+        f"  SELECT path, file_name, mtime FROM files WHERE path LIKE '{ATTACHMENT_CACHE}%' ORDER BY mtime DESC LIMIT 20\n"
+        "Filenames start with a unix timestamp prefix (e.g. `1700000000_photo.jpg`), so ORDER BY mtime DESC gives newest first. "
+        "For a specific conversation's attachments, cross-reference mtime against the conversation's message timestamps in the conversation_messages table.\n"
+        "\n"
+        "If a user sends a file with an extension the pipeline doesn't understand, the file is still saved to the cache — "
+        "use read_file on the exact cache path, or create a new parser task plugin with build_plugin so future files of that type get indexed automatically."
+    )
 
 
 def _database_tables(db) -> str:
