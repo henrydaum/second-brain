@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 
 from frontend.telegram.renderers import VIDEO_EXTENSIONS, SendAction, prepare_media_actions, prepare_photo_bytes
+
+
+def _file_bytes(path):
+    return io.BytesIO(path.read_bytes())
 from frontend.types import FrontendAction, FrontendSession
 
 logger = logging.getLogger("TelegramTransport")
@@ -16,9 +21,11 @@ class TelegramTransport:
         self._get_loop = get_loop
         self._render_text = render_text
         self._status_message_ids: dict[str, int] = {}
+        self._choice_message_ids: dict[str, tuple[int, int, str]] = {}
 
     def clear_statuses(self):
         self._status_message_ids.clear()
+        self._choice_message_ids.clear()
 
     async def send_long_message(self, chat_id: int, text: str, use_html: bool = False):
         if not text:
@@ -53,20 +60,20 @@ class TelegramTransport:
                     for file_path in action.files:
                         ext = file_path.suffix.lower()
                         if action.group_type == "photo_video":
-                            media.append(InputMediaVideo(open(file_path, "rb")) if ext in VIDEO_EXTENSIONS else InputMediaPhoto(prepare_photo_bytes(file_path)))
+                            media.append(InputMediaVideo(_file_bytes(file_path)) if ext in VIDEO_EXTENSIONS else InputMediaPhoto(prepare_photo_bytes(file_path)))
                         elif action.group_type == "audio":
-                            media.append(InputMediaAudio(open(file_path, "rb"), title=file_path.stem))
+                            media.append(InputMediaAudio(_file_bytes(file_path), title=file_path.stem))
                         else:
-                            media.append(InputMediaDocument(open(file_path, "rb"), filename=file_path.name))
+                            media.append(InputMediaDocument(_file_bytes(file_path), filename=file_path.name))
                     await app.bot.send_media_group(chat_id, media)
                 elif action.method == "photo":
                     await app.bot.send_photo(chat_id, photo=prepare_photo_bytes(action.files[0]))
                 elif action.method == "video":
-                    await app.bot.send_video(chat_id, video=open(action.files[0], "rb"))
+                    await app.bot.send_video(chat_id, video=_file_bytes(action.files[0]))
                 elif action.method == "audio":
-                    await app.bot.send_audio(chat_id, audio=open(action.files[0], "rb"), title=action.files[0].stem)
+                    await app.bot.send_audio(chat_id, audio=_file_bytes(action.files[0]), title=action.files[0].stem)
                 elif action.method == "document":
-                    await app.bot.send_document(chat_id, document=open(action.files[0], "rb"), filename=action.files[0].name)
+                    await app.bot.send_document(chat_id, document=_file_bytes(action.files[0]), filename=action.files[0].name)
                 elif action.method == "text":
                     await app.bot.send_message(chat_id, action.text_content, parse_mode="HTML")
             except Exception as e:
@@ -130,8 +137,29 @@ class TelegramTransport:
                 self._status_message_ids[action.status_id] = sent.message_id
             return
 
+        if action.type == "resolve_choices":
+            request_id = action.metadata.get("request_id") or ""
+            entry = self._choice_message_ids.pop(request_id, None)
+            note = rendered or action.text
+            if entry is not None:
+                entry_chat_id, message_id, original_text = entry
+                new_text = f"{original_text}\n\n<i>{note}</i>" if note else original_text
+                try:
+                    await app.bot.edit_message_text(
+                        new_text, chat_id=entry_chat_id, message_id=message_id,
+                        parse_mode="HTML", reply_markup=None)
+                    return
+                except Exception:
+                    pass
+            if note and action.metadata.get("resolved_by") and action.metadata.get("resolved_by") != self.adapter.name:
+                await app.bot.send_message(chat_id, note)
+            return
+
         if reply_markup is not None:
-            await app.bot.send_message(chat_id, rendered, reply_markup=reply_markup, parse_mode="HTML" if use_html else None)
+            sent = await app.bot.send_message(chat_id, rendered, reply_markup=reply_markup, parse_mode="HTML" if use_html else None)
+            request_id = action.metadata.get("request_id")
+            if request_id and action.metadata.get("choice_prefix") == "approval":
+                self._choice_message_ids[request_id] = (chat_id, sent.message_id, rendered or action.text)
             return
 
         await self.send_long_message(chat_id, rendered, use_html=use_html)

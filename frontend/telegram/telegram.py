@@ -1110,13 +1110,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             param = state.current_param
             if param is not None:
                 try:
-                    if param.type == "integer":
-                        int(text)  # validate
-                    state.store(param.name, text)
+                    state.store(param.name, coerce_param_value(text, param.type))
                     await _ask_next_model_param(chat_id)
-                except ValueError:
+                except (ValueError, json.JSONDecodeError) as e:
                     await update.message.reply_text(
-                        f"Invalid value for {param.name} — expected a number. Try again.")
+                        f"Invalid value for {param.name} ({param.type}): {e}\nTry again.")
             return
 
         # Check for pending /schedule create form input
@@ -1710,18 +1708,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             ))
             if result.text == "Expired or already handled.":
                 await update.callback_query.answer(result.text)
+                try:
+                    await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
                 return
 
             verdict = "Allowed" if action == "allow" else "Denied"
             await update.callback_query.answer(verdict)
-            try:
-                await update.callback_query.edit_message_reply_markup(reply_markup=None)
-            except Exception:
-                pass
-            try:
-                await update.callback_query.message.reply_text(result.text or f"Command {verdict.lower()}.")
-            except Exception:
-                pass
 
         except Exception as e:
             logger.error(f"Callback query error: {e}")

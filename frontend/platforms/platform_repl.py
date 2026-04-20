@@ -26,6 +26,11 @@ class ReplPlatformAdapter(BasePlatformAdapter):
             logger.error(f"REPL frontend crashed: {e}")
 
     def send_action(self, session: FrontendSession, action: FrontendAction):
+        if action.type == "resolve_choices":
+            resolved_by = action.metadata.get("resolved_by") or ""
+            if resolved_by and resolved_by != self.name and action.text:
+                print(f"\n[{action.text} via {resolved_by}]", flush=True)
+            return
         text = action.text.strip()
         if text:
             print(f"\n{text}", flush=True)

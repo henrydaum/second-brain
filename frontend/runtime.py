@@ -290,7 +290,8 @@ class FrontendRuntime:
 
     def _on_tool_start(self, session: FrontendSession, tool_name: str, caps):
         action = self.presenter.tool_started(tool_name, caps)
-        self.get_state(session).status_ids.append(action.status_id)
+        if action.status_id:
+            self.get_state(session).status_ids.append(action.status_id)
         self.send_action(session, action)
 
     def _on_tool_result(self, session: FrontendSession, tool_name: str, result, caps):
@@ -311,15 +312,24 @@ class FrontendRuntime:
 
     def _on_approval_resolved(self, req):
         resolved_by = req.metadata.get("resolved_by")
+        approved = getattr(req, "approved", False)
         with self._approval_lock:
+            notify = []
             for adapter_name, pending in self._pending_approvals.items():
+                had_pending = req.id in pending
                 pending.pop(req.id, None)
                 order = self._pending_approval_order.get(adapter_name, [])
                 self._pending_approval_order[adapter_name] = [item for item in order if item != req.id]
-                if adapter_name == "repl" and resolved_by and resolved_by != "repl":
-                    session = self.adapters[adapter_name].default_session() or self.get_last_session(adapter_name)
-                    if session is not None:
-                        self.send_action(session, self.presenter.notice("approval resolved via another frontend"))
+                if had_pending:
+                    notify.append(adapter_name)
+        for adapter_name in notify:
+            adapter = self.adapters.get(adapter_name)
+            if adapter is None:
+                continue
+            session = adapter.default_session() or self.get_last_session(adapter_name)
+            if session is None:
+                continue
+            self.send_action(session, self.presenter.approval_resolved(req, approved, resolved_by, adapter_name))
 
     def _on_chat_message_pushed(self, payload: dict):
         for name, adapter in self.adapters.items():

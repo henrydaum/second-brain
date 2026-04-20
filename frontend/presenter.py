@@ -45,6 +45,19 @@ class FrontendPresenter:
             metadata={"request_id": req.id, "choice_prefix": "approval"},
         )
 
+    def approval_resolved(self, req, approved: bool, resolved_by: str | None,
+                          adapter_name: str) -> FrontendAction:
+        verdict = "\u2705 Allowed" if approved else "\u274c Denied"
+        if resolved_by and resolved_by != adapter_name:
+            note = f"{verdict} (resolved via {resolved_by})"
+        else:
+            note = verdict
+        return FrontendAction(
+            type="resolve_choices",
+            text=note,
+            metadata={"request_id": req.id, "approved": approved, "resolved_by": resolved_by or ""},
+        )
+
     def pushed_message(self, payload: dict, caps: PlatformCapabilities) -> FrontendAction:
         title = str(payload.get("title") or "").strip()
         kind = str(payload.get("kind") or "").strip()
