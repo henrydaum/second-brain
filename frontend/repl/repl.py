@@ -102,21 +102,21 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
             on_notice=_on_notice,
         )
 
-    def _restart_agent():
-        """Rebuild the agent. Called by /restart; history rebinding is handled
-        by the /restart command handler itself."""
+    def _refresh_agent():
+        """Rebuild the agent. Called by /refresh; history rebinding is handled
+        by the /refresh command handler itself."""
         nonlocal agent
         rebuilt = _build_agent()
         if rebuilt is not None:
             agent = rebuilt
-            logger.info("Agent rebuilt via /restart.")
+            logger.info("Agent rebuilt via /refresh.")
 
     # --- Build command registry (shared + REPL-specific) ---
     registry = CommandRegistry()
     register_core_commands(registry, ctrl, services, tool_registry, root_dir,
                            get_agent=lambda: agent,
                            set_conversation_id=_set_conversation_id,
-                           restart_agent=_restart_agent)
+                           refresh_agent=_refresh_agent)
 
     # --- REPL-specific commands ---
 

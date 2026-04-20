@@ -167,6 +167,47 @@ def main():
 	signal.signal(signal.SIGINT, shutdown)
 	signal.signal(signal.SIGTERM, shutdown)
 
+	# --- 9b. Restart — hard fallback that re-execs the process ---
+	_restart_lock = threading.Lock()
+
+	def restart():
+		def _exec_self():
+			if not _restart_lock.acquire(blocking=False):
+				return
+			logger.info("Re-execing process now.")
+			os.execv(sys.executable, [sys.executable, *sys.argv])
+
+		def graceful_then_exec():
+			try:
+				logger.info("Restart: graceful shutdown starting...")
+				event_trigger.stop()
+				watcher.stop()
+				orchestrator.stop()
+				for svc in services.values():
+					if getattr(svc, "loaded", False):
+						try:
+							svc.unload()
+						except Exception as e:
+							logger.debug(f"Restart: unload '{svc.model_name}' failed: {e}")
+				config_manager.save(config)
+				plugin_keys = {entry[1] for entry in get_plugin_settings()}
+				plugin_vals = {k: v for k, v in config.items() if k in plugin_keys}
+				if plugin_vals:
+					config_manager.save_plugin_config(plugin_vals)
+			except Exception as e:
+				logger.error(f"Restart: graceful shutdown error (forcing exec anyway): {e}")
+			_exec_self()
+
+		def watchdog_force_exec():
+			time.sleep(5.0)
+			logger.warning("Restart: graceful shutdown exceeded 5s — forcing re-exec")
+			_exec_self()
+
+		threading.Thread(target=watchdog_force_exec, daemon=True, name="restart-watchdog").start()
+		threading.Thread(target=graceful_then_exec, daemon=True, name="restart-graceful").start()
+
+	ctrl.restart = restart
+
 	# --- 10. Start REPL ---
 	if "repl" in frontends:
 		try:

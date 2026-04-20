@@ -68,6 +68,7 @@ class Agent:
         self.history: list[dict] = []
         self._tool_call_counts: dict[str, int] = {}
         self.cancelled = False
+        self.running = False
 
     def chat(self, message: str, image_paths: list[str] = None) -> str:
         """
@@ -81,6 +82,13 @@ class Agent:
 
         Returns the assistant's final text response.
         """
+        self.running = True
+        try:
+            return self._chat(message, image_paths=image_paths)
+        finally:
+            self.running = False
+
+    def _chat(self, message: str, image_paths: list[str] = None) -> str:
         self.cancelled = False
         heal_orphan_tool_calls(self.history)
         user_msg = {"role": "user", "content": message}

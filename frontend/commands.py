@@ -125,7 +125,7 @@ def _describe_profile(name: str, profile: dict, active: bool, loaded: bool = Fal
 
 def register_core_commands(registry: CommandRegistry, ctrl, services, tool_registry,
                            root_dir, get_agent=None, set_conversation_id=None,
-                           restart_agent=None):
+                           refresh_agent=None):
     """Register commands shared by Telegram and REPL.
 
     These are pure ctrl-wrapper commands with no UI-specific side effects.
@@ -136,12 +136,12 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                              (or None). Used by /call, /new, /cancel, and /history.
         set_conversation_id: Optional callable(int | None) to update the current
                              conversation ID. Used by /history and /new.
-        restart_agent:       Optional callable() that rebuilds the frontend's Agent
+        refresh_agent:       Optional callable() that rebuilds the frontend's Agent
                              instance, preserving conversation history. Used by
-                             /restart to recover from a stuck tool call.
+                             /refresh to recover from a stuck tool call.
     """
     _set_conversation_id = set_conversation_id
-    _restart_agent = restart_agent
+    _refresh_agent = refresh_agent
     import json as _json
     import config_manager as _cm
     from config_data import SETTINGS_DATA as _SD
@@ -382,31 +382,41 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
     def _cmd_cancel(_arg):
         """Handler for /cancel — interrupt the agent at the next opportunity."""
         agent = get_agent() if get_agent else None
-        if agent:
-            agent.cancelled = True
-            return "Cancelling..."
-        return "No active agent to cancel."
+        if agent is None:
+            return "No active agent to cancel."
+        if not agent.running:
+            return "Cancelled."
+        agent.cancelled = True
+        return "Cancelling..."
 
-    def _cmd_restart(_arg):
-        """Handler for /restart — forcibly rebuild the agent, preserving history.
+    def _cmd_refresh(_arg):
+        """Handler for /refresh — forcibly rebuild the agent, preserving history.
 
         Use when /cancel isn't enough — e.g. a tool is wedged and the agent
         loop is stuck. Marks the old agent cancelled (best-effort), rebuilds
-        a fresh agent via the frontend's restart_agent callback, and heals
+        a fresh agent via the frontend's refresh_agent callback, and heals
         any orphan tool_calls left behind by the interrupted turn.
         """
         old_agent = get_agent() if get_agent else None
         old_history = list(old_agent.history) if old_agent else []
         if old_agent:
             old_agent.cancelled = True
-        if not _restart_agent:
-            return "Restart is not supported in this frontend."
-        _restart_agent()
+        if not _refresh_agent:
+            return "Refresh is not supported in this frontend."
+        _refresh_agent()
         new_agent = get_agent() if get_agent else None
         if new_agent is not None and old_history:
             new_agent.history = old_history
             heal_orphan_tool_calls(new_agent.history)
-        return "Restarted."
+        return "Refreshed."
+
+    def _cmd_restart(_arg):
+        """Handler for /restart — hard restart: re-exec the whole process."""
+        fn = getattr(ctrl, "restart", None)
+        if fn is None:
+            return "Restart is not supported in this frontend."
+        fn()
+        return "Restarting — the process will come back up in a few seconds."
 
     def _cmd_model(arg):
         """Handler for /model — manage LLM profiles."""
@@ -656,7 +666,10 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         CommandEntry("cancel", "Interrupt the agent",
                      handler=_cmd_cancel,
                      category="Conversation"),
-        CommandEntry("restart", "Force-rebuild the agent when a tool is stuck",
+        CommandEntry("refresh", "Rebuild the agent when a tool is stuck (try /restart if a service is hung)",
+                     handler=_cmd_refresh,
+                     category="Conversation"),
+        CommandEntry("restart", "Restart the whole process — escape hatch when /refresh isn't enough",
                      handler=_cmd_restart,
                      category="Conversation"),
         CommandEntry("history", "List or load past conversations", "[id]",

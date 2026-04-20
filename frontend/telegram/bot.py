@@ -131,7 +131,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     _pending_configures: dict = {}      # chat_id -> setting_key (waiting for value)
     _pending_model_adds: dict = {}      # chat_id -> {name, params, collected, current_idx}
     _pending_triggers: dict = {}        # chat_id -> {task, params, collected, current_idx}
-    # Busy flag with a generation counter so /restart can safely unstick an
+    # Busy flag with a generation counter so /refresh can safely unstick an
     # in-flight handler without the zombie's finally-clause clobbering the
     # flag of a newer message. Any clear tagged with a stale gen is a no-op.
     _busy_ref: dict = {"v": False, "gen": 0}
@@ -148,7 +148,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             _busy_ref["v"] = False
 
     def _force_unbusy():
-        """Called by /restart — bump generation, release the flag so the next
+        """Called by /refresh — bump generation, release the flag so the next
         user message routes immediately."""
         _busy_ref["gen"] += 1
         _busy_ref["v"] = False
@@ -303,15 +303,15 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return True
         return False
 
-    def _restart_agent():
-        """Called by /restart — rebuild the agent and release the busy flag so
+    def _refresh_agent():
+        """Called by /refresh — rebuild the agent and release the busy flag so
         the next message routes immediately, even if the previous handler is
         still spinning in a stuck tool."""
         _create_agent()
         _force_unbusy()
         # Drop any orphaned approval-status messages; their generations are gone.
         _pending_status_msgs.clear()
-        logger.info("Agent restarted (Telegram).")
+        logger.info("Agent refreshed (Telegram).")
 
     # ── Security ─────────────────────────────────────────────────────
 
@@ -330,7 +330,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     register_core_commands(registry, ctrl, services, tool_registry, root_dir,
                            get_agent=lambda: agent_ref["agent"],
                            set_conversation_id=_set_conversation_id,
-                           restart_agent=_restart_agent)
+                           refresh_agent=_refresh_agent)
 
     # Telegram-specific overrides
     def _load_handler(arg):
@@ -1627,7 +1627,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
         if _busy_ref["v"]:
             await update.message.reply_text(
-                "Still working on the previous message — send /restart to abort.")
+                "Still working on the previous message — send /refresh to abort.")
             return
 
         gen = _mark_busy()
@@ -1662,10 +1662,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 await _send_long_message(chat_id, converted, use_html=True)
                 logger.info(f"-> {len(result.text)} chars")
         except asyncio.TimeoutError:
-            logger.error("Message handler exceeded 15 min — restarting agent")
+            logger.error("Message handler exceeded 15 min — refreshing agent")
             await update.message.reply_text(
-                "Previous tool call abandoned after 15 min. Agent restarted.")
-            _restart_agent()
+                "Previous tool call abandoned after 15 min. Agent refreshed.")
+            _refresh_agent()
         except Exception as e:
             logger.error(f"Message handler error: {e}")
             await update.message.reply_text(f"Error: {e}")
@@ -1770,7 +1770,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             # ── Send to agent ──────────────────────────────────────
             if _busy_ref["v"]:
                 await msg.reply_text(
-                    "Still working on the previous message — send /restart to abort.")
+                    "Still working on the previous message — send /refresh to abort.")
                 return
 
             gen = _mark_busy()
@@ -1800,10 +1800,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     converted = _md_to_tg_html(result.text)
                     await _send_long_message(chat_id, converted, use_html=True)
             except asyncio.TimeoutError:
-                logger.error("Attachment handler exceeded 15 min — restarting agent")
+                logger.error("Attachment handler exceeded 15 min — refreshing agent")
                 await msg.reply_text(
-                    "Previous tool call abandoned after 15 min. Agent restarted.")
-                _restart_agent()
+                    "Previous tool call abandoned after 15 min. Agent refreshed.")
+                _refresh_agent()
             except Exception as e:
                 logger.error(f"Attachment handler error: {e}")
                 await msg.reply_text(f"Error: {e}")
