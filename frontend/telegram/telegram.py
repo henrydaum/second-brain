@@ -13,25 +13,31 @@ import json
 import logging
 import re
 import threading
-import uuid
 from pathlib import Path
 
 from Stage_1.attachment_cache import save as save_attachment
 from Stage_1.registry import get_modality, parse
-from Stage_3.agent import Agent
-from Stage_3.system_prompt import build_system_prompt
-from frontend.commands import CommandEntry, CommandRegistry, register_core_commands
-from frontend.dispatch import route_input
+from frontend.commands import CommandEntry
 from frontend.formatters import (
     format_services, format_tasks, format_tools,
     format_tool_result,
 )
-from event_bus import bus
-from event_channels import APPROVAL_REQUESTED, CHAT_MESSAGE_PUSHED
+from frontend.platforms.platform_telegram import TelegramPlatformAdapter
+from frontend.runtime import FrontendRuntime
+from frontend.telegram.forms import (
+    MODEL_ADD_PARAMS,
+    SCHEDULE_CREATE_STEPS,
+    PendingParamForm,
+    PendingScheduleCreate,
+    coerce_param_value,
+    schema_to_params,
+)
+from frontend.telegram.renderers import prepare_media_actions
+from frontend.telegram.transport import TelegramTransport
+from frontend.types import FrontendSession
 
 logger = logging.getLogger("Telegram")
 
-_TG_MAX_LEN = 4096
 _MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB Telegram bot API limit
 _MAX_ATTACHMENT_TEXT = 4000         # Max chars of parsed text to append from attachments
 
@@ -104,8 +110,17 @@ def _convert_bold_italic(text: str) -> str:
 
 
 def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
-                     tool_registry, services, config, root_dir: Path):
+                     tool_registry, services, config, root_dir: Path,
+                     runtime: FrontendRuntime | None = None,
+                     adapter: TelegramPlatformAdapter | None = None):
     """Launch the Telegram bot. Blocks until shutdown_event is set."""
+
+    adapter = adapter or TelegramPlatformAdapter(
+        ctrl, shutdown_fn, shutdown_event, tool_registry, services, config, root_dir
+    )
+    runtime = runtime or FrontendRuntime(ctrl, services, config, tool_registry, root_dir)
+    if adapter.runtime is None:
+        runtime.register_adapter(adapter)
 
     token = config.get("telegram_bot_token", "").strip()
     if not token:
@@ -115,192 +130,30 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     # Late imports so the dependency is only required when the frontend is enabled
     from telegram import (
         BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update,
-        InputMediaPhoto, InputMediaVideo, InputMediaAudio, InputMediaDocument,
     )
     from telegram.constants import ChatAction
     from telegram.ext import (
         Application, CallbackQueryHandler, MessageHandler, filters,
     )
-    from frontend.telegram.renderers import (
-        prepare_media_actions, prepare_photo_bytes, SendAction, VIDEO_EXTENSIONS,
-    )
 
     # ── State ────────────────────────────────────────────────────────
-    agent_ref: dict = {"agent": None}
-    conversation_ref: dict = {"id": None}
-    _pending_approvals: dict = {}       # callback_id -> (Event, result_dict)
-    _pending_calls: dict = {}           # chat_id -> {tool, params, collected, current_idx}
+    base_session = adapter.default_session() or FrontendSession("telegram", "0", "0")
+    _pending_calls: dict[int, PendingParamForm] = {}
     _pending_configures: dict = {}      # chat_id -> setting_key (waiting for value)
-    _pending_model_adds: dict = {}      # chat_id -> {name, params, collected, current_idx}
-    _pending_triggers: dict = {}        # chat_id -> {task, params, collected, current_idx}
-    # Busy flag with a generation counter so /refresh can safely unstick an
-    # in-flight handler without the zombie's finally-clause clobbering the
-    # flag of a newer message. Any clear tagged with a stale gen is a no-op.
-    _busy_ref: dict = {"v": False, "gen": 0}
+    _pending_model_adds: dict[int, PendingParamForm] = {}
+    _pending_triggers: dict[int, PendingParamForm] = {}
     _loop: asyncio.AbstractEventLoop | None = None
     _app: Application | None = None
+    transport = TelegramTransport(adapter, lambda: _app, lambda: _loop, _md_to_tg_html)
 
-    def _mark_busy() -> int:
-        gen = _busy_ref["gen"]
-        _busy_ref["v"] = True
-        return gen
-
-    def _clear_busy(gen: int):
-        if _busy_ref["gen"] == gen:
-            _busy_ref["v"] = False
-
-    def _force_unbusy():
-        """Called by /refresh — bump generation, release the flag so the next
-        user message routes immediately."""
-        _busy_ref["gen"] += 1
-        _busy_ref["v"] = False
-
-    # ── Agent lifecycle ──────────────────────────────────────────────
-
-    def _on_agent_message(msg: dict):
-        """Persist conversation messages to DB."""
-        role = msg.get("role", "")
-        content = msg.get("content") or ""
-
-        if conversation_ref["id"] is None:
-            title = (content[:80].replace("\n", " ").strip()
-                     if role == "user" else "New conversation")
-            conversation_ref["id"] = ctrl.db.create_conversation(title)
-
-        save_content = content
-        if msg.get("tool_calls"):
-            save_content = json.dumps({
-                "content": content,
-                "tool_calls": msg["tool_calls"],
-            })
-
-        ctrl.db.save_message(
-            conversation_ref["id"], role, save_content,
-            tool_call_id=msg.get("tool_call_id"),
-            tool_name=msg.get("name"),
-        )
-
-        if role == "assistant" and not msg.get("tool_calls"):
-            ctrl.maybe_generate_conversation_title_async(conversation_ref["id"])
-
-    # FIFO of pending status message_ids — pushed on tool_start, popped on tool_result.
-    # Agent executes tools serially, so this stays ordered.
-    _pending_status_msgs: list[int] = []
-
-    def _on_tool_start(tool_name: str):
-        """Send a pending status message; _on_tool_result will edit it to the final state."""
-        chat_id = int(config.get("telegram_allowed_user_id", 0))
-        if not chat_id:
-            return
-        text = f"\u23f3 {tool_name}"
-        async def _send():
-            msg = await _app.bot.send_message(chat_id, text, disable_notification=True)
-            return msg.message_id
-        try:
-            msg_id = asyncio.run_coroutine_threadsafe(_send(), _loop).result(timeout=5)
-            _pending_status_msgs.append(msg_id)
-        except Exception:
-            _pending_status_msgs.append(None)
-
-    def _on_tool_result(tool_name: str, result):
-        """Edit the pending status message to the final state; render_files also sends media."""
-        logger.info(f"tool: {tool_name} [{'ok' if result.success else 'fail'}]")
-        chat_id = int(config.get("telegram_allowed_user_id", 0))
-        if not chat_id:
-            return
-
-        msg_id = _pending_status_msgs.pop(0) if _pending_status_msgs else None
-        icon = "\u2705" if result.success else "\u274c"
-        text = f"{icon} {tool_name}"
-
-        async def _finalize():
-            if msg_id is not None:
-                try:
-                    await _app.bot.edit_message_text(text, chat_id=chat_id, message_id=msg_id)
-                except Exception:
-                    await _app.bot.send_message(chat_id, text, disable_notification=True)
-            else:
-                await _app.bot.send_message(chat_id, text, disable_notification=True)
-            if tool_name == "render_files" and result.attachment_paths:
-                actions = prepare_media_actions(result.attachment_paths)
-                await _execute_send_actions(chat_id, actions)
-
-        try:
-            asyncio.run_coroutine_threadsafe(_finalize(), _loop).result(timeout=30)
-        except Exception as e:
-            logger.error(f"Failed to finalize tool status: {e}")
-
-    def _approve_handler(req: 'ApprovalRequest'):
-        """Bus subscriber for approval. Runs in a background thread to prevent
-        blocking the event bus and the caller's thread."""
-        if req.is_resolved:
-            return  # another subscriber already answered
-            
-        def _handle():
-            command = req.command
-            justification = req.reason
-            callback_id = req.id
-            _pending_approvals[callback_id] = req
-
-            async def _send():
-                keyboard = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("❌ Deny", callback_data=f"{callback_id}:deny"),
-                    InlineKeyboardButton("✅ Allow", callback_data=f"{callback_id}:allow"),
-                ]])
-                
-                # Truncate justification if too long for Telegram (4096 chars total)
-                max_len = 3500
-                display_reason = justification
-                if len(display_reason) > max_len:
-                    display_reason = display_reason[:max_len] + "...\n[Truncated]"
-                    
-                escaped_cmd = html.escape(command)
-                escaped_reason = html.escape(display_reason)
-                text = (
-                    f"<b>Agent requests approval:</b>\n"
-                    f"<code>{escaped_cmd}</code>\n\n"
-                    f"<pre>{escaped_reason}</pre>"
-                )
-                chat_id = int(config.get("telegram_allowed_user_id", 0))
-                if chat_id:
-                    await _app.bot.send_message(chat_id, text,
-                                                reply_markup=keyboard,
-                                                parse_mode="HTML")
-
-            try:
-                # Dispatch the send coroutine and wait briefly for it to be sent
-                asyncio.run_coroutine_threadsafe(_send(), _loop).result(timeout=10)
-            except Exception as e:
-                logger.error(f"Failed to send approval request: {e}")
-                # We do not resolve the request here due to error; let other frontends handle it
-                _pending_approvals.pop(callback_id, None)
-                return
-                
-        threading.Thread(target=_handle, daemon=True).start()
-
-    bus.subscribe(APPROVAL_REQUESTED, _approve_handler)
-
-    def _on_agent_notice(text: str):
-        """Surface agent breadcrumbs (e.g. compaction) in the Telegram chat."""
-        bus.emit(CHAT_MESSAGE_PUSHED, {
-            "message": text,
-            "kind": "notice",
-            "source": "agent",
-        })
+    def _session(chat_id: int | None = None) -> FrontendSession:
+        if chat_id is None:
+            return runtime.get_last_session("telegram") or base_session
+        return FrontendSession(platform="telegram", user_id=str(chat_id), chat_id=str(chat_id))
 
     def _create_agent():
-        llm = services.get("llm")
-        if llm and llm.loaded:
-            agent_ref["agent"] = Agent(
-                llm, tool_registry, config,
-                system_prompt=lambda: build_system_prompt(
-                    ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services
-                ) + _TELEGRAM_SUFFIX,
-                on_tool_result=_on_tool_result,
-                on_tool_start=_on_tool_start,
-                on_message=_on_agent_message,
-                on_notice=_on_agent_notice,
-            )
+        runtime.set_prompt_suffix(base_session, _TELEGRAM_SUFFIX)
+        if runtime.ensure_agent(base_session) is not None:
             logger.info("Agent ready (Telegram).")
             return True
         return False
@@ -309,10 +162,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         """Called by /refresh — rebuild the agent and release the busy flag so
         the next message routes immediately, even if the previous handler is
         still spinning in a stuck tool."""
-        _create_agent()
-        _force_unbusy()
-        # Drop any orphaned approval-status messages; their generations are gone.
-        _pending_status_msgs.clear()
+        runtime.set_prompt_suffix(base_session, _TELEGRAM_SUFFIX)
+        runtime.refresh_agent(base_session)
+        runtime.force_unbusy(base_session)
+        transport.clear_statuses()
         logger.info("Agent refreshed (Telegram).")
 
     # ── Security ─────────────────────────────────────────────────────
@@ -325,21 +178,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     # ── Command registry ─────────────────────────────────────────────
 
-    def _set_conversation_id(conv_id):
-        conversation_ref["id"] = conv_id
-
-    registry = CommandRegistry()
-    register_core_commands(registry, ctrl, services, tool_registry, root_dir,
-                           get_agent=lambda: agent_ref["agent"],
-                           set_conversation_id=_set_conversation_id,
-                           refresh_agent=_refresh_agent)
+    registry = runtime.create_registry(base_session, refresh_agent=_refresh_agent)
 
     # Telegram-specific overrides
     def _load_handler(arg):
         if not arg:
             return None  # Dynamic menu will handle this
         result = ctrl.load_service(arg)
-        if arg == "llm" and not agent_ref["agent"]:
+        if arg == "llm" and runtime.ensure_agent(base_session) is None:
             _create_agent()
         return result
 
@@ -348,13 +194,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return None  # Dynamic menu will handle this
         result = ctrl.unload_service(arg)
         if arg == "llm":
-            agent_ref["agent"] = None
+            runtime.get_state(base_session).agent = None
         return result
 
     def _new_handler(_arg):
-        conversation_ref["id"] = None
-        if agent_ref["agent"]:
-            agent_ref["agent"].reset()
+        runtime.reset_session(base_session)
         return "New conversation started."
 
     for entry in [
@@ -386,289 +230,81 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     # ── Helpers ──────────────────────────────────────────────────────
 
-    async def _send_long_message(chat_id: int, text: str, use_html: bool = False):
-        """Send text, splitting into multiple messages if over 4096 chars.
-
-        If *use_html* is True, sends with parse_mode=HTML. On failure
-        (e.g. malformed HTML), retries as plain text.
-        """
-        if not text:
-            return
-
-        parse_mode = "HTML" if use_html else None
-
-        if len(text) <= _TG_MAX_LEN:
-            try:
-                await _app.bot.send_message(chat_id, text, parse_mode=parse_mode)
-            except Exception:
-                if parse_mode:
-                    await _app.bot.send_message(chat_id, text)
-            return
-
-        chunks = []
-        current = ""
-        for line in text.split("\n"):
-            if len(current) + len(line) + 1 > _TG_MAX_LEN:
-                if current:
-                    chunks.append(current)
-                current = line[:_TG_MAX_LEN]
-            else:
-                current = f"{current}\n{line}" if current else line
-        if current:
-            chunks.append(current)
-
-        for chunk in chunks:
-            try:
-                await _app.bot.send_message(chat_id, chunk, parse_mode=parse_mode)
-            except Exception:
-                if parse_mode:
-                    await _app.bot.send_message(chat_id, chunk)
-
-    def _chat_message_handler(payload: dict):
-        if not payload:
-            return
-        if _loop is None or _app is None:
-            logger.info("Telegram not ready yet; dropping pushed chat message.")
-            return
-
-        chat_id = int(config.get("telegram_allowed_user_id", 0))
-        if not chat_id:
-            return
-
-        title = str(payload.get("title") or "").strip()
-        kind = str(payload.get("kind") or "").strip()
-        message = str(payload.get("message") or "").strip()
-        if not message:
-            return
-
-        lines = []
-        if title:
-            lines.append(f"**{title}**")
-        elif kind:
-            lines.append(f"**{kind.title()}**")
-        lines.append(message)
-
-        rendered = _md_to_tg_html("\n\n".join(lines))
-
-        try:
-            asyncio.run_coroutine_threadsafe(
-                _send_long_message(chat_id, rendered, use_html=True),
-                _loop,
-            ).result(timeout=30)
-        except Exception as e:
-            logger.error(f"Failed to send pushed chat message: {e}")
-
-    bus.subscribe(CHAT_MESSAGE_PUSHED, _chat_message_handler)
-
-    async def _execute_send_actions(chat_id: int, actions: list[SendAction]):
-        """Execute a list of SendActions via the Telegram Bot API."""
-        for action in actions:
-            try:
-                if action.method == "media_group":
-                    media = []
-                    for f in action.files:
-                        ext = f.suffix.lower()
-                        if action.group_type == "photo_video":
-                            if ext in VIDEO_EXTENSIONS:
-                                media.append(InputMediaVideo(open(f, "rb")))
-                            else:
-                                media.append(InputMediaPhoto(prepare_photo_bytes(f)))
-                        elif action.group_type == "audio":
-                            media.append(InputMediaAudio(open(f, "rb"), title=f.stem))
-                        else:
-                            media.append(InputMediaDocument(open(f, "rb"), filename=f.name))
-                    await _app.bot.send_media_group(chat_id, media)
-
-                elif action.method == "photo":
-                    await _app.bot.send_photo(chat_id, photo=prepare_photo_bytes(action.files[0]))
-
-                elif action.method == "video":
-                    await _app.bot.send_video(chat_id, video=open(action.files[0], "rb"))
-
-                elif action.method == "audio":
-                    await _app.bot.send_audio(chat_id, audio=open(action.files[0], "rb"),
-                                              title=action.files[0].stem)
-
-                elif action.method == "document":
-                    await _app.bot.send_document(chat_id, document=open(action.files[0], "rb"),
-                                                 filename=action.files[0].name)
-
-                elif action.method == "text":
-                    await _app.bot.send_message(chat_id, action.text_content,
-                                                parse_mode="HTML")
-
-            except Exception as e:
-                names = ", ".join(f.name for f in action.files) if action.files else "(text)"
-                logger.error(f"Failed to send {names}: {e}")
-                await _app.bot.send_message(
-                    chat_id, f"(Failed to send: {names})")
+    adapter.set_sender(transport.dispatch_runtime_action)
 
     # ── Interactive /call form ───────────────────────────────────────
 
-    def _schema_to_params(schema: dict) -> list[dict]:
-        """Extract ordered parameter info from a JSON-schema-like object."""
-        props = schema.get("properties", {}) if schema else {}
-        required = set(schema.get("required", [])) if schema else set()
-        if not props:
-            return []
-        params = []
-        for name, info in props.items():
-            params.append({
-                "name": name,
-                "type": info.get("type", "string"),
-                "description": info.get("description", ""),
-                "required": name in required,
-                "enum": info.get("enum"),
-            })
-        return params
-
-    def _get_tool_params(tool_name: str) -> list[dict] | None:
+    def _get_tool_params(tool_name: str):
         """Extract parameter info from a tool's JSON schema."""
         tool = tool_registry.tools.get(tool_name)
         if not tool:
             return None
-        return _schema_to_params(tool.parameters or {})
+        return schema_to_params(tool.parameters or {})
 
-    def _get_trigger_params(task_name: str) -> list[dict] | None:
+    def _get_trigger_params(task_name: str):
         """Extract interactive trigger params from an event task schema."""
         task = ctrl.orchestrator.tasks.get(task_name)
         if not task:
             return None
         if getattr(task, "trigger", "path") != "event":
             return None
-        return _schema_to_params(getattr(task, "event_payload_schema", {}) or {})
+        return schema_to_params(getattr(task, "event_payload_schema", {}) or {})
 
-    async def _ask_next_param(chat_id: int):
-        """Send a prompt for the next parameter in a pending /call form."""
-        state = _pending_calls.get(chat_id)
+    async def _ask_next_form_param(chat_id: int, forms: dict[int, PendingParamForm], done, prefix: str):
+        state = forms.get(chat_id)
         if not state:
             return
-        idx = state["current_idx"]
-        if idx >= len(state["params"]):
-            # All params collected — execute
-            await _execute_pending_call(chat_id)
+        param = state.current_param
+        if param is None:
+            await done(chat_id)
             return
+        adapter.send_action(
+            _session(chat_id),
+            runtime.presenter.form_field(
+                param.name, param.type, param.description,
+                param.required, param.enum, prefix, param.name,
+            ),
+        )
 
-        param = state["params"][idx]
-        req = " (required)" if param["required"] else " (optional, send /skip)"
-        desc = f"\n{html.escape(param['description'])}" if param["description"] else ""
-
-        # Type-specific input hint
-        ptype = param["type"]
-        if ptype == "string":
-            hint = "\nType your value as plain text (no quotes needed)."
-        elif ptype == "integer":
-            hint = "\nType a whole number, e.g. <code>42</code>"
-        elif ptype == "number":
-            hint = "\nType a number, e.g. <code>3.14</code>"
-        elif ptype == "array":
-            hint = "\nSend each item on its own line, e.g.:\n<code>first item\nsecond item</code>"
-        elif ptype == "object":
-            hint = "\nSend as JSON, e.g. <code>{\"key\": \"value\"}</code>"
-        else:
-            hint = ""
-
-        text = f"<b>{html.escape(param['name'])}</b> ({ptype}){req}{desc}{hint}"
-
-        # Enum → inline keyboard
-        if param.get("enum"):
-            buttons = [[InlineKeyboardButton(str(v), callback_data=f"call:{chat_id}:{param['name']}:{v}")]
-                       for v in param["enum"]]
-            await _app.bot.send_message(chat_id, text,
-                                        reply_markup=InlineKeyboardMarkup(buttons),
-                                        parse_mode="HTML")
-        elif param["type"] == "boolean":
-            buttons = [[
-                InlineKeyboardButton("True", callback_data=f"call:{chat_id}:{param['name']}:true"),
-                InlineKeyboardButton("False", callback_data=f"call:{chat_id}:{param['name']}:false"),
-            ]]
-            await _app.bot.send_message(chat_id, text,
-                                        reply_markup=InlineKeyboardMarkup(buttons),
-                                        parse_mode="HTML")
-        else:
-            await _app.bot.send_message(chat_id, text, parse_mode="HTML")
+    async def _ask_next_param(chat_id: int):
+        await _ask_next_form_param(chat_id, _pending_calls, _execute_pending_call, "call")
 
     async def _execute_pending_call(chat_id: int):
         """Execute a completed /call form."""
         state = _pending_calls.pop(chat_id, None)
         if not state:
             return
-        tool_name = state["tool"]
-        kwargs = state["collected"]
+        tool_name = state.subject
+        kwargs = state.collected
         await _app.bot.send_message(chat_id, f"Calling {tool_name}...", disable_notification=True)
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None, lambda: ctrl.call_tool(tool_name, kwargs))
         logger.info(f"tool: {tool_name} [{'ok' if result.success else 'fail'}]")
         if result.attachment_paths:
-            actions = prepare_media_actions(result.attachment_paths)
-            await _execute_send_actions(chat_id, actions)
+            await transport.execute_send_actions(chat_id, prepare_media_actions(result.attachment_paths))
             if result.llm_summary:
-                await _send_long_message(chat_id, result.llm_summary)
+                await transport.send_long_message(chat_id, result.llm_summary)
         else:
             output = format_tool_result(result)
-            await _send_long_message(chat_id, output)
+            await transport.send_long_message(chat_id, output)
 
     async def _ask_next_trigger_param(chat_id: int):
-        """Send a prompt for the next parameter in a pending /trigger form."""
-        state = _pending_triggers.get(chat_id)
-        if not state:
-            return
-        idx = state["current_idx"]
-        if idx >= len(state["params"]):
-            await _execute_pending_trigger(chat_id)
-            return
-
-        param = state["params"][idx]
-        req = " (required)" if param["required"] else " (optional, send /skip)"
-        desc = f"\n{html.escape(param['description'])}" if param["description"] else ""
-
-        ptype = param["type"]
-        if ptype == "string":
-            hint = "\nType your value as plain text (no quotes needed)."
-        elif ptype == "integer":
-            hint = "\nType a whole number, e.g. <code>42</code>"
-        elif ptype == "number":
-            hint = "\nType a number, e.g. <code>3.14</code>"
-        elif ptype == "array":
-            hint = "\nSend each item on its own line, e.g.:\n<code>first item\nsecond item</code>"
-        elif ptype == "object":
-            hint = "\nSend as JSON, e.g. <code>{\"key\": \"value\"}</code>"
-        else:
-            hint = ""
-
-        text = f"<b>{html.escape(param['name'])}</b> ({ptype}){req}{desc}{hint}"
-
-        if param.get("enum"):
-            buttons = [[InlineKeyboardButton(str(v), callback_data=f"trigger:{chat_id}:{param['name']}:{v}")]
-                       for v in param["enum"]]
-            await _app.bot.send_message(chat_id, text,
-                                        reply_markup=InlineKeyboardMarkup(buttons),
-                                        parse_mode="HTML")
-        elif param["type"] == "boolean":
-            buttons = [[
-                InlineKeyboardButton("True", callback_data=f"trigger:{chat_id}:{param['name']}:true"),
-                InlineKeyboardButton("False", callback_data=f"trigger:{chat_id}:{param['name']}:false"),
-            ]]
-            await _app.bot.send_message(chat_id, text,
-                                        reply_markup=InlineKeyboardMarkup(buttons),
-                                        parse_mode="HTML")
-        else:
-            await _app.bot.send_message(chat_id, text, parse_mode="HTML")
+        await _ask_next_form_param(chat_id, _pending_triggers, _execute_pending_trigger, "trigger")
 
     async def _execute_pending_trigger(chat_id: int):
         """Execute a completed /trigger form."""
         state = _pending_triggers.pop(chat_id, None)
         if not state:
             return
-        task_name = state["task"]
-        payload = state["collected"]
+        task_name = state.subject
+        payload = state.collected
         await _app.bot.send_message(chat_id, f"Triggering {task_name}...", disable_notification=True)
         loop = asyncio.get_running_loop()
         output = await loop.run_in_executor(
             None, lambda: ctrl.trigger_event_task(task_name, payload))
         if output:
-            await _send_long_message(chat_id, output)
+            await transport.send_long_message(chat_id, output)
 
     async def _start_trigger_form(chat_id: int, task_name: str) -> bool:
         """Begin interactive /trigger payload collection for an event task."""
@@ -681,14 +317,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             output = await loop.run_in_executor(
                 None, lambda: ctrl.trigger_event_task(task_name, {}))
             if output:
-                await _send_long_message(chat_id, output)
+                await transport.send_long_message(chat_id, output)
             return True
-        _pending_triggers[chat_id] = {
-            "task": task_name,
-            "params": params,
-            "collected": {},
-            "current_idx": 0,
-        }
+        _pending_triggers[chat_id] = PendingParamForm(subject=task_name, params=params)
         await _app.bot.send_message(
             chat_id,
             f"<b>{html.escape(task_name)}</b> — fill in the trigger payload:\n"
@@ -696,26 +327,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             parse_mode="HTML")
         await _ask_next_trigger_param(chat_id)
         return True
-
-    def _coerce_param_value(raw: str, param_type: str):
-        """Convert a raw string to the appropriate Python type."""
-        if param_type == "integer":
-            return int(raw)
-        elif param_type == "number":
-            return float(raw)
-        elif param_type == "boolean":
-            return raw.lower() in ("true", "yes", "1")
-        elif param_type == "array":
-            try:
-                return json.loads(raw)
-            except json.JSONDecodeError:
-                # Newline-separated (primary) or comma-separated (fallback)
-                if "\n" in raw:
-                    return [line.strip() for line in raw.splitlines() if line.strip()]
-                return [item.strip() for item in raw.split(",") if item.strip()]
-        elif param_type == "object":
-            return json.loads(raw)
-        return raw
 
     async def _start_call_form(chat_id: int, tool_name: str):
         """Begin interactive /call parameter collection for a tool."""
@@ -730,20 +341,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             result = await loop.run_in_executor(
                 None, lambda: ctrl.call_tool(tool_name, {}))
             if result.attachment_paths:
-                actions = prepare_media_actions(result.attachment_paths)
-                await _execute_send_actions(chat_id, actions)
+                await transport.execute_send_actions(chat_id, prepare_media_actions(result.attachment_paths))
                 if result.llm_summary:
-                    await _send_long_message(chat_id, result.llm_summary)
+                    await transport.send_long_message(chat_id, result.llm_summary)
             else:
                 output = format_tool_result(result)
-                await _send_long_message(chat_id, output)
+                await transport.send_long_message(chat_id, output)
             return
-        _pending_calls[chat_id] = {
-            "tool": tool_name,
-            "params": params,
-            "collected": {},
-            "current_idx": 0,
-        }
+        _pending_calls[chat_id] = PendingParamForm(subject=tool_name, params=params)
         await _app.bot.send_message(
             chat_id,
             f"<b>{html.escape(tool_name)}</b> — fill in parameters:\n"
@@ -824,22 +429,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     # ── /model add interactive form ─────────────────────────────────
 
-    _MODEL_ADD_PARAMS = [
-        {"name": "llm_model_name", "description": "The model identifier sent to the API (e.g. gpt-4, llama-3.1-8b, gemini-2.5-flash).", "required": True},
-        {"name": "llm_endpoint", "description": "Custom API endpoint URL. Leave blank for the default OpenAI endpoint. For LM Studio, see developer tab.", "required": False, "default": ""},
-        {"name": "llm_api_key", "description": "API key or environment variable name (e.g. OPENAI_API_KEY). Leave blank for local models.", "required": False, "default": ""},
-        {"name": "llm_context_size", "description": "Max context window in tokens. Set 0 for reactive-only compaction.", "required": False, "default": "0", "type": "integer"},
-        {"name": "llm_service_class", "description": "Which LLM backend to use.", "required": True, "enum": ["OpenAILLM", "LMStudioLLM"]},
-    ]
-
     async def _start_model_add_form(chat_id: int, profile_name: str):
         """Begin interactive /model add parameter collection."""
-        _pending_model_adds[chat_id] = {
-            "name": profile_name,
-            "params": _MODEL_ADD_PARAMS,
-            "collected": {},
-            "current_idx": 0,
-        }
+        _pending_model_adds[chat_id] = PendingParamForm(subject=profile_name, params=MODEL_ADD_PARAMS)
         await _app.bot.send_message(
             chat_id,
             f"<b>New LLM profile: {html.escape(profile_name)}</b>\n"
@@ -849,42 +441,20 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         await _ask_next_model_param(chat_id)
 
     async def _ask_next_model_param(chat_id: int):
-        """Prompt for the next parameter in a /model add form."""
-        state = _pending_model_adds.get(chat_id)
-        if not state:
-            return
-        idx = state["current_idx"]
-        if idx >= len(state["params"]):
-            await _execute_model_add(chat_id)
-            return
-
-        param = state["params"][idx]
-        req = " (required)" if param.get("required") else " (optional, send /skip)"
-        desc = f"\n{html.escape(param['description'])}" if param.get("description") else ""
-
-        text = f"<b>{html.escape(param['name'])}</b>{req}{desc}"
-
-        if param.get("enum"):
-            buttons = [[InlineKeyboardButton(v, callback_data=f"mdladd:{chat_id}:{param['name']}:{v}")]
-                       for v in param["enum"]]
-            await _app.bot.send_message(chat_id, text,
-                                        reply_markup=InlineKeyboardMarkup(buttons),
-                                        parse_mode="HTML")
-        else:
-            await _app.bot.send_message(chat_id, text, parse_mode="HTML")
+        await _ask_next_form_param(chat_id, _pending_model_adds, _execute_model_add, "mdladd")
 
     async def _execute_model_add(chat_id: int):
         """Finish the /model add form and register the profile."""
         state = _pending_model_adds.pop(chat_id, None)
         if not state:
             return
-        profile_name = state["name"]
-        collected = state["collected"]
+        profile_name = state.subject
+        collected = state.collected
 
         # Apply defaults for skipped optional params
-        for param in _MODEL_ADD_PARAMS:
-            if param["name"] not in collected:
-                collected[param["name"]] = param.get("default", "")
+        for param in MODEL_ADD_PARAMS:
+            if param.name not in collected:
+                collected[param.name] = param.default
 
         # Coerce context size to int
         try:
@@ -896,7 +466,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         output = await loop.run_in_executor(
             None, lambda: registry.dispatch("model", f"add {profile_name} {json.dumps(collected)}"))
         if output:
-            await _send_long_message(chat_id, output)
+            await transport.send_long_message(chat_id, output)
 
     # ── Picker menus for list commands ───────────────────────────────
     #
@@ -1074,12 +644,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     # ── /schedule picker + create form ───────────────────────────────
 
-    _pending_schedule_creates: dict = {}   # chat_id -> schedule-create state
-
-    _SCHEDULE_CREATE_STEPS = [
-        "job_name", "schedule_type", "schedule_value",
-        "channel", "prompt", "title", "description",
-    ]
+    _pending_schedule_creates: dict[int, PendingScheduleCreate] = {}
 
     def _schedule_jobs_picker_keyboard():
         """Build the /schedule picker: one row per job + [+ New job]."""
@@ -1146,10 +711,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         await _app.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
 
     async def _start_schedule_create(chat_id: int):
-        _pending_schedule_creates[chat_id] = {
-            "step": 0,          # index into _SCHEDULE_CREATE_STEPS
-            "collected": {},
-        }
+        _pending_schedule_creates[chat_id] = PendingScheduleCreate()
         await _app.bot.send_message(
             chat_id,
             "<b>New scheduled job</b>\n"
@@ -1161,12 +723,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         state = _pending_schedule_creates.get(chat_id)
         if not state:
             return
-        step = state["step"]
-        if step >= len(_SCHEDULE_CREATE_STEPS):
+        if state.step >= len(SCHEDULE_CREATE_STEPS):
             await _finalize_schedule_create(chat_id)
             return
-        field = _SCHEDULE_CREATE_STEPS[step]
-        collected = state["collected"]
+        field = state.current_field(SCHEDULE_CREATE_STEPS)
+        collected = state.collected
 
         if field == "job_name":
             await _app.bot.send_message(
@@ -1223,7 +784,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         if field == "prompt":
             if collected.get("channel") != "subagent_run":
                 # Skip for non-subagent channels
-                state["step"] += 1
+                state.step += 1
                 await _ask_schedule_step(chat_id)
                 return
             await _app.bot.send_message(
@@ -1254,7 +815,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         state = _pending_schedule_creates.pop(chat_id, None)
         if not state:
             return
-        c = state["collected"]
+        c = state.collected
 
         definition: dict = {
             "channel": c.get("channel", "").strip(),
@@ -1288,7 +849,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             # Re-open the create form at the schedule_value step so the user can fix
             # the most common failure (bad cron / duplicate name).
             _pending_schedule_creates[chat_id] = state
-            state["step"] = 0
+            state.step = 0
             await _ask_schedule_step(chat_id)
             return
 
@@ -1334,31 +895,18 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
         # /history — show inline keyboard of recent conversations
         if cmd_name == "history" and not arg:
-            from datetime import datetime
-            conversations = ctrl.db.list_user_conversations(limit=10)
-            if not conversations:
+            action = runtime.list_history_action(_session(chat_id), limit=10)
+            if action is None:
                 await update.message.reply_text("No conversations yet.")
                 return
-            buttons = []
-            for conv in conversations:
-                title = (conv["title"] or "New conversation").replace("\n", " ")[:40]
-                ts = conv.get("updated_at")
-                time_str = datetime.fromtimestamp(ts).strftime("%b %d") if ts else ""
-                label = f"{title}  ({time_str})" if time_str else title
-                buttons.append([InlineKeyboardButton(
-                    label, callback_data=f"hist:{conv['id']}")])
-            await update.message.reply_text(
-                "Recent conversations:",
-                reply_markup=InlineKeyboardMarkup(buttons))
+            adapter.send_action(_session(chat_id), action)
             return
 
         # /skip — skip optional parameter in /call form
         if cmd_name == "skip":
             state = _pending_calls.get(chat_id)
             if state:
-                idx = state["current_idx"]
-                if idx < len(state["params"]) and not state["params"][idx]["required"]:
-                    state["current_idx"] += 1
+                if state.skip_current():
                     await _ask_next_param(chat_id)
                     return
                 else:
@@ -1366,9 +914,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     return
             state = _pending_triggers.get(chat_id)
             if state:
-                idx = state["current_idx"]
-                if idx < len(state["params"]) and not state["params"][idx]["required"]:
-                    state["current_idx"] += 1
+                if state.skip_current():
                     await _ask_next_trigger_param(chat_id)
                     return
                 else:
@@ -1376,9 +922,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     return
             state = _pending_model_adds.get(chat_id)
             if state:
-                idx = state["current_idx"]
-                if idx < len(state["params"]) and not state["params"][idx].get("required"):
-                    state["current_idx"] += 1
+                if state.skip_current():
                     await _ask_next_model_param(chat_id)
                     return
                 else:
@@ -1386,11 +930,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     return
             state = _pending_schedule_creates.get(chat_id)
             if state:
-                step = state["step"]
-                field = (_SCHEDULE_CREATE_STEPS[step]
-                         if step < len(_SCHEDULE_CREATE_STEPS) else "")
+                field = state.current_field(SCHEDULE_CREATE_STEPS) or ""
                 if field in ("title", "description"):
-                    state["step"] += 1
+                    state.step += 1
                     await _ask_schedule_step(chat_id)
                     return
                 else:
@@ -1500,7 +1042,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             None, lambda: registry.dispatch(cmd_name, arg))
 
         if output:
-            await _send_long_message(chat_id, output)
+            await transport.send_long_message(chat_id, output)
 
     async def handle_message(update: Update, _ctx):
         """Handle plain text — route to agent via route_input()."""
@@ -1516,39 +1058,33 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # Check for pending /call form input
         if chat_id in _pending_calls:
             state = _pending_calls[chat_id]
-            idx = state["current_idx"]
-            if idx < len(state["params"]):
-                param = state["params"][idx]
+            param = state.current_param
+            if param is not None:
                 try:
-                    value = _coerce_param_value(text, param["type"])
-                    state["collected"][param["name"]] = value
-                    state["current_idx"] += 1
+                    state.store(param.name, coerce_param_value(text, param.type))
                     await _ask_next_param(chat_id)
                 except (ValueError, json.JSONDecodeError) as e:
                     await update.message.reply_text(
-                        f"Invalid value for {param['name']} ({param['type']}): {e}\nTry again.")
+                        f"Invalid value for {param.name} ({param.type}): {e}\nTry again.")
                 return
 
         # Check for pending /trigger form input
         if chat_id in _pending_triggers:
             state = _pending_triggers[chat_id]
-            idx = state["current_idx"]
-            if idx < len(state["params"]):
-                param = state["params"][idx]
+            param = state.current_param
+            if param is not None:
                 try:
-                    value = _coerce_param_value(text, param["type"])
-                    state["collected"][param["name"]] = value
-                    state["current_idx"] += 1
+                    state.store(param.name, coerce_param_value(text, param.type))
                     await _ask_next_trigger_param(chat_id)
                 except (ValueError, json.JSONDecodeError) as e:
                     await update.message.reply_text(
-                        f"Invalid value for {param['name']} ({param['type']}): {e}\nTry again.")
+                        f"Invalid value for {param.name} ({param.type}): {e}\nTry again.")
                 return
 
         # Check for pending /model add form input
         if chat_id in _pending_model_adds:
             state = _pending_model_adds[chat_id]
-            if state.get("awaiting_name"):
+            if state.awaiting_name:
                 # Validate profile name
                 profile_name = text.strip()
                 if not profile_name or " " in profile_name:
@@ -1560,29 +1096,25 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     return
                 await _start_model_add_form(chat_id, profile_name)
                 return
-            idx = state["current_idx"]
-            if idx < len(state["params"]):
-                param = state["params"][idx]
-                ptype = param.get("type", "string")
+            param = state.current_param
+            if param is not None:
                 try:
-                    if ptype == "integer":
+                    if param.type == "integer":
                         int(text)  # validate
-                    state["collected"][param["name"]] = text
-                    state["current_idx"] += 1
+                    state.store(param.name, text)
                     await _ask_next_model_param(chat_id)
                 except ValueError:
                     await update.message.reply_text(
-                        f"Invalid value for {param['name']} — expected a number. Try again.")
+                        f"Invalid value for {param.name} — expected a number. Try again.")
             return
 
         # Check for pending /schedule create form input
         if chat_id in _pending_schedule_creates:
             state = _pending_schedule_creates[chat_id]
-            step = state["step"]
-            if step >= len(_SCHEDULE_CREATE_STEPS):
+            if state.step >= len(SCHEDULE_CREATE_STEPS):
                 await _finalize_schedule_create(chat_id)
                 return
-            field = _SCHEDULE_CREATE_STEPS[step]
+            field = state.current_field(SCHEDULE_CREATE_STEPS)
             value = text.strip()
 
             if field == "job_name":
@@ -1595,18 +1127,12 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await update.message.reply_text(
                         f"Job '{value}' already exists. Choose a different name.")
                     return
-                state["collected"]["job_name"] = value
-            elif field == "schedule_value":
-                state["collected"]["schedule_value"] = value
-            elif field in ("prompt", "title", "description"):
-                state["collected"][field] = value
-            elif field == "channel":
+            if field == "channel":
                 # channel is normally chosen via buttons; free text = "Other" entry
-                state["collected"]["channel"] = value
-            else:
-                state["collected"][field] = value
+                field = "channel"
+            state.collected[field] = value
 
-            state["step"] += 1
+            state.step += 1
             await _ask_schedule_step(chat_id)
             return
 
@@ -1624,15 +1150,20 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             output = await loop.run_in_executor(
                 None, lambda: registry.dispatch("configure", f"{key} {text}"))
             if output:
-                await _send_long_message(chat_id, output)
+                await transport.send_long_message(chat_id, output)
             return
 
-        if _busy_ref["v"]:
+        chat_session = _session(chat_id)
+        if runtime.is_busy(chat_session):
             await update.message.reply_text(
                 "Still working on the previous message — send /refresh to abort.")
             return
 
-        gen = _mark_busy()
+        gen = runtime.begin_turn(chat_session)
+        if gen is None:
+            await update.message.reply_text(
+                "Still working on the previous message — send /refresh to abort.")
+            return
         stop_typing = asyncio.Event()
 
         async def _typing_loop():
@@ -1656,25 +1187,27 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             # usually tighter, but this catches everything else.
             result = await asyncio.wait_for(
                 loop.run_in_executor(
-                    None, lambda: route_input(text, registry, agent_ref["agent"])),
+                    None, lambda: runtime.route_event(
+                        chat_session, registry, text, prompt_suffix=_TELEGRAM_SUFFIX)),
                 timeout=900)
 
             if result.text:
                 converted = _md_to_tg_html(result.text)
-                await _send_long_message(chat_id, converted, use_html=True)
+                await transport.send_long_message(chat_id, converted, use_html=True)
                 logger.info(f"-> {len(result.text)} chars")
         except asyncio.TimeoutError:
             logger.error("Message handler exceeded 15 min — refreshing agent")
             await update.message.reply_text(
                 "Previous tool call abandoned after 15 min. Agent refreshed.")
-            _refresh_agent()
+            runtime.refresh_agent(chat_session)
+            runtime.force_unbusy(chat_session)
         except Exception as e:
             logger.error(f"Message handler error: {e}")
             await update.message.reply_text(f"Error: {e}")
         finally:
             stop_typing.set()
             await typing_task
-            _clear_busy(gen)
+            runtime.end_turn(chat_session, gen)
 
     async def handle_attachment(update: Update, _ctx):
         """Save incoming photos/documents to the attachment cache, then hand off to the agent.
@@ -1779,12 +1312,17 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 user_text = user_text.lstrip()
 
         # ── Send to agent ──────────────────────────────────────
-        if _busy_ref["v"]:
+        chat_session = _session(chat_id)
+        if runtime.is_busy(chat_session):
             await msg.reply_text(
                 "Still working on the previous message — send /refresh to abort.")
             return
 
-        gen = _mark_busy()
+        gen = runtime.begin_turn(chat_session)
+        if gen is None:
+            await msg.reply_text(
+                "Still working on the previous message — send /refresh to abort.")
+            return
         stop_typing = asyncio.Event()
 
         async def _typing_loop():
@@ -1803,25 +1341,26 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             loop = asyncio.get_running_loop()
             result = await asyncio.wait_for(
                 loop.run_in_executor(
-                    None, lambda: route_input(
-                        user_text, registry, agent_ref["agent"],
-                        image_paths=send_image_paths)),
+                    None, lambda: runtime.route_event(
+                        chat_session, registry, user_text,
+                        image_paths=send_image_paths, prompt_suffix=_TELEGRAM_SUFFIX)),
                 timeout=900)
             if result.text:
                 converted = _md_to_tg_html(result.text)
-                await _send_long_message(chat_id, converted, use_html=True)
+                await transport.send_long_message(chat_id, converted, use_html=True)
         except asyncio.TimeoutError:
             logger.error("Attachment handler exceeded 15 min — refreshing agent")
             await msg.reply_text(
                 "Previous tool call abandoned after 15 min. Agent refreshed.")
-            _refresh_agent()
+            runtime.refresh_agent(chat_session)
+            runtime.force_unbusy(chat_session)
         except Exception as e:
             logger.error(f"Attachment handler error: {e}")
             await msg.reply_text(f"Error: {e}")
         finally:
             stop_typing.set()
             await typing_task
-            _clear_busy(gen)
+            runtime.end_turn(chat_session, gen)
 
     async def handle_callback_query(update: Update, _ctx):
         """Handle inline keyboard responses (approval, commands, /call form)."""
@@ -1849,7 +1388,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     output = await loop.run_in_executor(
                         None, lambda: registry.dispatch(cmd_name, arg))
                     if output:
-                        await _send_long_message(chat_id, output)
+                        await transport.send_long_message(chat_id, output)
                 return
 
             # ── Model profile callbacks (mdl:<action>[:<name>]) ──
@@ -1866,10 +1405,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     output = await loop.run_in_executor(
                         None, lambda: registry.dispatch("model", "list"))
                     if output:
-                        await _send_long_message(chat_id, output)
+                        await transport.send_long_message(chat_id, output)
                 elif action == "add":
                     # Ask for profile name, then start interactive form
-                    _pending_model_adds[chat_id] = {"awaiting_name": True}
+                    _pending_model_adds[chat_id] = PendingParamForm(awaiting_name=True)
                     await _app.bot.send_message(
                         chat_id,
                         "Enter a name for the new profile (e.g. <code>openai-gpt4</code>, "
@@ -1894,7 +1433,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     output = await loop.run_in_executor(
                         None, lambda: registry.dispatch("model", f"{action} {name}"))
                     if output:
-                        await _send_long_message(chat_id, output)
+                        await transport.send_long_message(chat_id, output)
                 return
 
             # ── Model add form enum callbacks (mdladd:<chat_id>:<param>:<value>) ──
@@ -1906,9 +1445,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await update.callback_query.answer()
                     await update.callback_query.edit_message_reply_markup(reply_markup=None)
                     state = _pending_model_adds.get(cid)
-                    if state and not state.get("awaiting_name"):
-                        state["collected"][param_name] = value
-                        state["current_idx"] += 1
+                    if state and not state.awaiting_name:
+                        state.store(param_name, value)
                         await _ask_next_model_param(cid)
                 return
 
@@ -1922,7 +1460,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 output = await loop.run_in_executor(
                     None, lambda: registry.dispatch("history", conv_id_str))
                 if output:
-                    await _send_long_message(chat_id, output)
+                    await transport.send_long_message(chat_id, output)
                 return
 
             # ── Configure setting selection (cfg:<key>) ──
@@ -1946,7 +1484,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     output = await loop.run_in_executor(
                         None, lambda: registry.dispatch("configure", f"{key} {raw_val}"))
                     if output:
-                        await _send_long_message(chat_id, output)
+                        await transport.send_long_message(chat_id, output)
                 return
 
             # ── /call form callbacks (call:<chat_id>:<param>:<value>) ──
@@ -1958,13 +1496,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await update.callback_query.answer()
                     await update.callback_query.edit_message_reply_markup(reply_markup=None)
                     state = _pending_calls.get(chat_id)
-                    if state:
-                        idx = state["current_idx"]
-                        if idx < len(state["params"]):
-                            param = state["params"][idx]
-                            state["collected"][param_name] = _coerce_param_value(value, param["type"])
-                            state["current_idx"] += 1
-                            await _ask_next_param(chat_id)
+                    param = state.current_param if state else None
+                    if param is not None:
+                        state.store(param_name, coerce_param_value(value, param.type))
+                        await _ask_next_param(chat_id)
                 return
 
             # ── /trigger form callbacks (trigger:<chat_id>:<param>:<value>) ──
@@ -1976,13 +1511,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await update.callback_query.answer()
                     await update.callback_query.edit_message_reply_markup(reply_markup=None)
                     state = _pending_triggers.get(chat_id)
-                    if state:
-                        idx = state["current_idx"]
-                        if idx < len(state["params"]):
-                            param = state["params"][idx]
-                            state["collected"][param_name] = _coerce_param_value(value, param["type"])
-                            state["current_idx"] += 1
-                            await _ask_next_trigger_param(chat_id)
+                    param = state.current_param if state else None
+                    if param is not None:
+                        state.store(param_name, coerce_param_value(value, param.type))
+                        await _ask_next_trigger_param(chat_id)
                 return
 
             # ── /services picker (svc:pick|load|unload|back[:name]) ──
@@ -2001,7 +1533,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     output = await loop.run_in_executor(
                         None, lambda: registry.dispatch(action, name))
                     if output:
-                        await _send_long_message(chat_id, output)
+                        await transport.send_long_message(chat_id, output)
                     await _show_services_picker(chat_id)
                 elif action == "back":
                     await _show_services_picker(chat_id)
@@ -2025,7 +1557,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     output = await loop.run_in_executor(
                         None, lambda: registry.dispatch(action, name))
                     if output:
-                        await _send_long_message(chat_id, output)
+                        await transport.send_long_message(chat_id, output)
                     await _show_tasks_picker(chat_id)
                 elif action == "back":
                     await _show_tasks_picker(chat_id)
@@ -2049,7 +1581,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     output = await loop.run_in_executor(
                         None, lambda: registry.dispatch(action, name))
                     if output:
-                        await _send_long_message(chat_id, output)
+                        await transport.send_long_message(chat_id, output)
                     await _show_tools_picker(chat_id)
                 elif action == "back":
                     await _show_tools_picker(chat_id)
@@ -2066,7 +1598,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 output = await loop.run_in_executor(
                     None, lambda: registry.dispatch("locations", arg))
                 if output:
-                    await _send_long_message(chat_id, output)
+                    await transport.send_long_message(chat_id, output)
                 return
 
             # ── /schedule picker + create form (sch:...) ──
@@ -2087,17 +1619,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await _show_schedule_picker(chat_id)
                 elif action in ("run", "enable", "disable", "show"):
                     output = await loop.run_in_executor(
-                        None, lambda: registry.dispatch(
-                            "schedule", f"{action} {tail}"))
+                        None, lambda: registry.dispatch("schedule", f"{action} {tail}"))
                     if output:
-                        await _send_long_message(chat_id, output)
+                        await transport.send_long_message(chat_id, output)
                     if action != "show":
                         await _show_schedule_picker(chat_id)
                 elif action == "delete":
                     kb = InlineKeyboardMarkup([[
-                        InlineKeyboardButton(
-                            "Confirm delete",
-                            callback_data=f"sch:confirmdel:{tail}"),
+                        InlineKeyboardButton("Confirm delete", callback_data=f"sch:confirmdel:{tail}"),
                         InlineKeyboardButton("Cancel", callback_data="sch:back"),
                     ]])
                     await _app.bot.send_message(
@@ -2108,26 +1637,22 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     output = await loop.run_in_executor(
                         None, lambda: registry.dispatch("schedule", f"delete {tail}"))
                     if output:
-                        await _send_long_message(chat_id, output)
+                        await transport.send_long_message(chat_id, output)
                     await _show_schedule_picker(chat_id)
                 elif action == "type":
-                    # Schedule-type enum from the create form
                     state = _pending_schedule_creates.get(chat_id)
                     if state:
-                        state["collected"]["schedule_type"] = tail
-                        state["step"] += 1
+                        state.collected["schedule_type"] = tail
+                        state.step += 1
                         await _ask_schedule_step(chat_id)
                 elif action == "ch":
-                    # Channel enum from the create form
                     state = _pending_schedule_creates.get(chat_id)
                     if state:
                         if tail == "__other__":
-                            await _app.bot.send_message(
-                                chat_id,
-                                "Enter the channel name as text.")
+                            await _app.bot.send_message(chat_id, "Enter the channel name as text.")
                             return
-                        state["collected"]["channel"] = tail
-                        state["step"] += 1
+                        state.collected["channel"] = tail
+                        state.step += 1
                         await _ask_schedule_step(chat_id)
                 return
 
@@ -2137,14 +1662,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 return
 
             callback_id, action = data.rsplit(":", 1)
-            pending_req = _pending_approvals.pop(callback_id, None)
-            if pending_req is None or pending_req.is_resolved:
+            if not runtime.resolve_approval(callback_id, action == "allow", resolved_by="telegram"):
                 await update.callback_query.answer("Expired or already handled.")
                 return
 
-            pending_req.resolve(action == "allow")
-
-            verdict = "Allowed" if pending_req.approved else "Denied"
+            verdict = "Allowed" if action == "allow" else "Denied"
             await update.callback_query.answer(verdict)
             try:
                 await update.callback_query.edit_message_reply_markup(reply_markup=None)
@@ -2202,7 +1724,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # Send startup message
         user_id = int(config.get("telegram_allowed_user_id", 0))
         if user_id:
-            status = "Agent ready." if agent_ref["agent"] else "LLM not loaded \u2014 use /load llm."
+            status = (
+                "Agent ready."
+                if runtime.ensure_agent(base_session) is not None
+                else "LLM not loaded \u2014 use /load llm."
+            )
             try:
                 await _app.bot.send_message(user_id, f"Second Brain online. {status}")
             except Exception as e:

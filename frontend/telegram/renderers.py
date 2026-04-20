@@ -3,7 +3,7 @@ Telegram media renderers.
 
 Takes a list of file paths, classifies each by Telegram-compatible media type,
 groups them into Media Group actions, and returns structured SendAction objects
-that bot.py can execute via the Telegram Bot API.
+that telegram.py can execute via the Telegram Bot API.
 
 Design philosophy mirrors frontend/gui/renderers.py — group by modality,
 render appropriately for the medium. Telegram Media Groups bundle 2-10 files

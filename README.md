@@ -291,7 +291,7 @@ Second Brain/
 │   ├── repl/
 │   │   └── repl.py         # Terminal frontend
 │   ├── telegram/
-│   │   ├── bot.py          # Telegram bot frontend
+│   │   ├── telegram.py     # Telegram bot frontend
 │   │   └── renderers.py    # Telegram media sending
 │   └── shared/
 │       ├── commands.py     # Shared slash command registry

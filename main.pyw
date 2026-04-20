@@ -33,6 +33,7 @@ from Stage_2.watcher import Watcher
 from Stage_2.event_trigger import EventTrigger
 from controller import Controller
 from Stage_3.tool_registry import ToolRegistry
+from frontend.platforms import start_frontends
 from plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
 
 
@@ -208,35 +209,10 @@ def main():
 
 	ctrl.restart = restart
 
-	# --- 10. Start REPL ---
-	if "repl" in frontends:
-		try:
-			from frontend.repl.repl import run_repl
-		except ImportError:
-			logger.warning("REPL frontend not available (frontend/repl/ missing?) — skipping.")
-			frontends.discard("repl")
-	if "repl" in frontends:
-		repl_thread = threading.Thread(
-			target=run_repl,
-			args=(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT),
-			daemon=True,
-		)
-		repl_thread.start()
-
-	# --- 10b. Start Telegram bot ---
-	if "telegram" in frontends:
-		try:
-			from frontend.telegram.bot import run_telegram_bot
-		except ImportError:
-			logger.warning("Telegram frontend not available (frontend/telegram/ missing?) — skipping.")
-			frontends.discard("telegram")
-	if "telegram" in frontends:
-		telegram_thread = threading.Thread(
-			target=run_telegram_bot,
-			args=(ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT),
-			daemon=True,
-		)
-		telegram_thread.start()
+	# --- 10. Start frontends via the shared runtime/bootstrap path ---
+	ctrl.frontend_runtime, _adapters, _frontend_threads = start_frontends(
+		frontends, ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT
+	)
 
 	# --- 11. Main thread idles until shutdown ---
 	while not _shutdown.is_set():

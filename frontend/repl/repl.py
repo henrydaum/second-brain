@@ -1,25 +1,13 @@
-"""
-REPL.
-
-Simple command loop that maps user input to the shared CommandRegistry.
-Runs on its own daemon thread so it never blocks the dispatch loop.
-
-The ``/chat`` subcommand enters a natural-language chat mode that uses
-:func:`frontend.dispatch.route_input` — the same channel used by
-Telegram and the API.
-Slash commands work inside chat mode too.
-"""
+"""Terminal frontend built on the shared frontend runtime."""
 
 import logging
 import threading
 from pathlib import Path
 
-from Stage_3.agent import Agent
-from Stage_3.system_prompt import build_system_prompt
-from frontend.commands import CommandEntry, CommandRegistry, register_core_commands
-from frontend.dispatch import route_input
-from event_bus import bus
-from event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED
+from frontend.commands import CommandEntry
+from frontend.platforms.platform_repl import ReplPlatformAdapter
+from frontend.runtime import FrontendRuntime
+from frontend.types import FrontendSession
 
 logger = logging.getLogger("REPL")
 
@@ -29,106 +17,27 @@ logger = logging.getLogger("REPL")
 # =================================================================
 
 def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
-             tool_registry, services, config, root_dir: Path):
-    agent = None
-    conversation_ref = {"id": None}
-
-    # --- Conversation persistence ---
-    def _set_conversation_id(conv_id):
-        conversation_ref["id"] = conv_id
-
-    def _on_agent_message(msg: dict):
-        """Persist conversation messages to DB."""
-        import json
-        role = msg.get("role", "")
-        content = msg.get("content") or ""
-
-        if conversation_ref["id"] is None:
-            title = (content[:80].replace("\n", " ").strip()
-                     if role == "user" else "New conversation")
-            conversation_ref["id"] = ctrl.db.create_conversation(title)
-
-        save_content = content
-        if msg.get("tool_calls"):
-            save_content = json.dumps({
-                "content": content,
-                "tool_calls": msg["tool_calls"],
-            })
-
-        ctrl.db.save_message(
-            conversation_ref["id"], role, save_content,
-            tool_call_id=msg.get("tool_call_id"),
-            tool_name=msg.get("name"),
-        )
-
-        if role == "assistant" and not msg.get("tool_calls"):
-            ctrl.maybe_generate_conversation_title_async(conversation_ref["id"])
-
-    # --- Console-based approval fallback for REPL sessions. ---
-    _pending_approvals = []
-    
-    def _repl_approve_handler(req: 'ApprovalRequest'):
-        if req.is_resolved:
-            return  # another subscriber already answered
-
-        print(f"\n\n[approval needed] Agent wants to run a command")
-        print(f"  Command:  {req.command}")
-        print(f"  Reason:   {req.reason}")
-        print(f"  Respond with /allow or /deny.")
-        _pending_approvals.append(req)
-
-    def _on_approval_resolved(req: 'ApprovalRequest'):
-        if req in _pending_approvals:
-            _pending_approvals.remove(req)
-            print(f"\n[approval resolved via another frontend]\n")
-
-    bus.subscribe(APPROVAL_REQUESTED, _repl_approve_handler)
-    bus.subscribe(APPROVAL_RESOLVED, _on_approval_resolved)
-
-    def _on_notice(text):
-        print(f"\n[{text}]", flush=True)
-
-    def _build_agent():
-        """Construct a fresh Agent with the current LLM and callbacks."""
-        llm = services.get("llm")
-        if llm is None or not llm.loaded:
-            return None
-        return Agent(
-            llm, tool_registry, config,
-            system_prompt=lambda: build_system_prompt(
-                ctrl.db, ctrl.orchestrator, ctrl.tool_registry, ctrl.services
-            ),
-            on_message=_on_agent_message,
-            on_notice=_on_notice,
-        )
-
-    def _refresh_agent():
-        """Rebuild the agent. Called by /refresh; history rebinding is handled
-        by the /refresh command handler itself."""
-        nonlocal agent
-        rebuilt = _build_agent()
-        if rebuilt is not None:
-            agent = rebuilt
-            logger.info("Agent rebuilt via /refresh.")
-
-    # --- Build command registry (shared + REPL-specific) ---
-    registry = CommandRegistry()
-    register_core_commands(registry, ctrl, services, tool_registry, root_dir,
-                           get_agent=lambda: agent,
-                           set_conversation_id=_set_conversation_id,
-                           refresh_agent=_refresh_agent)
+             tool_registry, services, config, root_dir: Path,
+             runtime: FrontendRuntime | None = None,
+             adapter: ReplPlatformAdapter | None = None):
+    adapter = adapter or ReplPlatformAdapter(
+        ctrl, shutdown_fn, shutdown_event, tool_registry, services, config, root_dir
+    )
+    runtime = runtime or FrontendRuntime(ctrl, services, config, tool_registry, root_dir)
+    if adapter.runtime is None:
+        runtime.register_adapter(adapter)
+    session = adapter.default_session() or FrontendSession("repl", "local", "console")
+    registry = runtime.create_registry(session)
 
     # --- REPL-specific commands ---
 
     def _chat_handler(_arg):
-        nonlocal agent
         llm = services.get("llm")
         if llm is None or not llm.loaded:
             return "LLM service is not loaded. Run /load llm to load it."
 
-        conversation_ref["id"] = None  # fresh conversation on /chat entry
-
-        agent = _build_agent()
+        runtime.reset_session(session)
+        runtime.refresh_agent(session)
         logger.info("Agent initialized.")
 
         print("Entering chat mode. Type 'exit' to return to REPL.")
@@ -147,7 +56,7 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 break
 
             try:
-                result = route_input(user_input, registry, agent)
+                result = runtime.route_event(session, registry, user_input)
                 if result.type == "chat":
                     print(f"\nassistant> {result.text}\n")
                     if result.attachments:
@@ -169,25 +78,13 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         return None
 
     def _allow_handler(_arg):
-        while _pending_approvals and _pending_approvals[0].is_resolved:
-            _pending_approvals.pop(0)
-            
-        if not _pending_approvals:
+        if not runtime.resolve_next_approval(session, True):
             return "No pending approvals."
-            
-        req = _pending_approvals.pop(0)
-        req.resolve(True)
         return "Approval granted."
 
     def _deny_handler(_arg):
-        while _pending_approvals and _pending_approvals[0].is_resolved:
-            _pending_approvals.pop(0)
-            
-        if not _pending_approvals:
+        if not runtime.resolve_next_approval(session, False):
             return "No pending approvals."
-            
-        req = _pending_approvals.pop(0)
-        req.resolve(False)
         return "Approval denied."
 
     for entry in [
@@ -221,6 +118,9 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
             if output:
                 print(output)
 
-        except (KeyboardInterrupt, EOFError):
+        except KeyboardInterrupt:
             shutdown_fn()
+            return
+        except EOFError:
+            logger.info("REPL stdin closed; stopping REPL without shutting down the app.")
             return
