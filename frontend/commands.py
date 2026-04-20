@@ -9,8 +9,11 @@ dispatch.
 frontends. Each frontend can add overrides on top.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Callable
+
+logger = logging.getLogger("Commands")
 
 
 # Help section order — commands without a category fall into "Other".
@@ -54,7 +57,11 @@ class CommandRegistry:
         entry = self._commands.get(name)
         if entry is None:
             return f"Unknown command: '/{name}'. Run /help to see available commands."
-        return entry.handler(arg)
+        try:
+            return entry.handler(arg)
+        except Exception as e:
+            logger.exception(f"Command '/{name}' handler raised")
+            return f"Command '/{name}' failed: {e}"
 
     def all_commands(self) -> list[CommandEntry]:
         """Return all registered commands in alphabetical order."""
