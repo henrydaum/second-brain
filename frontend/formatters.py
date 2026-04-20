@@ -40,6 +40,16 @@ def truncate_cell(text: str, max_len: int = 60) -> str:
     return text[:max_len - 3] + "..."
 
 
+def _format_subagent_result(data: dict) -> str | None:
+    if "final_answer" not in data or ("run_id" not in data and "conversation_id" not in data):
+        return None
+    title = str(data.get("title") or "").strip()
+    answer = str(data.get("final_answer") or "").strip()
+    if not answer:
+        return None
+    return f"{title}\n\n{answer}" if title else answer
+
+
 def format_tool_result(result) -> str:
     """Format a ToolResult for monospace display.
 
@@ -49,6 +59,10 @@ def format_tool_result(result) -> str:
     if not result.success:
         return f"Error: {result.error}"
     data = result.data
+    if isinstance(data, dict):
+        subagent = _format_subagent_result(data)
+        if subagent:
+            return subagent
     if isinstance(data, dict) and "columns" in data and "rows" in data:
         columns = data["columns"]
         rows = data["rows"]

@@ -259,7 +259,7 @@ class FrontendRuntime:
         for name, adapter in self.adapters.items():
             if not adapter.capabilities.supports_proactive_push:
                 continue
-            session = adapter.default_session() or self.get_last_session(name)
+            session = self.get_last_session(name) or adapter.default_session()
             if session is None:
                 continue
             self.send_action(session, self.presenter.pushed_message(payload or {}, adapter.capabilities))
