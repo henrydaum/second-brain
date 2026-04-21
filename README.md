@@ -2,15 +2,17 @@
 
 Second Brain is a local-first personal data engine.
 
-It watches your folders, parses what it finds, builds a structured index in SQLite, and gives an LLM the tools to search, reason, act, schedule work, remember things, and extend the system itself.
+It watches your folders, parses what it finds, builds a structured index in SQLite, and gives an LLM the tools to search, reason, act, schedule work, remember things, and extend the system itself. 
 
-The classic AI tool pattern looks like this:
+Why Second Brain:
+1. When the files you want to ask about are too large or too numerous for Claude, OpenAI, or Gemini; or AI companies don't have a feature you want but think you could build yourself.
+2. When OpenClaw and Hermes are too bloated for your use-case.
+3. Because you simply want some inspiration for building your own agent.
+4. You like free, open-source things.
+5. You want an AI that will automatically sync to your Google Drive files.
+6. You want all of these things, and you want to have them all from your phone.
 
-1. A user has a question about their own data.
-2. A stateless chatbot gives a confident answer it cannot ground.
-3. Repeat despite logic.
-
-Second Brain is an attempt to break that pattern. It is not "chat with your files." It is a private, always-on AI runtime for your data:
+Second Brain is a private, always-on AI runtime for your data:
 
 - a searchable file index
 - a natural-language analyst
@@ -20,7 +22,7 @@ Second Brain is an attempt to break that pattern. It is not "chat with your file
 - a memory-backed agent
 - a plugin platform that can author new tools, tasks, and services at runtime
 
-If you want the short version: Second Brain is what happens when file intelligence, cron, a tool-using agent, and a local plugin runtime are built as one system instead of four separate products.
+If you want the short version: Second Brain is what happens when file intelligence, cron, a tool-using agent, and a local plugin runtime are built as one system instead of several separate products.
 
 ## Why It Matters
 
@@ -36,6 +38,7 @@ It can:
 - run proactive subagents on schedules
 - fire tasks from events, not just file changes
 - push reminders, findings, daily briefs, and alerts into Telegram
+- proactively send emails and text messages
 - build and load new tools, tasks, and services without a restart
 
 It can be a private research assistant. It can be a file intelligence layer for your whole machine. It can be a reminder system. It can be a daily briefing engine. It can absolutely function like a personal AI calendar and operator for recurring work.
@@ -108,7 +111,7 @@ Tasks can be triggered by events through the internal event bus. That opens the 
 
 Path-triggered tasks and event-triggered tasks share the same orchestration model. One abstraction, two kinds of trigger. That is what makes the platform genuinely general rather than a bolt-on scheduler.
 
-### 5. Telegram Is a First-Class Frontend
+### 5. Telegram As a First-Class Frontend
 
 Flet is gone.
 
@@ -420,7 +423,7 @@ On first run, Second Brain creates its data directory automatically:
 - macOS: `~/Library/Application Support/Second Brain/`
 - Linux: `${XDG_DATA_HOME:-~/.local/share}/Second Brain/`
 
-The most important setting is `sync_directories`.
+The most important setting is `sync_directories`. Fill it with the folders you want to know everything about. Use /configure to set your sync_directory.
 
 Minimal example:
 
@@ -446,6 +449,8 @@ Minimal example:
   "active_llm_profile": "local"
 }
 ```
+
+You will need an LLM API key. A MiniMax API key for $10/month is more than sufficient for basic operations with their M2.7 model. If you are writing complicated plugins, I recommend a stronger model like Claude Opus, GPT 5.4, or higher. Use /model to build a new model profile with your key.
 
 Notes:
 
