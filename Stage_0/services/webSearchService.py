@@ -219,6 +219,50 @@ class WebSearchProvider(BaseService):
 
         return {"query": query, "answer": answer_text, "sources": deduped, "raw": data}
 
+    def fetch_url(self, url, max_chars=20000, timeout=20):
+        """Fetch a URL and return cleaned text. Returns dict: url, final_url, status, content_type, title, text, truncated."""
+        request = urllib.request.Request(
+            url, method="GET",
+            headers={
+                "User-Agent": "SecondBrain-WebSearch/3.0",
+                "Accept": "text/html,application/xhtml+xml,application/xml,text/plain,application/json;q=0.9,*/*;q=0.8",
+                "Accept-Encoding": "gzip",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+            text = self._decode_raw(raw, response.headers)
+            final_url = response.geturl()
+            status = response.status
+            content_type = (response.headers.get("Content-Type") or "").lower()
+
+        title = ""
+        if "html" in content_type or "<html" in text[:2000].lower():
+            m = re.search(r"<title[^>]*>(.*?)</title>", text, re.DOTALL | re.IGNORECASE)
+            if m:
+                title = self._clean_text(html.unescape(re.sub(r"<[^>]+>", "", m.group(1))), 300)
+            body = re.sub(r"(?is)<(script|style|noscript|svg|head)[^>]*>.*?</\1>", " ", text)
+            body = re.sub(r"(?is)<[^>]+>", " ", body)
+            body = html.unescape(body)
+            body = re.sub(r"[ \t]+", " ", body)
+            body = re.sub(r"\n\s*\n+", "\n\n", body).strip()
+        else:
+            body = text
+
+        truncated = len(body) > max_chars
+        if truncated:
+            body = body[:max_chars] + "\n\n[...truncated]"
+
+        return {
+            "url": url,
+            "final_url": final_url,
+            "status": status,
+            "content_type": content_type,
+            "title": title,
+            "text": body,
+            "truncated": truncated,
+        }
+
     def duckduckgo_search(self, query, count=5, search_lang="en"):
         """DuckDuckGo fallback. Returns dict with keys: results, query, count."""
         params = urllib.parse.urlencode({"q": query, "kl": search_lang or "en"})

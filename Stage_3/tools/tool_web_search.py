@@ -1,6 +1,9 @@
 from Stage_3.BaseTool import BaseTool, ToolResult
 
+import re
 import urllib.error
+
+_URL_RE = re.compile(r"^(https?://|www\.)\S+$", re.IGNORECASE)
 
 
 class WebSearch(BaseTool):
@@ -8,7 +11,8 @@ class WebSearch(BaseTool):
     description = (
         "Search the public web for information that is not already available in the "
         "local file system, especially current facts, external references, or verification. "
-        "Uses Brave search by default and can use Brave Answers when mode='answers' or mode='auto'."
+        "Uses Brave search by default and can use Brave Answers when mode='answers' or mode='auto'. "
+        "If 'query' is a URL (http://, https://, or www.), the page is fetched and its cleaned text is returned."
     )
     parameters = {
         "type": "object",
@@ -107,6 +111,25 @@ class WebSearch(BaseTool):
         svc = context.services.get("web_search_provider")
         if not svc or not svc.loaded:
             return ToolResult.failed("web_search_provider service is not available.")
+
+        if _URL_RE.match(query):
+            url = query if query.lower().startswith(("http://", "https://")) else "https://" + query
+            try:
+                data = svc.fetch_url(url)
+            except urllib.error.HTTPError as e:
+                return ToolResult.failed(f"Fetch HTTP error {e.code} for {url}")
+            except urllib.error.URLError as e:
+                return ToolResult.failed(f"Fetch connection error for {url}: {e}")
+            except Exception as e:
+                return ToolResult.failed(f"Fetch failed for {url}: {e}")
+
+            header = f"Fetched {data['final_url']} (status {data['status']}, {data['content_type'] or 'unknown type'})"
+            if data["title"]:
+                header += f"\nTitle: {data['title']}"
+            summary = header + "\n\n" + data["text"]
+            if data["truncated"]:
+                summary += "\n\n[content truncated]"
+            return ToolResult(success=True, data={"mode": "fetch", **data}, llm_summary=summary)
 
         try:
             count = int(kwargs.get("count", 5))
