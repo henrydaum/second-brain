@@ -669,7 +669,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         CommandEntry("refresh", "Rebuild the agent when a tool is stuck (try /restart if a service is hung)",
                      handler=_cmd_refresh,
                      category="Conversation"),
-        CommandEntry("restart", "Restart the whole process — escape hatch when /refresh isn't enough",
+        CommandEntry("restart", "Restart the whole app — escape hatch when /refresh isn't enough",
                      handler=_cmd_restart,
                      category="Conversation"),
         CommandEntry("history", "List or load past conversations", "[id]",
