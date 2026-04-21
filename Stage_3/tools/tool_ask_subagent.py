@@ -33,8 +33,8 @@ class AskSubagent(BaseTool):
             },
             "timeout_seconds": {
                 "type": "integer",
-                "description": "Maximum time to wait before giving up. Increase this for heavier research or multi-file analysis. Default 180.",
-                "default": 180,
+                "description": "Maximum time to wait before giving up. Note: the parent agent's per-tool max_calls budget is usually a tighter ceiling than this timeout. Default 600.",
+                "default": 600,
             },
             "poll_interval_seconds": {
                 "type": "number",
@@ -70,7 +70,7 @@ class AskSubagent(BaseTool):
         input_paths = [str(p) for p in input_paths if str(p).strip()]
 
         title = str(kwargs.get("title") or "").strip()
-        timeout_seconds = self._coerce_timeout(kwargs.get("timeout_seconds"), default=180)
+        timeout_seconds = self._coerce_timeout(kwargs.get("timeout_seconds"), default=600)
         poll_interval = self._coerce_poll(kwargs.get("poll_interval_seconds"), default=1.0)
 
         request_token = f"asksub:{uuid.uuid4().hex}"

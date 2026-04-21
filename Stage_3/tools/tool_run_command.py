@@ -16,12 +16,25 @@ import logging
 import shlex
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 from Stage_3.BaseTool import BaseTool, ToolResult
 from paths import ROOT_DIR, DATA_DIR
 
 logger = logging.getLogger("RunCommand")
+
+# Per-stream truncation cap before spilling full output to a temp file.
+_OUTPUT_CHAR_CAP = 4000
+
+
+def _truncate_stream(label: str, text: str, cap: int = _OUTPUT_CHAR_CAP) -> tuple[str, bool]:
+    if len(text) <= cap:
+        return text, False
+    head = text[: cap // 2]
+    tail = text[-cap // 2 :]
+    return f"{head}\n... [{label} truncated, {len(text)} chars total] ...\n{tail}", True
 
 
 # ── Whitelist configuration ──────────────────────────────────────────
@@ -278,17 +291,36 @@ class RunCommand(BaseTool):
             return ToolResult.failed(f"Command execution error: {e}")
 
         # ── Build summary ────────────────────────────────────────
+        stdout_view, out_trunc = _truncate_stream("stdout", result.stdout or "")
+        stderr_view, err_trunc = _truncate_stream("stderr", result.stderr or "")
+
+        spill_path = None
+        if out_trunc or err_trunc:
+            try:
+                fd, spill_path = tempfile.mkstemp(
+                    prefix=f"runcmd-{int(time.time())}-",
+                    suffix=".log",
+                    dir=str(DATA_DIR),
+                )
+                with open(fd, "w", encoding="utf-8") as f:
+                    f.write(f"$ {resolved}\n\n=== STDOUT ===\n{result.stdout or ''}\n\n=== STDERR ===\n{result.stderr or ''}\n")
+            except Exception as e:
+                logger.warning(f"Failed to spill full output: {e}")
+                spill_path = None
+
         parts = []
-        if result.stdout:
-            parts.append(result.stdout)
-        if result.stderr:
-            parts.append(f"STDERR:\n{result.stderr}")
+        if stdout_view:
+            parts.append(stdout_view)
+        if stderr_view:
+            parts.append(f"STDERR:\n{stderr_view}")
         if result.returncode != 0:
             parts.append(f"(exit code {result.returncode})")
+        if spill_path:
+            parts.append(f"(full output written to {spill_path})")
 
         output = "\n".join(parts) if parts else "(no output)"
 
         return ToolResult(
-            data={"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode},
+            data={"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode, "spill_path": spill_path},
             llm_summary=output,
         )

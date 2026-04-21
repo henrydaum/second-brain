@@ -27,6 +27,14 @@ class ReadFile(BaseTool):
                 "type": "string",
                 "description": "File path to read, either absolute or relative to the project root.",
             },
+            "offset": {
+                "type": "integer",
+                "description": "Line number to start reading from (1-indexed). Default 1. For .log files this counts from the newest line.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of lines to return. Output is also capped at ~20k chars regardless.",
+            },
         },
         "required": ["path"],
     }
@@ -38,6 +46,20 @@ class ReadFile(BaseTool):
         raw_path = kwargs.get("path", "").strip()
         if not raw_path:
             return ToolResult.failed("No path provided.")
+
+        try:
+            offset = int(kwargs.get("offset") or 1)
+        except (TypeError, ValueError):
+            offset = 1
+        offset = max(1, offset)
+
+        limit_raw = kwargs.get("limit")
+        try:
+            limit = int(limit_raw) if limit_raw is not None else None
+        except (TypeError, ValueError):
+            limit = None
+        if limit is not None:
+            limit = max(1, limit)
 
         target = Path(raw_path)
         if not target.is_absolute():
@@ -55,17 +77,31 @@ class ReadFile(BaseTool):
         except Exception as e:
             return ToolResult.failed(f"Read error: {e}")
 
+        lines = content.splitlines()
         if target.suffix == ".log":
             # Logs are read newest-first so the latest messages are always visible.
-            lines = content.splitlines()
-            content = "\n".join(reversed(lines))
-            if len(content) > MAX_CHARS:
-                total = len(content)
-                nl = content.rfind("\n", 0, MAX_CHARS)
-                head = content[:nl] if nl != -1 else content[:MAX_CHARS]
-                content = head + f"\n\n... (older lines truncated, {total} chars total)"
-        elif len(content) > MAX_CHARS:
-            total = len(content)
-            content = content[:MAX_CHARS] + f"\n\n... truncated ({total} chars total)"
+            lines = list(reversed(lines))
+
+        total_lines = len(lines)
+        start = min(offset - 1, total_lines)
+        end = total_lines if limit is None else min(start + limit, total_lines)
+        window = lines[start:end]
+        content = "\n".join(window)
+
+        char_truncated = False
+        if len(content) > MAX_CHARS:
+            nl = content.rfind("\n", 0, MAX_CHARS)
+            content = content[:nl] if nl != -1 else content[:MAX_CHARS]
+            char_truncated = True
+
+        notes = []
+        if start > 0:
+            notes.append(f"showing lines {start + 1}-{end} of {total_lines}")
+        elif end < total_lines:
+            notes.append(f"showing lines 1-{end} of {total_lines}")
+        if char_truncated:
+            notes.append(f"output capped at {MAX_CHARS} chars — pass offset/limit to page further")
+        if notes:
+            content += "\n\n... (" + "; ".join(notes) + ")"
 
         return ToolResult(llm_summary=content)

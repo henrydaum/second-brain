@@ -241,8 +241,15 @@ class ScheduleSubagent(BaseTool):
             title, prompt = _job_payload_summary(job)
             schedule = svc.describe_job(name)
             state = "enabled" if job.get("enabled", True) else "disabled"
+            try:
+                next_fire = svc.get_next_fire_at(name)
+            except Exception:
+                next_fire = None
+            next_fire_str = next_fire.isoformat(timespec="seconds") if next_fire else None
             lines.append(f"{name} [{state}]")
             lines.append(f"  {schedule}")
+            if next_fire_str:
+                lines.append(f"  next run: {next_fire_str}")
             if title:
                 lines.append(f"  title: {title}")
             if prompt:
@@ -251,6 +258,7 @@ class ScheduleSubagent(BaseTool):
                 "job_name": name,
                 "enabled": job.get("enabled", True),
                 "schedule": schedule,
+                "next_run_at": next_fire_str,
                 "title": title,
                 "prompt": prompt,
             })

@@ -118,6 +118,17 @@ class TimekeeperService(BaseService):
         except Exception as e:
             raise ValueError(f"Invalid cron expression: {e}")
 
+    def get_next_fire_at(self, name: str) -> datetime | None:
+        """Return the next scheduled fire time for a job, or None if disabled/unknown/exhausted."""
+        with self._lock:
+            job = self._jobs.get(name)
+            if job is None or not job.get("enabled", True):
+                return None
+            cached = self._next_fire_at.get(name)
+            if cached is not None:
+                return cached
+            return self._compute_next_fire(job, from_time=_now_local())
+
     def describe_job(self, name: str) -> str:
         with self._lock:
             job = self._jobs.get(name)

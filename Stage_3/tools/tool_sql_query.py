@@ -11,10 +11,60 @@ The tool validates that only SELECT/PRAGMA statements are executed
 """
 
 import logging
+import re
+from difflib import get_close_matches
 
 from Stage_3.BaseTool import BaseTool, ToolResult
 
 logger = logging.getLogger("SQLQuery")
+
+
+def _schema_hint(db, error_msg: str) -> str:
+    """Build a helpful hint listing tables (and a guessed table's columns) for the agent."""
+    try:
+        with db.lock:
+            tables = [r[0] for r in db.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            ).fetchall()]
+    except Exception:
+        return ""
+
+    if not tables:
+        return ""
+
+    lines = [f"\n\nAvailable tables: {', '.join(tables)}"]
+
+    # If error references a missing table, suggest closest match
+    m = re.search(r"no such table:\s*(\S+)", error_msg)
+    if m:
+        bad = m.group(1)
+        guesses = get_close_matches(bad, tables, n=2, cutoff=0.5)
+        if guesses:
+            lines.append(f"Did you mean: {', '.join(guesses)}?")
+        return "\n".join(lines)
+
+    # If error references a missing column, try to find candidate tables and list their columns
+    m = re.search(r"no such column:\s*(\S+)", error_msg)
+    if m:
+        bad_col = m.group(1).split(".")[-1]
+        suggestions = []
+        for t in tables:
+            try:
+                with db.lock:
+                    cols = [r[1] for r in db.conn.execute(f"PRAGMA table_info({t})").fetchall()]
+            except Exception:
+                continue
+            if bad_col in cols:
+                suggestions.append(f"{t}: {', '.join(cols)}")
+            else:
+                close = get_close_matches(bad_col, cols, n=1, cutoff=0.6)
+                if close:
+                    suggestions.append(f"{t} has '{close[0]}' (cols: {', '.join(cols)})")
+        if suggestions:
+            lines.append("Column hints:")
+            lines.extend("  " + s for s in suggestions[:5])
+
+    return "\n".join(lines)
 
 
 class SQLQuery(BaseTool):
@@ -64,7 +114,8 @@ class SQLQuery(BaseTool):
             return ToolResult.failed(str(e))
         except Exception as e:
             logger.error(f"Query failed: {e}")
-            return ToolResult.failed(str(e))
+            msg = str(e)
+            return ToolResult.failed(msg + _schema_hint(context.db, msg))
 
         columns = result["columns"]
         rows = result["rows"]
