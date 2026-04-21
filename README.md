@@ -5,12 +5,10 @@ Second Brain is a local-first personal data engine.
 It watches your folders, parses what it finds, builds a structured index in SQLite, and gives an LLM the tools to search, reason, act, schedule work, remember things, and extend the system itself. 
 
 Why Second Brain:
-1. When the files you want to ask about are too large or too numerous for Claude, OpenAI, or Gemini; or AI companies don't have a feature you want but think you could build yourself.
+1. When the files you want to ask about are too large or too numerous for Claude, OpenAI, or Gemini; or AI companies don't have a feature you want but you think you could build yourself.
 2. When OpenClaw and Hermes are too bloated for your use-case.
-3. Because you simply want some inspiration for building your own agent.
-4. You like free, open-source things.
-5. You want an AI that will automatically sync to your Google Drive files.
-6. You want all of these things, and you want to have them all from your phone.
+3. You want an AI that will automatically sync to your Google Drive files.
+4. You want all of these things, and you want to have them all from your phone.
 
 Second Brain is a private, always-on AI runtime for your data:
 
