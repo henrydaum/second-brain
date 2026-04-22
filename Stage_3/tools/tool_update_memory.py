@@ -7,7 +7,7 @@ from Stage_3.BaseTool import BaseTool, ToolResult
 from paths import DATA_DIR
 import os
 
-MAX_MEMORY_LENGTH = 1000
+MAX_MEMORY_LENGTH = 1500
 
 
 class UpdateMemory(BaseTool):
