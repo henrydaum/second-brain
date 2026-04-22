@@ -20,11 +20,10 @@ Second Brain is a private, always-on AI runtime for your data:
 - a memory-backed agent
 - a plugin platform that can author new tools, tasks, and services at runtime
 
-If you want the short version: Second Brain is what happens when file intelligence, cron, a tool-using agent, and a local plugin runtime are built as one system instead of several separate products.
+**Q:** How do you see this evolving into something truly revolutionary for how we interact with information?
+**A:** The deep filesystem access is very different from how other agents interact with data. Other agents can create, update, and delete individual files but they have no built-in way of aggregating data from entire hard drives. This capability is built into Second Brain, plus it syncs automatically. You can decide exactly how to process all of your files.
 
 ## Why It Matters
-
-Most AI apps are stateless. Most file indexers are passive. Most automation tools are brittle. Second Brain is none of those.
 
 It can:
 
@@ -40,8 +39,6 @@ It can:
 - build and load new tools, tasks, and services without a restart
 
 It can be a private research assistant. It can be a file intelligence layer for your whole machine. It can be a reminder system. It can be a daily briefing engine. It can absolutely function like a personal AI calendar and operator for recurring work.
-
-An agent is only as useful as the runtime around it. Second Brain is that runtime.
 
 ## Core Capabilities
 
@@ -64,7 +61,7 @@ The result is a live knowledge base over your local files, not a one-shot import
 
 ### 2. Search Like a Real System
 
-There is a common shortcut in AI tooling: wrap embeddings in a chat box and call it retrieval. That is fine for a demo, but it breaks the moment precision matters.
+AI can be inaccurate, so it was important to make sure Second Brain has manual search available. Every tool the AI can use, so can you. Double check your answers.
 
 Second Brain ships with multiple retrieval modes:
 
@@ -93,7 +90,7 @@ Jobs can be:
 - enabled or disabled without deleting them
 - backed by input files you explicitly attach to the job
 
-Scheduled subagents keep their own stored run history and can proactively push user-visible messages into chat. The system is no longer only reactive. It can act on its own schedule.
+Scheduled subagents keep their own stored run history and can proactively push user-visible messages into chat.
 
 ### 4. Event-Driven Tasks
 
@@ -106,19 +103,18 @@ Tasks can be triggered by events through the internal event bus. That opens the 
 - approval workflows
 - proactive notifications
 - future external integrations that emit events into the system
+- respond to emails immediately
 
 Path-triggered tasks and event-triggered tasks share the same orchestration model. One abstraction, two kinds of trigger. That is what makes the platform genuinely general rather than a bolt-on scheduler.
 
 ### 5. Telegram As a First-Class Frontend
 
-Flet is gone.
-
-Second Brain now ships with two primary frontends:
+Second Brain now ships with two primary frontends (but it's possible to add more):
 
 - Telegram bot
 - Terminal REPL
 
-Telegram is not an afterthought. It supports:
+Telegram supports:
 
 - slash commands
 - autocomplete
@@ -129,6 +125,8 @@ Telegram is not an afterthought. It supports:
 - proactive subagent push messages
 
 This means your local system can act like a private mobile AI assistant without becoming a cloud SaaS product. Your data never leaves your machine. The assistant reaches you, not the other way around.
+
+The frontend code was designed to be modular and expandable. Other messaging platforms, like Discord, can be added easily using a coding agent.
 
 ### 6. Durable Memory
 
