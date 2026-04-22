@@ -21,6 +21,7 @@ Second Brain is a private, always-on AI runtime for your data:
 - a plugin platform that can author new tools, tasks, and services at runtime
 
 **Q:** How do you see this evolving into something truly revolutionary for how we interact with information?
+
 **A:** The deep filesystem access is very different from how other agents interact with data. Other agents can create, update, and delete individual files but they have no built-in way of aggregating data from entire hard drives. This capability is built into Second Brain, plus it syncs automatically. You can decide exactly how to process all of your files.
 
 ## Why It Matters
