@@ -128,32 +128,7 @@ class BaseLLM(BaseService):
 
     Subclasses convert to their native format internally.
     """
-        
-    config_settings = [
-        ("LLM Model Name", "llm_model_name",
-         "Model name for the language model API.",
-         "gpt-5-mini",
-         {"type": "text"}),
 
-        ("LLM Endpoint", "llm_endpoint",
-         "Custom API endpoint URL. Leave blank for the default OpenAI endpoint.",
-         "",
-         {"type": "text"}),
-
-        ("LLM API Key", "llm_api_key",
-         "API key or environment variable name for the LLM.",
-         "OPENAI_API_KEY",
-         {"type": "text"}),
-
-        ("LLM Context Size", "llm_context_size",
-         "Max context window in tokens. Auto-detected for LM Studio models. "
-         "Set manually for OpenAI-compatible endpoints. When set, the agent "
-         "proactively compacts the conversation at 80% usage. When 0, the agent "
-         "still compacts reactively when a context-limit error is hit.",
-         0,
-         {"type": "text"}),
-    ]
-    
     def __init__(self):
         super().__init__()
         self.shared = True  # LLM clients are typically thread-safe
@@ -616,7 +591,7 @@ def _build_llm_from_profile(profile: dict) -> BaseLLM:
 
 class LLMRouter(BaseLLM):
 
-    config_settings = BaseLLM.config_settings + [
+    config_settings = [
         ("LLM Profiles", "llm_profiles",
          "Named LLM configurations. Managed via /model command.",
          {},
