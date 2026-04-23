@@ -3,7 +3,7 @@ import logging
 import time
 from pathlib import Path
 
-from Stage_1.services.parser_registry import get_modality
+from Stage_1.parser_registry import get_modality
 from Stage_2.BaseTask import BaseTask, TaskResult
 from Stage_3.agent import Agent
 from Stage_3.system_prompt import build_system_prompt

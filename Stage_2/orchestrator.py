@@ -21,7 +21,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from context import build_context
-from Stage_1.services.parser_registry import get_modality
+from Stage_1.parser_registry import get_modality
 from Stage_2.BaseTask import BaseTask, TaskResult
 from event_bus import bus
 from event_channels import TASK_COMPLETED, TASK_FAILED, SERVICE_LOADED
@@ -366,7 +366,7 @@ class Orchestrator:
 		logger.debug(f"Run enqueued: {run_id}")
 
 	def on_paths_discovered(self, child_paths: list[str]):
-		from Stage_1.services.parser_registry import get_modality, get_supported_extensions
+		from Stage_1.parser_registry import get_modality, get_supported_extensions
 		supported = get_supported_extensions()
 
 		for child_path in child_paths:

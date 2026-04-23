@@ -15,8 +15,8 @@ import re
 import threading
 from pathlib import Path
 
-from Stage_1.services.attachment_cache import save as save_attachment
-from Stage_1.services.parser_registry import get_modality
+from Stage_1.attachment_cache import save as save_attachment
+from Stage_1.parser_registry import get_modality
 from frontend.commands import CommandEntry
 from frontend.formatters import (
     format_services, format_tasks, format_tools,

@@ -14,7 +14,7 @@ services-aware entry point live on ParserService in parserService.py.
 
 import logging
 from pathlib import Path
-from Stage_1.services.ParseResult import ParseResult
+from Stage_1.ParseResult import ParseResult
 
 logger = logging.getLogger("ParserRegistry")
 

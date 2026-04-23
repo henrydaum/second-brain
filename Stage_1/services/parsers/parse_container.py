@@ -8,8 +8,8 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
-from Stage_1.services.ParseResult import ParseResult
-from Stage_1.services import parser_registry as registry
+from Stage_1.ParseResult import ParseResult
+from Stage_1 import parser_registry as registry
 
 logger = logging.getLogger("ParseContainer")
 

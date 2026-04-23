@@ -10,7 +10,7 @@ current state (e.g. newly registered plugins, service status changes).
 from datetime import datetime
 from pathlib import Path
 
-from Stage_1.services.parser_registry import get_supported_extensions
+from Stage_1.parser_registry import get_supported_extensions
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 

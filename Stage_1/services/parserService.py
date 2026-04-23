@@ -18,7 +18,7 @@ to other services (e.g. parse_gdoc -> google_drive, parse_audio -> whisper).
 import logging
 
 from Stage_1.BaseService import BaseService
-from Stage_1.services import parser_registry
+from Stage_1 import parser_registry
 
 logger = logging.getLogger("ParserService")
 

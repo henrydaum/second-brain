@@ -99,7 +99,7 @@ class ToolResult:
         """
         from pathlib import Path
         from urllib.parse import quote
-        from Stage_1.services.parser_registry import get_modality
+        from Stage_1.parser_registry import get_modality
 
         attachments = []
         for p in self.attachment_paths:
@@ -181,5 +181,4 @@ class BaseTool:
                 "parameters": self.parameters,
             }
         }
-
 
