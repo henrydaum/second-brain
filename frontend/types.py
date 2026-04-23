@@ -48,4 +48,5 @@ class FrontendAction:
     form: dict[str, Any] = field(default_factory=dict)
     status_id: str | None = None
     parse_mode: str | None = None
+    silent: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)

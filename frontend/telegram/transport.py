@@ -27,27 +27,27 @@ class TelegramTransport:
         self._status_message_ids.clear()
         self._choice_message_ids.clear()
 
-    async def send_long_message(self, chat_id: int, text: str, use_html: bool = False):
+    async def send_long_message(self, chat_id: int, text: str, use_html: bool = False, silent: bool = False):
         if not text:
             return
         app = self._get_app()
         parse_mode = "HTML" if use_html else None
         if len(text) <= self.adapter.capabilities.max_message_chars:
             try:
-                await app.bot.send_message(chat_id, text, parse_mode=parse_mode)
+                await app.bot.send_message(chat_id, text, parse_mode=parse_mode, disable_notification=silent)
             except Exception:
                 if parse_mode:
-                    await app.bot.send_message(chat_id, text)
+                    await app.bot.send_message(chat_id, text, disable_notification=silent)
             return
         current = ""
         for line in text.split("\n"):
             if len(current) + len(line) + 1 > self.adapter.capabilities.max_message_chars:
-                await self.send_long_message(chat_id, current, use_html=use_html)
+                await self.send_long_message(chat_id, current, use_html=use_html, silent=silent)
                 current = line[:self.adapter.capabilities.max_message_chars]
             else:
                 current = f"{current}\n{line}" if current else line
         if current:
-            await self.send_long_message(chat_id, current, use_html=use_html)
+            await self.send_long_message(chat_id, current, use_html=use_html, silent=silent)
 
     async def execute_send_actions(self, chat_id: int, actions: list[SendAction]):
         from telegram import InputMediaAudio, InputMediaDocument, InputMediaPhoto, InputMediaVideo
@@ -162,7 +162,7 @@ class TelegramTransport:
                 self._choice_message_ids[request_id] = (chat_id, sent.message_id, rendered or action.text)
             return
 
-        await self.send_long_message(chat_id, rendered, use_html=use_html)
+        await self.send_long_message(chat_id, rendered, use_html=use_html, silent=action.silent)
 
     def dispatch_runtime_action(self, session: FrontendSession, action: FrontendAction):
         loop = self._get_loop()

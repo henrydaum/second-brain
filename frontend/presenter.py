@@ -70,7 +70,8 @@ class FrontendPresenter:
             lines.append(f"**{label}**" if caps.supports_rich_text else label)
         if message:
             lines.append(message)
-        return FrontendAction(type="send_message", text="\n\n".join(lines).strip())
+        silent = str(payload.get("source") or "") == "timekeeper"
+        return FrontendAction(type="send_message", text="\n\n".join(lines).strip(), silent=silent)
 
     def notice(self, text: str) -> FrontendAction:
         return FrontendAction(type="send_message", text=f"[{text}]")
