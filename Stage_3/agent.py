@@ -22,8 +22,8 @@ import logging
 import time
 from pathlib import Path
 
-from Stage_0.services.llmService import LLMProviderError, is_context_limit_error
-from Stage_1.registry import get_modality
+from Stage_1.services.llmService import LLMProviderError, is_context_limit_error
+from Stage_1.services.parser_registry import get_modality
 from Stage_3.history_utils import heal_orphan_tool_calls
 from frontend.token_stripper import strip_model_tokens
 

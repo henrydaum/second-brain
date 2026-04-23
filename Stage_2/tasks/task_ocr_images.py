@@ -48,7 +48,7 @@ class OCRImages(BaseTask):
         for path in paths:
             try:
                 # Step 1: Extract images using the appropriate parser
-                parse_result = context.parse(path, "image")
+                parse_result = context.services.get("parser").parse(path, "image")
                 
                 if not parse_result.success:
                     logger.error(f"Image parse failed for {Path(path).name}: {parse_result.error}")

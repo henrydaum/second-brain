@@ -8,7 +8,7 @@ import urllib.request
 import urllib.error
 import logging
 
-from Stage_0.BaseService import BaseService
+from Stage_1.BaseService import BaseService
 
 logger = logging.getLogger("WebSearchService")
 

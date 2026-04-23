@@ -1,8 +1,8 @@
 import logging
 from pathlib import Path
 from PIL import Image
-from Stage_1.ParseResult import ParseResult
-import Stage_1.registry as registry
+from Stage_1.services.ParseResult import ParseResult
+from Stage_1.services import parser_registry as registry
 
 logger = logging.getLogger("ParseImage")
 

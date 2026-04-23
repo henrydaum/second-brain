@@ -128,10 +128,10 @@ _TASK_CONFIG = {
 }
 
 _SERVICE_CONFIG = {
-    "baked_in_dir":       ROOT_DIR / "Stage_0" / "services",
+    "baked_in_dir":       ROOT_DIR / "Stage_1" / "services",
     "sandbox_dir":        SANDBOX_SERVICES,
     "glob":               "*.py",
-    "baked_in_ns":        "Stage_0.services.{stem}",
+    "baked_in_ns":        "Stage_1.services.{stem}",
     "sandbox_ns":         "sandbox_services_{stem}",
 }
 

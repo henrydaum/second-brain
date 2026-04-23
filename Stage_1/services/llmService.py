@@ -5,7 +5,7 @@ import logging
 import time
 import json
 
-from Stage_0.BaseService import BaseService
+from Stage_1.BaseService import BaseService
 
 logger = logging.getLogger("LLMClass")
 

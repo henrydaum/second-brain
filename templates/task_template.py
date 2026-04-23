@@ -85,8 +85,8 @@ Every task receives a `context` object with:
                           embedder.encode(texts)
 
   context.parse     Parse a file using the Stage 1 parser system:
-                      result = context.parse(path)           # default modality
-                      result = context.parse(path, "image")  # specific modality
+                      result = context.services.get("parser").parse(path)           # default modality
+                      result = context.services.get("parser").parse(path, "image")  # specific modality
                     Returns ParseResult with .success, .output, .also_contains
 
 
@@ -228,7 +228,7 @@ class BaseTask:
 #         results = []
 #         for path in paths:
 #             try:
-#                 parse_result = context.parse(path, "text")
+#                 parse_result = context.services.get("parser").parse(path, "text")
 #                 if not parse_result.success:
 #                     results.append(TaskResult.failed(f"Parse failed: {parse_result.error}"))
 #                     continue

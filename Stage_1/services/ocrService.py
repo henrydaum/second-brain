@@ -4,7 +4,7 @@ import tempfile
 import logging
 from pathlib import Path
 
-from Stage_0.BaseService import BaseService
+from Stage_1.BaseService import BaseService
 
 # 3rd Party
 from PIL import Image

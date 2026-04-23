@@ -13,7 +13,7 @@ import logging
 import os
 from pathlib import Path
 
-from Stage_0.BaseService import BaseService
+from Stage_1.BaseService import BaseService
 from paths import DATA_DIR
 
 logger = logging.getLogger("WhisperService")

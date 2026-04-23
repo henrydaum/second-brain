@@ -7,7 +7,7 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from Stage_1.registry import get_modality, get_supported_extensions
+from Stage_1.services.parser_registry import get_modality, get_supported_extensions
 logger = logging.getLogger("Watcher")
 
 """

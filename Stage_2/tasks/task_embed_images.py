@@ -52,7 +52,7 @@ class EmbedImages(BaseTask):
 
 		for path in paths:
 			try:
-				parse_result = context.parse(path, "image")
+				parse_result = context.services.get("parser").parse(path, "image")
 
 				if not parse_result.success:
 					logger.error(f"Image parse failed for {Path(path).name}: {parse_result.error}")

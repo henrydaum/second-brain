@@ -7,7 +7,7 @@ import logging
 # 3rd Party - also includes torch, sentence_transformers (imported later)
 import numpy as np
 
-from Stage_0.BaseService import BaseService
+from Stage_1.BaseService import BaseService
 from paths import DATA_DIR
 
 logger = logging.getLogger("EmbedClass")

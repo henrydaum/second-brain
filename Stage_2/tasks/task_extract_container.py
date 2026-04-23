@@ -46,7 +46,7 @@ class ExtractContainer(BaseTask):
 		results = []
 		for path in paths:
 			try:
-				parse_result = context.parse(path, "container")
+				parse_result = context.services.get("parser").parse(path, "container")
 
 				if not parse_result.success:
 					logger.warning(f"Container parse failed for {Path(path).name}: {parse_result.error}")

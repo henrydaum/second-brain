@@ -18,13 +18,13 @@ class ParseResult:
     modality: str = "unknown"
     success: bool = True
     error: str = ""
-    
+
     # The standardized payload
     output: Any = None  # The raw output of the parser, in one of the standard formats above.
-    
+
     # Metadata — lightweight, always populated
     metadata: dict = field(default_factory=dict)
-    
+
     # Multi-modal discovery — what else is in this file?
     also_contains: list[str] = field(default_factory=list)
     # e.g. ["image", "tabular"] for a PDF with charts and photos

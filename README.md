@@ -312,7 +312,7 @@ Second Brain/
 │       ├── dispatch.py     # Shared input routing
 │       └── formatters.py   # Shared formatting helpers
 │
-├── Stage_0/
+├── Stage_1/
 │   ├── BaseService.py
 │   └── services/
 │       ├── llmService.py
@@ -556,7 +556,7 @@ Software that can extend itself in response to use is a different kind of softwa
 
 If you want permanent source-controlled additions, add files in:
 
-- `Stage_0/services/`
+- `Stage_1/services/`
 - `Stage_2/tasks/`
 - `Stage_3/tools/`
 

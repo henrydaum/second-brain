@@ -27,14 +27,14 @@ _PLUGIN_CONFIG = {
 _EXPECTED_IMPORTS = {
     "tool":    ("Stage_3.BaseTool", {"BaseTool", "ToolResult"}),
     "task":    ("Stage_2.BaseTask", {"BaseTask", "TaskResult"}),
-    "service": ("Stage_0.BaseService", {"BaseService"}),
+    "service": ("Stage_1.BaseService", {"BaseService"}),
 }
 
 # Baked-in source directories (read-only)
 _BAKED_IN_DIRS = {
     "tool":    ROOT_DIR / "Stage_3" / "tools",
     "task":    ROOT_DIR / "Stage_2" / "tasks",
-    "service": ROOT_DIR / "Stage_0" / "services",
+    "service": ROOT_DIR / "Stage_1" / "services",
 }
 
 

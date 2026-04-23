@@ -15,8 +15,8 @@ import re
 import threading
 from pathlib import Path
 
-from Stage_1.attachment_cache import save as save_attachment
-from Stage_1.registry import get_modality, parse
+from Stage_1.services.attachment_cache import save as save_attachment
+from Stage_1.services.parser_registry import get_modality
 from frontend.commands import CommandEntry
 from frontend.formatters import (
     format_services, format_tasks, format_tools,
@@ -1286,8 +1286,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             content = ""
             truncated = False
             try:
-                pr = parse(str(cache_path), config={"max_chars": _MAX_ATTACHMENT_TEXT},
-                          services=services)
+                parser_svc = services.get("parser")
+                pr = parser_svc.parse(str(cache_path), config={"max_chars": _MAX_ATTACHMENT_TEXT})
                 if pr.output:
                     if isinstance(pr.output, str):
                         raw = pr.output

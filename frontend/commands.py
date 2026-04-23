@@ -420,7 +420,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
 
     def _cmd_model(arg):
         """Handler for /model — manage LLM profiles."""
-        from Stage_0.services.llmService import LLMRouter
+        from Stage_1.services.llmService import LLMRouter
 
         router = services.get("llm")
         if not isinstance(router, LLMRouter):

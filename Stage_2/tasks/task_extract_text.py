@@ -37,7 +37,7 @@ class ExtractText(BaseTask):
 		results = []
 		for path in paths:
 			try:
-				parse_result = context.parse(path, "text")
+				parse_result = context.services.get("parser").parse(path, "text")
 
 				if not parse_result.success:
 					results.append(TaskResult.failed(f"Parse failed: {parse_result.error}"))

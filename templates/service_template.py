@@ -11,7 +11,7 @@ To create a new service:
   1. Use build_plugin(plugin_type="service", file_name="<name>Service.py",
      action="create", code="...") to write the file to the sandbox.
   2. The code MUST inherit from BaseService and include:
-       from Stage_0.BaseService import BaseService
+       from Stage_1.BaseService import BaseService
   3. Implement _load(), unload(), and your service methods.
   4. Add a build_services(config) factory function at the bottom.
   5. Hot-reload picks it up automatically — no restart needed.
@@ -19,7 +19,7 @@ To create a new service:
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
 build_plugin automatically validates:
-  - Correct import (from Stage_0.BaseService import BaseService)
+  - Correct import (from Stage_1.BaseService import BaseService)
   - Class inheriting BaseService
   - Presence of build_services() function
   - File naming conventions
@@ -27,7 +27,7 @@ build_plugin automatically validates:
 
 AUTO-DISCOVERY RULES
 --------------------
-- File must be in Stage_0/services/ (baked-in) or the sandbox services dir
+- File must be in Stage_1/services/ (baked-in) or the sandbox services dir
 - File must NOT start with "_"
 - Module must have a top-level build_services(config) -> dict function
 - The returned dict maps service names to service instances
@@ -116,7 +116,7 @@ In build_services(), access via: config.get("whisper_model_name", "base")
 """
 
 # =====================================================================
-# BASE CLASS (copied from Stage_0/BaseService.py for self-containment)
+# BASE CLASS (copied from Stage_1/BaseService.py for self-containment)
 # =====================================================================
 
 import logging
@@ -179,7 +179,7 @@ class BaseService(ABC):
 # import gc
 # import os
 # from pathlib import Path
-# from Stage_0.BaseService import BaseService
+# from Stage_1.BaseService import BaseService
 #
 # logger = logging.getLogger("WhisperService")
 #
@@ -228,7 +228,7 @@ class BaseService(ABC):
 # EXAMPLE: A per-call service (e.g. API client with auth)
 # =====================================================================
 
-# from Stage_0.BaseService import BaseService
+# from Stage_1.BaseService import BaseService
 #
 #
 # class GoogleDriveService(BaseService):

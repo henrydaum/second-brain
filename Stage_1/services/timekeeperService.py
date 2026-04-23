@@ -8,7 +8,7 @@ from cron_descriptor import ExpressionDescriptor
 from croniter import croniter
 
 import config_manager
-from Stage_0.BaseService import BaseService
+from Stage_1.BaseService import BaseService
 from event_bus import bus
 from event_channels import CHAT_MESSAGE_PUSHED
 

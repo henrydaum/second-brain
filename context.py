@@ -2,8 +2,10 @@
 Runtime context passed into tools and tasks.
 
 The context packages together the database handle, config, shared
-services, parser entry point, and a few runtime helpers so plugins do
-not need to know how the surrounding application is wired.
+services, and a few runtime helpers so plugins do not need to know how
+the surrounding application is wired. Parsing is reached uniformly via
+``context.services.get("parser").parse(path, modality)`` — no special
+shortcut on the context.
 """
 
 from dataclasses import dataclass, field
@@ -20,10 +22,8 @@ class SecondBrainContext:
     config:
         Global settings dict.
     services:
-        Mapping of service name to service instance.
-    parse:
-        Parser entry point. Example:
-        context.parse("report.pdf", "text") -> ParseResult
+        Mapping of service name to service instance. Includes the
+        "parser" service for file parsing.
     call_tool:
         Helper for tool-to-tool composition. Only populated for tools.
         Example:
@@ -35,7 +35,6 @@ class SecondBrainContext:
     db: Any = None
     config: dict = field(default_factory=dict)
     services: dict = field(default_factory=dict)
-    parse: Any = None            # callable(path, modality, config) -> ParseResult
     call_tool: Any = None        # callable(name, **kwargs) -> ToolResult (tools only)
     approve_command: Any = None  # callable(command, justification) -> bool (tools only)
     tool_registry: Any = None    # ToolRegistry instance (tools only)
@@ -46,10 +45,6 @@ def build_context(db, config: dict, services: dict, call_tool=None,
                    tool_registry=None, orchestrator=None) -> SecondBrainContext:
     """
     Build a fully wired runtime context.
-
-    The parse callable is constructed here with services baked in, so
-    callers do not need to import Stage_1.registry or assemble helpers
-    themselves.
 
     approve_command is auto-wired to the event bus. If nothing is
     subscribed to APPROVAL_REQUESTED, the field stays None so tools can
@@ -62,7 +57,6 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         # In tool registry (tools — with call_tool):
         context = build_context(self.db, self.config, self.services, call_tool=self.call)
     """
-    from Stage_1.registry import parse as _parse
     from event_bus import bus
     from event_channels import APPROVAL_REQUESTED
     from frontend.approval_request import ApprovalRequest
@@ -80,7 +74,6 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         db=db,
         config=config,
         services=services,
-        parse=lambda path, modality=None, config=None: _parse(path, modality, config, services),
         call_tool=call_tool,
         approve_command=approve_command,
         tool_registry=tool_registry,

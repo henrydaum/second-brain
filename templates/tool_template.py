@@ -78,8 +78,8 @@ Every tool receives a `context` object with:
                       embedder = context.services.get("text_embedder")
 
   context.parse     Parse a file using the Stage 1 parser system:
-                      result = context.parse(path)
-                      result = context.parse(path, "image")
+                      result = context.services.get("parser").parse(path)
+                      result = context.services.get("parser").parse(path, "image")
 
   context.call_tool Call another tool (tool-to-tool chaining):
                       result = context.call_tool("lexical_search", query="hello")

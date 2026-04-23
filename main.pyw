@@ -72,6 +72,12 @@ def main():
 	services = discover_services(_ROOT, config)
 	logger.info(f"Services discovered: {list(services.keys())} ({time.time() - t0:.2f}s)")
 
+	# Inject peer services into the parser service so parser functions can
+	# delegate to other services (e.g. parse_gdoc -> google_drive).
+	parser_svc = services.get("parser")
+	if parser_svc is not None and hasattr(parser_svc, "set_peer_services"):
+		parser_svc.set_peer_services(services)
+
 	# --- 3b. Auto-load services ---
 	for svc_name in config.get("autoload_services", []):
 		svc = services.get(svc_name)

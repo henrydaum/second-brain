@@ -1,18 +1,22 @@
 """
-Parser registry and main entry point.
+Parser registry.
 
 The registry maps (extension, modality) pairs to parser functions.
-Each parser function looks like this: func(path: str, config: dict) -> ParseResult
+Each parser function looks like this: func(path: str, config: dict, services: dict) -> ParseResult
 
 A single extension can have multiple entries for different modalities.
 The first modality registered for an extension becomes its default.
+
+The registry itself is pure state and helper functions. Lifecycle
+(populating the registry by importing parser modules) and the
+services-aware entry point live on ParserService in parserService.py.
 """
 
 import logging
 from pathlib import Path
-from Stage_1.ParseResult import ParseResult
+from Stage_1.services.ParseResult import ParseResult
 
-logger = logging.getLogger("Registry")
+logger = logging.getLogger("ParserRegistry")
 
 
 # ===================================================================
@@ -70,8 +74,10 @@ def parse(path: str, modality: str = None, config: dict = None, services: dict =
     """
     Parse a file and return standardized content.
 
-    This is the single entry point for the entire parser system.
-    Tasks call this when they need to load a file's content.
+    Callers should prefer ``context.services.get("parser").parse(...)`` — the
+    ParserService wraps this function and injects the peer-services dict
+    automatically. This function is exposed for use by the service itself
+    and for the read-only helpers (get_modality, get_supported_extensions).
 
     Args:
         path:       Absolute path to the file.
@@ -79,27 +85,12 @@ def parse(path: str, modality: str = None, config: dict = None, services: dict =
                     "video", "tabular", "container". If None, uses the default
                     modality for this file's extension.
         config:     Optional settings (max_chars, sample_rows, etc.)
+        services:   Peer services dict passed through to parser functions.
 
     Returns:
-        ParseResult with the output in the standard format for the given modality (see ParseResult).
+        ParseResult with the output in the standard format for the given modality.
         If no parser is registered for this (extension, modality) pair,
         returns a failed ParseResult.
-
-    Examples:
-        # Default: PDF -> text
-        result = parse("report.pdf")
-        print(result.output)
-
-        # Explicit: extract images from PDF
-        result = parse("report.pdf", "image")
-        for img in result.output:
-            img.show()
-
-        # Chain multi-modal discovery
-        result = parse("report.pdf")
-        for mode in result.also_contains:
-            extra = parse("report.pdf", mode)
-            display(extra.output)
     """
     if config is None:
         config = {}
@@ -133,8 +124,3 @@ def parse(path: str, modality: str = None, config: dict = None, services: dict =
     except Exception as e:
         logger.error(f"Parser failed for {path_obj.name} as {modality}: {e}")
         return ParseResult.failed(error=str(e), modality=modality)
-
-# Initialize the registry by importing all parsers.
-# Each parser file calls register() at module level, which populates
-# both _REGISTRY and _MODALITY_MAP in one shot.
-from Stage_1.parsers import parse_audio, parse_image, parse_tabular, parse_text, parse_video, parse_container
