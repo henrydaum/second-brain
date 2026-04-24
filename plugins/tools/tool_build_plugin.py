@@ -325,7 +325,7 @@ def _check_service_structure(tree: ast.Module, warnings: list):
 
 
 def _check_import_statement(tree: ast.Module, plugin_type: str, warnings: list):
-    """Check that the code imports the correct Base class from the right stage folder."""
+    """Check that the code imports the correct Base class from the right module."""
     expected_module, expected_names = _EXPECTED_IMPORTS[plugin_type]
 
     for node in ast.iter_child_nodes(tree):
