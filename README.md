@@ -328,9 +328,9 @@ Second Brain/
 │   ├── ui_request.py       # Generic frontend UI request primitive
 │   ├── repl/
 │   │   └── repl.py         # Terminal frontend
-│   ├── telegram/
-│   │   ├── telegram.py     # Telegram bot frontend
-│   │   └── renderers.py    # Telegram media sending
+│   └── telegram/
+│       ├── telegram.py     # Telegram bot frontend
+│       └── renderers.py    # Telegram media sending
 │
 ├── pipeline/
 │   ├── attachment_cache.py # Frontend upload persistence
@@ -345,27 +345,27 @@ Second Brain/
 │   ├── BaseTool.py
 │   ├── plugin_discovery.py # Built-in + sandbox discovery and hot registration
 │   ├── services/
-│       ├── llmService.py
-│       ├── embedService.py
-│       ├── ocrService.py
-│       ├── whisperService.py
-│       ├── webSearchService.py
-│       ├── timekeeperService.py
-│       ├── driveService.py
-│       ├── parserService.py
-│       └── helpers/
-│
+│   │   ├── llmService.py
+│   │   ├── embedService.py
+│   │   ├── ocrService.py
+│   │   ├── whisperService.py
+│   │   ├── webSearchService.py
+│   │   ├── timekeeperService.py
+│   │   ├── driveService.py
+│   │   ├── parserService.py
+│   │   └── helpers/
+│   │
 │   ├── tasks/
-│       ├── task_extract_text.py
-│       ├── task_extract_container.py
-│       ├── task_ocr_images.py
-│       ├── task_chunk_text.py
-│       ├── task_embed_text.py
-│       ├── task_embed_images.py
-│       ├── task_textualize_tabular.py
-│       ├── task_lexical_index.py
-│       └── task_run_subagent.py
-│
+│   │   ├── task_extract_text.py
+│   │   ├── task_extract_container.py
+│   │   ├── task_ocr_images.py
+│   │   ├── task_chunk_text.py
+│   │   ├── task_embed_text.py
+│   │   ├── task_embed_images.py
+│   │   ├── task_textualize_tabular.py
+│   │   ├── task_lexical_index.py
+│   │   └── task_run_subagent.py
+│   │
 │   └── tools/
 │       ├── tool_hybrid_search.py
 │       ├── tool_lexical_search.py
