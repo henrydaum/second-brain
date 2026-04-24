@@ -1,28 +1,10 @@
 # Second Brain
 
-Second Brain is exactly what it sounds like.
+Second Brain is an attempt to make a digital brain that approximates the real thing. It's part knowledge engine, part personal operator, and part programmable automation layer.
 
-It watches your folders, parses what it finds, builds a structured index in SQLite, and gives an LLM the tools to search, reason, act, schedule work, remember things, and extend the system itself. 
+It continuously indexes your files, remembers durable context, searches the web when local knowledge is not enough, runs tools and shell commands, and can spin up background subagents that act on schedules or events. It lives in your terminal and Telegram, so your assistant is available everywhere.
 
-Why Second Brain:
-1. When the files you want to ask about are too large or too numerous for Claude, OpenAI, or Gemini.
-2. When OpenClaw and Hermes are too bloated for your use-case.
-3. You want an AI that will automatically sync to your Google Drive files.
-4. You want all of these things, and you want to have them all from your phone.
-
-Second Brain is a private, always-on AI runtime for your data:
-
-- a searchable file index
-- a natural-language analyst
-- a background scheduler
-- an event-driven automation system
-- a Telegram assistant
-- a memory-backed agent
-- a plugin platform that can author new tools, tasks, and services at runtime
-
-**Q:** How do you see this evolving into something truly revolutionary for how we interact with information?
-
-**A:** The deep filesystem access is very different from how other agents interact with data. Other agents can create, update, and delete individual files but they have no built-in way of aggregating data from entire hard drives. This capability is built into Second Brain, plus it syncs automatically. You can decide exactly how to process all of your files.
+Instead of being "just a chatbot," it turns your machine into a system that can observe, search, reason, and act. Point it at your world, give it tools, and it becomes a private AI layer for research, reminders, recurring work, and everyday operations.
 
 ## Why It Matters
 
