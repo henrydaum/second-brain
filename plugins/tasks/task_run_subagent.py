@@ -4,10 +4,12 @@ import time
 from pathlib import Path
 
 from plugins.services.helpers.parser_registry import get_modality
+from plugins.services.llmService import LLMRouter, _profile_service_name
 from plugins.BaseTask import BaseTask, TaskResult
 from agent.agent import Agent
 from agent.system_prompt import build_system_prompt
 from agent.tool_registry import ToolRegistry
+from runtime.agent_scope import load_scope, scoped_db, scoped_registry
 from frontend.token_stripper import strip_model_tokens
 from agent.subagent_runtime import (
     PushSubagentMessageTool,
@@ -43,6 +45,10 @@ class RunSubagent(BaseTask):
                 "type": "array",
                 "description": "Optional list of file paths to include as inputs.",
             },
+            "agent": {
+                "type": "string",
+                "description": "Optional agent profile name to run under. Defaults to the active profile.",
+            },
         },
         "required": ["prompt"],
     }
@@ -56,6 +62,7 @@ class RunSubagent(BaseTask):
             title TEXT,
             prompt TEXT,
             final_answer TEXT,
+            agent TEXT,
             created_at REAL
         );
 
@@ -80,12 +87,9 @@ class RunSubagent(BaseTask):
     timeout = 900
 
     def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
-        llm = context.services.get("llm")
-        if llm is None or not getattr(llm, "loaded", False):
+        router = context.services.get("llm")
+        if router is None or not getattr(router, "loaded", False):
             return TaskResult.failed("LLM service is not loaded.")
-
-        if getattr(llm, "active", None) is None and hasattr(llm, "active"):
-            return TaskResult.failed("No active LLM profile is loaded.")
 
         if context.tool_registry is None:
             return TaskResult.failed("Tool registry is not available to background tasks.")
@@ -93,6 +97,38 @@ class RunSubagent(BaseTask):
         prompt = (payload.get("prompt") or "").strip()
         if not prompt:
             return TaskResult.failed("Subagent payload is missing 'prompt'.")
+
+        # Resolve which agent profile this run should use. Empty or missing
+        # "agent" falls back to the currently active profile — same behavior
+        # as before the multi-agent work.
+        requested_agent = (payload.get("agent") or "").strip()
+        target_agent = (
+            requested_agent
+            or (getattr(router, "_active_name", None) or "")
+            or context.config.get("active_llm_profile") or ""
+        ).strip()
+        if not target_agent:
+            return TaskResult.failed("No agent profile is active and none was specified.")
+
+        # Resolve the per-profile LLM service. Load it if necessary so subagents
+        # targeting a non-default profile don't silently fall back.
+        llm = context.services.get(_profile_service_name(target_agent)) if isinstance(router, LLMRouter) else router
+        if llm is None:
+            return TaskResult.failed(f"Unknown agent profile: '{target_agent}'.")
+        if not getattr(llm, "loaded", False):
+            try:
+                llm.load()
+            except Exception as e:
+                return TaskResult.failed(f"Failed to load agent profile '{target_agent}': {e}")
+            if not getattr(llm, "loaded", False):
+                return TaskResult.failed(f"Agent profile '{target_agent}' did not load.")
+
+        try:
+            scope = load_scope(target_agent, context.config)
+        except ValueError as e:
+            return TaskResult.failed(f"Invalid scope for agent '{target_agent}': {e}")
+
+        sub_db = scoped_db(context.db, scope) if scope.has_table_filter else context.db
 
         title = (payload.get("title") or "").strip()
         timekeeper_meta = payload.get("_timekeeper") or {}
@@ -107,7 +143,8 @@ class RunSubagent(BaseTask):
         input_rows, compiled_prompt, image_paths = self._compile_prompt(prompt, input_paths, context)
         push_records: list[SubagentPushRecord] = []
 
-        sub_registry = self._build_subagent_registry(context, run_id, job_name, push_records)
+        sub_registry = self._build_subagent_registry(context, run_id, job_name, push_records, scope, sub_db)
+        # Conversations go through the base db — the scope wrapper is read-only.
         conversation_id = context.db.create_conversation(conversation_title[:200])
 
         def _on_message(msg: dict):
@@ -133,7 +170,7 @@ class RunSubagent(BaseTask):
             llm,
             sub_registry,
             context.config,
-            system_prompt=lambda: self._build_subagent_prompt(context, sub_registry),
+            system_prompt=lambda: self._build_subagent_prompt(context, sub_registry, sub_db, scope),
             on_message=_on_message,
         )
 
@@ -147,27 +184,48 @@ class RunSubagent(BaseTask):
         if clean_answer.startswith("Error: no active LLM profile loaded"):
             return TaskResult.failed(clean_answer)
 
-        self._persist_run(context, run_id, job_name, conversation_id, conversation_title, prompt, clean_answer, input_rows, push_records)
+        self._persist_run(
+            context, run_id, job_name, conversation_id, conversation_title, prompt,
+            clean_answer, input_rows, push_records, target_agent,
+        )
         return TaskResult(success=True)
 
-    def _build_subagent_registry(self, context, run_id: str, job_name: str, push_records: list[SubagentPushRecord]) -> ToolRegistry:
-        registry = ToolRegistry(context.db, context.config, context.services)
+    def _build_subagent_registry(self, context, run_id: str, job_name: str,
+                                 push_records: list[SubagentPushRecord],
+                                 scope, sub_db) -> ToolRegistry:
+        # Build the registry against the scoped db so tools see the lens.
+        registry = ToolRegistry(sub_db, context.config, context.services)
         registry.orchestrator = context.orchestrator
 
+        allow = scope.tools_allow
+        deny = scope.tools_deny or set()
+
         for tool in context.tool_registry.tools.values():
-            if getattr(tool, "agent_enabled", False) and getattr(tool, "background_safe", True):
-                registry.register(tool)
+            name = tool.name
+            if not getattr(tool, "agent_enabled", False):
+                continue
+            if not getattr(tool, "background_safe", True):
+                continue
+            if allow is not None and name not in allow:
+                continue
+            if name in deny:
+                continue
+            registry.register(tool)
 
         def _record_push(record: SubagentPushRecord):
             push_records.append(record)
 
+        # push_subagent_message is the only way a subagent reaches the user,
+        # so it is always registered regardless of scope.
         registry.register(PushSubagentMessageTool(run_id, job_name, _record_push))
         return registry
 
-    def _build_subagent_prompt(self, context, sub_registry) -> str:
-        base = build_system_prompt(context.db, context.orchestrator, sub_registry, context.services)
+    def _build_subagent_prompt(self, context, sub_registry, sub_db, scope) -> str:
+        base = build_system_prompt(sub_db, context.orchestrator, sub_registry, context.services)
+        scope_suffix = ("\n\n" + scope.prompt_suffix) if scope and scope.prompt_suffix else ""
         return (
             base
+            + scope_suffix
             + "\n\n## Scheduled subagent\n"
             + "You are running unattended on a schedule.\n"
             + "Work as if no one will answer follow-up questions during this run.\n"
@@ -251,7 +309,8 @@ class RunSubagent(BaseTask):
         return f"\n[Input file: {path}]\n{raw}"
 
     def _persist_run(self, context, run_id: str, job_name: str, conversation_id: int, title: str,
-                     prompt: str, final_answer: str, input_rows: list[dict], push_records: list[SubagentPushRecord]):
+                     prompt: str, final_answer: str, input_rows: list[dict],
+                     push_records: list[SubagentPushRecord], agent_name: str):
         run_row = (
             run_id,
             job_name,
@@ -259,6 +318,7 @@ class RunSubagent(BaseTask):
             title,
             prompt,
             final_answer,
+            agent_name,
             time.time(),
         )
         filled_inputs = [
@@ -274,8 +334,8 @@ class RunSubagent(BaseTask):
             context.db.conn.execute(
                 """
                 INSERT OR REPLACE INTO subagent_runs
-                (run_id, job_name, conversation_id, title, prompt, final_answer, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (run_id, job_name, conversation_id, title, prompt, final_answer, agent, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 run_row,
             )

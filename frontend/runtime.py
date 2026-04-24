@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from agent.agent import Agent
 from agent.history_utils import heal_orphan_tool_calls
 from agent.system_prompt import build_system_prompt
+from runtime.agent_scope import load_scope, scoped_db, scoped_registry
 from events.event_bus import bus
 from events.event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED, CHAT_MESSAGE_PUSHED
 from frontend.commands import CommandRegistry, register_core_commands
@@ -85,6 +86,7 @@ class FrontendRuntime:
             get_agent=lambda: state.agent,
             set_conversation_id=lambda conv_id: setattr(state, "conversation_id", conv_id),
             refresh_agent=refresh_agent or (lambda: self.refresh_agent(session)),
+            rescope_agents=self.rescope_all_agents,
         )
         for entry in overrides or []:
             registry.register(entry)
@@ -93,16 +95,47 @@ class FrontendRuntime:
     def set_prompt_suffix(self, session: FrontendSession, prompt_suffix: str = ""):
         self.get_state(session).prompt_suffix = prompt_suffix or ""
 
+    def _active_scope(self):
+        """Resolve the scope for the currently active agent profile, if any.
+
+        Returns ``None`` when no profile is active or the profile declares
+        no restrictions — in that case the main agent uses the unrestricted
+        tool registry and database directly.
+        """
+        profile_name = self.config.get("active_llm_profile")
+        if not profile_name:
+            return None
+        try:
+            scope = load_scope(profile_name, self.config)
+        except ValueError as e:
+            logger.warning(f"Invalid scope for profile '{profile_name}': {e}")
+            return None
+        if not (scope.has_tool_filter or scope.has_table_filter or scope.prompt_suffix):
+            return None
+        return scope
+
     def build_agent(self, session: FrontendSession) -> Agent | None:
         llm = self.services.get("llm")
         if llm is None or not getattr(llm, "loaded", False):
             return None
         caps = self.adapters[session.platform].capabilities
+        scope = self._active_scope()
+        # Scope the DB and tool registry up-front; both fall back to the
+        # unrestricted originals when the active profile has no filters.
+        agent_db = scoped_db(self.ctrl.db, scope) if scope else self.ctrl.db
+        agent_registry = scoped_registry(self.tool_registry, scope) if scope else self.tool_registry
+
+        def _system_prompt():
+            base = build_system_prompt(
+                agent_db, self.ctrl.orchestrator, agent_registry, self.ctrl.services
+            )
+            suffix = self.get_state(session).prompt_suffix
+            scope_suffix = ("\n\n" + scope.prompt_suffix) if (scope and scope.prompt_suffix) else ""
+            return base + suffix + scope_suffix
+
         return Agent(
-            llm, self.tool_registry, self.config,
-            system_prompt=lambda: build_system_prompt(
-                self.ctrl.db, self.ctrl.orchestrator, self.ctrl.tool_registry, self.ctrl.services
-            ) + self.get_state(session).prompt_suffix,
+            llm, agent_registry, self.config,
+            system_prompt=_system_prompt,
             on_message=lambda msg: self._persist_message(session, msg),
             on_tool_start=lambda tool_name: self._on_tool_start(session, tool_name, caps),
             on_tool_result=lambda tool_name, result: self._on_tool_result(session, tool_name, result, caps),
@@ -120,6 +153,31 @@ class FrontendRuntime:
         state.agent = self.build_agent(session)
         state.status_ids.clear()
         return state.agent
+
+    def rescope_agent(self, session: FrontendSession) -> Agent | None:
+        """Rebuild the agent for a session while preserving its chat history.
+
+        Used after ``/agent switch`` so the same conversation carries over to
+        the new profile but now runs against the new scope's db and toolset.
+        """
+        state = self.get_state(session)
+        preserved_history = list(state.agent.history) if state.agent else []
+        state.agent = self.build_agent(session)
+        state.status_ids.clear()
+        if state.agent is not None and preserved_history:
+            state.agent.history = preserved_history
+            heal_orphan_tool_calls(state.agent.history)
+        return state.agent
+
+    def rescope_all_agents(self) -> None:
+        """Rescope every session's agent. Called after the global active
+        profile changes so subsequent messages on any frontend pick up the
+        new scope immediately."""
+        for key, state in self._states.items():
+            session = state.last_session
+            if session is None or state.agent is None:
+                continue
+            self.rescope_agent(session)
 
     def begin_turn(self, session: FrontendSession) -> int | None:
         state = self.get_state(session)

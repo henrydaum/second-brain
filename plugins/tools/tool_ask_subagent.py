@@ -31,6 +31,10 @@ class AskSubagent(BaseTool):
                 "type": "string",
                 "description": "Optional short title for the run. Useful for labeling the saved conversation and run history.",
             },
+            "agent": {
+                "type": "string",
+                "description": "Optional agent profile name to run under (see /agent list). Leave blank to use the current active profile.",
+            },
             "timeout_seconds": {
                 "type": "integer",
                 "description": "Maximum time to wait before giving up. Note: the parent agent's per-tool max_calls budget is usually a tighter ceiling than this timeout. Default 600.",
@@ -70,6 +74,7 @@ class AskSubagent(BaseTool):
         input_paths = [str(p) for p in input_paths if str(p).strip()]
 
         title = str(kwargs.get("title") or "").strip()
+        agent_name = str(kwargs.get("agent") or "").strip()
         timeout_seconds = self._coerce_timeout(kwargs.get("timeout_seconds"), default=600)
         poll_interval = self._coerce_poll(kwargs.get("poll_interval_seconds"), default=1.0)
 
@@ -79,6 +84,7 @@ class AskSubagent(BaseTool):
             "title": title,
             "job_name": "ask_subagent",
             "input_paths": input_paths,
+            "agent": agent_name,
             "_ask_subagent": {
                 "request_token": request_token,
                 "requested_at": time.time(),

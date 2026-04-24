@@ -370,7 +370,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         all_settings = list(SETTINGS_DATA) + list(get_plugin_settings())
         buttons = []
         for title, key, _desc, _default, _type_info in all_settings:
-            # Skip settings with dedicated commands (/model, /schedule).
+            # Skip settings with dedicated commands (/agent, /schedule).
             if isinstance(_type_info, dict) and _type_info.get("hidden") is True:
                 continue
             # Telegram callback_data max 64 bytes — use key directly
@@ -433,10 +433,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             f"{hint}\n\nSend the new value (or /cancel):",
             parse_mode="HTML")
 
-    # ── /model add interactive form ─────────────────────────────────
+    # ── /agent add interactive form ─────────────────────────────────
 
     async def _start_model_add_form(chat_id: int, profile_name: str):
-        """Begin interactive /model add parameter collection."""
+        """Begin interactive /agent add parameter collection."""
         _pending_model_adds[chat_id] = PendingParamForm(subject=profile_name, params=MODEL_ADD_PARAMS)
         await _app.bot.send_message(
             chat_id,
@@ -450,7 +450,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         await _ask_next_form_param(chat_id, _pending_model_adds, _execute_model_add, "mdladd")
 
     async def _execute_model_add(chat_id: int):
-        """Finish the /model add form and register the profile."""
+        """Finish the /agent add form and register the profile."""
         state = _pending_model_adds.pop(chat_id, None)
         if not state:
             return
@@ -471,7 +471,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         result = await _dispatch_frontend_event(FrontendEvent(
             type="slash_command",
             session=_session(chat_id),
-            command_name="model",
+            command_name="agent",
             command_arg=f"add {profile_name} {json.dumps(collected)}",
         ))
         if result.text:
@@ -996,8 +996,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 if started:
                     return
 
-        # /model — show subcommand menu or profile picker
-        if cmd_name == "model":
+        # /agent — show subcommand menu or profile picker
+        if cmd_name == "agent":
             if not arg:
                 # Show subcommand menu
                 buttons = [
@@ -1008,7 +1008,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     [InlineKeyboardButton("Remove profile", callback_data="mdl:pick:remove")],
                 ]
                 await update.message.reply_text(
-                    "LLM Profile Manager:",
+                    "Agent Profile Manager:",
                     reply_markup=InlineKeyboardMarkup(buttons))
                 return
             # If arg is a subcommand needing a profile, show picker
@@ -1016,7 +1016,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             if sub in ("switch", "remove", "show") and len(arg.strip().split()) == 1:
                 profiles = config.get("llm_profiles", {})
                 if not profiles:
-                    await update.message.reply_text("No LLM profiles configured.")
+                    await update.message.reply_text("No agent profiles configured.")
                     return
                 buttons = [[InlineKeyboardButton(
                     f"{'* ' if config.get('active_llm_profile') == n else ''}{n}",
@@ -1092,7 +1092,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         f"Invalid value for {param.name} ({param.type}): {e}\nTry again.")
                 return
 
-        # Check for pending /model add form input
+        # Check for pending /agent add form input
         if chat_id in _pending_model_adds:
             state = _pending_model_adds[chat_id]
             if state.awaiting_name:
@@ -1421,7 +1421,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     result = await _dispatch_frontend_event(FrontendEvent(
                         type="callback_response",
                         session=_session(chat_id),
-                        payload={"kind": "command", "command_name": "model", "command_arg": "list"},
+                        payload={"kind": "command", "command_name": "agent", "command_arg": "list"},
                     ))
                     if result.text:
                         await transport.send_long_message(chat_id, result.text)
@@ -1438,7 +1438,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     sub = name
                     profiles = config.get("llm_profiles", {})
                     if not profiles:
-                        await _app.bot.send_message(chat_id, "No LLM profiles configured.")
+                        await _app.bot.send_message(chat_id, "No agent profiles configured.")
                     else:
                         buttons = [[InlineKeyboardButton(
                             f"{'* ' if config.get('active_llm_profile') == n else ''}{n}",
@@ -1451,7 +1451,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     result = await _dispatch_frontend_event(FrontendEvent(
                         type="callback_response",
                         session=_session(chat_id),
-                        payload={"kind": "command", "command_name": "model", "command_arg": f"{action} {name}"},
+                        payload={"kind": "command", "command_name": "agent", "command_arg": f"{action} {name}"},
                     ))
                     if result.text:
                         await transport.send_long_message(chat_id, result.text)

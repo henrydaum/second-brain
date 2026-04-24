@@ -174,9 +174,15 @@ class Database:
 				title TEXT,
 				prompt TEXT,
 				final_answer TEXT,
+				agent TEXT,
 				created_at REAL
 			)
 		""")
+		# Migration: add agent column for existing databases
+		try:
+			self.conn.execute("ALTER TABLE subagent_runs ADD COLUMN agent TEXT")
+		except sqlite3.OperationalError:
+			pass  # column already exists
 		self.conn.execute("""
 			CREATE INDEX IF NOT EXISTS idx_subagent_runs_conversation
 			ON subagent_runs(conversation_id)

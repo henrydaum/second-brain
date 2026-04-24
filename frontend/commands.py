@@ -107,7 +107,7 @@ def _mask_api_key(value: str) -> str:
 
 
 def _describe_profile(name: str, profile: dict, active: bool, loaded: bool = False) -> str:
-    """Render a single profile line for /model list."""
+    """Render a single profile line for /agent list."""
     marker = "*" if active else " "
     status = "active" if active else ("loaded" if loaded else "")
     cls = profile.get("llm_service_class") or "?"
@@ -119,13 +119,23 @@ def _describe_profile(name: str, profile: dict, active: bool, loaded: bool = Fal
         ctx_str = f"ctx {ctx}"
     else:
         ctx_str = "ctx auto"
+    scope_parts = []
+    if profile.get("tools_allow") is not None:
+        scope_parts.append(f"tools+{len(profile['tools_allow'])}")
+    elif profile.get("tools_deny") is not None:
+        scope_parts.append(f"tools-{len(profile['tools_deny'])}")
+    if profile.get("tables_allow") is not None:
+        scope_parts.append(f"tables+{len(profile['tables_allow'])}")
+    elif profile.get("tables_deny") is not None:
+        scope_parts.append(f"tables-{len(profile['tables_deny'])}")
+    scope_str = ("  [" + ",".join(scope_parts) + "]") if scope_parts else ""
     return (f"  {marker} {name:<16} {status:<8} "
-            f"{cls:<14} {model:<24} ({ctx_str})")
+            f"{cls:<14} {model:<24} ({ctx_str}){scope_str}")
 
 
 def register_core_commands(registry: CommandRegistry, ctrl, services, tool_registry,
                            root_dir, get_agent=None, set_conversation_id=None,
-                           refresh_agent=None):
+                           refresh_agent=None, rescope_agents=None):
     """Register commands shared by Telegram and REPL.
 
     These are pure ctrl-wrapper commands with no UI-specific side effects.
@@ -139,9 +149,14 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         refresh_agent:       Optional callable() that rebuilds the frontend's Agent
                              instance, preserving conversation history. Used by
                              /refresh to recover from a stuck tool call.
+        rescope_agents:      Optional callable() invoked after the active agent
+                             profile changes, so existing session agents pick up
+                             the new scope (tool filter, table filter, prompt
+                             suffix) on their next message.
     """
     _set_conversation_id = set_conversation_id
     _refresh_agent = refresh_agent
+    _rescope_agents = rescope_agents
     import json as _json
     import config.config_manager as _cm
     from config.config_data import SETTINGS_DATA as _SD
@@ -168,7 +183,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
 
         Settings flagged ``"hidden": True`` in their type_info are excluded —
         these keys (e.g. ``llm_profiles``, ``scheduled_jobs``) have dedicated
-        commands (``/model``, ``/schedule``) and should not appear in
+        commands (``/agent``, ``/schedule``) and should not appear in
         ``/config`` or ``/configure``.
         """
         merged = dict(_core_map)
@@ -418,9 +433,10 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         fn()
         return "Restarting — the process will come back up in a few seconds."
 
-    def _cmd_model(arg):
-        """Handler for /model — manage LLM profiles."""
+    def _cmd_agent(arg):
+        """Handler for /agent — manage agent profiles (model + optional scope)."""
         from plugins.services.llmService import LLMRouter
+        from runtime.agent_scope import load_scope
 
         router = services.get("llm")
         if not isinstance(router, LLMRouter):
@@ -433,10 +449,10 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         if sub in ("list", "ls"):
             infos = router.list_profiles()
             if not infos:
-                return ("No LLM profiles configured. "
-                        "Run /model add <name> {json} to create one.")
+                return ("No agent profiles configured. "
+                        "Run /agent add <name> {json} to create one.")
             active_name = ctrl.config.get("active_llm_profile")
-            lines = ["LLM Profiles:"]
+            lines = ["Agent Profiles:"]
             for p in infos:
                 profile = ctrl.config.get("llm_profiles", {}).get(p["name"], {})
                 lines.append(_describe_profile(
@@ -449,11 +465,17 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         elif sub == "switch":
             name = rest.strip()
             if not name:
-                return "Usage: /model switch <profile_name>"
+                return "Usage: /agent switch <profile_name>"
             profiles = ctrl.config.get("llm_profiles", {})
             if name not in profiles:
                 return (f"Unknown profile: '{name}'. "
-                        f"Run /model list to see all profiles.")
+                        f"Run /agent list to see all profiles.")
+            # Validate scope up-front so a bad manifest is rejected here
+            # rather than silently ignored when the agent runs.
+            try:
+                load_scope(name, ctrl.config)
+            except ValueError as e:
+                return f"Cannot switch to '{name}': {e}"
             result = router.switch(name)
             ctrl.config["active_llm_profile"] = name
             _cm.save(ctrl.config)
@@ -462,6 +484,11 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                 existing = _cm.load_plugin_config()
                 existing["active_llm_profile"] = name
                 _cm.save_plugin_config(existing)
+            if _rescope_agents:
+                try:
+                    _rescope_agents()
+                except Exception as e:
+                    logger.warning(f"Rescope after /agent switch failed: {e}")
             return result
 
         elif sub == "add":
@@ -469,12 +496,14 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             name = add_parts[0] if add_parts else ""
             json_str = add_parts[1] if len(add_parts) > 1 else ""
             if not name:
-                return ("Usage: /model add <profile_name> {json}\n"
+                return ("Usage: /agent add <profile_name> {json}\n"
                         "Keys: llm_model_name, llm_endpoint, llm_api_key, "
-                        "llm_context_size, llm_service_class (OpenAILLM|LMStudioLLM)")
+                        "llm_context_size, llm_service_class (OpenAILLM|LMStudioLLM). "
+                        "Optional scope: prompt_suffix, tools_allow, tools_deny, "
+                        "tables_allow, tables_deny.")
             if not json_str:
-                return ("Usage: /model add <profile_name> {json}\n"
-                        "Example: /model add mymodel "
+                return ("Usage: /agent add <profile_name> {json}\n"
+                        "Example: /agent add mymodel "
                         '{\"llm_model_name\": \"gpt-4\", \"llm_endpoint\": \"\", '
                         '\"llm_api_key\": \"OPENAI_API_KEY\", \"llm_context_size\": 0, '
                         '\"llm_service_class\": \"OpenAILLM\"}')
@@ -485,6 +514,12 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
 
             profiles = ctrl.config.setdefault("llm_profiles", {})
             profiles[name] = profile
+            # Validate scope before registering so a bad manifest is rejected.
+            try:
+                load_scope(name, ctrl.config)
+            except ValueError as e:
+                del profiles[name]
+                return f"Invalid scope for '{name}': {e}"
             router.add_profile(name, profile)
             _cm.save(ctrl.config)
             pk = _plugin_keys()
@@ -498,20 +533,26 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                 ctrl.config["active_llm_profile"] = name
                 router.switch(name)
                 _cm.save(ctrl.config)
+                if _rescope_agents:
+                    try:
+                        _rescope_agents()
+                    except Exception as e:
+                        logger.warning(f"Rescope after /agent add failed: {e}")
                 return f"Profile '{name}' added and set as active."
             return f"Profile '{name}' added."
 
         elif sub == "remove":
             name = rest.strip()
             if not name:
-                return "Usage: /model remove <profile_name>"
+                return "Usage: /agent remove <profile_name>"
             profiles = ctrl.config.get("llm_profiles", {})
             if name not in profiles:
                 return (f"Unknown profile: '{name}'. "
-                        f"Run /model list to see all profiles.")
+                        f"Run /agent list to see all profiles.")
+            was_active = ctrl.config.get("active_llm_profile") == name
             router.remove_profile(name)
             del profiles[name]
-            if ctrl.config.get("active_llm_profile") == name:
+            if was_active:
                 remaining = list(profiles.keys())
                 if remaining:
                     ctrl.config["active_llm_profile"] = remaining[0]
@@ -524,16 +565,21 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                 existing = _cm.load_plugin_config()
                 existing["llm_profiles"] = profiles
                 _cm.save_plugin_config(existing)
+            if was_active and _rescope_agents:
+                try:
+                    _rescope_agents()
+                except Exception as e:
+                    logger.warning(f"Rescope after /agent remove failed: {e}")
             return f"Profile '{name}' removed."
 
         elif sub == "show":
             name = rest.strip()
             if not name:
-                return "Usage: /model show <profile_name>"
+                return "Usage: /agent show <profile_name>"
             profiles = ctrl.config.get("llm_profiles", {})
             if name not in profiles:
                 return (f"Unknown profile: '{name}'. "
-                        f"Run /model list to see all profiles.")
+                        f"Run /agent list to see all profiles.")
             # Mask API keys
             display = dict(profiles[name])
             if "llm_api_key" in display:
@@ -631,7 +677,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         return (f"Unknown subcommand: '{sub}'. "
                 f"Use: list, show, enable, disable, delete, run, create.")
 
-    _model_completions = lambda: (
+    _agent_completions = lambda: (
         ["list", "switch", "add", "remove", "show"]
         + sorted(ctrl.config.get("llm_profiles", {}).keys())
     )
@@ -750,9 +796,9 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      "<setting_name> <value>",
                      handler=_cmd_configure,
                      category="Config & System"),
-        CommandEntry("model", "Manage LLM profiles",
+        CommandEntry("agent", "Manage agent profiles (model + optional scope)",
                      "[list|switch|add|remove|show] [args]",
-                     handler=_cmd_model, arg_completions=_model_completions,
+                     handler=_cmd_agent, arg_completions=_agent_completions,
                      category="Config & System"),
         CommandEntry("schedule", "Manage scheduled jobs",
                      "[list|show|enable|disable|delete|run|create] [args]",

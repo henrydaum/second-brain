@@ -591,53 +591,76 @@ def _build_llm_from_profile(profile: dict) -> BaseLLM:
 # internally so the agent and service registry stay unchanged.
 # =====================================================================
 
+PROFILE_SERVICE_PREFIX = "llm_"
+
+
+def _profile_service_name(name: str) -> str:
+    return f"{PROFILE_SERVICE_PREFIX}{name}"
+
+
 class LLMRouter(BaseLLM):
 
     config_settings = [
         ("LLM Profiles", "llm_profiles",
-         "Named LLM configurations. Managed via /model command.",
+         "Named agent profiles (model + optional tool/table scope). Managed via /agent command.",
          {},
          {"type": "json_dict", "hidden": True}),
 
         ("Active LLM Profile", "active_llm_profile",
-         "Name of the currently active LLM profile.",
+         "Name of the currently active agent profile.",
          "",
          {"type": "text", "hidden": True}),
     ]
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, services: dict | None = None):
         super().__init__()
         self.config = config
-        self._profiles: dict[str, BaseLLM] = {}
+        # Each profile lives in *services* as "llm_<name>" — the router
+        # delegates to whichever one is active. Holding a reference keeps
+        # router state synced with the registry.
+        self.services: dict = services if services is not None else {}
         self._active_name: str | None = None
         self.model_name = "LLM Router"
 
+    def _profile_names(self) -> list[str]:
+        return [
+            n[len(PROFILE_SERVICE_PREFIX):]
+            for n in self.services
+            if n.startswith(PROFILE_SERVICE_PREFIX)
+        ]
+
+    def _profile_instance(self, name: str | None) -> BaseLLM | None:
+        if not name:
+            return None
+        return self.services.get(_profile_service_name(name))
+
     @property
     def active(self) -> BaseLLM | None:
-        return self._profiles.get(self._active_name)
+        return self._profile_instance(self._active_name)
 
     # --- Profile management ---
 
     def add_profile(self, name: str, profile_config: dict):
-        """Instantiate an LLM from profile config and store it."""
-        self._profiles[name] = _build_llm_from_profile(profile_config)
+        """Instantiate an LLM from profile config and register it as a service."""
+        self.services[_profile_service_name(name)] = _build_llm_from_profile(profile_config)
 
     def remove_profile(self, name: str) -> str:
-        """Unload and remove a profile."""
-        llm = self._profiles.pop(name, None)
+        """Unload and remove a profile's underlying service."""
+        llm = self.services.pop(_profile_service_name(name), None)
         if llm and llm.loaded:
             llm.unload()
         if self._active_name == name:
-            self._active_name = next(iter(self._profiles), None)
+            remaining = self._profile_names()
+            self._active_name = remaining[0] if remaining else None
             self._mirror_active()
         return f"Profile '{name}' removed."
 
     def switch(self, name: str) -> str:
         """Switch the active profile. Loads the new one if not already loaded."""
-        if name not in self._profiles:
+        llm = self._profile_instance(name)
+        if llm is None:
             return f"Unknown profile: '{name}'"
         self._active_name = name
-        llm = self.active
         if not llm.loaded:
             llm.load()
         self._mirror_active()
@@ -648,7 +671,7 @@ class LLMRouter(BaseLLM):
         profiles = self.config.get("llm_profiles", {})
         result = []
         for name, pconf in profiles.items():
-            llm = self._profiles.get(name)
+            llm = self._profile_instance(name)
             result.append({
                 "name": name,
                 "model": pconf.get("llm_model_name", "?"),
@@ -676,24 +699,29 @@ class LLMRouter(BaseLLM):
             self.config["llm_profiles"] = profiles
             self.config["active_llm_profile"] = "default"
 
-        # Instantiate LLM objects for profiles not yet created
+        # Ensure an instance exists in services for each profile
         for name, pconf in profiles.items():
-            if name not in self._profiles:
-                self._profiles[name] = _build_llm_from_profile(pconf)
+            key = _profile_service_name(name)
+            if key not in self.services:
+                self.services[key] = _build_llm_from_profile(pconf)
 
-        # Remove profiles deleted from config
-        for name in list(self._profiles):
-            if name not in profiles:
-                if self._profiles[name].loaded:
-                    self._profiles[name].unload()
-                del self._profiles[name]
+        # Remove services for profiles deleted from config
+        for key in list(self.services):
+            if not key.startswith(PROFILE_SERVICE_PREFIX):
+                continue
+            profile_name = key[len(PROFILE_SERVICE_PREFIX):]
+            if profile_name not in profiles:
+                llm = self.services[key]
+                if getattr(llm, "loaded", False):
+                    llm.unload()
+                del self.services[key]
 
         # Set active
         active = self.config.get("active_llm_profile", "")
-        if active and active in self._profiles:
+        if active and self._profile_instance(active):
             self._active_name = active
-        elif self._profiles:
-            self._active_name = next(iter(self._profiles))
+        elif profiles:
+            self._active_name = next(iter(profiles))
 
     def _mirror_active(self):
         """Copy key attributes from the active LLM to the router."""
@@ -719,9 +747,11 @@ class LLMRouter(BaseLLM):
         return False
 
     def unload(self):
-        for llm in self._profiles.values():
-            if llm.loaded:
-                llm.unload()
+        for key, svc in list(self.services.items()):
+            if not key.startswith(PROFILE_SERVICE_PREFIX):
+                continue
+            if getattr(svc, "loaded", False):
+                svc.unload()
         self.loaded = False
         self.model_name = "LLM Router"
         logger.info("All LLM profiles unloaded.")
@@ -751,5 +781,33 @@ class LLMRouter(BaseLLM):
 
 
 def build_services(config: dict) -> dict:
-    router = LLMRouter(config)
-    return {"llm": router}
+    """Expose each agent profile as its own ``llm_<name>`` service plus a
+    routing ``llm`` alias that delegates to the active one.
+
+    The router stores a reference to the returned dict so profile mutations
+    (``add_profile``/``remove_profile``) and service registry views stay in
+    lockstep.
+    """
+    services: dict = {}
+
+    profiles = config.get("llm_profiles", {})
+    # One-time migration from the old flat keys. Mirrors LLMRouter._sync_from_config
+    # so the profile services are present from startup, not just after first load.
+    if not profiles and config.get("llm_model_name"):
+        profiles = {
+            "default": {
+                "llm_model_name": config.get("llm_model_name", ""),
+                "llm_endpoint": config.get("llm_endpoint", ""),
+                "llm_api_key": config.get("llm_api_key", "OPENAI_API_KEY"),
+                "llm_context_size": config.get("llm_context_size", 0),
+                "llm_service_class": "OpenAILLM",
+            }
+        }
+        config["llm_profiles"] = profiles
+        config["active_llm_profile"] = "default"
+
+    for name, pconf in profiles.items():
+        services[_profile_service_name(name)] = _build_llm_from_profile(pconf)
+
+    services["llm"] = LLMRouter(config, services)
+    return services

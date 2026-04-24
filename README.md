@@ -452,12 +452,12 @@ Minimal example:
 }
 ```
 
-You will need an LLM API key. A MiniMax API key for $10/month is more than sufficient for basic operations with their M2.7 model. If you are writing complicated plugins, I recommend a stronger model like Claude Opus, GPT 5.4, or higher. Use /model to build a new model profile with your key.
+You will need an LLM API key. A MiniMax API key for $10/month is more than sufficient for basic operations with their M2.7 model. If you are writing complicated plugins, I recommend a stronger model like Claude Opus, GPT 5.4, or higher. Use /agent to build a new agent profile with your key.
 
 Notes:
 
 - Tool calling not available with LM Studio.
-- `LLMRouter` supports multiple named profiles and switching between them with `/model`.
+- `LLMRouter` supports multiple named agent profiles (model + optional tool/table scope) and switching between them with `/agent`.
 - `timekeeper` and `web_search_provider` are good defaults to autoload because they power scheduling and web search; `llm` is needed for basic functioning.
 - Brave Search and Brave Answers are optional and configured through plugin settings.
 
