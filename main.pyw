@@ -26,15 +26,15 @@ logging.getLogger().addHandler(_file_handler)
 
 logger = logging.getLogger("Main")
 
-import config_manager
-from Stage_2.database import Database
-from Stage_2.orchestrator import Orchestrator
-from Stage_2.watcher import Watcher
-from Stage_2.event_trigger import EventTrigger
-from controller import Controller
-from Stage_3.tool_registry import ToolRegistry
+from config import config_manager
+from pipeline.database import Database
+from pipeline.orchestrator import Orchestrator
+from pipeline.watcher import Watcher
+from pipeline.event_trigger import EventTrigger
+from runtime.controller import Controller
+from agent.tool_registry import ToolRegistry
 from frontend.platforms import start_frontends
-from plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
+from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
 
 
 _ROOT = Path(__file__).parent
@@ -110,7 +110,7 @@ def main():
 	config_manager.reconcile_plugin_config(config, get_plugin_settings())
 
 	# --- Debug: print the full system prompt ---
-	# from Stage_3.system_prompt import build_system_prompt
+	# from agent.system_prompt import build_system_prompt
 	# prompt = build_system_prompt(database, orchestrator, tool_registry, services)
 	# print("\n" + "=" * 80)
 	# print("SYSTEM PROMPT")
