@@ -9,6 +9,8 @@ from Stage_1.BaseService import BaseService
 
 logger = logging.getLogger("LLMClass")
 
+"""This is the one plugin which is truly required for the application to run. All other plugins are technically optional."""
+
 
 _CONTEXT_LIMIT_HINTS = (
     "context window",
