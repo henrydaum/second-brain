@@ -108,30 +108,30 @@ def _purge_plugin_settings(plugin_types: set[str]):
 # ── Per-type configuration ───────────────────────────────────────────
 
 _TOOL_CONFIG = {
-    "baked_in_dir":       ROOT_DIR / "Stage_3" / "tools",
+    "baked_in_dir":       ROOT_DIR / "plugins" / "tools",
     "sandbox_dir":        SANDBOX_TOOLS,
     "glob":               "tool_*.py",
-    "baked_in_ns":        "Stage_3.tools.{stem}",
+    "baked_in_ns":        "plugins.tools.{stem}",
     "sandbox_ns":         "sandbox_tools_{stem}",
-    "base_module":        "Stage_3.BaseTool",
+    "base_module":        "plugins.BaseTool",
     "base_class_name":    "BaseTool",
 }
 
 _TASK_CONFIG = {
-    "baked_in_dir":       ROOT_DIR / "Stage_2" / "tasks",
+    "baked_in_dir":       ROOT_DIR / "plugins" / "tasks",
     "sandbox_dir":        SANDBOX_TASKS,
     "glob":               "task_*.py",
-    "baked_in_ns":        "Stage_2.tasks.{stem}",
+    "baked_in_ns":        "plugins.tasks.{stem}",
     "sandbox_ns":         "sandbox_tasks_{stem}",
-    "base_module":        "Stage_2.BaseTask",
+    "base_module":        "plugins.BaseTask",
     "base_class_name":    "BaseTask",
 }
 
 _SERVICE_CONFIG = {
-    "baked_in_dir":       ROOT_DIR / "Stage_1" / "services",
+    "baked_in_dir":       ROOT_DIR / "plugins" / "services",
     "sandbox_dir":        SANDBOX_SERVICES,
     "glob":               "*.py",
-    "baked_in_ns":        "Stage_1.services.{stem}",
+    "baked_in_ns":        "plugins.services.{stem}",
     "sandbox_ns":         "sandbox_services_{stem}",
 }
 
