@@ -185,11 +185,18 @@ This means Second Brain is not a fixed assistant. It can inspect its own archite
 
 ## Architecture
 
-The system is organized into three main stages, with an event bus connecting long-lived components. Each stage does one thing well and hands its output to the next.
+The codebase is now organized by responsibility instead of numbered stages. The system still has the same three big jobs, but they live in clear top-level packages:
 
-### Stage 1: Services + Parsers
+- `plugins/` for built-in tools, tasks, services, and discovery
+- `pipeline/` for watching files, queueing work, and dispatching tasks
+- `agent/` for prompt construction, tool execution, history healing, and subagent runtime
+- `runtime/` for controller and task/tool context wiring
+- `config/` and `events/` for shared system infrastructure
+- `frontend/` for REPL, Telegram, and the shared runtime/presenter layer
 
-Shared backends with explicit load and unload lifecycles.
+### Services + Parsers
+
+Shared backends with explicit load and unload lifecycles, implemented as built-in plugins under `plugins/services/`.
 
 Built-in services include:
 
@@ -204,7 +211,7 @@ Built-in services include:
 
 The LLM layer supports profile routing, so you can switch models without changing the rest of the system.
 
-Within the same stage, extension-driven parsers normalize raw files into structured outputs.
+Within the same plugin family, extension-driven parsers normalize raw files into structured outputs. Parser helpers live under `plugins/services/helpers/`, and the parser service wires them into the rest of the runtime.
 
 Supported modalities include:
 
@@ -217,9 +224,11 @@ Supported modalities include:
 
 Parsers can also report `also_contains` hints, which allows multi-modal follow-up work. For example, a file can yield text and still announce that it contains images worth OCRing. The parser does not have to do everything in one pass.
 
-### Stage 2: Task Pipeline + Orchestration
+### Task Pipeline + Orchestration
 
 This is the always-on execution layer. The heart of the system.
+
+Core pipeline code lives under `pipeline/`, while built-in tasks live under `plugins/tasks/`.
 
 It includes:
 
@@ -238,9 +247,11 @@ There are now two kinds of work in the system:
 
 That split is what allows continuous file indexing and scheduled/proactive agents to coexist inside one architecture.
 
-### Stage 3: Agent + Tools
+### Agent + Tools
 
 This is the reasoning and action layer.
+
+Core agent code lives under `agent/`, and built-in tools live under `plugins/tools/`.
 
 The agent gets a dynamically rebuilt system prompt that includes:
 
@@ -290,32 +301,50 @@ The frontend code is modular enough such that it is possible to create a new fro
 Second Brain/
 ├── main.py                 # Cross-platform entry point
 ├── main.pyw                # Canonical startup script
-├── controller.py           # Command/control surface used by frontends
-├── context.py              # Shared runtime context for tools and tasks
-├── plugin_discovery.py     # Built-in + sandbox discovery and hot registration
 ├── paths.py                # Root/data/sandbox path definitions
-├── event_bus.py            # Internal pub/sub bus
-├── event_channels.py       # Event channel registry
-├── config_data.py          # Core config schema
-├── config_manager.py       # Config + plugin-config persistence
+│
+├── agent/
+│   ├── agent.py            # Main reasoning loop
+│   ├── history_utils.py    # Conversation repair helpers
+│   ├── subagent_runtime.py # Scheduled/subagent runtime support
+│   ├── system_prompt.py    # Dynamic system prompt builder
+│   └── tool_registry.py    # Tool registration + execution
+│
+├── config/
+│   ├── config_data.py      # Core config schema
+│   └── config_manager.py   # Config + plugin-config persistence
+│
+├── events/
+│   ├── event_bus.py        # Internal pub/sub bus
+│   └── event_channels.py   # Event channel registry
 │
 ├── frontend/
+│   ├── runtime.py          # Frontend runtime boundary
+│   ├── presenter.py        # Shared rendering/presentation helpers
+│   ├── commands.py         # Shared slash command registry
+│   ├── dispatch.py         # Shared input routing
+│   ├── formatters.py       # Shared formatting helpers
+│   ├── approval_request.py # Approval request primitive
+│   ├── ui_request.py       # Generic frontend UI request primitive
 │   ├── repl/
 │   │   └── repl.py         # Terminal frontend
 │   ├── telegram/
 │   │   ├── telegram.py     # Telegram bot frontend
 │   │   └── renderers.py    # Telegram media sending
-│   └── shared/
-│       ├── commands.py     # Shared slash command registry
-│       ├── dispatch.py     # Shared input routing
-│       └── formatters.py   # Shared formatting helpers
 │
-├── Stage_1/
+├── pipeline/
+│   ├── attachment_cache.py # Frontend upload persistence
+│   ├── database.py         # SQLite state + task queue
+│   ├── event_trigger.py    # Bus-driven task-run enqueue
+│   ├── orchestrator.py     # Task registration + dispatch
+│   └── watcher.py          # Filesystem watcher
+│
+├── plugins/
 │   ├── BaseService.py
-│   ├── ParseResult.py
-│   ├── attachment_cache.py
-│   ├── parser_registry.py
-│   └── services/
+│   ├── BaseTask.py
+│   ├── BaseTool.py
+│   ├── plugin_discovery.py # Built-in + sandbox discovery and hot registration
+│   ├── services/
 │       ├── llmService.py
 │       ├── embedService.py
 │       ├── ocrService.py
@@ -324,15 +353,9 @@ Second Brain/
 │       ├── timekeeperService.py
 │       ├── driveService.py
 │       ├── parserService.py
-│       └── parsers/
+│       └── helpers/
 │
-├── Stage_2/
-│   ├── database.py
-│   ├── watcher.py
-│   ├── event_trigger.py
-│   ├── orchestrator.py
-│   ├── BaseTask.py
-│   └── tasks/
+│   ├── tasks/
 │       ├── task_extract_text.py
 │       ├── task_extract_container.py
 │       ├── task_ocr_images.py
@@ -343,12 +366,6 @@ Second Brain/
 │       ├── task_lexical_index.py
 │       └── task_run_subagent.py
 │
-├── Stage_3/
-│   ├── agent.py
-│   ├── BaseTool.py
-│   ├── tool_registry.py
-│   ├── system_prompt.py
-│   ├── SearchResult.py
 │   └── tools/
 │       ├── tool_hybrid_search.py
 │       ├── tool_lexical_search.py
@@ -360,8 +377,13 @@ Second Brain/
 │       ├── tool_build_plugin.py
 │       ├── tool_update_memory.py
 │       ├── tool_web_search.py
-│       └── tool_schedule_subagent.py
-│       └── tool_ask_subagent.py
+│       ├── tool_schedule_subagent.py
+│       ├── tool_ask_subagent.py
+│       └── helpers/
+│
+├── runtime/
+│   ├── context.py          # Shared runtime context for tools and tasks
+│   └── controller.py       # Command/control surface used by frontends
 │
 ├── templates/
 │   ├── tool_template.py
@@ -466,7 +488,7 @@ On startup, the system:
 2. creates sandbox directories if needed
 3. initializes the database
 4. discovers services, tasks, and tools
-5. starts the orchestrator
+5. starts the task orchestrator
 6. starts the filesystem watcher
 7. starts the event-trigger runner
 8. launches the enabled frontends
@@ -554,11 +576,11 @@ Software that can extend itself in response to use is a different kind of softwa
 
 If you want permanent source-controlled additions, add files in:
 
-- `Stage_1/services/`
-- `Stage_2/tasks/`
-- `Stage_3/tools/`
+- `plugins/services/`
+- `plugins/tasks/`
+- `plugins/tools/`
 
-Parsers live in `Stage_1/services/parsers/` and are registered by extension.
+Parser helpers live in `plugins/services/helpers/` and are registered by extension through the parser service.
 
 ## Supported File Types
 
