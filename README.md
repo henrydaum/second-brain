@@ -508,7 +508,7 @@ Available in the REPL and as slash commands in Telegram.
 | `help` | Show all commands |
 | `history [id]` | List or load saved conversations |
 | `load <service>` | Load a service |
-| `locations [tools|tasks|services]` | Inspect plugin-related file locations |
+| `locations [tools/tasks/services]` | Inspect plugin-related file locations |
 | `model ...` | Manage LLM profiles |
 | `new` | Start a new conversation |
 | `pause <task>` | Pause a task |
