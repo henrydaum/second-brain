@@ -1,3 +1,5 @@
+<img width="1440" height="569" alt="highreslogotypecrop" src="https://github.com/user-attachments/assets/598ab57f-ed6b-491a-9cd6-142b93b09244" />
+
 # Second Brain
 
 Second Brain is an attempt to make a digital brain that approximates the real thing. It's part knowledge engine, part personal operator, and part programmable automation layer.
