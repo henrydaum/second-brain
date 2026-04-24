@@ -143,10 +143,10 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
     _set_conversation_id = set_conversation_id
     _refresh_agent = refresh_agent
     import json as _json
-    import config_manager as _cm
-    from config_data import SETTINGS_DATA as _SD
-    from plugin_discovery import get_plugin_settings as _get_ps
-    from Stage_3.history_utils import heal_orphan_tool_calls
+    import config.config_manager as _cm
+    from config.config_data import SETTINGS_DATA as _SD
+    from plugins.plugin_discovery import get_plugin_settings as _get_ps
+    from agent.history_utils import heal_orphan_tool_calls
     from frontend.formatters import (
         format_services, format_tasks,
         format_tools, format_locations,
@@ -420,7 +420,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
 
     def _cmd_model(arg):
         """Handler for /model — manage LLM profiles."""
-        from Stage_1.services.llmService import LLMRouter
+        from plugins.services.llmService import LLMRouter
 
         router = services.get("llm")
         if not isinstance(router, LLMRouter):
@@ -595,7 +595,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             if job is None:
                 return (f"Unknown job: '{name}'. "
                         f"Run /schedule list to see all jobs.")
-            from event_bus import bus
+            from events.event_bus import bus
             from datetime import datetime
             payload = dict(job.get("payload", {}))
             payload["_timekeeper"] = {

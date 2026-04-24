@@ -32,6 +32,6 @@ class ApprovalRequest(InteractiveRequest):
 
     def on_resolved(self):
         # Avoid circular imports at module load time by importing bus here
-        from event_bus import bus
-        from event_channels import APPROVAL_RESOLVED
+        from events.event_bus import bus
+        from events.event_channels import APPROVAL_RESOLVED
         bus.emit(APPROVAL_RESOLVED, self)

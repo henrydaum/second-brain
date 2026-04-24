@@ -143,7 +143,7 @@ def _classify(path: Path) -> str:
     if ext in UNSUPPORTED_IMAGE_EXTENSIONS:
         return "document"
     # Small text files get inlined
-    from Stage_1.parser_registry import get_modality
+    from plugins.services.helpers.parser_registry import get_modality
     modality = get_modality(ext)
     if modality == "text":
         try:

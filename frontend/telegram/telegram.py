@@ -15,8 +15,8 @@ import re
 import threading
 from pathlib import Path
 
-from Stage_1.attachment_cache import save as save_attachment
-from Stage_1.parser_registry import get_modality
+from pipeline.attachment_cache import save as save_attachment
+from plugins.services.helpers.parser_registry import get_modality
 from frontend.commands import CommandEntry
 from frontend.formatters import (
     format_services, format_tasks, format_tools,
@@ -364,8 +364,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     async def _show_configure_menu(chat_id: int):
         """Show inline keyboard with all config settings."""
-        from config_data import SETTINGS_DATA
-        from plugin_discovery import get_plugin_settings
+        from config.config_data import SETTINGS_DATA
+        from plugins.plugin_discovery import get_plugin_settings
 
         all_settings = list(SETTINGS_DATA) + list(get_plugin_settings())
         buttons = []
@@ -385,8 +385,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     async def _ask_configure_value(chat_id: int, key: str):
         """Show current value and ask for new value."""
-        from config_data import SETTINGS_DATA
-        from plugin_discovery import get_plugin_settings
+        from config.config_data import SETTINGS_DATA
+        from plugins.plugin_discovery import get_plugin_settings
 
         all_settings = {k: (t, d, ti) for t, k, d, _, ti in
                         list(SETTINGS_DATA) + list(get_plugin_settings())}

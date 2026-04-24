@@ -5,11 +5,11 @@ import logging
 import threading
 from dataclasses import dataclass, field
 
-from Stage_3.agent import Agent
-from Stage_3.history_utils import heal_orphan_tool_calls
-from Stage_3.system_prompt import build_system_prompt
-from event_bus import bus
-from event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED, CHAT_MESSAGE_PUSHED
+from agent.agent import Agent
+from agent.history_utils import heal_orphan_tool_calls
+from agent.system_prompt import build_system_prompt
+from events.event_bus import bus
+from events.event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED, CHAT_MESSAGE_PUSHED
 from frontend.commands import CommandRegistry, register_core_commands
 from frontend.dispatch import InputResult, route_input
 from frontend.presenter import FrontendPresenter
