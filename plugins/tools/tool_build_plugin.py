@@ -25,16 +25,16 @@ _PLUGIN_CONFIG = {
 
 # Expected import statements for each plugin type
 _EXPECTED_IMPORTS = {
-    "tool":    ("Stage_3.BaseTool", {"BaseTool", "ToolResult"}),
-    "task":    ("Stage_2.BaseTask", {"BaseTask", "TaskResult"}),
-    "service": ("Stage_1.BaseService", {"BaseService"}),
+    "tool":    ("plugins.BaseTool", {"BaseTool", "ToolResult"}),
+    "task":    ("plugins.BaseTask", {"BaseTask", "TaskResult"}),
+    "service": ("plugins.BaseService", {"BaseService"}),
 }
 
 # Baked-in source directories (read-only)
 _BAKED_IN_DIRS = {
-    "tool":    ROOT_DIR / "Stage_3" / "tools",
-    "task":    ROOT_DIR / "Stage_2" / "tasks",
-    "service": ROOT_DIR / "Stage_1" / "services",
+    "tool":    ROOT_DIR / "plugins" / "tools",
+    "task":    ROOT_DIR / "plugins" / "tasks",
+    "service": ROOT_DIR / "plugins" / "services",
 }
 
 

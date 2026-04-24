@@ -14,14 +14,14 @@ To create a new tool:
   1. Use build_plugin(plugin_type="tool", file_name="tool_<your_name>.py",
      action="create", code="...") to write the file to the sandbox.
   2. The code MUST inherit from BaseTool and include:
-       from Stage_3.BaseTool import BaseTool, ToolResult
+       from plugins.BaseTool import BaseTool, ToolResult
   3. Fill in the class attributes and implement run().
   4. Hot-reload picks it up automatically — no restart needed.
   5. If the tool needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
 build_plugin automatically validates:
-  - Correct import (from Stage_3.BaseTool import BaseTool, ToolResult)
+  - Correct import (from plugins.BaseTool import BaseTool, ToolResult)
   - Class inheriting BaseTool with a `name` attribute
   - No name collisions with baked-in tools
   - File naming conventions (must start with "tool_")
@@ -29,7 +29,7 @@ build_plugin automatically validates:
 
 AUTO-DISCOVERY RULES
 --------------------
-- File must be in Stage_3/tools/ (baked-in) or the sandbox tools dir
+- File must be in plugins/tools/ (baked-in) or the sandbox tools dir
 - File name must start with "tool_"
 - Class must inherit from BaseTool
 - One tool class per file (recommended)
@@ -52,7 +52,7 @@ Event-triggered tasks (trigger="event") subscribe to bus channels. A tool
 can fire one by emitting on a channel the task declared, OR by calling
 the controller helper which emits on the task's first channel:
 
-    from event_bus import bus
+    from events.event_bus import bus
     bus.emit("trigger.cluster_now", {"reason": "user asked"})
     # or, without knowing the channel name:
     # ctrl.trigger_event_task("cluster_embeddings", {"reason": "..."})
@@ -169,7 +169,7 @@ In run(), access via: context.config.get("my_setting_key", "default")
 """
 
 # =====================================================================
-# BASE CLASS (copied from Stage_3/BaseTool.py for self-containment)
+# BASE CLASS (copied from plugins/BaseTool.py for self-containment)
 # =====================================================================
 
 import logging
@@ -226,7 +226,7 @@ class BaseTool:
 # EXAMPLE: A simple database query tool
 # =====================================================================
 
-# from Stage_3.BaseTool import BaseTool, ToolResult
+# from plugins.BaseTool import BaseTool, ToolResult
 #
 #
 # class SQLQuery(BaseTool):
@@ -272,7 +272,7 @@ class BaseTool:
 # EXAMPLE: A tool that calls another tool (tool chaining)
 # =====================================================================
 
-# from Stage_3.BaseTool import BaseTool, ToolResult
+# from plugins.BaseTool import BaseTool, ToolResult
 #
 #
 # class HybridSearch(BaseTool):

@@ -11,14 +11,14 @@ To create a new task:
   1. Use build_plugin(plugin_type="task", file_name="task_<your_name>.py",
      action="create", code="...") to write the file to the sandbox.
   2. The code MUST inherit from BaseTask and include:
-       from Stage_2.BaseTask import BaseTask, TaskResult
+       from plugins.BaseTask import BaseTask, TaskResult
   3. Fill in the class attributes and implement run().
   4. Hot-reload picks it up automatically — no restart needed.
   5. If the task needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
 build_plugin automatically validates:
-  - Correct import (from Stage_2.BaseTask import BaseTask, TaskResult)
+  - Correct import (from plugins.BaseTask import BaseTask, TaskResult)
   - Class inheriting BaseTask with a `name` attribute
   - No name collisions with baked-in tasks
   - File naming conventions (must start with "task_")
@@ -26,7 +26,7 @@ build_plugin automatically validates:
 
 AUTO-DISCOVERY RULES
 --------------------
-- File must be in Stage_2/tasks/ (baked-in) or the sandbox tasks dir
+- File must be in plugins/tasks/ (baked-in) or the sandbox tasks dir
 - File name must start with "task_"
 - Class must inherit from BaseTask
 - One task class per file (recommended)
@@ -127,7 +127,7 @@ In run(), access via: context.config.get("embed_chunk_overlap", 50)
 """
 
 # =====================================================================
-# BASE CLASS (copied from Stage_2/BaseTask.py for self-containment)
+# BASE CLASS (copied from plugins/BaseTask.py for self-containment)
 # =====================================================================
 
 import logging
@@ -202,7 +202,7 @@ class BaseTask:
 
 # import time
 # from pathlib import Path
-# from Stage_2.BaseTask import BaseTask, TaskResult
+# from plugins.BaseTask import BaseTask, TaskResult
 #
 # logger = logging.getLogger("ExtractText")
 #
@@ -253,7 +253,7 @@ class BaseTask:
 # EXAMPLE: A downstream task that depends on extracted_text
 # =====================================================================
 
-# from Stage_2.BaseTask import BaseTask, TaskResult
+# from plugins.BaseTask import BaseTask, TaskResult
 #
 #
 # class EmbedText(BaseTask):
@@ -298,7 +298,7 @@ class BaseTask:
 # =====================================================================
 
 # import time
-# from Stage_2.BaseTask import BaseTask, TaskResult
+# from plugins.BaseTask import BaseTask, TaskResult
 #
 #
 # class ClusterEmbeddings(BaseTask):

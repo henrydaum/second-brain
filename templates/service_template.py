@@ -11,7 +11,7 @@ To create a new service:
   1. Use build_plugin(plugin_type="service", file_name="<name>Service.py",
      action="create", code="...") to write the file to the sandbox.
   2. The code MUST inherit from BaseService and include:
-       from Stage_1.BaseService import BaseService
+       from plugins.BaseService import BaseService
   3. Implement _load(), unload(), and your service methods.
   4. Add a build_services(config) factory function at the bottom.
   5. Hot-reload picks it up automatically — no restart needed.
@@ -19,7 +19,7 @@ To create a new service:
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
 build_plugin automatically validates:
-  - Correct import (from Stage_1.BaseService import BaseService)
+  - Correct import (from plugins.BaseService import BaseService)
   - Class inheriting BaseService
   - Presence of build_services() function
   - File naming conventions
@@ -27,7 +27,7 @@ build_plugin automatically validates:
 
 AUTO-DISCOVERY RULES
 --------------------
-- File must be in Stage_1/services/ (baked-in) or the sandbox services dir
+- File must be in plugins/services/ (baked-in) or the sandbox services dir
 - File must NOT start with "_"
 - Module must have a top-level build_services(config) -> dict function
 - The returned dict maps service names to service instances
@@ -53,7 +53,7 @@ Services can fire event-triggered tasks by emitting on the bus. This is
 how a cron-like service drives periodic work: emit on a channel the task
 subscribes to, and the orchestrator enqueues a run on its next tick.
 
-    from event_bus import bus
+    from events.event_bus import bus
 
     class SchedulerService(BaseService):
         model_name = "scheduler"
@@ -116,7 +116,7 @@ In build_services(), access via: config.get("whisper_model_name", "base")
 """
 
 # =====================================================================
-# BASE CLASS (copied from Stage_1/BaseService.py for self-containment)
+# BASE CLASS (copied from plugins/BaseService.py for self-containment)
 # =====================================================================
 
 import logging
@@ -179,7 +179,7 @@ class BaseService(ABC):
 # import gc
 # import os
 # from pathlib import Path
-# from Stage_1.BaseService import BaseService
+# from plugins.BaseService import BaseService
 #
 # logger = logging.getLogger("WhisperService")
 #
@@ -228,7 +228,7 @@ class BaseService(ABC):
 # EXAMPLE: A per-call service (e.g. API client with auth)
 # =====================================================================
 
-# from Stage_1.BaseService import BaseService
+# from plugins.BaseService import BaseService
 #
 #
 # class GoogleDriveService(BaseService):
