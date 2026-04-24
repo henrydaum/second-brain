@@ -185,9 +185,9 @@ This means Second Brain is not a fixed assistant. It can inspect its own archite
 
 ## Architecture
 
-The system is organized into four stages, with an event bus connecting long-lived components. Each stage does one thing well and hands its output to the next.
+The system is organized into three main stages, with an event bus connecting long-lived components. Each stage does one thing well and hands its output to the next.
 
-### Stage 0: Services
+### Stage 1: Services + Parsers
 
 Shared backends with explicit load and unload lifecycles.
 
@@ -204,9 +204,7 @@ Built-in services include:
 
 The LLM layer supports profile routing, so you can switch models without changing the rest of the system.
 
-### Stage 1: Parsers
-
-Extension-driven parsers normalize raw files into structured outputs.
+Within the same stage, extension-driven parsers normalize raw files into structured outputs.
 
 Supported modalities include:
 
@@ -314,6 +312,9 @@ Second Brain/
 │
 ├── Stage_1/
 │   ├── BaseService.py
+│   ├── ParseResult.py
+│   ├── attachment_cache.py
+│   ├── parser_registry.py
 │   └── services/
 │       ├── llmService.py
 │       ├── embedService.py
@@ -321,12 +322,9 @@ Second Brain/
 │       ├── whisperService.py
 │       ├── webSearchService.py
 │       ├── timekeeperService.py
-│       └── driveService.py
-│
-├── Stage_1/
-│   ├── registry.py
-│   ├── ParseResult.py
-│   └── parsers/
+│       ├── driveService.py
+│       ├── parserService.py
+│       └── parsers/
 │
 ├── Stage_2/
 │   ├── database.py
@@ -560,7 +558,7 @@ If you want permanent source-controlled additions, add files in:
 - `Stage_2/tasks/`
 - `Stage_3/tools/`
 
-Parsers live in `Stage_1/parsers/` and are registered by extension.
+Parsers live in `Stage_1/services/parsers/` and are registered by extension.
 
 ## Supported File Types
 
