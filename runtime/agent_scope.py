@@ -16,7 +16,9 @@ Omitting both ``_allow`` and ``_deny`` on a profile means no restriction —
 that profile is a fully-capable agent, identical to today's behavior.
 """
 
+import inspect
 import logging
+import re
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -24,6 +26,7 @@ from dataclasses import dataclass
 from agent.tool_registry import ToolRegistry
 
 logger = logging.getLogger("AgentScope")
+_CALL_TOOL_RE = re.compile(r'context\.call_tool\(\s*["\']([^"\']+)["\']')
 
 # SQLite authorizer action code (stable public SQLite C API value).
 _SQLITE_READ = 20
@@ -254,6 +257,7 @@ def scoped_registry(base_registry: ToolRegistry, scope: AgentScope) -> ToolRegis
         allowed_names = set(scope.tools_allow)
     else:
         allowed_names = {n for n in base_registry.tools.keys() if n not in (scope.tools_deny or set())}
+    allowed_names = _expand_tool_dependencies(base_registry.tools, allowed_names)
 
     for name, tool in base_registry.tools.items():
         if name in allowed_names:
@@ -274,3 +278,20 @@ def _is_safe_identifier(name: str) -> bool:
     if not (name[0].isalpha() or name[0] == "_"):
         return False
     return all(c.isalnum() or c == "_" for c in name)
+
+
+def _expand_tool_dependencies(tools: dict, names: set[str]) -> set[str]:
+    expanded, pending = set(names), list(names)
+    while pending:
+        tool = tools.get(pending.pop())
+        if tool is None:
+            continue
+        try:
+            source = inspect.getsource(tool.__class__)
+        except (OSError, TypeError):
+            continue
+        for dep in _CALL_TOOL_RE.findall(source):
+            if dep in tools and dep not in expanded:
+                expanded.add(dep)
+                pending.append(dep)
+    return expanded
