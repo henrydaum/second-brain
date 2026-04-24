@@ -1,11 +1,11 @@
 # Second Brain
 
-Second Brain is a local-first personal data engine.
+Second Brain is exactly what it sounds like.
 
 It watches your folders, parses what it finds, builds a structured index in SQLite, and gives an LLM the tools to search, reason, act, schedule work, remember things, and extend the system itself. 
 
 Why Second Brain:
-1. When the files you want to ask about are too large or too numerous for Claude, OpenAI, or Gemini; or AI companies don't have a feature you want but you think you could build yourself.
+1. When the files you want to ask about are too large or too numerous for Claude, OpenAI, or Gemini.
 2. When OpenClaw and Hermes are too bloated for your use-case.
 3. You want an AI that will automatically sync to your Google Drive files.
 4. You want all of these things, and you want to have them all from your phone.
@@ -39,7 +39,7 @@ It can:
 - proactively send emails and text messages
 - build and load new tools, tasks, and services without a restart
 
-It can be a private research assistant. It can be a file intelligence layer for your whole machine. It can be a reminder system. It can be a daily briefing engine. It can absolutely function like a personal AI calendar and operator for recurring work.
+It can be your personal assistant. It can be a file intelligence layer for your whole machine. It can be a reminder system. It can be a daily briefing engine. It can absolutely function like a personal AI calendar and operator for recurring work. It's a general-intelligence system for your computer. Some might even say it can be a new operating system.
 
 ## Core Capabilities
 
@@ -52,26 +52,26 @@ Built-in indexing pipeline includes:
 - text extraction
 - OCR for images
 - archive/container extraction
-- chunking for embedding
+- text chunking (for text embedding)
 - text embeddings
 - image embeddings
 - lexical full-text indexing
-- tabular textualization for spreadsheets and data files
+- tabular textualization for turning spreadsheets into searchable data
 
-The result is a live knowledge base over your local files, not a one-shot import.
+The result is a live knowledge base over your local files, not a one-shot import. If you don't see something you need, just ask Second Brain to build it for you and it'll create a sandboxed task to do the job. The pipeline is robust and safe, correctly handling file/folder renames, debouncing/misfires, hidden folders, and other special cases. When a file is updated, added, or removed, all data within the dependency pipeline with that file key get updated.
 
 ### 2. Search Like a Real System
 
-AI can be inaccurate, so it was important to make sure Second Brain has manual search available. Every tool the AI can use, so can you. Double check your answers.
+You can type /call to call any tool that the LLM agent can. This is useful for manual searches and situations where precision is imperative.
 
-Second Brain ships with multiple retrieval modes:
+Second Brain ships with multiple retrieval tools:
 
 - `lexical_search` for exact terms and keyword-heavy queries
 - `semantic_search` for meaning-based retrieval over embeddings
 - `hybrid_search` for fused lexical + semantic ranking
 - `sql_query` for direct inspection of the underlying SQLite database
 
-You can ask normal-language questions. You can also inspect the system with precision when you want to. Both are first-class.
+If an LLM can mess something up, it will mess something up. That's not to say that this happens often, but Second Brain was built with that in mind. It has safety and fallbacks, including manual controls when they are called for.
 
 ### 3. Run Background Subagents
 
@@ -91,7 +91,7 @@ Jobs can be:
 - enabled or disabled without deleting them
 - backed by input files you explicitly attach to the job
 
-Scheduled subagents keep their own stored run history and can proactively push user-visible messages into chat.
+Scheduled subagents keep their own stored run history in SQL and can proactively push user-visible messages into chat. Subagent conversation histories are not immediately available to the main chat, but you can simply ask your agent to look at the most recent runs for context using (the tool for the job is sql_query).
 
 ### 4. Event-Driven Tasks
 
@@ -99,14 +99,13 @@ The system is no longer only file-driven, either.
 
 Tasks can be triggered by events through the internal event bus. That opens the door to workflows like:
 
-- scheduled event emissions from the timekeeper service
+- scheduled events from the timekeeper service
 - chained background runs
 - approval workflows
 - proactive notifications
-- future external integrations that emit events into the system
-- respond to emails immediately
+- respond to emails immediately and maintain an inbox
 
-Path-triggered tasks and event-triggered tasks share the same orchestration model. One abstraction, two kinds of trigger. That is what makes the platform genuinely general rather than a bolt-on scheduler.
+Path-triggered tasks and event-triggered tasks share the same orchestration layer. One abstraction, two kinds of trigger. The event bus can be triggered from anywhere in the system, and it's possible to create a new `service` for things like text messages and webhooks.
 
 ### 5. Telegram As a First-Class Frontend
 
@@ -115,7 +114,7 @@ Second Brain now ships with two primary frontends (but it's possible to add more
 - Telegram bot
 - Terminal REPL
 
-Telegram supports:
+Telegram is free and supports:
 
 - slash commands
 - autocomplete
@@ -125,7 +124,7 @@ Telegram supports:
 - approval prompts for sensitive actions
 - proactive subagent push messages
 
-This means your local system can act like a private mobile AI assistant without becoming a cloud SaaS product. Your data never leaves your machine. The assistant reaches you, not the other way around.
+This means your local system can act like a private mobile AI assistant—an *agent*. To set up Telegram, simply message @BotFather and get the API token, then message @userinfobot to find your ID and put both in config.json manually or with /configure.
 
 The frontend code was designed to be modular and expandable. Other messaging platforms, like Discord, can be added easily using a coding agent.
 
@@ -142,7 +141,7 @@ The agent can update that memory intentionally with `update_memory`. It is meant
 
 It is not meant for one-off reminders, transient task state, or short-lived updates that only matter in the moment.
 
-On top of that, conversation history is stored in SQLite and can be revisited later with read-only SQL. Nothing is thrown away unless you throw it away.
+On top of that, conversation history is stored in SQLite and can be revisited later with read-only SQL. Nothing is thrown away unless you throw it away; simply ask the agent to look at your most recent conversations for context.
 
 ### 7. Web Search
 
@@ -152,23 +151,23 @@ It supports:
 
 - Brave Search
 - Brave Answers
-- DuckDuckGo fallback when a Brave Search key is not configured
+- DuckDuckGo fallback when a Brave Search key is not configured (API keys are free from https://brave.com/search/api/ — the $5/month free tier is more than enough, and you can set the spending limit to $5 so you never spend a cent)
 
-The agent is not trapped inside the local corpus. It can blend your private knowledge with current public information when appropriate. Local-first does not mean local-only.
+The agent is not trapped inside the local corpus. It can blend your private knowledge with current public information when appropriate.
 
 ### 8. Self-Extending Runtime
 
 One of the most unusual parts of the project is that the agent can build new capabilities inside a sandbox at runtime.
 
-If the current toolset cannot reasonably complete a task, the agent can use `build_plugin` to create, edit, or delete:
+If the current toolset cannot reasonably complete a task, the agent can use `build_plugin` to create, edit, or delete plugins:
 
 - **services** can be loaded and unloaded to help carry out complex and repetitive tasks and tools
-- **tasks** create tables of statistical data from the information found in computer folders, and they can also be triggered at certain times of day (cron jobs)
-- **tools** are used by LLMs to access the data resulting from tasks, as well as perform other agentic abilities like searching the web
+- **tasks** extract data tables from computer folders, and they can also be triggered at certain times of day (cron jobs)
+- **tools** are used by LLMs to access the data resulting from tasks, as well as perform other agentic abilities (searching the web)
 
-Plugins cover all basic use-cases for an agentic system. They can be made and designed by the LLM with no code written by the user. They are hot-registered immediately. No restart needed.
+Plugins cover all basic use-cases for an agentic system. They can be designed and written by an LLM with no code written by the user. They are hot-registered immediately, no restart needed.
 
-This means Second Brain is not a fixed assistant. It can inspect its own architecture, generate a focused extension, and use that new capability right away. The system grows in the direction you actually use it in.
+This means Second Brain is not a fixed assistant. It can inspect its own architecture, generate a focused extension, and use that new capability right away. Modular and extensible, Second Brain is a general intelligence system, which is much like an OS.
 
 ## What You Can Use It For
 
@@ -185,7 +184,7 @@ This means Second Brain is not a fixed assistant. It can inspect its own archite
 
 ## Architecture
 
-The codebase is now organized by responsibility instead of numbered stages. The system still has the same three big jobs, but they live in clear top-level packages:
+System responsibilities live in clear, top-level packages:
 
 - `plugins/` for built-in tools, tasks, services, and discovery
 - `pipeline/` for watching files, queueing work, and dispatching tasks
@@ -245,7 +244,7 @@ There are now two kinds of work in the system:
 - path-keyed tasks for files
 - event-keyed tasks for runs triggered by bus events
 
-That split is what allows continuous file indexing and scheduled/proactive agents to coexist inside one architecture.
+That split is what allows continuous file indexing and scheduled/proactive agents to coexist inside one architecture. For example, you can create embeddings for every new file and then run a clustering algorithm once a day using those embeddings. Since clusters change slightly whenever a new file is added, it makes more sense to run it once a day, than to recalculate on every file change. Use event-driven tasks on a timer for similar situations.
 
 ### Agent + Tools
 
@@ -263,7 +262,9 @@ The agent gets a dynamically rebuilt system prompt that includes:
 - current durable memory
 - current sandbox plugins
 
-The prompt pushes the assistant toward concise, grounded behavior: inspect the system first, prefer local evidence, cite the files, tables, or tool results it relied on. Confidence is earned by checking.
+The prompt pushes the assistant toward concise, grounded behavior. Among other things, it tells it to cite its sources and use the right tools for the job.
+
+Because the system prompt is built dynamically for each prompt, there is currently no prompt caching.
 
 Built-in tools include:
 
@@ -280,7 +281,7 @@ Built-in tools include:
 | `update_memory` | Update durable memory in `memory.md` |
 | `web_search` | Search the public web when local data is not enough |
 | `schedule_subagent` | Create and manage scheduled background subagent jobs |
-| `ask_subagent` | The main agent can delegate a complex task to a subagent to get a top-level answer |
+| `ask_subagent` | The main agent can delegate a complex task to a subagent to get a high-level answer |
 
 ## Frontends
 
@@ -412,7 +413,7 @@ Second Brain/
 ### Install
 
 ```bash
-git clone <repo-url>
+git clone <https://github.com/henrydaum/second-brain>
 cd "Second Brain"
 pip install -r requirements.txt
 ```
@@ -421,7 +422,7 @@ Key dependencies include:
 
 - `openai`
 - `lmstudio`
-- `sentence-transformers` (optional—only needed for local embedding)
+- `sentence-transformers` (heaviest import; optional; only needed for local embedding)
 - `faster-whisper`
 - `PyMuPDF`
 - `python-docx`
@@ -528,9 +529,7 @@ Available in the REPL and as slash commands in Telegram.
 
 ## Scheduling and Calendar-Like Workflows
 
-The easiest way to understand the new scheduler is this:
-
-Second Brain can operate proactively, not just reactively.
+Second Brain can operate proactively, not just reactively, using a built-in cron scheduler (timekeeperService).
 
 You can use `schedule_subagent` to create jobs that behave like:
 
@@ -539,7 +538,7 @@ You can use `schedule_subagent` to create jobs that behave like:
 - daily briefings
 - weekly planning prompts
 - periodic research tasks
-- generate leads via email or text
+- email or text outreach and replies
 - "check this folder and notify me if something important changed"
 
 It is fair to describe the system as calendar-capable, even though it doesn't have a traditional calendar UI.
@@ -570,17 +569,17 @@ This gives you a very unusual loop:
 4. Potentially make another edit in the core code.
 5. Use the new capability immediately.
 
-Software that can extend itself in response to use is a different kind of software.
+The software is extensible and self-expanding. Technically, just the llmService and build_plugin tool are strictly necessary because they can build everything else with some careful prompting.
 
 ### Built-In Plugins
 
-If you want permanent source-controlled additions, add files in:
+If you want permanent source-controlled additions, move sandbox plugins from the DATA_DIR to:
 
 - `plugins/services/`
 - `plugins/tasks/`
 - `plugins/tools/`
 
-Parser helpers live in `plugins/services/helpers/` and are registered by extension through the parser service.
+Parser helpers live in `plugins/services/helpers/` and are registered by extension through the parser service. You can put extra helper functions inside the /helpers folders inside of those main plugin folders.
 
 ## Supported File Types
 
@@ -593,21 +592,6 @@ Parser helpers live in `plugins/services/helpers/` and are registered by extensi
 | Tabular | `.csv`, `.tsv`, `.xlsx`, `.xls`, `.parquet`, `.feather`, `.sqlite`, `.db` |
 | Container | `.zip`, `.tar`, `.gz`, `.7z`, `.rar` |
 
-## Design Philosophy
-
-Second Brain is built around a few strong ideas:
-
-- Local-first by default
-- Murphy's Law: if an LLM can mess something up, it will mess something up; fallbacks and safety wherever possible.
-- Retrieval and automation in the same runtime
-- Agents should be able to act, not just answer
-- Background intelligence matters
-- Extensibility should be part of the product, not an afterthought
-
-The goal is not to make a prettier chatbot.
-
-The goal is to make a personal AI system that is actually operational.
-
 ## Final Words
 
 Most AI tools are built to be impressive in a demo and forgotten by the weekend. Second Brain is built for the opposite. It is meant to quietly keep running, watch the things you care about, and do real work while you are not looking.
@@ -616,7 +600,7 @@ A personal AI system should know your files, remember your context, respect your
 
 OpenClaw is great, but it's bloated. Second Brain is meant to be a lightweight and easy to learn alternative that doesn't try to do a million things out of the box.
 
-Building your own runtime is its own kind of pleasure, because there is a sense of ownership and control. Furthermore, the patterns learned along the way—retrieval, orchestration, memory, self-extension—generalize to almost any serious agentic system somebody might want to build next.
+Building your own runtime is its own kind of pleasure, because there is a sense of ownership and control. Furthermore, the patterns learned along the way (tools, tasks, and services) generalize to almost any serious agentic system somebody might want to build next.
 
 One file at a time.
 
