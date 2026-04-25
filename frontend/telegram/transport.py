@@ -92,7 +92,7 @@ class TelegramTransport:
             value = button["value"]
             if prefix == "approval" and request_id:
                 callback = f"{request_id}:{value}"
-            elif prefix in {"call", "trigger", "mdladd"} and context is not None:
+            elif prefix in {"call", "trigger", "llmadd", "agtadd", "mdladd"} and context is not None:
                 callback = f"{prefix}:{chat_id}:{context}:{value}"
             elif prefix == "cfgval" and context is not None:
                 callback = f"cfgval:{context}:{value}"
