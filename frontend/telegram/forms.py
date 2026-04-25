@@ -86,19 +86,42 @@ LLM_ADD_PARAMS = [
 ]
 
 
+def _format_name_hint(title: str, names: list[str] | None, note: str = "") -> str:
+    if not names:
+        return ""
+    lines = []
+    current = ""
+    for name in names:
+        item = f"`{name}`"
+        next_line = item if not current else f"{current}, {item}"
+        if len(next_line) > 72 and current:
+            lines.append(current)
+            current = item
+        else:
+            current = next_line
+    if current:
+        lines.append(current)
+    note_line = f"\n{note}" if note else ""
+    return f"\n\n{title}:{note_line}\n" + "\n".join(lines)
+
+
 def agent_add_params(llm_choices: list[str], tool_names: list[str] | None = None,
                      table_names: list[str] | None = None) -> list[FormParam]:
     """Build the agent-profile creation form. ``llm_choices`` is the live list
     of model names from llm_profiles, plus the literal 'default' sentinel —
     it must be passed in at form-start time so the dropdown reflects what's
     actually configured."""
-    tool_hint = f" Tool names: {', '.join(tool_names)}" if tool_names else ""
-    table_hint = f" Table names: {', '.join(table_names)}" if table_names else ""
+    tool_hint = _format_name_hint(
+        "Agent-visible tool names",
+        tool_names,
+        "Use these registry names, not filenames like `tool_run_command.py`.",
+    )
+    table_hint = _format_name_hint("Database table names", table_names)
     return [
         FormParam("llm", description="LLM to use. 'default' follows whatever LLM is currently the default.",
                   required=True, enum=llm_choices),
         FormParam("prompt_suffix", description="Extra text appended to the system prompt. Leave blank for none."),
-        FormParam("tools_allow", type="array", description=f"Whitelist of tool names (comma-separated or JSON list). Skip for no restriction.{tool_hint}", default=None),
+        FormParam("tools_allow", type="array", description=f"Whitelist of tool names. Skip for no restriction.{tool_hint}", default=None),
         FormParam("tools_deny", type="array", description=f"Blacklist of tool names. Skip for no restriction.{tool_hint}", default=None),
         FormParam("tables_allow", type="array", description=f"Whitelist of database tables. Skip for no restriction.{table_hint}", default=None),
         FormParam("tables_deny", type="array", description=f"Blacklist of database tables. Skip for no restriction.{table_hint}", default=None),

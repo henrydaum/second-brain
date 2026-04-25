@@ -11,7 +11,7 @@ from agent.system_prompt import build_system_prompt
 from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_db, scoped_registry
 from events.event_bus import bus
 from events.event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED, CHAT_MESSAGE_PUSHED
-from frontend.commands import CommandRegistry, register_core_commands
+from frontend.commands import CommandRegistry, active_agent_line, register_core_commands
 from frontend.dispatch import InputResult, route_input
 from frontend.presenter import FrontendPresenter
 from frontend.types import FrontendEvent, FrontendSession
@@ -28,6 +28,7 @@ class FrontendRuntimeState:
     prompt_suffix: str = ""
     status_ids: list[str] = field(default_factory=list)
     last_session: FrontendSession | None = None
+    active_agent_announced: bool = False
 
 
 class FrontendRuntime:
@@ -81,10 +82,16 @@ class FrontendRuntime:
     def create_registry(self, session: FrontendSession, overrides=None, refresh_agent=None) -> CommandRegistry:
         state = self.get_state(session)
         registry = CommandRegistry()
+
+        def _set_conversation_id(conv_id):
+            state.conversation_id = conv_id
+            if conv_id is None:
+                state.active_agent_announced = True
+
         register_core_commands(
             registry, self.ctrl, self.services, self.tool_registry, self.root_dir,
             get_agent=lambda: state.agent,
-            set_conversation_id=lambda conv_id: setattr(state, "conversation_id", conv_id),
+            set_conversation_id=_set_conversation_id,
             refresh_agent=refresh_agent or (lambda: self.refresh_agent(session)),
             rescope_agents=self.rescope_all_agents,
         )
@@ -204,8 +211,14 @@ class FrontendRuntime:
     def route_event(self, session: FrontendSession, registry: CommandRegistry, text: str,
                     image_paths: list[str] | None = None, prompt_suffix: str = ""):
         self.set_prompt_suffix(session, prompt_suffix)
+        state = self.get_state(session)
+        should_announce = state.conversation_id is None and not state.active_agent_announced
         agent = self.ensure_agent(session)
-        return route_input(text, registry, agent, image_paths=image_paths)
+        result = route_input(text, registry, agent, image_paths=image_paths)
+        if should_announce and result.type == "chat" and result.text:
+            result.text = f"{active_agent_line(self.config)}\n\n{result.text}"
+            state.active_agent_announced = True
+        return result
 
     def handle_frontend_event(self, event: FrontendEvent, registry: CommandRegistry,
                               prompt_suffix: str = "") -> InputResult:
@@ -266,6 +279,7 @@ class FrontendRuntime:
     def reset_session(self, session: FrontendSession):
         state = self.get_state(session)
         state.conversation_id = None
+        state.active_agent_announced = True
         if state.agent:
             state.agent.reset()
 

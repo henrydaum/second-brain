@@ -17,7 +17,7 @@ from pathlib import Path
 
 from pipeline.attachment_cache import save as save_attachment
 from plugins.services.helpers.parser_registry import get_modality
-from frontend.commands import CommandEntry
+from frontend.commands import CommandEntry, active_agent_line, new_conversation_message
 from frontend.formatters import (
     format_services, format_tasks, format_tools,
     format_tool_result,
@@ -207,7 +207,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     def _new_handler(_arg):
         runtime.reset_session(base_session)
-        return "New conversation started."
+        return new_conversation_message(config)
 
     for entry in [
         CommandEntry("load", "Load a service", "<service_name>",
@@ -221,7 +221,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         CommandEntry("new", "Start a new conversation", handler=_new_handler,
                      category="Conversation"),
         CommandEntry("start", "Welcome message",
-                     handler=lambda _: "Second Brain is online. Send a message to chat, or /help for commands.",
+                     handler=lambda _: (
+                         f"Second Brain is online. {active_agent_line(config)} "
+                         "Send a message to chat, or /help for commands."
+                     ),
                      hide_from_help=True),
         # Compact formatter overrides (used when called with an arg or via pickers).
         CommandEntry("services", "List services and status",
@@ -482,7 +485,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     async def _start_agent_add_form(chat_id: int, profile_name: str):
         """Begin interactive /agent add parameter collection."""
         llm_choices = ["default"] + sorted((config.get("llm_profiles", {}) or {}).keys())
-        tool_names = sorted(tool_registry.tools.keys())
+        tool_names = sorted(
+            name for name, tool in tool_registry.tools.items()
+            if getattr(tool, "agent_enabled", False)
+        )
         table_names = [r["name"] for r in ctrl.db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
         _pending_agent_adds[chat_id] = PendingParamForm(

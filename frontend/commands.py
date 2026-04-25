@@ -143,6 +143,18 @@ def _describe_agent_profile(name: str, profile: dict, active: bool) -> str:
     return (f"  {marker} {name:<16} {status:<8} llm={llm_ref}{scope_str}")
 
 
+def active_agent_name(config: dict) -> str:
+    return config.get("active_agent_profile") or "default"
+
+
+def active_agent_line(config: dict) -> str:
+    return f"Chatting with agent: {active_agent_name(config)}."
+
+
+def new_conversation_message(config: dict) -> str:
+    return f"New conversation started. {active_agent_line(config)}"
+
+
 def register_core_commands(registry: CommandRegistry, ctrl, services, tool_registry,
                            root_dir, get_agent=None, set_conversation_id=None,
                            refresh_agent=None, rescope_agents=None):
@@ -402,7 +414,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         agent = get_agent() if get_agent else None
         if agent:
             agent.reset()
-        return "New conversation started."
+        return new_conversation_message(ctrl.config)
 
     def _cmd_cancel(_arg):
         """Handler for /cancel — interrupt the agent at the next opportunity."""
@@ -578,7 +590,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         rest = parts[1] if len(parts) > 1 else ""
 
         agent_profiles = ctrl.config.get("agent_profiles", {}) or {}
-        active_name = ctrl.config.get("active_agent_profile") or "default"
+        active_name = active_agent_name(ctrl.config)
 
         if sub in ("list", "ls"):
             if not agent_profiles:
@@ -608,7 +620,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                     _rescope_agents()
                 except Exception as e:
                     logger.warning(f"Rescope after /agent switch failed: {e}")
-            return f"Switched to agent profile '{name}'."
+            return f"Switched to agent profile '{name}'. {active_agent_line(ctrl.config)}"
 
         if sub == "add":
             add_parts = rest.split(None, 1)
@@ -663,7 +675,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                         _rescope_agents()
                     except Exception as e:
                         logger.warning(f"Rescope after /agent remove failed: {e}")
-                return f"Agent profile '{name}' removed. Active is now 'default'."
+                return f"Agent profile '{name}' removed. Active is now 'default'. {active_agent_line(ctrl.config)}"
             return f"Agent profile '{name}' removed."
 
         if sub == "show":
