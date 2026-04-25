@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from agent.agent import Agent
 from agent.history_utils import heal_orphan_tool_calls
 from agent.system_prompt import build_system_prompt
-from runtime.agent_scope import load_scope, scoped_db, scoped_registry
+from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_db, scoped_registry
 from events.event_bus import bus
 from events.event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED, CHAT_MESSAGE_PUSHED
 from frontend.commands import CommandRegistry, register_core_commands
@@ -102,7 +102,7 @@ class FrontendRuntime:
         no restrictions — in that case the main agent uses the unrestricted
         tool registry and database directly.
         """
-        profile_name = self.config.get("active_llm_profile")
+        profile_name = self.config.get("active_agent_profile")
         if not profile_name:
             return None
         try:
@@ -115,7 +115,8 @@ class FrontendRuntime:
         return scope
 
     def build_agent(self, session: FrontendSession) -> Agent | None:
-        llm = self.services.get("llm")
+        profile_name = self.config.get("active_agent_profile") or "default"
+        llm = resolve_agent_llm(profile_name, self.config, self.services)
         if llm is None or not getattr(llm, "loaded", False):
             return None
         caps = self.adapters[session.platform].capabilities

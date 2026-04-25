@@ -25,10 +25,11 @@ from frontend.formatters import (
 from frontend.platforms.platform_telegram import TelegramPlatformAdapter
 from frontend.runtime import FrontendRuntime
 from frontend.telegram.forms import (
-    MODEL_ADD_PARAMS,
+    LLM_ADD_PARAMS,
     SCHEDULE_CREATE_STEPS,
     PendingParamForm,
     PendingScheduleCreate,
+    agent_add_params,
     coerce_param_value,
     schema_to_params,
 )
@@ -140,7 +141,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     base_session = adapter.default_session() or FrontendSession("telegram", "0", "0")
     _pending_calls: dict[int, PendingParamForm] = {}
     _pending_configures: dict = {}      # chat_id -> setting_key (waiting for value)
-    _pending_model_adds: dict[int, PendingParamForm] = {}
+    _pending_llm_adds: dict[int, PendingParamForm] = {}
+    _pending_agent_adds: dict[int, PendingParamForm] = {}
     _pending_triggers: dict[int, PendingParamForm] = {}
     _loop: asyncio.AbstractEventLoop | None = None
     _app: Application | None = None
@@ -433,36 +435,34 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             f"{hint}\n\nSend the new value (or /cancel):",
             parse_mode="HTML")
 
-    # ── /agent add interactive form ─────────────────────────────────
+    # ── /llm add interactive form ───────────────────────────────────
 
-    async def _start_model_add_form(chat_id: int, profile_name: str):
-        """Begin interactive /agent add parameter collection."""
-        _pending_model_adds[chat_id] = PendingParamForm(subject=profile_name, params=MODEL_ADD_PARAMS)
+    async def _start_llm_add_form(chat_id: int, model_name: str):
+        """Begin interactive /llm add parameter collection."""
+        _pending_llm_adds[chat_id] = PendingParamForm(subject=model_name, params=LLM_ADD_PARAMS)
         await _app.bot.send_message(
             chat_id,
-            f"<b>New LLM profile: {html.escape(profile_name)}</b>\n"
-            f"Fill in the parameters below.\n"
+            f"<b>New LLM: {html.escape(model_name)}</b>\n"
+            f"Fill in the connection parameters below.\n"
             f"Send /skip for optional params, /cancel to abort.",
             parse_mode="HTML")
-        await _ask_next_model_param(chat_id)
+        await _ask_next_llm_param(chat_id)
 
-    async def _ask_next_model_param(chat_id: int):
-        await _ask_next_form_param(chat_id, _pending_model_adds, _execute_model_add, "mdladd")
+    async def _ask_next_llm_param(chat_id: int):
+        await _ask_next_form_param(chat_id, _pending_llm_adds, _execute_llm_add, "llmadd")
 
-    async def _execute_model_add(chat_id: int):
-        """Finish the /agent add form and register the profile."""
-        state = _pending_model_adds.pop(chat_id, None)
+    async def _execute_llm_add(chat_id: int):
+        """Finish the /llm add form and register the LLM."""
+        state = _pending_llm_adds.pop(chat_id, None)
         if not state:
             return
-        profile_name = state.subject
+        model_name = state.subject
         collected = state.collected
 
-        # Apply defaults for skipped optional params
-        for param in MODEL_ADD_PARAMS:
+        for param in LLM_ADD_PARAMS:
             if param.name not in collected:
                 collected[param.name] = param.default
 
-        # Coerce context size to int
         try:
             collected["llm_context_size"] = int(collected.get("llm_context_size", 0))
         except (ValueError, TypeError):
@@ -471,8 +471,49 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         result = await _dispatch_frontend_event(FrontendEvent(
             type="slash_command",
             session=_session(chat_id),
+            command_name="llm",
+            command_arg=f"add {model_name} {json.dumps(collected)}",
+        ))
+        if result.text:
+            await transport.send_long_message(chat_id, result.text)
+
+    # ── /agent add interactive form ─────────────────────────────────
+
+    async def _start_agent_add_form(chat_id: int, profile_name: str):
+        """Begin interactive /agent add parameter collection."""
+        llm_choices = ["default"] + sorted((config.get("llm_profiles", {}) or {}).keys())
+        _pending_agent_adds[chat_id] = PendingParamForm(
+            subject=profile_name, params=agent_add_params(llm_choices))
+        await _app.bot.send_message(
+            chat_id,
+            f"<b>New agent profile: {html.escape(profile_name)}</b>\n"
+            f"Pick an LLM and configure scope below.\n"
+            f"Send /skip for optional params, /cancel to abort.",
+            parse_mode="HTML")
+        await _ask_next_agent_param(chat_id)
+
+    async def _ask_next_agent_param(chat_id: int):
+        await _ask_next_form_param(chat_id, _pending_agent_adds, _execute_agent_add, "agtadd")
+
+    async def _execute_agent_add(chat_id: int):
+        """Finish the /agent add form and register the agent profile."""
+        state = _pending_agent_adds.pop(chat_id, None)
+        if not state:
+            return
+        profile_name = state.subject
+        collected = state.collected
+
+        # Drop unset optional fields so AgentScope.has_*_filter stays False.
+        cleaned = {k: v for k, v in collected.items() if v not in (None, "")}
+        # Always carry llm + prompt_suffix even if blank for clarity.
+        cleaned.setdefault("llm", collected.get("llm") or "default")
+        cleaned.setdefault("prompt_suffix", collected.get("prompt_suffix") or "")
+
+        result = await _dispatch_frontend_event(FrontendEvent(
+            type="slash_command",
+            session=_session(chat_id),
             command_name="agent",
-            command_arg=f"add {profile_name} {json.dumps(collected)}",
+            command_arg=f"add {profile_name} {json.dumps(cleaned)}",
         ))
         if result.text:
             await transport.send_long_message(chat_id, result.text)
@@ -889,8 +930,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             if chat_id in _pending_configures:
                 _pending_configures.pop(chat_id)
                 cancelled = True
-            if chat_id in _pending_model_adds:
-                _pending_model_adds.pop(chat_id)
+            if chat_id in _pending_llm_adds:
+                _pending_llm_adds.pop(chat_id)
+                cancelled = True
+            if chat_id in _pending_agent_adds:
+                _pending_agent_adds.pop(chat_id)
                 cancelled = True
             if chat_id in _pending_triggers:
                 _pending_triggers.pop(chat_id)
@@ -929,10 +973,18 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 else:
                     await update.message.reply_text("This parameter is required.")
                     return
-            state = _pending_model_adds.get(chat_id)
+            state = _pending_llm_adds.get(chat_id)
             if state:
                 if state.skip_current():
-                    await _ask_next_model_param(chat_id)
+                    await _ask_next_llm_param(chat_id)
+                    return
+                else:
+                    await update.message.reply_text("This parameter is required.")
+                    return
+            state = _pending_agent_adds.get(chat_id)
+            if state:
+                if state.skip_current():
+                    await _ask_next_agent_param(chat_id)
                     return
                 else:
                     await update.message.reply_text("This parameter is required.")
@@ -999,31 +1051,60 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         # /agent — show subcommand menu or profile picker
         if cmd_name == "agent":
             if not arg:
-                # Show subcommand menu
                 buttons = [
-                    [InlineKeyboardButton("List profiles", callback_data="mdl:list")],
-                    [InlineKeyboardButton("Switch active", callback_data="mdl:pick:switch")],
-                    [InlineKeyboardButton("Add profile", callback_data="mdl:add")],
-                    [InlineKeyboardButton("Show profile", callback_data="mdl:pick:show")],
-                    [InlineKeyboardButton("Remove profile", callback_data="mdl:pick:remove")],
+                    [InlineKeyboardButton("List profiles", callback_data="agnt:list")],
+                    [InlineKeyboardButton("Switch active", callback_data="agnt:pick:switch")],
+                    [InlineKeyboardButton("Add profile", callback_data="agnt:add")],
+                    [InlineKeyboardButton("Show profile", callback_data="agnt:pick:show")],
+                    [InlineKeyboardButton("Remove profile", callback_data="agnt:pick:remove")],
                 ]
                 await update.message.reply_text(
                     "Agent Profile Manager:",
                     reply_markup=InlineKeyboardMarkup(buttons))
                 return
-            # If arg is a subcommand needing a profile, show picker
             sub = arg.strip().split(None, 1)[0].lower()
             if sub in ("switch", "remove", "show") and len(arg.strip().split()) == 1:
-                profiles = config.get("llm_profiles", {})
+                profiles = config.get("agent_profiles", {}) or {}
                 if not profiles:
                     await update.message.reply_text("No agent profiles configured.")
                     return
+                active = config.get("active_agent_profile") or "default"
                 buttons = [[InlineKeyboardButton(
-                    f"{'* ' if config.get('active_llm_profile') == n else ''}{n}",
-                    callback_data=f"mdl:{sub}:{n}")]
+                    f"{'* ' if active == n else ''}{n}",
+                    callback_data=f"agnt:{sub}:{n}")]
                     for n in profiles]
                 await update.message.reply_text(
                     f"Choose a profile to {sub}:",
+                    reply_markup=InlineKeyboardMarkup(buttons))
+                return
+
+        # /llm — show subcommand menu or LLM picker
+        if cmd_name == "llm":
+            if not arg:
+                buttons = [
+                    [InlineKeyboardButton("List LLMs", callback_data="llm:list")],
+                    [InlineKeyboardButton("Set default", callback_data="llm:pick:default")],
+                    [InlineKeyboardButton("Add LLM", callback_data="llm:add")],
+                    [InlineKeyboardButton("Show LLM", callback_data="llm:pick:show")],
+                    [InlineKeyboardButton("Remove LLM", callback_data="llm:pick:remove")],
+                ]
+                await update.message.reply_text(
+                    "LLM Manager:",
+                    reply_markup=InlineKeyboardMarkup(buttons))
+                return
+            sub = arg.strip().split(None, 1)[0].lower()
+            if sub in ("default", "remove", "show") and len(arg.strip().split()) == 1:
+                profiles = config.get("llm_profiles", {}) or {}
+                if not profiles:
+                    await update.message.reply_text("No LLMs configured.")
+                    return
+                default_llm = config.get("default_llm_profile") or ""
+                buttons = [[InlineKeyboardButton(
+                    f"{'* ' if default_llm == n else ''}{n}",
+                    callback_data=f"llm:{sub}:{n}")]
+                    for n in profiles]
+                await update.message.reply_text(
+                    f"Choose an LLM to {sub}:",
                     reply_markup=InlineKeyboardMarkup(buttons))
                 return
 
@@ -1092,26 +1173,51 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         f"Invalid value for {param.name} ({param.type}): {e}\nTry again.")
                 return
 
-        # Check for pending /agent add form input
-        if chat_id in _pending_model_adds:
-            state = _pending_model_adds[chat_id]
+        # Check for pending /llm add form input
+        if chat_id in _pending_llm_adds:
+            state = _pending_llm_adds[chat_id]
             if state.awaiting_name:
-                # Validate profile name
-                profile_name = text.strip()
-                if not profile_name or " " in profile_name:
-                    await update.message.reply_text("Profile name must be a single word with no spaces. Try again.")
+                model_name = text.strip()
+                if not model_name or " " in model_name:
+                    await update.message.reply_text("Model name must be a single word with no spaces. Try again.")
                     return
-                existing = config.get("llm_profiles", {})
-                if profile_name in existing:
-                    await update.message.reply_text(f"Profile '{profile_name}' already exists. Choose a different name.")
+                existing = config.get("llm_profiles", {}) or {}
+                if model_name in existing:
+                    await update.message.reply_text(f"LLM '{model_name}' already exists. Choose a different name.")
                     return
-                await _start_model_add_form(chat_id, profile_name)
+                _pending_llm_adds.pop(chat_id, None)
+                await _start_llm_add_form(chat_id, model_name)
                 return
             param = state.current_param
             if param is not None:
                 try:
                     state.store(param.name, coerce_param_value(text, param.type))
-                    await _ask_next_model_param(chat_id)
+                    await _ask_next_llm_param(chat_id)
+                except (ValueError, json.JSONDecodeError) as e:
+                    await update.message.reply_text(
+                        f"Invalid value for {param.name} ({param.type}): {e}\nTry again.")
+            return
+
+        # Check for pending /agent add form input
+        if chat_id in _pending_agent_adds:
+            state = _pending_agent_adds[chat_id]
+            if state.awaiting_name:
+                profile_name = text.strip()
+                if not profile_name or " " in profile_name:
+                    await update.message.reply_text("Profile name must be a single word with no spaces. Try again.")
+                    return
+                existing = config.get("agent_profiles", {}) or {}
+                if profile_name in existing:
+                    await update.message.reply_text(f"Profile '{profile_name}' already exists. Choose a different name.")
+                    return
+                _pending_agent_adds.pop(chat_id, None)
+                await _start_agent_add_form(chat_id, profile_name)
+                return
+            param = state.current_param
+            if param is not None:
+                try:
+                    state.store(param.name, coerce_param_value(text, param.type))
+                    await _ask_next_agent_param(chat_id)
                 except (ValueError, json.JSONDecodeError) as e:
                     await update.message.reply_text(
                         f"Invalid value for {param.name} ({param.type}): {e}\nTry again.")
@@ -1408,8 +1514,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         await transport.send_long_message(chat_id, result.text)
                 return
 
-            # ── Model profile callbacks (mdl:<action>[:<name>]) ──
-            if data.startswith("mdl:"):
+            # ── Agent profile callbacks (agnt:<action>[:<name>]) ──
+            if data.startswith("agnt:"):
                 parts = data.split(":", 2)
                 action = parts[1] if len(parts) > 1 else ""
                 name = parts[2] if len(parts) > 2 else ""
@@ -1426,23 +1532,22 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     if result.text:
                         await transport.send_long_message(chat_id, result.text)
                 elif action == "add":
-                    # Ask for profile name, then start interactive form
-                    _pending_model_adds[chat_id] = PendingParamForm(awaiting_name=True)
+                    _pending_agent_adds[chat_id] = PendingParamForm(awaiting_name=True)
                     await _app.bot.send_message(
                         chat_id,
-                        "Enter a name for the new profile (e.g. <code>openai-gpt4</code>, "
-                        "<code>local-llama</code>):\n\nSend /cancel to abort.",
+                        "Enter a name for the new agent profile (e.g. <code>researcher</code>):\n\n"
+                        "Send /cancel to abort.",
                         parse_mode="HTML")
                 elif action == "pick":
-                    # Show profile picker for the subcommand in `name`
                     sub = name
-                    profiles = config.get("llm_profiles", {})
+                    profiles = config.get("agent_profiles", {}) or {}
                     if not profiles:
                         await _app.bot.send_message(chat_id, "No agent profiles configured.")
                     else:
+                        active = config.get("active_agent_profile") or "default"
                         buttons = [[InlineKeyboardButton(
-                            f"{'* ' if config.get('active_llm_profile') == n else ''}{n}",
-                            callback_data=f"mdl:{sub}:{n}")]
+                            f"{'* ' if active == n else ''}{n}",
+                            callback_data=f"agnt:{sub}:{n}")]
                             for n in profiles]
                         await _app.bot.send_message(
                             chat_id, f"Choose a profile to {sub}:",
@@ -1457,18 +1562,80 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         await transport.send_long_message(chat_id, result.text)
                 return
 
-            # ── Model add form enum callbacks (mdladd:<chat_id>:<param>:<value>) ──
-            if data.startswith("mdladd:"):
+            # ── LLM callbacks (llm:<action>[:<name>]) ──
+            if data.startswith("llm:"):
+                parts = data.split(":", 2)
+                action = parts[1] if len(parts) > 1 else ""
+                name = parts[2] if len(parts) > 2 else ""
+                await update.callback_query.answer()
+                await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                chat_id = update.callback_query.message.chat_id
+
+                if action == "list":
+                    result = await _dispatch_frontend_event(FrontendEvent(
+                        type="callback_response",
+                        session=_session(chat_id),
+                        payload={"kind": "command", "command_name": "llm", "command_arg": "list"},
+                    ))
+                    if result.text:
+                        await transport.send_long_message(chat_id, result.text)
+                elif action == "add":
+                    _pending_llm_adds[chat_id] = PendingParamForm(awaiting_name=True)
+                    await _app.bot.send_message(
+                        chat_id,
+                        "Enter the model name for the new LLM (e.g. <code>gpt-4o</code>, "
+                        "<code>claude-opus-4-7</code>):\n\nSend /cancel to abort.",
+                        parse_mode="HTML")
+                elif action == "pick":
+                    sub = name
+                    profiles = config.get("llm_profiles", {}) or {}
+                    if not profiles:
+                        await _app.bot.send_message(chat_id, "No LLMs configured.")
+                    else:
+                        default_llm = config.get("default_llm_profile") or ""
+                        buttons = [[InlineKeyboardButton(
+                            f"{'* ' if default_llm == n else ''}{n}",
+                            callback_data=f"llm:{sub}:{n}")]
+                            for n in profiles]
+                        await _app.bot.send_message(
+                            chat_id, f"Choose an LLM to {sub}:",
+                            reply_markup=InlineKeyboardMarkup(buttons))
+                elif action in ("default", "remove", "show"):
+                    result = await _dispatch_frontend_event(FrontendEvent(
+                        type="callback_response",
+                        session=_session(chat_id),
+                        payload={"kind": "command", "command_name": "llm", "command_arg": f"{action} {name}"},
+                    ))
+                    if result.text:
+                        await transport.send_long_message(chat_id, result.text)
+                return
+
+            # ── LLM add form enum callbacks (llmadd:<chat_id>:<param>:<value>) ──
+            if data.startswith("llmadd:"):
                 parts = data.split(":", 3)
                 if len(parts) == 4:
                     _, cid_str, param_name, value = parts
                     cid = int(cid_str)
                     await update.callback_query.answer()
                     await update.callback_query.edit_message_reply_markup(reply_markup=None)
-                    state = _pending_model_adds.get(cid)
+                    state = _pending_llm_adds.get(cid)
                     if state and not state.awaiting_name:
                         state.store(param_name, value)
-                        await _ask_next_model_param(cid)
+                        await _ask_next_llm_param(cid)
+                return
+
+            # ── Agent add form enum callbacks (agtadd:<chat_id>:<param>:<value>) ──
+            if data.startswith("agtadd:"):
+                parts = data.split(":", 3)
+                if len(parts) == 4:
+                    _, cid_str, param_name, value = parts
+                    cid = int(cid_str)
+                    await update.callback_query.answer()
+                    await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                    state = _pending_agent_adds.get(cid)
+                    if state and not state.awaiting_name:
+                        state.store(param_name, value)
+                        await _ask_next_agent_param(cid)
                 return
 
             # ── History conversation selection (hist:<id>) ──

@@ -121,6 +121,15 @@ def main():
 	# --- 6. Initialize controller ---
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)
 
+	# Rebind the LLM router to the live service registry so /llm add and
+	# /llm remove mutate ctrl.services directly. Without this, the router
+	# would only mutate the dict it was built from inside llmService and
+	# /services would not reflect new LLMs until restart.
+	from plugins.services.llmService import LLMRouter
+	_router = ctrl.services.get("llm")
+	if isinstance(_router, LLMRouter):
+		_router.services = ctrl.services
+
 	# --- 6b. Determine which frontends to start ---
 	frontends = set(config.get("enabled_frontends", ["repl", "telegram"]))
 	logger.info(f"Enabled frontends: {sorted(frontends)}")

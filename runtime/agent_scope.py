@@ -1,7 +1,7 @@
 """
 Agent scope — per-profile lens over the shared database and tool registry.
 
-An agent profile (stored in ``llm_profiles`` config) can declare optional
+An agent profile (stored in ``agent_profiles`` config) can declare optional
 restrictions on which tables it can read and which tools it can call.
 This module turns those declarations into:
 
@@ -57,7 +57,7 @@ def load_scope(profile_name: str, config: dict) -> AgentScope:
     Raises ``ValueError`` if the profile sets both _allow and _deny for
     the same resource kind (tools or tables).
     """
-    profile = config.get("llm_profiles", {}).get(profile_name, {}) or {}
+    profile = config.get("agent_profiles", {}).get(profile_name, {}) or {}
 
     tools_allow = profile.get("tools_allow")
     tools_deny = profile.get("tools_deny")
@@ -263,6 +263,24 @@ def scoped_registry(base_registry: ToolRegistry, scope: AgentScope) -> ToolRegis
         if name in allowed_names:
             new_registry.tools[name] = tool
     return new_registry
+
+
+def resolve_agent_llm(profile_name: str, config: dict, services: dict):
+    """Resolve the LLM service an agent profile should use.
+
+    Looks up ``agent_profiles[profile_name]["llm"]``. The literal string
+    ``"default"`` resolves to ``config["default_llm_profile"]``. Returns the
+    service instance from ``services`` or ``None`` if it's missing — callers
+    should fall back to ``services["llm"]`` (the default-LLM router) in that
+    case so the app still works during transient misconfiguration.
+    """
+    profile = (config.get("agent_profiles", {}) or {}).get(profile_name, {}) or {}
+    llm_ref = profile.get("llm") or "default"
+    if llm_ref == "default":
+        llm_ref = config.get("default_llm_profile") or ""
+    if not llm_ref:
+        return services.get("llm")
+    return services.get(llm_ref) or services.get("llm")
 
 
 def scoped_db(base_db, scope: AgentScope):

@@ -78,13 +78,28 @@ def coerce_param_value(raw: str, param_type: str):
     return raw
 
 
-MODEL_ADD_PARAMS = [
-    FormParam("llm_model_name", description="The model identifier sent to the API (e.g. gpt-4, llama-3.1-8b, gemini-2.5-flash).", required=True),
+LLM_ADD_PARAMS = [
     FormParam("llm_endpoint", description="Custom API endpoint URL. Leave blank for the default OpenAI endpoint. For LM Studio, see developer tab."),
     FormParam("llm_api_key", description="API key or environment variable name (e.g. OPENAI_API_KEY). Leave blank for local models."),
     FormParam("llm_context_size", type="integer", description="Max context window in tokens. Set 0 for reactive-only compaction."),
     FormParam("llm_service_class", description="Which LLM backend to use.", required=True, enum=["OpenAILLM", "LMStudioLLM"]),
 ]
+
+
+def agent_add_params(llm_choices: list[str]) -> list[FormParam]:
+    """Build the agent-profile creation form. ``llm_choices`` is the live list
+    of model names from llm_profiles, plus the literal 'default' sentinel —
+    it must be passed in at form-start time so the dropdown reflects what's
+    actually configured."""
+    return [
+        FormParam("llm", description="LLM to use. 'default' follows whatever LLM is currently the default.",
+                  required=True, enum=llm_choices),
+        FormParam("prompt_suffix", description="Extra text appended to the system prompt. Leave blank for none."),
+        FormParam("tools_allow", type="array", description="Whitelist of tool names (comma-separated or JSON list). Skip for no restriction.", default=None),
+        FormParam("tools_deny", type="array", description="Blacklist of tool names. Skip for no restriction.", default=None),
+        FormParam("tables_allow", type="array", description="Whitelist of database tables. Skip for no restriction.", default=None),
+        FormParam("tables_deny", type="array", description="Blacklist of database tables. Skip for no restriction.", default=None),
+    ]
 
 
 SCHEDULE_CREATE_STEPS = [

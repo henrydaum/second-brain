@@ -4,12 +4,12 @@ import time
 from pathlib import Path
 
 from plugins.services.helpers.parser_registry import get_modality
-from plugins.services.llmService import LLMRouter, _profile_service_name
+from plugins.services.llmService import LLMRouter
 from plugins.BaseTask import BaseTask, TaskResult
 from agent.agent import Agent
 from agent.system_prompt import build_system_prompt
 from agent.tool_registry import ToolRegistry
-from runtime.agent_scope import load_scope, scoped_db, scoped_registry
+from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_db, scoped_registry
 from frontend.token_stripper import strip_model_tokens
 from agent.subagent_runtime import (
     PushSubagentMessageTool,
@@ -99,22 +99,22 @@ class RunSubagent(BaseTask):
             return TaskResult.failed("Subagent payload is missing 'prompt'.")
 
         # Resolve which agent profile this run should use. Empty or missing
-        # "agent" falls back to the currently active profile — same behavior
-        # as before the multi-agent work.
+        # "agent" falls back to the currently active profile.
         requested_agent = (payload.get("agent") or "").strip()
         target_agent = (
             requested_agent
-            or (getattr(router, "_active_name", None) or "")
-            or context.config.get("active_llm_profile") or ""
-        ).strip()
-        if not target_agent:
-            return TaskResult.failed("No agent profile is active and none was specified.")
+            or context.config.get("active_agent_profile") or ""
+        ).strip() or "default"
 
-        # Resolve the per-profile LLM service. Load it if necessary so subagents
-        # targeting a non-default profile don't silently fall back.
-        llm = context.services.get(_profile_service_name(target_agent)) if isinstance(router, LLMRouter) else router
-        if llm is None:
+        agent_profiles = context.config.get("agent_profiles", {}) or {}
+        if target_agent not in agent_profiles:
             return TaskResult.failed(f"Unknown agent profile: '{target_agent}'.")
+
+        # Resolve the LLM the agent profile points at. Load it if necessary so
+        # subagents pinning to a non-default LLM don't silently fall back.
+        llm = resolve_agent_llm(target_agent, context.config, context.services)
+        if llm is None:
+            return TaskResult.failed(f"No LLM resolved for agent profile '{target_agent}'.")
         if not getattr(llm, "loaded", False):
             try:
                 llm.load()

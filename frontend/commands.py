@@ -106,12 +106,11 @@ def _mask_api_key(value: str) -> str:
     return f"{value[:4]}...{value[-4:]}"
 
 
-def _describe_profile(name: str, profile: dict, active: bool, loaded: bool = False) -> str:
-    """Render a single profile line for /agent list."""
-    marker = "*" if active else " "
-    status = "active" if active else ("loaded" if loaded else "")
+def _describe_llm(model_name: str, profile: dict, default: bool, loaded: bool) -> str:
+    """Render a single LLM line for /llm list."""
+    marker = "*" if default else " "
+    status = "default" if default else ("loaded" if loaded else "")
     cls = profile.get("llm_service_class") or "?"
-    model = profile.get("llm_model_name") or "?"
     ctx = profile.get("llm_context_size") or 0
     if ctx and ctx >= 1000:
         ctx_str = f"ctx {ctx // 1000}k"
@@ -119,6 +118,16 @@ def _describe_profile(name: str, profile: dict, active: bool, loaded: bool = Fal
         ctx_str = f"ctx {ctx}"
     else:
         ctx_str = "ctx auto"
+    endpoint = profile.get("llm_endpoint") or "(default)"
+    return (f"  {marker} {model_name:<24} {status:<8} "
+            f"{cls:<14} {ctx_str:<10} {endpoint}")
+
+
+def _describe_agent_profile(name: str, profile: dict, active: bool) -> str:
+    """Render a single agent profile line for /agent list."""
+    marker = "*" if active else " "
+    status = "active" if active else ""
+    llm_ref = profile.get("llm") or "default"
     scope_parts = []
     if profile.get("tools_allow") is not None:
         scope_parts.append(f"tools+{len(profile['tools_allow'])}")
@@ -128,9 +137,10 @@ def _describe_profile(name: str, profile: dict, active: bool, loaded: bool = Fal
         scope_parts.append(f"tables+{len(profile['tables_allow'])}")
     elif profile.get("tables_deny") is not None:
         scope_parts.append(f"tables-{len(profile['tables_deny'])}")
+    if profile.get("prompt_suffix"):
+        scope_parts.append("prompt+")
     scope_str = ("  [" + ",".join(scope_parts) + "]") if scope_parts else ""
-    return (f"  {marker} {name:<16} {status:<8} "
-            f"{cls:<14} {model:<24} ({ctx_str}){scope_str}")
+    return (f"  {marker} {name:<16} {status:<8} llm={llm_ref}{scope_str}")
 
 
 def register_core_commands(registry: CommandRegistry, ctrl, services, tool_registry,
@@ -433,158 +443,237 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         fn()
         return "Restarting — the process will come back up in a few seconds."
 
-    def _cmd_agent(arg):
-        """Handler for /agent — manage agent profiles (model + optional scope)."""
+    def _persist_config_key(key: str, value):
+        """Save a config key. Mirrors plugin keys into plugin_config.json."""
+        ctrl.config[key] = value
+        _cm.save(ctrl.config)
+        if key in _plugin_keys():
+            existing = _cm.load_plugin_config()
+            existing[key] = value
+            _cm.save_plugin_config(existing)
+
+    def _cmd_llm(arg):
+        """Handler for /llm — manage LLM connection configs (model, endpoint, key, context)."""
         from plugins.services.llmService import LLMRouter
-        from runtime.agent_scope import load_scope
 
         router = services.get("llm")
         if not isinstance(router, LLMRouter):
-            return "LLM service is not a profile router. Run /load llm to load it."
+            return "LLM service is not a router. Run /load llm to load it."
 
         parts = arg.strip().split(None, 1) if arg.strip() else []
         sub = parts[0].lower() if parts else "list"
         rest = parts[1] if len(parts) > 1 else ""
 
         if sub in ("list", "ls"):
-            infos = router.list_profiles()
+            infos = router.list_llms()
             if not infos:
-                return ("No agent profiles configured. "
-                        "Run /agent add <name> {json} to create one.")
-            active_name = ctrl.config.get("active_llm_profile")
-            lines = ["Agent Profiles:"]
-            for p in infos:
-                profile = ctrl.config.get("llm_profiles", {}).get(p["name"], {})
-                lines.append(_describe_profile(
-                    p["name"], profile,
-                    active=(p["name"] == active_name),
-                    loaded=p.get("loaded", False),
+                return ("No LLMs configured. "
+                        "Run /llm add <model_name> {json} to create one.")
+            lines = ["LLMs:"]
+            for info in infos:
+                lines.append(_describe_llm(
+                    info["model_name"],
+                    {
+                        "llm_service_class": info["class"],
+                        "llm_context_size": info["context_size"],
+                        "llm_endpoint": info["endpoint"],
+                    },
+                    default=info["default"],
+                    loaded=info["loaded"],
                 ))
             return "\n".join(lines)
 
-        elif sub == "switch":
-            name = rest.strip()
-            if not name:
-                return "Usage: /agent switch <profile_name>"
-            profiles = ctrl.config.get("llm_profiles", {})
-            if name not in profiles:
-                return (f"Unknown profile: '{name}'. "
-                        f"Run /agent list to see all profiles.")
-            # Validate scope up-front so a bad manifest is rejected here
-            # rather than silently ignored when the agent runs.
-            try:
-                load_scope(name, ctrl.config)
-            except ValueError as e:
-                return f"Cannot switch to '{name}': {e}"
-            result = router.switch(name)
-            ctrl.config["active_llm_profile"] = name
-            _cm.save(ctrl.config)
-            pk = _plugin_keys()
-            if "active_llm_profile" in pk:
-                existing = _cm.load_plugin_config()
-                existing["active_llm_profile"] = name
-                _cm.save_plugin_config(existing)
+        if sub == "default":
+            model = rest.strip()
+            if not model:
+                return "Usage: /llm default <model_name>"
+            profiles = ctrl.config.get("llm_profiles", {}) or {}
+            if model not in profiles:
+                return (f"Unknown LLM: '{model}'. "
+                        f"Run /llm list to see all LLMs.")
+            _persist_config_key("default_llm_profile", model)
             if _rescope_agents:
                 try:
                     _rescope_agents()
                 except Exception as e:
-                    logger.warning(f"Rescope after /agent switch failed: {e}")
-            return result
+                    logger.warning(f"Rescope after /llm default failed: {e}")
+            return f"Default LLM set to '{model}'."
 
-        elif sub == "add":
+        if sub == "add":
             add_parts = rest.split(None, 1)
-            name = add_parts[0] if add_parts else ""
+            model = add_parts[0] if add_parts else ""
             json_str = add_parts[1] if len(add_parts) > 1 else ""
-            if not name:
-                return ("Usage: /agent add <profile_name> {json}\n"
-                        "Keys: llm_model_name, llm_endpoint, llm_api_key, "
-                        "llm_context_size, llm_service_class (OpenAILLM|LMStudioLLM). "
-                        "Optional scope: prompt_suffix, tools_allow, tools_deny, "
-                        "tables_allow, tables_deny.")
+            if not model:
+                return ("Usage: /llm add <model_name> {json}\n"
+                        "Keys: llm_endpoint, llm_api_key, llm_context_size, "
+                        "llm_service_class (OpenAILLM|LMStudioLLM).")
             if not json_str:
-                return ("Usage: /agent add <profile_name> {json}\n"
-                        "Example: /agent add mymodel "
-                        '{\"llm_model_name\": \"gpt-4\", \"llm_endpoint\": \"\", '
-                        '\"llm_api_key\": \"OPENAI_API_KEY\", \"llm_context_size\": 0, '
-                        '\"llm_service_class\": \"OpenAILLM\"}')
+                return ("Usage: /llm add <model_name> {json}\n"
+                        "Example: /llm add gpt-4 "
+                        '{\"llm_endpoint\": \"\", \"llm_api_key\": \"OPENAI_API_KEY\", '
+                        '\"llm_context_size\": 128000, \"llm_service_class\": \"OpenAILLM\"}')
             try:
                 profile = _json.loads(json_str)
             except _json.JSONDecodeError as e:
                 return f"Invalid JSON: {e}"
 
             profiles = ctrl.config.setdefault("llm_profiles", {})
+            profiles[model] = profile
+            router.add_llm(model, profile)
+            _persist_config_key("llm_profiles", profiles)
+
+            # First LLM becomes the default automatically.
+            if not ctrl.config.get("default_llm_profile"):
+                _persist_config_key("default_llm_profile", model)
+                return f"LLM '{model}' added and set as default."
+            return f"LLM '{model}' added."
+
+        if sub == "remove":
+            model = rest.strip()
+            if not model:
+                return "Usage: /llm remove <model_name>"
+            profiles = ctrl.config.get("llm_profiles", {}) or {}
+            if model not in profiles:
+                return (f"Unknown LLM: '{model}'. "
+                        f"Run /llm list to see all LLMs.")
+            if len(profiles) == 1:
+                return "Refusing to remove the only LLM. Add another one first."
+            was_default = ctrl.config.get("default_llm_profile") == model
+            router.remove_llm(model)
+            del profiles[model]
+            _persist_config_key("llm_profiles", profiles)
+            if was_default:
+                new_default = next(iter(profiles))
+                _persist_config_key("default_llm_profile", new_default)
+                if _rescope_agents:
+                    try:
+                        _rescope_agents()
+                    except Exception as e:
+                        logger.warning(f"Rescope after /llm remove failed: {e}")
+                return f"LLM '{model}' removed. Default is now '{new_default}'."
+            return f"LLM '{model}' removed."
+
+        if sub == "show":
+            model = rest.strip()
+            if not model:
+                return "Usage: /llm show <model_name>"
+            profiles = ctrl.config.get("llm_profiles", {}) or {}
+            if model not in profiles:
+                return (f"Unknown LLM: '{model}'. "
+                        f"Run /llm list to see all LLMs.")
+            display = dict(profiles[model])
+            if "llm_api_key" in display:
+                display["llm_api_key"] = _mask_api_key(display["llm_api_key"])
+            return f"{model}:\n{_json.dumps(display, indent=2)}"
+
+        return (f"Unknown subcommand: '{sub}'. "
+                f"Use: list, add, remove, show, default.")
+
+    def _cmd_agent(arg):
+        """Handler for /agent — manage agent profiles (LLM reference + optional scope)."""
+        from runtime.agent_scope import load_scope
+
+        parts = arg.strip().split(None, 1) if arg.strip() else []
+        sub = parts[0].lower() if parts else "list"
+        rest = parts[1] if len(parts) > 1 else ""
+
+        agent_profiles = ctrl.config.get("agent_profiles", {}) or {}
+        active_name = ctrl.config.get("active_agent_profile") or "default"
+
+        if sub in ("list", "ls"):
+            if not agent_profiles:
+                return ("No agent profiles configured. "
+                        "Run /agent add <name> {json} to create one.")
+            lines = ["Agent Profiles:"]
+            for name, profile in agent_profiles.items():
+                lines.append(_describe_agent_profile(
+                    name, profile, active=(name == active_name),
+                ))
+            return "\n".join(lines)
+
+        if sub == "switch":
+            name = rest.strip()
+            if not name:
+                return "Usage: /agent switch <profile_name>"
+            if name not in agent_profiles:
+                return (f"Unknown agent profile: '{name}'. "
+                        f"Run /agent list to see all profiles.")
+            try:
+                load_scope(name, ctrl.config)
+            except ValueError as e:
+                return f"Cannot switch to '{name}': {e}"
+            _persist_config_key("active_agent_profile", name)
+            if _rescope_agents:
+                try:
+                    _rescope_agents()
+                except Exception as e:
+                    logger.warning(f"Rescope after /agent switch failed: {e}")
+            return f"Switched to agent profile '{name}'."
+
+        if sub == "add":
+            add_parts = rest.split(None, 1)
+            name = add_parts[0] if add_parts else ""
+            json_str = add_parts[1] if len(add_parts) > 1 else ""
+            if not name:
+                return ("Usage: /agent add <profile_name> {json}\n"
+                        "Keys: llm (model_name or 'default'), prompt_suffix, "
+                        "tools_allow, tools_deny, tables_allow, tables_deny.")
+            if not json_str:
+                return ("Usage: /agent add <profile_name> {json}\n"
+                        "Example: /agent add researcher "
+                        '{\"llm\": \"default\", \"prompt_suffix\": \"\", '
+                        '\"tools_allow\": [\"sql_query\", \"read_file\"]}')
+            try:
+                profile = _json.loads(json_str)
+            except _json.JSONDecodeError as e:
+                return f"Invalid JSON: {e}"
+
+            llm_ref = profile.get("llm") or "default"
+            llm_profiles = ctrl.config.get("llm_profiles", {}) or {}
+            if llm_ref != "default" and llm_ref not in llm_profiles:
+                return (f"Profile references unknown LLM '{llm_ref}'. "
+                        f"Run /llm list to see all LLMs.")
+
+            profiles = ctrl.config.setdefault("agent_profiles", {})
             profiles[name] = profile
-            # Validate scope before registering so a bad manifest is rejected.
             try:
                 load_scope(name, ctrl.config)
             except ValueError as e:
                 del profiles[name]
                 return f"Invalid scope for '{name}': {e}"
-            router.add_profile(name, profile)
-            _cm.save(ctrl.config)
-            pk = _plugin_keys()
-            if "llm_profiles" in pk:
-                existing = _cm.load_plugin_config()
-                existing["llm_profiles"] = profiles
-                _cm.save_plugin_config(existing)
+            _persist_config_key("agent_profiles", profiles)
+            return f"Agent profile '{name}' added."
 
-            # If first profile or no active, make it active
-            if not ctrl.config.get("active_llm_profile"):
-                ctrl.config["active_llm_profile"] = name
-                router.switch(name)
-                _cm.save(ctrl.config)
+        if sub == "remove":
+            name = rest.strip()
+            if not name:
+                return "Usage: /agent remove <profile_name>"
+            if name == "default":
+                return "Refusing to remove the 'default' agent profile."
+            if name not in agent_profiles:
+                return (f"Unknown agent profile: '{name}'. "
+                        f"Run /agent list to see all profiles.")
+            was_active = active_name == name
+            del agent_profiles[name]
+            _persist_config_key("agent_profiles", agent_profiles)
+            if was_active:
+                _persist_config_key("active_agent_profile", "default")
                 if _rescope_agents:
                     try:
                         _rescope_agents()
                     except Exception as e:
-                        logger.warning(f"Rescope after /agent add failed: {e}")
-                return f"Profile '{name}' added and set as active."
-            return f"Profile '{name}' added."
+                        logger.warning(f"Rescope after /agent remove failed: {e}")
+                return f"Agent profile '{name}' removed. Active is now 'default'."
+            return f"Agent profile '{name}' removed."
 
-        elif sub == "remove":
-            name = rest.strip()
-            if not name:
-                return "Usage: /agent remove <profile_name>"
-            profiles = ctrl.config.get("llm_profiles", {})
-            if name not in profiles:
-                return (f"Unknown profile: '{name}'. "
-                        f"Run /agent list to see all profiles.")
-            was_active = ctrl.config.get("active_llm_profile") == name
-            router.remove_profile(name)
-            del profiles[name]
-            if was_active:
-                remaining = list(profiles.keys())
-                if remaining:
-                    ctrl.config["active_llm_profile"] = remaining[0]
-                    router.switch(remaining[0])
-                else:
-                    ctrl.config["active_llm_profile"] = ""
-            _cm.save(ctrl.config)
-            pk = _plugin_keys()
-            if "llm_profiles" in pk:
-                existing = _cm.load_plugin_config()
-                existing["llm_profiles"] = profiles
-                _cm.save_plugin_config(existing)
-            if was_active and _rescope_agents:
-                try:
-                    _rescope_agents()
-                except Exception as e:
-                    logger.warning(f"Rescope after /agent remove failed: {e}")
-            return f"Profile '{name}' removed."
-
-        elif sub == "show":
+        if sub == "show":
             name = rest.strip()
             if not name:
                 return "Usage: /agent show <profile_name>"
-            profiles = ctrl.config.get("llm_profiles", {})
-            if name not in profiles:
-                return (f"Unknown profile: '{name}'. "
+            if name not in agent_profiles:
+                return (f"Unknown agent profile: '{name}'. "
                         f"Run /agent list to see all profiles.")
-            # Mask API keys
-            display = dict(profiles[name])
-            if "llm_api_key" in display:
-                display["llm_api_key"] = _mask_api_key(display["llm_api_key"])
-            return f"{name}:\n{_json.dumps(display, indent=2)}"
+            return f"{name}:\n{_json.dumps(agent_profiles[name], indent=2)}"
 
         return (f"Unknown subcommand: '{sub}'. "
                 f"Use: list, switch, add, remove, show.")
@@ -679,7 +768,12 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
 
     _agent_completions = lambda: (
         ["list", "switch", "add", "remove", "show"]
-        + sorted(ctrl.config.get("llm_profiles", {}).keys())
+        + sorted((ctrl.config.get("agent_profiles", {}) or {}).keys())
+    )
+
+    _llm_completions = lambda: (
+        ["list", "add", "remove", "show", "default"]
+        + sorted((ctrl.config.get("llm_profiles", {}) or {}).keys())
     )
 
     def _schedule_completions():
@@ -796,7 +890,11 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      "<setting_name> <value>",
                      handler=_cmd_configure,
                      category="Config & System"),
-        CommandEntry("agent", "Manage agent profiles (model + optional scope)",
+        CommandEntry("llm", "Manage LLM connection configs",
+                     "[list|add|remove|show|default] [args]",
+                     handler=_cmd_llm, arg_completions=_llm_completions,
+                     category="Config & System"),
+        CommandEntry("agent", "Manage agent profiles (LLM + optional scope)",
                      "[list|switch|add|remove|show] [args]",
                      handler=_cmd_agent, arg_completions=_agent_completions,
                      category="Config & System"),
