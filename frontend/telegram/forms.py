@@ -112,9 +112,9 @@ def agent_add_params(llm_choices: list[str], tool_names: list[str] | None = None
     it must be passed in at form-start time so the dropdown reflects what's
     actually configured."""
     tool_hint = _format_name_hint(
-        "Agent-visible tool names",
+        "Tool names",
         tool_names,
-        "Use these registry names, not filenames like `tool_run_command.py`.",
+        "(Use these registry names, not filenames like `tool_run_command.py`.)",
     )
     table_hint = _format_name_hint("Database table names", table_names)
     return [
