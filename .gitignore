@@ -1,3 +1,4 @@
+tests/
 __pycache__/
 .pytest_cache/
 pytest-cache-files-*/
@@ -6,6 +7,7 @@ config.json
 database.db*
 .VSCodeCounter
 .claude
+.codex_smoke/
 .DS_Store
 .git
 .vscode

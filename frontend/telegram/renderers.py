@@ -84,22 +84,19 @@ def prepare_photo_bytes(path: Path) -> io.BytesIO:
         img = img.convert("RGB")
 
     # Shrink by 25% each pass until it fits
-    quality = 85
     for scale in [0.75, 0.5, 0.35, 0.25]:
         w, h = img.size
         resized = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
         buf = io.BytesIO()
-        resized.save(buf, format="JPEG", quality=quality)
-        if buf.tell() <= _PHOTO_MAX_SIZE:
+        resized.save(buf, format="JPEG", quality=85)
+        resized_size = buf.tell()
+        if resized_size <= _PHOTO_MAX_SIZE:
             buf.seek(0)
             buf.name = path.stem + ".jpg"
-            logger.info(f"Resized to {buf.tell() / 1024 / 1024:.1f} MB ({int(w * scale)}x{int(h * scale)})")
+            logger.info(f"Resized to {resized_size / 1024 / 1024:.1f} MB ({int(w * scale)}x{int(h * scale)})")
             return buf
 
-    # Last resort: very small
-    buf.seek(0)
-    buf.name = path.stem + ".jpg"
-    return buf
+    raise ValueError(f"{path.name} could not be resized under Telegram's 10 MB photo limit")
 
 
 # ===================================================================

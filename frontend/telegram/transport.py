@@ -8,7 +8,11 @@ from frontend.telegram.renderers import VIDEO_EXTENSIONS, SendAction, prepare_me
 
 
 def _file_bytes(path):
-    return io.BytesIO(path.read_bytes())
+    buf = io.BytesIO(path.read_bytes())
+    buf.name = path.name
+    return buf
+
+
 from frontend.types import FrontendAction, FrontendSession
 
 logger = logging.getLogger("TelegramTransport")
@@ -53,33 +57,76 @@ class TelegramTransport:
         from telegram import InputMediaAudio, InputMediaDocument, InputMediaPhoto, InputMediaVideo
 
         app = self._get_app()
+
+        async def send_one(file_path, method):
+            if method == "photo":
+                await app.bot.send_photo(chat_id, photo=prepare_photo_bytes(file_path))
+            elif method == "video":
+                await app.bot.send_video(chat_id, video=_file_bytes(file_path))
+            elif method == "audio":
+                await app.bot.send_audio(chat_id, audio=_file_bytes(file_path), title=file_path.stem)
+            else:
+                await app.bot.send_document(chat_id, document=_file_bytes(file_path), filename=file_path.name)
+
+        def method_for(file_path, group_type):
+            if group_type == "photo_video":
+                return "video" if file_path.suffix.lower() in VIDEO_EXTENSIONS else "photo"
+            return "audio" if group_type == "audio" else "document"
+
         for action in actions:
+            failed = []
             try:
                 if action.method == "media_group":
                     media = []
+                    valid = []
                     for file_path in action.files:
-                        ext = file_path.suffix.lower()
-                        if action.group_type == "photo_video":
-                            media.append(InputMediaVideo(_file_bytes(file_path)) if ext in VIDEO_EXTENSIONS else InputMediaPhoto(prepare_photo_bytes(file_path)))
-                        elif action.group_type == "audio":
-                            media.append(InputMediaAudio(_file_bytes(file_path), title=file_path.stem))
-                        else:
-                            media.append(InputMediaDocument(_file_bytes(file_path), filename=file_path.name))
-                    await app.bot.send_media_group(chat_id, media)
+                        try:
+                            method = method_for(file_path, action.group_type)
+                            if method == "photo":
+                                media.append(InputMediaPhoto(prepare_photo_bytes(file_path)))
+                            elif method == "video":
+                                media.append(InputMediaVideo(_file_bytes(file_path)))
+                            elif method == "audio":
+                                media.append(InputMediaAudio(_file_bytes(file_path), title=file_path.stem))
+                            else:
+                                media.append(InputMediaDocument(_file_bytes(file_path), filename=file_path.name))
+                            valid.append(file_path)
+                        except Exception as e:
+                            failed.append(file_path.name)
+                            logger.error(f"Failed to prepare {file_path.name}: {e}")
+                    if len(media) > 1:
+                        try:
+                            await app.bot.send_media_group(chat_id, media)
+                        except Exception as e:
+                            logger.error(f"Failed to send media group: {e}")
+                            for file_path in valid:
+                                try:
+                                    await send_one(file_path, method_for(file_path, action.group_type))
+                                except Exception as item_error:
+                                    failed.append(file_path.name)
+                                    logger.error(f"Failed to send {file_path.name}: {item_error}")
+                    elif valid:
+                        try:
+                            await send_one(valid[0], method_for(valid[0], action.group_type))
+                        except Exception as e:
+                            failed.append(valid[0].name)
+                            logger.error(f"Failed to send {valid[0].name}: {e}")
                 elif action.method == "photo":
-                    await app.bot.send_photo(chat_id, photo=prepare_photo_bytes(action.files[0]))
+                    await send_one(action.files[0], "photo")
                 elif action.method == "video":
-                    await app.bot.send_video(chat_id, video=_file_bytes(action.files[0]))
+                    await send_one(action.files[0], "video")
                 elif action.method == "audio":
-                    await app.bot.send_audio(chat_id, audio=_file_bytes(action.files[0]), title=action.files[0].stem)
+                    await send_one(action.files[0], "audio")
                 elif action.method == "document":
-                    await app.bot.send_document(chat_id, document=_file_bytes(action.files[0]), filename=action.files[0].name)
+                    await send_one(action.files[0], "document")
                 elif action.method == "text":
                     await app.bot.send_message(chat_id, action.text_content, parse_mode="HTML")
             except Exception as e:
                 names = ", ".join(file_path.name for file_path in action.files) if action.files else "(text)"
                 logger.error(f"Failed to send {names}: {e}")
-                await app.bot.send_message(chat_id, f"(Failed to send: {names})")
+                failed.append(names)
+            if failed:
+                await app.bot.send_message(chat_id, f"(Failed to send: {', '.join(dict.fromkeys(failed))})")
 
     def button_rows(self, chat_id: int, action: FrontendAction):
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
