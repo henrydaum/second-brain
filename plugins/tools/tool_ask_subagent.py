@@ -13,6 +13,7 @@ class AskSubagent(BaseTool):
         "Delegate a complex question to a separate subagent run, wait for it to do its own research with its own tool use, and return a concise final answer. "
         "Use this when the task is big enough to benefit from a focused pass, such as multi-step research, file synthesis, or comparing documents. "
         "Good use cases: 'read these files and summarize the key risks', 'research this topic across my files and the web', 'compare two documents and give me the main differences'. "
+        "You can also choose a specific agent profile when you want the subagent to operate with a narrower or more specialized scope. "
         "Do not use this for simple lookups or quick one-tool tasks. This tool is synchronous and blocking: it triggers the existing event-driven run_subagent task, waits for completion, and returns the stored result so it can be reviewed later."
     )
     parameters = {
@@ -33,7 +34,7 @@ class AskSubagent(BaseTool):
             },
             "agent": {
                 "type": "string",
-                "description": "Optional agent profile name to run under (see /agent list). Leave blank to use the current active profile.",
+                "description": "Optional agent profile name to run under (see /agent list). Use this to pick a specialist subagent such as a builder, researcher, or communicator. Leave blank to use the current active profile.",
             },
             "timeout_seconds": {
                 "type": "integer",

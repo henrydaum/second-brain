@@ -47,7 +47,7 @@ class RunSubagent(BaseTask):
             },
             "agent": {
                 "type": "string",
-                "description": "Optional agent profile name to run under. Defaults to the active profile.",
+                "description": "Optional agent profile name to run under. This lets callers choose a specialist agent profile with its own model and scope. Defaults to the active profile.",
             },
         },
         "required": ["prompt"],

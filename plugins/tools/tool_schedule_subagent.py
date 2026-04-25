@@ -45,6 +45,7 @@ class ScheduleSubagent(BaseTool):
     description = (
         "Create and manage scheduled background subagent jobs. Use this for "
         "reminders, recurring briefs, periodic checks, or unattended research. "
+        "Jobs can also be pinned to a specific agent profile so recurring work runs with the intended scope and toolset. "
         "Mutating actions require user approval."
     )
     parameters = {
@@ -86,7 +87,7 @@ class ScheduleSubagent(BaseTool):
             },
             "agent": {
                 "type": "string",
-                "description": "Optional agent profile name to run the job under. Leave blank to use whatever agent profile is active when the job fires.",
+                "description": "Optional agent profile name to run the job under. Useful for specialist jobs like a research agent, builder agent, or communication agent. Leave blank to use whatever agent profile is active when the job fires.",
             },
             "description": {
                 "type": "string",

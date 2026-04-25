@@ -103,7 +103,7 @@ SETTINGS_DATA = [
     # restrictions). Managed via /agent. The "default" profile is permanent and
     # follows the default LLM via the "default" sentinel.
     ("Agent Profiles", "agent_profiles",
-     "Named agent profiles. Each references an LLM (by model_name or 'default') and adds optional scope.",
+     "Named agent profiles. Each references an LLM (by model_name or 'default') and can narrow tool and table access for specialized agents such as builders, researchers, or communicators.",
      {"default": {
          "llm": "default",
          "prompt_suffix": "",

@@ -914,7 +914,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      "[list|add|remove|show|default] [args]",
                      handler=_cmd_llm, arg_completions=_llm_completions,
                      category="Config & System"),
-        CommandEntry("agent", "Manage agent profiles (LLM + optional scope)",
+        CommandEntry("agent", "Manage scoped agent profiles",
                      "[list|switch|add|remove|show] [args]",
                      handler=_cmd_agent, arg_completions=_agent_completions,
                      category="Config & System"),

@@ -461,6 +461,20 @@ Notes:
 - `timekeeper` and `web_search_provider` are good defaults to autoload because they power scheduling and web search; `llm` is needed for basic functioning.
 - Brave Search and Brave Answers are optional and configured through plugin settings.
 
+### Agent Profiles for Safe Delegation
+
+Agent profiles let you split work across specialized agents without giving every agent full access to everything.
+
+This matters most when one of those agents is outward-facing. If you build a communication-focused agent that writes updates, emails, summaries, or outward messages, you may not want it to see your full local database, internal research, or every high-power tool in the system. A scoped profile lets you reduce what that agent can read and what it can call, which reduces what it can accidentally leak.
+
+A practical setup looks like:
+
+- a builder agent with coding and file-editing tools
+- a researcher agent with broader search and database access
+- a communicator agent with a much smaller toolset and a narrower database view
+
+In other words, you can treat Second Brain less like one monolithic assistant and more like a small team of specialists, each with the minimum visibility and tool access needed for its job. Having multiple agents is easy and optional.
+
 ### Run
 
 ```bash
