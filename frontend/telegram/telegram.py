@@ -1939,7 +1939,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         user_id = int(config.get("telegram_allowed_user_id", 0))
         if user_id:
             status = (
-                "Agent ready."
+                f"Agent: {config.get("active_agent_profile", "default")}"
                 if runtime.ensure_agent(base_session) is not None
                 else "LLM not loaded \u2014 use /load llm."
             )
