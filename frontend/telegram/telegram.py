@@ -30,7 +30,9 @@ from frontend.telegram.forms import (
     PendingParamForm,
     PendingScheduleCreate,
     agent_add_params,
+    agent_edit_field_param,
     coerce_param_value,
+    llm_edit_field_param,
     schema_to_params,
 )
 from frontend.telegram.renderers import prepare_media_actions
@@ -143,6 +145,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     _pending_configures: dict = {}      # chat_id -> setting_key (waiting for value)
     _pending_llm_adds: dict[int, PendingParamForm] = {}
     _pending_agent_adds: dict[int, PendingParamForm] = {}
+    # Single-field edit forms — subject is the profile/model name and the
+    # single FormParam in `params` carries the field name.
+    _pending_llm_edits: dict[int, PendingParamForm] = {}
+    _pending_agent_edits: dict[int, PendingParamForm] = {}
     _pending_triggers: dict[int, PendingParamForm] = {}
     _loop: asyncio.AbstractEventLoop | None = None
     _app: Application | None = None
@@ -512,8 +518,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         profile_name = state.subject
         collected = state.collected
 
-        # Drop unset optional fields so AgentScope.has_*_filter stays False.
-        cleaned = {k: v for k, v in collected.items() if v not in (None, "")}
+        # Drop unset optional fields (including empty containers — an empty
+        # tools_allow=[] would otherwise mean "deny everything") so
+        # AgentScope.has_*_filter stays False.
+        cleaned = {k: v for k, v in collected.items()
+                   if v not in (None, "", [], {})}
         # Always carry llm + prompt_suffix even if blank for clarity.
         cleaned.setdefault("llm", collected.get("llm") or "default")
         cleaned.setdefault("prompt_suffix", collected.get("prompt_suffix") or "")
@@ -526,6 +535,224 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         ))
         if result.text:
             await transport.send_long_message(chat_id, result.text)
+
+    # ── /llm edit + /agent edit single-field forms ──────────────────
+
+    _AGENT_FIELDS = ("llm", "prompt_suffix",
+                     "tools_allow", "tools_deny",
+                     "tables_allow", "tables_deny")
+    _LLM_FIELDS = ("llm_endpoint", "llm_api_key",
+                   "llm_context_size", "llm_service_class")
+
+    def _format_value_short(value) -> str:
+        if value is None or value == "":
+            return "(none)"
+        if isinstance(value, list):
+            if not value:
+                return "(none)"
+            return ", ".join(str(v) for v in value)
+        if isinstance(value, str) and len(value) > 60:
+            return value[:57] + "…"
+        return str(value)
+
+    def _agent_attribute_lines(profile: dict) -> list[str]:
+        lines = []
+        llm_ref = profile.get("llm") or "default"
+        if llm_ref == "default":
+            resolved = config.get("default_llm_profile") or "?"
+            lines.append(f"  llm: default (→ {html.escape(resolved)})")
+        else:
+            lines.append(f"  llm: {html.escape(llm_ref)}")
+        lines.append(f"  prompt_suffix: {html.escape(_format_value_short(profile.get('prompt_suffix')))}")
+        for field in ("tools_allow", "tools_deny", "tables_allow", "tables_deny"):
+            lines.append(f"  {field}: {html.escape(_format_value_short(profile.get(field)))}")
+        return lines
+
+    def _llm_attribute_lines(profile: dict) -> list[str]:
+        masked = dict(profile)
+        api_key = masked.get("llm_api_key") or ""
+        if api_key and not (api_key.startswith("$") or api_key.isupper()):
+            masked["llm_api_key"] = "****" if len(api_key) <= 8 else f"{api_key[:4]}...{api_key[-4:]}"
+        lines = []
+        for field in _LLM_FIELDS:
+            lines.append(f"  {field}: {html.escape(_format_value_short(masked.get(field)))}")
+        return lines
+
+    async def _show_agent_profile_actions(chat_id: int, name: str):
+        profiles = config.get("agent_profiles", {}) or {}
+        profile = profiles.get(name)
+        if profile is None:
+            await _app.bot.send_message(chat_id, f"Unknown agent profile: '{name}'.")
+            return
+        active = (config.get("active_agent_profile") or "default") == name
+        header = f"<b>{html.escape(name)}</b>"
+        if active:
+            header += "  (active)"
+        text = "\n".join([header] + _agent_attribute_lines(profile))
+        rows = []
+        if not active:
+            rows.append([InlineKeyboardButton("Set active", callback_data=f"agnt:switch:{name}")])
+        rows.append([InlineKeyboardButton("Edit", callback_data=f"agnt:edit:{name}")])
+        if name != "default":
+            rows.append([InlineKeyboardButton("Remove", callback_data=f"agnt:remove:{name}")])
+        rows.append([InlineKeyboardButton("◀ Back", callback_data="agnt:back")])
+        await _app.bot.send_message(
+            chat_id, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+
+    async def _show_llm_profile_actions(chat_id: int, name: str):
+        profiles = config.get("llm_profiles", {}) or {}
+        profile = profiles.get(name)
+        if profile is None:
+            await _app.bot.send_message(chat_id, f"Unknown LLM: '{name}'.")
+            return
+        is_default = (config.get("default_llm_profile") or "") == name
+        header = f"<b>{html.escape(name)}</b>"
+        if is_default:
+            header += "  (default)"
+        text = "\n".join([header] + _llm_attribute_lines(profile))
+        rows = []
+        if not is_default:
+            rows.append([InlineKeyboardButton("Set as default", callback_data=f"llm:default:{name}")])
+        rows.append([InlineKeyboardButton("Edit", callback_data=f"llm:edit:{name}")])
+        rows.append([InlineKeyboardButton("Remove", callback_data=f"llm:remove:{name}")])
+        rows.append([InlineKeyboardButton("◀ Back", callback_data="llm:back")])
+        await _app.bot.send_message(
+            chat_id, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+
+    async def _show_agent_profiles_list(chat_id: int):
+        profiles = config.get("agent_profiles", {}) or {}
+        active = config.get("active_agent_profile") or "default"
+        rows = []
+        for name in sorted(profiles.keys()):
+            label = f"{'* ' if name == active else '  '}{name}"
+            rows.append([InlineKeyboardButton(label, callback_data=f"agnt:pick:{name}")])
+        rows.append([InlineKeyboardButton("+ Add new profile", callback_data="agnt:add")])
+        await _app.bot.send_message(
+            chat_id, "Agent profiles:",
+            reply_markup=InlineKeyboardMarkup(rows))
+
+    async def _show_llm_list(chat_id: int):
+        profiles = config.get("llm_profiles", {}) or {}
+        default_llm = config.get("default_llm_profile") or ""
+        rows = []
+        for name in sorted(profiles.keys()):
+            label = f"{'* ' if name == default_llm else '  '}{name}"
+            rows.append([InlineKeyboardButton(label, callback_data=f"llm:pick:{name}")])
+        rows.append([InlineKeyboardButton("+ Add new LLM", callback_data="llm:add")])
+        await _app.bot.send_message(
+            chat_id, "LLMs:",
+            reply_markup=InlineKeyboardMarkup(rows))
+
+    async def _show_agent_edit_fields(chat_id: int, name: str):
+        profiles = config.get("agent_profiles", {}) or {}
+        profile = profiles.get(name)
+        if profile is None:
+            await _app.bot.send_message(chat_id, f"Unknown agent profile: '{name}'.")
+            return
+        text = "\n".join([f"<b>Edit {html.escape(name)}</b>"] + _agent_attribute_lines(profile))
+        rows = [
+            [InlineKeyboardButton("llm", callback_data=f"agnt:editfield:{name}:llm"),
+             InlineKeyboardButton("prompt_suffix", callback_data=f"agnt:editfield:{name}:prompt_suffix")],
+            [InlineKeyboardButton("tools_allow", callback_data=f"agnt:editfield:{name}:tools_allow"),
+             InlineKeyboardButton("tools_deny", callback_data=f"agnt:editfield:{name}:tools_deny")],
+            [InlineKeyboardButton("tables_allow", callback_data=f"agnt:editfield:{name}:tables_allow"),
+             InlineKeyboardButton("tables_deny", callback_data=f"agnt:editfield:{name}:tables_deny")],
+            [InlineKeyboardButton("◀ Back", callback_data=f"agnt:pick:{name}")],
+        ]
+        await _app.bot.send_message(
+            chat_id, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+
+    async def _show_llm_edit_fields(chat_id: int, name: str):
+        profiles = config.get("llm_profiles", {}) or {}
+        profile = profiles.get(name)
+        if profile is None:
+            await _app.bot.send_message(chat_id, f"Unknown LLM: '{name}'.")
+            return
+        text = "\n".join([f"<b>Edit {html.escape(name)}</b>"] + _llm_attribute_lines(profile))
+        rows = [
+            [InlineKeyboardButton("llm_endpoint", callback_data=f"llm:editfield:{name}:llm_endpoint"),
+             InlineKeyboardButton("llm_api_key", callback_data=f"llm:editfield:{name}:llm_api_key")],
+            [InlineKeyboardButton("llm_context_size", callback_data=f"llm:editfield:{name}:llm_context_size"),
+             InlineKeyboardButton("llm_service_class", callback_data=f"llm:editfield:{name}:llm_service_class")],
+            [InlineKeyboardButton("◀ Back", callback_data=f"llm:pick:{name}")],
+        ]
+        await _app.bot.send_message(
+            chat_id, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+
+    async def _start_agent_field_edit(chat_id: int, name: str, field: str):
+        if field not in _AGENT_FIELDS:
+            await _app.bot.send_message(chat_id, f"Unknown field: {field}")
+            return
+        llm_choices = ["default"] + sorted((config.get("llm_profiles", {}) or {}).keys())
+        tool_names = sorted(
+            n for n, tool in tool_registry.tools.items()
+            if getattr(tool, "agent_enabled", False)
+        )
+        try:
+            table_names = [r["name"] for r in ctrl.db.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+        except Exception:
+            table_names = []
+        param = agent_edit_field_param(field, llm_choices, tool_names, table_names)
+        _pending_agent_edits[chat_id] = PendingParamForm(subject=name, params=[param])
+        adapter.send_action(
+            _session(chat_id),
+            runtime.presenter.form_field(
+                param.name, param.type, param.description,
+                param.required, param.enum, "agtedit", param.name,
+            ),
+        )
+
+    async def _start_llm_field_edit(chat_id: int, name: str, field: str):
+        if field not in _LLM_FIELDS:
+            await _app.bot.send_message(chat_id, f"Unknown field: {field}")
+            return
+        param = llm_edit_field_param(field)
+        _pending_llm_edits[chat_id] = PendingParamForm(subject=name, params=[param])
+        adapter.send_action(
+            _session(chat_id),
+            runtime.presenter.form_field(
+                param.name, param.type, param.description,
+                param.required, param.enum, "llmedit", param.name,
+            ),
+        )
+
+    async def _execute_agent_field_edit(chat_id: int):
+        state = _pending_agent_edits.pop(chat_id, None)
+        if not state or not state.params:
+            return
+        name = state.subject
+        field = state.params[0].name
+        value = state.collected.get(field)
+        # JSON-encode so the command parser receives a single token.
+        raw = json.dumps(value) if value is not None else "null"
+        result = await _dispatch_frontend_event(FrontendEvent(
+            type="slash_command",
+            session=_session(chat_id),
+            command_name="agent",
+            command_arg=f"edit {name} {field} {raw}",
+        ))
+        if result.text:
+            await transport.send_long_message(chat_id, result.text)
+        await _show_agent_edit_fields(chat_id, name)
+
+    async def _execute_llm_field_edit(chat_id: int):
+        state = _pending_llm_edits.pop(chat_id, None)
+        if not state or not state.params:
+            return
+        name = state.subject
+        field = state.params[0].name
+        value = state.collected.get(field)
+        raw = json.dumps(value) if value is not None else "null"
+        result = await _dispatch_frontend_event(FrontendEvent(
+            type="slash_command",
+            session=_session(chat_id),
+            command_name="llm",
+            command_arg=f"edit {name} {field} {raw}",
+        ))
+        if result.text:
+            await transport.send_long_message(chat_id, result.text)
+        await _show_llm_edit_fields(chat_id, name)
 
     # ── Picker menus for list commands ───────────────────────────────
     #
@@ -966,6 +1193,12 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             if chat_id in _pending_agent_adds:
                 _pending_agent_adds.pop(chat_id)
                 cancelled = True
+            if chat_id in _pending_llm_edits:
+                _pending_llm_edits.pop(chat_id)
+                cancelled = True
+            if chat_id in _pending_agent_edits:
+                _pending_agent_edits.pop(chat_id)
+                cancelled = True
             if chat_id in _pending_triggers:
                 _pending_triggers.pop(chat_id)
                 cancelled = True
@@ -1018,6 +1251,25 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     return
                 else:
                     await update.message.reply_text("This parameter is required.")
+                    return
+            state = _pending_agent_edits.get(chat_id)
+            if state:
+                if state.params and not state.params[0].required:
+                    # Skipping clears the field — store None and submit.
+                    state.store(state.params[0].name, None)
+                    await _execute_agent_field_edit(chat_id)
+                    return
+                else:
+                    await update.message.reply_text("This field is required.")
+                    return
+            state = _pending_llm_edits.get(chat_id)
+            if state:
+                if state.params and not state.params[0].required:
+                    state.store(state.params[0].name, None)
+                    await _execute_llm_field_edit(chat_id)
+                    return
+                else:
+                    await update.message.reply_text("This field is required.")
                     return
             state = _pending_schedule_creates.get(chat_id)
             if state:
@@ -1078,65 +1330,15 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 if started:
                     return
 
-        # /agent — show subcommand menu or profile picker
-        if cmd_name == "agent":
-            if not arg:
-                buttons = [
-                    [InlineKeyboardButton("List profiles", callback_data="agnt:list")],
-                    [InlineKeyboardButton("Switch active", callback_data="agnt:pick:switch")],
-                    [InlineKeyboardButton("Add profile", callback_data="agnt:add")],
-                    [InlineKeyboardButton("Show profile", callback_data="agnt:pick:show")],
-                    [InlineKeyboardButton("Remove profile", callback_data="agnt:pick:remove")],
-                ]
-                await update.message.reply_text(
-                    "Agent Profile Manager:",
-                    reply_markup=InlineKeyboardMarkup(buttons))
-                return
-            sub = arg.strip().split(None, 1)[0].lower()
-            if sub in ("switch", "remove", "show") and len(arg.strip().split()) == 1:
-                profiles = config.get("agent_profiles", {}) or {}
-                if not profiles:
-                    await update.message.reply_text("No agent profiles configured.")
-                    return
-                active = config.get("active_agent_profile") or "default"
-                buttons = [[InlineKeyboardButton(
-                    f"{'* ' if active == n else ''}{n}",
-                    callback_data=f"agnt:{sub}:{n}")]
-                    for n in profiles]
-                await update.message.reply_text(
-                    f"Choose a profile to {sub}:",
-                    reply_markup=InlineKeyboardMarkup(buttons))
-                return
+        # /agent — show profile-list keyboard
+        if cmd_name == "agent" and not arg:
+            await _show_agent_profiles_list(chat_id)
+            return
 
-        # /llm — show subcommand menu or LLM picker
-        if cmd_name == "llm":
-            if not arg:
-                buttons = [
-                    [InlineKeyboardButton("List LLMs", callback_data="llm:list")],
-                    [InlineKeyboardButton("Set default", callback_data="llm:pick:default")],
-                    [InlineKeyboardButton("Add LLM", callback_data="llm:add")],
-                    [InlineKeyboardButton("Show LLM", callback_data="llm:pick:show")],
-                    [InlineKeyboardButton("Remove LLM", callback_data="llm:pick:remove")],
-                ]
-                await update.message.reply_text(
-                    "LLM Manager:",
-                    reply_markup=InlineKeyboardMarkup(buttons))
-                return
-            sub = arg.strip().split(None, 1)[0].lower()
-            if sub in ("default", "remove", "show") and len(arg.strip().split()) == 1:
-                profiles = config.get("llm_profiles", {}) or {}
-                if not profiles:
-                    await update.message.reply_text("No LLMs configured.")
-                    return
-                default_llm = config.get("default_llm_profile") or ""
-                buttons = [[InlineKeyboardButton(
-                    f"{'* ' if default_llm == n else ''}{n}",
-                    callback_data=f"llm:{sub}:{n}")]
-                    for n in profiles]
-                await update.message.reply_text(
-                    f"Choose an LLM to {sub}:",
-                    reply_markup=InlineKeyboardMarkup(buttons))
-                return
+        # /llm — show LLM-list keyboard
+        if cmd_name == "llm" and not arg:
+            await _show_llm_list(chat_id)
+            return
 
         # /configure — show settings menu or accept key+value
         if cmd_name == "configure":
@@ -1211,6 +1413,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 if not model_name or " " in model_name:
                     await update.message.reply_text("Model name must be a single word with no spaces. Try again.")
                     return
+                if model_name == "default":
+                    await update.message.reply_text(
+                        "'default' is reserved — it's the sentinel agent profiles use to follow "
+                        "whatever LLM is current. Pick a different name (e.g. the model identifier).")
+                    return
                 existing = config.get("llm_profiles", {}) or {}
                 if model_name in existing:
                     await update.message.reply_text(f"LLM '{model_name}' already exists. Choose a different name.")
@@ -1248,6 +1455,32 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 try:
                     state.store(param.name, coerce_param_value(text, param.type))
                     await _ask_next_agent_param(chat_id)
+                except (ValueError, json.JSONDecodeError) as e:
+                    await update.message.reply_text(
+                        f"Invalid value for {param.name} ({param.type}): {e}\nTry again.")
+            return
+
+        # Check for pending /agent edit single-field input
+        if chat_id in _pending_agent_edits:
+            state = _pending_agent_edits[chat_id]
+            param = state.current_param
+            if param is not None:
+                try:
+                    state.store(param.name, coerce_param_value(text, param.type))
+                    await _execute_agent_field_edit(chat_id)
+                except (ValueError, json.JSONDecodeError) as e:
+                    await update.message.reply_text(
+                        f"Invalid value for {param.name} ({param.type}): {e}\nTry again.")
+            return
+
+        # Check for pending /llm edit single-field input
+        if chat_id in _pending_llm_edits:
+            state = _pending_llm_edits[chat_id]
+            param = state.current_param
+            if param is not None:
+                try:
+                    state.store(param.name, coerce_param_value(text, param.type))
+                    await _execute_llm_field_edit(chat_id)
                 except (ValueError, json.JSONDecodeError) as e:
                     await update.message.reply_text(
                         f"Invalid value for {param.name} ({param.type}): {e}\nTry again.")
@@ -1550,23 +1783,18 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         await transport.send_long_message(chat_id, result.text)
                 return
 
-            # ── Agent profile callbacks (agnt:<action>[:<name>]) ──
+            # ── Agent profile callbacks (agnt:<action>[:<name>[:<field>]]) ──
             if data.startswith("agnt:"):
-                parts = data.split(":", 2)
+                parts = data.split(":", 3)
                 action = parts[1] if len(parts) > 1 else ""
                 name = parts[2] if len(parts) > 2 else ""
+                field = parts[3] if len(parts) > 3 else ""
                 await update.callback_query.answer()
                 await update.callback_query.edit_message_reply_markup(reply_markup=None)
                 chat_id = update.callback_query.message.chat_id
 
-                if action == "list":
-                    result = await _dispatch_frontend_event(FrontendEvent(
-                        type="callback_response",
-                        session=_session(chat_id),
-                        payload={"kind": "command", "command_name": "agent", "command_arg": "list"},
-                    ))
-                    if result.text:
-                        await transport.send_long_message(chat_id, result.text)
+                if action == "back":
+                    await _show_agent_profiles_list(chat_id)
                 elif action == "add":
                     _pending_agent_adds[chat_id] = PendingParamForm(awaiting_name=True)
                     await _app.bot.send_message(
@@ -1575,19 +1803,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         "Send /cancel to abort.",
                         parse_mode="HTML")
                 elif action == "pick":
-                    sub = name
-                    profiles = config.get("agent_profiles", {}) or {}
-                    if not profiles:
-                        await _app.bot.send_message(chat_id, "No agent profiles configured.")
-                    else:
-                        active = config.get("active_agent_profile") or "default"
-                        buttons = [[InlineKeyboardButton(
-                            f"{'* ' if active == n else ''}{n}",
-                            callback_data=f"agnt:{sub}:{n}")]
-                            for n in profiles]
-                        await _app.bot.send_message(
-                            chat_id, f"Choose a profile to {sub}:",
-                            reply_markup=InlineKeyboardMarkup(buttons))
+                    await _show_agent_profile_actions(chat_id, name)
+                elif action == "edit":
+                    await _show_agent_edit_fields(chat_id, name)
+                elif action == "editfield":
+                    await _start_agent_field_edit(chat_id, name, field)
                 elif action in ("switch", "remove", "show"):
                     result = await _dispatch_frontend_event(FrontendEvent(
                         type="callback_response",
@@ -1596,25 +1816,25 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     ))
                     if result.text:
                         await transport.send_long_message(chat_id, result.text)
+                    if action != "remove":
+                        # Refresh the per-profile menu so the user lands somewhere useful.
+                        await _show_agent_profile_actions(chat_id, name)
+                    else:
+                        await _show_agent_profiles_list(chat_id)
                 return
 
-            # ── LLM callbacks (llm:<action>[:<name>]) ──
+            # ── LLM callbacks (llm:<action>[:<name>[:<field>]]) ──
             if data.startswith("llm:"):
-                parts = data.split(":", 2)
+                parts = data.split(":", 3)
                 action = parts[1] if len(parts) > 1 else ""
                 name = parts[2] if len(parts) > 2 else ""
+                field = parts[3] if len(parts) > 3 else ""
                 await update.callback_query.answer()
                 await update.callback_query.edit_message_reply_markup(reply_markup=None)
                 chat_id = update.callback_query.message.chat_id
 
-                if action == "list":
-                    result = await _dispatch_frontend_event(FrontendEvent(
-                        type="callback_response",
-                        session=_session(chat_id),
-                        payload={"kind": "command", "command_name": "llm", "command_arg": "list"},
-                    ))
-                    if result.text:
-                        await transport.send_long_message(chat_id, result.text)
+                if action == "back":
+                    await _show_llm_list(chat_id)
                 elif action == "add":
                     _pending_llm_adds[chat_id] = PendingParamForm(awaiting_name=True)
                     await _app.bot.send_message(
@@ -1623,19 +1843,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         "<code>claude-opus-4-7</code>):\n\nSend /cancel to abort.",
                         parse_mode="HTML")
                 elif action == "pick":
-                    sub = name
-                    profiles = config.get("llm_profiles", {}) or {}
-                    if not profiles:
-                        await _app.bot.send_message(chat_id, "No LLMs configured.")
-                    else:
-                        default_llm = config.get("default_llm_profile") or ""
-                        buttons = [[InlineKeyboardButton(
-                            f"{'* ' if default_llm == n else ''}{n}",
-                            callback_data=f"llm:{sub}:{n}")]
-                            for n in profiles]
-                        await _app.bot.send_message(
-                            chat_id, f"Choose an LLM to {sub}:",
-                            reply_markup=InlineKeyboardMarkup(buttons))
+                    await _show_llm_profile_actions(chat_id, name)
+                elif action == "edit":
+                    await _show_llm_edit_fields(chat_id, name)
+                elif action == "editfield":
+                    await _start_llm_field_edit(chat_id, name, field)
                 elif action in ("default", "remove", "show"):
                     result = await _dispatch_frontend_event(FrontendEvent(
                         type="callback_response",
@@ -1644,6 +1856,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     ))
                     if result.text:
                         await transport.send_long_message(chat_id, result.text)
+                    if action != "remove":
+                        await _show_llm_profile_actions(chat_id, name)
+                    else:
+                        await _show_llm_list(chat_id)
                 return
 
             # ── LLM add form enum callbacks (llmadd:<chat_id>:<param>:<value>) ──
@@ -1658,6 +1874,34 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     if state and not state.awaiting_name:
                         state.store(param_name, value)
                         await _ask_next_llm_param(cid)
+                return
+
+            # ── LLM edit single-field enum callbacks (llmedit:<chat_id>:<param>:<value>) ──
+            if data.startswith("llmedit:"):
+                parts = data.split(":", 3)
+                if len(parts) == 4:
+                    _, cid_str, param_name, value = parts
+                    cid = int(cid_str)
+                    await update.callback_query.answer()
+                    await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                    state = _pending_llm_edits.get(cid)
+                    if state and state.params and state.params[0].name == param_name:
+                        state.store(param_name, value)
+                        await _execute_llm_field_edit(cid)
+                return
+
+            # ── Agent edit single-field enum callbacks (agtedit:<chat_id>:<param>:<value>) ──
+            if data.startswith("agtedit:"):
+                parts = data.split(":", 3)
+                if len(parts) == 4:
+                    _, cid_str, param_name, value = parts
+                    cid = int(cid_str)
+                    await update.callback_query.answer()
+                    await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                    state = _pending_agent_edits.get(cid)
+                    if state and state.params and state.params[0].name == param_name:
+                        state.store(param_name, value)
+                        await _execute_agent_field_edit(cid)
                 return
 
             # ── Agent add form enum callbacks (agtadd:<chat_id>:<param>:<value>) ──

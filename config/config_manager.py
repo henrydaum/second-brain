@@ -63,6 +63,12 @@ def load(path: str = None) -> dict:
         merged.get("enabled_frontends", DEFAULTS["enabled_frontends"])
     )
 
+    # If the schema introduced new SETTINGS_DATA keys since the file was last
+    # written, persist the merged defaults now so the on-disk file no longer
+    # drifts behind the schema.
+    if set(merged.keys()) - set(user_config.keys()):
+        save(merged, path)
+
     return merged
 
 

@@ -143,10 +143,24 @@ def _describe_agent_profile(name: str, profile: dict, active: bool) -> str:
     return (f"  {marker} {name:<16} {status:<8} llm={llm_ref}{scope_str}")
 
 
+_AGENT_SCOPE_FIELDS = ("tools_allow", "tools_deny", "tables_allow", "tables_deny")
+_AGENT_PROFILE_FIELDS = ("llm", "prompt_suffix") + _AGENT_SCOPE_FIELDS
+_LLM_PROFILE_FIELDS = ("llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class")
+
+
 def _normalize_agent_profile(profile: dict) -> dict:
+    """Coerce profile fields into the canonical shape.
+
+    Empty arrays/objects collapse to None so AgentScope.has_*_filter stays
+    False — an explicit empty allow-list would otherwise mean "deny everything"
+    which is almost never what the user wants.
+    """
     profile = dict(profile)
-    for key in ("tools_allow", "tools_deny", "tables_allow", "tables_deny"):
-        profile.setdefault(key, None)
+    for key in _AGENT_SCOPE_FIELDS:
+        val = profile.get(key)
+        if val in ("", [], {}):
+            val = None
+        profile[key] = val
     return profile
 
 
@@ -526,6 +540,10 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                 return ("Usage: /llm add <model_name> {json}\n"
                         "Keys: llm_endpoint, llm_api_key, llm_context_size, "
                         "llm_service_class (OpenAILLM|LMStudioLLM).")
+            if model == "default":
+                return ("Cannot name an LLM 'default' — that string is the "
+                        "sentinel agent profiles use to follow whatever LLM "
+                        "is the current default. Pick a model name instead.")
             if not json_str:
                 return ("Usage: /llm add <model_name> {json}\n"
                         "Example: /llm add gpt-4 "
@@ -558,9 +576,17 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             if len(profiles) == 1:
                 return "Refusing to remove the only LLM. Add another one first."
             was_default = ctrl.config.get("default_llm_profile") == model
+            # Find agent profiles still referencing this LLM by name (the
+            # "default" sentinel is fine — those resolve via default_llm_profile).
+            agent_profiles = ctrl.config.get("agent_profiles", {}) or {}
+            stale_refs = sorted(
+                name for name, p in agent_profiles.items()
+                if (p or {}).get("llm") == model
+            )
             router.remove_llm(model)
             del profiles[model]
             _persist_config_key("llm_profiles", profiles)
+            lines = []
             if was_default:
                 new_default = next(iter(profiles))
                 _persist_config_key("default_llm_profile", new_default)
@@ -569,8 +595,16 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                         _rescope_agents()
                     except Exception as e:
                         logger.warning(f"Rescope after /llm remove failed: {e}")
-                return f"LLM '{model}' removed. Default is now '{new_default}'."
-            return f"LLM '{model}' removed."
+                lines.append(f"LLM '{model}' removed. Default is now '{new_default}'.")
+            else:
+                lines.append(f"LLM '{model}' removed.")
+            if stale_refs:
+                lines.append(
+                    f"Warning: {len(stale_refs)} agent profile(s) still reference "
+                    f"'{model}' by name: {', '.join(stale_refs)}. Until you edit "
+                    "them, they will fall back to the default LLM."
+                )
+            return "\n".join(lines)
 
         if sub == "show":
             model = rest.strip()
@@ -585,8 +619,48 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                 display["llm_api_key"] = _mask_api_key(display["llm_api_key"])
             return f"{model}:\n{_json.dumps(display, indent=2)}"
 
+        if sub == "edit":
+            edit_parts = rest.split(None, 2)
+            if len(edit_parts) < 3:
+                return ("Usage: /llm edit <model_name> <field> <value>\n"
+                        f"Fields: {', '.join(_LLM_PROFILE_FIELDS)}")
+            model, field, raw = edit_parts
+            profiles = ctrl.config.get("llm_profiles", {}) or {}
+            if model not in profiles:
+                return (f"Unknown LLM: '{model}'. "
+                        f"Run /llm list to see all LLMs.")
+            if field not in _LLM_PROFILE_FIELDS:
+                return (f"Unknown field: '{field}'. "
+                        f"Allowed: {', '.join(_LLM_PROFILE_FIELDS)}.")
+            try:
+                value = _json.loads(raw)
+            except _json.JSONDecodeError:
+                value = raw
+            if field == "llm_context_size":
+                try:
+                    value = int(value)
+                except (ValueError, TypeError):
+                    return "llm_context_size must be an integer."
+            if field == "llm_service_class" and value not in ("OpenAILLM", "LMStudioLLM"):
+                return "llm_service_class must be 'OpenAILLM' or 'LMStudioLLM'."
+            profiles[model][field] = value
+            # Rebuild the registered LLM so the change takes effect immediately.
+            try:
+                if model in router.services and getattr(router.services[model], "loaded", False):
+                    router.services[model].unload()
+            except Exception as e:
+                logger.warning(f"Unload during /llm edit failed: {e}")
+            router.add_llm(model, profiles[model])
+            _persist_config_key("llm_profiles", profiles)
+            if _rescope_agents:
+                try:
+                    _rescope_agents()
+                except Exception as e:
+                    logger.warning(f"Rescope after /llm edit failed: {e}")
+            return f"Updated {model}.{field}."
+
         return (f"Unknown subcommand: '{sub}'. "
-                f"Use: list, add, remove, show, default.")
+                f"Use: list, add, edit, remove, show, default.")
 
     def _cmd_agent(arg):
         """Handler for /agent — manage agent profiles (LLM reference + optional scope)."""
@@ -695,8 +769,56 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                         f"Run /agent list to see all profiles.")
             return f"{name}:\n{_json.dumps(agent_profiles[name], indent=2)}"
 
+        if sub == "edit":
+            edit_parts = rest.split(None, 2)
+            if len(edit_parts) < 3:
+                return ("Usage: /agent edit <profile_name> <field> <value>\n"
+                        f"Fields: {', '.join(_AGENT_PROFILE_FIELDS)}")
+            name, field, raw = edit_parts
+            if name not in agent_profiles:
+                return (f"Unknown agent profile: '{name}'. "
+                        f"Run /agent list to see all profiles.")
+            if field not in _AGENT_PROFILE_FIELDS:
+                return (f"Unknown field: '{field}'. "
+                        f"Allowed: {', '.join(_AGENT_PROFILE_FIELDS)}.")
+            try:
+                value = _json.loads(raw)
+            except _json.JSONDecodeError:
+                value = raw
+            if field == "llm":
+                if not isinstance(value, str) or not value:
+                    return "llm must be a string ('default' or a model name)."
+                llm_profiles = ctrl.config.get("llm_profiles", {}) or {}
+                if value != "default" and value not in llm_profiles:
+                    return (f"Unknown LLM '{value}'. "
+                            f"Run /llm list to see all LLMs.")
+            elif field in _AGENT_SCOPE_FIELDS:
+                if value in ("", [], {}):
+                    value = None
+                elif value is not None and not isinstance(value, list):
+                    return f"{field} must be a JSON array or null."
+            elif field == "prompt_suffix":
+                if value is None:
+                    value = ""
+                value = str(value)
+
+            old_value = agent_profiles[name].get(field)
+            agent_profiles[name][field] = value
+            try:
+                load_scope(name, ctrl.config)
+            except ValueError as e:
+                agent_profiles[name][field] = old_value
+                return f"Edit rejected: {e}"
+            _persist_config_key("agent_profiles", agent_profiles)
+            if name == active_name and _rescope_agents:
+                try:
+                    _rescope_agents()
+                except Exception as e:
+                    logger.warning(f"Rescope after /agent edit failed: {e}")
+            return f"Updated {name}.{field}."
+
         return (f"Unknown subcommand: '{sub}'. "
-                f"Use: list, switch, add, remove, show.")
+                f"Use: list, switch, add, edit, remove, show.")
 
     def _cmd_schedule(arg):
         """Handler for /schedule — manage scheduled jobs (timekeeper)."""
@@ -787,12 +909,12 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                 f"Use: list, show, enable, disable, delete, run, create.")
 
     _agent_completions = lambda: (
-        ["list", "switch", "add", "remove", "show"]
+        ["list", "switch", "add", "edit", "remove", "show"]
         + sorted((ctrl.config.get("agent_profiles", {}) or {}).keys())
     )
 
     _llm_completions = lambda: (
-        ["list", "add", "remove", "show", "default"]
+        ["list", "add", "edit", "remove", "show", "default"]
         + sorted((ctrl.config.get("llm_profiles", {}) or {}).keys())
     )
 
@@ -911,11 +1033,11 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      handler=_cmd_configure,
                      category="Config & System"),
         CommandEntry("llm", "Manage LLM connection configs",
-                     "[list|add|remove|show|default] [args]",
+                     "[list|add|edit|remove|show|default] [args]",
                      handler=_cmd_llm, arg_completions=_llm_completions,
                      category="Config & System"),
         CommandEntry("agent", "Manage scoped agent profiles",
-                     "[list|switch|add|remove|show] [args]",
+                     "[list|switch|add|edit|remove|show] [args]",
                      handler=_cmd_agent, arg_completions=_agent_completions,
                      category="Config & System"),
         CommandEntry("schedule", "Manage scheduled jobs",

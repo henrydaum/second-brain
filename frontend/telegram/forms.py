@@ -117,6 +117,54 @@ def agent_add_params(llm_choices: list[str], tool_names: list[str] | None = None
     ]
 
 
+_AGENT_EDIT_DESCRIPTIONS = {
+    "llm": "LLM to use. 'default' follows whatever LLM is currently the default.",
+    "prompt_suffix": "Extra text appended to the system prompt. Send /skip to clear.",
+    "tools_allow": "Whitelist of tool names. Send /skip to clear (no restriction).",
+    "tools_deny": "Blacklist of tool names. Send /skip to clear (no restriction).",
+    "tables_allow": "Whitelist of database tables. Send /skip to clear (no restriction).",
+    "tables_deny": "Blacklist of database tables. Send /skip to clear (no restriction).",
+}
+
+_LLM_EDIT_DESCRIPTIONS = {
+    "llm_endpoint": "Custom API endpoint URL. Leave blank for the default OpenAI endpoint.",
+    "llm_api_key": "API key or environment variable name (e.g. OPENAI_API_KEY).",
+    "llm_context_size": "Max context window in tokens. 0 = reactive-only compaction.",
+    "llm_service_class": "LLM backend class.",
+}
+
+
+def agent_edit_field_param(field: str, llm_choices: list[str] | None = None,
+                           tool_names: list[str] | None = None,
+                           table_names: list[str] | None = None) -> FormParam:
+    """Build a single ``FormParam`` for editing one agent-profile field.
+
+    Mirrors the matching add-form prompt so the edit UX is consistent.
+    """
+    desc = _AGENT_EDIT_DESCRIPTIONS.get(field, "")
+    if field == "llm":
+        return FormParam(field, description=desc, required=True, enum=llm_choices or ["default"])
+    if field == "prompt_suffix":
+        return FormParam(field, description=desc)
+    hint = ""
+    if field in ("tools_allow", "tools_deny"):
+        hint = _format_name_hint("Tool names", tool_names,
+                                 "(Use registry names, not filenames.)")
+    elif field in ("tables_allow", "tables_deny"):
+        hint = _format_name_hint("Database table names", table_names)
+    return FormParam(field, type="array", description=f"{desc}{hint}", default=None)
+
+
+def llm_edit_field_param(field: str) -> FormParam:
+    desc = _LLM_EDIT_DESCRIPTIONS.get(field, "")
+    if field == "llm_service_class":
+        return FormParam(field, description=desc, required=True,
+                         enum=["OpenAILLM", "LMStudioLLM"])
+    if field == "llm_context_size":
+        return FormParam(field, type="integer", description=desc)
+    return FormParam(field, description=desc)
+
+
 SCHEDULE_CREATE_STEPS = [
     "job_name", "schedule_type", "schedule_value",
     "channel", "prompt", "agent", "title", "description",
