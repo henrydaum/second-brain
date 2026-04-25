@@ -20,6 +20,7 @@ def build_system_prompt(db, orchestrator, tool_registry, services: dict) -> str:
         _identity(services),
         _current_datetime(),
         _available_tools(tool_registry),
+        _agent_profiles(orchestrator),
         _authoring_guidance(),
         _sandbox_files(),
         _attachments(),
@@ -129,6 +130,12 @@ def _available_tools(tool_registry) -> str:
     else:
         lines.append("No tools are currently registered.")
     return "\n".join(lines)
+
+
+def _agent_profiles(orchestrator) -> str:
+    config = getattr(orchestrator, "config", {}) or {}
+    names = sorted((config.get("agent_profiles") or {"default": {}}).keys())
+    return "## Agents\nDifferent agents have different abilities. You can call ask_subagent and schedule_subagent using these available agents: " + ", ".join(names) + "."
 
 
 def _sandbox_files() -> str:
