@@ -89,18 +89,7 @@ LLM_ADD_PARAMS = [
 def _format_name_hint(title: str, names: list[str] | None, note: str = "") -> str:
     if not names:
         return ""
-    lines = []
-    current = ""
-    for name in names:
-        item = f"`{name}`"
-        next_line = item if not current else f"{current}, {item}"
-        if len(next_line) > 72 and current:
-            lines.append(current)
-            current = item
-        else:
-            current = next_line
-    if current:
-        lines.append(current)
+    lines = [f"`{name}`" for name in names]
     note_line = f"\n{note}" if note else ""
     return f"\n\n{title}:{note_line}\n" + "\n".join(lines)
 
