@@ -482,8 +482,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     async def _start_agent_add_form(chat_id: int, profile_name: str):
         """Begin interactive /agent add parameter collection."""
         llm_choices = ["default"] + sorted((config.get("llm_profiles", {}) or {}).keys())
+        tool_names = sorted(tool_registry.tools.keys())
+        table_names = [r["name"] for r in ctrl.db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
         _pending_agent_adds[chat_id] = PendingParamForm(
-            subject=profile_name, params=agent_add_params(llm_choices))
+            subject=profile_name, params=agent_add_params(llm_choices, tool_names, table_names))
         await _app.bot.send_message(
             chat_id,
             f"<b>New agent profile: {html.escape(profile_name)}</b>\n"

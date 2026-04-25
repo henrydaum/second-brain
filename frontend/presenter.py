@@ -115,7 +115,7 @@ class FrontendPresenter:
         elif field_type == "number":
             hint = "\nType a number, e.g. `3.14`."
         elif field_type == "array":
-            hint = "\nSend each item on its own line."
+            hint = "\nSend each item on its own line. Text items need no quotes. E.g.\n```\nitem 1\nitem 2\nitem 3\n```"
         elif field_type == "object":
             hint = "\nSend as JSON, e.g. `{\"key\": \"value\"}`."
         else:

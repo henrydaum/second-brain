@@ -86,19 +86,22 @@ LLM_ADD_PARAMS = [
 ]
 
 
-def agent_add_params(llm_choices: list[str]) -> list[FormParam]:
+def agent_add_params(llm_choices: list[str], tool_names: list[str] | None = None,
+                     table_names: list[str] | None = None) -> list[FormParam]:
     """Build the agent-profile creation form. ``llm_choices`` is the live list
     of model names from llm_profiles, plus the literal 'default' sentinel —
     it must be passed in at form-start time so the dropdown reflects what's
     actually configured."""
+    tool_hint = f" Tool names: {', '.join(tool_names)}" if tool_names else ""
+    table_hint = f" Table names: {', '.join(table_names)}" if table_names else ""
     return [
         FormParam("llm", description="LLM to use. 'default' follows whatever LLM is currently the default.",
                   required=True, enum=llm_choices),
         FormParam("prompt_suffix", description="Extra text appended to the system prompt. Leave blank for none."),
-        FormParam("tools_allow", type="array", description="Whitelist of tool names (comma-separated or JSON list). Skip for no restriction.", default=None),
-        FormParam("tools_deny", type="array", description="Blacklist of tool names. Skip for no restriction.", default=None),
-        FormParam("tables_allow", type="array", description="Whitelist of database tables. Skip for no restriction.", default=None),
-        FormParam("tables_deny", type="array", description="Blacklist of database tables. Skip for no restriction.", default=None),
+        FormParam("tools_allow", type="array", description=f"Whitelist of tool names (comma-separated or JSON list). Skip for no restriction.{tool_hint}", default=None),
+        FormParam("tools_deny", type="array", description=f"Blacklist of tool names. Skip for no restriction.{tool_hint}", default=None),
+        FormParam("tables_allow", type="array", description=f"Whitelist of database tables. Skip for no restriction.{table_hint}", default=None),
+        FormParam("tables_deny", type="array", description=f"Blacklist of database tables. Skip for no restriction.{table_hint}", default=None),
     ]
 
 
