@@ -143,6 +143,13 @@ def _describe_agent_profile(name: str, profile: dict, active: bool) -> str:
     return (f"  {marker} {name:<16} {status:<8} llm={llm_ref}{scope_str}")
 
 
+def _normalize_agent_profile(profile: dict) -> dict:
+    profile = dict(profile)
+    for key in ("tools_allow", "tools_deny", "tables_allow", "tables_deny"):
+        profile.setdefault(key, None)
+    return profile
+
+
 def active_agent_name(config: dict) -> str:
     return config.get("active_agent_profile") or "default"
 
@@ -639,6 +646,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                 profile = _json.loads(json_str)
             except _json.JSONDecodeError as e:
                 return f"Invalid JSON: {e}"
+            profile = _normalize_agent_profile(profile)
 
             llm_ref = profile.get("llm") or "default"
             llm_profiles = ctrl.config.get("llm_profiles", {}) or {}

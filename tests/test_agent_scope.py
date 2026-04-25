@@ -2,6 +2,7 @@ import unittest
 from pathlib import Path
 
 from agent.tool_registry import ToolRegistry
+from frontend.commands import _normalize_agent_profile
 from pipeline.database import Database
 from plugins.tools.tool_sql_query import SQLQuery
 from runtime.agent_scope import load_scope, scoped_db, scoped_registry
@@ -48,6 +49,13 @@ class AgentScopeTests(unittest.TestCase):
         missing = load_scope("p", {"agent_profiles": {"p": {"llm": "default"}}})
         nulls = load_scope("p", {"agent_profiles": {"p": {"llm": "default", "tools_allow": None, "tools_deny": None, "tables_allow": None, "tables_deny": None}}})
         self.assertEqual(missing, nulls)
+
+    def test_agent_profile_normalization_fills_missing_scope_keys(self):
+        profile = _normalize_agent_profile({"llm": "default", "tables_allow": ["conversations"]})
+        self.assertEqual(profile["tables_allow"], ["conversations"])
+        self.assertIsNone(profile["tools_allow"])
+        self.assertIsNone(profile["tools_deny"])
+        self.assertIsNone(profile["tables_deny"])
 
     def test_unfiltered_scope_keeps_full_registry(self):
         scope = load_scope("default", {"agent_profiles": {"default": {"llm": "default"}}})
