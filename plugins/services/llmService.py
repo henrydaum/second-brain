@@ -603,15 +603,16 @@ def _migrate_legacy_llm_config(config: dict) -> bool:
 
     Old shape (per entry):
         {llm_model_name, llm_endpoint, llm_api_key, llm_context_size,
-         llm_service_class, [prompt_suffix, tools_allow, tools_deny,
-         tables_allow, tables_deny]}
+         llm_service_class, [prompt_suffix, whitelist_or_blacklist_tools,
+         tools_list, whitelist_or_blacklist_tables, tables_list]}
 
     New shape:
         llm_profiles[model_name] = {llm_endpoint, llm_api_key,
                                     llm_context_size, llm_service_class}
         default_llm_profile = "<model_name>"
-        agent_profiles[name]  = {llm, prompt_suffix, tools_allow,
-                                 tools_deny, tables_allow, tables_deny}
+        agent_profiles[name]  = {llm, prompt_suffix,
+                                 whitelist_or_blacklist_tools, tools_list,
+                                 whitelist_or_blacklist_tables, tables_list}
         active_agent_profile  = "<name>"
 
     Returns True if any migration ran. Idempotent — entries already in the
@@ -645,8 +646,8 @@ def _migrate_legacy_llm_config(config: dict) -> bool:
 
     new_llms: dict = {}
     new_agents: dict = config.get("agent_profiles", {}) or {}
-    scope_keys = ("prompt_suffix", "tools_allow", "tools_deny",
-                  "tables_allow", "tables_deny")
+    scope_keys = ("prompt_suffix", "whitelist_or_blacklist_tools", "tools_list",
+                  "whitelist_or_blacklist_tables", "tables_list")
     old_active = config.get("active_llm_profile", "")
     new_default_llm = ""
     new_active_agent = ""
@@ -668,10 +669,10 @@ def _migrate_legacy_llm_config(config: dict) -> bool:
             new_agents[name] = {
                 "llm": model,
                 "prompt_suffix": pconf.get("prompt_suffix", "") or "",
-                "tools_allow": pconf.get("tools_allow"),
-                "tools_deny": pconf.get("tools_deny"),
-                "tables_allow": pconf.get("tables_allow"),
-                "tables_deny": pconf.get("tables_deny"),
+                "whitelist_or_blacklist_tools": pconf.get("whitelist_or_blacklist_tools", "blacklist"),
+                "tools_list": pconf.get("tools_list") or [],
+                "whitelist_or_blacklist_tables": pconf.get("whitelist_or_blacklist_tables", "blacklist"),
+                "tables_list": pconf.get("tables_list") or [],
             }
             if name == old_active:
                 new_active_agent = name
@@ -686,10 +687,10 @@ def _migrate_legacy_llm_config(config: dict) -> bool:
         new_agents["default"] = {
             "llm": "default",
             "prompt_suffix": "",
-            "tools_allow": None,
-            "tools_deny": None,
-            "tables_allow": None,
-            "tables_deny": None,
+            "whitelist_or_blacklist_tools": "blacklist",
+            "tools_list": [],
+            "whitelist_or_blacklist_tables": "blacklist",
+            "tables_list": [],
         }
 
     config["llm_profiles"] = new_llms

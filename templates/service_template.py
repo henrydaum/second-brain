@@ -132,7 +132,7 @@ class BaseService(ABC):
 
     def __init__(self):
         self._loaded = False
-        self.services = {}
+        self.services = {}  # Every service gets the full registry for peer access, but use it wisely to avoid tight coupling.
 
     @property
     def loaded(self) -> bool:

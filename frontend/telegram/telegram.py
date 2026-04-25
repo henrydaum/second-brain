@@ -515,14 +515,15 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         profile_name = state.subject
         collected = state.collected
 
-        # Drop unset optional fields (including empty containers — an empty
-        # tools_allow=[] would otherwise mean "deny everything") so
-        # AgentScope.has_*_filter stays False.
         cleaned = {k: v for k, v in collected.items()
                    if v not in (None, "", [], {})}
         # Always carry llm + prompt_suffix even if blank for clarity.
         cleaned.setdefault("llm", collected.get("llm") or "default")
         cleaned.setdefault("prompt_suffix", collected.get("prompt_suffix") or "")
+        cleaned.setdefault("whitelist_or_blacklist_tools", collected.get("whitelist_or_blacklist_tools") or "blacklist")
+        cleaned.setdefault("tools_list", collected.get("tools_list") or [])
+        cleaned.setdefault("whitelist_or_blacklist_tables", collected.get("whitelist_or_blacklist_tables") or "blacklist")
+        cleaned.setdefault("tables_list", collected.get("tables_list") or [])
 
         result = await _dispatch_frontend_event(FrontendEvent(
             type="slash_command",
@@ -536,8 +537,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     # ── /llm edit + /agent edit single-field forms ──────────────────
 
     _AGENT_FIELDS = ("llm", "prompt_suffix",
-                     "tools_allow", "tools_deny",
-                     "tables_allow", "tables_deny")
+                     "whitelist_or_blacklist_tools", "tools_list",
+                     "whitelist_or_blacklist_tables", "tables_list")
     _LLM_FIELDS = ("llm_endpoint", "llm_api_key",
                    "llm_context_size", "llm_service_class")
 
@@ -561,7 +562,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         else:
             lines.append(f"  llm: {html.escape(llm_ref)}")
         lines.append(f"  prompt_suffix: {html.escape(_format_value_short(profile.get('prompt_suffix')))}")
-        for field in ("tools_allow", "tools_deny", "tables_allow", "tables_deny"):
+        for field in ("whitelist_or_blacklist_tools", "tools_list",
+                      "whitelist_or_blacklist_tables", "tables_list"):
             lines.append(f"  {field}: {html.escape(_format_value_short(profile.get(field)))}")
         return lines
 
@@ -650,10 +652,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         rows = [
             [InlineKeyboardButton("llm", callback_data=f"agnt:editfield:{name}:llm"),
              InlineKeyboardButton("prompt_suffix", callback_data=f"agnt:editfield:{name}:prompt_suffix")],
-            [InlineKeyboardButton("tools_allow", callback_data=f"agnt:editfield:{name}:tools_allow"),
-             InlineKeyboardButton("tools_deny", callback_data=f"agnt:editfield:{name}:tools_deny")],
-            [InlineKeyboardButton("tables_allow", callback_data=f"agnt:editfield:{name}:tables_allow"),
-             InlineKeyboardButton("tables_deny", callback_data=f"agnt:editfield:{name}:tables_deny")],
+            [InlineKeyboardButton("tool mode", callback_data=f"agnt:editfield:{name}:whitelist_or_blacklist_tools"),
+             InlineKeyboardButton("tools_list", callback_data=f"agnt:editfield:{name}:tools_list")],
+            [InlineKeyboardButton("table mode", callback_data=f"agnt:editfield:{name}:whitelist_or_blacklist_tables"),
+             InlineKeyboardButton("tables_list", callback_data=f"agnt:editfield:{name}:tables_list")],
             [InlineKeyboardButton("◀ Back", callback_data=f"agnt:pick:{name}")],
         ]
         await _app.bot.send_message(

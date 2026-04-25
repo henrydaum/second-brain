@@ -195,7 +195,7 @@ Built-in services include:
 The LLM layer is split into two separate config tables:
 
 - `llm_profiles` — connection metadata for each model (endpoint, API key, context size, backend class). Each entry is registered as its own service keyed by the model name, and managed via `/llm`.
-- `agent_profiles` — named agent definitions that reference an LLM by model name (or the literal `"default"` sentinel that follows whatever LLM is currently the default) and add optional scope: a prompt suffix plus tool and database-table allow/deny lists. Managed via `/agent`.
+- `agent_profiles` — named agent definitions that reference an LLM by model name (or the literal `"default"` sentinel that follows whatever LLM is currently the default) and add optional scope: a prompt suffix plus tool and database-table whitelist/blacklist filters. Managed via `/agent`.
 
 A fresh install ships with one agent profile (`default`) that uses the default LLM and has no restrictions, so you only ever touch `/agent` if you want more than one agent.
 
@@ -484,8 +484,10 @@ Each agent profile carries:
 
 - `llm` — a model name from `llm_profiles`, or the literal string `"default"` to follow whatever LLM is currently the default at runtime
 - `prompt_suffix` — extra text appended to the system prompt for this agent
-- `tools_allow` / `tools_deny` — whitelist or blacklist of tool names (set one or the other, not both)
-- `tables_allow` / `tables_deny` — whitelist or blacklist of database tables (set one or the other, not both)
+- `whitelist_or_blacklist_tools` — `"whitelist"` or `"blacklist"` for tool filtering
+- `tools_list` — tool names for that filter; `blacklist` plus `[]` allows all tools
+- `whitelist_or_blacklist_tables` — `"whitelist"` or `"blacklist"` for database-table filtering
+- `tables_list` — table names for that filter; `blacklist` plus `[]` allows all tables
 
 Tool dependencies are auto-expanded: if you allow `hybrid_search`, the underlying `lexical_search` and `semantic_search` are also exposed automatically. Table scope is enforced at the SQLite layer through a read-only attached database plus a SQLite authorizer, so a scoped agent's `sql_query` calls cannot reach denied tables.
 

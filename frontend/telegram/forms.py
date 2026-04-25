@@ -110,20 +110,20 @@ def agent_add_params(llm_choices: list[str], tool_names: list[str] | None = None
         FormParam("llm", description="LLM to use. 'default' follows whatever LLM is currently the default.",
                   required=True, enum=llm_choices),
         FormParam("prompt_suffix", description="Extra text appended to the system prompt. Leave blank for none."),
-        FormParam("tools_allow", type="array", description=f"Whitelist of tool names. Skip for no restriction.{tool_hint}", default=None),
-        FormParam("tools_deny", type="array", description=f"Blacklist of tool names. Skip for no restriction.{tool_hint}", default=None),
-        FormParam("tables_allow", type="array", description=f"Whitelist of database tables. Skip for no restriction.{table_hint}", default=None),
-        FormParam("tables_deny", type="array", description=f"Blacklist of database tables. Skip for no restriction.{table_hint}", default=None),
+        FormParam("whitelist_or_blacklist_tools", description="Choose blacklist, then /skip the next item, to allow all tools.", required=True, enum=["blacklist", "whitelist"]),
+        FormParam("tools_list", type="array", description=f"Tool names, one per line. Send /skip for none.{tool_hint}", default=[]),
+        FormParam("whitelist_or_blacklist_tables", description="Choose blacklist, then /skip the next item, to allow all tables.", required=True, enum=["blacklist", "whitelist"]),
+        FormParam("tables_list", type="array", description=f"Database table names, one per line. Send /skip for none.{table_hint}", default=[]),
     ]
 
 
 _AGENT_EDIT_DESCRIPTIONS = {
     "llm": "LLM to use. 'default' follows whatever LLM is currently the default.",
     "prompt_suffix": "Extra text appended to the system prompt. Send /skip to clear.",
-    "tools_allow": "Whitelist of tool names. Send /skip to clear (no restriction).",
-    "tools_deny": "Blacklist of tool names. Send /skip to clear (no restriction).",
-    "tables_allow": "Whitelist of database tables. Send /skip to clear (no restriction).",
-    "tables_deny": "Blacklist of database tables. Send /skip to clear (no restriction).",
+    "whitelist_or_blacklist_tools": "Choose blacklist with an empty tools_list to allow all tools.",
+    "tools_list": "Tool names, one per line. Send /skip for none.",
+    "whitelist_or_blacklist_tables": "Choose blacklist with an empty tables_list to allow all tables.",
+    "tables_list": "Database table names, one per line. Send /skip for none.",
 }
 
 _LLM_EDIT_DESCRIPTIONS = {
@@ -146,11 +146,13 @@ def agent_edit_field_param(field: str, llm_choices: list[str] | None = None,
         return FormParam(field, description=desc, required=True, enum=llm_choices or ["default"])
     if field == "prompt_suffix":
         return FormParam(field, description=desc)
+    if field in ("whitelist_or_blacklist_tools", "whitelist_or_blacklist_tables"):
+        return FormParam(field, description=desc, required=True, enum=["blacklist", "whitelist"])
     hint = ""
-    if field in ("tools_allow", "tools_deny"):
+    if field == "tools_list":
         hint = _format_name_hint("Tool names", tool_names,
                                  "(Use registry names, not filenames.)")
-    elif field in ("tables_allow", "tables_deny"):
+    elif field == "tables_list":
         hint = _format_name_hint("Database table names", table_names)
     return FormParam(field, type="array", description=f"{desc}{hint}", default=None)
 

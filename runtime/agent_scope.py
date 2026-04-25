@@ -1,8 +1,8 @@
 """
 Agent scope — per-profile lens over the shared database and tool registry.
 
-An agent profile (stored in ``agent_profiles`` config) can declare optional
-restrictions on which tables it can read and which tools it can call.
+An agent profile (stored in ``agent_profiles`` config) declares whitelist or
+blacklist filters for the tables it can read and the tools it can call.
 This module turns those declarations into:
 
     - a ``ScopedDatabase`` that runs queries against an in-memory main
@@ -12,8 +12,7 @@ This module turns those declarations into:
       through the views we create;
     - a ``ToolRegistry`` view that only exposes the allowed tools.
 
-Omitting both ``_allow`` and ``_deny`` on a profile means no restriction —
-that profile is a fully-capable agent, identical to today's behavior.
+Using ``blacklist`` with an empty list means no restriction.
 """
 
 import inspect
@@ -39,48 +38,56 @@ class AgentScope:
     prompt_suffix: str = ""
     tools_allow: set[str] | None = None
     tools_deny: set[str] | None = None
-    tables_allow: list | None = None  # list[str | dict{name, sql}]
+    tables_allow: list | None = None  # whitelist entries: str | dict{name, sql}
     tables_deny: set[str] | None = None
 
     @property
     def has_tool_filter(self) -> bool:
-        return self.tools_allow is not None or self.tools_deny is not None
+        return self.tools_allow is not None or bool(self.tools_deny)
 
     @property
     def has_table_filter(self) -> bool:
-        return self.tables_allow is not None or self.tables_deny is not None
+        return self.tables_allow is not None or bool(self.tables_deny)
 
 
 def load_scope(profile_name: str, config: dict) -> AgentScope:
-    """Parse a profile's restriction fields into an ``AgentScope``.
-
-    Raises ``ValueError`` if the profile sets both _allow and _deny for
-    the same resource kind (tools or tables).
-    """
+    """Parse a profile's filter fields into an ``AgentScope``."""
     profile = config.get("agent_profiles", {}).get(profile_name, {}) or {}
 
-    tools_allow = profile.get("tools_allow")
-    tools_deny = profile.get("tools_deny")
-    if tools_allow is not None and tools_deny is not None:
-        raise ValueError(
-            f"Profile '{profile_name}' sets both tools_allow and tools_deny — pick one."
-        )
-
-    tables_allow = profile.get("tables_allow")
-    tables_deny = profile.get("tables_deny")
-    if tables_allow is not None and tables_deny is not None:
-        raise ValueError(
-            f"Profile '{profile_name}' sets both tables_allow and tables_deny — pick one."
-        )
+    tools_mode = _scope_mode(profile_name, profile, "tools")
+    tables_mode = _scope_mode(profile_name, profile, "tables")
+    tools_list = _scope_list(profile_name, profile, "tools")
+    tables_list = _scope_list(profile_name, profile, "tables")
 
     return AgentScope(
         profile_name=profile_name,
         prompt_suffix=str(profile.get("prompt_suffix") or ""),
-        tools_allow=set(tools_allow) if tools_allow is not None else None,
-        tools_deny=set(tools_deny) if tools_deny is not None else None,
-        tables_allow=list(tables_allow) if tables_allow is not None else None,
-        tables_deny=set(tables_deny) if tables_deny is not None else None,
+        tools_allow=set(tools_list) if tools_mode == "whitelist" else None,
+        tools_deny=set(tools_list) if tools_mode == "blacklist" else None,
+        tables_allow=list(tables_list) if tables_mode == "whitelist" else None,
+        tables_deny=set(tables_list) if tables_mode == "blacklist" else None,
     )
+
+
+def _scope_mode(profile_name: str, profile: dict, kind: str) -> str:
+    key = f"whitelist_or_blacklist_{kind}"
+    mode = profile.get(key, "blacklist")
+    if mode not in ("whitelist", "blacklist"):
+        raise ValueError(
+            f"Profile '{profile_name}' has invalid {key}: {mode!r}. "
+            "Use 'whitelist' or 'blacklist'."
+        )
+    return mode
+
+
+def _scope_list(profile_name: str, profile: dict, kind: str) -> list:
+    key = f"{kind}_list"
+    value = profile.get(key, [])
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"Profile '{profile_name}' field {key} must be an array.")
+    return value
 
 
 def scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
@@ -108,7 +115,7 @@ class ScopedDatabase:
 
     The connection has an empty in-memory main schema with only the views
     the profile is allowed to see; the real DB is attached read-only as
-    ``source``. Named-view SQL in ``tables_allow`` must reference base
+    ``source``. Named-view SQL in ``tables_list`` must reference base
     tables via ``source.<name>`` — explicit qualification avoids circular
     references when a view shadows a same-named base table.
 
@@ -163,10 +170,10 @@ class ScopedDatabase:
             for entry in self._scope.tables_allow:
                 if isinstance(entry, str):
                     if entry not in all_names:
-                        logger.warning(f"tables_allow references missing object: {entry!r}")
+                        logger.warning(f"tables_list references missing object: {entry!r}")
                         continue
                     if not _is_safe_identifier(entry):
-                        logger.warning(f"tables_allow bare name is not a safe identifier: {entry!r}")
+                        logger.warning(f"tables_list bare name is not a safe identifier: {entry!r}")
                         continue
                     # Passthrough view in main -> source.<name>
                     self._create_view(entry, f"SELECT * FROM {_SOURCE_SCHEMA}.{entry}")
@@ -174,14 +181,14 @@ class ScopedDatabase:
                     name = entry.get("name")
                     sql = entry.get("sql")
                     if not name or not sql:
-                        logger.warning(f"tables_allow entry missing name/sql: {entry!r}")
+                        logger.warning(f"tables_list entry missing name/sql: {entry!r}")
                         continue
                     if not _is_safe_identifier(name):
-                        logger.warning(f"tables_allow entry has invalid name: {name!r}")
+                        logger.warning(f"tables_list entry has invalid name: {name!r}")
                         continue
                     self._create_view(name, sql)
                 else:
-                    logger.warning(f"Unrecognized tables_allow entry: {entry!r}")
+                    logger.warning(f"Unrecognized tables_list entry: {entry!r}")
         else:
             # deny list: create passthrough views for every source table except the denied ones.
             denied = self._scope.tables_deny or set()

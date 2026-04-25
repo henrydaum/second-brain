@@ -107,10 +107,10 @@ SETTINGS_DATA = [
      {"default": {
          "llm": "default",
          "prompt_suffix": "",
-         "tools_allow": None,
-         "tools_deny": None,
-         "tables_allow": None,
-         "tables_deny": None,
+         "whitelist_or_blacklist_tools": "blacklist",
+         "tools_list": [],
+         "whitelist_or_blacklist_tables": "blacklist",
+         "tables_list": [],
      }},
      {"type": "json_dict", "hidden": True}),
 

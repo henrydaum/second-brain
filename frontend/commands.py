@@ -129,38 +129,31 @@ def _describe_agent_profile(name: str, profile: dict, active: bool) -> str:
     status = "active" if active else ""
     llm_ref = profile.get("llm") or "default"
     scope_parts = []
-    if profile.get("tools_allow") is not None:
-        scope_parts.append(f"tools+{len(profile['tools_allow'])}")
-    elif profile.get("tools_deny") is not None:
-        scope_parts.append(f"tools-{len(profile['tools_deny'])}")
-    if profile.get("tables_allow") is not None:
-        scope_parts.append(f"tables+{len(profile['tables_allow'])}")
-    elif profile.get("tables_deny") is not None:
-        scope_parts.append(f"tables-{len(profile['tables_deny'])}")
+    tools_mode = profile.get("whitelist_or_blacklist_tools", "blacklist")
+    tables_mode = profile.get("whitelist_or_blacklist_tables", "blacklist")
+    scope_parts.append(f"tools{ '+' if tools_mode == 'whitelist' else '-' }{len(profile.get('tools_list') or [])}")
+    scope_parts.append(f"tables{ '+' if tables_mode == 'whitelist' else '-' }{len(profile.get('tables_list') or [])}")
     if profile.get("prompt_suffix"):
         scope_parts.append("prompt+")
     scope_str = ("  [" + ",".join(scope_parts) + "]") if scope_parts else ""
     return (f"  {marker} {name:<16} {status:<8} llm={llm_ref}{scope_str}")
 
 
-_AGENT_SCOPE_FIELDS = ("tools_allow", "tools_deny", "tables_allow", "tables_deny")
+_AGENT_MODE_FIELDS = ("whitelist_or_blacklist_tools", "whitelist_or_blacklist_tables")
+_AGENT_LIST_FIELDS = ("tools_list", "tables_list")
+_AGENT_SCOPE_FIELDS = _AGENT_MODE_FIELDS + _AGENT_LIST_FIELDS
 _AGENT_PROFILE_FIELDS = ("llm", "prompt_suffix") + _AGENT_SCOPE_FIELDS
 _LLM_PROFILE_FIELDS = ("llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class")
 
 
 def _normalize_agent_profile(profile: dict) -> dict:
-    """Coerce profile fields into the canonical shape.
-
-    Empty arrays/objects collapse to None so AgentScope.has_*_filter stays
-    False — an explicit empty allow-list would otherwise mean "deny everything"
-    which is almost never what the user wants.
-    """
+    """Coerce profile fields into the canonical shape."""
     profile = dict(profile)
-    for key in _AGENT_SCOPE_FIELDS:
-        val = profile.get(key)
-        if val in ("", [], {}):
-            val = None
-        profile[key] = val
+    for key in _AGENT_MODE_FIELDS:
+        profile[key] = profile.get(key) or "blacklist"
+    for key in _AGENT_LIST_FIELDS:
+        val = profile.get(key, [])
+        profile[key] = [] if val in (None, "", {}) else val
     return profile
 
 
@@ -710,12 +703,16 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             if not name:
                 return ("Usage: /agent add <profile_name> {json}\n"
                         "Keys: llm (model_name or 'default'), prompt_suffix, "
-                        "tools_allow, tools_deny, tables_allow, tables_deny.")
+                        "whitelist_or_blacklist_tools, tools_list, "
+                        "whitelist_or_blacklist_tables, tables_list.")
             if not json_str:
                 return ("Usage: /agent add <profile_name> {json}\n"
                         "Example: /agent add researcher "
                         '{\"llm\": \"default\", \"prompt_suffix\": \"\", '
-                        '\"tools_allow\": [\"sql_query\", \"read_file\"]}')
+                        '\"whitelist_or_blacklist_tools\": \"whitelist\", '
+                        '\"tools_list\": [\"sql_query\", \"read_file\"], '
+                        '\"whitelist_or_blacklist_tables\": \"blacklist\", '
+                        '\"tables_list\": []}')
             try:
                 profile = _json.loads(json_str)
             except _json.JSONDecodeError as e:
@@ -792,11 +789,14 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                 if value != "default" and value not in llm_profiles:
                     return (f"Unknown LLM '{value}'. "
                             f"Run /llm list to see all LLMs.")
-            elif field in _AGENT_SCOPE_FIELDS:
-                if value in ("", [], {}):
-                    value = None
-                elif value is not None and not isinstance(value, list):
-                    return f"{field} must be a JSON array or null."
+            elif field in _AGENT_MODE_FIELDS:
+                if value not in ("whitelist", "blacklist"):
+                    return f"{field} must be 'whitelist' or 'blacklist'."
+            elif field in _AGENT_LIST_FIELDS:
+                if value in (None, "", {}):
+                    value = []
+                elif not isinstance(value, list):
+                    return f"{field} must be a JSON array."
             elif field == "prompt_suffix":
                 if value is None:
                     value = ""

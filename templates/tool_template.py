@@ -41,7 +41,7 @@ Tasks run in the background on every file (batch processing).
 Tools are called on-demand and return results immediately.
 
 Tools can be called by:
-  - The LLM agent (subject to the active agent_profile's tools_allow/tools_deny)
+  - The LLM agent (subject to the active agent_profile's tool mode and tools_list)
   - The user via CLI: /call tool_name {"arg": "value"}
   - Other tools via context.call_tool("tool_name", arg="value")
 
