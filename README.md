@@ -183,7 +183,7 @@ Shared backends with explicit load and unload lifecycles, implemented as built-i
 
 Built-in services include:
 
-- `llm` - routed LLM service with named profiles
+- `llm` - default-LLM router; one service per entry in `llm_profiles` is also registered (keyed by model name) so multiple LLMs can be loaded concurrently
 - `web_search_provider` - Brave Search / Brave Answers / DuckDuckGo fallback
 - `timekeeper` - cron and one-time scheduling
 - `ocr` - Windows OCR
@@ -192,7 +192,12 @@ Built-in services include:
 - `image_embedder` - image embeddings
 - `google_drive` - Drive integration
 
-The LLM layer supports profile routing, so you can switch models without changing the rest of the system.
+The LLM layer is split into two separate config tables:
+
+- `llm_profiles` — connection metadata for each model (endpoint, API key, context size, backend class). Each entry is registered as its own service keyed by the model name, and managed via `/llm`.
+- `agent_profiles` — named agent definitions that reference an LLM by model name (or the literal `"default"` sentinel that follows whatever LLM is currently the default) and add optional scope: a prompt suffix plus tool and database-table allow/deny lists. Managed via `/agent`.
+
+A fresh install ships with one agent profile (`default`) that uses the default LLM and has no restrictions, so you only ever touch `/agent` if you want more than one agent.
 
 Within the same plugin family, extension-driven parsers normalize raw files into structured outputs. Parser helpers live under `plugins/services/helpers/`, and the parser service wires them into the rest of the runtime.
 
@@ -459,7 +464,7 @@ Notes:
 - Setting the LLM context size to 0 is recommended for automatic compaction.
 - Brave Search and Brave Answers are optional for web search and configured through plugin settings.
 - LLM and agent configuration is manual; you can't ask the agent to do it for you. This is to prevent the LLM from leaking your API keys, and for the sake of transparency.
-- Every LLM profile gets saved as a new service instance, which you can load and unload individually. The default profile is automatically loaded.
+- Every entry in `llm_profiles` gets registered as its own service keyed by model name, plus an `llm` router service that resolves to whatever `default_llm_profile` points at. Load and unload individual LLMs with `/load <model_name>` and `/unload <model_name>`. The default LLM is loaded automatically.
 
 ### Agent Profiles for Safe Delegation
 
@@ -474,6 +479,19 @@ A practical setup looks like:
 - a communicator agent with a much smaller toolset and a narrower database view
 
 In other words, you can treat Second Brain less like one monolithic assistant and more like a small team of specialists, each with the minimum visibility and tool access needed for its job. Having multiple agents is easy and optional.
+
+Each agent profile carries:
+
+- `llm` — a model name from `llm_profiles`, or the literal string `"default"` to follow whatever LLM is currently the default at runtime
+- `prompt_suffix` — extra text appended to the system prompt for this agent
+- `tools_allow` / `tools_deny` — whitelist or blacklist of tool names (set one or the other, not both)
+- `tables_allow` / `tables_deny` — whitelist or blacklist of database tables (set one or the other, not both)
+
+Tool dependencies are auto-expanded: if you allow `hybrid_search`, the underlying `lexical_search` and `semantic_search` are also exposed automatically. Table scope is enforced at the SQLite layer through a read-only attached database plus a SQLite authorizer, so a scoped agent's `sql_query` calls cannot reach denied tables.
+
+Switch the active profile with `/agent switch <name>`. The switch carries the conversation history forward but applies the new scope to the next turn. The `default` profile is permanent and cannot be removed.
+
+In Telegram, `/agent` and `/llm` open profile-list menus. Tap a profile to see its attributes and `[Set active|default]`, `[Edit]`, and `[Remove]` actions.
 
 ### Run
 
@@ -502,13 +520,12 @@ Available in the REPL and as slash commands in Telegram.
 | `cancel` | Interrupt the active agent |
 | `config [key]` | Show config values |
 | `configure <key> <value>` | Update config |
-| `disable <tool>` | Disable a tool for agent use |
-| `enable <tool>` | Enable a tool for agent use |
 | `help` | Show all commands |
 | `history [id]` | List or load saved conversations |
+| `llm [list\|add\|edit\|remove\|show\|default]` | Manage LLM connection profiles (model, endpoint, key, context, class) |
+| `agent [list\|switch\|add\|edit\|remove\|show]` | Manage scoped agent profiles (LLM reference + tool/table allow-deny + prompt suffix) |
 | `load <service>` | Load a service |
 | `locations [tools\|tasks\|services]` | Inspect plugin-related file locations |
-| `model ...` | Manage LLM profiles |
 | `new` | Start a new conversation |
 | `pause <task>` | Pause a task |
 | `pipeline` | Show the path-driven dependency graph |
