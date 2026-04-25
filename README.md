@@ -440,26 +440,26 @@ Minimal example:
   "telegram_bot_token": "",
   "telegram_allowed_user_id": 0,
   "llm_profiles": {
-    "local": {
-      "llm_model_name": "gpt-4.1-mini",
-      "llm_endpoint": "http://127.0.0.1:1234/v1",
-      "llm_api_key": "lm-studio",
-      "llm_context_size": 128000,
+    "gpt-4.1-mini": {
+      "llm_endpoint": "",
+      "llm_api_key": "sk-p...oMMA",
+      "llm_context_size": 0,
       "llm_service_class": "OpenAILLM"
     }
   },
-  "active_llm_profile": "local"
+  "default_llm_profile": "gpt-4.1-mini"
 }
 ```
 
-You will need an LLM API key. A MiniMax API key for $10/month is more than sufficient for basic operations with their M2.7 model. If you are writing complicated plugins, I recommend a stronger model like Claude Opus, GPT 5.4, or higher. Use /agent to build a new agent profile with your key.
+You will need an LLM API key. A MiniMax API key for $10/month is more than sufficient for basic operations with their M2.7 model. If you are writing complicated plugins, I recommend a stronger model like Claude Opus, GPT 5.5, or higher. You can configure multiple llm profiles with /llm.
 
 Notes:
 
-- Tool calling not available with LM Studio.
-- `LLMRouter` supports multiple named agent profiles (model + optional tool/table scope) and switching between them with `/agent`.
-- `timekeeper` and `web_search_provider` are good defaults to autoload because they power scheduling and web search; `llm` is needed for basic functioning.
-- Brave Search and Brave Answers are optional and configured through plugin settings.
+- Tool calling isn't available with LM Studio.
+- Setting the LLM context size to 0 is recommended for automatic compaction.
+- Brave Search and Brave Answers are optional for web search and configured through plugin settings.
+- LLM and agent configuration is manual; you can't ask the agent to do it for you. This is to prevent the LLM from leaking your API keys, and for the sake of transparency.
+- Every LLM profile gets saved as a new service instance, which you can load and unload individually. The default profile is automatically loaded.
 
 ### Agent Profiles for Safe Delegation
 
