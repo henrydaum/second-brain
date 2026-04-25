@@ -42,6 +42,7 @@ SERVICE LIFECYCLE
      - Sets self.loaded = True on success
      - Handles timing and logging automatically
   3. The service is used by tasks/tools via context.services.get("name")
+     - Inside a service, use self.services.get("name") to reach peers.
   4. unload() is called to free resources (GPU memory, connections, etc.)
 
 Services can be loaded/unloaded at runtime from the Telegram frontend or REPL.
@@ -131,6 +132,7 @@ class BaseService(ABC):
 
     def __init__(self):
         self._loaded = False
+        self.services = {}
 
     @property
     def loaded(self) -> bool:
@@ -170,6 +172,10 @@ class BaseService(ABC):
     def get_client(self):
         """Override for per-call services (shared=False)."""
         raise NotImplementedError
+
+    def set_peer_services(self, services: dict):
+        """Receive the live runtime service registry."""
+        self.services = services
 
 
 # =====================================================================

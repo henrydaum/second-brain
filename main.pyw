@@ -72,12 +72,6 @@ def main():
 	services = discover_services(_ROOT, config)
 	logger.info(f"Services discovered: {list(services.keys())} ({time.time() - t0:.2f}s)")
 
-	# Inject peer services into the parser service so parser functions can
-	# delegate to other services (e.g. parse_gdoc -> google_drive).
-	parser_svc = services.get("parser")
-	if parser_svc is not None and hasattr(parser_svc, "set_peer_services"):
-		parser_svc.set_peer_services(services)
-
 	# --- 3b. Auto-load services ---
 	for svc_name in config.get("autoload_services", []):
 		svc = services.get(svc_name)
@@ -120,15 +114,6 @@ def main():
 
 	# --- 6. Initialize controller ---
 	ctrl = Controller(orchestrator, database, services, config, tool_registry)
-
-	# Rebind the LLM router to the live service registry so /llm add and
-	# /llm remove mutate ctrl.services directly. Without this, the router
-	# would only mutate the dict it was built from inside llmService and
-	# /services would not reflect new LLMs until restart.
-	from plugins.services.llmService import LLMRouter
-	_router = ctrl.services.get("llm")
-	if isinstance(_router, LLMRouter):
-		_router.services = ctrl.services
 
 	# --- 6b. Determine which frontends to start ---
 	frontends = set(config.get("enabled_frontends", ["repl", "telegram"]))

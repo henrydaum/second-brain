@@ -4,15 +4,13 @@ Parser service.
 Wraps the parser registry as a standard service so callers access parsing
 through the uniform ``context.services.get("parser").parse(...)`` pattern.
 
-The service lifecycle triggers parser discovery: _load() imports every
-parser module under Stage_1/services/parsers/, and each module registers
+The service lifecycle triggers parser discovery: _load() imports parser
+modules under plugins/services/helpers/, and each module registers
 its (extension, modality) -> function mappings on import via
 parser_registry.register().
 
-Peer services (llm, whisper, google_drive, etc.) are injected via
-set_peer_services() after main.pyw finishes discover_services(). The
-service forwards that dict to each parser function so parsers can delegate
-to other services (e.g. parse_gdoc -> google_drive, parse_audio -> whisper).
+The live service registry is injected through BaseService so parsers can
+delegate to peers (e.g. parse_gdoc -> google_drive, parse_audio -> whisper).
 """
 
 import logging
@@ -32,10 +30,6 @@ class ParserService(BaseService):
     shared = True
     config_settings: list = []
 
-    def __init__(self):
-        super().__init__()
-        self._peer_services: dict = {}
-
     def _load(self) -> bool:
         # Importing each parser module triggers its top-level register() calls,
         # which populate parser_registry._REGISTRY and _MODALITY_MAP.
@@ -52,16 +46,9 @@ class ParserService(BaseService):
         # register() calls on re-import).
         self.loaded = False
 
-    def set_peer_services(self, services: dict):
-        """Inject the full services dict so parsers can reach peers.
-
-        Called by main.pyw immediately after discover_services() returns.
-        """
-        self._peer_services = services
-
     def parse(self, path: str, modality: str = None, config: dict = None):
         """Parse a file and return a ParseResult. See parser_registry.parse."""
-        return parser_registry.parse(path, modality, config, self._peer_services)
+        return parser_registry.parse(path, modality, config, self.services)
 
 
 def build_services(config: dict) -> dict:

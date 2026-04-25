@@ -258,7 +258,7 @@ class Controller:
 
         Returns a list of human-readable feedback strings.
         """
-        from plugins.plugin_discovery import get_setting_service_map, discover_services
+        from plugins.plugin_discovery import get_setting_service_map, discover_services, wire_peer_services
 
         svc_map = get_setting_service_map()
         affected: set[str] = set()
@@ -302,6 +302,7 @@ class Controller:
             for n in affected:
                 if n in new_services:
                     self.services[n] = new_services[n]
+            wire_peer_services(self.services)
 
             # Reload services that were previously loaded
             for n in previously_loaded:

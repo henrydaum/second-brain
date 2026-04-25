@@ -278,8 +278,16 @@ def discover_services(root_dir: Path, config: dict) -> dict:
                 _collect_config_settings(svc, service_names=built_names, plugin_type="service")
                 services[svc_name] = svc
 
+    wire_peer_services(services)
     logger.info(f"Discovered {len(services)} service(s) in {time.time() - t0:.2f}s")
     return services
+
+
+def wire_peer_services(services: dict):
+    """Inject the live service registry into every service."""
+    for svc in list(services.values()):
+        if hasattr(svc, "set_peer_services"):
+            svc.set_peer_services(services)
 
 
 # ── Single-plugin load/unload (used by build_plugin) ────────────────
@@ -397,6 +405,7 @@ def _load_single_service(file_path: Path, services: dict, config: dict) -> tuple
         _collect_config_settings(svc, service_names=names, plugin_type="service")
         services[svc_name] = svc
 
+    wire_peer_services(services)
     return ", ".join(names), None
 
 

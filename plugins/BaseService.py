@@ -57,6 +57,7 @@ class BaseService(ABC):
 
     def __init__(self):
         self._loaded = False
+        self.services = {}
 
     @property
     def loaded(self) -> bool:
@@ -112,3 +113,7 @@ class BaseService(ABC):
             f"Service '{self.model_name}' is per-call (shared=False) but "
             f"doesn't implement get_client()."
         )
+
+    def set_peer_services(self, services: dict):
+        """Receive the live runtime service registry."""
+        self.services = services
