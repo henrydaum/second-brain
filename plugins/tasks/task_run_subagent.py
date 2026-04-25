@@ -9,7 +9,7 @@ from plugins.BaseTask import BaseTask, TaskResult
 from agent.agent import Agent
 from agent.system_prompt import build_system_prompt
 from agent.tool_registry import ToolRegistry
-from runtime.agent_scope import load_scope, resolve_agent_llm, scope_prompt_note, scoped_db, scoped_registry
+from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_db, scoped_registry
 from frontend.token_stripper import strip_model_tokens
 from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED
@@ -181,7 +181,12 @@ class RunSubagent(BaseTask):
             llm,
             sub_registry,
             context.config,
-            system_prompt=lambda: self._build_subagent_prompt(context, sub_registry, sub_db, scope, mode),
+            system_prompt=lambda: build_system_prompt(
+                sub_db, context.orchestrator, sub_registry, context.services,
+                scope=scope,
+                profile_name=(scope.profile_name if scope else (context.config.get("active_agent_profile") or "default")),
+                subagent_mode=mode,
+            ),
             on_message=_on_message,
         )
 
@@ -234,44 +239,6 @@ class RunSubagent(BaseTask):
             # it when the job's notification mode allows pushing.
             registry.register(PushSubagentMessageTool(run_id, job_name, _record_push))
         return registry
-
-    def _build_subagent_prompt(self, context, sub_registry, sub_db, scope, mode: str) -> str:
-        base = build_system_prompt(sub_db, context.orchestrator, sub_registry, context.services)
-        profile_name = scope.profile_name if scope else (context.config.get("active_agent_profile") or "default")
-        scope_note = ("\n\n" + scope_prompt_note(profile_name, scope)) if scope else ""
-        scope_suffix = ("\n\n" + scope.prompt_suffix) if scope and scope.prompt_suffix else ""
-
-        common_header = (
-            "\n\n## Scheduled subagent\n"
-            "You are running unattended on a schedule.\n"
-            "Work as if no one will answer follow-up questions during this run.\n"
-            "Do not rely on permission dialogs or back-and-forth clarification.\n"
-            "Do not ask questions.\n"
-        )
-
-        if mode == "off":
-            mode_block = (
-                "Notifications: OFF. You are running silently and have no way to message the user during this run. "
-                "The push_subagent_message tool is not available. "
-                "Do your work and finish with a concise final answer that will be stored for later review.\n"
-            )
-        elif mode == "important":
-            mode_block = (
-                "Notifications: IMPORTANT-ONLY. push_subagent_message is available but should be used only when something noteworthy comes up — "
-                "a real finding, an alert, a needed nudge, or information the user actually needs to see now. "
-                "Routine completion is not important; stay silent in that case. "
-                "Always finish with a concise final answer that will be stored for later review.\n"
-            )
-        else:  # "all"
-            mode_block = (
-                "Notifications: ALL. push_subagent_message is the main way to send a user-visible message during the run. "
-                "Use it for reminders, alerts, briefs, findings, check-ins, or anything the user should actually see in chat. "
-                "If you do not call push_subagent_message, the system will fall back to sending your final answer as a single push so the user is not left in the dark. "
-                "update_memory stores durable lessons for future sessions but does not notify anyone — never use it in place of push_subagent_message when the user is expecting to hear from you. "
-                "Finish with a concise final answer that can be stored and reviewed later.\n"
-            )
-
-        return base + scope_note + scope_suffix + common_header + mode_block
 
     def _emit_fallback_push(self, run_id: str, job_name: str, title: str,
                             final_answer: str, push_records: list[SubagentPushRecord]) -> None:

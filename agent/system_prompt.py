@@ -1,41 +1,79 @@
 """
 System prompt builder.
 
-Assembles a system prompt for the agent that includes a brief identity,
-actionable guidance, tool descriptions, and dynamic runtime state.
-Built fresh each time the user sends a message so the LLM always sees
-current state (e.g. newly registered plugins, service status changes).
+Single entry point for assembling the agent system prompt. Sections are
+gated on which tools the calling agent's registry actually exposes, so a
+restricted profile doesn't get a wall of guidance about tools it can't
+call. Also handles the scope-limits note, prompt suffixes, and the
+scheduled-subagent header so callers don't have to stitch strings.
+
+Built fresh each turn so the LLM always sees current state (newly
+registered plugins, service status changes, current memory.md, etc.).
 """
 
 from datetime import datetime
 from pathlib import Path
 
 from plugins.services.helpers.parser_registry import get_supported_extensions
+from runtime.agent_scope import AgentScope
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def build_system_prompt(db, orchestrator, tool_registry, services: dict) -> str:
+def build_system_prompt(
+    db,
+    orchestrator,
+    tool_registry,
+    services: dict,
+    *,
+    scope: AgentScope | None = None,
+    profile_name: str = "default",
+    extra_suffix: str = "",
+    subagent_mode: str | None = None,
+) -> str:
+    r = tool_registry  # short alias for gating checks
+
     sections = [
-        _identity(services),
+        _identity(services, r),
         _current_datetime(),
-        _available_tools(tool_registry),
-        _agent_profiles(orchestrator),
-        _authoring_guidance(),
-        _sandbox_files(),
-        _attachments(),
-        _database_tables(db),
+        _available_tools(r),
+        _agent_profiles(orchestrator) if _has_any(r, "ask_subagent", "schedule_subagent") else "",
+        _authoring_guidance() if _has_tool(r, "build_plugin") else "",
+        _sandbox_files() if _has_tool(r, "build_plugin") else "",
+        _attachments() if _has_tool(r, "sql_query") else "",
+        _database_tables(db) if _has_tool(r, "sql_query") else "",
         _services_status(services),
         _pipeline_status(db, orchestrator),
-        _file_inventory(db),
-        _agent_memory(),
+        _file_inventory(db) if _has_any(r, "read_file", "hybrid_search", "lexical_search", "semantic_search") else "",
+        _agent_memory() if _has_tool(r, "update_memory") else "",
     ]
-    return "\n\n".join(s for s in sections if s)
+    prompt = "\n\n".join(s for s in sections if s)
+
+    scope_note = _scope_prompt_note(profile_name, scope)
+    if scope_note:
+        prompt += "\n\n" + scope_note
+    if scope and scope.prompt_suffix:
+        prompt += "\n\n" + scope.prompt_suffix
+    if extra_suffix:
+        prompt += extra_suffix
+    if subagent_mode is not None:
+        prompt += _subagent_block(subagent_mode)
+    return prompt
+
+
+# ── Tool gating helpers ──────────────────────────────────────────────
+
+def _has_tool(registry, name: str) -> bool:
+    return bool(registry) and name in getattr(registry, "tools", {})
+
+
+def _has_any(registry, *names: str) -> bool:
+    return any(_has_tool(registry, n) for n in names)
 
 
 # ── Static sections ──────────────────────────────────────────────────
 
-def _identity(services: dict) -> str:
+def _identity(services: dict, registry) -> str:
     # Resolve the active model name from the LLM router
     model_line = ""
     llm = services.get("llm")
@@ -51,10 +89,40 @@ def _identity(services: dict) -> str:
     from paths import DATA_DIR
     log_path = DATA_DIR / "app.log"
 
+    # (required_tool, line). None means always include.
+    habit_bullets: list[tuple[str | None, str]] = [
+        (None, "- Use the built-in tools to inspect the system before making assumptions."),
+        ("sql_query", "- Past conversations live in the database (conversations and conversation_messages tables) and can be recalled with sql_query."),
+        ("read_file", "- For architecture or design intent, read README.md with read_file."),
+        ("read_file", f"- A debug log for the current session is at {log_path} — read it with read_file if you need to investigate an error."),
+        ("render_files", "- Use render_files when the user would benefit from seeing a file directly."),
+        ("build_plugin", "- If the current tools cannot reasonably complete a task, suggest creating a sandbox plugin with build_plugin."),
+        (None, "- Tool call limits are per message, not per session. If one tool reaches its limit, you may still use other tools."),
+    ]
+
+    memory_block = ""
+    if _has_tool(registry, "update_memory"):
+        memory_block = (
+            "- Call update_memory proactively and often. Triggers:\n"
+            "  * The user shares a fact about themselves, their role, or how they like to work → save it.\n"
+            "  * You learn something non-obvious about a tool (a quirk, a common failure mode, the right argument pattern, a gotcha) → save the lesson so future sessions don't repeat the mistake.\n"
+            "  * A tool call fails and you figure out what would have worked → save the correction.\n"
+            "  * The user corrects your behavior or expresses a preference → save it as a standing instruction.\n"
+            "  * You discover a useful pattern (e.g. which table to query for X, which plugin handles Y) → save it.\n"
+            "  Be rigorous: err on the side of writing a note rather than skipping it. Memory is how you get smarter over time.\n"
+        )
+
+    habits = "\n".join(line for tool, line in habit_bullets if tool is None or _has_tool(registry, tool))
+
+    capabilities = ["inspect local files", "query the SQLite database"]
+    if _has_tool(registry, "build_plugin"):
+        capabilities.append("extend the system through sandbox plugins")
+    cap_line = ", ".join(capabilities[:-1]) + ", and " + capabilities[-1] if len(capabilities) > 1 else capabilities[0]
+
     return (
         "You are Second Brain, the assistant inside the user's local file intelligence system. "
         "Your job is to help the user work with their files, database, tools, and automations. "
-        "You can inspect local files, query the SQLite database, and extend the system through sandbox plugins.\n"
+        f"You can {cap_line}.\n"
         f"{model_line}"
         "\n"
         "Behavior:\n"
@@ -64,20 +132,8 @@ def _identity(services: dict) -> str:
         "- Pick the right tool for the job. Before acting, scan the available tools and choose the one that most directly fits the task; don't default to a familiar tool when a more specific one exists.\n"
         "\n"
         "Tool habits:\n"
-        "- Use the built-in tools to inspect the system before making assumptions.\n"
-        "- Past conversations live in the database (conversations and conversation_messages tables) and can be recalled with sql_query.\n"
-        "- For architecture or design intent, read README.md with read_file.\n"
-        f"- A debug log for the current session is at {log_path} — read it with read_file if you need to investigate an error.\n"
-        "- Use render_files when the user would benefit from seeing a file directly.\n"
-        "- If the current tools cannot reasonably complete a task, suggest creating a sandbox plugin with build_plugin.\n"
-        "- Call update_memory proactively and often. Triggers:\n"
-        "  * The user shares a fact about themselves, their role, or how they like to work → save it.\n"
-        "  * You learn something non-obvious about a tool (a quirk, a common failure mode, the right argument pattern, a gotcha) → save the lesson so future sessions don't repeat the mistake.\n"
-        "  * A tool call fails and you figure out what would have worked → save the correction.\n"
-        "  * The user corrects your behavior or expresses a preference → save it as a standing instruction.\n"
-        "  * You discover a useful pattern (e.g. which table to query for X, which plugin handles Y) → save it.\n"
-        "  Be rigorous: err on the side of writing a note rather than skipping it. Memory is how you get smarter over time.\n"
-        "- Tool call limits are per message, not per session. If one tool reaches its limit, you may still use other tools."
+        f"{habits}\n"
+        f"{memory_block}"
     )
 
 
@@ -262,3 +318,55 @@ def _agent_memory() -> str:
         content = mem_path.read_text()
         return f"\n\n{header}\nCurrent contents:\n{content}"
     return f"\n\n{header}\nCurrent contents: (empty — the file will be created on first update_memory call)"
+
+
+# ── Scope + subagent trailers ────────────────────────────────────────
+
+def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
+    if profile_name == "default" or not scope:
+        return ""
+    limits = []
+    if scope.has_tool_filter:
+        limits.append("tool access is limited to the tools exposed in this prompt")
+    if scope.has_table_filter:
+        limits.append("database access is limited to the scoped tables/views available through your tools")
+    if not limits:
+        return ""
+    return (
+        "## Agent profile limits\n"
+        f"You are running under the '{profile_name}' agent profile.\n"
+        f"{' and '.join(limits)}.\n"
+        "If something is unavailable or denied, work within that scope instead of assuming full system access."
+    )
+
+
+def _subagent_block(mode: str) -> str:
+    header = (
+        "\n\n## Scheduled subagent\n"
+        "You are running unattended on a schedule.\n"
+        "Work as if no one will answer follow-up questions during this run.\n"
+        "Do not rely on permission dialogs or back-and-forth clarification.\n"
+        "Do not ask questions.\n"
+    )
+    if mode == "off":
+        body = (
+            "Notifications: OFF. You are running silently and have no way to message the user during this run. "
+            "The push_subagent_message tool is not available. "
+            "Do your work and finish with a concise final answer that will be stored for later review.\n"
+        )
+    elif mode == "important":
+        body = (
+            "Notifications: IMPORTANT-ONLY. push_subagent_message is available but should be used only when something noteworthy comes up — "
+            "a real finding, an alert, a needed nudge, or information the user actually needs to see now. "
+            "Routine completion is not important; stay silent in that case. "
+            "Always finish with a concise final answer that will be stored for later review.\n"
+        )
+    else:  # "all"
+        body = (
+            "Notifications: ALL. push_subagent_message is the main way to send a user-visible message during the run. "
+            "Use it for reminders, alerts, briefs, findings, check-ins, or anything the user should actually see in chat. "
+            "If you do not call push_subagent_message, the system will fall back to sending your final answer as a single push so the user is not left in the dark. "
+            "update_memory stores durable lessons for future sessions but does not notify anyone — never use it in place of push_subagent_message when the user is expecting to hear from you. "
+            "Finish with a concise final answer that can be stored and reviewed later.\n"
+        )
+    return header + body

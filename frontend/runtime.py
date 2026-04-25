@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from agent.agent import Agent
 from agent.history_utils import heal_orphan_tool_calls
 from agent.system_prompt import build_system_prompt
-from runtime.agent_scope import load_scope, resolve_agent_llm, scope_prompt_note, scoped_db, scoped_registry
+from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_db, scoped_registry
 from events.event_bus import bus
 from events.event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED, CHAT_MESSAGE_PUSHED
 from frontend.commands import CommandRegistry, active_agent_line, register_core_commands
@@ -134,13 +134,12 @@ class FrontendRuntime:
         agent_registry = scoped_registry(self.tool_registry, scope, db=agent_db) if scope else self.tool_registry
 
         def _system_prompt():
-            base = build_system_prompt(
-                agent_db, self.ctrl.orchestrator, agent_registry, self.ctrl.services
+            return build_system_prompt(
+                agent_db, self.ctrl.orchestrator, agent_registry, self.ctrl.services,
+                scope=scope,
+                profile_name=profile_name,
+                extra_suffix=self.get_state(session).prompt_suffix,
             )
-            scope_note = ("\n\n" + scope_prompt_note(profile_name, scope)) if scope else ""
-            suffix = self.get_state(session).prompt_suffix
-            scope_suffix = ("\n\n" + scope.prompt_suffix) if (scope and scope.prompt_suffix) else ""
-            return base + scope_note + suffix + scope_suffix
 
         return Agent(
             llm, agent_registry, self.config,
