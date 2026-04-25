@@ -83,6 +83,24 @@ def load_scope(profile_name: str, config: dict) -> AgentScope:
     )
 
 
+def scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
+    if profile_name == "default" or not scope:
+        return ""
+    limits = []
+    if scope.has_tool_filter:
+        limits.append("tool access is limited to the tools exposed in this prompt")
+    if scope.has_table_filter:
+        limits.append("database access is limited to the scoped tables/views available through your tools")
+    if not limits:
+        return ""
+    return (
+        "## Agent profile limits\n"
+        f"You are running under the '{profile_name}' agent profile.\n"
+        f"{' and '.join(limits)}.\n"
+        "If something is unavailable or denied, work within that scope instead of assuming full system access."
+    )
+
+
 # ── Scoped database ──────────────────────────────────────────────────
 
 class ScopedDatabase:

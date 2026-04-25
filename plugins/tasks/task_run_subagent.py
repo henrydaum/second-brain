@@ -9,7 +9,7 @@ from plugins.BaseTask import BaseTask, TaskResult
 from agent.agent import Agent
 from agent.system_prompt import build_system_prompt
 from agent.tool_registry import ToolRegistry
-from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_db, scoped_registry
+from runtime.agent_scope import load_scope, resolve_agent_llm, scope_prompt_note, scoped_db, scoped_registry
 from frontend.token_stripper import strip_model_tokens
 from agent.subagent_runtime import (
     PushSubagentMessageTool,
@@ -222,9 +222,12 @@ class RunSubagent(BaseTask):
 
     def _build_subagent_prompt(self, context, sub_registry, sub_db, scope) -> str:
         base = build_system_prompt(sub_db, context.orchestrator, sub_registry, context.services)
+        profile_name = scope.profile_name if scope else (context.config.get("active_agent_profile") or "default")
+        scope_note = ("\n\n" + scope_prompt_note(profile_name, scope)) if scope else ""
         scope_suffix = ("\n\n" + scope.prompt_suffix) if scope and scope.prompt_suffix else ""
         return (
             base
+            + scope_note
             + scope_suffix
             + "\n\n## Scheduled subagent\n"
             + "You are running unattended on a schedule.\n"
