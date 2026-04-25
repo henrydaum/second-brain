@@ -45,7 +45,6 @@ class PushSubagentMessageTool(BaseTool):
         "required": ["message"],
     }
     requires_services = []
-    agent_enabled = True
     max_calls = 10
     background_safe = True
 

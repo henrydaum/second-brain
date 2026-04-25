@@ -151,7 +151,6 @@ class BaseTool:
     requires_services: list[str] = []
 
     # --- Agent controls ---
-    agent_enabled: bool = True   # Whether the LLM can see and call this tool
     max_calls: int = 3           # Max times the agent can call this tool per message
     background_safe: bool = True # Whether unattended subagents may call this tool
 

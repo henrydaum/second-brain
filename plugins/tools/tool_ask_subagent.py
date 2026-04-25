@@ -50,7 +50,6 @@ class AskSubagent(BaseTool):
         "required": ["prompt"],
     }
     requires_services = ["llm"]
-    agent_enabled = True
     max_calls = 2
     background_safe = False
 

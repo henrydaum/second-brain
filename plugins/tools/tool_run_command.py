@@ -234,7 +234,6 @@ class RunCommand(BaseTool):
         "required": ["command", "justification"],
     }
     requires_services = []
-    agent_enabled = True
     max_calls = 10
     background_safe = False
 

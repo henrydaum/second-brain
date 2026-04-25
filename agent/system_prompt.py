@@ -118,23 +118,16 @@ def _authoring_guidance() -> str:
 def _available_tools(tool_registry) -> str:
     if not tool_registry:
         return ""
-    enabled = [t for t in tool_registry.tools.values() if t.agent_enabled]
-    disabled = [t for t in tool_registry.tools.values() if not t.agent_enabled]
+    tools = list(tool_registry.tools.values())
     lines = ["## Available tools"]
-    if enabled:
-        for tool in enabled:
+    if tools:
+        for tool in tools:
             desc = (tool.description or "").strip()
             tag = " [sandbox]" if getattr(tool, '_mutable', False) else ""
             lines.append(f"### {tool.name}{tag}")
             lines.append(desc)
     else:
-        lines.append("No tools are currently enabled.")
-    if disabled:
-        lines.append("")
-        lines.append(
-            "Disabled tools (cannot call directly, used internally): "
-            + ", ".join(t.name for t in disabled)
-        )
+        lines.append("No tools are currently registered.")
     return "\n".join(lines)
 
 

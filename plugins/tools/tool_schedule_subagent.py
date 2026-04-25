@@ -101,7 +101,6 @@ class ScheduleSubagent(BaseTool):
         "required": ["action"],
     }
     requires_services = ["timekeeper"]
-    agent_enabled = True
     max_calls = 8
     background_safe = False
 

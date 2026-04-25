@@ -491,10 +491,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     async def _start_agent_add_form(chat_id: int, profile_name: str):
         """Begin interactive /agent add parameter collection."""
         llm_choices = ["default"] + sorted((config.get("llm_profiles", {}) or {}).keys())
-        tool_names = sorted(
-            name for name, tool in tool_registry.tools.items()
-            if getattr(tool, "agent_enabled", False)
-        )
+        tool_names = sorted(tool_registry.tools.keys())
         table_names = [r["name"] for r in ctrl.db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
         _pending_agent_adds[chat_id] = PendingParamForm(
@@ -684,10 +681,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             await _app.bot.send_message(chat_id, f"Unknown field: {field}")
             return
         llm_choices = ["default"] + sorted((config.get("llm_profiles", {}) or {}).keys())
-        tool_names = sorted(
-            n for n, tool in tool_registry.tools.items()
-            if getattr(tool, "agent_enabled", False)
-        )
+        tool_names = sorted(tool_registry.tools.keys())
         try:
             table_names = [r["name"] for r in ctrl.db.conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
@@ -769,7 +763,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     #   tsk:{pause|unpause|reset|retry|trigger}:<name>
     #   tsk:back
     #   tool:pick:<name>     — open tool action menu
-    #   tool:{enable|disable|call}:<name>
+    #   tool:call:<name>
     #   tool:back
     #   loc:<filter>         — /locations tools|tasks|services|all
     #   sch:pick:<name>      — open job action menu
@@ -883,9 +877,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         """Build an inline picker for /tools: one row per tool."""
         buttons = []
         for t in ctrl.list_tools():
-            marker = "✓" if t["agent_enabled"] else "·"
             buttons.append([InlineKeyboardButton(
-                f"{marker} {t['name']}", callback_data=f"tool:pick:{t['name']}")])
+                t["name"], callback_data=f"tool:pick:{t['name']}")])
         return InlineKeyboardMarkup(buttons) if buttons else None
 
     async def _show_tools_picker(chat_id: int):
@@ -893,8 +886,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         if not tools:
             await _app.bot.send_message(chat_id, "No tools registered.")
             return
-        enabled_count = sum(1 for t in tools if t["agent_enabled"])
-        summary = f"Tools — {enabled_count} of {len(tools)} enabled"
+        summary = f"Tools — {len(tools)} registered"
         kb = _tools_picker_keyboard()
         await _app.bot.send_message(chat_id, summary, reply_markup=kb)
 
@@ -907,13 +899,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         desc = (tool.get("description") or "").split("\n")[0]
         if len(desc) > 300:
             desc = desc[:297] + "..."
-        status = "Enabled" if tool["agent_enabled"] else "Disabled"
-        text = f"<b>{html.escape(name)}</b>\nStatus: {status}\n{html.escape(desc)}"
-        toggle_btn = (InlineKeyboardButton("Disable", callback_data=f"tool:disable:{name}")
-                      if tool["agent_enabled"]
-                      else InlineKeyboardButton("Enable", callback_data=f"tool:enable:{name}"))
+        text = f"<b>{html.escape(name)}</b>\n{html.escape(desc)}"
         kb = InlineKeyboardMarkup([
-            [toggle_btn, InlineKeyboardButton("Call…", callback_data=f"tool:call:{name}")],
+            [InlineKeyboardButton("Call…", callback_data=f"tool:call:{name}")],
             [InlineKeyboardButton("◀ Back", callback_data="tool:back")],
         ])
         await _app.bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")
@@ -2039,7 +2027,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await _show_tasks_picker(chat_id)
                 return
 
-            # ── /tools picker (tool:pick|enable|disable|call|back[:name]) ──
+            # ── /tools picker (tool:pick|call|back[:name]) ──
             if data.startswith("tool:"):
                 parts = data.split(":", 2)
                 action = parts[1] if len(parts) > 1 else ""
@@ -2052,15 +2040,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await _show_tool_actions(chat_id, name)
                 elif action == "call":
                     await _start_call_form(chat_id, name)
-                elif action in ("enable", "disable"):
-                    result = await _dispatch_frontend_event(FrontendEvent(
-                        type="callback_response",
-                        session=_session(chat_id),
-                        payload={"kind": "command", "command_name": action, "command_arg": name},
-                    ))
-                    if result.text:
-                        await transport.send_long_message(chat_id, result.text)
-                    await _show_tools_picker(chat_id)
                 elif action == "back":
                     await _show_tools_picker(chat_id)
                 return

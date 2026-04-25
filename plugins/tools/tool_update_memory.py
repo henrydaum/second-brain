@@ -36,7 +36,6 @@ class UpdateMemory(BaseTool):
         "required": ["search_block", "replace_block"],
     }
     requires_services = ["llm"]
-    agent_enabled = True
     max_calls = 3
 
     _COMPACT_PROMPT = (

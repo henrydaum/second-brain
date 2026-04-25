@@ -128,11 +128,11 @@ class ToolRegistry:
     @property
     def max_tool_calls(self) -> int:
         """Return the agent's total tool-call budget for one message."""
-        return sum(t.max_calls for t in self.tools.values() if t.agent_enabled)
+        return sum(t.max_calls for t in self.tools.values())
 
     def get_all_schemas(self) -> list[dict]:
-        """Export schemas for agent-enabled tools."""
-        return [tool.to_schema() for tool in self.tools.values() if tool.agent_enabled]
+        """Export schemas for every registered tool."""
+        return [tool.to_schema() for tool in self.tools.values()]
 
     def get_schema(self, name: str) -> dict | None:
         tool = self.tools.get(name)

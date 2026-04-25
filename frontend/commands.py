@@ -975,16 +975,6 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         CommandEntry("tools", "List registered tools",
                      handler=lambda _: format_tools(ctrl.list_tools()),
                      category="Services & Tools"),
-        CommandEntry("enable", "Enable a tool for agent use", "<tool_name>",
-                     handler=lambda a: ctrl.enable_tool(a) if a
-                             else "Usage: /enable <tool_name>",
-                     arg_completions=_tool_names,
-                     category="Services & Tools"),
-        CommandEntry("disable", "Disable a tool", "<tool_name>",
-                     handler=lambda a: ctrl.disable_tool(a) if a
-                             else "Usage: /disable <tool_name>",
-                     arg_completions=_tool_names,
-                     category="Services & Tools"),
         CommandEntry("call", "Call a tool directly", "<tool_name> {json_args}",
                      handler=_cmd_call, arg_completions=_tool_names,
                      category="Services & Tools"),

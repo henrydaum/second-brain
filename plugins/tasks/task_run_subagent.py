@@ -202,8 +202,6 @@ class RunSubagent(BaseTask):
 
         for tool in context.tool_registry.tools.values():
             name = tool.name
-            if not getattr(tool, "agent_enabled", False):
-                continue
             if not getattr(tool, "background_safe", True):
                 continue
             if allow is not None and name not in allow:

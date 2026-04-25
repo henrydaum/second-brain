@@ -486,30 +486,6 @@ class Controller:
     # TOOLS
     # =================================================================
 
-    def enable_tool(self, name: str) -> str:
-        """Enable a tool for agent use."""
-        if self.tool_registry is None:
-            return "No tool registry available."
-        tool = self.tool_registry.tools.get(name)
-        if tool is None:
-            return f"Unknown tool: '{name}'. Run /tools to see all tools."
-        if tool.agent_enabled:
-            return f"Tool '{name}' is already enabled."
-        tool.agent_enabled = True
-        return f"Tool '{name}' enabled for agent use."
-
-    def disable_tool(self, name: str) -> str:
-        """Disable a tool from agent use (still callable via /call)."""
-        if self.tool_registry is None:
-            return "No tool registry available."
-        tool = self.tool_registry.tools.get(name)
-        if tool is None:
-            return f"Unknown tool: '{name}'. Run /tools to see all tools."
-        if not tool.agent_enabled:
-            return f"Tool '{name}' is already disabled."
-        tool.agent_enabled = False
-        return f"Tool '{name}' disabled for agent use."
-
     def list_tools(self) -> list[dict]:
         """List all registered tools with descriptions and required services."""
         if self.tool_registry is None:
@@ -517,7 +493,6 @@ class Controller:
         return [
             {"name": name,
                 "description": (tool.description or "").split("\n")[0],
-                "agent_enabled": tool.agent_enabled,
                 "max_calls": tool.max_calls,
                 "requires_services": getattr(tool, 'requires_services', []),
                 "parameters": getattr(tool, 'parameters', {}),

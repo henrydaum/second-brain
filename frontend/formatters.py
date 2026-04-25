@@ -223,23 +223,21 @@ def format_tasks(tasks: list[dict], compact: bool = False) -> str:
 
 
 def format_tools(tools: list[dict], compact: bool = False) -> str:
-    """Format tool list with enabled/disabled status, descriptions, and parameters."""
+    """Format tool list with descriptions and parameters."""
     if not tools:
         return "No tools registered."
     if compact:
         lines = []
         for t in tools:
-            status = "" if t["agent_enabled"] else f"  ({enabled_badge(False).lower()})"
             desc = t["description"]
             if len(desc) > 100:
                 desc = desc[:97] + "..."
-            lines.append(f"{t['name']}{status}\n  {desc}")
+            lines.append(f"{t['name']}\n  {desc}")
         return "Tools:\n" + "\n".join(lines)
     lines = []
     for t in tools:
-        status = "" if t["agent_enabled"] else f"  ({enabled_badge(False).lower()})"
         svc = f"  needs: {t['requires_services']}" if t["requires_services"] else ""
-        lines.append(f"  {t['name']}{status}{svc}")
+        lines.append(f"  {t['name']}{svc}")
         desc = t["description"]
         if len(desc) > 200:
             desc = desc[:197] + "..."

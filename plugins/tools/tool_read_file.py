@@ -39,7 +39,6 @@ class ReadFile(BaseTool):
         "required": ["path"],
     }
     requires_services = []
-    agent_enabled = True
     max_calls = 10
 
     def run(self, context, **kwargs) -> ToolResult:

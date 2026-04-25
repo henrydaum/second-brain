@@ -55,7 +55,6 @@ class WebSearch(BaseTool):
         "required": ["query"],
     }
     requires_services = ["web_search_provider"]
-    agent_enabled = True
     max_calls = 5
 
     def _looks_question_like(self, query):

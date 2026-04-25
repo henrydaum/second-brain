@@ -85,7 +85,6 @@ class BuildPlugin(BaseTool):
         "required": ["plugin_type", "file_name", "action"],
     }
     requires_services = []
-    agent_enabled = True
     max_calls = 10
     background_safe = False
 
