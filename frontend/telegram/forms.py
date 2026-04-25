@@ -110,9 +110,9 @@ def agent_add_params(llm_choices: list[str], tool_names: list[str] | None = None
         FormParam("llm", description="LLM to use. 'default' follows whatever LLM is currently the default.",
                   required=True, enum=llm_choices),
         FormParam("prompt_suffix", description="Extra text appended to the system prompt. Leave blank for none."),
-        FormParam("whitelist_or_blacklist_tools", description="Choose blacklist, then /skip the next item, to allow all tools.", required=True, enum=["blacklist", "whitelist"]),
+        FormParam("whitelist_or_blacklist_tools", description="In the next step, you will choose which tools to whitelist or blacklist.\nChoose blacklist, then /skip the next item, to allow all tools.", required=True, enum=["blacklist", "whitelist"]),
         FormParam("tools_list", type="array", description=f"Tool names, one per line. Send /skip for none.{tool_hint}", default=[]),
-        FormParam("whitelist_or_blacklist_tables", description="Choose blacklist, then /skip the next item, to allow all tables.", required=True, enum=["blacklist", "whitelist"]),
+        FormParam("whitelist_or_blacklist_tables", description="In the next step, you will choose which tables to whitelist or blacklist.\nChoose blacklist, then /skip the next item, to allow all tables.", required=True, enum=["blacklist", "whitelist"]),
         FormParam("tables_list", type="array", description=f"Database table names, one per line. Send /skip for none.{table_hint}", default=[]),
     ]
 
