@@ -195,6 +195,11 @@ class ScopedDatabase:
             # arg and must be allowed — the view is the scope filter.
             if trigger_or_view is not None:
                 return sqlite3.SQLITE_OK
+            # COUNT(*) and similar top-level table reads arrive without a
+            # schema/column name, so deny them unless they target one of the
+            # scoped main-schema views we created.
+            if not db_name and not arg2 and arg1 not in self._visible_names:
+                return sqlite3.SQLITE_DENY
             # Top-level reads can only hit our in-memory main schema and
             # sqlite_master. Reads on the attached source DB are denied.
             if db_name == _SOURCE_SCHEMA:
@@ -238,22 +243,25 @@ class ScopedDatabase:
 
 # ── Scoped tool registry ─────────────────────────────────────────────
 
-def scoped_registry(base_registry: ToolRegistry, scope: AgentScope) -> ToolRegistry:
+def scoped_registry(base_registry: ToolRegistry, scope: AgentScope, db=None) -> ToolRegistry:
     """Return a ``ToolRegistry`` that only exposes tools the scope allows.
 
     The returned registry shares the base registry's ``services``, ``config``,
-    ``orchestrator``, and the tool instances themselves — it only filters
-    the ``tools`` dict. When no tool filter is declared, the base registry
-    is returned unchanged.
+    ``orchestrator``, and the tool instances themselves. It may filter the
+    ``tools`` dict and/or swap in a scoped database handle. When neither the
+    tool set nor database changes, the base registry is returned unchanged.
     """
-    if not scope.has_tool_filter:
+    target_db = base_registry.db if db is None else db
+    if not scope.has_tool_filter and target_db is base_registry.db:
         return base_registry
 
-    new_registry = ToolRegistry(base_registry.db, base_registry.config, base_registry.services)
+    new_registry = ToolRegistry(target_db, base_registry.config, base_registry.services)
     new_registry.orchestrator = base_registry.orchestrator
 
     allowed_names: set[str]
-    if scope.tools_allow is not None:
+    if not scope.has_tool_filter:
+        allowed_names = set(base_registry.tools.keys())
+    elif scope.tools_allow is not None:
         allowed_names = set(scope.tools_allow)
     else:
         allowed_names = {n for n in base_registry.tools.keys() if n not in (scope.tools_deny or set())}

@@ -131,7 +131,7 @@ class FrontendRuntime:
         # Scope the DB and tool registry up-front; both fall back to the
         # unrestricted originals when the active profile has no filters.
         agent_db = scoped_db(self.ctrl.db, scope) if scope else self.ctrl.db
-        agent_registry = scoped_registry(self.tool_registry, scope) if scope else self.tool_registry
+        agent_registry = scoped_registry(self.tool_registry, scope, db=agent_db) if scope else self.tool_registry
 
         def _system_prompt():
             base = build_system_prompt(
