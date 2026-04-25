@@ -4,7 +4,7 @@ import logging
 import threading
 from pathlib import Path
 
-from frontend.commands import CommandEntry, active_agent_line
+from frontend.commands import CommandEntry
 from frontend.platforms.platform_repl import ReplPlatformAdapter
 from frontend.runtime import FrontendRuntime
 from frontend.types import FrontendEvent, FrontendSession
@@ -41,7 +41,7 @@ def run_repl(ctrl, shutdown_fn, shutdown_event: threading.Event,
         logger.info("Agent initialized.")
 
         print("Entering chat mode. Type 'exit' to return to REPL.")
-        print(active_agent_line(config))
+        print(f"Agent: {config.get("active_agent_profile", "default")}")
         print("Slash commands (e.g. /services) work here too.")
         print("---")
 

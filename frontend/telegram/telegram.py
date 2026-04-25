@@ -17,7 +17,7 @@ from pathlib import Path
 
 from pipeline.attachment_cache import save as save_attachment
 from plugins.services.helpers.parser_registry import get_modality
-from frontend.commands import CommandEntry, active_agent_line, new_conversation_message
+from frontend.commands import CommandEntry, new_conversation_message
 from frontend.formatters import (
     format_services, format_tasks, format_tools,
     format_tool_result,
@@ -222,7 +222,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                      category="Conversation"),
         CommandEntry("start", "Welcome message",
                      handler=lambda _: (
-                         f"Second Brain is online. {active_agent_line(config)} "
+                         f"Second Brain is online."
                          "Send a message to chat, or /help for commands."
                      ),
                      hide_from_help=True),

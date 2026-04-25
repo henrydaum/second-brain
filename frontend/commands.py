@@ -148,7 +148,7 @@ def active_agent_name(config: dict) -> str:
 
 
 def active_agent_line(config: dict) -> str:
-    return f"Chatting with agent: {active_agent_name(config)}."
+    return f"Agent: {active_agent_name(config)}."
 
 
 def new_conversation_message(config: dict) -> str:
@@ -620,7 +620,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                     _rescope_agents()
                 except Exception as e:
                     logger.warning(f"Rescope after /agent switch failed: {e}")
-            return f"Switched to agent profile '{name}'. {active_agent_line(ctrl.config)}"
+            return f"Switched to agent profile '{name}'."
 
         if sub == "add":
             add_parts = rest.split(None, 1)
@@ -675,7 +675,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                         _rescope_agents()
                     except Exception as e:
                         logger.warning(f"Rescope after /agent remove failed: {e}")
-                return f"Agent profile '{name}' removed. Active is now 'default'. {active_agent_line(ctrl.config)}"
+                return f"Agent profile '{name}' removed. Active is now 'default'."
             return f"Agent profile '{name}' removed."
 
         if sub == "show":
