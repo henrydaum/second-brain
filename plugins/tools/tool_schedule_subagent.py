@@ -2,7 +2,11 @@ from copy import deepcopy
 
 import config.config_manager as config_manager
 from plugins.BaseTool import BaseTool, ToolResult
-from agent.subagent_runtime import SUBAGENT_RUN_CHANNEL
+from agent.subagent_runtime import (
+    SUBAGENT_RUN_CHANNEL,
+    SUBAGENT_NOTIFICATION_MODES,
+    SUBAGENT_DEFAULT_NOTIFICATION_MODE,
+)
 
 
 def _coerce_input_paths(value) -> list[str]:
@@ -96,6 +100,17 @@ class ScheduleSubagent(BaseTool):
             "enabled": {
                 "type": "boolean",
                 "description": "Whether the job should be enabled.",
+            },
+            "notifications": {
+                "type": "string",
+                "enum": list(SUBAGENT_NOTIFICATION_MODES),
+                "description": (
+                    "How chatty the subagent should be when the job fires. "
+                    "'all' (default): the agent pushes regularly via push_subagent_message, and if it forgets, the final answer is sent automatically as a single push. "
+                    "'important': the agent has push_subagent_message but is told to use it only when something noteworthy comes up; silence is allowed. "
+                    "'off': the agent runs silently with no push tool and produces no user-visible chat output (final answer is still stored)."
+                ),
+                "default": SUBAGENT_DEFAULT_NOTIFICATION_MODE,
             },
         },
         "required": ["action"],
@@ -215,6 +230,18 @@ class ScheduleSubagent(BaseTool):
                 payload["agent"] = agent_name
             else:
                 payload.pop("agent", None)
+
+        notifications = kwargs.get("notifications")
+        if notifications is not None:
+            mode = str(notifications).strip().lower()
+            if mode not in SUBAGENT_NOTIFICATION_MODES:
+                raise ValueError(
+                    f"notifications must be one of: {', '.join(SUBAGENT_NOTIFICATION_MODES)}."
+                )
+            payload["notifications"] = mode
+        elif require_prompt and "notifications" not in payload:
+            payload["notifications"] = SUBAGENT_DEFAULT_NOTIFICATION_MODE
+
         payload["job_name"] = job_name
 
         job_def = deepcopy(current_job) if current_job is not None else {}
@@ -269,6 +296,11 @@ class ScheduleSubagent(BaseTool):
             agent = str((job.get("payload") or {}).get("agent") or "").strip()
             if agent:
                 lines.append(f"  agent: {agent}")
+            notifications = str(
+                (job.get("payload") or {}).get("notifications")
+                or SUBAGENT_DEFAULT_NOTIFICATION_MODE
+            ).strip().lower()
+            lines.append(f"  notifications: {notifications}")
             if prompt:
                 lines.append(f"  prompt: {prompt[:160]}")
             data.append({
@@ -278,6 +310,7 @@ class ScheduleSubagent(BaseTool):
                 "next_run_at": next_fire_str,
                 "title": title,
                 "agent": agent,
+                "notifications": notifications,
                 "prompt": prompt,
             })
         return ToolResult(data=data, llm_summary="\n".join(lines))
@@ -305,6 +338,11 @@ class ScheduleSubagent(BaseTool):
         agent = str((job.get("payload") or {}).get("agent") or "").strip()
         if agent:
             lines.append(f"Agent: {agent}")
+        notifications = str(
+            (job.get("payload") or {}).get("notifications")
+            or SUBAGENT_DEFAULT_NOTIFICATION_MODE
+        ).strip().lower()
+        lines.append(f"Notifications: {notifications}")
         if prompt:
             lines.append(f"Prompt: {prompt}")
         input_paths = (job.get("payload") or {}).get("input_paths") or []
@@ -344,6 +382,10 @@ def _require_schedule_approval(context, action: str, job_name: str, job: dict, s
         lines.append(f"Title: {title}")
     if agent:
         lines.append(f"Agent: {agent}")
+    notifications = str(
+        payload.get("notifications") or SUBAGENT_DEFAULT_NOTIFICATION_MODE
+    ).strip().lower()
+    lines.append(f"Notifications: {notifications}")
     if prompt:
         lines.append(f"Prompt: {prompt}")
     if input_paths:

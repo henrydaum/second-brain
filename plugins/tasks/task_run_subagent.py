@@ -11,10 +11,14 @@ from agent.system_prompt import build_system_prompt
 from agent.tool_registry import ToolRegistry
 from runtime.agent_scope import load_scope, resolve_agent_llm, scope_prompt_note, scoped_db, scoped_registry
 from frontend.token_stripper import strip_model_tokens
+from events.event_bus import bus
+from events.event_channels import CHAT_MESSAGE_PUSHED
 from agent.subagent_runtime import (
     PushSubagentMessageTool,
     SubagentPushRecord,
     SUBAGENT_RUN_CHANNEL,
+    SUBAGENT_NOTIFICATION_MODES,
+    SUBAGENT_DEFAULT_NOTIFICATION_MODE,
 )
 
 logger = logging.getLogger("TaskRunSubagent")
@@ -139,11 +143,18 @@ class RunSubagent(BaseTask):
         )
         conversation_title = title or job_name or prompt[:80].replace("\n", " ").strip() or "Scheduled subagent run"
 
+        mode = (payload.get("notifications") or SUBAGENT_DEFAULT_NOTIFICATION_MODE)
+        mode = str(mode).strip().lower()
+        if mode not in SUBAGENT_NOTIFICATION_MODES:
+            mode = SUBAGENT_DEFAULT_NOTIFICATION_MODE
+
         input_paths = self._normalize_input_paths(payload.get("input_paths"))
         input_rows, compiled_prompt, image_paths = self._compile_prompt(prompt, input_paths, context)
         push_records: list[SubagentPushRecord] = []
 
-        sub_registry = self._build_subagent_registry(context, run_id, job_name, push_records, scope, sub_db)
+        sub_registry = self._build_subagent_registry(
+            context, run_id, job_name, push_records, scope, sub_db, mode,
+        )
         # Conversations go through the base db — the scope wrapper is read-only.
         conversation_id = context.db.create_conversation(conversation_title[:200])
 
@@ -170,7 +181,7 @@ class RunSubagent(BaseTask):
             llm,
             sub_registry,
             context.config,
-            system_prompt=lambda: self._build_subagent_prompt(context, sub_registry, sub_db, scope),
+            system_prompt=lambda: self._build_subagent_prompt(context, sub_registry, sub_db, scope, mode),
             on_message=_on_message,
         )
 
@@ -184,6 +195,11 @@ class RunSubagent(BaseTask):
         if clean_answer.startswith("Error: no active LLM profile loaded"):
             return TaskResult.failed(clean_answer)
 
+        if mode == "all" and not push_records and clean_answer.strip():
+            self._emit_fallback_push(
+                run_id, job_name, conversation_title, clean_answer, push_records,
+            )
+
         self._persist_run(
             context, run_id, job_name, conversation_id, conversation_title, prompt,
             clean_answer, input_rows, push_records, target_agent,
@@ -192,7 +208,7 @@ class RunSubagent(BaseTask):
 
     def _build_subagent_registry(self, context, run_id: str, job_name: str,
                                  push_records: list[SubagentPushRecord],
-                                 scope, sub_db) -> ToolRegistry:
+                                 scope, sub_db, mode: str) -> ToolRegistry:
         # Build the registry against the scoped db so tools see the lens.
         registry = ToolRegistry(sub_db, context.config, context.services)
         registry.orchestrator = context.orchestrator
@@ -210,37 +226,72 @@ class RunSubagent(BaseTask):
                 continue
             registry.register(tool)
 
-        def _record_push(record: SubagentPushRecord):
-            push_records.append(record)
+        if mode != "off":
+            def _record_push(record: SubagentPushRecord):
+                push_records.append(record)
 
-        # push_subagent_message is the only way a subagent reaches the user,
-        # so it is always registered regardless of scope.
-        registry.register(PushSubagentMessageTool(run_id, job_name, _record_push))
+            # push_subagent_message is the user-visible channel; only register
+            # it when the job's notification mode allows pushing.
+            registry.register(PushSubagentMessageTool(run_id, job_name, _record_push))
         return registry
 
-    def _build_subagent_prompt(self, context, sub_registry, sub_db, scope) -> str:
+    def _build_subagent_prompt(self, context, sub_registry, sub_db, scope, mode: str) -> str:
         base = build_system_prompt(sub_db, context.orchestrator, sub_registry, context.services)
         profile_name = scope.profile_name if scope else (context.config.get("active_agent_profile") or "default")
         scope_note = ("\n\n" + scope_prompt_note(profile_name, scope)) if scope else ""
         scope_suffix = ("\n\n" + scope.prompt_suffix) if scope and scope.prompt_suffix else ""
-        return (
-            base
-            + scope_note
-            + scope_suffix
-            + "\n\n## Scheduled subagent\n"
-            + "You are running unattended on a schedule.\n"
-            + "Work as if no one will answer follow-up questions during this run.\n"
-            + "Do not rely on permission dialogs or back-and-forth clarification.\n"
-            + "Do not ask questions.\n"
-            + "push_subagent_message is the main way to send a user-visible message during the run.\n"
-            + "If you do not call push_subagent_message, the run is mostly invisible to the user aside from logs and stored history.\n"
-            + "Use push_subagent_message for reminders, alerts, briefs, findings, check-ins, or anything the user should actually see in chat.\n"
-            + "If the user asked to be reminded, notified, briefed, or updated, you should usually call push_subagent_message before finishing.\n"
-            + "Stay silent only when the job is intentionally background-only and no user-facing update is needed.\n"
-            + "push_subagent_message is how you reach the user during this run. update_memory stores durable lessons for future sessions but does not notify anyone — never use it in place of push_subagent_message when the user is expecting to hear from you.\n"
-            + "A one-off reminder, brief, nudge, or status update belongs in push_subagent_message.\n"
-            + "Finish with a concise final answer that can be stored and reviewed later.\n"            
+
+        common_header = (
+            "\n\n## Scheduled subagent\n"
+            "You are running unattended on a schedule.\n"
+            "Work as if no one will answer follow-up questions during this run.\n"
+            "Do not rely on permission dialogs or back-and-forth clarification.\n"
+            "Do not ask questions.\n"
         )
+
+        if mode == "off":
+            mode_block = (
+                "Notifications: OFF. You are running silently and have no way to message the user during this run. "
+                "The push_subagent_message tool is not available. "
+                "Do your work and finish with a concise final answer that will be stored for later review.\n"
+            )
+        elif mode == "important":
+            mode_block = (
+                "Notifications: IMPORTANT-ONLY. push_subagent_message is available but should be used only when something noteworthy comes up — "
+                "a real finding, an alert, a needed nudge, or information the user actually needs to see now. "
+                "Routine completion is not important; stay silent in that case. "
+                "Always finish with a concise final answer that will be stored for later review.\n"
+            )
+        else:  # "all"
+            mode_block = (
+                "Notifications: ALL. push_subagent_message is the main way to send a user-visible message during the run. "
+                "Use it for reminders, alerts, briefs, findings, check-ins, or anything the user should actually see in chat. "
+                "If you do not call push_subagent_message, the system will fall back to sending your final answer as a single push so the user is not left in the dark. "
+                "update_memory stores durable lessons for future sessions but does not notify anyone — never use it in place of push_subagent_message when the user is expecting to hear from you. "
+                "Finish with a concise final answer that can be stored and reviewed later.\n"
+            )
+
+        return base + scope_note + scope_suffix + common_header + mode_block
+
+    def _emit_fallback_push(self, run_id: str, job_name: str, title: str,
+                            final_answer: str, push_records: list[SubagentPushRecord]) -> None:
+        message = final_answer.strip()
+        push_title = (title or job_name or "").strip()
+        sent_at = time.time()
+        push_records.append(SubagentPushRecord(
+            kind="brief",
+            title=push_title,
+            message=message,
+            sent_at=sent_at,
+        ))
+        bus.emit(CHAT_MESSAGE_PUSHED, {
+            "message": message,
+            "title": push_title,
+            "kind": "brief",
+            "source": "subagent",
+            "source_id": run_id,
+            "job_name": job_name,
+        })
 
     def _compile_prompt(self, prompt: str, input_paths: list[str], context):
         prompt_parts = [prompt]

@@ -7,6 +7,8 @@ from events.event_channels import CHAT_MESSAGE_PUSHED
 
 SUBAGENT_RUN_CHANNEL = "subagent.run"
 SUBAGENT_PUSH_KINDS = ["note", "finding", "brief", "alert"]
+SUBAGENT_NOTIFICATION_MODES = ("all", "important", "off")
+SUBAGENT_DEFAULT_NOTIFICATION_MODE = "all"
 
 
 @dataclass
