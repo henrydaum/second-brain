@@ -119,5 +119,5 @@ def agent_add_params(llm_choices: list[str], tool_names: list[str] | None = None
 
 SCHEDULE_CREATE_STEPS = [
     "job_name", "schedule_type", "schedule_value",
-    "channel", "prompt", "title", "description",
+    "channel", "prompt", "agent", "title", "description",
 ]

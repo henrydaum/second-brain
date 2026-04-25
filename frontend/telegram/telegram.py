@@ -854,6 +854,25 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 parse_mode="HTML")
             return
 
+        if field == "agent":
+            if collected.get("channel") != "subagent_run":
+                state.step += 1
+                await _ask_schedule_step(chat_id)
+                return
+            active = config.get("active_agent_profile") or "default"
+            profiles = sorted((config.get("agent_profiles", {}) or {}).keys())
+            rows = [[InlineKeyboardButton(
+                f"{'* ' if name == active else ''}{name}",
+                callback_data=f"sch:agent:{name}")]
+                for name in profiles]
+            rows.append([InlineKeyboardButton("Use active profile at run time", callback_data="sch:agent:__active__")])
+            await _app.bot.send_message(
+                chat_id,
+                "<b>agent</b> (optional)\n"
+                "Choose which agent profile this scheduled subagent should run under.",
+                reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+            return
+
         if field == "title":
             await _app.bot.send_message(
                 chat_id,
@@ -892,6 +911,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         payload = definition["payload"]
         if c.get("channel") == "subagent_run":
             payload["prompt"] = c.get("prompt", "")
+            if c.get("agent"):
+                payload["agent"] = c["agent"]
         if c.get("title"):
             payload["title"] = c["title"]
 
@@ -1001,7 +1022,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             state = _pending_schedule_creates.get(chat_id)
             if state:
                 field = state.current_field(SCHEDULE_CREATE_STEPS) or ""
-                if field in ("title", "description"):
+                if field in ("agent", "title", "description"):
                     state.step += 1
                     await _ask_schedule_step(chat_id)
                     return
@@ -1250,6 +1271,12 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 if timekeeper and timekeeper.get_job(value) is not None:
                     await update.message.reply_text(
                         f"Job '{value}' already exists. Choose a different name.")
+                    return
+            if field == "agent" and value:
+                profiles = config.get("agent_profiles", {}) or {}
+                if value not in profiles:
+                    await update.message.reply_text(
+                        f"Unknown agent profile: '{value}'. Choose one of the buttons or type an existing profile name.")
                     return
             if field == "channel":
                 # channel is normally chosen via buttons; free text = "Other" entry
@@ -1866,6 +1893,12 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                             await _app.bot.send_message(chat_id, "Enter the channel name as text.")
                             return
                         state.collected["channel"] = tail
+                        state.step += 1
+                        await _ask_schedule_step(chat_id)
+                elif action == "agent":
+                    state = _pending_schedule_creates.get(chat_id)
+                    if state:
+                        state.collected["agent"] = "" if tail == "__active__" else tail
                         state.step += 1
                         await _ask_schedule_step(chat_id)
                 return

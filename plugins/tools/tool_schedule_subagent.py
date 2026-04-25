@@ -84,6 +84,10 @@ class ScheduleSubagent(BaseTool):
                 "type": "string",
                 "description": "Optional short title.",
             },
+            "agent": {
+                "type": "string",
+                "description": "Optional agent profile name to run the job under. Leave blank to use whatever agent profile is active when the job fires.",
+            },
             "description": {
                 "type": "string",
                 "description": "Optional job description.",
@@ -162,7 +166,7 @@ class ScheduleSubagent(BaseTool):
                     return ToolResult.failed(f"Unknown subagent job: '{job_name}'.")
 
             job_def = self._build_job_def(
-                job_name, kwargs,
+                job_name, {**kwargs, "_agent_profiles": context.config.get("agent_profiles", {}) or {}},
                 require_prompt=(action == "create"),
                 current_job=current_job,
             )
@@ -201,6 +205,16 @@ class ScheduleSubagent(BaseTool):
         title = kwargs.get("title")
         if title is not None:
             payload["title"] = str(title)
+        agent = kwargs.get("agent")
+        if agent is not None:
+            agent_name = str(agent).strip()
+            profiles = kwargs.get("_agent_profiles") or {}
+            if agent_name and agent_name not in profiles:
+                raise ValueError(f"Unknown agent profile: '{agent_name}'.")
+            if agent_name:
+                payload["agent"] = agent_name
+            else:
+                payload.pop("agent", None)
         payload["job_name"] = job_name
 
         job_def = deepcopy(current_job) if current_job is not None else {}
@@ -252,6 +266,9 @@ class ScheduleSubagent(BaseTool):
                 lines.append(f"  next run: {next_fire_str}")
             if title:
                 lines.append(f"  title: {title}")
+            agent = str((job.get("payload") or {}).get("agent") or "").strip()
+            if agent:
+                lines.append(f"  agent: {agent}")
             if prompt:
                 lines.append(f"  prompt: {prompt[:160]}")
             data.append({
@@ -260,6 +277,7 @@ class ScheduleSubagent(BaseTool):
                 "schedule": schedule,
                 "next_run_at": next_fire_str,
                 "title": title,
+                "agent": agent,
                 "prompt": prompt,
             })
         return ToolResult(data=data, llm_summary="\n".join(lines))
@@ -284,6 +302,9 @@ class ScheduleSubagent(BaseTool):
         lines = [prefix, f"State: {state}", f"Schedule: {schedule}"]
         if title:
             lines.append(f"Title: {title}")
+        agent = str((job.get("payload") or {}).get("agent") or "").strip()
+        if agent:
+            lines.append(f"Agent: {agent}")
         if prompt:
             lines.append(f"Prompt: {prompt}")
         input_paths = (job.get("payload") or {}).get("input_paths") or []
@@ -309,6 +330,7 @@ def _require_schedule_approval(context, action: str, job_name: str, job: dict, s
     payload = deepcopy(job.get("payload") or {})
     prompt = str(payload.get("prompt") or "").strip()
     title = str(payload.get("title") or "").strip()
+    agent = str(payload.get("agent") or "").strip()
     input_paths = payload.get("input_paths") or []
     state = "enabled" if job.get("enabled", True) else "disabled"
 
@@ -320,6 +342,8 @@ def _require_schedule_approval(context, action: str, job_name: str, job: dict, s
     ]
     if title:
         lines.append(f"Title: {title}")
+    if agent:
+        lines.append(f"Agent: {agent}")
     if prompt:
         lines.append(f"Prompt: {prompt}")
     if input_paths:
