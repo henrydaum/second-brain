@@ -45,6 +45,8 @@ _GOOGLE_LINK_MAP = {
 _INLINE_TEXT_MAX = 3000   # bytes — small text files rendered inline
 _MEDIA_GROUP_MAX = 10     # Telegram limit per media group
 _PHOTO_MAX_SIZE = 10 * 1024 * 1024  # 10 MB — Telegram photo upload limit
+_PHOTO_MAX_DIMENSION_SUM = 10_000
+_PHOTO_MAX_RATIO = 20
 
 
 # ===================================================================
@@ -73,30 +75,42 @@ def prepare_photo_bytes(path: Path) -> io.BytesIO:
     If over 10 MB, progressively downscales until it fits.
     """
     size = path.stat().st_size
-    if size <= _PHOTO_MAX_SIZE:
+    img = Image.open(path)
+    w, h = img.size
+    ratio = max(w, h) / max(1, min(w, h))
+    if size <= _PHOTO_MAX_SIZE and w + h <= _PHOTO_MAX_DIMENSION_SUM and ratio <= _PHOTO_MAX_RATIO:
         buf = io.BytesIO(path.read_bytes())
         buf.name = path.name
         return buf
 
-    logger.info(f"Resizing {path.name} ({size / 1024 / 1024:.1f} MB) to fit 10 MB photo limit")
-    img = Image.open(path)
+    logger.info(
+        f"Resizing {path.name} ({size / 1024 / 1024:.1f} MB, {w}x{h}) "
+        f"to fit Telegram photo limits"
+    )
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
 
-    # Shrink by 25% each pass until it fits
-    for scale in [0.75, 0.5, 0.35, 0.25]:
-        w, h = img.size
+    dimension_scale = min(1, _PHOTO_MAX_DIMENSION_SUM / (w + h))
+    for scale in [dimension_scale, dimension_scale * 0.75, dimension_scale * 0.5, dimension_scale * 0.35, dimension_scale * 0.25]:
+        if scale <= 0:
+            continue
         resized = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
         buf = io.BytesIO()
         resized.save(buf, format="JPEG", quality=85)
         resized_size = buf.tell()
-        if resized_size <= _PHOTO_MAX_SIZE:
+        resized_w, resized_h = resized.size
+        resized_ratio = max(resized_w, resized_h) / max(1, min(resized_w, resized_h))
+        if (
+            resized_size <= _PHOTO_MAX_SIZE
+            and resized_w + resized_h <= _PHOTO_MAX_DIMENSION_SUM
+            and resized_ratio <= _PHOTO_MAX_RATIO
+        ):
             buf.seek(0)
             buf.name = path.stem + ".jpg"
-            logger.info(f"Resized to {resized_size / 1024 / 1024:.1f} MB ({int(w * scale)}x{int(h * scale)})")
+            logger.info(f"Resized to {resized_size / 1024 / 1024:.1f} MB ({resized_w}x{resized_h})")
             return buf
 
-    raise ValueError(f"{path.name} could not be resized under Telegram's 10 MB photo limit")
+    raise ValueError(f"{path.name} could not be resized within Telegram's photo limits")
 
 
 # ===================================================================
