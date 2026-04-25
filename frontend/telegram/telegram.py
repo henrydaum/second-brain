@@ -515,15 +515,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         profile_name = state.subject
         collected = state.collected
 
-        cleaned = {k: v for k, v in collected.items()
-                   if v not in (None, "", [], {})}
-        # Always carry llm + prompt_suffix even if blank for clarity.
-        cleaned.setdefault("llm", collected.get("llm") or "default")
-        cleaned.setdefault("prompt_suffix", collected.get("prompt_suffix") or "")
-        cleaned.setdefault("whitelist_or_blacklist_tools", collected.get("whitelist_or_blacklist_tools") or "blacklist")
-        cleaned.setdefault("tools_list", collected.get("tools_list") or [])
-        cleaned.setdefault("whitelist_or_blacklist_tables", collected.get("whitelist_or_blacklist_tables") or "blacklist")
-        cleaned.setdefault("tables_list", collected.get("tables_list") or [])
+        cleaned = {
+            "llm": collected.get("llm") or "default",
+            "prompt_suffix": collected.get("prompt_suffix") or "",
+            "whitelist_or_blacklist_tools": collected.get("whitelist_or_blacklist_tools") or "blacklist",
+            "tools_list": collected.get("tools_list") or [],
+            "whitelist_or_blacklist_tables": collected.get("whitelist_or_blacklist_tables") or "blacklist",
+            "tables_list": collected.get("tables_list") or [],
+        }
 
         result = await _dispatch_frontend_event(FrontendEvent(
             type="slash_command",
