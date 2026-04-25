@@ -93,10 +93,6 @@ class ScheduleSubagent(BaseTool):
                 "type": "string",
                 "description": "Optional agent profile name to run the job under. Useful for specialist jobs like a research agent, builder agent, or communication agent. Leave blank to use whatever agent profile is active when the job fires.",
             },
-            "description": {
-                "type": "string",
-                "description": "Optional job description.",
-            },
             "enabled": {
                 "type": "boolean",
                 "description": "Whether the job should be enabled.",
@@ -181,7 +177,7 @@ class ScheduleSubagent(BaseTool):
                     return ToolResult.failed(f"Unknown subagent job: '{job_name}'.")
 
             job_def = self._build_job_def(
-                job_name, {**kwargs, "_agent_profiles": context.config.get("agent_profiles", {}) or {}},
+                {**kwargs, "_agent_profiles": context.config.get("agent_profiles", {}) or {}},
                 require_prompt=(action == "create"),
                 current_job=current_job,
             )
@@ -203,7 +199,7 @@ class ScheduleSubagent(BaseTool):
 
         return ToolResult.failed("action must be one of: create, update, delete, get, list, enable, disable.")
 
-    def _build_job_def(self, job_name: str, kwargs: dict, require_prompt: bool, current_job: dict | None) -> dict:
+    def _build_job_def(self, kwargs: dict, require_prompt: bool, current_job: dict | None) -> dict:
         existing_payload = deepcopy((current_job or {}).get("payload") or {})
         prompt = kwargs.get("prompt")
         if require_prompt and not str(prompt or "").strip():
@@ -242,13 +238,11 @@ class ScheduleSubagent(BaseTool):
         elif require_prompt and "notifications" not in payload:
             payload["notifications"] = SUBAGENT_DEFAULT_NOTIFICATION_MODE
 
-        payload["job_name"] = job_name
-
         job_def = deepcopy(current_job) if current_job is not None else {}
         job_def["channel"] = SUBAGENT_RUN_CHANNEL
         job_def["payload"] = payload
 
-        for key in ("cron", "run_at", "description"):
+        for key in ("cron", "run_at"):
             if kwargs.get(key) is not None:
                 job_def[key] = kwargs.get(key)
         for key in ("one_time", "enabled"):
@@ -390,8 +384,6 @@ def _require_schedule_approval(context, action: str, job_name: str, job: dict, s
         lines.append(f"Prompt: {prompt}")
     if input_paths:
         lines.append("Inputs: " + ", ".join(str(p) for p in input_paths))
-    if job.get("description"):
-        lines.append(f"Description: {job['description']}")
 
     try:
         approved = approve_fn(f"Schedule subagent job: {action} {job_name}", "\n".join(lines))

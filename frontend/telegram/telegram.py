@@ -963,8 +963,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             schedule_desc = timekeeper.describe_job(name)
         except Exception:
             schedule_desc = job.get("cron") or job.get("run_at") or "?"
-        title = (job.get("payload", {}).get("title")
-                 or job.get("description") or "").strip()
+        title = (job.get("payload", {}).get("title") or "").strip()
         lines = [
             f"<b>{html.escape(name)}</b>",
             f"Status: {'Enabled' if enabled else 'Disabled'}",
@@ -1098,14 +1097,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 parse_mode="HTML")
             return
 
-        if field == "description":
-            await _app.bot.send_message(
-                chat_id,
-                "<b>description</b> (optional — send /skip to omit)\n"
-                "Longer description of the job.",
-                parse_mode="HTML")
-            return
-
     async def _finalize_schedule_create(chat_id: int):
         state = _pending_schedule_creates.pop(chat_id, None)
         if not state:
@@ -1122,9 +1113,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             definition["run_at"] = c.get("schedule_value")
         else:
             definition["cron"] = c.get("schedule_value")
-        if c.get("description"):
-            definition["description"] = c["description"]
-
         payload = definition["payload"]
         if c.get("channel") == "subagent_run":
             payload["prompt"] = c.get("prompt", "")
@@ -1264,7 +1252,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             state = _pending_schedule_creates.get(chat_id)
             if state:
                 field = state.current_field(SCHEDULE_CREATE_STEPS) or ""
-                if field in ("agent", "title", "description"):
+                if field in ("agent", "title"):
                     state.step += 1
                     await _ask_schedule_step(chat_id)
                     return

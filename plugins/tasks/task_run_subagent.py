@@ -137,8 +137,7 @@ class RunSubagent(BaseTask):
         title = (payload.get("title") or "").strip()
         timekeeper_meta = payload.get("_timekeeper") or {}
         job_name = (
-            (payload.get("job_name") or "").strip()
-            or str(timekeeper_meta.get("job_name") or "").strip()
+            str(timekeeper_meta.get("job_name") or "").strip()
             or "scheduled_subagent"
         )
         conversation_title = title or job_name or prompt[:80].replace("\n", " ").strip() or "Scheduled subagent run"

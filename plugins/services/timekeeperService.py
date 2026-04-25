@@ -179,7 +179,6 @@ class TimekeeperService(BaseService):
 
         title = (
             str(job.get("payload", {}).get("title") or "").strip()
-            or str(job.get("description") or "").strip()
             or name
         )
         bus.emit(CHAT_MESSAGE_PUSHED, {
@@ -233,7 +232,6 @@ class TimekeeperService(BaseService):
             "run_at": job_def.get("run_at"),
             "one_time": bool(job_def.get("one_time", False)),
             "payload": deepcopy(job_def.get("payload", {})),
-            "description": job_def.get("description"),
         }
 
         if not job["channel"]:
@@ -265,9 +263,6 @@ class TimekeeperService(BaseService):
             except Exception as e:
                 raise ValueError(f"Job '{name}' has invalid cron expression: {e}")
             job["run_at"] = None
-
-        if job["description"] is not None:
-            job["description"] = str(job["description"])
 
         return job
 

@@ -314,8 +314,7 @@ def format_scheduled_jobs(jobs: dict, timekeeper=None) -> str:
     for name, job in sorted(jobs.items()):
         enabled = job.get("enabled", True)
         schedule = _format_schedule_summary(job, timekeeper)
-        title = (job.get("payload", {}).get("title")
-                 or job.get("description") or "").strip()
+        title = (job.get("payload", {}).get("title") or "").strip()
         rows.append((name, enabled_badge(enabled), schedule, title))
 
     name_w = max((len(r[0]) for r in rows), default=4)
