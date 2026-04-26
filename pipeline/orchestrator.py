@@ -24,7 +24,7 @@ from runtime.context import build_context
 from plugins.services.helpers.parser_registry import get_modality
 from plugins.BaseTask import BaseTask, TaskResult
 from events.event_bus import bus
-from events.event_channels import TASK_COMPLETED, TASK_FAILED, SERVICE_LOADED
+from events.event_channels import TASK_COMPLETED, TASK_FAILED, SERVICE_LOADED, TASKS_CHANGED
 
 logger = logging.getLogger("Orchestrator")
 
@@ -104,6 +104,7 @@ class Orchestrator:
 		self._build_graph()
 		self.refresh_event_subscriptions()
 		logger.info(f"Registered task: {task.name}")
+		bus.emit(TASKS_CHANGED, {"name": task.name, "action": "registered"})
 
 	def unregister_task(self, name: str):
 		"""Remove a task from the orchestrator (used by build_plugin on delete)."""
@@ -114,6 +115,7 @@ class Orchestrator:
 			self._build_graph()
 			self.refresh_event_subscriptions()
 			logger.info(f"Unregistered task: {name}")
+			bus.emit(TASKS_CHANGED, {"name": name, "action": "unregistered"})
 
 	def refresh_event_subscriptions(self):
 		"""Refresh event-task bus subscriptions when task definitions change."""

@@ -13,6 +13,8 @@ import time
 
 from runtime.context import build_context
 from plugins.BaseTool import BaseTool, ToolResult
+from events.event_bus import bus
+from events.event_channels import TOOLS_CHANGED
 
 logger = logging.getLogger("Tool")
 
@@ -45,6 +47,7 @@ class ToolRegistry:
         with self._lock:
             self.tools[tool.name] = tool
         logger.info(f"Registered tool: {tool.name}")
+        bus.emit(TOOLS_CHANGED, {"name": tool.name, "action": "registered"})
 
     def unregister(self, name: str):
         """Remove a tool from the registry (used by build_plugin on delete)."""
@@ -52,6 +55,7 @@ class ToolRegistry:
             removed = self.tools.pop(name, None)
         if removed:
             logger.info(f"Unregistered tool: {name}")
+            bus.emit(TOOLS_CHANGED, {"name": name, "action": "unregistered"})
 
     def call(self, name: str, **kwargs) -> ToolResult:
         """

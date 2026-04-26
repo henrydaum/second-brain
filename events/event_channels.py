@@ -52,6 +52,22 @@ Payload:
     name:   str   — service name (may be None for bulk events)
     loaded: bool  — True after load, False after unload"""
 
+TOOLS_CHANGED = "tools_changed"
+"""A tool was registered, re-registered, or unregistered. Lets frontends
+rescope running agents so build_plugin / unload_plugin updates take effect
+without /restart.
+Payload:
+    name:   str — tool name
+    action: str — 'registered' or 'unregistered'"""
+
+TASKS_CHANGED = "tasks_changed"
+"""A task was registered or unregistered. Task registration creates a new
+output table via ensure_output_table, so scoped agents need to rebuild
+their ScopedDatabase to see the new table in views and system prompt.
+Payload:
+    name:   str — task name
+    action: str — 'registered' or 'unregistered'"""
+
 CHAT_MESSAGE_PUSHED = "chat_message_pushed"
 """Something in the system wants to proactively surface a message in the user's
 chat view. Used by scheduled subagents pushing notes, the timekeeper announcing

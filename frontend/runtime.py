@@ -10,7 +10,7 @@ from agent.history_utils import heal_orphan_tool_calls
 from agent.system_prompt import build_system_prompt
 from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_db, scoped_registry
 from events.event_bus import bus
-from events.event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED, CHAT_MESSAGE_PUSHED
+from events.event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED, CHAT_MESSAGE_PUSHED, TOOLS_CHANGED, TASKS_CHANGED
 from frontend.commands import CommandRegistry, active_agent_line, register_core_commands
 from frontend.dispatch import InputResult, route_input
 from frontend.presenter import FrontendPresenter
@@ -47,6 +47,8 @@ class FrontendRuntime:
         bus.subscribe(APPROVAL_REQUESTED, self._on_approval_requested)
         bus.subscribe(APPROVAL_RESOLVED, self._on_approval_resolved)
         bus.subscribe(CHAT_MESSAGE_PUSHED, self._on_chat_message_pushed)
+        bus.subscribe(TOOLS_CHANGED, lambda _payload: self.rescope_all_agents())
+        bus.subscribe(TASKS_CHANGED, lambda _payload: self.rescope_all_agents())
 
     def register_adapter(self, adapter):
         self.adapters[adapter.name] = adapter
@@ -167,10 +169,20 @@ class FrontendRuntime:
 
         Used after ``/agent switch`` so the same conversation carries over to
         the new profile but now runs against the new scope's db and toolset.
+
+        If the previous agent is still running a turn (e.g. inside a
+        build_plugin tool call), patch its tool_registry and system_prompt
+        in place so the in-flight turn's mid-turn schema refresh sees the
+        new tools/tables instead of the stale snapshot.
         """
         state = self.get_state(session)
-        preserved_history = list(state.agent.history) if state.agent else []
-        state.agent = self.build_agent(session)
+        old_agent = state.agent
+        preserved_history = list(old_agent.history) if old_agent else []
+        new_agent = self.build_agent(session)
+        if new_agent is not None and old_agent is not None:
+            old_agent.tool_registry = new_agent.tool_registry
+            old_agent.system_prompt = new_agent.system_prompt
+        state.agent = new_agent
         state.status_ids.clear()
         if state.agent is not None and preserved_history:
             state.agent.history = preserved_history
