@@ -18,6 +18,25 @@ from frontend.types import FrontendAction, FrontendSession
 logger = logging.getLogger("TelegramTransport")
 
 
+def _chunk_text(text: str, max_chars: int) -> list[str]:
+    """Split text into chunks each at most max_chars long, preferring newline boundaries."""
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > max_chars:
+        split_at = remaining.rfind("\n", 0, max_chars)
+        if split_at <= 0:
+            split_at = max_chars
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:].lstrip("\n")
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
 class TelegramTransport:
     def __init__(self, adapter, get_app, get_loop, render_text):
         self.adapter = adapter
@@ -36,22 +55,13 @@ class TelegramTransport:
             return
         app = self._get_app()
         parse_mode = "HTML" if use_html else None
-        if len(text) <= self.adapter.capabilities.max_message_chars:
+        max_chars = self.adapter.capabilities.max_message_chars
+        for chunk in _chunk_text(text, max_chars):
             try:
-                await app.bot.send_message(chat_id, text, parse_mode=parse_mode, disable_notification=silent)
+                await app.bot.send_message(chat_id, chunk, parse_mode=parse_mode, disable_notification=silent)
             except Exception:
                 if parse_mode:
-                    await app.bot.send_message(chat_id, text, disable_notification=silent)
-            return
-        current = ""
-        for line in text.split("\n"):
-            if len(current) + len(line) + 1 > self.adapter.capabilities.max_message_chars:
-                await self.send_long_message(chat_id, current, use_html=use_html, silent=silent)
-                current = line[:self.adapter.capabilities.max_message_chars]
-            else:
-                current = f"{current}\n{line}" if current else line
-        if current:
-            await self.send_long_message(chat_id, current, use_html=use_html, silent=silent)
+                    await app.bot.send_message(chat_id, chunk, disable_notification=silent)
 
     async def execute_send_actions(self, chat_id: int, actions: list[SendAction]):
         from telegram import InputMediaAudio, InputMediaDocument, InputMediaPhoto, InputMediaVideo
@@ -203,10 +213,27 @@ class TelegramTransport:
             return
 
         if reply_markup is not None:
-            sent = await app.bot.send_message(chat_id, rendered, reply_markup=reply_markup, parse_mode="HTML" if use_html else None)
+            max_chars = self.adapter.capabilities.max_message_chars
+            tail = rendered or ""
+            if max_chars and len(tail) > max_chars:
+                # Telegram rejects messages over the limit; send the body first
+                # without buttons, then attach the buttons to a short tail.
+                head_chunks = _chunk_text(tail, max_chars)
+                for chunk in head_chunks[:-1]:
+                    await self.send_long_message(chat_id, chunk, use_html=use_html)
+                tail = head_chunks[-1]
+            try:
+                sent = await app.bot.send_message(
+                    chat_id, tail, reply_markup=reply_markup,
+                    parse_mode="HTML" if use_html else None)
+            except Exception:
+                if use_html:
+                    sent = await app.bot.send_message(chat_id, tail, reply_markup=reply_markup)
+                else:
+                    raise
             request_id = action.metadata.get("request_id")
             if request_id and action.metadata.get("choice_prefix") == "approval":
-                self._choice_message_ids[request_id] = (chat_id, sent.message_id, rendered or action.text)
+                self._choice_message_ids[request_id] = (chat_id, sent.message_id, tail)
             return
 
         await self.send_long_message(chat_id, rendered, use_html=use_html, silent=action.silent)
