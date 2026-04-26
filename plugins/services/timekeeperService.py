@@ -10,7 +10,6 @@ from croniter import croniter
 import config.config_manager as config_manager
 from plugins.BaseService import BaseService
 from events.event_bus import bus
-from events.event_channels import CHAT_MESSAGE_PUSHED
 
 logger = logging.getLogger("TimekeeperService")
 
@@ -176,18 +175,6 @@ class TimekeeperService(BaseService):
 
         logger.info(f"Emitting scheduled event '{job['channel']}' for job '{name}'")
         bus.emit(job["channel"], payload)
-
-        title = (
-            str(job.get("payload", {}).get("title") or "").strip()
-            or name
-        )
-        bus.emit(CHAT_MESSAGE_PUSHED, {
-            "message": f"🕐 {title}",
-            "title": "",
-            "kind": "",
-            "source": "timekeeper",
-            "source_id": name,
-        })
 
         with self._lock:
             current = self._jobs.get(name)

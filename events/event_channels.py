@@ -70,8 +70,8 @@ Payload:
 
 CHAT_MESSAGE_PUSHED = "chat_message_pushed"
 """Something in the system wants to proactively surface a message in the user's
-chat view. Used by scheduled subagents pushing notes, the timekeeper announcing
-a fired job, and any other background producer that needs to reach the user.
+chat view. Used by scheduled subagents pushing notes and any other background
+producer that needs to reach the user.
 Payload:
     message:  str            — the body text to display (required)
     title:    str (optional) — rendered as a header above the message
