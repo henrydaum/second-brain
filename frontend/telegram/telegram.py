@@ -173,11 +173,12 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         return False
 
     def _refresh_agent():
-        """Called by /refresh — rebuild the agent and release the busy flag so
-        the next message routes immediately, even if the previous handler is
-        still spinning in a stuck tool."""
+        """Called by /refresh — rebuild every session's agent and release the
+        busy flag so the next message routes immediately, even if the previous
+        handler is still spinning in a stuck tool. Rebuilding picks up the
+        latest scope, tools, and tables for every chat."""
         runtime.set_prompt_suffix(base_session, _TELEGRAM_SUFFIX)
-        runtime.refresh_agent(base_session)
+        runtime.rescope_all_agents()
         runtime.force_unbusy(base_session)
         transport.clear_statuses()
         logger.info("Agent refreshed (Telegram).")
