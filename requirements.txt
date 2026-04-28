@@ -42,5 +42,9 @@ google-api-python-client
 # Windows OCR (Windows only)
 winsdk; sys_platform == "win32"
 
+# Mac OCR (macOS only) — Apple Vision via pyobjc
+pyobjc-framework-Vision; sys_platform == "darwin"
+pyobjc-framework-Quartz; sys_platform == "darwin"
+
 # Syncing
 watchdog
