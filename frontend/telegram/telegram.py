@@ -1601,6 +1601,19 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 return
             tg_file = await msg.document.get_file()
             file_name = msg.document.file_name or "document"
+        elif msg.voice:
+            if msg.voice.file_size and msg.voice.file_size > _MAX_FILE_SIZE:
+                await msg.reply_text("File too large (50 MB limit).")
+                return
+            tg_file = await msg.voice.get_file()
+            file_name = "voice.ogg"
+        elif msg.audio:
+            if msg.audio.file_size and msg.audio.file_size > _MAX_FILE_SIZE:
+                await msg.reply_text("File too large (50 MB limit).")
+                return
+            tg_file = await msg.audio.get_file()
+            ext = Path(msg.audio.file_name or "").suffix or ".mp3"
+            file_name = msg.audio.file_name or f"audio{ext}"
 
         if tg_file is None:
             return
@@ -1666,8 +1679,14 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             if not caption:
                 user_text = user_text.lstrip()
 
+        elif modality == "audio":
+            from frontend.attachment_inliner import transcribe_audio_inline
+            user_text += await transcribe_audio_inline(services, cache_path, file_name)
+            if not caption:
+                user_text = user_text.lstrip()
+
         else:
-            # Audio, video, unknown: file is saved and the Stage_2 pipeline will
+            # Video, unknown: file is saved and the Stage_2 pipeline will
             # index whatever it can. The agent can use read_file / search tools
             # to access it, or write a new parser plugin for novel extensions.
             user_text += (
@@ -2165,7 +2184,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         _app.add_handler(MessageHandler(filters.COMMAND, handle_command))
         _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         _app.add_handler(MessageHandler(
-            filters.PHOTO | filters.Document.ALL, handle_attachment))
+            filters.PHOTO | filters.Document.ALL | filters.VOICE | filters.AUDIO,
+            handle_attachment))
         _app.add_handler(CallbackQueryHandler(handle_callback_query))
 
         await _app.initialize()

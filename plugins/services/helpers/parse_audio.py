@@ -143,5 +143,5 @@ def parse_audio(path: str, config: dict, services: dict = None) -> ParseResult:
 
 registry.register([
     ".mp3", ".wav", ".flac", ".m4a",
-    ".aac", ".ogg", ".wma", ".opus",
+    ".aac", ".ogg", ".oga", ".wma", ".opus",
 ], "audio", parse_audio)
