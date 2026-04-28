@@ -21,6 +21,41 @@ logger = logging.getLogger("WhisperService")
 WHISPER_DIR = DATA_DIR / "whisper"
 
 
+def _looks_like_hallucination(text: str) -> bool:
+    """Heuristic for Whisper's classic non-speech hallucinations (music,
+    silence, ambient noise transcribed as repeated YouTube-trained phrases
+    like "Thank you." or "Thanks for watching.").
+
+    Two signals:
+      1. Unique-word ratio is very low (the same phrase repeated).
+      2. Total content is short and matches a known canned phrase.
+    """
+    import re
+    stripped = text.strip()
+    if not stripped:
+        return False
+
+    words = re.findall(r"\w+", stripped.lower())
+    if not words:
+        return False
+
+    # Very short outputs that match canned hallucinations.
+    canned = {
+        "thank you", "thank you.", "thanks for watching", "thanks for watching.",
+        "you", "bye", "bye.", ".",
+    }
+    if stripped.lower() in canned:
+        return True
+
+    # Repetition: < 30% unique words across at least 8 words is a strong signal.
+    if len(words) >= 8:
+        unique_ratio = len(set(words)) / len(words)
+        if unique_ratio < 0.3:
+            return True
+
+    return False
+
+
 class FasterWhisperService(BaseService):
     """Local audio transcription via faster-whisper."""
 
@@ -67,7 +102,12 @@ class FasterWhisperService(BaseService):
         logger.info("Whisper model unloaded.")
 
     def transcribe(self, audio_path: str) -> str:
-        """Transcribe an audio file. Returns full transcript as a single string."""
+        """Transcribe an audio file. Returns full transcript as a single string.
+
+        Filters out non-speech segments via Silero VAD and per-segment
+        no_speech_prob, then post-filters obvious hallucination patterns
+        (e.g. "Thank you. Thank you. Thank you." over music) before returning.
+        """
         if not self.loaded or not self.model:
             return ""
         if not os.path.exists(audio_path):
@@ -75,8 +115,27 @@ class FasterWhisperService(BaseService):
             return ""
 
         logger.info(f"Transcribing: {Path(audio_path).name}")
-        segments, info = self.model.transcribe(audio_path, beam_size=5)
-        text = " ".join(seg.text.strip() for seg in segments)
+        segments, info = self.model.transcribe(
+            audio_path,
+            beam_size=5,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+        )
+
+        kept = [
+            seg.text.strip()
+            for seg in segments
+            if seg.no_speech_prob < 0.6 and seg.text.strip()
+        ]
+        text = " ".join(kept).strip()
+
+        if text and _looks_like_hallucination(text):
+            logger.info(
+                f"Discarded likely-hallucinated transcript for {Path(audio_path).name}: "
+                f"{text[:80]!r}"
+            )
+            text = ""
+
         logger.info(
             f"Transcribed {Path(audio_path).name}: "
             f"{len(text)} chars, language={info.language} ({info.language_probability:.0%})"

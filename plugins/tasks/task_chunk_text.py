@@ -19,6 +19,38 @@ from plugins.BaseTask import BaseTask, TaskResult
 logger = logging.getLogger("ChunkText")
 
 
+def _looks_like_gibberish(text: str) -> bool:
+	"""Conservative reject: only flag chunks that are almost certainly junk
+	from a broken parser (mojibake, binary leakage, replacement-char soup).
+
+	Bias is toward keeping content — false-negative is fine, false-positive
+	(dropping real text) is not. Two cheap signals:
+	  1. Replacement-char density > 5% — the U+FFFD "�" pattern from bad decodes.
+	  2. Alpha-or-CJK ratio < 25% over a chunk of 80+ non-space chars — catches
+	     binary noise, hex dumps, control-char streams. The 80-char floor
+	     keeps short legit fragments (numbers, code, tables) safe.
+	"""
+	if not text:
+		return False
+
+	# Replacement chars: very strong signal, low false-positive rate.
+	if text.count("�") / max(len(text), 1) > 0.05:
+		return True
+
+	# Skip the alpha-ratio check on short chunks — too easy to false-positive
+	# on legitimate numeric/code/table fragments.
+	non_space = [c for c in text if not c.isspace()]
+	if len(non_space) < 80:
+		return False
+
+	def _is_wordlike(c: str) -> bool:
+		# Letters in any script (Latin, CJK, Cyrillic, Arabic, etc.) plus digits.
+		return c.isalpha() or c.isdigit()
+
+	wordlike = sum(1 for c in non_space if _is_wordlike(c))
+	return (wordlike / len(non_space)) < 0.25
+
+
 def _recursive_split(text: str, separators: list[str], chunk_size: int) -> list[str]:
 	"""
 	Break text into atomic segments by trying progressively finer separators.
@@ -177,16 +209,28 @@ class ChunkText(BaseTask):
 				chunks = _chunk_text(content, chunk_size, overlap)
 
 				data = []
-				for i, chunk in enumerate(chunks):
+				dropped = 0
+				kept_index = 0
+				for chunk in chunks:
+					if _looks_like_gibberish(chunk):
+						dropped += 1
+						continue
 					data.append({
 						"path": path,
-						"chunk_index": i,
+						"chunk_index": kept_index,
 						"content": chunk,
 						"char_count": len(chunk),
 						"chunked_at": now,
 					})
+					kept_index += 1
 
-				logger.info(f"Chunked {Path(path).name} into {len(chunks)} chunks (size={chunk_size}, overlap={overlap})")
+				if dropped:
+					logger.info(
+						f"Chunked {Path(path).name} into {len(chunks)} chunks; "
+						f"dropped {dropped} as gibberish (size={chunk_size}, overlap={overlap})"
+					)
+				else:
+					logger.info(f"Chunked {Path(path).name} into {len(chunks)} chunks (size={chunk_size}, overlap={overlap})")
 
 				results.append(TaskResult(
 					success=True,
