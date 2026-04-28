@@ -205,6 +205,7 @@ class Agent:
     # ── Context compaction ──────────────────────────────────────────
 
     _COMPACT_THRESHOLD = 0.80  # compact when prompt tokens exceed this fraction of context_size
+    _COMPACT_TAIL_CHARS = 3000  # keep this many chars of recent messages verbatim after the summary
 
     _COMPACT_PROMPT = (
         "You are summarizing a conversation for Second Brain so the assistant can continue later with minimal loss.\n\n"
@@ -213,9 +214,36 @@ class Agent:
         "- Important tool results and data the user may refer back to\n"
         "- The user's current goals and any open questions\n"
         "- Any instructions, preferences, or durable constraints the user has stated\n\n"
-        "Be thorough. This summary will replace the earlier conversation history, "
-        "so anything omitted may be lost. Write in a neutral, factual tone."
+        "The most recent turns will be shown verbatim after your summary, so focus on earlier context. "
+        "Be thorough — anything omitted from both the summary and the verbatim tail may be lost. "
+        "Write in a neutral, factual tone."
     )
+
+    def _select_tail(self, history: list[dict]) -> int:
+        """Return the index in `history` where the verbatim tail starts.
+
+        Walks backwards accumulating message content lengths until the budget
+        (_COMPACT_TAIL_CHARS) is exceeded, then snaps the boundary forward to
+        the first `role == "user"` message so the tail never starts mid
+        tool_call/tool_result sequence. Returns len(history) if no safe tail
+        boundary exists (caller should treat this as "no tail").
+        """
+        if not history:
+            return len(history)
+        budget = self._COMPACT_TAIL_CHARS
+        total = 0
+        start = len(history)
+        for i in range(len(history) - 1, -1, -1):
+            msg_len = len(msg.get("content", "") or "") if (msg := history[i]) else 0
+            if total and total + msg_len > budget:
+                break
+            total += msg_len
+            start = i
+        # Snap forward to the first user message in [start, len(history))
+        for i in range(start, len(history)):
+            if history[i].get("role") == "user":
+                return i
+        return len(history)
 
     def _should_compact(self, response) -> bool:
         """Check if the conversation is getting too long for the context window."""
@@ -235,11 +263,24 @@ class Agent:
             # Already minimal — nothing to compact
             return
 
-        # Build a transcript of the conversation for the summarizer.
+        # Split history into head (to summarize) and tail (kept verbatim).
+        # The tail must start on a user message so we never split a tool_call
+        # from its tool_result.
+        tail_start = self._select_tail(self.history)
+        head = self.history[:tail_start]
+        tail = self.history[tail_start:]
+        if not head:
+            # Whole history is "tail" — nothing older to summarize. Fall back
+            # to the prior behavior of summarizing everything so we still free
+            # space; the tail-snap may have been too aggressive.
+            head = self.history
+            tail = []
+
+        # Build a transcript of the head for the summarizer.
         # Aggressively truncate individual messages so the summary request
         # itself doesn't exceed the context window.
         transcript_lines = []
-        for msg in self.history:
+        for msg in head:
             role = msg["role"].upper()
             if role == "TOOL":
                 name = msg.get("name", "unknown")
@@ -282,17 +323,29 @@ class Agent:
             self._fallback_trim()
             return
 
-        # Replace history with the summary, then a user prompt that directs the
-        # LLM to continue. Ending on role=user is critical: some providers treat
-        # a trailing assistant message as a prefill rather than a cue to respond,
-        # which caused mid-task subagent runs to stall after compaction.
-        self.history = [
+        # Replace history with the summary followed by the verbatim tail.
+        # If there's no tail, append a synthetic user nudge — ending on
+        # role=user is critical: some providers treat a trailing assistant
+        # message as a prefill rather than a cue to respond, which caused
+        # mid-task subagent runs to stall after compaction.
+        new_history = [
             {"role": "user", "content": f"[Conversation summary from earlier]\n{summary}"},
             {"role": "assistant", "content": "Understood — I have the earlier context."},
-            {"role": "user", "content": "Continue with the task. Call the next tool or provide the final answer."},
         ]
-        self._fire_on_notice(f"Compacted conversation into {len(summary)} characters.")
-        logger.info(f"Compacted conversation into {len(summary)} characters.")
+        if tail:
+            new_history.extend(tail)
+        else:
+            new_history.append(
+                {"role": "user", "content": "Continue with the task. Call the next tool or provide the final answer."}
+            )
+        self.history = new_history
+        tail_chars = sum(len(m.get("content", "") or "") for m in tail)
+        self._fire_on_notice(
+            f"Compacted conversation into {len(summary)}-char summary + {len(tail)} tail message(s) ({tail_chars} chars)."
+        )
+        logger.info(
+            f"Compacted: summary={len(summary)} chars, tail={len(tail)} msgs / {tail_chars} chars"
+        )
 
     def _fallback_trim(self):
         """Last-resort trim: keep only the most recent user message and response."""
