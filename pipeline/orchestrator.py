@@ -95,6 +95,8 @@ class Orchestrator:
 			writes=task.writes,
 			reads=task.reads,
 			modalities=task.modalities,
+			trigger=getattr(task, "trigger", "path"),
+			trigger_channels=getattr(task, "trigger_channels", []) or [],
 		)
 
 		with self._task_lock:
@@ -416,7 +418,10 @@ class Orchestrator:
 		logger.debug(f"Backfill scan completed in {time.time() - t0:.3f}s")
 
 		for task in self.tasks.values():
-			count = self.db.reset_stuck_tasks_for(task.name, task.timeout)
+			if getattr(task, "trigger", "path") == "event":
+				count = self.db.reset_stuck_runs_for(task.name, task.timeout)
+			else:
+				count = self.db.reset_stuck_tasks_for(task.name, task.timeout)
 			if count > 0:
 				logger.info(f"Startup: reset {count} stuck '{task.name}' entries")
 
@@ -454,12 +459,20 @@ class Orchestrator:
 			if not task.reads:
 				continue
 			for input_table in task.reads:
+				if input_table not in table_writers:
+					logger.info(
+						f"Skipping cascade from {input_table} for '{task.name}' "
+						"(not produced by a path task)"
+					)
+					continue
 				for output_table in task.writes:
 					if output_table in shared_tables:
 						logger.info(f"Skipping cascade {input_table} -> {output_table} (shared table)")
 						continue
-					self.db.create_cascade_trigger(input_table, output_table)
-					logger.info(f"Cascade trigger: {input_table} -> {output_table}")
+					if self.db.create_cascade_trigger(input_table, output_table):
+						logger.info(f"Cascade trigger: {input_table} -> {output_table}")
+					else:
+						logger.info(f"Skipping cascade {input_table} -> {output_table} (no path column)")
 
 	def dependency_pipeline_graph(self):
 		"""Return a human-readable view of the current path-task pipeline."""
@@ -467,17 +480,23 @@ class Orchestrator:
 			return
 
 		lines = ["Path Pipeline:"]
+		path_tasks = {
+			name: task for name, task in self.tasks.items()
+			if getattr(task, "trigger", "path") == "path"
+		}
+		if not path_tasks:
+			return "Path Pipeline:\n  (no path-driven tasks)"
 
 		# Pre-compute downstream children for each task.
-		children: dict[str, list[str]] = {name: [] for name in self.tasks}
-		for task in self.tasks.values():
+		children: dict[str, list[str]] = {name: [] for name in path_tasks}
+		for task in path_tasks.values():
 			for table in task.writes:
-				for downstream in self.tasks.values():
+				for downstream in path_tasks.values():
 					if table in downstream.reads and downstream.name not in children[task.name]:
 						children[task.name].append(downstream.name)
 
 		# Root tasks have no upstream path dependencies.
-		roots = [t.name for t in self.tasks.values() if not self.upstream.get(t.name)]
+		roots = [t.name for t in path_tasks.values() if not self.upstream.get(t.name)]
 
 		# Walk from roots to detect orphaned tasks that are not reachable.
 		reachable = set()
@@ -489,13 +508,13 @@ class Orchestrator:
 			reachable.add(name)
 			queue.extend(children[name])
 
-		orphans = [name for name in self.tasks if name not in reachable]
+		orphans = [name for name in path_tasks if name not in reachable]
 		top_level = roots + orphans
 
 		visited: set[str] = set()
 
 		def walk(task_name: str, prefix: str, is_last: bool):
-			task = self.tasks[task_name]
+			task = path_tasks[task_name]
 			connector = "└── " if is_last else "├── "
 
 			if task_name in visited:

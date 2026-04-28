@@ -115,9 +115,20 @@ class Database:
 				task_name    TEXT PRIMARY KEY,
 				writes       TEXT,
 				reads        TEXT,
-				modalities   TEXT
+				modalities   TEXT,
+				trigger      TEXT DEFAULT 'path',
+				trigger_channels TEXT DEFAULT ''
 			)
 		""")
+		# Migration: add event-task metadata for existing databases
+		try:
+			self.conn.execute("ALTER TABLE registered_tasks ADD COLUMN trigger TEXT DEFAULT 'path'")
+		except sqlite3.OperationalError:
+			pass  # column already exists
+		try:
+			self.conn.execute("ALTER TABLE registered_tasks ADD COLUMN trigger_channels TEXT DEFAULT ''")
+		except sqlite3.OperationalError:
+			pass  # column already exists
 
 		# Event-task runs — one row per triggered run for trigger="event" tasks.
 		# Path-keyed tasks use task_queue; event-keyed tasks use this table.
@@ -536,12 +547,15 @@ class Database:
 	# =================================================================
 
 	def clean_output_tables(self, path, table_names):
-		"""Remove a file's data from multiple output tables."""
+		"""Remove a file's data from path-keyed output tables."""
 		for table in table_names:
 			self._validate_identifier(table)
 		with self.lock:
-			for table in table_names:
+			for table in dict.fromkeys(table_names):
 				try:
+					if not self._table_has_column_unlocked(table, "path"):
+						logger.debug(f"Skipping cleanup for '{table}' (no path column)")
+						continue
 					self.conn.execute(f"DELETE FROM {table} WHERE path = ?", (path,))
 				except sqlite3.OperationalError as e:
 					if "no such table" not in str(e):
@@ -553,6 +567,8 @@ class Database:
 		Create a SQL trigger that deletes downstream rows when upstream rows
 		are deleted. INSERT OR REPLACE fires DELETE triggers in SQLite, so
 		this automatically cascades when an upstream task re-runs for a file.
+		Returns True when a trigger was created or already existed; False when
+		either table is not path-keyed and should be skipped.
 		"""
 		self._validate_identifier(upstream_table)
 		self._validate_identifier(downstream_table)
@@ -566,8 +582,21 @@ class Database:
 			END;
 		"""
 		with self.lock:
+			if (
+				not self._table_has_column_unlocked(upstream_table, "path")
+				or not self._table_has_column_unlocked(downstream_table, "path")
+			):
+				return False
 			self.conn.execute(sql)
 			self.conn.commit()
+			return True
+
+	def _table_has_column_unlocked(self, table_name: str, column_name: str) -> bool:
+		"""Return whether a table has a column. Caller must hold self.lock."""
+		self._validate_identifier(table_name)
+		self._validate_identifier(column_name)
+		cur = self.conn.execute(f"PRAGMA table_info({table_name})")
+		return any(row["name"] == column_name for row in cur.fetchall())
 
 	def unclaim_tasks(self, task_name: str, paths: list[str]):
 		"""Return claimed tasks to PENDING when deps aren't met at dispatch time."""
@@ -679,17 +708,19 @@ class Database:
 	# TASK REGISTRATION
 	# =================================================================
 
-	def register_task(self, name, writes, reads, modalities):
+	def register_task(self, name, writes, reads, modalities, trigger="path", trigger_channels=None):
 		"""Persist task metadata across restarts."""
 		with self.lock:
 			self.conn.execute("""
 				INSERT OR REPLACE INTO registered_tasks
-				(task_name, writes, reads, modalities)
-				VALUES (?, ?, ?, ?)
+				(task_name, writes, reads, modalities, trigger, trigger_channels)
+				VALUES (?, ?, ?, ?, ?, ?)
 			""", (name,
 				  ",".join(writes) if writes else "",
 				  ",".join(reads) if reads else "",
-				  ",".join(modalities) if modalities else ""))
+				  ",".join(modalities) if modalities else "",
+				  trigger or "path",
+				  ",".join(trigger_channels) if trigger_channels else ""))
 			self.conn.commit()
 
 	def get_registered_tasks(self):
