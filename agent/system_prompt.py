@@ -155,7 +155,7 @@ def _authoring_guidance() -> str:
         "3. Create a new plugin with build_plugin(action='create', ...).\n"
         "4. Refine it with build_plugin(action='edit', search_block='...', replace_block='...').\n"
         "5. If needed, install packages with run_command.\n"
-        "6. If you created a tool, call it to verify behavior.\n\n"
+        "6. If you created a tool, you will have immediate access to it. Call it to verify behavior.\n\n"
         "Naming:\n"
         "- Tools use tool_<name>.py\n"
         "- Tasks use task_<name>.py\n"
