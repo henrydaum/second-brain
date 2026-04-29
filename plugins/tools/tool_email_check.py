@@ -120,8 +120,29 @@ class EmailCheck(BaseTool):
                     s["recipients"] = full.get("recipients", "")
 
         logger.info(f"[EmailCheck] {len(summaries)} message(s) — {label}")
+
+        if not summaries:
+            llm_summary = f"No messages {label}."
+        else:
+            lines = [f"Found {len(summaries)} message(s) {label}:"]
+            for i, s in enumerate(summaries, 1):
+                read_flag = "" if s.get("is_read") else " [UNREAD]"
+                line = (
+                    f"{i}. id={s.get('message_id','')}{read_flag}\n"
+                    f"   from:    {s.get('sender','')}\n"
+                    f"   subject: {s.get('subject','(no subject)')}\n"
+                    f"   snippet: {(s.get('snippet','') or '')[:200]}"
+                )
+                if include_body and s.get("body_plain"):
+                    body = s["body_plain"].strip().replace("\r\n", "\n")
+                    if len(body) > 1500:
+                        body = body[:1500] + "…[truncated]"
+                    line += f"\n   body:\n{body}"
+                lines.append(line)
+            llm_summary = "\n".join(lines)
+
         return ToolResult(
             success=True,
             data={"emails": summaries, "count": len(summaries), "scope": scope},
-            llm_summary=f"Found {len(summaries)} message(s) {label}.",
+            llm_summary=llm_summary,
         )
