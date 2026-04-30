@@ -41,6 +41,7 @@ class ToolRegistry:
         self.tools: dict[str, BaseTool] = {}
         self._lock = threading.Lock()
         self.orchestrator = None        # set after construction in main.pyw
+        self.is_subagent = False        # set True by task_run_subagent for scoped registries
 
     def register(self, tool: BaseTool):
         """Register a tool. Overwrites if name already exists."""
@@ -85,7 +86,8 @@ class ToolRegistry:
         context = build_context(self.db, self.config, self.services,
                                 call_tool=self.call,
                                 tool_registry=self,
-                                orchestrator=self.orchestrator)
+                                orchestrator=self.orchestrator,
+                                is_subagent=self.is_subagent)
 
         t0 = time.time()
 

@@ -46,6 +46,32 @@ class EmailMarkRead(BaseTool):
         if not message_id:
             return ToolResult.failed("message_id is required.")
 
+        # Subagent guard: only allow marking messages that involve the AI alias.
+        if context.is_subagent:
+            ai_email = (context.config.get("ai_email_address") or "").strip().lower()
+            if not ai_email:
+                return ToolResult.failed(
+                    "Subagent context but ai_email_address is not set — "
+                    "cannot verify message ownership."
+                )
+            msg = gmail.get_message(message_id)
+            if not msg:
+                return ToolResult.failed(f"Message {message_id} not found.")
+            haystack = " ".join([
+                msg.get("sender", ""),
+                msg.get("recipients", ""),
+                msg.get("cc", ""),
+            ]).lower()
+            if ai_email not in haystack:
+                logger.warning(
+                    f"[EmailMarkRead] Subagent rejected: {message_id} does not "
+                    f"involve {ai_email}."
+                )
+                return ToolResult.failed(
+                    "Subagent context: this message does not involve the AI "
+                    "alias and cannot be modified."
+                )
+
         unread = bool(kwargs.get("unread", False))
         ok = gmail.mark_unread(message_id) if unread else gmail.mark_read(message_id)
         action = "unread" if unread else "read"

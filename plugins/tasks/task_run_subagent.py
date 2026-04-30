@@ -216,6 +216,7 @@ class RunSubagent(BaseTask):
         # Build the registry against the scoped db so tools see the lens.
         registry = ToolRegistry(sub_db, context.config, context.services)
         registry.orchestrator = context.orchestrator
+        registry.is_subagent = True
 
         allow = scope.tools_allow
         deny = scope.tools_deny or set()

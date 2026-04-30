@@ -106,11 +106,11 @@ class EmailSend(BaseTool):
 
         as_ai = bool(kwargs.get("as_ai", False))
 
-        # Subagent guard: no approval UI → force AI mode.
-        if context.approve_command is None and not as_ai:
+        # Subagent guard: force AI mode so a scheduled subagent can never
+        # send from the user's main address.
+        if context.is_subagent and not as_ai:
             logger.warning(
-                "[EmailSend] No approval UI attached (subagent context). "
-                "Forcing as_ai=True to prevent sending from user's main address."
+                "[EmailSend] Subagent context — forcing as_ai=True."
             )
             as_ai = True
 

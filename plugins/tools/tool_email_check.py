@@ -88,6 +88,25 @@ class EmailCheck(BaseTool):
         query = (kwargs.get("query") or "").strip()
         ai_email = (context.config.get("ai_email_address") or "").strip()
 
+        # Subagent guard: restrict to the AI alias's mail only. Prevents a
+        # scheduled subagent from reading the user's main inbox or running
+        # arbitrary Gmail queries.
+        if context.is_subagent:
+            if not ai_email:
+                return ToolResult.failed(
+                    "Subagent context but ai_email_address is not set — "
+                    "cannot scope reads safely. Configure it under Settings → "
+                    "Plugin Config → AI Agent Email Address."
+                )
+            if scope == "inbox":
+                logger.warning("[EmailCheck] Subagent context: rewriting scope 'inbox' → 'ai_inbox'.")
+                scope = "ai_inbox"
+            elif scope == "custom":
+                return ToolResult.failed(
+                    "scope='custom' is not allowed in subagent context. "
+                    "Use scope='ai_inbox' or scope='ai_sent'."
+                )
+
         if scope == "inbox":
             summaries = gmail.fetch_inbox(max_results=limit)
             label = "inbox"
