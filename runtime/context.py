@@ -73,6 +73,8 @@ def build_context(db, config: dict, services: dict, call_tool=None,
             req = ApprovalRequest(command, justification)
             bus.emit(APPROVAL_REQUESTED, req)
             if not req.wait(timeout=300.0):
+                req.metadata["timed_out"] = True
+                req.resolve(False)
                 return False
             return req.approved
 
