@@ -691,6 +691,8 @@ def _migrate_legacy_llm_config(config: dict) -> bool:
             "tools_list": [],
             "whitelist_or_blacklist_tables": "blacklist",
             "tables_list": [],
+            "whitelist_or_blacklist_folders": "blacklist",
+            "folders_list": [],
         }
 
     config["llm_profiles"] = new_llms

@@ -523,6 +523,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             "tools_list": collected.get("tools_list") or [],
             "whitelist_or_blacklist_tables": collected.get("whitelist_or_blacklist_tables") or "blacklist",
             "tables_list": collected.get("tables_list") or [],
+            "whitelist_or_blacklist_folders": collected.get("whitelist_or_blacklist_folders") or "blacklist",
+            "folders_list": collected.get("folders_list") or [],
         }
 
         result = await _dispatch_frontend_event(FrontendEvent(
@@ -538,7 +540,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
 
     _AGENT_FIELDS = ("llm", "prompt_suffix",
                      "whitelist_or_blacklist_tools", "tools_list",
-                     "whitelist_or_blacklist_tables", "tables_list")
+                     "whitelist_or_blacklist_tables", "tables_list",
+                     "whitelist_or_blacklist_folders", "folders_list")
     _LLM_FIELDS = ("llm_endpoint", "llm_api_key",
                    "llm_context_size", "llm_service_class")
 
@@ -563,7 +566,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             lines.append(f"  llm: {html.escape(llm_ref)}")
         lines.append(f"  prompt_suffix: {html.escape(_format_value_short(profile.get('prompt_suffix')))}")
         for field in ("whitelist_or_blacklist_tools", "tools_list",
-                      "whitelist_or_blacklist_tables", "tables_list"):
+                      "whitelist_or_blacklist_tables", "tables_list",
+                      "whitelist_or_blacklist_folders", "folders_list"):
             lines.append(f"  {field}: {html.escape(_format_value_short(profile.get(field)))}")
         return lines
 
@@ -656,6 +660,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
              InlineKeyboardButton("tools_list", callback_data=f"agnt:editfield:{name}:tools_list")],
             [InlineKeyboardButton("table mode", callback_data=f"agnt:editfield:{name}:whitelist_or_blacklist_tables"),
              InlineKeyboardButton("tables_list", callback_data=f"agnt:editfield:{name}:tables_list")],
+            [InlineKeyboardButton("folder mode", callback_data=f"agnt:editfield:{name}:whitelist_or_blacklist_folders"),
+             InlineKeyboardButton("folders_list", callback_data=f"agnt:editfield:{name}:folders_list")],
             [InlineKeyboardButton("◀ Back", callback_data=f"agnt:pick:{name}")],
         ]
         await _app.bot.send_message(

@@ -111,6 +111,8 @@ SETTINGS_DATA = [
          "tools_list": [],
          "whitelist_or_blacklist_tables": "blacklist",
          "tables_list": [],
+         "whitelist_or_blacklist_folders": "blacklist",
+         "folders_list": [],
      }},
      {"type": "json_dict", "hidden": True}),
 

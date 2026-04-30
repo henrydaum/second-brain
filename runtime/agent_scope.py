@@ -40,6 +40,8 @@ class AgentScope:
     tools_deny: set[str] | None = None
     tables_allow: list | None = None  # whitelist entries: str | dict{name, sql}
     tables_deny: set[str] | None = None
+    folders_allow: list[str] | None = None  # normalized fwd-slash, no trailing slash
+    folders_deny: list[str] | None = None
 
     @property
     def has_tool_filter(self) -> bool:
@@ -49,6 +51,11 @@ class AgentScope:
     def has_table_filter(self) -> bool:
         return self.tables_allow is not None or bool(self.tables_deny)
 
+    @property
+    def has_folder_filter(self) -> bool:
+        # An explicit (even empty) whitelist counts — empty whitelist = fail closed.
+        return self.folders_allow is not None or bool(self.folders_deny)
+
 
 def load_scope(profile_name: str, config: dict) -> AgentScope:
     """Parse a profile's filter fields into an ``AgentScope``."""
@@ -56,8 +63,12 @@ def load_scope(profile_name: str, config: dict) -> AgentScope:
 
     tools_mode = _scope_mode(profile_name, profile, "tools")
     tables_mode = _scope_mode(profile_name, profile, "tables")
+    folders_mode = _scope_mode(profile_name, profile, "folders")
     tools_list = _scope_list(profile_name, profile, "tools")
     tables_list = _scope_list(profile_name, profile, "tables")
+    folders_list = _scope_list(profile_name, profile, "folders")
+
+    folders_norm = _normalize_folders(profile_name, folders_list)
 
     return AgentScope(
         profile_name=profile_name,
@@ -66,7 +77,26 @@ def load_scope(profile_name: str, config: dict) -> AgentScope:
         tools_deny=set(tools_list) if tools_mode == "blacklist" else None,
         tables_allow=list(tables_list) if tables_mode == "whitelist" else None,
         tables_deny=set(tables_list) if tables_mode == "blacklist" else None,
+        folders_allow=folders_norm if folders_mode == "whitelist" else None,
+        folders_deny=folders_norm if folders_mode == "blacklist" else None,
     )
+
+
+def _normalize_folders(profile_name: str, raw: list) -> list[str]:
+    """Coerce folder strings to forward-slash, no-trailing-slash form, dedup, drop empties."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str):
+            raise ValueError(
+                f"Profile '{profile_name}' folders_list entry must be a string, got {type(entry).__name__}"
+            )
+        norm = entry.replace("\\", "/").rstrip("/")
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+    return out
 
 
 def _scope_mode(profile_name: str, profile: dict, kind: str) -> str:
@@ -111,8 +141,8 @@ class ScopedDatabase:
     """
 
     def __init__(self, base_db, scope: AgentScope):
-        if not scope.has_table_filter:
-            raise ValueError("ScopedDatabase should only be built when tables are restricted.")
+        if not (scope.has_table_filter or scope.has_folder_filter):
+            raise ValueError("ScopedDatabase should only be built when tables or folders are restricted.")
         self._base = base_db
         self._scope = scope
         self.lock = threading.Lock()  # matches Database.lock for tools that reach in
@@ -125,6 +155,8 @@ class ScopedDatabase:
             f"ATTACH DATABASE 'file:{normalized_path}?mode=ro' AS {_SOURCE_SCHEMA}"
         )
         self._visible_names: set[str] = set()
+        self._folder_clause = _folder_where_clause(scope)
+        self._has_path_col_cache: dict[str, bool] = {}
         self._build_views()
         self._install_authorizer()
 
@@ -157,8 +189,8 @@ class ScopedDatabase:
                     if not _is_safe_identifier(entry):
                         logger.warning(f"tables_list bare name is not a safe identifier: {entry!r}")
                         continue
-                    # Passthrough view in main -> source.<name>
-                    self._create_view(entry, f"SELECT * FROM {_SOURCE_SCHEMA}.{entry}")
+                    # Passthrough view in main -> source.<name>, with optional folder filter.
+                    self._create_view(entry, self._passthrough_sql(entry))
                 elif isinstance(entry, dict):
                     name = entry.get("name")
                     sql = entry.get("sql")
@@ -168,6 +200,7 @@ class ScopedDatabase:
                     if not _is_safe_identifier(name):
                         logger.warning(f"tables_list entry has invalid name: {name!r}")
                         continue
+                    # Custom-SQL entries are user-authored — folder filter is NOT auto-applied.
                     self._create_view(name, sql)
                 else:
                     logger.warning(f"Unrecognized tables_list entry: {entry!r}")
@@ -183,7 +216,27 @@ class ScopedDatabase:
                 # create views with reserved names.
                 if name.startswith("sqlite_"):
                     continue
-                self._create_view(name, f"SELECT * FROM {_SOURCE_SCHEMA}.{name}")
+                self._create_view(name, self._passthrough_sql(name))
+
+    def _passthrough_sql(self, name: str) -> str:
+        """Build the SELECT for a passthrough view, applying the folder filter if applicable."""
+        base = f"SELECT * FROM {_SOURCE_SCHEMA}.{name}"
+        if self._folder_clause and self._table_has_path_column(name):
+            return f"{base} WHERE {self._folder_clause}"
+        return base
+
+    def _table_has_path_column(self, name: str) -> bool:
+        cached = self._has_path_col_cache.get(name)
+        if cached is not None:
+            return cached
+        try:
+            cur = self._conn.execute(f"PRAGMA {_SOURCE_SCHEMA}.table_info({name})")
+            has_path = any(row["name"] == "path" for row in cur.fetchall())
+        except sqlite3.Error as e:
+            logger.warning(f"PRAGMA table_info failed for {name!r}: {e}")
+            has_path = False
+        self._has_path_col_cache[name] = has_path
+        return has_path
 
     def _create_view(self, name: str, sql: str):
         # TEMP views can reference objects in attached databases; regular
@@ -299,10 +352,47 @@ def resolve_agent_llm(profile_name: str, config: dict, services: dict):
 
 
 def scoped_db(base_db, scope: AgentScope):
-    """Return a ``ScopedDatabase`` or the base db if no table filter is set."""
-    if not scope.has_table_filter:
+    """Return a ``ScopedDatabase`` or the base db if no scope filters are set."""
+    if not (scope.has_table_filter or scope.has_folder_filter):
         return base_db
     return ScopedDatabase(base_db, scope)
+
+
+def _folder_where_clause(scope: AgentScope) -> str | None:
+    """Build a SQL predicate (no leading WHERE) restricting `path` to the scope's folders.
+
+    Whitelist + non-empty folders → predicate matches paths inside any folder.
+    Whitelist + empty folders     → '1=0' (fail closed).
+    Blacklist + non-empty folders → NOT (predicate).
+    No folder filter active       → None.
+
+    Both sides of the comparison are normalized to forward slashes so that
+    paths stored with backslashes (Windows) match folder strings normalized
+    by ``_normalize_folders``. View bodies are static SQL, so folder strings
+    are inlined with single quotes doubled — no other characters need escaping
+    because LIKE wildcards (`%`, `_`) inside a folder name would only narrow
+    the match (they can't escape the LIKE pattern boundary).
+    """
+    if scope.folders_allow is not None:
+        folders = scope.folders_allow
+        if not folders:
+            return "1=0"
+        predicate = _folder_predicate(folders)
+        return predicate
+    if scope.folders_deny:
+        return f"NOT {_folder_predicate(scope.folders_deny)}"
+    return None
+
+
+def _folder_predicate(folders: list[str]) -> str:
+    terms = []
+    for folder in folders:
+        escaped = folder.replace("'", "''")
+        terms.append(
+            f"(replace(path,'\\','/') = '{escaped}' "
+            f"OR replace(path,'\\','/') LIKE '{escaped}/%')"
+        )
+    return "(" + " OR ".join(terms) + ")"
 
 
 def _is_safe_identifier(name: str) -> bool:

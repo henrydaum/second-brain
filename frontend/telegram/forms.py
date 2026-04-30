@@ -114,6 +114,8 @@ def agent_add_params(llm_choices: list[str], tool_names: list[str] | None = None
         FormParam("tools_list", type="array", description=f"Tool names, one per line. Send /skip for none.{tool_hint}", default=[]),
         FormParam("whitelist_or_blacklist_tables", description="In the next step, you will choose which tables to whitelist or blacklist.\nChoose blacklist, then /skip the next item, to allow all tables.", required=True, enum=["blacklist", "whitelist"]),
         FormParam("tables_list", type="array", description=f"Database table names, one per line. Send /skip for none.{table_hint}", default=[]),
+        FormParam("whitelist_or_blacklist_folders", description="In the next step, you will choose which folders to whitelist or blacklist.\nChoose blacklist, then /skip the next item, to allow all folders.\nFolders only filter rows of path-keyed tables.", required=True, enum=["blacklist", "whitelist"]),
+        FormParam("folders_list", type="array", description="Folder paths, one per line. Send /skip for none. Rows of path-keyed tables are restricted to (or excluded from) these folders and their descendants.", default=[]),
     ]
 
 
@@ -124,6 +126,8 @@ _AGENT_EDIT_DESCRIPTIONS = {
     "tools_list": "Tool names, one per line. Send /skip for none.",
     "whitelist_or_blacklist_tables": "Choose blacklist with an empty tables_list to allow all tables.",
     "tables_list": "Database table names, one per line. Send /skip for none.",
+    "whitelist_or_blacklist_folders": "Choose blacklist with an empty folders_list to allow all folders.",
+    "folders_list": "Folder paths, one per line. Filters rows of path-keyed tables. Send /skip for none.",
 }
 
 _LLM_EDIT_DESCRIPTIONS = {
@@ -146,7 +150,8 @@ def agent_edit_field_param(field: str, llm_choices: list[str] | None = None,
         return FormParam(field, description=desc, required=True, enum=llm_choices or ["default"])
     if field == "prompt_suffix":
         return FormParam(field, description=desc)
-    if field in ("whitelist_or_blacklist_tools", "whitelist_or_blacklist_tables"):
+    if field in ("whitelist_or_blacklist_tools", "whitelist_or_blacklist_tables",
+                 "whitelist_or_blacklist_folders"):
         return FormParam(field, description=desc, required=True, enum=["blacklist", "whitelist"])
     hint = ""
     if field == "tools_list":
@@ -154,6 +159,8 @@ def agent_edit_field_param(field: str, llm_choices: list[str] | None = None,
                                  "(Use registry names, not filenames.)")
     elif field == "tables_list":
         hint = _format_name_hint("Database table names", table_names)
+    elif field == "folders_list":
+        hint = ""
     return FormParam(field, type="array", description=f"{desc}{hint}", default=None)
 
 

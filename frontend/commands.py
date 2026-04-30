@@ -131,16 +131,22 @@ def _describe_agent_profile(name: str, profile: dict, active: bool) -> str:
     scope_parts = []
     tools_mode = profile.get("whitelist_or_blacklist_tools", "blacklist")
     tables_mode = profile.get("whitelist_or_blacklist_tables", "blacklist")
+    folders_mode = profile.get("whitelist_or_blacklist_folders", "blacklist")
     scope_parts.append(f"tools{ '+' if tools_mode == 'whitelist' else '-' }{len(profile.get('tools_list') or [])}")
     scope_parts.append(f"tables{ '+' if tables_mode == 'whitelist' else '-' }{len(profile.get('tables_list') or [])}")
+    scope_parts.append(f"folders{ '+' if folders_mode == 'whitelist' else '-' }{len(profile.get('folders_list') or [])}")
     if profile.get("prompt_suffix"):
         scope_parts.append("prompt+")
     scope_str = ("  [" + ",".join(scope_parts) + "]") if scope_parts else ""
     return (f"  {marker} {name:<16} {status:<8} llm={llm_ref}{scope_str}")
 
 
-_AGENT_MODE_FIELDS = ("whitelist_or_blacklist_tools", "whitelist_or_blacklist_tables")
-_AGENT_LIST_FIELDS = ("tools_list", "tables_list")
+_AGENT_MODE_FIELDS = (
+    "whitelist_or_blacklist_tools",
+    "whitelist_or_blacklist_tables",
+    "whitelist_or_blacklist_folders",
+)
+_AGENT_LIST_FIELDS = ("tools_list", "tables_list", "folders_list")
 _AGENT_SCOPE_FIELDS = _AGENT_MODE_FIELDS + _AGENT_LIST_FIELDS
 _AGENT_PROFILE_FIELDS = ("llm", "prompt_suffix") + _AGENT_SCOPE_FIELDS
 _LLM_PROFILE_FIELDS = ("llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class")
@@ -704,7 +710,8 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                 return ("Usage: /agent add <profile_name> {json}\n"
                         "Keys: llm (model_name or 'default'), prompt_suffix, "
                         "whitelist_or_blacklist_tools, tools_list, "
-                        "whitelist_or_blacklist_tables, tables_list.")
+                        "whitelist_or_blacklist_tables, tables_list, "
+                        "whitelist_or_blacklist_folders, folders_list.")
             if not json_str:
                 return ("Usage: /agent add <profile_name> {json}\n"
                         "Example: /agent add researcher "
@@ -712,7 +719,9 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                         '\"whitelist_or_blacklist_tools\": \"whitelist\", '
                         '\"tools_list\": [\"sql_query\", \"read_file\"], '
                         '\"whitelist_or_blacklist_tables\": \"blacklist\", '
-                        '\"tables_list\": []}')
+                        '\"tables_list\": [], '
+                        '\"whitelist_or_blacklist_folders\": \"blacklist\", '
+                        '\"folders_list\": []}')
             try:
                 profile = _json.loads(json_str)
             except _json.JSONDecodeError as e:
