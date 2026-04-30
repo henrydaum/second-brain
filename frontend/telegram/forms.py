@@ -176,5 +176,5 @@ def llm_edit_field_param(field: str) -> FormParam:
 
 SCHEDULE_CREATE_STEPS = [
     "job_name", "schedule_type", "schedule_value",
-    "channel", "prompt", "agent", "title",
+    "channel", "prompt", "agent", "notifications", "title",
 ]

@@ -901,9 +901,9 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             if not name or not json_str:
                 return ("Usage: /schedule create <job_name> {json}\n"
                         "Example: /schedule create daily_digest "
-                        '{\"channel\": \"subagent_run\", \"cron\": \"0 8 * * *\", '
+                        '{\"channel\": \"subagent.run\", \"cron\": \"0 8 * * *\", '
                         '\"payload\": {\"prompt\": \"Summarize overnight activity\", '
-                        '\"title\": \"Daily digest\"}}')
+                        '\"notifications\": \"all\", \"title\": \"Daily digest\"}}')
             try:
                 definition = _json.loads(json_str)
             except _json.JSONDecodeError as e:

@@ -24,6 +24,11 @@ from frontend.formatters import (
 )
 from frontend.platforms.platform_telegram import TelegramPlatformAdapter
 from frontend.runtime import FrontendRuntime
+from agent.subagent_runtime import (
+    SUBAGENT_RUN_CHANNEL,
+    SUBAGENT_NOTIFICATION_MODES,
+    SUBAGENT_DEFAULT_NOTIFICATION_MODE,
+)
 from frontend.telegram.forms import (
     LLM_ADD_PARAMS,
     SCHEDULE_CREATE_STEPS,
@@ -1044,8 +1049,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return
 
         if field == "channel":
-            # Seed with subagent_run + any channels currently in use
-            seen = {"subagent_run"}
+            seen = {SUBAGENT_RUN_CHANNEL}
             timekeeper = services.get("timekeeper")
             if timekeeper and getattr(timekeeper, "loaded", False):
                 for job in timekeeper.list_jobs().values():
@@ -1063,21 +1067,20 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return
 
         if field == "prompt":
-            if collected.get("channel") != "subagent_run":
-                # Skip for non-subagent channels
+            if collected.get("channel") != SUBAGENT_RUN_CHANNEL:
                 state.step += 1
                 await _ask_schedule_step(chat_id)
                 return
             await _app.bot.send_message(
                 chat_id,
-                "<b>prompt</b> (required for subagent_run)\n"
+                "<b>prompt</b> (required for subagent jobs)\n"
                 "The instruction sent to the subagent, e.g. "
                 "<code>Summarize yesterday's inbox into 5 bullet points.</code>",
                 parse_mode="HTML")
             return
 
         if field == "agent":
-            if collected.get("channel") != "subagent_run":
+            if collected.get("channel") != SUBAGENT_RUN_CHANNEL:
                 state.step += 1
                 await _ask_schedule_step(chat_id)
                 return
@@ -1092,6 +1095,25 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 chat_id,
                 "<b>agent</b> (optional)\n"
                 "Choose which agent profile this scheduled subagent should run under.",
+                reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+            return
+
+        if field == "notifications":
+            if collected.get("channel") != SUBAGENT_RUN_CHANNEL:
+                state.step += 1
+                await _ask_schedule_step(chat_id)
+                return
+            rows = [[InlineKeyboardButton(
+                f"{'* ' if mode == SUBAGENT_DEFAULT_NOTIFICATION_MODE else ''}{mode}",
+                callback_data=f"sch:notif:{mode}")]
+                for mode in SUBAGENT_NOTIFICATION_MODES]
+            await _app.bot.send_message(
+                chat_id,
+                "<b>notifications</b> (required for subagent jobs)\n"
+                "How chatty the subagent should be when it fires.\n"
+                "<code>all</code> — pushes regularly; final answer is auto-pushed if forgotten.\n"
+                "<code>important</code> — push tool available, told to use it only for noteworthy findings.\n"
+                "<code>off</code> — runs silently, no chat output (final answer still stored).",
                 reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
             return
 
@@ -1120,10 +1142,13 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         else:
             definition["cron"] = c.get("schedule_value")
         payload = definition["payload"]
-        if c.get("channel") == "subagent_run":
+        if c.get("channel") == SUBAGENT_RUN_CHANNEL:
             payload["prompt"] = c.get("prompt", "")
             if c.get("agent"):
                 payload["agent"] = c["agent"]
+            payload["notifications"] = (
+                c.get("notifications") or SUBAGENT_DEFAULT_NOTIFICATION_MODE
+            )
         if c.get("title"):
             payload["title"] = c["title"]
 
@@ -1495,9 +1520,12 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     await update.message.reply_text(
                         f"Unknown agent profile: '{value}'. Choose one of the buttons or type an existing profile name.")
                     return
-            if field == "channel":
-                # channel is normally chosen via buttons; free text = "Other" entry
-                field = "channel"
+            if field == "notifications":
+                value = value.lower()
+                if value not in SUBAGENT_NOTIFICATION_MODES:
+                    await update.message.reply_text(
+                        f"notifications must be one of: {', '.join(SUBAGENT_NOTIFICATION_MODES)}.")
+                    return
             state.collected[field] = value
 
             state.step += 1
@@ -2137,6 +2165,12 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                     state = _pending_schedule_creates.get(chat_id)
                     if state:
                         state.collected["agent"] = "" if tail == "__active__" else tail
+                        state.step += 1
+                        await _ask_schedule_step(chat_id)
+                elif action == "notif":
+                    state = _pending_schedule_creates.get(chat_id)
+                    if state and tail in SUBAGENT_NOTIFICATION_MODES:
+                        state.collected["notifications"] = tail
                         state.step += 1
                         await _ask_schedule_step(chat_id)
                 return
