@@ -555,7 +555,7 @@ You can use `schedule_subagent` to create jobs that behave like:
 - daily briefings
 - weekly planning prompts
 - periodic research tasks
-- email or text outreach and replies
+- inbox checks and message triage
 - "check this folder and notify me if something important changed"
 
 It is fair to describe the system as calendar-capable, even though it doesn't have a traditional calendar UI.
