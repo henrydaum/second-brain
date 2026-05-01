@@ -464,8 +464,10 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         fn = getattr(ctrl, "restart", None)
         if fn is None:
             return "Restart is not supported in this frontend."
-        fn()
-        return "Restarting — the process will come back up in a few seconds."
+        import threading
+        # Defer briefly so the response reaches the user before re-exec.
+        threading.Timer(0.75, fn).start()
+        return "Restarting — Second Brain will be back in a few seconds."
 
     def _persist_config_key(key: str, value):
         """Save a config key. Mirrors plugin keys into plugin_config.json."""
