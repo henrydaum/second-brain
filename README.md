@@ -75,7 +75,7 @@ Jobs can be:
 - enabled or disabled without deleting them
 - backed by input files you explicitly attach to the job
 
-Scheduled subagents keep their own stored run history in SQL and can proactively push user-visible messages into chat. Subagent conversation histories are not immediately available to the main chat, but you can simply ask your agent to look at the most recent runs for context using (the tool for the job is sql_query). You can leave messages for your subagent with /message.
+Scheduled subagents keep their own stored run history in SQL and can proactively push user-visible messages into chat. Subagent conversation histories are not immediately available to the main chat, but you can simply ask your agent to look at the most recent runs for context using (the tool for the job is sql_query). You can also leave messages for your subagent with /message.
 
 ### 4. Event-Driven Tasks
 
@@ -253,7 +253,7 @@ The agent gets a dynamically rebuilt system prompt that includes:
 
 The prompt pushes the assistant toward concise, grounded behavior. Among other things, it tells it to cite its sources and use the right tools for the job.
 
-Because the system prompt is built dynamically for each prompt, there is currently little to no prompt caching.
+The system prompt is built dynamically for each message, ensuring that the model always has the freshest information available.
 
 Built-in tools include:
 
@@ -565,7 +565,7 @@ Subagents in cron routines (one-time or not) have three notification modes:
 2. "off" - Never notify
 3. "important" - The agent will notify you when something important happens (at the discretion of the agent, depending on the job)
 
-Subagents notify the user through a `message` tool, which is added to their tool registry depending on the notification mode. If the agent doesn't use the tool in "all" mode, the last thing they generated is sent instead. Just as the subagent can message you through the `message` tool, you can also message them through the /message command. You can leave any number of messages for them this way, and they will read them the next time they wake up.
+Subagents notify the user through the `message` tool, which is added to their tool registry depending on the notification mode. If the agent doesn't use the tool in "all" mode, the last thing they generated is sent instead. Just as the subagent can message you through the `message` tool, you can also message them through the /message command. You can leave any number of messages for them this way, and they will read them the next time they wake up.
 
 One last thing: subagents in cron routines remember what they have done in their previous runs. Keep this in mind when designing your prompts.
 
