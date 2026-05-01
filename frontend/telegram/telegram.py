@@ -155,6 +155,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     _pending_llm_edits: dict[int, PendingParamForm] = {}
     _pending_agent_edits: dict[int, PendingParamForm] = {}
     _pending_triggers: dict[int, PendingParamForm] = {}
+    _pending_messages: dict[int, str] = {}
     _loop: asyncio.AbstractEventLoop | None = None
     _app: Application | None = None
     transport = TelegramTransport(adapter, lambda: _app, lambda: _loop, _md_to_tg_html)
@@ -378,6 +379,12 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             f"Send /skip for optional params, /cancel to abort.",
             parse_mode="HTML")
         await _ask_next_param(chat_id)
+
+    async def _start_message_capture(chat_id: int, job_name: str):
+        _pending_messages[chat_id] = job_name.strip()
+        await _app.bot.send_message(
+            chat_id,
+            f"Send the message for '{job_name.strip()}'. Send /cancel to abort.")
 
     async def _show_configure_menu(chat_id: int):
         """Show inline keyboard with all config settings."""
@@ -1195,6 +1202,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             if chat_id in _pending_schedule_creates:
                 _pending_schedule_creates.pop(chat_id)
                 cancelled = True
+            if chat_id in _pending_messages:
+                _pending_messages.pop(chat_id)
+                cancelled = True
             if cancelled:
                 await update.message.reply_text("Cancelled.")
                 return
@@ -1320,6 +1330,10 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                 if started:
                     return
 
+        if cmd_name == "message" and arg and len(arg.split(maxsplit=1)) == 1:
+            await _start_message_capture(chat_id, arg)
+            return
+
         # /agent — show profile-list keyboard
         if cmd_name == "agent" and not arg:
             await _show_agent_profiles_list(chat_id)
@@ -1368,6 +1382,18 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         chat_id = update.message.chat_id
         preview = text[:60] + ("..." if len(text) > 60 else "")
         logger.info(f'<- "{preview}"')
+
+        if chat_id in _pending_messages:
+            job_name = _pending_messages.pop(chat_id)
+            result = await _dispatch_frontend_event(FrontendEvent(
+                type="slash_command",
+                session=_session(chat_id),
+                command_name="message",
+                command_arg=f"{job_name} {text}",
+            ))
+            if result.text:
+                await transport.send_long_message(chat_id, result.text)
+            return
 
         # Check for pending /call form input
         if chat_id in _pending_calls:
@@ -1784,6 +1810,9 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
                         return
                     if cmd_name == "trigger":
                         await _start_trigger_form(chat_id, arg)
+                        return
+                    if cmd_name == "message":
+                        await _start_message_capture(chat_id, arg)
                         return
 
                     result = await _dispatch_frontend_event(FrontendEvent(
