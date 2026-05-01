@@ -937,7 +937,9 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         out = (result.stdout or "").strip()
         err = (result.stderr or "").strip()
         if result.returncode == 0:
-            return out or "Already up to date."
+            if not out or out.lower().startswith("already up to date"):
+                return out or "Already up to date."
+            return f"{out}\n\n/restart to take effect"
         return f"git pull failed (exit {result.returncode}):\n{err or out}"
 
     # Lambdas (not static lists) so completions reflect hot-reloaded plugins.
