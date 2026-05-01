@@ -1,8 +1,8 @@
 # Inbox pass — hourly cron
 
-This is your inbox shift. **Do not do outreach in this shift.** Even if you see a great posting, ignore it — the outreach cron handles that. Your only job here is to get the inbox to zero unread.
+This is your inbox shift. **Do not do outreach in this shift.** Even if you see a great fresh lead, ignore it. Your only job here is to get the inbox to zero unread.
 
-Work through this checklist in order. Stop at the end. Do not improvise extra steps.
+Work through this checklist in order. Stop at the end. Do not improvise extra steps. DO NOT send a message to Henry unless you see something genuinely important. Zero new emails = Sleep. This job runs often so do not spam him!
 
 ```
 [ ] 1. Read the last 3 end-of-shift logs. Anything was left in flight last hour?

@@ -7,12 +7,14 @@ fetch the body of each result (slower).
 
 Scopes:
     inbox     — recent messages in the INBOX label.
-    ai_sent   — messages sent FROM the configured ai_email_address.
-    ai_inbox  — messages addressed TO the configured ai_email_address.
+    ai_sent   — messages sent FROM any configured ai_email_addresses entry.
+    ai_inbox  — messages addressed TO any configured ai_email_addresses entry.
     custom    — use the `query` parameter as a raw Gmail search string.
 
 Config:
-    ai_email_address — shared with tool_email_send.
+    ai_email_addresses — list of Gmail send-as aliases the agent may use.
+                         Empty list = no agent access (subagents fail).
+                         Shared with tool_email_send and tool_email_mark_read.
 """
 
 import logging
@@ -20,6 +22,18 @@ import logging
 from plugins.BaseTool import BaseTool, ToolResult
 
 logger = logging.getLogger("tool_email_check")
+
+
+def _allowed_addresses(config) -> list[str]:
+    raw = config.get("ai_email_addresses") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(a).strip().lower() for a in raw if str(a).strip()]
+
+
+def _alias_scope_clause(allowed: list[str], include_from: bool = False) -> str:
+    ops = ["to", "cc", "bcc", "deliveredto"] + (["from"] if include_from else [])
+    return " OR ".join(f'{op}:"{a}"' for a in allowed for op in ops)
 
 
 class EmailCheck(BaseTool):
@@ -31,11 +45,12 @@ class EmailCheck(BaseTool):
     )
     config_settings = [
         (
-            "AI Agent Email Address",
-            "ai_email_address",
-            "Gmail send-as alias (e.g. agent@yourdomain.com).",
-            "",
-            {"type": "text"},
+            "AI Agent Email Addresses",
+            "ai_email_addresses",
+            "List of Gmail send-as aliases the agent may read, mark, and send from. "
+            "Empty list = no agent access (subagents will fail).",
+            [],
+            {"type": "json_list"},
         ),
     ]
     parameters = {
@@ -86,40 +101,42 @@ class EmailCheck(BaseTool):
         limit = int(kwargs.get("limit", 20))
         include_body = bool(kwargs.get("include_body", False))
         query = (kwargs.get("query") or "").strip()
-        ai_email = (context.config.get("ai_email_address") or "").strip()
+        allowed = _allowed_addresses(context.config)
 
-        # Subagent guard: restrict to the AI alias's mail only. Prevents a
-        # scheduled subagent from reading the user's main inbox or running
-        # arbitrary Gmail queries.
+        # Subagent guard: subagents can only read mail involving an allowed
+        # address. Empty list = no access.
         if context.is_subagent:
-            if not ai_email:
+            if not allowed:
                 return ToolResult.failed(
-                    "Subagent context but ai_email_address is not set — "
-                    "cannot scope reads safely. Configure it under Settings → "
-                    "Plugin Config → AI Agent Email Address."
+                    "Subagent context but ai_email_addresses is empty — no "
+                    "mail access. Configure it under Settings → Plugin Config "
+                    "→ AI Agent Email Addresses."
                 )
             if scope == "inbox":
                 logger.warning("[EmailCheck] Subagent context: rewriting scope 'inbox' → 'ai_inbox'.")
                 scope = "ai_inbox"
             elif scope == "custom":
-                return ToolResult.failed(
-                    "scope='custom' is not allowed in subagent context. "
-                    "Use scope='ai_inbox' or scope='ai_sent'."
-                )
+                if not query:
+                    return ToolResult.failed("scope='custom' requires a 'query' argument.")
+                scope_clause = _alias_scope_clause(allowed, include_from=True)
+                query = f"({query}) AND ({scope_clause})"
+                logger.info(f"[EmailCheck] Subagent scope=custom rewritten: {query}")
 
         if scope == "inbox":
             summaries = gmail.fetch_inbox(max_results=limit)
             label = "inbox"
         elif scope == "ai_sent":
-            if not ai_email:
-                return ToolResult.failed("ai_email_address is not set.")
-            summaries = gmail.search(f"from:{ai_email}", max_results=limit)
-            label = f"sent from {ai_email}"
+            if not allowed:
+                return ToolResult.failed("ai_email_addresses is empty.")
+            q = " OR ".join(f'from:"{a}"' for a in allowed)
+            summaries = gmail.search(f"({q})", max_results=limit)
+            label = f"sent from {', '.join(allowed)}"
         elif scope == "ai_inbox":
-            if not ai_email:
-                return ToolResult.failed("ai_email_address is not set.")
-            summaries = gmail.fetch_inbox_aliased(ai_email, max_results=limit)
-            label = f"addressed to {ai_email}"
+            if not allowed:
+                return ToolResult.failed("ai_email_addresses is empty.")
+            q = _alias_scope_clause(allowed)
+            summaries = gmail.search(f"({q})", max_results=limit)
+            label = f"addressed to {', '.join(allowed)}"
         elif scope == "custom":
             if not query:
                 return ToolResult.failed("scope='custom' requires a 'query' argument.")

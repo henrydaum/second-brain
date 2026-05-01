@@ -38,6 +38,8 @@ class GmailService(BaseService):
         super().__init__()
         self._creds = None
         self.service = None  # backward compat
+        self._self_address = None
+        self._labels_cache: list[dict] | None = None
 
     def _load(self) -> bool:
         if not self._is_connected():
@@ -109,8 +111,47 @@ class GmailService(BaseService):
     def unload(self):
         self._creds = None
         self.service = None
+        self._self_address = None
+        self._labels_cache = None
         self.loaded = False
         logger.info("[Gmail] Service unloaded.")
+
+    def list_labels(self, force_refresh: bool = False) -> list[dict]:
+        """Return Gmail labels as [{id, name, type}]. Cached on the instance."""
+        if self._labels_cache is not None and not force_refresh:
+            return self._labels_cache
+        client = self.get_client()
+        if not client:
+            return []
+        try:
+            resp = client.users().labels().list(userId="me").execute()
+            self._labels_cache = [
+                {"id": l.get("id", ""), "name": l.get("name", ""), "type": l.get("type", "user")}
+                for l in resp.get("labels", [])
+            ]
+            return self._labels_cache
+        except Exception as e:
+            logger.error(f"[Gmail] list_labels failed: {e}")
+            return []
+
+    def modify_labels(self, message_id: str, add_ids: list[str], remove_ids: list[str]) -> bool:
+        """Public wrapper around _modify_labels for label add/remove operations."""
+        return self._modify_labels(message_id, add_ids, remove_ids)
+
+    def get_self_address(self) -> str:
+        """Return the authenticated Google account's email address (cached)."""
+        if self._self_address:
+            return self._self_address
+        client = self.get_client()
+        if not client:
+            return ""
+        try:
+            profile = client.users().getProfile(userId="me").execute()
+            self._self_address = (profile.get("emailAddress") or "").strip()
+            return self._self_address
+        except Exception as e:
+            logger.error(f"[Gmail] getProfile failed: {e}")
+            return ""
 
     # ── Inbox access ──────────────────────────────────────────────────────────
 

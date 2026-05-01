@@ -1,28 +1,44 @@
 """
 tool_email_send — Send a new email or reply to an existing thread via Gmail.
 
-Two identities are supported:
-- User account (as_ai=False): requires user approval before sending. Use when
-  the user explicitly wants to send mail from their personal address.
-- AI alias (as_ai=True): sends from the configured ai_email_address. No
-  approval prompt — autonomous. Use for agent-driven outreach.
+Identity is controlled by two parameters:
+- as_ai=False: send from the authenticated Google account, with approval prompt.
+- as_ai=True, from_address=<alias>: send from that alias (must be in
+  ai_email_addresses), no approval — autonomous.
+- as_ai=True, from_address blank: send from the authenticated Google account
+  ("me") IF it is listed in ai_email_addresses. Otherwise fall back to the
+  first entry in ai_email_addresses. This prevents a blank from_address
+  from bypassing the configured access list.
 
-Subagent guard: if no approval UI is subscribed (i.e. running inside a
-subagent), as_ai is forced to True regardless of the caller's argument so a
-subagent can never send from the user's main address. If as_ai is forced on
-but ai_email_address is unset, the call fails loudly rather than silently
-falling back.
+Subagent guard: subagents are forced to as_ai=True, and only run when
+ai_email_addresses is non-empty (configured access list).
 
 Config (set in UI → Settings → Plugin Config):
-    ai_email_address — Gmail send-as alias (must be added under Gmail
-                       Settings → Accounts → Send mail as).
+    ai_email_addresses — list of Gmail send-as aliases (each must be added
+                         under Gmail Settings → Accounts → Send mail as).
+                         Empty list = no agent send access.
 """
 
 import logging
+import os
+import re
 
 from plugins.BaseTool import BaseTool, ToolResult
 
 logger = logging.getLogger("tool_email_send")
+
+_ADDR_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+
+def _extract_addrs(header: str) -> list[str]:
+    return [m.group(0).lower() for m in _ADDR_RE.finditer(header or "")]
+
+
+def _allowed_addresses(config) -> list[str]:
+    raw = config.get("ai_email_addresses") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(a).strip() for a in raw if str(a).strip()]
 
 
 class EmailSend(BaseTool):
@@ -36,12 +52,13 @@ class EmailSend(BaseTool):
     )
     config_settings = [
         (
-            "AI Agent Email Address",
-            "ai_email_address",
-            "Gmail send-as alias (e.g. agent@yourdomain.com). "
-            "Must be added under Gmail Settings → Accounts → Send mail as.",
-            "",
-            {"type": "text"},
+            "AI Agent Email Addresses",
+            "ai_email_addresses",
+            "List of Gmail send-as aliases the agent may send from. Each must "
+            "be added under Gmail Settings → Accounts → Send mail as. Empty "
+            "list = no agent send access.",
+            [],
+            {"type": "json_list"},
         ),
     ]
     parameters = {
@@ -50,11 +67,19 @@ class EmailSend(BaseTool):
             "as_ai": {
                 "type": "boolean",
                 "description": (
-                    "If true, send from the configured ai_email_address with "
-                    "no approval prompt (autonomous mode). If false, send "
-                    "from the user's main account and require approval."
+                    "If true, send from one of the configured ai_email_addresses "
+                    "entries with no approval prompt (autonomous mode). If false, "
+                    "send from the user's main account and require approval."
                 ),
                 "default": False,
+            },
+            "from_address": {
+                "type": "string",
+                "description": (
+                    "Pick which configured alias to send from (must be in "
+                    "ai_email_addresses). Leave blank to send from the "
+                    "authenticated Google account ('me')."
+                ),
             },
             "message_id": {
                 "type": "string",
@@ -105,24 +130,68 @@ class EmailSend(BaseTool):
                 )
 
         as_ai = bool(kwargs.get("as_ai", False))
+        allowed = _allowed_addresses(context.config)
+        requested_from = (kwargs.get("from_address") or "").strip()
 
-        # Subagent guard: force AI mode so a scheduled subagent can never
-        # send from the user's main address.
-        if context.is_subagent and not as_ai:
-            logger.warning(
-                "[EmailSend] Subagent context — forcing as_ai=True."
-            )
-            as_ai = True
+        # Subagent guard: force AI mode so a subagent can never send from the
+        # user's main address. Empty list = no send access.
+        if context.is_subagent:
+            if not allowed:
+                return ToolResult.failed(
+                    "Subagent context but ai_email_addresses is empty — no "
+                    "send access. Configure at least one alias under Settings "
+                    "→ Plugin Config → AI Agent Email Addresses."
+                )
+            if not as_ai:
+                logger.warning("[EmailSend] Subagent context — forcing as_ai=True.")
+                as_ai = True
 
-        ai_email = (context.config.get("ai_email_address") or "").strip()
-        if as_ai and not ai_email:
-            return ToolResult.failed(
-                "as_ai is required (subagent context or explicit) but "
-                "ai_email_address is not set. Go to Settings → Plugin Config "
-                "→ AI Agent Email Address and enter your Gmail send-as alias."
-            )
+        if as_ai and not requested_from and kwargs.get("message_id"):
+            original_for_id = gmail.get_message(kwargs["message_id"])
+            if original_for_id:
+                to_addrs = _extract_addrs(original_for_id.get("recipients", ""))
+                cc_addrs = _extract_addrs(original_for_id.get("cc", ""))
+                allowed_lower = [a.lower() for a in allowed]
+                inferred = (
+                    next((a for a in allowed_lower if a in to_addrs), None)
+                    or next((a for a in allowed_lower if a in cc_addrs), None)
+                )
+                if inferred:
+                    requested_from = inferred
+                    logger.info(f"[EmailSend] Reply-identity inferred: {inferred}")
 
-        from_address = ai_email if as_ai else None
+        if as_ai and requested_from:
+            allowed_lower = {a.lower() for a in allowed}
+            if requested_from.lower() not in allowed_lower:
+                return ToolResult.failed(
+                    f"from_address '{requested_from}' is not in "
+                    f"ai_email_addresses ({', '.join(allowed) or 'empty'})."
+                )
+            ai_email = requested_from
+            from_address = ai_email
+        elif as_ai:
+            # Blank from_address with as_ai=True: send from the authenticated
+            # Google account ("me") only if it's listed in ai_email_addresses
+            # — otherwise fall back to the first allowed alias to prevent a
+            # configured-allowlist bypass.
+            self_address = gmail.get_self_address()
+            allowed_lower = {a.lower() for a in allowed}
+            if self_address and self_address.lower() in allowed_lower:
+                ai_email = self_address
+                from_address = None
+            elif allowed:
+                ai_email = allowed[0]
+                from_address = ai_email
+            else:
+                return ToolResult.failed(
+                    "as_ai=True with blank from_address but ai_email_addresses "
+                    "is empty and the authenticated account is unknown — "
+                    "configure at least one alias under Settings → Plugin "
+                    "Config → AI Agent Email Addresses."
+                )
+        else:
+            ai_email = ""
+            from_address = None
 
         body = kwargs.get("body", "").strip()
         if not body:
@@ -137,8 +206,18 @@ class EmailSend(BaseTool):
             [p.strip() for p in raw_attachments if isinstance(p, str) and p.strip()]
             if raw_attachments else None
         )
+        missing = [p for p in attachments or [] if not os.path.isfile(p)]
+        if missing:
+            return ToolResult.failed(
+                "Attachment file(s) not found; email was not sent: " + ", ".join(missing)
+            )
 
-        identity_label = f"alias {ai_email}" if as_ai else "your main account"
+        if as_ai and from_address is None:
+            identity_label = f"your main account ({ai_email}, autonomous)"
+        elif as_ai:
+            identity_label = f"alias {ai_email}"
+        else:
+            identity_label = "your main account"
 
         # ── Reply mode ─────────────────────────────────────────────────────
         if message_id:

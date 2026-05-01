@@ -9,6 +9,13 @@ from plugins.BaseTool import BaseTool, ToolResult
 logger = logging.getLogger("tool_email_mark_read")
 
 
+def _allowed_addresses(config) -> list[str]:
+    raw = config.get("ai_email_addresses") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(a).strip().lower() for a in raw if str(a).strip()]
+
+
 class EmailMarkRead(BaseTool):
     name = "email_mark_read"
     description = (
@@ -46,13 +53,14 @@ class EmailMarkRead(BaseTool):
         if not message_id:
             return ToolResult.failed("message_id is required.")
 
-        # Subagent guard: only allow marking messages that involve the AI alias.
+        # Subagent guard: only allow marking messages that involve at least
+        # one address in ai_email_addresses. Empty list = no access.
         if context.is_subagent:
-            ai_email = (context.config.get("ai_email_address") or "").strip().lower()
-            if not ai_email:
+            allowed = _allowed_addresses(context.config)
+            if not allowed:
                 return ToolResult.failed(
-                    "Subagent context but ai_email_address is not set — "
-                    "cannot verify message ownership."
+                    "Subagent context but ai_email_addresses is empty — no "
+                    "mail access. Configure it under Settings → Plugin Config."
                 )
             msg = gmail.get_message(message_id)
             if not msg:
@@ -62,14 +70,14 @@ class EmailMarkRead(BaseTool):
                 msg.get("recipients", ""),
                 msg.get("cc", ""),
             ]).lower()
-            if ai_email not in haystack:
+            if not any(addr in haystack for addr in allowed):
                 logger.warning(
                     f"[EmailMarkRead] Subagent rejected: {message_id} does not "
-                    f"involve {ai_email}."
+                    f"involve any of {allowed}."
                 )
                 return ToolResult.failed(
-                    "Subagent context: this message does not involve the AI "
-                    "alias and cannot be modified."
+                    "Subagent context: this message does not involve any "
+                    "configured AI alias and cannot be modified."
                 )
 
         unread = bool(kwargs.get("unread", False))
