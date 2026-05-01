@@ -195,7 +195,7 @@ Built-in services include:
 The LLM layer is split into two separate config tables:
 
 - `llm_profiles` — connection metadata for each model (endpoint, API key, context size, backend class). Each entry is registered as its own service keyed by the model name, and managed via `/llm`.
-- `agent_profiles` — named agent definitions that reference an LLM by model name (or the literal `"default"` sentinel that follows whatever LLM is currently the default) and add optional scope: a prompt suffix plus tool and database-table whitelist/blacklist filters. Managed via `/agent`.
+- `agent_profiles` — named agent definitions that reference an LLM by model name (or the literal `"default"` sentinel that follows whatever LLM is currently the default) and add optional scope: a prompt suffix plus tool whitelist/blacklist filters. Managed via `/agent`.
 
 A fresh install ships with one agent profile (`default`) that uses the default LLM and has no restrictions, so you only ever touch `/agent` if you want more than one agent.
 
@@ -468,17 +468,17 @@ Notes:
 
 ### Agent Profiles for Safe Delegation
 
-Agent profiles let you split work across specialized agents without giving every agent full access to everything.
+Agent profiles let you split work across specialized agents without giving every agent the same model, prompt, and tool surface.
 
-This matters most when one of those agents is outward-facing. If you build a communication-focused agent that writes updates, emails, summaries, or outward messages, you may not want it to see your full local database, internal research, or every high-power tool in the system. A scoped profile lets you reduce what that agent can read and what it can call, which reduces what it can accidentally leak.
+This matters most when one of those agents is outward-facing. If you build a communication-focused agent that writes updates, emails, summaries, or outward messages, you may not want it to have every high-power tool in the system. A scoped profile lets you reduce what that agent can call. For narrower database or folder behavior, build a purpose-specific tool that applies the exact filter you want.
 
 A practical setup looks like:
 
 - a builder agent with coding and file-editing tools
 - a researcher agent with broader search and database access
-- a communicator agent with a much smaller toolset and a narrower database view
+- a communicator agent with a much smaller toolset
 
-In other words, you can treat Second Brain less like one monolithic assistant and more like a small team of specialists, each with the minimum visibility and tool access needed for its job. Having multiple agents is easy and optional.
+In other words, you can treat Second Brain less like one monolithic assistant and more like a small team of specialists, each with the model, instructions, and tool access needed for its job. Having multiple agents is easy and optional.
 
 Each agent profile carries:
 
@@ -486,10 +486,8 @@ Each agent profile carries:
 - `prompt_suffix` — extra text appended to the system prompt for this agent
 - `whitelist_or_blacklist_tools` — `"whitelist"` or `"blacklist"` for tool filtering
 - `tools_list` — tool names for that filter; `blacklist` plus `[]` allows all tools
-- `whitelist_or_blacklist_tables` — `"whitelist"` or `"blacklist"` for database-table filtering
-- `tables_list` — table names for that filter; `blacklist` plus `[]` allows all tables
 
-Tool dependencies are auto-expanded: if you allow `hybrid_search`, the underlying `lexical_search` and `semantic_search` are also exposed automatically. Table scope is enforced at the SQLite layer through a read-only attached database plus a SQLite authorizer, so a scoped agent's `sql_query` calls cannot reach denied tables.
+Tool dependencies are auto-expanded: if you allow `hybrid_search`, the underlying `lexical_search` and `semantic_search` are also callable automatically.
 
 Switch the active profile with `/agent switch <name>`. The switch carries the conversation history forward but applies the new scope to the next turn. The `default` profile is permanent and cannot be removed.
 
@@ -525,7 +523,7 @@ Available in the REPL and as slash commands in Telegram.
 | `help` | Show all commands |
 | `history [id]` | List or load saved conversations |
 | `llm [list\|add\|edit\|remove\|show\|default]` | Manage LLM connection profiles (model, endpoint, key, context, class) |
-| `agent [list\|switch\|add\|edit\|remove\|show]` | Manage scoped agent profiles (LLM reference + tool/table allow-deny + prompt suffix) |
+| `agent [list\|switch\|add\|edit\|remove\|show]` | Manage scoped agent profiles (LLM reference + tool allow-deny + prompt suffix) |
 | `load <service>` | Load a service |
 | `locations [tools\|tasks\|services]` | Inspect plugin-related file locations |
 | `new` | Start a new conversation |

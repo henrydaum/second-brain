@@ -99,20 +99,16 @@ SETTINGS_DATA = [
      {"type": "text"}),
 
     # --- Agent Profiles ---
-    # Each profile bundles an LLM reference + scope (prompt suffix, tool/table
-    # restrictions). Managed via /agent. The "default" profile is permanent and
+    # Each profile bundles an LLM reference + optional prompt/tool scope.
+    # Managed via /agent. The "default" profile is permanent and
     # follows the default LLM via the "default" sentinel.
     ("Agent Profiles", "agent_profiles",
-     "Named agent profiles. Each references an LLM (by model_name or 'default') and can narrow tool and table access for specialized agents such as builders, researchers, or communicators.",
+     "Named agent profiles. Each references an LLM (by model_name or 'default') and can narrow tool access for specialized agents such as builders, researchers, or communicators.",
      {"default": {
          "llm": "default",
          "prompt_suffix": "",
          "whitelist_or_blacklist_tools": "blacklist",
          "tools_list": [],
-         "whitelist_or_blacklist_tables": "blacklist",
-         "tables_list": [],
-         "whitelist_or_blacklist_folders": "blacklist",
-         "folders_list": [],
      }},
      {"type": "json_dict", "hidden": True}),
 

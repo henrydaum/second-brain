@@ -181,7 +181,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         """Called by /refresh — rebuild every session's agent and release the
         busy flag so the next message routes immediately, even if the previous
         handler is still spinning in a stuck tool. Rebuilding picks up the
-        latest scope, tools, and tables for every chat."""
+        latest prompt and tool scope for every chat."""
         runtime.set_prompt_suffix(base_session, _TELEGRAM_SUFFIX)
         runtime.rescope_all_agents()
         runtime.force_unbusy(base_session)
@@ -498,14 +498,12 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         """Begin interactive /agent add parameter collection."""
         llm_choices = ["default"] + sorted((config.get("llm_profiles", {}) or {}).keys())
         tool_names = sorted(tool_registry.tools.keys())
-        table_names = [r["name"] for r in ctrl.db.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
         _pending_agent_adds[chat_id] = PendingParamForm(
-            subject=profile_name, params=agent_add_params(llm_choices, tool_names, table_names))
+            subject=profile_name, params=agent_add_params(llm_choices, tool_names))
         await _app.bot.send_message(
             chat_id,
             f"<b>New agent profile: {html.escape(profile_name)}</b>\n"
-            f"Pick an LLM and configure scope below.\n"
+            f"Pick an LLM and configure tool scope below.\n"
             f"Send /skip for optional params, /cancel to abort.",
             parse_mode="HTML")
         await _ask_next_agent_param(chat_id)
@@ -526,10 +524,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             "prompt_suffix": collected.get("prompt_suffix") or "",
             "whitelist_or_blacklist_tools": collected.get("whitelist_or_blacklist_tools") or "blacklist",
             "tools_list": collected.get("tools_list") or [],
-            "whitelist_or_blacklist_tables": collected.get("whitelist_or_blacklist_tables") or "blacklist",
-            "tables_list": collected.get("tables_list") or [],
-            "whitelist_or_blacklist_folders": collected.get("whitelist_or_blacklist_folders") or "blacklist",
-            "folders_list": collected.get("folders_list") or [],
         }
 
         result = await _dispatch_frontend_event(FrontendEvent(
@@ -544,9 +538,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     # ── /llm edit + /agent edit single-field forms ──────────────────
 
     _AGENT_FIELDS = ("llm", "prompt_suffix",
-                     "whitelist_or_blacklist_tools", "tools_list",
-                     "whitelist_or_blacklist_tables", "tables_list",
-                     "whitelist_or_blacklist_folders", "folders_list")
+                     "whitelist_or_blacklist_tools", "tools_list")
     _LLM_FIELDS = ("llm_endpoint", "llm_api_key",
                    "llm_context_size", "llm_service_class")
 
@@ -570,9 +562,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         else:
             lines.append(f"  llm: {html.escape(llm_ref)}")
         lines.append(f"  prompt_suffix: {html.escape(_format_value_short(profile.get('prompt_suffix')))}")
-        for field in ("whitelist_or_blacklist_tools", "tools_list",
-                      "whitelist_or_blacklist_tables", "tables_list",
-                      "whitelist_or_blacklist_folders", "folders_list"):
+        for field in ("whitelist_or_blacklist_tools", "tools_list"):
             lines.append(f"  {field}: {html.escape(_format_value_short(profile.get(field)))}")
         return lines
 
@@ -663,10 +653,6 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
              InlineKeyboardButton("prompt_suffix", callback_data=f"agnt:editfield:{name}:prompt_suffix")],
             [InlineKeyboardButton("tool mode", callback_data=f"agnt:editfield:{name}:whitelist_or_blacklist_tools"),
              InlineKeyboardButton("tools_list", callback_data=f"agnt:editfield:{name}:tools_list")],
-            [InlineKeyboardButton("table mode", callback_data=f"agnt:editfield:{name}:whitelist_or_blacklist_tables"),
-             InlineKeyboardButton("tables_list", callback_data=f"agnt:editfield:{name}:tables_list")],
-            [InlineKeyboardButton("folder mode", callback_data=f"agnt:editfield:{name}:whitelist_or_blacklist_folders"),
-             InlineKeyboardButton("folders_list", callback_data=f"agnt:editfield:{name}:folders_list")],
             [InlineKeyboardButton("◀ Back", callback_data=f"agnt:pick:{name}")],
         ]
         await _app.bot.send_message(
@@ -695,12 +681,7 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
             return
         llm_choices = ["default"] + sorted((config.get("llm_profiles", {}) or {}).keys())
         tool_names = sorted(tool_registry.tools.keys())
-        try:
-            table_names = [r["name"] for r in ctrl.db.conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
-        except Exception:
-            table_names = []
-        param = agent_edit_field_param(field, llm_choices, tool_names, table_names)
+        param = agent_edit_field_param(field, llm_choices, tool_names)
         _pending_agent_edits[chat_id] = PendingParamForm(subject=name, params=[param])
         adapter.send_action(
             _session(chat_id),

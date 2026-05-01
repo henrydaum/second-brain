@@ -604,15 +604,14 @@ def _migrate_legacy_llm_config(config: dict) -> bool:
     Old shape (per entry):
         {llm_model_name, llm_endpoint, llm_api_key, llm_context_size,
          llm_service_class, [prompt_suffix, whitelist_or_blacklist_tools,
-         tools_list, whitelist_or_blacklist_tables, tables_list]}
+         tools_list]}
 
     New shape:
         llm_profiles[model_name] = {llm_endpoint, llm_api_key,
                                     llm_context_size, llm_service_class}
         default_llm_profile = "<model_name>"
         agent_profiles[name]  = {llm, prompt_suffix,
-                                 whitelist_or_blacklist_tools, tools_list,
-                                 whitelist_or_blacklist_tables, tables_list}
+                                 whitelist_or_blacklist_tools, tools_list}
         active_agent_profile  = "<name>"
 
     Returns True if any migration ran. Idempotent — entries already in the
@@ -646,8 +645,7 @@ def _migrate_legacy_llm_config(config: dict) -> bool:
 
     new_llms: dict = {}
     new_agents: dict = config.get("agent_profiles", {}) or {}
-    scope_keys = ("prompt_suffix", "whitelist_or_blacklist_tools", "tools_list",
-                  "whitelist_or_blacklist_tables", "tables_list")
+    scope_keys = ("prompt_suffix", "whitelist_or_blacklist_tools", "tools_list")
     old_active = config.get("active_llm_profile", "")
     new_default_llm = ""
     new_active_agent = ""
@@ -671,8 +669,6 @@ def _migrate_legacy_llm_config(config: dict) -> bool:
                 "prompt_suffix": pconf.get("prompt_suffix", "") or "",
                 "whitelist_or_blacklist_tools": pconf.get("whitelist_or_blacklist_tools", "blacklist"),
                 "tools_list": pconf.get("tools_list") or [],
-                "whitelist_or_blacklist_tables": pconf.get("whitelist_or_blacklist_tables", "blacklist"),
-                "tables_list": pconf.get("tables_list") or [],
             }
             if name == old_active:
                 new_active_agent = name
@@ -689,10 +685,6 @@ def _migrate_legacy_llm_config(config: dict) -> bool:
             "prompt_suffix": "",
             "whitelist_or_blacklist_tools": "blacklist",
             "tools_list": [],
-            "whitelist_or_blacklist_tables": "blacklist",
-            "tables_list": [],
-            "whitelist_or_blacklist_folders": "blacklist",
-            "folders_list": [],
         }
 
     config["llm_profiles"] = new_llms

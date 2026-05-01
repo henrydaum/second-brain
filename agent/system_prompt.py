@@ -328,8 +328,6 @@ def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
     limits = []
     if scope.has_tool_filter:
         limits.append("tool access is limited to the tools exposed in this prompt")
-    if scope.has_table_filter:
-        limits.append("database access is limited to the scoped tables/views available through your tools")
     if not limits:
         return ""
     return (

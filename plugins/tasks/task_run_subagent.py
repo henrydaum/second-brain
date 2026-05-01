@@ -9,7 +9,7 @@ from plugins.BaseTask import BaseTask, TaskResult
 from agent.agent import Agent
 from agent.system_prompt import build_system_prompt
 from agent.tool_registry import ToolRegistry
-from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_db, scoped_registry
+from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_registry
 from frontend.token_stripper import strip_model_tokens
 from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED
@@ -132,7 +132,7 @@ class RunSubagent(BaseTask):
         except ValueError as e:
             return TaskResult.failed(f"Invalid scope for agent '{target_agent}': {e}")
 
-        sub_db = scoped_db(context.db, scope) if scope.has_table_filter else context.db
+        sub_db = context.db
 
         title = (payload.get("title") or "").strip()
         timekeeper_meta = payload.get("_timekeeper") or {}
@@ -154,7 +154,6 @@ class RunSubagent(BaseTask):
         sub_registry = self._build_subagent_registry(
             context, run_id, job_name, push_records, scope, sub_db, mode,
         )
-        # Conversations go through the base db — the scope wrapper is read-only.
         conversation_id = context.db.create_conversation(conversation_title[:200])
 
         def _on_message(msg: dict):
@@ -213,23 +212,18 @@ class RunSubagent(BaseTask):
     def _build_subagent_registry(self, context, run_id: str, job_name: str,
                                  push_records: list[SubagentPushRecord],
                                  scope, sub_db, mode: str) -> ToolRegistry:
-        # Build the registry against the scoped db so tools see the lens.
-        registry = ToolRegistry(sub_db, context.config, context.services)
-        registry.orchestrator = context.orchestrator
-        registry.is_subagent = True
-
-        allow = scope.tools_allow
-        deny = scope.tools_deny or set()
-
+        # Build from background-safe tools, then apply the profile's tool scope.
+        base_registry = ToolRegistry(sub_db, context.config, context.services)
+        base_registry.orchestrator = context.orchestrator
+        base_registry.is_subagent = True
         for tool in context.tool_registry.tools.values():
-            name = tool.name
             if not getattr(tool, "background_safe", True):
                 continue
-            if allow is not None and name not in allow:
-                continue
-            if name in deny:
-                continue
-            registry.register(tool)
+            base_registry.tools[tool.name] = tool
+
+        registry = scoped_registry(base_registry, scope, db=sub_db)
+        registry.orchestrator = context.orchestrator
+        registry.is_subagent = True
 
         if mode != "off":
             def _record_push(record: SubagentPushRecord):

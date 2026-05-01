@@ -130,23 +130,15 @@ def _describe_agent_profile(name: str, profile: dict, active: bool) -> str:
     llm_ref = profile.get("llm") or "default"
     scope_parts = []
     tools_mode = profile.get("whitelist_or_blacklist_tools", "blacklist")
-    tables_mode = profile.get("whitelist_or_blacklist_tables", "blacklist")
-    folders_mode = profile.get("whitelist_or_blacklist_folders", "blacklist")
     scope_parts.append(f"tools{ '+' if tools_mode == 'whitelist' else '-' }{len(profile.get('tools_list') or [])}")
-    scope_parts.append(f"tables{ '+' if tables_mode == 'whitelist' else '-' }{len(profile.get('tables_list') or [])}")
-    scope_parts.append(f"folders{ '+' if folders_mode == 'whitelist' else '-' }{len(profile.get('folders_list') or [])}")
     if profile.get("prompt_suffix"):
         scope_parts.append("prompt+")
     scope_str = ("  [" + ",".join(scope_parts) + "]") if scope_parts else ""
     return (f"  {marker} {name:<16} {status:<8} llm={llm_ref}{scope_str}")
 
 
-_AGENT_MODE_FIELDS = (
-    "whitelist_or_blacklist_tools",
-    "whitelist_or_blacklist_tables",
-    "whitelist_or_blacklist_folders",
-)
-_AGENT_LIST_FIELDS = ("tools_list", "tables_list", "folders_list")
+_AGENT_MODE_FIELDS = ("whitelist_or_blacklist_tools",)
+_AGENT_LIST_FIELDS = ("tools_list",)
 _AGENT_SCOPE_FIELDS = _AGENT_MODE_FIELDS + _AGENT_LIST_FIELDS
 _AGENT_PROFILE_FIELDS = ("llm", "prompt_suffix") + _AGENT_SCOPE_FIELDS
 _LLM_PROFILE_FIELDS = ("llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class")
@@ -154,13 +146,13 @@ _LLM_PROFILE_FIELDS = ("llm_endpoint", "llm_api_key", "llm_context_size", "llm_s
 
 def _normalize_agent_profile(profile: dict) -> dict:
     """Coerce profile fields into the canonical shape."""
-    profile = dict(profile)
-    for key in _AGENT_MODE_FIELDS:
-        profile[key] = profile.get(key) or "blacklist"
-    for key in _AGENT_LIST_FIELDS:
-        val = profile.get(key, [])
-        profile[key] = [] if val in (None, "", {}) else val
-    return profile
+    val = profile.get("tools_list", [])
+    return {
+        "llm": profile.get("llm") or "default",
+        "prompt_suffix": str(profile.get("prompt_suffix") or ""),
+        "whitelist_or_blacklist_tools": profile.get("whitelist_or_blacklist_tools") or "blacklist",
+        "tools_list": [] if val in (None, "", {}) else val,
+    }
 
 
 def active_agent_name(config: dict) -> str:
@@ -193,8 +185,8 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                              /refresh to recover from a stuck tool call.
         rescope_agents:      Optional callable() invoked after the active agent
                              profile changes, so existing session agents pick up
-                             the new scope (tool filter, table filter, prompt
-                             suffix) on their next message.
+                             the new scope (tool filter, prompt suffix) on their
+                             next message.
     """
     _set_conversation_id = set_conversation_id
     _refresh_agent = refresh_agent
@@ -709,19 +701,13 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             if not name:
                 return ("Usage: /agent add <profile_name> {json}\n"
                         "Keys: llm (model_name or 'default'), prompt_suffix, "
-                        "whitelist_or_blacklist_tools, tools_list, "
-                        "whitelist_or_blacklist_tables, tables_list, "
-                        "whitelist_or_blacklist_folders, folders_list.")
+                        "whitelist_or_blacklist_tools, tools_list.")
             if not json_str:
                 return ("Usage: /agent add <profile_name> {json}\n"
                         "Example: /agent add researcher "
                         '{\"llm\": \"default\", \"prompt_suffix\": \"\", '
                         '\"whitelist_or_blacklist_tools\": \"whitelist\", '
-                        '\"tools_list\": [\"sql_query\", \"read_file\"], '
-                        '\"whitelist_or_blacklist_tables\": \"blacklist\", '
-                        '\"tables_list\": [], '
-                        '\"whitelist_or_blacklist_folders\": \"blacklist\", '
-                        '\"folders_list\": []}')
+                        '\"tools_list\": [\"sql_query\", \"read_file\"]}')
             try:
                 profile = _json.loads(json_str)
             except _json.JSONDecodeError as e:
@@ -773,7 +759,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             if name not in agent_profiles:
                 return (f"Unknown agent profile: '{name}'. "
                         f"Run /agent list to see all profiles.")
-            return f"{name}:\n{_json.dumps(agent_profiles[name], indent=2)}"
+            return f"{name}:\n{_json.dumps(_normalize_agent_profile(agent_profiles[name]), indent=2)}"
 
         if sub == "edit":
             edit_parts = rest.split(None, 2)
@@ -813,6 +799,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
 
             old_value = agent_profiles[name].get(field)
             agent_profiles[name][field] = value
+            agent_profiles[name] = _normalize_agent_profile(agent_profiles[name])
             try:
                 load_scope(name, ctrl.config)
             except ValueError as e:

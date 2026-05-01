@@ -62,8 +62,7 @@ Payload:
 
 TASKS_CHANGED = "tasks_changed"
 """A task was registered or unregistered. Task registration creates a new
-output table via ensure_output_table, so scoped agents need to rebuild
-their ScopedDatabase to see the new table in views and system prompt.
+output table via ensure_output_table, so agents rebuild their prompt context.
 Payload:
     name:   str — task name
     action: str — 'registered' or 'unregistered'"""

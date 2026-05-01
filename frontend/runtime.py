@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from agent.agent import Agent
 from agent.history_utils import heal_orphan_tool_calls
 from agent.system_prompt import build_system_prompt
-from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_db, scoped_registry
+from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_registry
 from events.event_bus import bus
 from events.event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED, CHAT_MESSAGE_PUSHED, TOOLS_CHANGED, TASKS_CHANGED
 from frontend.commands import CommandRegistry, active_agent_line, register_core_commands
@@ -119,7 +119,7 @@ class FrontendRuntime:
         except ValueError as e:
             logger.warning(f"Invalid scope for profile '{profile_name}': {e}")
             return None
-        if not (scope.has_tool_filter or scope.has_table_filter or scope.prompt_suffix):
+        if not (scope.has_tool_filter or scope.prompt_suffix):
             return None
         return scope
 
@@ -130,9 +130,9 @@ class FrontendRuntime:
             return None
         caps = self.adapters[session.platform].capabilities
         scope = self._active_scope()
-        # Scope the DB and tool registry up-front; both fall back to the
-        # unrestricted originals when the active profile has no filters.
-        agent_db = scoped_db(self.ctrl.db, scope) if scope else self.ctrl.db
+        # Scope the tool registry up-front; database filtering belongs in
+        # purpose-built tools rather than shared agent profiles.
+        agent_db = self.ctrl.db
         agent_registry = scoped_registry(self.tool_registry, scope, db=agent_db) if scope else self.tool_registry
 
         def _system_prompt():
@@ -168,12 +168,12 @@ class FrontendRuntime:
         """Rebuild the agent for a session while preserving its chat history.
 
         Used after ``/agent switch`` so the same conversation carries over to
-        the new profile but now runs against the new scope's db and toolset.
+        the new profile but now runs against the new prompt/tool scope.
 
         If the previous agent is still running a turn (e.g. inside a
         build_plugin tool call), patch its tool_registry and system_prompt
         in place so the in-flight turn's mid-turn schema refresh sees the
-        new tools/tables instead of the stale snapshot.
+        new tools instead of the stale snapshot.
         """
         state = self.get_state(session)
         old_agent = state.agent

@@ -9,7 +9,6 @@ Returns a list of SearchResult dicts, one per matching chunk.
 """
 
 import logging
-import os
 import re
 import time
 
@@ -92,9 +91,9 @@ class LexicalSearch(BaseTool):
             params.extend(sources)
 
         if folder:
-            normalized_folder = os.path.normpath(folder)
-            sql_parts.append("AND sc.path LIKE ? || '%'")
-            params.append(normalized_folder)
+            normalized_folder = folder.replace("\\", "/").rstrip("/")
+            sql_parts.append("AND (replace(sc.path, char(92), '/') = ? OR replace(sc.path, char(92), '/') LIKE ?)")
+            params.extend([normalized_folder, normalized_folder + "/%"])
 
         sql_parts.append("ORDER BY si.rank")
         sql_parts.append("LIMIT ?")
