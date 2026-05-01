@@ -924,6 +924,22 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                 pass
         return actions
 
+    def _cmd_update(_arg):
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["git", "pull"],
+                capture_output=True, text=True, timeout=60,
+                cwd=root_dir,
+            )
+        except Exception as e:
+            return f"Update failed: {e}"
+        out = (result.stdout or "").strip()
+        err = (result.stderr or "").strip()
+        if result.returncode == 0:
+            return out or "Already up to date."
+        return f"git pull failed (exit {result.returncode}):\n{err or out}"
+
     # Lambdas (not static lists) so completions reflect hot-reloaded plugins.
     _all_task_names = lambda: ctrl.list_task_names()
     _path_task_names = lambda: ctrl.list_task_names(trigger="path")
@@ -1038,6 +1054,9 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      category="Config & System"),
         CommandEntry("reload", "Hot-reload tasks and tools",
                      handler=lambda _: ctrl.reload_plugins(root_dir),
+                     category="Config & System"),
+        CommandEntry("update", "Pull latest changes from the Second Brain repo",
+                     handler=_cmd_update,
                      category="Config & System"),
     ]:
         registry.register(entry)
