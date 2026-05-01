@@ -18,6 +18,44 @@ _INTERRUPTED_CONTENT = json.dumps(
 )
 
 
+def messages_to_history(messages: list[dict]) -> list[dict]:
+    """Convert persisted conversation_messages rows into Agent.history dicts.
+
+    Reverses the role-specific encoding done by Agent's _on_message persistence
+    path (assistant turns with tool_calls are JSON-packed into the content column).
+    Heals orphan tool_calls so the result is safe to feed back to a provider.
+    """
+    history: list[dict] = []
+    for msg in messages:
+        role = msg.get("role")
+        if role == "system":
+            continue
+        content = msg.get("content") or ""
+        if role == "assistant":
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict) and "tool_calls" in parsed:
+                    history.append({
+                        "role": "assistant",
+                        "content": parsed.get("content"),
+                        "tool_calls": parsed["tool_calls"],
+                    })
+                    continue
+            except (json.JSONDecodeError, TypeError):
+                pass
+            history.append({"role": "assistant", "content": content})
+        elif role == "tool":
+            history.append({
+                "role": "tool",
+                "tool_call_id": msg.get("tool_call_id"),
+                "content": content,
+            })
+        else:
+            history.append({"role": role, "content": content})
+    heal_orphan_tool_calls(history)
+    return history
+
+
 def heal_orphan_tool_calls(history: list[dict]) -> tuple[int, int]:
     """Repair a message history in place.
 

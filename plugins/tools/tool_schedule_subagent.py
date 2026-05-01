@@ -102,8 +102,8 @@ class ScheduleSubagent(BaseTool):
                 "enum": list(SUBAGENT_NOTIFICATION_MODES),
                 "description": (
                     "How chatty the subagent should be when the job fires. "
-                    "'all' (default): the agent pushes regularly via push_subagent_message, and if it forgets, the final answer is sent automatically as a single push. "
-                    "'important': the agent has push_subagent_message but is told to use it only when something noteworthy comes up; silence is allowed. "
+                    "'all' (default): the agent pushes regularly via the message tool, and if it forgets, the final answer is sent automatically as a single push. "
+                    "'important': the agent has the message tool but is told to use it only when something noteworthy comes up; silence is allowed. "
                     "'off': the agent runs silently with no push tool and produces no user-visible chat output (final answer is still stored)."
                 ),
                 "default": SUBAGENT_DEFAULT_NOTIFICATION_MODE,

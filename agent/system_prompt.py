@@ -345,26 +345,29 @@ def _subagent_block(mode: str) -> str:
         "Work as if no one will answer follow-up questions during this run.\n"
         "Do not rely on permission dialogs or back-and-forth clarification.\n"
         "Do not ask questions.\n"
+        "Your conversation persists across runs: prior turns and any messages "
+        "the user left for you via /message appear in your history as user "
+        "turns. Read them and respond to anything they asked.\n"
     )
     if mode == "off":
         body = (
             "Notifications: OFF. You are running silently and have no way to message the user during this run. "
-            "The push_subagent_message tool is not available. "
+            "The message tool is not available. "
             "Do your work and finish with a concise final answer that will be stored for later review.\n"
         )
     elif mode == "important":
         body = (
-            "Notifications: IMPORTANT-ONLY. push_subagent_message is available but should be used only when something noteworthy comes up — "
+            "Notifications: IMPORTANT-ONLY. The message tool is available but should be used only when something noteworthy comes up — "
             "a real finding, an alert, a needed nudge, or information the user actually needs to see now. "
             "Routine completion is not important; stay silent in that case. "
             "Always finish with a concise final answer that will be stored for later review.\n"
         )
     else:  # "all"
         body = (
-            "Notifications: ALL. push_subagent_message is the main way to send a user-visible message during the run. "
+            "Notifications: ALL. The message tool is the main way to send a user-visible message during the run. "
             "Use it for reminders, alerts, briefs, findings, check-ins, or anything the user should actually see in chat. "
-            "If you do not call push_subagent_message, the system will fall back to sending your final answer as a single push so the user is not left in the dark. "
-            "update_memory stores durable lessons for future sessions but does not notify anyone — never use it in place of push_subagent_message when the user is expecting to hear from you. "
+            "If you do not call message, the system will fall back to sending your final answer as a single push so the user is not left in the dark. "
+            "update_memory stores durable lessons for future sessions but does not notify anyone — never use it in place of message when the user is expecting to hear from you. "
             "Finish with a concise final answer that can be stored and reviewed later.\n"
         )
     return header + body

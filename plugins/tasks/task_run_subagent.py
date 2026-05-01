@@ -7,6 +7,7 @@ from plugins.services.helpers.parser_registry import get_modality
 from plugins.services.llmService import LLMRouter
 from plugins.BaseTask import BaseTask, TaskResult
 from agent.agent import Agent
+from agent.history_utils import messages_to_history
 from agent.system_prompt import build_system_prompt
 from agent.tool_registry import ToolRegistry
 from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_registry
@@ -14,7 +15,7 @@ from frontend.token_stripper import strip_model_tokens
 from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED
 from agent.subagent_runtime import (
-    PushSubagentMessageTool,
+    MessageTool,
     SubagentPushRecord,
     SUBAGENT_RUN_CHANNEL,
     SUBAGENT_NOTIFICATION_MODES,
@@ -154,8 +155,20 @@ class RunSubagent(BaseTask):
         sub_registry = self._build_subagent_registry(
             context, run_id, job_name, push_records, scope, sub_db, mode,
         )
-        conversation_id = context.db.create_conversation(conversation_title[:200])
 
+        # Scheduled jobs (anything coming via timekeeper) thread their runs
+        # into a single persistent conversation so /message replies and prior
+        # turns naturally appear in context. One-shot ask_subagent calls keep
+        # the original behavior — fresh conversation per run.
+        is_scheduled = bool(timekeeper_meta)
+        conversation_id, prior_history = self._resolve_conversation(
+            context, is_scheduled, job_name, conversation_title,
+        )
+
+        # Scheduled runs persist the conversation in a single bulk rewrite at
+        # the end (see replace_conversation_messages below), so any in-memory
+        # compaction the agent does survives to the next wake. One-shot runs
+        # use the per-message stream — they don't outlive the run.
         def _on_message(msg: dict):
             role = msg.get("role", "")
             if role not in {"user", "assistant", "tool"}:
@@ -185,8 +198,19 @@ class RunSubagent(BaseTask):
                 profile_name=(scope.profile_name if scope else (context.config.get("active_agent_profile") or "default")),
                 subagent_mode=mode,
             ),
-            on_message=_on_message,
+            on_message=(None if is_scheduled else _on_message),
         )
+        if prior_history:
+            agent.history = prior_history
+
+        # Drain any /message replies that piled up since the last wake. They
+        # were already saved as user turns and are part of prior_history; this
+        # just flips them from pending → consumed for diagnostics.
+        if is_scheduled:
+            try:
+                context.db.mark_inbox_consumed(conversation_id)
+            except Exception as e:
+                logger.warning(f"Failed to mark inbox consumed for {job_name}: {e}")
 
         try:
             final_answer = agent.chat(compiled_prompt, image_paths=image_paths)
@@ -198,6 +222,15 @@ class RunSubagent(BaseTask):
         if clean_answer.startswith("Error: no active LLM profile loaded"):
             return TaskResult.failed(clean_answer)
 
+        # Persist the agent's final in-memory history. If chat() compacted
+        # mid-run, this is what survives — the next wake reloads from here
+        # instead of replaying the full uncompacted log.
+        if is_scheduled:
+            try:
+                context.db.replace_conversation_messages(conversation_id, agent.history)
+            except Exception as e:
+                logger.warning(f"Failed to persist compacted history for {job_name}: {e}")
+
         if mode == "all" and not push_records and clean_answer.strip():
             self._emit_fallback_push(
                 run_id, job_name, conversation_title, clean_answer, push_records,
@@ -208,6 +241,49 @@ class RunSubagent(BaseTask):
             clean_answer, input_rows, push_records, target_agent,
         )
         return TaskResult(success=True)
+
+    def _resolve_conversation(self, context, is_scheduled: bool, job_name: str,
+                              conversation_title: str) -> tuple[int, list[dict]]:
+        """Return (conversation_id, prior_history) for this run.
+
+        Scheduled jobs reuse a stable conversation_id stored on the timekeeper
+        job's payload so each wake-up sees prior turns and any /message replies
+        Henry sent in between. The id is allocated lazily on first run.
+        Non-scheduled runs get a fresh conversation, matching prior behavior.
+        """
+        if not is_scheduled:
+            return context.db.create_conversation(conversation_title[:200]), []
+
+        timekeeper = context.services.get("timekeeper")
+        existing = None
+        if timekeeper is not None and getattr(timekeeper, "loaded", False):
+            job = timekeeper.get_job(job_name)
+            if job is not None:
+                existing = (job.get("payload") or {}).get("conversation_id")
+
+        if existing is not None:
+            try:
+                conv_id = int(existing)
+            except (TypeError, ValueError):
+                conv_id = None
+            if conv_id is not None and context.db.get_conversation(conv_id) is not None:
+                rows = context.db.get_conversation_messages(conv_id)
+                return conv_id, messages_to_history(rows)
+            # Stale id (conversation was deleted) — fall through and re-allocate.
+
+        conv_id = context.db.create_conversation(conversation_title[:200])
+        if timekeeper is not None and getattr(timekeeper, "loaded", False):
+            try:
+                job = timekeeper.get_job(job_name)
+                if job is not None:
+                    new_payload = dict(job.get("payload") or {})
+                    new_payload["conversation_id"] = conv_id
+                    timekeeper.update_job(job_name, {"payload": new_payload})
+            except Exception as e:
+                logger.warning(
+                    f"Failed to persist conversation_id for job '{job_name}': {e}"
+                )
+        return conv_id, []
 
     def _build_subagent_registry(self, context, run_id: str, job_name: str,
                                  push_records: list[SubagentPushRecord],
@@ -229,9 +305,9 @@ class RunSubagent(BaseTask):
             def _record_push(record: SubagentPushRecord):
                 push_records.append(record)
 
-            # push_subagent_message is the user-visible channel; only register
-            # it when the job's notification mode allows pushing.
-            registry.register(PushSubagentMessageTool(run_id, job_name, _record_push))
+            # `message` is the user-visible channel; only register it when the
+            # job's notification mode allows pushing.
+            registry.register(MessageTool(run_id, job_name, _record_push))
         return registry
 
     def _emit_fallback_push(self, run_id: str, job_name: str, title: str,

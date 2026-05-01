@@ -168,9 +168,15 @@ class Database:
 				content         TEXT,
 				tool_call_id    TEXT,
 				tool_name       TEXT,
-				timestamp       REAL
+				timestamp       REAL,
+				consumed_at     REAL
 			)
 		""")
+		# Migration: add consumed_at for /message inbox tracking on existing dbs.
+		try:
+			self.conn.execute("ALTER TABLE conversation_messages ADD COLUMN consumed_at REAL")
+		except sqlite3.OperationalError:
+			pass  # column already exists
 		self.conn.execute("""
 			CREATE INDEX IF NOT EXISTS idx_conv_msg_conv
 			ON conversation_messages(conversation_id)
@@ -859,6 +865,91 @@ class Database:
 				"SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY timestamp",
 				(conversation_id,))
 			return [dict(row) for row in cur.fetchall()]
+
+	def save_inbox_message(self, conversation_id, content) -> int:
+		"""Append a user turn from /message — pending until the subagent's next wake."""
+		now = time.time()
+		with self.lock:
+			cur = self.conn.execute("""
+				INSERT INTO conversation_messages
+				(conversation_id, role, content, timestamp, consumed_at)
+				VALUES (?, 'user', ?, ?, NULL)
+			""", (conversation_id, content, now))
+			self.conn.execute(
+				"UPDATE conversations SET updated_at = ? WHERE id = ?",
+				(now, conversation_id))
+			self.conn.commit()
+			return cur.lastrowid
+
+	def mark_inbox_consumed(self, conversation_id) -> int:
+		"""Mark all unconsumed user turns on a conversation as delivered. Returns rows updated."""
+		now = time.time()
+		with self.lock:
+			cur = self.conn.execute("""
+				UPDATE conversation_messages
+				SET consumed_at = ?
+				WHERE conversation_id = ? AND role = 'user' AND consumed_at IS NULL
+			""", (now, conversation_id))
+			self.conn.commit()
+			return cur.rowcount
+
+	def replace_conversation_messages(self, conversation_id, history: list[dict]) -> None:
+		"""Atomically replace a conversation's persisted messages with `history`.
+
+		Used after a scheduled subagent run finishes, so any in-memory compaction
+		the agent did (history rewrite when context filled up) is preserved for
+		the next wake — otherwise we'd reload the full uncompacted log and
+		re-compact every run.
+
+		`history` is in Agent.history shape: list of {role, content, ...} dicts.
+		Assistant turns with tool_calls get JSON-packed into the content column,
+		matching the encoding used by task_run_subagent's on_message callback.
+		"""
+		import json as _json
+		base = time.time()
+		rows = []
+		for i, msg in enumerate(history):
+			role = msg.get("role")
+			if role not in {"user", "assistant", "tool"}:
+				continue
+			content = msg.get("content") or ""
+			if role == "assistant" and msg.get("tool_calls"):
+				content = _json.dumps({
+					"content": msg.get("content"),
+					"tool_calls": msg["tool_calls"],
+				})
+			# Stagger timestamps so ORDER BY timestamp preserves insertion order.
+			ts = base + i * 0.001
+			# Mark user turns as consumed (everything in the saved history has
+			# been seen by the agent that just ran).
+			consumed = ts if role == "user" else None
+			rows.append((
+				conversation_id, role, content,
+				msg.get("tool_call_id"), msg.get("name"),
+				ts, consumed,
+			))
+		with self.lock:
+			self.conn.execute(
+				"DELETE FROM conversation_messages WHERE conversation_id = ?",
+				(conversation_id,))
+			if rows:
+				self.conn.executemany("""
+					INSERT INTO conversation_messages
+					(conversation_id, role, content, tool_call_id, tool_name, timestamp, consumed_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?)
+				""", rows)
+			self.conn.execute(
+				"UPDATE conversations SET updated_at = ? WHERE id = ?",
+				(time.time(), conversation_id))
+			self.conn.commit()
+
+	def count_pending_inbox(self, conversation_id) -> int:
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT COUNT(*) AS cnt FROM conversation_messages "
+				"WHERE conversation_id = ? AND role = 'user' AND consumed_at IS NULL",
+				(conversation_id,))
+			return cur.fetchone()["cnt"]
 
 	def delete_conversation(self, conversation_id):
 		with self.lock:

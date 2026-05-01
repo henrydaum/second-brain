@@ -19,12 +19,14 @@ class SubagentPushRecord:
     sent_at: float
 
 
-class PushSubagentMessageTool(BaseTool):
-    name = "push_subagent_message"
+class MessageTool(BaseTool):
+    name = "message"
     description = (
         "Send a user-visible message to chat from a scheduled subagent run. "
         "Use this for reminders, briefs, alerts, findings, or any update the "
-        "user should actually see during an unattended job."
+        "user should actually see during an unattended job. The user can "
+        "reply between runs via /message <job> <text>; their replies appear "
+        "in your conversation history on the next wake."
     )
     parameters = {
         "type": "object",
