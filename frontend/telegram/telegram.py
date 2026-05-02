@@ -155,7 +155,8 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
     _pending_llm_edits: dict[int, PendingParamForm] = {}
     _pending_agent_edits: dict[int, PendingParamForm] = {}
     _pending_triggers: dict[int, PendingParamForm] = {}
-    _pending_messages: dict[int, str] = {}
+    # chat_id -> {"job": <job_name>, "notify": "all"|"important"|"off"|None}
+    _pending_messages: dict[int, dict] = {}
     _loop: asyncio.AbstractEventLoop | None = None
     _app: Application | None = None
     transport = TelegramTransport(adapter, lambda: _app, lambda: _loop, _md_to_tg_html)
@@ -381,10 +382,31 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         await _ask_next_param(chat_id)
 
     async def _start_message_capture(chat_id: int, job_name: str):
-        _pending_messages[chat_id] = job_name.strip()
+        """Step 1 of /message form: pick the notification mode for the next run."""
+        job = job_name.strip()
+        buttons = [
+            [InlineKeyboardButton("Default (use job's setting)",
+                                  callback_data=f"msg:notify:{job}:default")],
+            [InlineKeyboardButton("Important — guarantee a reply",
+                                  callback_data=f"msg:notify:{job}:important")],
+            [InlineKeyboardButton("All — push every update",
+                                  callback_data=f"msg:notify:{job}:all")],
+            [InlineKeyboardButton("Off — silent run",
+                                  callback_data=f"msg:notify:{job}:off")],
+        ]
         await _app.bot.send_message(
             chat_id,
-            f"Send the message for '{job_name.strip()}'. Send /cancel to abort.")
+            f"Notification mode for '{job}' (this run only)?",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    async def _begin_message_text_capture(chat_id: int, job_name: str, notify: str | None):
+        """Step 2: prompt for the actual message text after notify mode is chosen."""
+        _pending_messages[chat_id] = {"job": job_name.strip(), "notify": notify}
+        suffix = f" (notify: {notify})" if notify else ""
+        await _app.bot.send_message(
+            chat_id,
+            f"Send the message for '{job_name.strip()}'{suffix}. Send /cancel to abort.")
 
     async def _show_configure_menu(chat_id: int):
         """Show inline keyboard with all config settings."""
@@ -1354,6 +1376,11 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         entry = registry._commands.get(cmd_name)
         if entry and not arg and entry.arg_completions:
             completions = entry.arg_completions()
+            # /message completions also include --notify=* flags for REPL tab-
+            # completion; those are handled by a dedicated picker, not the
+            # job-list menu.
+            if cmd_name == "message":
+                completions = [c for c in completions if not c.startswith("--")]
             if completions:
                 buttons = [[InlineKeyboardButton(c, callback_data=f"cmd:{cmd_name}:{c}")]
                            for c in completions[:20]]
@@ -1384,12 +1411,15 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         logger.info(f'<- "{preview}"')
 
         if chat_id in _pending_messages:
-            job_name = _pending_messages.pop(chat_id)
+            state = _pending_messages.pop(chat_id)
+            job_name = state.get("job", "")
+            notify = state.get("notify")
+            arg = f"{job_name} --notify={notify} {text}" if notify else f"{job_name} {text}"
             result = await _dispatch_frontend_event(FrontendEvent(
                 type="slash_command",
                 session=_session(chat_id),
                 command_name="message",
-                command_arg=f"{job_name} {text}",
+                command_arg=arg,
             ))
             if result.text:
                 await transport.send_long_message(chat_id, result.text)
@@ -1795,6 +1825,18 @@ def run_telegram_bot(ctrl, shutdown_fn, shutdown_event: threading.Event,
         data = update.callback_query.data or ""
 
         try:
+            # ── /message notify-mode picker (msg:notify:<job>:<mode>) ──
+            if data.startswith("msg:notify:"):
+                parts = data.split(":", 3)
+                if len(parts) == 4:
+                    _, _, job, mode = parts
+                    await update.callback_query.answer()
+                    await update.callback_query.edit_message_reply_markup(reply_markup=None)
+                    chat_id = update.callback_query.message.chat_id
+                    notify = None if mode == "default" else mode
+                    await _begin_message_text_capture(chat_id, job, notify)
+                return
+
             # ── Command menu callbacks (cmd:<name>:<arg>) ──
             if data.startswith("cmd:"):
                 parts = data.split(":", 2)
