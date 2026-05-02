@@ -143,26 +143,69 @@ class RunSubagent(BaseTask):
         )
         conversation_title = title or job_name or prompt[:80].replace("\n", " ").strip() or "Scheduled subagent run"
 
-        mode = (payload.get("notifications") or SUBAGENT_DEFAULT_NOTIFICATION_MODE)
-        mode = str(mode).strip().lower()
-        if mode not in SUBAGENT_NOTIFICATION_MODES:
-            mode = SUBAGENT_DEFAULT_NOTIFICATION_MODE
+        is_scheduled = bool(timekeeper_meta)
+
+        # One-shot override from /message --notify=<mode> takes precedence over
+        # the job's stored notifications mode for this run only. We clear it
+        # before the agent runs so a crash mid-run doesn't leave it sticky.
+        override_mode_raw = payload.get("next_notifications")
+        override_mode = None
+        if override_mode_raw is not None:
+            candidate = str(override_mode_raw).strip().lower()
+            if candidate in SUBAGENT_NOTIFICATION_MODES:
+                override_mode = candidate
+
+        if override_mode is not None:
+            mode = override_mode
+        else:
+            mode = (payload.get("notifications") or SUBAGENT_DEFAULT_NOTIFICATION_MODE)
+            mode = str(mode).strip().lower()
+            if mode not in SUBAGENT_NOTIFICATION_MODES:
+                mode = SUBAGENT_DEFAULT_NOTIFICATION_MODE
+
+        if is_scheduled and override_mode_raw is not None:
+            timekeeper = context.services.get("timekeeper")
+            if timekeeper is not None and getattr(timekeeper, "loaded", False):
+                try:
+                    job = timekeeper.get_job(job_name)
+                    if job is not None:
+                        cleared = dict(job.get("payload") or {})
+                        cleared.pop("next_notifications", None)
+                        timekeeper.update_job(job_name, {"payload": cleared})
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to clear next_notifications for job '{job_name}': {e}"
+                    )
 
         input_paths = self._normalize_input_paths(payload.get("input_paths"))
         input_rows, compiled_prompt, image_paths = self._compile_prompt(prompt, input_paths, context)
         push_records: list[SubagentPushRecord] = []
 
-        sub_registry = self._build_subagent_registry(
-            context, run_id, job_name, push_records, scope, sub_db, mode,
-        )
-
         # Scheduled jobs (anything coming via timekeeper) thread their runs
         # into a single persistent conversation so /message replies and prior
         # turns naturally appear in context. One-shot ask_subagent calls keep
         # the original behavior — fresh conversation per run.
-        is_scheduled = bool(timekeeper_meta)
         conversation_id, prior_history = self._resolve_conversation(
             context, is_scheduled, job_name, conversation_title,
+        )
+
+        # Did the user leave a /message reply since the last wake? If so, we
+        # must guarantee a response back to chat regardless of mode.
+        pending_user_messages = 0
+        if is_scheduled:
+            try:
+                pending_user_messages = context.db.count_pending_inbox(conversation_id)
+            except Exception as e:
+                logger.warning(f"Failed to count pending inbox for {job_name}: {e}")
+        has_pending = pending_user_messages > 0
+
+        # If the user explicitly asked something but the job is set to "off",
+        # upgrade to "important" so the message tool is actually available.
+        if has_pending and mode == "off":
+            mode = "important"
+
+        sub_registry = self._build_subagent_registry(
+            context, run_id, job_name, push_records, scope, sub_db, mode,
         )
 
         # Scheduled runs persist the conversation in a single bulk rewrite at
@@ -197,26 +240,28 @@ class RunSubagent(BaseTask):
                 scope=scope,
                 profile_name=(scope.profile_name if scope else (context.config.get("active_agent_profile") or "default")),
                 subagent_mode=mode,
+                subagent_has_pending_messages=has_pending,
             ),
             on_message=(None if is_scheduled else _on_message),
         )
         if prior_history:
             agent.history = prior_history
 
-        # Drain any /message replies that piled up since the last wake. They
-        # were already saved as user turns and are part of prior_history; this
-        # just flips them from pending → consumed for diagnostics.
+        try:
+            final_answer = agent.chat(compiled_prompt, image_paths=image_paths)
+        except Exception as e:
+            logger.error(f"Subagent run {run_id} failed: {e}", exc_info=True)
+            # Leave /message replies pending so the next wake retries them
+            # instead of silently dropping the user's question on a crash.
+            return TaskResult.failed(str(e))
+
+        # Drain /message replies only after a successful run — the agent has
+        # actually seen them in prior_history and produced an answer.
         if is_scheduled:
             try:
                 context.db.mark_inbox_consumed(conversation_id)
             except Exception as e:
                 logger.warning(f"Failed to mark inbox consumed for {job_name}: {e}")
-
-        try:
-            final_answer = agent.chat(compiled_prompt, image_paths=image_paths)
-        except Exception as e:
-            logger.error(f"Subagent run {run_id} failed: {e}", exc_info=True)
-            return TaskResult.failed(str(e))
 
         clean_answer, _ = strip_model_tokens(final_answer or "")
         if clean_answer.startswith("Error: no active LLM profile loaded"):
@@ -231,7 +276,10 @@ class RunSubagent(BaseTask):
             except Exception as e:
                 logger.warning(f"Failed to persist compacted history for {job_name}: {e}")
 
-        if mode == "all" and not push_records and clean_answer.strip():
+        # Fallback push: guarantee the user sees a response when either (a) the
+        # job runs in "all" mode, or (b) the user just left a /message reply
+        # — silence is never the right answer to a direct question.
+        if (mode == "all" or has_pending) and not push_records and clean_answer.strip():
             self._emit_fallback_push(
                 run_id, job_name, conversation_title, clean_answer, push_records,
             )

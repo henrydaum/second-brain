@@ -30,6 +30,7 @@ def build_system_prompt(
     profile_name: str = "default",
     extra_suffix: str = "",
     subagent_mode: str | None = None,
+    subagent_has_pending_messages: bool = False,
 ) -> str:
     r = tool_registry  # short alias for gating checks
 
@@ -57,7 +58,7 @@ def build_system_prompt(
     if extra_suffix:
         prompt += extra_suffix
     if subagent_mode is not None:
-        prompt += _subagent_block(subagent_mode)
+        prompt += _subagent_block(subagent_mode, subagent_has_pending_messages)
     return prompt
 
 
@@ -338,7 +339,7 @@ def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
     )
 
 
-def _subagent_block(mode: str) -> str:
+def _subagent_block(mode: str, has_pending_messages: bool = False) -> str:
     header = (
         "\n\n## Scheduled subagent\n"
         "You are running unattended on a schedule.\n"
@@ -370,4 +371,11 @@ def _subagent_block(mode: str) -> str:
             "update_memory stores durable lessons for future sessions but does not notify anyone — never use it in place of message when the user is expecting to hear from you. "
             "Finish with a concise final answer that can be stored and reviewed later.\n"
         )
-    return header + body
+    pending_note = ""
+    if has_pending_messages:
+        pending_note = (
+            "\nThe user left a message for this run via /message. You MUST answer them by calling "
+            "the `message` tool before finishing — even on `important` or `off` modes, treat this as "
+            "a direct question that requires a reply.\n"
+        )
+    return header + body + pending_note

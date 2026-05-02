@@ -927,12 +927,14 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         return actions
 
     def _cmd_message(arg):
-        """Handler for /message <job_name> <text> — leave a note for a scheduled subagent.
+        """Handler for /message <job_name> [--notify=<mode>] <text>.
 
         Writes the message as a pending user turn on the job's persistent
         conversation. The subagent sees it in history on its next scheduled wake.
+        Optional --notify=all|important|off applies a one-shot override on the
+        next run only (cleared once that run starts).
         """
-        from agent.subagent_runtime import SUBAGENT_RUN_CHANNEL
+        from agent.subagent_runtime import SUBAGENT_RUN_CHANNEL, SUBAGENT_NOTIFICATION_MODES
 
         timekeeper = services.get("timekeeper")
         if timekeeper is None or not getattr(timekeeper, "loaded", False):
@@ -941,10 +943,23 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
 
         parts = arg.strip().split(None, 1) if arg.strip() else []
         if len(parts) < 2:
-            return ("Usage: /message <job_name> <text>\n"
+            return ("Usage: /message <job_name> [--notify=all|important|off] <text>\n"
                     "Leaves a message for a scheduled subagent. "
-                    "It appears in the agent's conversation on its next wake.")
-        job_name, text = parts[0], parts[1].strip()
+                    "It appears in the agent's conversation on its next wake. "
+                    "--notify overrides the job's notification mode for that run only.")
+        job_name, rest = parts[0], parts[1].strip()
+
+        override_mode = None
+        if rest.startswith("--notify="):
+            flag, _, remainder = rest.partition(" ")
+            mode_val = flag.split("=", 1)[1].strip().lower()
+            if mode_val not in SUBAGENT_NOTIFICATION_MODES:
+                return (f"Invalid --notify value: '{mode_val}'. "
+                        f"Use one of: {', '.join(SUBAGENT_NOTIFICATION_MODES)}.")
+            override_mode = mode_val
+            rest = remainder.strip()
+
+        text = rest
         if not text:
             return "Message text is required."
 
@@ -955,6 +970,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
 
         payload = job.get("payload") or {}
         conv_id = payload.get("conversation_id")
+        new_payload = None
         if conv_id is None or ctrl.db.get_conversation(int(conv_id)) is None:
             # First message before the job has ever run — allocate now so the
             # message is preserved and the next wake will pick it up.
@@ -962,29 +978,37 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             conv_id = ctrl.db.create_conversation(title)
             new_payload = dict(payload)
             new_payload["conversation_id"] = conv_id
+
+        if override_mode is not None:
+            new_payload = dict(new_payload if new_payload is not None else payload)
+            new_payload["next_notifications"] = override_mode
+
+        if new_payload is not None:
             try:
                 timekeeper.update_job(job_name, {"payload": new_payload})
             except ValueError as e:
-                return f"Failed to attach conversation to job '{job_name}': {e}"
+                return f"Failed to update job '{job_name}': {e}"
 
         ctrl.db.save_inbox_message(int(conv_id), text)
         pending = ctrl.db.count_pending_inbox(int(conv_id))
-        return (f"Queued for '{job_name}'. "
+        suffix = f" (next run notifications: {override_mode})" if override_mode else ""
+        return (f"Queued for '{job_name}'{suffix}. "
                 f"{pending} pending message{'s' if pending != 1 else ''} "
                 "until next wake.")
 
     def _message_completions():
         timekeeper = services.get("timekeeper")
         if timekeeper is None or not getattr(timekeeper, "loaded", False):
-            return []
+            return ["--notify=all", "--notify=important", "--notify=off"]
         try:
             from agent.subagent_runtime import SUBAGENT_RUN_CHANNEL
-            return sorted(
+            jobs = sorted(
                 name for name, job in timekeeper.list_jobs().items()
                 if (job.get("channel") or "").strip() == SUBAGENT_RUN_CHANNEL
             )
+            return jobs + ["--notify=all", "--notify=important", "--notify=off"]
         except Exception:
-            return []
+            return ["--notify=all", "--notify=important", "--notify=off"]
 
     def _cmd_update(_arg):
         import subprocess
@@ -1112,7 +1136,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      arg_completions=_schedule_completions,
                      category="Config & System"),
         CommandEntry("message", "Leave a message for a scheduled subagent",
-                     "<job_name> <text>",
+                     "<job_name> [--notify=all|important|off] <text>",
                      handler=_cmd_message,
                      arg_completions=_message_completions,
                      category="Config & System"),
