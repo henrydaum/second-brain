@@ -1,4 +1,4 @@
-from frontend.ui_request import InteractiveRequest
+from events.ui_request import InteractiveRequest
 
 
 class ApprovalRequest(InteractiveRequest):

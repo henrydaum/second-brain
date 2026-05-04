@@ -357,7 +357,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
     from config.config_data import SETTINGS_DATA as _SD
     from plugins.plugin_discovery import get_plugin_settings as _get_ps
     from agent.history_utils import heal_orphan_tool_calls
-    from frontend.formatters import (
+    from plugins.frontends.helpers.formatters import (
         format_services, format_tasks,
         format_tools, format_locations,
         format_tool_result, format_scheduled_jobs,

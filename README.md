@@ -175,7 +175,7 @@ System responsibilities live in clear, top-level packages:
 - `agent/` for prompt construction, tool execution, history healing, and subagent runtime
 - `runtime/` for controller and task/tool context wiring
 - `config/` and `events/` for shared system infrastructure
-- `frontend/` for REPL, Telegram, and the shared runtime/presenter layer
+- `plugins/frontends/` for REPL, Telegram, and shared slash-command helpers
 
 ### Services + Parsers
 
@@ -305,22 +305,10 @@ Second Brain/
 │   └── config_manager.py   # Config + plugin-config persistence
 │
 ├── events/
-│   ├── event_bus.py        # Internal pub/sub bus
-│   └── event_channels.py   # Event channel registry
-│
-├── frontend/
-│   ├── runtime.py          # Frontend runtime boundary
-│   ├── presenter.py        # Shared rendering/presentation helpers
-│   ├── commands.py         # Shared slash command registry
-│   ├── dispatch.py         # Shared input routing
-│   ├── formatters.py       # Shared formatting helpers
 │   ├── approval_request.py # Approval request primitive
-│   ├── ui_request.py       # Generic frontend UI request primitive
-│   ├── repl/
-│   │   └── repl.py         # Terminal frontend
-│   └── telegram/
-│       ├── telegram.py     # Telegram bot frontend
-│       └── renderers.py    # Telegram media sending
+│   ├── event_bus.py        # Internal pub/sub bus
+│   ├── event_channels.py   # Event channel registry
+│   └── ui_request.py       # Generic UI-mediated request primitive
 │
 ├── pipeline/
 │   ├── attachment_cache.py # Frontend upload persistence
@@ -330,10 +318,16 @@ Second Brain/
 │   └── watcher.py          # Filesystem watcher
 │
 ├── plugins/
+│   ├── BaseFrontend.py
 │   ├── BaseService.py
 │   ├── BaseTask.py
 │   ├── BaseTool.py
 │   ├── plugin_discovery.py # Built-in + sandbox discovery and hot registration
+│   ├── frontends/
+│   │   ├── repl_frontend.py
+│   │   ├── telegram_frontend.py
+│   │   └── helpers/
+│   │
 │   ├── services/
 │   │   ├── llmService.py
 │   │   ├── embedService.py
@@ -373,7 +367,8 @@ Second Brain/
 │
 ├── runtime/
 │   ├── context.py          # Shared runtime context for tools and tasks
-│   └── controller.py       # Command/control surface used by frontends
+│   ├── controller.py       # Command/control surface used by frontends
+│   └── token_stripper.py   # Model-token cleanup
 │
 ├── templates/
 │   ├── tool_template.py

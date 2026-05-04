@@ -12,7 +12,7 @@ Channel names live in event_channels.py. Don't sprinkle ad-hoc strings.
 Usage:
     from events.event_bus import bus
     from events.event_channels import TASK_COMPLETED, APPROVAL_REQUESTED
-    from frontend.approval_request import ApprovalRequest
+    from events.approval_request import ApprovalRequest
 
     bus.subscribe(TASK_COMPLETED, lambda p: print(p["task_name"]))
     bus.emit(TASK_COMPLETED, {"task_name": "embed", "rows_written": 3})

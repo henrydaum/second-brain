@@ -11,7 +11,7 @@ from agent.history_utils import messages_to_history
 from agent.system_prompt import build_system_prompt
 from agent.tool_registry import ToolRegistry
 from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_registry
-from frontend.token_stripper import strip_model_tokens
+from runtime.token_stripper import strip_model_tokens
 from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED
 from agent.subagent_runtime import (

@@ -149,7 +149,7 @@ def _authoring_guidance() -> str:
         "You can extend the system by creating sandbox plugins (tools, tasks, and services).\n\n"
         "Project layout:\n"
         "- Built-in plugins live under plugins/tools, plugins/tasks, and plugins/services.\n"
-        "- Core app code lives under agent, pipeline, runtime, config, events, and frontend.\n\n"
+        "- Core app code lives under agent, pipeline, runtime, config, events, and plugins/frontends.\n\n"
         "Recommended workflow:\n"
         "1. Read the relevant template with read_file(path='templates/tool_template.py') (or task_template.py / service_template.py).\n"
         "2. Read a similar existing plugin for reference. Sandbox plugin paths are listed below; built-in plugins can be read with paths like 'plugins/tools/tool_hybrid_search.py'.\n"

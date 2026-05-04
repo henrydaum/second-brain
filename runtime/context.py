@@ -65,7 +65,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
     """
     from events.event_bus import bus
     from events.event_channels import APPROVAL_REQUESTED
-    from frontend.approval_request import ApprovalRequest
+    from events.approval_request import ApprovalRequest
 
     approve_command = None
     if call_tool is not None and bus.has_subscribers(APPROVAL_REQUESTED):

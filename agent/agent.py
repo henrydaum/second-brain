@@ -25,7 +25,7 @@ from pathlib import Path
 from plugins.services.llmService import LLMProviderError, is_context_limit_error
 from plugins.services.helpers.parser_registry import get_modality
 from agent.history_utils import heal_orphan_tool_calls
-from frontend.token_stripper import strip_model_tokens
+from runtime.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("Agent")
 
