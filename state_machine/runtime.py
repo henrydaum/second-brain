@@ -77,7 +77,7 @@ class RuntimeSession:
     busy: bool = False
     active_agent_profile: str = "default"
     # Subagent / specialist sessions pin a profile and can register extra tool
-    # instances (e.g. the subagent MessageTool) that are not part of the global
+    # instances (e.g. NotifyTool) that are not part of the global
     # tool_registry. When None / empty, the session follows the runtime's
     # active profile and uses the global tool registry.
     profile_override: str | None = None
@@ -630,8 +630,8 @@ class ConversationRuntime:
 
         The tool is layered on top of the session's scoped registry, so the
         agent on this session can call it but no other session sees it.
-        Useful for ephemeral, session-specific tools (e.g. a MessageTool
-        bound to a single subagent run).
+        Useful for ephemeral, session-specific tools (e.g. a NotifyTool
+        bound to a single scheduled run).
         """
         session = self.sessions.get(session_key)
         if session is None:
@@ -876,7 +876,7 @@ class ConversationRuntime:
         registry = self.tool_registry
         if scope:
             registry = scoped_registry(self.tool_registry, scope, db=self.db)
-        # Subagent sessions add their pinned tool instances (MessageTool etc.)
+        # Subagent sessions add their pinned tool instances (NotifyTool etc.)
         # on top of the scoped view so the agent in this session can call them.
         extras = list((session.extra_tool_instances if session else []) or [])
         if extras:

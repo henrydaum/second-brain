@@ -1095,7 +1095,8 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         Optional --notify=all|important|off applies a one-shot override on the
         next run only (cleared once that run starts).
         """
-        from agent.subagent_runtime import SUBAGENT_RUN_CHANNEL, SUBAGENT_NOTIFICATION_MODES
+        from events.event_channels import SUBAGENT_RUN
+        from plugins.tasks.helpers.notifications import NOTIFICATION_MODES
 
         timekeeper = services.get("timekeeper")
         if timekeeper is None or not getattr(timekeeper, "loaded", False):
@@ -1114,9 +1115,9 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         if rest.startswith("--notify="):
             flag, _, remainder = rest.partition(" ")
             mode_val = flag.split("=", 1)[1].strip().lower()
-            if mode_val not in SUBAGENT_NOTIFICATION_MODES:
+            if mode_val not in NOTIFICATION_MODES:
                 return (f"Invalid --notify value: '{mode_val}'. "
-                        f"Use one of: {', '.join(SUBAGENT_NOTIFICATION_MODES)}.")
+                        f"Use one of: {', '.join(NOTIFICATION_MODES)}.")
             override_mode = mode_val
             rest = remainder.strip()
 
@@ -1125,7 +1126,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             return "Message text is required."
 
         job = timekeeper.get_job(job_name)
-        if job is None or (job.get("channel") or "").strip() != SUBAGENT_RUN_CHANNEL:
+        if job is None or (job.get("channel") or "").strip() != SUBAGENT_RUN:
             return (f"Unknown subagent job: '{job_name}'. "
                     f"Run /schedule list to see scheduled subagents.")
 
@@ -1170,10 +1171,10 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         if timekeeper is None or not getattr(timekeeper, "loaded", False):
             return ["--notify=all", "--notify=important", "--notify=off"]
         try:
-            from agent.subagent_runtime import SUBAGENT_RUN_CHANNEL
+            from events.event_channels import SUBAGENT_RUN
             jobs = sorted(
                 name for name, job in timekeeper.list_jobs().items()
-                if (job.get("channel") or "").strip() == SUBAGENT_RUN_CHANNEL
+                if (job.get("channel") or "").strip() == SUBAGENT_RUN
             )
             return jobs + ["--notify=all", "--notify=important", "--notify=off"]
         except Exception:

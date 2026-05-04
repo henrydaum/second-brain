@@ -2,11 +2,8 @@ from copy import deepcopy
 
 import config.config_manager as config_manager
 from plugins.BaseTool import BaseTool, ToolResult
-from agent.subagent_runtime import (
-    SUBAGENT_RUN_CHANNEL,
-    SUBAGENT_NOTIFICATION_MODES,
-    SUBAGENT_DEFAULT_NOTIFICATION_MODE,
-)
+from events.event_channels import SUBAGENT_RUN
+from plugins.tasks.helpers.notifications import DEFAULT_NOTIFICATION_MODE, NOTIFICATION_MODES, notification_mode
 
 
 def _coerce_input_paths(value) -> list[str]:
@@ -27,7 +24,7 @@ def _ensure_timekeeper_autoload(context):
 
 
 def _is_subagent_job(job: dict) -> bool:
-    return (job.get("channel") or "").strip() == SUBAGENT_RUN_CHANNEL
+    return (job.get("channel") or "").strip() == SUBAGENT_RUN
 
 
 def _job_payload_summary(job: dict) -> tuple[str, str]:
@@ -99,14 +96,14 @@ class ScheduleSubagent(BaseTool):
             },
             "notifications": {
                 "type": "string",
-                "enum": list(SUBAGENT_NOTIFICATION_MODES),
+                "enum": list(NOTIFICATION_MODES),
                 "description": (
                     "How chatty the subagent should be when the job fires. "
-                    "'all' (default): the agent pushes regularly via the message tool, and if it forgets, the final answer is sent automatically as a single push. "
-                    "'important': the agent has the message tool but is told to use it only when something noteworthy comes up; silence is allowed. "
-                    "'off': the agent runs silently with no push tool and produces no user-visible chat output (final answer is still stored)."
+                    "'all' (default): the agent pushes regularly via the notify tool, and if it forgets, the final answer is sent automatically as a single push. "
+                    "'important': the agent has the notify tool but is told to use it only when something noteworthy comes up; silence is allowed. "
+                    "'off': the agent runs silently with no notify tool and produces no user-visible chat output (final answer is still stored)."
                 ),
-                "default": SUBAGENT_DEFAULT_NOTIFICATION_MODE,
+                "default": DEFAULT_NOTIFICATION_MODE,
             },
         },
         "required": ["action"],
@@ -229,17 +226,17 @@ class ScheduleSubagent(BaseTool):
 
         notifications = kwargs.get("notifications")
         if notifications is not None:
-            mode = str(notifications).strip().lower()
-            if mode not in SUBAGENT_NOTIFICATION_MODES:
+            mode = notification_mode(notifications, default="")
+            if mode not in NOTIFICATION_MODES:
                 raise ValueError(
-                    f"notifications must be one of: {', '.join(SUBAGENT_NOTIFICATION_MODES)}."
+                    f"notifications must be one of: {', '.join(NOTIFICATION_MODES)}."
                 )
             payload["notifications"] = mode
         elif require_prompt and "notifications" not in payload:
-            payload["notifications"] = SUBAGENT_DEFAULT_NOTIFICATION_MODE
+            payload["notifications"] = DEFAULT_NOTIFICATION_MODE
 
         job_def = deepcopy(current_job) if current_job is not None else {}
-        job_def["channel"] = SUBAGENT_RUN_CHANNEL
+        job_def["channel"] = SUBAGENT_RUN
         job_def["payload"] = payload
 
         for key in ("cron", "run_at"):
@@ -292,7 +289,7 @@ class ScheduleSubagent(BaseTool):
                 lines.append(f"  agent: {agent}")
             notifications = str(
                 (job.get("payload") or {}).get("notifications")
-                or SUBAGENT_DEFAULT_NOTIFICATION_MODE
+                or DEFAULT_NOTIFICATION_MODE
             ).strip().lower()
             lines.append(f"  notifications: {notifications}")
             if prompt:
@@ -334,7 +331,7 @@ class ScheduleSubagent(BaseTool):
             lines.append(f"Agent: {agent}")
         notifications = str(
             (job.get("payload") or {}).get("notifications")
-            or SUBAGENT_DEFAULT_NOTIFICATION_MODE
+            or DEFAULT_NOTIFICATION_MODE
         ).strip().lower()
         lines.append(f"Notifications: {notifications}")
         if prompt:
@@ -377,7 +374,7 @@ def _require_schedule_approval(context, action: str, job_name: str, job: dict, s
     if agent:
         lines.append(f"Agent: {agent}")
     notifications = str(
-        payload.get("notifications") or SUBAGENT_DEFAULT_NOTIFICATION_MODE
+        payload.get("notifications") or DEFAULT_NOTIFICATION_MODE
     ).strip().lower()
     lines.append(f"Notifications: {notifications}")
     if prompt:

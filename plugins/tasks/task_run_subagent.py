@@ -6,14 +6,9 @@ from plugins.services.helpers.parser_registry import get_modality
 from plugins.BaseTask import BaseTask, TaskResult
 from runtime.token_stripper import strip_model_tokens
 from events.event_bus import bus
-from events.event_channels import CHAT_MESSAGE_PUSHED, SESSION_TURN_COMPLETED
-from agent.subagent_runtime import (
-    MessageTool,
-    SubagentPushRecord,
-    SUBAGENT_RUN_CHANNEL,
-    SUBAGENT_NOTIFICATION_MODES,
-    SUBAGENT_DEFAULT_NOTIFICATION_MODE,
-)
+from events.event_channels import CHAT_MESSAGE_PUSHED, SESSION_TURN_COMPLETED, SUBAGENT_RUN
+from agent.session_tools import NotifyTool, NotificationRecord
+from plugins.tasks.helpers.notifications import NOTIFICATION_MODES, notification_mode
 
 logger = logging.getLogger("TaskRunSubagent")
 
@@ -27,13 +22,13 @@ class RunSubagent(BaseTask):
     ``subagent:{job_name}``. Firing the timekeeper amounts to dispatching
     one ``send_text`` action on that session, which goes through the same
     enact() path as a user turn — same approvals, same forms, same cancel
-    semantics. The MessageTool is registered as a per-session pinned tool
+    semantics. The NotifyTool is registered as a per-session pinned tool
     so the agent's pushes still flow through CHAT_MESSAGE_PUSHED.
     """
 
     name = "run_subagent"
     trigger = "event"
-    trigger_channels = [SUBAGENT_RUN_CHANNEL]
+    trigger_channels = [SUBAGENT_RUN]
     event_payload_schema = {
         "type": "object",
         "properties": {
@@ -87,12 +82,12 @@ class RunSubagent(BaseTask):
         if has_pending and mode == "off":
             mode = "important"
 
-        push_records: list[SubagentPushRecord] = []
-        message_tool = None
+        push_records: list[NotificationRecord] = []
+        notify_tool = None
         if mode != "off":
-            def _record_push(record: SubagentPushRecord):
+            def _record_push(record: NotificationRecord):
                 push_records.append(record)
-            message_tool = MessageTool(run_id, job_name, _record_push)
+            notify_tool = NotifyTool(source="subagent", source_id=run_id, job_name=job_name, recorder=_record_push)
 
         session_key = runtime.subagent_session_key(job_name)
         input_paths = self._normalize_input_paths(payload.get("input_paths"))
@@ -110,8 +105,8 @@ class RunSubagent(BaseTask):
                     "subagent_job_name": job_name,
                 },
             )
-            if message_tool:
-                runtime.add_session_tool(session_key, message_tool)
+            if notify_tool:
+                runtime.add_session_tool(session_key, notify_tool)
             result = runtime.iterate_agent_turn(session_key, compiled_prompt, image_paths=image_paths)
         except Exception as e:
             logger.error(f"Subagent run {run_id} failed: {e}", exc_info=True)
@@ -150,16 +145,13 @@ class RunSubagent(BaseTask):
         override_mode = None
         if override_mode_raw is not None:
             candidate = str(override_mode_raw).strip().lower()
-            if candidate in SUBAGENT_NOTIFICATION_MODES:
+            if candidate in NOTIFICATION_MODES:
                 override_mode = candidate
 
         if override_mode is not None:
             mode = override_mode
         else:
-            mode = (payload.get("notifications") or SUBAGENT_DEFAULT_NOTIFICATION_MODE)
-            mode = str(mode).strip().lower()
-            if mode not in SUBAGENT_NOTIFICATION_MODES:
-                mode = SUBAGENT_DEFAULT_NOTIFICATION_MODE
+            mode = notification_mode(payload.get("notifications"))
 
         # One-shot --notify override is consumed once.
         if is_scheduled and override_mode_raw is not None:
@@ -215,11 +207,11 @@ class RunSubagent(BaseTask):
         return conv_id
 
     def _emit_fallback_push(self, run_id: str, job_name: str, title: str,
-                            final_answer: str, push_records: list[SubagentPushRecord]) -> None:
+                            final_answer: str, push_records: list[NotificationRecord]) -> None:
         message = final_answer.strip()
         push_title = (title or job_name or "").strip()
         sent_at = time.time()
-        push_records.append(SubagentPushRecord(
+        push_records.append(NotificationRecord(
             kind="brief", title=push_title, message=message, sent_at=sent_at,
         ))
         bus.emit(CHAT_MESSAGE_PUSHED, {

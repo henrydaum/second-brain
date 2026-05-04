@@ -3,8 +3,8 @@ import time
 import uuid
 
 from plugins.BaseTool import BaseTool, ToolResult
-from agent.subagent_runtime import SUBAGENT_RUN_CHANNEL
 from events.event_bus import bus
+from events.event_channels import SUBAGENT_RUN
 
 
 class AskSubagent(BaseTool):
@@ -63,7 +63,7 @@ class AskSubagent(BaseTool):
             return ToolResult.failed("Orchestrator is not available.")
         if getattr(context, "runtime", None) is None:
             return ToolResult.failed("ConversationRuntime is not available.")
-        if not bus.has_subscribers(SUBAGENT_RUN_CHANNEL):
+        if not bus.has_subscribers(SUBAGENT_RUN):
             return ToolResult.failed("No subscriber is listening on subagent.run.")
 
         prompt = str(kwargs.get("prompt") or "").strip()
@@ -95,7 +95,7 @@ class AskSubagent(BaseTool):
             },
         }
 
-        bus.emit(SUBAGENT_RUN_CHANNEL, payload)
+        bus.emit(SUBAGENT_RUN, payload)
 
         deadline = time.time() + timeout_seconds
         run_row = None

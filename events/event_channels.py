@@ -67,6 +67,16 @@ Payload:
     name:   str — task name
     action: str — 'registered' or 'unregistered'"""
 
+SUBAGENT_RUN = "subagent.run"
+"""A scheduled or delegated agent conversation should run one turn.
+Payload:
+    prompt:          str
+    title:           str (optional)
+    job_name:        str (optional)
+    conversation_id: int (optional)
+    input_paths:     list[str] (optional)
+    agent:           str (optional)"""
+
 CHAT_MESSAGE_PUSHED = "chat_message_pushed"
 """Something in the system wants to proactively surface a message in the user's
 chat view. Used by scheduled subagents pushing notes and any other background
