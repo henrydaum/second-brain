@@ -26,6 +26,8 @@ from events.event_channels import (
     APPROVAL_RESOLVED,
     CHAT_MESSAGE_PUSHED,
     TASKS_CHANGED,
+    TOOL_CALL_FINISHED,
+    TOOL_CALL_STARTED,
     TOOLS_CHANGED,
 )
 from state_machine.action_map import (
@@ -97,6 +99,7 @@ class BaseFrontend:
         render_buttons(session_key, buttons)
         render_error(session_key, error)
         render_typing(session_key, on)            — default no-op.
+        render_tool_status(session_key, payload)  — default no-op.
 
     Provided (do NOT override):
         bind(runtime, registry, config)
@@ -187,6 +190,10 @@ class BaseFrontend:
         """Default no-op; rich frontends override to show a typing indicator."""
         return
 
+    def render_tool_status(self, session_key: str, payload: dict) -> None:
+        """Default no-op; frontends with status affordances override."""
+        return
+
     # ──────────────────────────────────────────────────────────────────────
     # Wiring — provided by the base.
     # ──────────────────────────────────────────────────────────────────────
@@ -211,6 +218,8 @@ class BaseFrontend:
             bus.subscribe(APPROVAL_REQUESTED, self.on_bus_approval_requested),
             bus.subscribe(APPROVAL_RESOLVED, self.on_bus_approval_resolved),
             bus.subscribe(CHAT_MESSAGE_PUSHED, self.on_bus_message_pushed),
+            bus.subscribe(TOOL_CALL_STARTED, self.on_bus_tool_call_started),
+            bus.subscribe(TOOL_CALL_FINISHED, self.on_bus_tool_call_finished),
             bus.subscribe(TOOLS_CHANGED, self.on_tools_changed),
             bus.subscribe(TASKS_CHANGED, self.on_tasks_changed),
         ]
@@ -360,6 +369,12 @@ class BaseFrontend:
             except Exception:
                 logger.exception(f"render_messages (push) failed for '{self.name}'")
 
+    def on_bus_tool_call_started(self, payload: dict) -> None:
+        self._render_tool_status_event({**(payload or {}), "status": "started"})
+
+    def on_bus_tool_call_finished(self, payload: dict) -> None:
+        self._render_tool_status_event({**(payload or {}), "status": "finished"})
+
     def on_tools_changed(self, _payload) -> None:
         return
 
@@ -416,3 +431,12 @@ class BaseFrontend:
         if self.runtime is None:
             return []
         return list(self.runtime.sessions.keys())
+
+    def _render_tool_status_event(self, payload: dict) -> None:
+        key = (payload or {}).get("session_key")
+        if not key or key not in self._live_session_keys():
+            return
+        try:
+            self.render_tool_status(key, payload)
+        except Exception:
+            logger.exception(f"render_tool_status failed for '{self.name}'")

@@ -98,6 +98,11 @@ class ReplFrontend(BaseFrontend):
     def render_error(self, _session_key: str, error: dict) -> None:
         print(f"\n[error] {(error or {}).get('message') or error}")
 
+    def render_tool_status(self, _session_key: str, payload: dict) -> None:
+        name = payload.get("tool_name") or "tool"
+        status = "..." if payload.get("status") == "started" else "ok" if payload.get("ok") else "failed"
+        print(f"\n[tool] {name} {status}")
+
     def _live_session_keys(self) -> list[str]:
         return [self.session_key(None)]
 

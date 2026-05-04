@@ -132,9 +132,15 @@ class ConversationLoop:
                 if images:
                     images = []  # Only the first LLM call sees attached images.
 
-                # ──────────────────── THE enact() SITE ────────────────────
-                result = cs.enact(action_type, content, actor_id)
-                # ──────────────────────────────────────────────────────────
+                started = self._tool_started(action_type, content)
+                try:
+                    # ──────────────────── THE enact() SITE ────────────────────
+                    result = cs.enact(action_type, content, actor_id)
+                    # ──────────────────────────────────────────────────────────
+                except Exception as e:
+                    self._tool_finished(started, error=str(e))
+                    raise
+                self._tool_finished(started, result=result)
 
                 self._absorb(result, action_type, content, history, new_messages, attachments, db, conversation_id)
 
@@ -274,11 +280,6 @@ class ConversationLoop:
             return json.dumps({"error": f"Tool '{name}' has reached its call limit ({tool.max_calls}). Try a different approach."}), []
         self._tool_call_counts[name] = self._tool_call_counts.get(name, 0) + 1
 
-        if self.on_tool_start:
-            self.on_tool_start(name)
-        if self.on_tool_result:
-            self.on_tool_result(name, tool_result)
-
         # Action-level failure (legality, exec error) → tool error message.
         if not getattr(result, "ok", True):
             err = getattr(result, "error", None)
@@ -375,6 +376,28 @@ class ConversationLoop:
         new_messages.append(msg)
         if db is not None and conversation_id is not None:
             save_history_message(db, conversation_id, msg)
+
+    def _tool_started(self, action_type: str, content: Any):
+        if action_type != "call_tool":
+            return None
+        name = (content or {}).get("name") or "unknown"
+        call_id = (content or {}).get("_tool_call_id") or "tc_unknown"
+        args = (content or {}).get("args") or {}
+        if self.on_tool_start:
+            try:
+                self.on_tool_start(name, call_id, args)
+            except TypeError:
+                self.on_tool_start(name)
+        return name, call_id
+
+    def _tool_finished(self, started, result=None, error: str | None = None):
+        if not started or not self.on_tool_result:
+            return
+        name, call_id = started
+        try:
+            self.on_tool_result(name, call_id, result, error)
+        except TypeError:
+            self.on_tool_result(name, (getattr(result, "data", None) or {}).get("result") if result else None)
 
     @staticmethod
     def _is_image(path: str) -> bool:

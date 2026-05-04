@@ -82,6 +82,23 @@ Payload:
     source_id:str (optional) — producer-specific id (subagent run_id,
                                timekeeper job_name, etc.)"""
 
+TOOL_CALL_STARTED = "tool_call_started"
+"""The agent started a tool call.
+Payload:
+    session_key: str
+    call_id:     str
+    tool_name:   str
+    args:        dict"""
+
+TOOL_CALL_FINISHED = "tool_call_finished"
+"""The agent finished a tool call.
+Payload:
+    session_key: str
+    call_id:     str
+    tool_name:   str
+    ok:          bool
+    error:       str (optional)"""
+
 
 # ── Reserved (not yet emitted) ─────────────────────────────────────
 # Documented here so future work has an obvious home instead of inventing

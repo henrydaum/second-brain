@@ -23,6 +23,7 @@ from state_machine.conversationClass import CallableSpec, ConversationState, For
 from state_machine.conversation_loop import ConversationLoop
 from state_machine.conversation_phases import BASE_PHASE, PHASE_APPROVING_REQUEST
 from state_machine.errors import ActionError, ActionResult
+from events.event_channels import TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from state_machine.forms import schema_to_form_steps
 from state_machine.persistence import latest_state, messages_to_history, save_history_message, save_state_marker
 
@@ -185,7 +186,7 @@ class ConversationRuntime:
         self._ensure_conversation(session, self._latest_user_text(session))
         session.busy = True
         try:
-            loop = self._loop()
+            loop = self._loop(session.key)
             reply, new_messages, attachments = loop.drive(
                 session.cs,
                 "agent",
@@ -374,7 +375,7 @@ class ConversationRuntime:
             self._persist_marker(session)
             return req
 
-    def _loop(self) -> ConversationLoop:
+    def _loop(self, session_key: str | None = None) -> ConversationLoop:
         llm = self._active_llm()
         if llm is None and hasattr(self, "llm"):
             llm = self.llm
@@ -382,8 +383,26 @@ class ConversationRuntime:
             raise RuntimeError("LLM service is not loaded.")
         return ConversationLoop(
             llm, self._active_tool_registry(), self.config, self.system_prompt,
-            self.on_tool_start, self.on_tool_result, self.on_notice,
+            *self._tool_callbacks(session_key), self.on_notice,
         )
+
+    def _tool_callbacks(self, session_key: str | None):
+        def started(name, call_id="tc_unknown", args=None):
+            if self.on_tool_start:
+                self.on_tool_start(name)
+            if self.emit_event:
+                self.emit_event(TOOL_CALL_STARTED, {"session_key": session_key, "call_id": call_id, "tool_name": name, "args": args or {}})
+
+        def finished(name, call_id="tc_unknown", result=None, error=None):
+            tool_result = (getattr(result, "data", None) or {}).get("result") if result else None
+            ok = bool(result and getattr(result, "ok", False) and getattr(tool_result, "success", True) and not error)
+            err = error or getattr(getattr(result, "error", None), "message", None) or getattr(tool_result, "error", None)
+            if self.on_tool_result:
+                self.on_tool_result(name, tool_result)
+            if self.emit_event:
+                self.emit_event(TOOL_CALL_FINISHED, {"session_key": session_key, "call_id": call_id, "tool_name": name, "ok": ok, "error": err})
+
+        return started, finished
 
     def _new_state(self, marker: dict[str, Any] | None = None) -> ConversationState:
         commands = dict(self.commands)

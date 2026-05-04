@@ -7,6 +7,7 @@ from agent.system_prompt import build_system_prompt
 from events.event_bus import bus
 from plugins.frontends.helpers.command_registry import CommandEntry, CommandRegistry, register_core_commands
 from plugins.frontends.repl_frontend import ReplFrontend
+from plugins.frontends.telegram_frontend import TelegramFrontend
 from runtime.agent_scope import load_scope, scoped_registry
 from state_machine.runtime import ConversationRuntime
 
@@ -15,20 +16,22 @@ logger = logging.getLogger("Frontends")
 
 def start_frontends(frontends: set[str], ctrl, shutdown_fn, shutdown_event,
                     tool_registry, services, config, root_dir):
-    runtime = _repl_runtime(ctrl, shutdown_fn, tool_registry, services, config, root_dir) if "repl" in frontends else None
+    runtime = _conversation_runtime(ctrl, shutdown_fn, tool_registry, services, config, root_dir) if frontends & {"repl", "telegram"} else None
     adapters, threads = {}, []
-    if runtime:
+    if runtime and "repl" in frontends:
         repl = ReplFrontend(shutdown_fn, shutdown_event)
         repl.bind(runtime, runtime.command_registry, config)
         _start("repl", repl.start, adapters, threads, repl)
-    if "telegram" in frontends:
-        _start_legacy_telegram(ctrl, shutdown_fn, shutdown_event, tool_registry, services, config, root_dir, adapters, threads)
+    if runtime and "telegram" in frontends:
+        telegram = TelegramFrontend(shutdown_event, services)
+        telegram.bind(runtime, runtime.command_registry, config)
+        _start("telegram", telegram.start, adapters, threads, telegram)
     for name in sorted(frontends - {"repl", "telegram"}):
         logger.warning(f"Unknown frontend '{name}' - skipping.")
     return runtime, adapters, threads
 
 
-def _repl_runtime(ctrl, shutdown_fn, tool_registry, services, config, root_dir):
+def _conversation_runtime(ctrl, shutdown_fn, tool_registry, services, config, root_dir):
     registry = CommandRegistry()
     ref = {}
     register_core_commands(
@@ -73,13 +76,3 @@ def _start(name, target, adapters, threads, adapter):
     thread.start()
     adapters[name] = adapter
     threads.append(thread)
-
-
-def _start_legacy_telegram(ctrl, shutdown_fn, shutdown_event, tool_registry, services, config, root_dir, adapters, threads):
-    from frontend.platforms.platform_telegram import TelegramPlatformAdapter
-    from frontend.runtime import FrontendRuntime
-    legacy = FrontendRuntime(ctrl, services, config, tool_registry, root_dir)
-    adapter = TelegramPlatformAdapter(ctrl, shutdown_fn, shutdown_event, tool_registry, services, config, root_dir)
-    legacy.register_adapter(adapter)
-    ctrl.legacy_frontend_runtime = legacy
-    _start("telegram", adapter.start, adapters, threads, adapter)
