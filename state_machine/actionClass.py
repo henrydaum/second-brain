@@ -17,7 +17,7 @@ collected inputs.
 from typing import Any, Tuple, Optional
 import logging
 
-from state_machine.conversationClass import CallableSpec, PhaseFrame
+from state_machine.conversationClass import CallableSpec, FormStep, PhaseFrame
 from state_machine.conversation_phases import (
     PHASE_APPROVING_REQUEST,
     PHASE_CALLING_COMMAND,
@@ -204,7 +204,13 @@ class _CallableAction(Action):
         # Approval temporarily gives priority to the approver; approving later
         # reconstructs this same callable payload with `_approved=True`.
         approver = spec.approval_actor_id or self.cs.other_id(self.actor_id)
-        self.cs.push_phase(PhaseFrame(PHASE_APPROVING_REQUEST, "answer_approval", approver, spec.name, {"pending": {"type": self.action_type, "actor_id": self.actor_id, "content": payload}}))
+        self.cs.push_phase(PhaseFrame(PHASE_APPROVING_REQUEST, "answer_approval", approver, spec.name, {
+            "type": "boolean",
+            "title": spec.name,
+            "prompt": f"Approve {spec.name}?",
+            "required": True,
+            "pending": {"type": self.action_type, "actor_id": self.actor_id, "content": payload},
+        }))
         self.cs.set_priority(approver)
         event = self.cs.event("approval_requested", self.actor_id, name=spec.name, approver=approver, payload=payload)
         return ActionResult(True, self.action_type, "Approval required.", events=[event])
@@ -271,39 +277,112 @@ class SubmitFormText(Action):
 
 
 class AnswerApproval(Action):
+    """Resolve a pending typed-input request.
+
+    Despite the historical name, this carries any typed value (string,
+    integer, number, boolean, array, object, enum). For a frame whose
+    `data["type"]` is "boolean" with a `pending` action, a truthy value
+    re-enacts the gated action with `_approved=True` (the legacy approval
+    gate). For other types, the value is simply returned in the result data
+    for the caller (subagent, tool, etc.) to consume.
+    """
+
     action_type = "answer_approval"
 
     def execute(self):
         frame = self.cs.frame
         if not frame or frame.phase != PHASE_APPROVING_REQUEST:
-            raise self.error(ERROR_INVALID_ACTION, "No approval is pending.")
-        approved = self._approved()
-        pending = frame.data["pending"]
+            raise self.error(ERROR_INVALID_ACTION, "No request is pending.")
+        value = self._coerce(frame)
+        pending = frame.data.get("pending")
+        original_actor = (pending or {}).get("actor_id") or self.cs.other_id(self.actor_id) or self.actor_id
         self.cs.pop_phase()
-        self.cs.set_priority(pending["actor_id"])
-        event = self.cs.event("approval_answered", self.actor_id, approved=approved, pending=pending)
-        if not approved:
-            self.cs.reset_phase()
-            return ActionResult(True, self.action_type, "Denied.", events=[event], data={"approved": False})
-        content = dict(pending["content"])
-        content["_approved"] = True
+        self.cs.set_priority(original_actor)
+        event = self.cs.event("approval_answered", self.actor_id, value=value, approved=bool(value), pending=pending)
+
+        # Boolean-with-pending: legacy approval-gate replay.
+        if pending and frame.data.get("type", "boolean") == "boolean":
+            if not value:
+                self.cs.reset_phase()
+                return ActionResult(True, self.action_type, "Denied.", events=[event], data={"approved": False, "value": False})
+            content = dict(pending["content"])
+            content["_approved"] = True
+            from state_machine.action_map import create_action
+
+            result = create_action(self.cs, pending["type"], content, pending["actor_id"]).enact()
+            result.events.insert(0, event)
+            return result
+
+        # Free-form typed input: just return the value.
+        self.cs.reset_phase()
+        return ActionResult(True, self.action_type, "Received.", events=[event], data={"value": value, "approved": bool(value)})
+
+    def _coerce(self, frame) -> Any:
+        """Coerce raw content into the requested type using FormStep semantics."""
+        type_ = frame.data.get("type", "boolean")
+        enum = frame.data.get("enum")
+        default = frame.data.get("default")
+        required = frame.data.get("required", True)
+        raw = self.content
+        if isinstance(raw, dict):
+            # Accept {"value": ...}, legacy {"approved": ...}, or {"text": "..."}.
+            if "value" in raw:
+                raw = raw["value"]
+            elif "approved" in raw:
+                raw = raw["approved"]
+            elif "text" in raw:
+                raw = raw["text"]
+
+        # Booleans carry the historical lenient text parser ("yes", "y", etc.).
+        if type_ == "boolean":
+            if isinstance(raw, bool):
+                return raw
+            text = str(raw).strip().lower()
+            if text in {"y", "yes", "approve", "approved", "true", "1"}:
+                return True
+            if text in {"n", "no", "deny", "denied", "false", "0", "cancel"}:
+                return False
+            raise self.error(ERROR_INVALID_INPUT, "Approval needs yes or no.")
+
+        step = FormStep(name=frame.name or "input", required=required, type=type_, enum=enum, default=default)
+        ok, reason = step.validate(raw)
+        if not ok:
+            raise self.error(ERROR_INVALID_INPUT, reason or "Invalid input.")
+        return step.coerce(raw)
+
+
+class SkipForm(Action):
+    """Skip an optional form field by accepting its default and advancing.
+
+    Mirrors `SubmitFormText`'s replay path: pop the form when complete and
+    re-enact the original command/tool action with collected args.
+    """
+
+    action_type = "skip_form"
+
+    def execute(self):
+        frame = self.cs.frame
+        if not frame or not frame.step:
+            raise self.error(ERROR_INVALID_ACTION, "No form is awaiting input.")
+        if frame.step.required:
+            raise self.error(ERROR_INVALID_INPUT, "Cannot skip a required field.", field=frame.step.name)
+        frame.data.setdefault("args", {})[frame.step.name] = frame.step.default
+        frame.step_index += 1
+        if frame.step:
+            event = self.cs.event("form_step", self.actor_id, name=frame.name, step=frame.step.name, prompt=frame.step.prompt)
+            return ActionResult(True, self.action_type, "Input required.", events=[event], data={"step": frame.step.name})
+        pending = {"name": frame.name, "args": frame.data["args"]}
+        actor, action_type = frame.actor_id, frame.action_type
+        self.cs.pop_phase()
         from state_machine.action_map import create_action
 
-        result = create_action(self.cs, pending["type"], content, pending["actor_id"]).enact()
-        result.events.insert(0, event)
+        result = create_action(self.cs, action_type, pending, actor).enact()
+        if not result.ok and action_type == "call_command":
+            frame.step_index = max(0, len(frame.steps) - 1)
+            self.cs.push_phase(frame)
+            if result.error:
+                result.error.retry_phase = self.cs.phase
         return result
-
-    def _approved(self) -> bool:
-        if isinstance(self.content, bool):
-            return self.content
-        if isinstance(self.content, dict) and "approved" in self.content:
-            return bool(self.content["approved"])
-        text = str(self.content.get("text") if isinstance(self.content, dict) else self.content).strip().lower()
-        if text in {"y", "yes", "approve", "approved", "true"}:
-            return True
-        if text in {"n", "no", "deny", "denied", "false", "cancel"}:
-            return False
-        raise self.error(ERROR_INVALID_INPUT, "Approval needs yes or no.")
 
 
 class SendAttachment(Action):

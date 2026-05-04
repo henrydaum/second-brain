@@ -14,6 +14,7 @@ where everything flows through, easy to find, easy to read.
 """
 
 import threading
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -129,8 +130,6 @@ class ConversationRuntime:
             return self.load_history(session.key, int((payload or {}).get("conversation_id")))
         if action_type == "new_conversation":
             return self.new_conversation(session.key)
-        if action_type == "skip_form":
-            return self._skip_form(session)
 
         # Normalize legacy aliases.
         if action_type == "chat_message":
@@ -270,33 +269,6 @@ class ConversationRuntime:
             return text
         return payload
 
-    def _skip_form(self, session: RuntimeSession) -> RuntimeResult:
-        """Skip an optional form field and replay the original action.
-
-        This stays a special-case because it's a frontend convenience (the
-        user explicitly chose to skip), not a state-machine action.
-        """
-        frame = session.cs.frame
-        if not frame or not frame.step or frame.step.required:
-            return RuntimeResult(False, ["Cannot skip this field."], error={"code": "invalid_skip", "message": "Cannot skip this field."})
-        frame.data.setdefault("args", {})[frame.step.name] = frame.step.default
-        frame.step_index += 1
-        if frame.step:
-            out = RuntimeResult(messages=["Input required."])
-            self._decorate_form(session, out)
-            return out
-        pending = {"name": frame.name, "args": frame.data["args"]}
-        actor, action_type = frame.actor_id, frame.action_type
-        session.cs.pop_phase()
-
-        # ──────────────── THE enact() SITE (form replay) ────────────────
-        result = session.cs.enact(action_type, pending, actor)
-        # ────────────────────────────────────────────────────────────────
-
-        out = RuntimeResult().add_action_result(result)
-        self._echo_callable_result(action_type, result, out)
-        return out
-
     # ──────────────────────────────────────────────────────────────────────
     # Session + persistence + setup
     # ──────────────────────────────────────────────────────────────────────
@@ -320,10 +292,35 @@ class ConversationRuntime:
         )
         with self._sessions_lock:
             self.sessions[session_key] = session
+        self._restore_pending_requests(session)
         return RuntimeResult(
             messages=[f"Loaded conversation: {self._conversation_title(conversation_id)}"],
             data={"conversation_id": conversation_id, "history": session.history},
         )
+
+    def _restore_pending_requests(self, session: RuntimeSession) -> None:
+        """Re-emit `approval_requested` events for any phase frames that were
+        mid-flight when the session was last persisted, so frontend adapters
+        can re-register them in their pending-request tables and re-prompt
+        the user.
+        """
+        if not self.emit_event:
+            return
+        frames = session.cs.cache.get("phases", []) if isinstance(session.cs.cache, dict) else []
+        for frame in frames:
+            if getattr(frame, "phase", None) != PHASE_APPROVING_REQUEST:
+                continue
+            data = getattr(frame, "data", {}) or {}
+            req = StateMachineApprovalRequest(
+                title=data.get("title") or frame.name or "Input required",
+                body=data.get("prompt") or "",
+                pending_action=data.get("pending"),
+                id=data.get("request_id") or f"approve_{uuid.uuid4().hex}",
+                type=data.get("type", "boolean"),
+                enum=data.get("enum"),
+                default=data.get("default"),
+            )
+            self.emit_event("approval_requested", req)
 
     def new_conversation(self, session_key: str) -> RuntimeResult:
         with self._sessions_lock:
@@ -331,13 +328,44 @@ class ConversationRuntime:
         return RuntimeResult(messages=[f"New conversation started. Agent: {self.config.get('active_agent_profile') or 'default'}."])
 
     def request_approval(self, session_key: str, title: str, body: str, pending_action: dict[str, Any]) -> StateMachineApprovalRequest:
-        """Native approval object, but transport/event-bus friendly."""
+        """Boolean-approval gate. Thin wrapper around `request_input`."""
+        return self.request_input(session_key, title, body, type="boolean", pending_action=pending_action)
+
+    def request_input(
+        self,
+        session_key: str,
+        title: str,
+        prompt: str,
+        *,
+        type: str = "boolean",
+        enum: list | None = None,
+        default: Any = None,
+        required: bool = True,
+        pending_action: dict[str, Any] | None = None,
+    ) -> StateMachineApprovalRequest:
+        """Request typed user input (string, integer, number, boolean, array, object, enum).
+
+        The phase frame stores everything needed to rebuild the in-memory
+        `StateMachineApprovalRequest` after a restart (see `load_history`).
+        """
         session = self.get_session(session_key)
         with session.lock:
-            req = StateMachineApprovalRequest(title, body, pending_action)
+            req = StateMachineApprovalRequest(
+                title=title, body=prompt, pending_action=pending_action,
+                type=type, enum=enum, default=default,
+            )
             session.cs.push_phase(PhaseFrame(
                 PHASE_APPROVING_REQUEST, "answer_approval", "user", title,
-                {"request_id": req.id, "pending": pending_action},
+                {
+                    "request_id": req.id,
+                    "type": type,
+                    "enum": enum,
+                    "default": default,
+                    "required": required,
+                    "title": title,
+                    "prompt": prompt,
+                    "pending": pending_action,
+                },
             ))
             session.cs.set_priority("user")
             if self.emit_event:

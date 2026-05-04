@@ -194,7 +194,7 @@ class ConversationLoop:
             return "end_turn", {"final_text": text}
 
         # 3) Otherwise call the LLM for the next response.
-        response = self._invoke(self._messages(history), self.tool_registry.get_all_schemas() or None, image_paths or None)
+        response = self._invoke(self._messages(history), self.tool_registry.get_all_schemas() or None, image_paths or None, history)
 
         if getattr(response, "has_tool_calls", False):
             self._pending_tool_calls = list(response.tool_calls)
@@ -306,23 +306,57 @@ class ConversationLoop:
         prompt = self.system_prompt() if callable(self.system_prompt) else self.system_prompt
         return [{"role": "system", "content": prompt}, *[m for m in history if m.get("role") != "system"]]
 
-    def _invoke(self, messages, tools, image_paths=None):
-        response = self.llm.chat_with_tools(messages, tools, image_paths=image_paths)
+    def _invoke(self, messages, tools, image_paths=None, history=None):
+        from plugins.services.llmService import is_context_limit_error
+
+        try:
+            response = self.llm.chat_with_tools(messages, tools, image_paths=image_paths)
+        except Exception as e:
+            if history is None or not is_context_limit_error(e):
+                raise
+            logger.warning("Context limit hit, compacting and retrying: %s", e)
+            self._compact(history)
+            try:
+                response = self.llm.chat_with_tools(self._messages(history), tools, image_paths=None)
+            except Exception as retry_error:
+                if is_context_limit_error(retry_error):
+                    raise RuntimeError("Context limit reached even after compacting. Use /new to start fresh.") from retry_error
+                raise
         if getattr(response, "is_error", False):
-            raise RuntimeError(getattr(response, "error", None) or getattr(response, "content", None) or "LLM provider error.")
+            err = getattr(response, "error", None) or getattr(response, "content", None) or "LLM provider error."
+            if history is not None and is_context_limit_error(err):
+                logger.warning("Context limit hit (response error), compacting and retrying: %s", err)
+                self._compact(history)
+                response = self.llm.chat_with_tools(self._messages(history), tools, image_paths=None)
+                if getattr(response, "is_error", False):
+                    raise RuntimeError("Context limit reached even after compacting. Use /new to start fresh.")
+            else:
+                raise RuntimeError(err)
         return response
 
     def _compact_if_needed(self, response, history) -> None:
-        # Compact when prompt tokens approach the model's context size.
+        # Proactive compaction: trigger before hitting the context limit when
+        # the model's context_size is set. context_size == 0 disables proactive
+        # compaction; reactive compaction in `_invoke` is the safety net.
         ctx, tok = getattr(self.llm, "context_size", 0), getattr(response, "prompt_tokens", 0)
         if not ctx or not tok or tok / ctx < 0.80 or len(history) <= 2:
             return
+        self._compact(history)
+
+    def _compact(self, history) -> None:
+        """Summarize the head of `history` in place. Used by both proactive
+        and reactive compaction."""
+        if len(history) <= 2:
+            return
         try:
             transcript = "\n".join(f"{m.get('role', '').upper()}: {(m.get('content') or '')[:1000]}" for m in history[:-2])
-            summary_response = self._invoke([
+            summary_response = self.llm.chat_with_tools([
                 {"role": "system", "content": "Summarize this Second Brain conversation so the assistant can continue with minimal loss."},
                 {"role": "user", "content": transcript[:20000]},
-            ], tools=None)
+            ], None)
+            if getattr(summary_response, "is_error", False):
+                logger.debug("Compaction summarization returned error: %s", getattr(summary_response, "error", None))
+                return
             summary = _clean(getattr(summary_response, "content", ""))
             if not summary:
                 return
