@@ -4,7 +4,7 @@ import logging
 import threading
 from pathlib import Path
 
-from frontend.commands import CommandEntry
+from plugins.frontends.helpers.command_registry import CommandEntry
 from frontend.platforms.platform_repl import ReplPlatformAdapter
 from frontend.runtime import FrontendRuntime
 from frontend.types import FrontendEvent, FrontendSession

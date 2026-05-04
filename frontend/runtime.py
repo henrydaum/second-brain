@@ -11,7 +11,7 @@ from agent.system_prompt import build_system_prompt
 from runtime.agent_scope import load_scope, resolve_agent_llm, scoped_registry
 from events.event_bus import bus
 from events.event_channels import APPROVAL_REQUESTED, APPROVAL_RESOLVED, CHAT_MESSAGE_PUSHED, TOOLS_CHANGED, TASKS_CHANGED
-from frontend.commands import CommandRegistry, active_agent_line, register_core_commands
+from plugins.frontends.helpers.command_registry import CommandRegistry, active_agent_line, register_core_commands
 from frontend.dispatch import InputResult, route_input
 from frontend.presenter import FrontendPresenter
 from frontend.types import FrontendEvent, FrontendSession

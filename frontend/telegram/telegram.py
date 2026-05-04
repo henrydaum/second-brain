@@ -17,7 +17,7 @@ from pathlib import Path
 
 from pipeline.attachment_cache import save as save_attachment
 from plugins.services.helpers.parser_registry import get_modality
-from frontend.commands import CommandEntry, new_conversation_message
+from plugins.frontends.helpers.command_registry import CommandEntry, new_conversation_message
 from frontend.formatters import (
     format_services, format_tasks, format_tools,
     format_tool_result,
