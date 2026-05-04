@@ -16,14 +16,12 @@ from plugins.frontends.helpers.telegram_renderers import (
     prepare_media_actions,
     prepare_photo_bytes,
 )
-from plugins.services.helpers.parser_registry import get_modality
 from state_machine.action_map import ACTION_SEND_ATTACHMENT
 from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
 
 logger = logging.getLogger("TelegramFrontend")
 
 _MAX_FILE_SIZE = 50 * 1024 * 1024
-_MAX_ATTACHMENT_TEXT = 4000
 
 
 def _md_to_tg_html(text: str) -> str:
@@ -77,6 +75,7 @@ class TelegramFrontend(BaseFrontend):
         self._chat_by_session: dict[str, int] = {}
         self._callbacks: dict[str, tuple[str, str]] = {}
         self._tool_messages: dict[str, tuple[int, int, str]] = {}
+        self._last_keyboard: dict[str, tuple[int, int]] = {}
 
     def session_key(self, ctx) -> str:
         user = getattr(getattr(ctx, "effective_user", None), "id", None) or getattr(ctx, "user_id", 0)
@@ -123,6 +122,11 @@ class TelegramFrontend(BaseFrontend):
                 key, value = self._callbacks.pop(token)
                 try:
                     await query.edit_message_reply_markup(reply_markup=None)
+                except Exception:
+                    pass
+                self._last_keyboard.pop(key, None)
+                try:
+                    await query.message.reply_text(value.split(":", 2)[-1] if value.startswith("approval:") else value)
                 except Exception:
                     pass
                 if value.startswith("approval:"):
@@ -182,10 +186,12 @@ class TelegramFrontend(BaseFrontend):
             return super().submit_text(session_key, text)
 
     def render_messages(self, session_key: str, messages: list[str]) -> None:
+        self._clear_last_keyboard(session_key)
         for msg in messages:
             self._send_text(session_key, _md_to_tg_html(msg), use_html=True)
 
     def render_attachments(self, session_key: str, paths: list[str]) -> None:
+        self._clear_last_keyboard(session_key)
         self._send(self._send_media(self._chat_id(session_key), paths))
 
     def render_form_field(self, session_key: str, form: dict) -> None:
@@ -200,6 +206,7 @@ class TelegramFrontend(BaseFrontend):
         self._send_text(session_key, "Choose:", markup=self._buttons_markup(session_key, buttons))
 
     def render_error(self, session_key: str, error: dict) -> None:
+        self._clear_last_keyboard(session_key)
         self._send_text(session_key, html.escape(f"Error: {(error or {}).get('message') or error}"))
 
     def render_tool_status(self, session_key: str, payload: dict) -> None:
@@ -207,8 +214,13 @@ class TelegramFrontend(BaseFrontend):
         if not chat_id:
             return
         key = f"{session_key}:{payload.get('call_id')}"
-        name = payload.get("tool_name") or "tool"
+        name = payload.get("tool_name") or payload.get("command_name") or "call"
         self._send(self._send_tool_started(chat_id, key, name) if payload.get("status") == "started" else self._finish_tool_message(key, chat_id, name, bool(payload.get("ok")), payload.get("error")))
+
+    def on_bus_approval_resolved(self, req) -> None:
+        super().on_bus_approval_resolved(req)
+        for key in self._live_session_keys():
+            self._clear_last_keyboard(key)
 
     def _live_session_keys(self) -> list[str]:
         if self._chat_by_session:
@@ -258,24 +270,7 @@ class TelegramFrontend(BaseFrontend):
             await msg.reply_text("File too large (50 MB limit).")
             return
         cache_path = save_attachment(file_name, bytes(await tg_file.download_as_bytearray()), float(self.config.get("attachment_cache_size_gb", 2.0)))
-        text, image_paths = self._attachment_text(msg.caption or "", file_name, cache_path, bool(msg.photo))
-        await self._with_typing(msg.chat, lambda: self.submit(key, ACTION_SEND_ATTACHMENT, {"path": str(cache_path), "extension": cache_path.suffix.lstrip("."), "text": text, "image_paths": image_paths}), ChatAction)
-
-    def _attachment_text(self, caption: str, file_name: str, path: Path, is_photo: bool) -> tuple[str, list[str]]:
-        suffix = path.suffix or Path(file_name).suffix
-        modality = get_modality(suffix) if suffix else "unknown"
-        text = caption or ""
-        if modality == "image" or is_photo:
-            has_vision = self.services.get("llm") and self.services["llm"].vision is not False
-            return (text + f"\n\n[The user attached an image: {file_name} (cached at {path})]").strip(), [str(path)] if has_vision else []
-        if modality in {"text", "tabular"} and self.services.get("parser"):
-            try:
-                parsed = self.services["parser"].parse(str(path), config={"max_chars": _MAX_ATTACHMENT_TEXT}).output
-                raw = parsed if isinstance(parsed, str) else str(parsed)
-                return (text + f"\n\n[The user attached a file: {file_name} (cached at {path})]\n{raw[:_MAX_ATTACHMENT_TEXT]}").strip(), []
-            except Exception as e:
-                logger.warning(f"Failed to parse Telegram attachment {file_name}: {e}")
-        return (text + f"\n\n[The user attached a file: {file_name} (cached at {path}). Use read_file or search tools to access it.]").strip(), []
+        await self._with_typing(msg.chat, lambda: self.submit(key, ACTION_SEND_ATTACHMENT, {"path": str(cache_path), "extension": cache_path.suffix.lstrip("."), "caption": msg.caption or "", "file_name": file_name, "is_photo": bool(msg.photo)}), ChatAction)
 
     def _send_text(self, session_key: str, text: str, use_html: bool = True, markup=None) -> None:
         chat_id = self._chat_id(session_key)
@@ -283,11 +278,18 @@ class TelegramFrontend(BaseFrontend):
             self._send(self._send_text_async(chat_id, text, use_html, markup))
 
     async def _send_text_async(self, chat_id: int, text: str, use_html: bool, markup=None):
+        session_key = next((k for k, v in self._chat_by_session.items() if v == chat_id), None)
+        if session_key and markup:
+            await self._clear_last_keyboard_async(session_key)
+        elif session_key:
+            await self._clear_last_keyboard_async(session_key)
         for chunk in _chunks(text, self.capabilities.max_message_chars or 4096):
             try:
-                await self.app.bot.send_message(chat_id, chunk, parse_mode="HTML" if use_html else None, reply_markup=markup)
+                sent = await self.app.bot.send_message(chat_id, chunk, parse_mode="HTML" if use_html else None, reply_markup=markup)
             except Exception:
-                await self.app.bot.send_message(chat_id, html.unescape(chunk), reply_markup=markup)
+                sent = await self.app.bot.send_message(chat_id, html.unescape(chunk), reply_markup=markup)
+            if session_key and markup:
+                self._last_keyboard[session_key] = (chat_id, sent.message_id)
             markup = None
 
     async def _send_media(self, chat_id: int | None, paths: list[str]):
@@ -325,7 +327,7 @@ class TelegramFrontend(BaseFrontend):
 
     async def _finish_tool_message(self, key: str, chat_id: int, name: str, ok: bool, error: str | None):
         entry = self._tool_messages.pop(key, None)
-        text = f"{'✅' if ok else '❌'} <code>{html.escape(name)}</code>"
+        text = f"{'✓' if ok else '✗'} <code>{html.escape(name)}</code>"
         if error and not ok:
             text += f"\n{html.escape(str(error))}"
         if entry:
@@ -360,6 +362,8 @@ class TelegramFrontend(BaseFrontend):
 
     def _prompt(self, name: str | None, field: dict) -> str:
         bits = [f"<b>{html.escape(name or 'Input required')}</b>", html.escape(field.get("prompt") or field.get("name") or "Input required")]
+        if field.get("type"):
+            bits.append(f"<i>Type: {html.escape(str(field['type']))}</i>")
         if field.get("required") is False:
             bits.append("<i>/skip to skip. /cancel to cancel.</i>")
         return "\n".join(bits)
@@ -405,3 +409,15 @@ class TelegramFrontend(BaseFrontend):
     def _markup(rows):
         from telegram import InlineKeyboardMarkup
         return InlineKeyboardMarkup(rows) if rows else None
+
+    def _clear_last_keyboard(self, key: str) -> None:
+        self._send(self._clear_last_keyboard_async(key))
+
+    async def _clear_last_keyboard_async(self, key: str):
+        entry = self._last_keyboard.pop(key, None)
+        if not entry or self.app is None:
+            return
+        try:
+            await self.app.bot.edit_message_reply_markup(chat_id=entry[0], message_id=entry[1], reply_markup=None)
+        except Exception:
+            pass

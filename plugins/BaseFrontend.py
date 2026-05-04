@@ -25,6 +25,8 @@ from events.event_channels import (
     APPROVAL_REQUESTED,
     APPROVAL_RESOLVED,
     CHAT_MESSAGE_PUSHED,
+    COMMAND_CALL_FINISHED,
+    COMMAND_CALL_STARTED,
     TASKS_CHANGED,
     TOOL_CALL_FINISHED,
     TOOL_CALL_STARTED,
@@ -218,6 +220,8 @@ class BaseFrontend:
             bus.subscribe(APPROVAL_REQUESTED, self.on_bus_approval_requested),
             bus.subscribe(APPROVAL_RESOLVED, self.on_bus_approval_resolved),
             bus.subscribe(CHAT_MESSAGE_PUSHED, self.on_bus_message_pushed),
+            bus.subscribe(COMMAND_CALL_STARTED, self.on_bus_command_call_started),
+            bus.subscribe(COMMAND_CALL_FINISHED, self.on_bus_command_call_finished),
             bus.subscribe(TOOL_CALL_STARTED, self.on_bus_tool_call_started),
             bus.subscribe(TOOL_CALL_FINISHED, self.on_bus_tool_call_finished),
             bus.subscribe(TOOLS_CHANGED, self.on_tools_changed),
@@ -363,7 +367,11 @@ class BaseFrontend:
             return
         title = (payload or {}).get("title")
         body = f"{title}\n\n{message}" if title else message
-        for key in self._live_session_keys():
+        target = (payload or {}).get("session_key")
+        keys = [target] if target else self._live_session_keys()
+        for key in keys:
+            if key not in self._live_session_keys():
+                continue
             try:
                 self.render_messages(key, [body])
             except Exception:
@@ -374,6 +382,12 @@ class BaseFrontend:
 
     def on_bus_tool_call_finished(self, payload: dict) -> None:
         self._render_tool_status_event({**(payload or {}), "status": "finished"})
+
+    def on_bus_command_call_started(self, payload: dict) -> None:
+        self._render_tool_status_event({**(payload or {}), "status": "started", "kind": "command"})
+
+    def on_bus_command_call_finished(self, payload: dict) -> None:
+        self._render_tool_status_event({**(payload or {}), "status": "finished", "kind": "command"})
 
     def on_tools_changed(self, _payload) -> None:
         return

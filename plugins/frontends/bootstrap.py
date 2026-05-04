@@ -59,6 +59,12 @@ def _conversation_runtime(ctrl, shutdown_fn, tool_registry, services, config, ro
     )
     runtime.command_registry = registry
     ref["runtime"] = runtime
+    # Tasks running through the orchestrator (scheduled subagents in
+    # particular) reach the runtime via context.runtime.
+    if getattr(ctrl, "orchestrator", None) is not None:
+        ctrl.orchestrator.runtime = runtime
+    if tool_registry is not None:
+        tool_registry.runtime = runtime
     return runtime
 
 

@@ -144,7 +144,7 @@ class Cancel(Action):
     def execute(self):
         frame = self.cs.pop_phase()
         event = self.cs.event("cancelled", self.actor_id, cancelled=frame.action_type if frame else None)
-        return ActionResult(True, self.action_type, events=[event])
+        return ActionResult(True, self.action_type, "Cancelled.", events=[event])
 
 
 class _CallableAction(Action):
@@ -229,14 +229,41 @@ class _CallableAction(Action):
     def _run(self, spec: CallableSpec, args: dict[str, Any]):
         old_phase = self.cs.phase
         self.cs.phase = self.calling_phase
+        started = self._emit_command_started(spec, args)
         try:
             value = spec.handler(self.cs, self.actor_id, args) if spec.handler else None
             if isinstance(value, ActionResult) and not value.ok:
                 raise value.error or self.error(ERROR_EXECUTION_FAILED, value.message or "Action failed.")
+        except Exception as e:
+            self._emit_command_finished(started, spec, False, str(e))
+            raise
         finally:
             self.cs.reset_phase()
+        self._emit_command_finished(started, spec, True, None)
         event = self.cs.event(self.action_type, self.actor_id, name=spec.name, args=args, result=value, previous_phase=old_phase)
         return ActionResult(True, self.action_type, events=[event], data={"result": value})
+
+    def _emit_command_started(self, spec: CallableSpec, args: dict[str, Any]):
+        if self.action_type != "call_command":
+            return None
+        try:
+            from events.event_bus import bus
+            from events.event_channels import COMMAND_CALL_STARTED
+            call_id = f"cmd:{spec.name}:{id(args)}"
+            bus.emit(COMMAND_CALL_STARTED, {"session_key": self.cs.cache.get("session_key"), "call_id": call_id, "command_name": spec.name, "args": args})
+            return call_id
+        except Exception:
+            return None
+
+    def _emit_command_finished(self, call_id, spec: CallableSpec, ok: bool, error: str | None):
+        if not call_id:
+            return
+        try:
+            from events.event_bus import bus
+            from events.event_channels import COMMAND_CALL_FINISHED
+            bus.emit(COMMAND_CALL_FINISHED, {"session_key": self.cs.cache.get("session_key"), "call_id": call_id, "command_name": spec.name, "ok": ok, "error": error})
+        except Exception:
+            pass
 
 
 class CallCommand(_CallableAction):
@@ -263,10 +290,15 @@ class SubmitFormText(Action):
         if not frame or not frame.step:
             raise self.error(ERROR_INVALID_ACTION, "No form is awaiting input.")
         text = self.content if isinstance(self.content, str) else (self.content or {}).get("text")
-        ok, reason = frame.step.validate(text)
-        if not ok:
-            raise self.error(ERROR_INVALID_INPUT, reason or "Invalid input.", field=frame.step.name)
-        frame.data.setdefault("args", {})[frame.step.name] = frame.step.coerce(text)
+        try:
+            value = frame.step.coerce(text)
+        except Exception as e:
+            raise self.error(ERROR_INVALID_INPUT, f"{frame.step.name} must be {frame.step.type}: {e}", field=frame.step.name)
+        if frame.step.validator:
+            ok, reason = frame.step.validator(value)
+            if not ok:
+                raise self.error(ERROR_INVALID_INPUT, reason or "Invalid input.", field=frame.step.name)
+        frame.data.setdefault("args", {})[frame.step.name] = value
         frame.step_index += 1
         spec = self.cs.spec(frame.actor_id, frame.action_type, frame.name)
         missing = _missing(spec, frame.data["args"]) if spec else []
@@ -387,7 +419,7 @@ class SkipForm(Action):
         if missing:
             frame.steps, frame.step_index = missing, 0
             event = self.cs.event("form_step", self.actor_id, name=frame.name, step=missing[0].name, prompt=missing[0].prompt)
-            return ActionResult(True, self.action_type, "Input required.", events=[event], data={"step": frame.step.name})
+            return ActionResult(True, self.action_type, "Skipped.", events=[event], data={"step": frame.step.name})
         pending = {"name": frame.name, "args": frame.data["args"]}
         actor, action_type = frame.actor_id, frame.action_type
         self.cs.pop_phase()
@@ -399,6 +431,8 @@ class SkipForm(Action):
             self.cs.push_phase(frame)
             if result.error:
                 result.error.retry_phase = self.cs.phase
+        if result.ok:
+            result.message = result.message or "Skipped."
         return result
 
 
@@ -422,5 +456,8 @@ class SendAttachment(Action):
         self.cs.phase = PHASE_PARSING_ATTACHMENT
         parsed = self.cs.attachment_parser(content) if self.cs.attachment_parser else content
         self.cs.reset_phase()
+        actor = self.cs.participants.get(self.actor_id)
+        if actor and actor.kind == "user":
+            self.cs.switch_priority(self.actor_id)
         event = self.cs.event("attachment", self.actor_id, attachment=content, parsed=parsed)
         return ActionResult(True, self.action_type, events=[event], data={"parsed": parsed})

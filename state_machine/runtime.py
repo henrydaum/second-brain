@@ -16,14 +16,27 @@ where everything flows through, easy to find, easy to read.
 import threading
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from state_machine.approval import StateMachineApprovalRequest
 from state_machine.conversationClass import CallableSpec, ConversationState, FormStep, Participant, PhaseFrame
 from state_machine.conversation_loop import ConversationLoop
-from state_machine.conversation_phases import BASE_PHASE, PHASE_APPROVING_REQUEST
+from state_machine.conversation_phases import BASE_PHASE, BUSY_PHASES, PHASE_APPROVING_REQUEST
 from state_machine.errors import ActionError, ActionResult
-from events.event_channels import TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from events.event_bus import bus
+from events.event_channels import (
+    CHAT_MESSAGE_PUSHED,
+    SESSION_AGENT_PROFILE_CHANGED,
+    SESSION_CLOSED,
+    SESSION_CREATED,
+    SESSION_MESSAGE,
+    SESSION_PHASE_CHANGED,
+    SESSION_TURN_CHANGED,
+    SYSTEM_PROMPT_EXTRA_CHANGED,
+    TOOL_CALL_FINISHED,
+    TOOL_CALL_STARTED,
+)
 from state_machine.forms import schema_to_form_steps
 from state_machine.persistence import latest_state, messages_to_history, save_history_message, save_state_marker
 
@@ -62,13 +75,26 @@ class RuntimeSession:
     conversation_id: int | None = None
     busy: bool = False
     active_agent_profile: str = "default"
+    # Subagent / specialist sessions pin a profile and can register extra tool
+    # instances (e.g. the subagent MessageTool) that are not part of the global
+    # tool_registry. When None / empty, the session follows the runtime's
+    # active profile and uses the global tool registry.
+    profile_override: str | None = None
+    extra_tool_instances: list = field(default_factory=list)
+    is_subagent: bool = False
+    subagent_meta: dict[str, Any] = field(default_factory=dict)
+    system_prompt_extras: dict[str, Any] = field(default_factory=dict)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def to_marker(self) -> dict[str, Any]:
         state = self.cs.to_dict()
         state.update({
             "conversation_id": self.conversation_id,
             "active_agent_profile": self.active_agent_profile,
+            "profile_override": self.profile_override,
+            "is_subagent": self.is_subagent,
+            "subagent_meta": self.subagent_meta,
             "busy": self.busy,
         })
         return state
@@ -112,13 +138,27 @@ class ConversationRuntime:
 
     def handle_action(self, session_key: str, action_type: str, payload: dict | str | None = None) -> RuntimeResult:
         session = self.get_session(session_key)
+        normalized = "send_text" if action_type == "chat_message" else action_type
+        if session.busy or session.cs.phase in BUSY_PHASES:
+            if normalized == "cancel":
+                session.cancel_event.set()
+                return RuntimeResult(messages=["Cancelled."])
+            if normalized == "send_text":
+                return RuntimeResult(messages=["Not your turn - I'm still working. Send /cancel to interrupt."])
+            return RuntimeResult(False, messages=["Still working. Send /cancel to interrupt."], error={"code": "busy", "message": "Still working."})
         with session.lock:
             try:
                 self._refresh_session_specs(session)
-                return self._dispatch(session, action_type, payload)
+                out = self._dispatch(session, action_type, payload)
             finally:
                 if action_type not in {"load_history", "new_conversation"}:
                     self._persist_marker(session)
+        drive_images = out.data.pop("_drive_agent_image_paths", None)
+        if drive_images is not None:
+            self._drive_agent_turn(session, out, drive_images)
+            with session.lock:
+                self._persist_marker(session)
+        return out
 
     # ──────────────────────────────────────────────────────────────────────
     # The single user-side dispatch. One labeled `cs.enact()` line, plus a
@@ -159,12 +199,18 @@ class ConversationRuntime:
 
         out = RuntimeResult()
 
+        old_phase = session.cs.phase
+        old_priority = session.cs.turn_priority
+
         # ──────────────── THE enact() SITE (user-side) ────────────────
         result = session.cs.enact(action_type, content, actor_id)
         # ──────────────────────────────────────────────────────────────
 
         out.add_action_result(result)
+        text = self._result_text(action_type, text, result)
+        image_paths = self._result_image_paths(action_type, image_paths, result)
         self._absorb_user_action(session, action_type, text, result)
+        self._emit_state_change(session, old_phase, old_priority)
         self._decorate_form(session, out)
         self._echo_callable_result(action_type, result, out)
 
@@ -172,7 +218,7 @@ class ConversationRuntime:
                 and result.ok
                 and session.cs.turn_priority == "agent"
                 and session.cs.phase == BASE_PHASE):
-            self._drive_agent_turn(session, out, image_paths)
+            out.data["_drive_agent_image_paths"] = image_paths
 
         return out
 
@@ -185,6 +231,7 @@ class ConversationRuntime:
     def _drive_agent_turn(self, session: RuntimeSession, out: RuntimeResult, image_paths: list[str] | None) -> RuntimeResult:
         self._ensure_conversation(session, self._latest_user_text(session))
         session.busy = True
+        session.cancel_event.clear()
         try:
             loop = self._loop(session.key)
             reply, new_messages, attachments = loop.drive(
@@ -209,6 +256,7 @@ class ConversationRuntime:
             # priority so the conversation can continue.
             if session.cs.turn_priority != "user":
                 session.cs.set_priority("user")
+            session.cancel_event.clear()
 
         if (self.title_callback and session.conversation_id
                 and any(m.get("role") == "assistant" and not m.get("tool_calls") for m in new_messages)):
@@ -216,6 +264,12 @@ class ConversationRuntime:
 
         if reply:
             out.messages.append(reply)
+            bus.emit(SESSION_MESSAGE, {
+                "session_key": session.key,
+                "role": "assistant",
+                "content": reply,
+                "actor_id": "agent",
+            })
         elif new_messages:
             # Agent ended without final text but produced messages — surface
             # the last assistant content if any, otherwise flag as cancelled.
@@ -233,6 +287,20 @@ class ConversationRuntime:
     # Helpers
     # ──────────────────────────────────────────────────────────────────────
 
+    def _emit_state_change(self, session: RuntimeSession, old_phase: str, old_priority: str) -> None:
+        if session.cs.phase != old_phase:
+            bus.emit(SESSION_PHASE_CHANGED, {
+                "session_key": session.key,
+                "old_phase": old_phase,
+                "new_phase": session.cs.phase,
+            })
+        if session.cs.turn_priority != old_priority:
+            bus.emit(SESSION_TURN_CHANGED, {
+                "session_key": session.key,
+                "from_actor": old_priority,
+                "to_actor": session.cs.turn_priority,
+            })
+
     def _absorb_user_action(self, session: RuntimeSession, action_type: str, text: str, result: ActionResult) -> None:
         """Translate user-side action outcomes into history rows + side effects.
 
@@ -248,6 +316,12 @@ class ConversationRuntime:
             session.history.append(msg)
             if self.db and session.conversation_id:
                 save_history_message(self.db, session.conversation_id, msg)
+            bus.emit(SESSION_MESSAGE, {
+                "session_key": session.key,
+                "role": "user",
+                "content": text,
+                "actor_id": "user",
+            })
 
     def _echo_callable_result(self, action_type: str, result: ActionResult, out: RuntimeResult) -> None:
         """Surface command/tool return values to the frontend (v1 behavior)."""
@@ -271,6 +345,18 @@ class ConversationRuntime:
             return text
         return payload
 
+    def _result_text(self, action_type: str, text: str, result: ActionResult) -> str:
+        if action_type != "send_attachment" or not result.ok:
+            return text
+        parsed = (result.data or {}).get("parsed")
+        return str((parsed or {}).get("text") or text) if isinstance(parsed, dict) else text
+
+    def _result_image_paths(self, action_type: str, image_paths: list[str], result: ActionResult) -> list[str]:
+        if action_type != "send_attachment" or not result.ok:
+            return image_paths
+        parsed = (result.data or {}).get("parsed")
+        return list((parsed or {}).get("image_paths") or image_paths) if isinstance(parsed, dict) else image_paths
+
     # ──────────────────────────────────────────────────────────────────────
     # Session + persistence + setup
     # ──────────────────────────────────────────────────────────────────────
@@ -278,7 +364,14 @@ class ConversationRuntime:
     def get_session(self, key: str) -> RuntimeSession:
         with self._sessions_lock:
             if key not in self.sessions:
-                self.sessions[key] = RuntimeSession(key, self._new_state())
+                session = RuntimeSession(key, self._new_state())
+                session.cs = self._new_state(session=session)
+                self.sessions[key] = session
+                bus.emit(SESSION_CREATED, {
+                    "session_key": key,
+                    "is_subagent": False,
+                    "agent_profile": session.active_agent_profile,
+                })
             return self.sessions[key]
 
     def load_history(self, session_key: str, conversation_id: int) -> RuntimeResult:
@@ -292,13 +385,92 @@ class ConversationRuntime:
             False,
             marker.get("active_agent_profile") or self.config.get("active_agent_profile") or "default",
         )
+        # Re-seed cs with session-aware specs.
+        session.cs = self._new_state(marker, session=session)
         with self._sessions_lock:
             self.sessions[session_key] = session
+        bus.emit(SESSION_CREATED, {
+            "session_key": session_key,
+            "is_subagent": False,
+            "agent_profile": session.active_agent_profile,
+        })
         self._restore_pending_requests(session)
         return RuntimeResult(
             messages=[f"Loaded conversation: {self._conversation_title(conversation_id)}"],
             data={"conversation_id": conversation_id, "history": session.history},
         )
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Subagent sessions: pinned to a profile, with optional pinned tool
+    # instances (e.g. MessageTool) and a persistent conversation_id. Each
+    # scheduled subagent owns one of these — same dispatcher, same approvals,
+    # same form/cancel machinery as a user session.
+    # ──────────────────────────────────────────────────────────────────────
+
+    def create_subagent_session(
+        self,
+        session_key: str,
+        *,
+        agent_profile: str = "default",
+        conversation_id: int | None = None,
+        extra_tool_instances: list | None = None,
+        subagent_meta: dict | None = None,
+        system_prompt_extras: dict | None = None,
+        history: list[dict[str, Any]] | None = None,
+    ) -> RuntimeSession:
+        """Create or replace a subagent-pinned session.
+
+        The session's profile, tool scope, and any pinned tool instances are
+        fixed at creation time. Subsequent ``handle_action`` calls on this
+        session_key will use them regardless of which profile the user has
+        active in the foreground.
+        """
+        session = RuntimeSession(
+            session_key,
+            self._new_state(),
+            list(history or []),
+            conversation_id,
+            False,
+            agent_profile,
+            profile_override=agent_profile,
+            extra_tool_instances=list(extra_tool_instances or []),
+            is_subagent=True,
+            subagent_meta=dict(subagent_meta or {}),
+            system_prompt_extras=dict(system_prompt_extras or {}),
+        )
+        session.cs = self._new_state(session=session)
+        with self._sessions_lock:
+            existed = session_key in self.sessions
+            self.sessions[session_key] = session
+        if existed:
+            bus.emit(SESSION_CLOSED, {"session_key": session_key})
+        bus.emit(SESSION_CREATED, {
+            "session_key": session_key,
+            "is_subagent": True,
+            "agent_profile": agent_profile,
+        })
+        return session
+
+    def update_subagent_session(self, session_key: str, **fields) -> RuntimeSession | None:
+        """Update mutable fields on an existing subagent session in place.
+
+        Useful when the per-run notification mode or pending-message flag
+        changes between fires without rebuilding the whole session.
+        """
+        session = self.sessions.get(session_key)
+        if session is None or not session.is_subagent:
+            return None
+        for key, value in fields.items():
+            if key == "system_prompt_extras":
+                session.system_prompt_extras = dict(value or {})
+            elif key == "extra_tool_instances":
+                session.extra_tool_instances = list(value or [])
+                self._refresh_session_specs(session)
+            elif key == "subagent_meta":
+                session.subagent_meta = dict(value or {})
+            elif hasattr(session, key):
+                setattr(session, key, value)
+        return session
 
     def _restore_pending_requests(self, session: RuntimeSession) -> None:
         """Re-emit `approval_requested` events for any phase frames that were
@@ -326,8 +498,168 @@ class ConversationRuntime:
 
     def new_conversation(self, session_key: str) -> RuntimeResult:
         with self._sessions_lock:
-            self.sessions[session_key] = RuntimeSession(session_key, self._new_state())
+            existed = session_key in self.sessions
+            session = RuntimeSession(session_key, self._new_state())
+            session.cs = self._new_state(session=session)
+            self.sessions[session_key] = session
+        if existed:
+            bus.emit(SESSION_CLOSED, {"session_key": session_key})
+        bus.emit(SESSION_CREATED, {
+            "session_key": session_key,
+            "is_subagent": False,
+            "agent_profile": session.active_agent_profile,
+        })
         return RuntimeResult(messages=[f"New conversation started. Agent: {self.config.get('active_agent_profile') or 'default'}."])
+
+    @staticmethod
+    def subagent_session_key(job_name: str) -> str:
+        return f"subagent:{job_name}"
+
+    def get_subagent_session(self, job_name: str) -> RuntimeSession | None:
+        return self.sessions.get(self.subagent_session_key(job_name))
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Plugin-facing API.
+    #
+    # Tools, tasks, and services can reach the runtime via
+    # ``context.runtime`` (built in ``runtime/context.py``). The methods
+    # below are the supported surface for *interacting* with sessions —
+    # producing messages, mutating the agent's profile or system prompt,
+    # registering session-pinned tools, and inspecting state.
+    #
+    # Anything not listed here is internal and may change without notice.
+    # ──────────────────────────────────────────────────────────────────────
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        """Return a snapshot of every live session as a dict.
+
+        Includes ``key``, ``is_subagent``, ``agent_profile``, ``phase``,
+        ``turn_priority``, ``conversation_id``, ``busy``, and the keys of
+        any system-prompt extras pinned to the session.
+        """
+        out = []
+        for key, s in list(self.sessions.items()):
+            out.append({
+                "key": key,
+                "is_subagent": s.is_subagent,
+                "agent_profile": s.profile_override or s.active_agent_profile,
+                "phase": s.cs.phase,
+                "turn_priority": s.cs.turn_priority,
+                "conversation_id": s.conversation_id,
+                "busy": s.busy,
+                "system_prompt_extras": list(s.system_prompt_extras.keys()),
+                "session_tools": [t.name for t in s.extra_tool_instances],
+            })
+        return out
+
+    def push_message(self, session_key: str, text: str, *, title: str | None = None,
+                     source: str | None = None, source_id: str | None = None) -> None:
+        """Surface a message in a session (typically the foreground one).
+
+        Plugins should prefer this over emitting CHAT_MESSAGE_PUSHED directly
+        — the runtime forwards through the same channel but stamps the
+        session_key, which lets multi-session frontends route correctly.
+        """
+        from events.event_channels import CHAT_MESSAGE_PUSHED
+        payload = {"message": text, "session_key": session_key}
+        if title:
+            payload["title"] = title
+        if source:
+            payload["source"] = source
+        if source_id:
+            payload["source_id"] = source_id
+        bus.emit(CHAT_MESSAGE_PUSHED, payload)
+
+    def set_agent_profile(self, session_key: str, profile: str) -> bool:
+        """Pin a different agent profile to an existing session.
+
+        Returns False if the session doesn't exist. The change is reflected
+        on the next ``handle_action`` call (registry/scope/system-prompt all
+        reread the override).
+        """
+        session = self.sessions.get(session_key)
+        if session is None:
+            return False
+        old = session.profile_override or session.active_agent_profile
+        session.profile_override = profile
+        session.active_agent_profile = profile
+        self._refresh_session_specs(session)
+        bus.emit(SESSION_AGENT_PROFILE_CHANGED, {
+            "session_key": session_key, "old_profile": old, "new_profile": profile,
+        })
+        return True
+
+    def add_system_prompt_extra(self, session_key: str, key: str, value: str) -> bool:
+        """Add or replace a named system-prompt addendum on a session.
+
+        Whatever string the plugin stores under ``key`` is appended to the
+        session's system prompt on every turn. Removal: pass ``None`` for
+        ``value`` or call ``remove_system_prompt_extra``.
+
+        Use cases: a service injecting current-state context (active doc, on-
+        call status); a tool pinning a remember-this note; a task running on
+        a schedule pinning its mode.
+        """
+        session = self.sessions.get(session_key)
+        if session is None:
+            return False
+        if value is None:
+            session.system_prompt_extras.pop(key, None)
+        else:
+            session.system_prompt_extras[key] = value
+        bus.emit(SYSTEM_PROMPT_EXTRA_CHANGED, {
+            "session_key": session_key, "key": key, "value": value,
+        })
+        return True
+
+    def remove_system_prompt_extra(self, session_key: str, key: str) -> bool:
+        return self.add_system_prompt_extra(session_key, key, None)
+
+    def add_session_tool(self, session_key: str, tool_instance) -> bool:
+        """Pin an extra tool instance to a session.
+
+        The tool is layered on top of the session's scoped registry, so the
+        agent on this session can call it but no other session sees it.
+        Useful for ephemeral, session-specific tools (e.g. a MessageTool
+        bound to a single subagent run).
+        """
+        session = self.sessions.get(session_key)
+        if session is None:
+            return False
+        # Replace any existing tool with the same name.
+        session.extra_tool_instances = [
+            t for t in session.extra_tool_instances if getattr(t, "name", None) != getattr(tool_instance, "name", None)
+        ]
+        session.extra_tool_instances.append(tool_instance)
+        self._refresh_session_specs(session)
+        return True
+
+    def remove_session_tool(self, session_key: str, tool_name: str) -> bool:
+        session = self.sessions.get(session_key)
+        if session is None:
+            return False
+        before = len(session.extra_tool_instances)
+        session.extra_tool_instances = [
+            t for t in session.extra_tool_instances if getattr(t, "name", None) != tool_name
+        ]
+        if len(session.extra_tool_instances) != before:
+            self._refresh_session_specs(session)
+            return True
+        return False
+
+    def cancel_session(self, session_key: str) -> RuntimeResult | None:
+        """Drive a ``cancel`` action on the session if one is live."""
+        if session_key not in self.sessions:
+            return None
+        return self.handle_action(session_key, "cancel")
+
+    def close_session(self, session_key: str) -> bool:
+        """Discard a session entirely. Persistence is unaffected."""
+        with self._sessions_lock:
+            existed = self.sessions.pop(session_key, None) is not None
+        if existed:
+            bus.emit(SESSION_CLOSED, {"session_key": session_key})
+        return existed
 
     def request_approval(self, session_key: str, title: str, body: str, pending_action: dict[str, Any]) -> StateMachineApprovalRequest:
         """Boolean-approval gate. Thin wrapper around `request_input`."""
@@ -376,15 +708,73 @@ class ConversationRuntime:
             return req
 
     def _loop(self, session_key: str | None = None) -> ConversationLoop:
-        llm = self._active_llm()
+        session = self.sessions.get(session_key) if session_key else None
+        llm = self._active_llm(session)
         if llm is None and hasattr(self, "llm"):
             llm = self.llm
         if llm is None or not getattr(llm, "loaded", True):
             raise RuntimeError("LLM service is not loaded.")
+        def notice(text: str):
+            if self.on_notice:
+                self.on_notice(text)
+            if session_key:
+                bus.emit(CHAT_MESSAGE_PUSHED, {"session_key": session_key, "message": text, "source": "runtime", "kind": "alert"})
+
         return ConversationLoop(
-            llm, self._active_tool_registry(), self.config, self.system_prompt,
-            *self._tool_callbacks(session_key), self.on_notice,
+            llm, self._active_tool_registry(session), self.config,
+            self._session_system_prompt(session),
+            *self._tool_callbacks(session_key), notice, session.cancel_event if session else None,
         )
+
+    def _session_system_prompt(self, session: RuntimeSession | None):
+        """Return a system_prompt callable bound to this session.
+
+        For subagent sessions we route through ``build_system_prompt``
+        directly so the scoped registry, profile name, and notification mode
+        feed into the prompt. For user sessions we wrap the global callable
+        and append the session's ``system_prompt_extras`` — letting any
+        plugin pin contextual snippets to the prompt without touching the
+        bootstrap closure.
+        """
+        if session is None:
+            return self.system_prompt
+
+        if session.is_subagent:
+            from agent.system_prompt import build_system_prompt
+            profile = session.profile_override or session.active_agent_profile or "default"
+            scope = self._scope_for_profile(profile)
+            registry = self._active_tool_registry(session)
+            extras = session.system_prompt_extras or {}
+
+            def _subagent_prompt():
+                text = build_system_prompt(
+                    self.db, getattr(self, "_orchestrator_ref", None) or self.services.get("orchestrator"),
+                    registry, self.services,
+                    scope=scope,
+                    profile_name=profile,
+                    subagent_mode=extras.get("subagent_mode"),
+                    subagent_has_pending_messages=bool(extras.get("subagent_has_pending_messages")),
+                )
+                # Plugin-supplied addenda (anything that isn't a known
+                # subagent-mode key) gets appended verbatim.
+                for key, value in extras.items():
+                    if key in {"subagent_mode", "subagent_has_pending_messages"}:
+                        continue
+                    if isinstance(value, str) and value:
+                        text += "\n\n" + value
+                return text
+            return _subagent_prompt
+
+        base = self.system_prompt
+        extras = session.system_prompt_extras
+
+        def _user_prompt():
+            text = base() if callable(base) else (base or "")
+            for value in (extras or {}).values():
+                if isinstance(value, str) and value:
+                    text += "\n\n" + value
+            return text
+        return _user_prompt
 
     def _tool_callbacks(self, session_key: str | None):
         def started(name, call_id="tc_unknown", args=None):
@@ -404,23 +794,26 @@ class ConversationRuntime:
 
         return started, finished
 
-    def _new_state(self, marker: dict[str, Any] | None = None) -> ConversationState:
+    def _new_state(self, marker: dict[str, Any] | None = None, session: RuntimeSession | None = None) -> ConversationState:
         commands = dict(self.commands)
-        tools = self._tool_specs()
-        cache = (marker or {}).get("cache")
+        tools = self._tool_specs(session)
+        cache = dict((marker or {}).get("cache") or {})
+        if session:
+            cache["session_key"] = session.key
         phase = (marker or {}).get("phase", BASE_PHASE)
         return ConversationState(
             [Participant("user", "user", commands=commands), Participant("agent", "agent", tools=tools)],
             (marker or {}).get("turn_priority", "user"),
             phase,
             cache,
+            attachment_parser=self._parse_attachment,
         )
 
-    def _tool_specs(self) -> dict[str, CallableSpec]:
+    def _tool_specs(self, session: RuntimeSession | None = None) -> dict[str, CallableSpec]:
         # Expose direct tool calls as callable specs for `/call`-style flows.
         # ConversationLoop still uses the registry schemas directly when
         # marshalling the agent's tool calls.
-        registry = self._active_tool_registry()
+        registry = self._active_tool_registry(session)
         if not registry:
             return {}
         specs = {}
@@ -430,7 +823,7 @@ class ConversationRuntime:
             if name:
                 specs[name] = CallableSpec(
                     name,
-                    lambda _cs, _actor, args, n=name: self._active_tool_registry().call(n, **args),
+                    lambda _cs, _actor, args, n=name, reg=registry: reg.call(n, **args),
                     schema_to_form_steps(fn.get("parameters")),
                 )
         return specs
@@ -440,12 +833,17 @@ class ConversationRuntime:
             self._refresh_session_specs(session)
 
     def _refresh_session_specs(self, session: RuntimeSession) -> None:
-        session.active_agent_profile = self.config.get("active_agent_profile") or "default"
+        if not session.is_subagent:
+            session.active_agent_profile = self.config.get("active_agent_profile") or "default"
         session.cs.participants["user"].commands = dict(self.commands)
-        session.cs.participants["agent"].tools = self._tool_specs()
+        session.cs.participants["agent"].tools = self._tool_specs(session)
 
-    def _active_scope(self):
-        profile = self.config.get("active_agent_profile") or "default"
+    def _profile_for_session(self, session: RuntimeSession | None) -> str:
+        if session is not None and session.profile_override:
+            return session.profile_override
+        return self.config.get("active_agent_profile") or "default"
+
+    def _scope_for_profile(self, profile: str):
         try:
             from runtime.agent_scope import load_scope
             scope = load_scope(profile, self.config)
@@ -453,20 +851,64 @@ class ConversationRuntime:
             return None
         return scope if scope.has_tool_filter or scope.prompt_suffix else None
 
-    def _active_tool_registry(self):
-        scope = self._active_scope()
-        if not scope or not self.tool_registry:
-            return self.tool_registry
-        from runtime.agent_scope import scoped_registry
-        return scoped_registry(self.tool_registry, scope, db=self.db)
+    def _active_scope(self, session: RuntimeSession | None = None):
+        return self._scope_for_profile(self._profile_for_session(session))
 
-    def _active_llm(self):
-        profile = self.config.get("active_agent_profile") or "default"
+    def _active_tool_registry(self, session: RuntimeSession | None = None):
+        if not self.tool_registry:
+            return None
+        from runtime.agent_scope import scoped_registry
+        scope = self._active_scope(session)
+        registry = self.tool_registry
+        if scope:
+            registry = scoped_registry(self.tool_registry, scope, db=self.db)
+        # Subagent sessions add their pinned tool instances (MessageTool etc.)
+        # on top of the scoped view so the agent in this session can call them.
+        extras = list((session.extra_tool_instances if session else []) or [])
+        if extras:
+            from agent.tool_registry import ToolRegistry
+            cloned = ToolRegistry(registry.db, registry.config, registry.services)
+            cloned.orchestrator = getattr(registry, "orchestrator", None)
+            cloned.is_subagent = bool(session and session.is_subagent) or getattr(registry, "is_subagent", False)
+            cloned.tools.update(registry.tools)
+            for tool in extras:
+                cloned.tools[tool.name] = tool
+            registry = cloned
+        return registry
+
+    def _active_llm(self, session: RuntimeSession | None = None):
+        profile = self._profile_for_session(session)
         try:
             from runtime.agent_scope import resolve_agent_llm
             return resolve_agent_llm(profile, self.config, self.services)
         except Exception:
             return self.services.get("llm")
+
+    def _parse_attachment(self, content: dict[str, Any]) -> dict[str, Any]:
+        path = Path(str(content.get("path") or ""))
+        file_name = content.get("file_name") or path.name or "attachment"
+        caption = str(content.get("caption") or content.get("text") or "").strip()
+        suffix = path.suffix or ("." + str(content.get("extension") or "").lstrip(".") if content.get("extension") else "")
+        try:
+            from plugins.services.helpers.parser_registry import get_modality
+            modality = get_modality(suffix) if suffix else "unknown"
+        except Exception:
+            modality = "unknown"
+        text, image_paths = caption, list(content.get("image_paths") or [])
+        if modality == "image" or content.get("is_photo"):
+            has_vision = self.services.get("llm") and getattr(self.services["llm"], "vision", True) is not False
+            image_paths = [str(path)] if has_vision and path else image_paths
+            text = (text + f"\n\n[The user attached an image: {file_name} (cached at {path})]").strip()
+        elif modality in {"text", "tabular", "unknown"} and self.services.get("parser"):
+            try:
+                parsed = self.services["parser"].parse(str(path), config={"max_chars": 4000}).output
+                raw = parsed if isinstance(parsed, str) else str(parsed)
+                text = (text + f"\n\n[The user attached a file: {file_name} (cached at {path})]\n{raw[:4000]}").strip()
+            except Exception:
+                text = (text + f"\n\n[The user attached a file: {file_name} (cached at {path}). Use read_file or search tools to access it.]").strip()
+        else:
+            text = (text + f"\n\n[The user attached a file: {file_name} (cached at {path}). Use read_file or search tools to access it.]").strip()
+        return {**content, "text": text, "image_paths": image_paths}
 
     def _command_specs(self, specs: dict[str, dict]) -> dict[str, CallableSpec]:
         out = {}

@@ -60,6 +60,7 @@ class ConversationLoop:
         on_tool_start=None,
         on_tool_result=None,
         on_notice=None,
+        cancel_event=None,
     ):
         self.llm = llm
         self.tool_registry = tool_registry
@@ -68,6 +69,7 @@ class ConversationLoop:
         self.on_tool_start = on_tool_start
         self.on_tool_result = on_tool_result
         self.on_notice = on_notice
+        self.cancel_event = cancel_event
         self.cancelled = False
         self.running = False
         self._tool_call_counts: dict[str, int] = {}
@@ -123,7 +125,7 @@ class ConversationLoop:
 
         try:
             for _ in range(max_iterations):
-                if self.cancelled or cs.turn_priority != actor_id:
+                if self._cancelled() or cs.turn_priority != actor_id:
                     break
 
                 action_type, content = self._next_action(cs, history, images)
@@ -132,6 +134,8 @@ class ConversationLoop:
                 if images:
                     images = []  # Only the first LLM call sees attached images.
 
+                if self._cancelled():
+                    break
                 started = self._tool_started(action_type, content)
                 try:
                     # ──────────────────── THE enact() SITE ────────────────────
@@ -148,13 +152,8 @@ class ConversationLoop:
                     break
 
             if cs.turn_priority == actor_id:
-                # Used up the iteration budget; close the turn cleanly through
-                # the same `enact()` site so events stay consistent.
-                self._absorb(
-                    cs.enact("send_text", self.OVER_BUDGET_MESSAGE, actor_id),
-                    "send_text", self.OVER_BUDGET_MESSAGE,
-                    history, new_messages, attachments, db, conversation_id,
-                )
+                if not self._cancelled():
+                    self._over_budget_summary(cs, actor_id, history, new_messages, attachments, db, conversation_id)
                 cs.enact("end_turn", None, actor_id)
 
             return self._final_text, new_messages, attachments
@@ -179,6 +178,8 @@ class ConversationLoop:
         """
         # 1) Still have pending tool calls? Issue one. The first call of a
         #    batch carries the assistant's accompanying text (if any).
+        if self._cancelled():
+            return None, None
         if self._pending_tool_calls:
             tc = self._pending_tool_calls.pop(0)
             try:
@@ -361,15 +362,29 @@ class ConversationLoop:
             summary = _clean(getattr(summary_response, "content", ""))
             if not summary:
                 return
+            old_count = len(history)
             history[:] = [
                 {"role": "user", "content": f"[Conversation summary from earlier]\n{summary}"},
                 {"role": "assistant", "content": "Understood - I have the earlier context."},
                 *history[-2:],
             ]
             if self.on_notice:
-                self.on_notice(f"Compacted conversation into {len(summary)} chars.")
+                self.on_notice(f"Compacted {old_count} messages.")
         except Exception as e:
             logger.debug("Compaction failed: %s", e, exc_info=True)
+
+    def _over_budget_summary(self, cs, actor_id, history, new_messages, attachments, db, conversation_id) -> None:
+        try:
+            nudge = {"role": "user", "content": "You've hit the tool-call limit. Summarize what you have and stop calling tools."}
+            response = self._invoke(self._messages([*history, nudge]), None, None, history)
+            text = _clean(getattr(response, "content", "")) or self.OVER_BUDGET_MESSAGE
+        except Exception:
+            text = self.OVER_BUDGET_MESSAGE
+        self._final_text = text
+        self._absorb(cs.enact("send_text", text, actor_id), "send_text", text, history, new_messages, attachments, db, conversation_id)
+
+    def _cancelled(self) -> bool:
+        return self.cancelled or bool(self.cancel_event and self.cancel_event.is_set())
 
     def _record(self, msg, history, new_messages, db, conversation_id):
         history.append(msg)

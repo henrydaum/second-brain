@@ -99,6 +99,80 @@ Payload:
     ok:          bool
     error:       str (optional)"""
 
+COMMAND_CALL_STARTED = "command_call_started"
+"""The runtime started a slash command.
+Payload:
+    session_key:  str
+    call_id:      str
+    command_name: str
+    args:         dict"""
+
+COMMAND_CALL_FINISHED = "command_call_finished"
+"""The runtime finished a slash command.
+Payload:
+    session_key:  str
+    call_id:      str
+    command_name: str
+    ok:           bool
+    error:        str (optional)"""
+
+
+# ── Conversation lifecycle ─────────────────────────────────────────
+# Plugins (tools, tasks, services) subscribe to these to react to what
+# is happening inside the state machine without having to reach into
+# ConversationRuntime directly. Frontends emit and consume them too.
+
+SESSION_CREATED = "session_created"
+"""A new RuntimeSession was created (or replaced via /new, load_history, or
+create_subagent_session).
+Payload:
+    session_key: str
+    is_subagent: bool
+    agent_profile: str"""
+
+SESSION_CLOSED = "session_closed"
+"""A RuntimeSession was discarded (replaced, deleted, app shutdown).
+Payload:
+    session_key: str"""
+
+SESSION_PHASE_CHANGED = "session_phase_changed"
+"""The session's phase transitioned (awaiting_input -> calling_tool, etc.).
+Payload:
+    session_key: str
+    old_phase:   str
+    new_phase:   str"""
+
+SESSION_TURN_CHANGED = "session_turn_changed"
+"""Turn priority moved between participants on a session.
+Payload:
+    session_key: str
+    from_actor:  str
+    to_actor:    str"""
+
+SESSION_MESSAGE = "session_message"
+"""A user- or agent-authored message landed on the session transcript.
+Payload:
+    session_key: str
+    role:        str   — "user" | "assistant" | "tool"
+    content:     str
+    actor_id:    str"""
+
+SESSION_AGENT_PROFILE_CHANGED = "session_agent_profile_changed"
+"""A plugin or command changed the agent profile pinned to a session.
+Payload:
+    session_key:  str
+    old_profile:  str
+    new_profile:  str"""
+
+SYSTEM_PROMPT_EXTRA_CHANGED = "system_prompt_extra_changed"
+"""A plugin added/updated/removed a system prompt extra on a session.
+Useful for frontends or subscribers that want to surface what's pinned to
+the agent's prompt.
+Payload:
+    session_key: str
+    key:         str
+    value:       str | None  (None on removal)"""
+
 
 # ── Reserved (not yet emitted) ─────────────────────────────────────
 # Documented here so future work has an obvious home instead of inventing

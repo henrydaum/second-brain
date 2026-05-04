@@ -34,6 +34,10 @@ class Orchestrator:
 		self.db = db
 		self.config = config
 		self.services = services or {}
+		# ConversationRuntime ref, populated by frontend bootstrap once the
+		# runtime is constructed. Tasks that need to drive a state-machine
+		# session (scheduled subagents) reach it via context.runtime.
+		self.runtime = None
 
 		# Task registry: name -> BaseTask instance
 		self.tasks: dict[str, BaseTask] = {}
@@ -672,6 +676,7 @@ class Orchestrator:
 			self.db, self.config, self.services,
 			tool_registry=self.tool_registry,
 			orchestrator=self,
+			runtime=self.runtime,
 		)
 
 		t0 = time.time()
@@ -756,6 +761,7 @@ class Orchestrator:
 			self.db, self.config, self.services,
 			tool_registry=self.tool_registry,
 			orchestrator=self,
+			runtime=self.runtime,
 		)
 
 		t0 = time.time()

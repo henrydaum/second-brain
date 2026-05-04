@@ -36,17 +36,17 @@ class FormStep:
         # normalize them before handlers see the collected args.
         if value in (None, "") and not self.required:
             return self.default
-        if self.enum and value not in self.enum:
-            raise ValueError(f"{self.name} must be one of: {', '.join(map(str, self.enum))}.")
-        if self.type == "integer":
-            return int(value)
+        if self.type in {"integer", "int"}:
+            value = int(value)
         if self.type == "number":
-            return float(value)
+            value = float(value)
         if self.type == "boolean":
-            return value if isinstance(value, bool) else str(value).strip().lower() in {"true", "yes", "1", "y"}
+            value = value if isinstance(value, bool) else str(value).strip().lower() in {"true", "yes", "1", "y"}
         if self.type in {"array", "object"} and isinstance(value, str):
             import json
-            return json.loads(value)
+            value = json.loads(value)
+        if self.enum and value not in self.enum:
+            raise ValueError(f"{self.name} must be one of: {', '.join(map(str, self.enum))}.")
         return value
 
     def validate(self, value: Any) -> tuple[bool, str | None]:

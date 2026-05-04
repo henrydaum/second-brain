@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
@@ -99,9 +100,13 @@ class ReplFrontend(BaseFrontend):
         print(f"\n[error] {(error or {}).get('message') or error}")
 
     def render_tool_status(self, _session_key: str, payload: dict) -> None:
-        name = payload.get("tool_name") or "tool"
-        status = "..." if payload.get("status") == "started" else "ok" if payload.get("ok") else "failed"
-        print(f"\n[tool] {name} {status}")
+        name = payload.get("tool_name") or payload.get("command_name") or "call"
+        if payload.get("status") == "started":
+            sys.stdout.write(f"\n⏳ {name}...")
+            sys.stdout.flush()
+            return
+        sys.stdout.write(f"\r{'✓' if payload.get('ok') else '✗'} {name}   \n")
+        sys.stdout.flush()
 
     def _live_session_keys(self) -> list[str]:
         return [self.session_key(None)]
@@ -115,7 +120,7 @@ class ReplFrontend(BaseFrontend):
             parts.append("/skip to skip")
         if field.get("default") is not None:
             parts.append(f"default: {field['default']}")
-        if field.get("type") and field.get("type") != "string":
+        if field.get("type"):
             parts.append(f"type: {field['type']}")
         return f" ({'; '.join(parts)})" if parts else ""
 

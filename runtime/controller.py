@@ -622,29 +622,3 @@ class Controller:
             self.orchestrator.paused.update(saved_pauses)
 
         return "Plugins reloaded."
-
-    # =================================================================
-    # HELP
-    # =================================================================
-
-    def help(self) -> list[dict]:
-        """Command list for the REPL."""
-        return [
-            {"command": "call <tool> <json>", "description": "Call a tool directly"},
-            {"command": "disable <n>", "description": "Disable a tool from agent use"},
-            {"command": "enable <n>", "description": "Enable a tool for agent use"},
-            {"command": "load <n>", "description": "Load a service"},
-            {"command": "pause <n>", "description": "Pause a task"},
-            {"command": "pipeline", "description": "Show the path-driven task dependency graph"},
-            {"command": "quit / exit", "description": "Shutdown"},
-            {"command": "reload", "description": "Hot-reload tasks and tools"},
-            {"command": "reset <n>", "description": "Reset all entries for a path-driven task"},
-            {"command": "retry <n>", "description": "Retry failed entries for a path-driven task"},
-            {"command": "retry all", "description": "Retry all failed across all path-driven tasks"},
-            {"command": "services", "description": "List services and status"},
-            {"command": "tasks", "description": "List path-driven and event-driven tasks"},
-            {"command": "tools", "description": "List registered tools"},
-            {"command": "trigger <n> [json]", "description": "Manually fire an event-triggered task"},
-            {"command": "unload <n>", "description": "Unload a service"},
-            {"command": "unpause <n>", "description": "Unpause a task"},
-        ]

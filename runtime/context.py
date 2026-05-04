@@ -44,11 +44,14 @@ class SecondBrainContext:
     tool_registry: Any = None    # ToolRegistry instance (tools only)
     orchestrator: Any = None     # Orchestrator instance (tools only)
     is_subagent: bool = False    # True inside task_run_subagent execution
+    runtime: Any = None          # ConversationRuntime — present for tasks that
+                                 # need to drive a state-machine session
+                                 # (scheduled subagents in particular).
 
 
 def build_context(db, config: dict, services: dict, call_tool=None,
                    tool_registry=None, orchestrator=None,
-                   is_subagent: bool = False) -> SecondBrainContext:
+                   is_subagent: bool = False, runtime=None) -> SecondBrainContext:
     """
     Build a fully wired runtime context.
 
@@ -87,4 +90,5 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         tool_registry=tool_registry,
         orchestrator=orchestrator,
         is_subagent=is_subagent,
+        runtime=runtime,
     )
