@@ -156,10 +156,15 @@ class Database:
 			CREATE TABLE IF NOT EXISTS conversations (
 				id          INTEGER PRIMARY KEY AUTOINCREMENT,
 				title       TEXT,
+				kind        TEXT DEFAULT 'user',
 				created_at  REAL,
 				updated_at  REAL
 			)
 		""")
+		try:
+			self.conn.execute("ALTER TABLE conversations ADD COLUMN kind TEXT DEFAULT 'user'")
+		except sqlite3.OperationalError:
+			pass  # column already exists
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS conversation_messages (
 				id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -180,29 +185,6 @@ class Database:
 		self.conn.execute("""
 			CREATE INDEX IF NOT EXISTS idx_conv_msg_conv
 			ON conversation_messages(conversation_id)
-		""")
-		# Scheduled subagent runs link back to conversations, which lets
-		# user-facing history views exclude background-run threads.
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS subagent_runs (
-				run_id TEXT PRIMARY KEY,
-				job_name TEXT,
-				conversation_id INTEGER,
-				title TEXT,
-				prompt TEXT,
-				final_answer TEXT,
-				agent TEXT,
-				created_at REAL
-			)
-		""")
-		# Migration: add agent column for existing databases
-		try:
-			self.conn.execute("ALTER TABLE subagent_runs ADD COLUMN agent TEXT")
-		except sqlite3.OperationalError:
-			pass  # column already exists
-		self.conn.execute("""
-			CREATE INDEX IF NOT EXISTS idx_subagent_runs_conversation
-			ON subagent_runs(conversation_id)
 		""")
 		# Enable foreign key enforcement (needed for ON DELETE CASCADE)
 		self.conn.execute("PRAGMA foreign_keys = ON")
@@ -797,12 +779,12 @@ class Database:
 	# CONVERSATIONS
 	# =================================================================
 
-	def create_conversation(self, title="New conversation") -> int:
+	def create_conversation(self, title="New conversation", kind="user") -> int:
 		now = time.time()
 		with self.lock:
 			cur = self.conn.execute(
-				"INSERT INTO conversations (title, created_at, updated_at) VALUES (?, ?, ?)",
-				(title, now, now))
+				"INSERT INTO conversations (title, kind, created_at, updated_at) VALUES (?, ?, ?, ?)",
+				(title, kind, now, now))
 			self.conn.commit()
 			return cur.lastrowid
 
@@ -848,11 +830,7 @@ class Database:
 				"""
 				SELECT *
 				FROM conversations c
-				WHERE NOT EXISTS (
-					SELECT 1
-					FROM subagent_runs sr
-					WHERE sr.conversation_id = c.id
-				)
+				WHERE COALESCE(c.kind, 'user') != 'subagent'
 				ORDER BY c.updated_at DESC
 				LIMIT ?
 				""",
@@ -865,21 +843,6 @@ class Database:
 				"SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY timestamp",
 				(conversation_id,))
 			return [dict(row) for row in cur.fetchall()]
-
-	def save_inbox_message(self, conversation_id, content) -> int:
-		"""Append a user turn from /message — pending until the subagent's next wake."""
-		now = time.time()
-		with self.lock:
-			cur = self.conn.execute("""
-				INSERT INTO conversation_messages
-				(conversation_id, role, content, timestamp, consumed_at)
-				VALUES (?, 'user', ?, ?, NULL)
-			""", (conversation_id, content, now))
-			self.conn.execute(
-				"UPDATE conversations SET updated_at = ? WHERE id = ?",
-				(now, conversation_id))
-			self.conn.commit()
-			return cur.lastrowid
 
 	def mark_inbox_consumed(self, conversation_id) -> int:
 		"""Mark all unconsumed user turns on a conversation as delivered. Returns rows updated."""
@@ -901,7 +864,7 @@ class Database:
 		the next wake — otherwise we'd reload the full uncompacted log and
 		re-compact every run.
 
-		`history` is in Agent.history shape: list of {role, content, ...} dicts.
+		`history` is in provider-message shape: list of {role, content, ...} dicts.
 		Assistant turns with tool_calls get JSON-packed into the content column,
 		matching the encoding used by task_run_subagent's on_message callback.
 		"""

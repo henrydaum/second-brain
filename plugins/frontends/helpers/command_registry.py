@@ -1129,6 +1129,10 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             return (f"Unknown subagent job: '{job_name}'. "
                     f"Run /schedule list to see scheduled subagents.")
 
+        runtime = getattr(ctrl, "frontend_runtime", None) or getattr(tool_registry, "runtime", None)
+        if runtime is None:
+            return "Conversation runtime is not available."
+
         payload = job.get("payload") or {}
         conv_id = payload.get("conversation_id")
         new_payload = None
@@ -1136,7 +1140,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             # First message before the job has ever run — allocate now so the
             # message is preserved and the next wake will pick it up.
             title = (payload.get("title") or job_name or "Scheduled subagent")[:200]
-            conv_id = ctrl.db.create_conversation(title)
+            conv_id = runtime.create_conversation(title, kind="subagent")
             new_payload = dict(payload)
             new_payload["conversation_id"] = conv_id
 
@@ -1150,7 +1154,11 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
             except ValueError as e:
                 return f"Failed to update job '{job_name}': {e}"
 
-        ctrl.db.save_inbox_message(int(conv_id), text)
+        session_key = runtime.subagent_session_key(job_name)
+        session_existed = session_key in getattr(runtime, "sessions", {})
+        runtime.inject_user_message(session_key, text, conversation_id=int(conv_id))
+        if not session_existed:
+            runtime.unload_conversation(session_key)
         pending = ctrl.db.count_pending_inbox(int(conv_id))
         suffix = f" (next run notifications: {override_mode})" if override_mode else ""
         return (f"Queued for '{job_name}'{suffix}. "

@@ -1,4 +1,3 @@
-import json
 import logging
 import time
 from pathlib import Path
@@ -7,7 +6,7 @@ from plugins.services.helpers.parser_registry import get_modality
 from plugins.BaseTask import BaseTask, TaskResult
 from runtime.token_stripper import strip_model_tokens
 from events.event_bus import bus
-from events.event_channels import CHAT_MESSAGE_PUSHED
+from events.event_channels import CHAT_MESSAGE_PUSHED, SESSION_TURN_COMPLETED
 from agent.subagent_runtime import (
     MessageTool,
     SubagentPushRecord,
@@ -48,36 +47,6 @@ class RunSubagent(BaseTask):
     }
     requires_services = ["llm"]
     writes = []
-    output_schema = """
-        CREATE TABLE IF NOT EXISTS subagent_runs (
-            run_id TEXT PRIMARY KEY,
-            job_name TEXT,
-            conversation_id INTEGER,
-            title TEXT,
-            prompt TEXT,
-            final_answer TEXT,
-            agent TEXT,
-            created_at REAL
-        );
-
-        CREATE TABLE IF NOT EXISTS subagent_run_inputs (
-            run_id TEXT,
-            input_index INTEGER,
-            path TEXT,
-            modality TEXT,
-            PRIMARY KEY (run_id, input_index)
-        );
-
-        CREATE TABLE IF NOT EXISTS subagent_run_pushes (
-            run_id TEXT,
-            push_index INTEGER,
-            kind TEXT,
-            title TEXT,
-            message TEXT,
-            sent_at REAL,
-            PRIMARY KEY (run_id, push_index)
-        );
-    """
     timeout = 900
 
     def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
@@ -104,10 +73,8 @@ class RunSubagent(BaseTask):
 
         mode = self._resolve_mode(payload, timekeeper_meta, context, is_scheduled, job_name)
 
-        # Persistent conversation_id for scheduled jobs (so prior turns are
-        # preserved). One-shot runs allocate fresh.
-        conversation_id, prior_history = self._resolve_conversation(
-            context, is_scheduled, job_name, conversation_title,
+        conversation_id = self._resolve_conversation(
+            context, runtime, payload, is_scheduled, job_name, conversation_title,
         )
 
         pending_user_messages = 0
@@ -128,38 +95,30 @@ class RunSubagent(BaseTask):
             message_tool = MessageTool(run_id, job_name, _record_push)
 
         session_key = runtime.subagent_session_key(job_name)
-        # Recreate the session each run so per-run extras (mode, pending
-        # messages, conversation history) reflect the current invocation.
-        runtime.create_subagent_session(
-            session_key,
-            agent_profile=target_agent,
-            conversation_id=conversation_id,
-            extra_tool_instances=[message_tool] if message_tool else [],
-            subagent_meta={
-                "job_name": job_name,
-                "run_id": run_id,
-                "is_scheduled": is_scheduled,
-            },
-            system_prompt_extras={
-                "subagent_mode": mode,
-                "subagent_has_pending_messages": has_pending,
-            },
-            history=prior_history,
-        )
-
         input_paths = self._normalize_input_paths(payload.get("input_paths"))
-        input_rows, compiled_prompt, image_paths = self._compile_prompt(prompt, input_paths, context)
+        compiled_prompt, image_paths = self._compile_prompt(prompt, input_paths, context)
 
-        # Drive one user turn through the state machine. The runtime takes
-        # care of history persistence, agent loop, approvals, and forms.
-        action_payload = {"text": compiled_prompt}
-        if image_paths:
-            action_payload["image_paths"] = image_paths
+        turn_events = []
+        unsub = bus.subscribe(SESSION_TURN_COMPLETED, lambda event: turn_events.append(event) if (event or {}).get("session_key") == session_key else None)
         try:
-            result = runtime.handle_action(session_key, "send_text", action_payload)
+            runtime.load_conversation(
+                session_key, conversation_id, agent_profile=target_agent,
+                system_prompt_extras={
+                    "subagent_mode": mode,
+                    "subagent_has_pending_messages": has_pending,
+                    "subagent_run_id": run_id,
+                    "subagent_job_name": job_name,
+                },
+            )
+            if message_tool:
+                runtime.add_session_tool(session_key, message_tool)
+            result = runtime.iterate_agent_turn(session_key, compiled_prompt, image_paths=image_paths)
         except Exception as e:
             logger.error(f"Subagent run {run_id} failed: {e}", exc_info=True)
             return TaskResult.failed(str(e))
+        finally:
+            unsub()
+            runtime.unload_conversation(session_key)
 
         if not result.ok:
             err = (result.error or {}).get("message") or "Subagent run failed."
@@ -172,17 +131,7 @@ class RunSubagent(BaseTask):
             except Exception as e:
                 logger.warning(f"Failed to mark inbox consumed for {job_name}: {e}")
 
-        # Persist the (possibly compacted) in-memory history so the next
-        # wake reloads from the rewritten log instead of the full transcript.
-        if is_scheduled:
-            session = runtime.sessions.get(session_key)
-            if session is not None:
-                try:
-                    context.db.replace_conversation_messages(conversation_id, list(session.history))
-                except Exception as e:
-                    logger.warning(f"Failed to persist compacted history for {job_name}: {e}")
-
-        final_answer = "\n".join(m for m in result.messages if m).strip()
+        final_answer = ((turn_events[-1] or {}).get("final_text") if turn_events else "") or "\n".join(m for m in result.messages if m).strip()
         clean_answer, _ = strip_model_tokens(final_answer)
         if clean_answer.startswith("Error: no active LLM profile loaded"):
             return TaskResult.failed(clean_answer)
@@ -192,10 +141,6 @@ class RunSubagent(BaseTask):
         if (mode == "all" or has_pending) and not push_records and clean_answer.strip():
             self._emit_fallback_push(run_id, job_name, conversation_title, clean_answer, push_records)
 
-        self._persist_run(
-            context, run_id, job_name, conversation_id, conversation_title, prompt,
-            clean_answer, input_rows, push_records, target_agent,
-        )
         return TaskResult(success=True)
 
     # ──────────────────────────────────────────────────────────────────────
@@ -230,13 +175,20 @@ class RunSubagent(BaseTask):
                     logger.warning(f"Failed to clear next_notifications for job '{job_name}': {e}")
         return mode
 
-    def _resolve_conversation(self, context, is_scheduled: bool, job_name: str,
-                              conversation_title: str) -> tuple[int, list[dict]]:
+    def _resolve_conversation(self, context, runtime, payload: dict, is_scheduled: bool, job_name: str,
+                              conversation_title: str) -> int:
+        existing = payload.get("conversation_id")
+        if not is_scheduled and existing is not None:
+            try:
+                conv_id = int(existing)
+            except (TypeError, ValueError):
+                conv_id = None
+            if conv_id is not None and context.db.get_conversation(conv_id) is not None:
+                return conv_id
         if not is_scheduled:
-            return context.db.create_conversation(conversation_title[:200]), []
+            return runtime.create_conversation(conversation_title[:200], kind="subagent")
 
         timekeeper = context.services.get("timekeeper")
-        existing = None
         if timekeeper is not None and getattr(timekeeper, "loaded", False):
             job = timekeeper.get_job(job_name)
             if job is not None:
@@ -248,11 +200,9 @@ class RunSubagent(BaseTask):
             except (TypeError, ValueError):
                 conv_id = None
             if conv_id is not None and context.db.get_conversation(conv_id) is not None:
-                from agent.history_utils import messages_to_history
-                rows = context.db.get_conversation_messages(conv_id)
-                return conv_id, messages_to_history(rows)
+                return conv_id
 
-        conv_id = context.db.create_conversation(conversation_title[:200])
+        conv_id = runtime.create_conversation(conversation_title[:200], kind="subagent")
         if timekeeper is not None and getattr(timekeeper, "loaded", False):
             try:
                 job = timekeeper.get_job(job_name)
@@ -262,7 +212,7 @@ class RunSubagent(BaseTask):
                     timekeeper.update_job(job_name, {"payload": new_payload})
             except Exception as e:
                 logger.warning(f"Failed to persist conversation_id for job '{job_name}': {e}")
-        return conv_id, []
+        return conv_id
 
     def _emit_fallback_push(self, run_id: str, job_name: str, title: str,
                             final_answer: str, push_records: list[SubagentPushRecord]) -> None:
@@ -279,7 +229,6 @@ class RunSubagent(BaseTask):
 
     def _compile_prompt(self, prompt: str, input_paths: list[str], context):
         prompt_parts = [prompt]
-        input_rows = []
         image_paths = []
 
         for idx, raw_path in enumerate(input_paths):
@@ -288,7 +237,6 @@ class RunSubagent(BaseTask):
                 continue
             ext = Path(path).suffix.lower()
             modality = get_modality(ext) if ext else "unknown"
-            input_rows.append({"run_id": None, "input_index": idx, "path": path, "modality": modality})
 
             if modality == "image":
                 image_paths.append(path)
@@ -299,7 +247,7 @@ class RunSubagent(BaseTask):
                 continue
             prompt_parts.append(f"\n[Input file: {path} (type: {modality}). This file type is not auto-parsed for the subagent.]")
 
-        return input_rows, "\n".join(prompt_parts).strip(), image_paths
+        return "\n".join(prompt_parts).strip(), image_paths
 
     def _parse_input_file(self, path: str, modality: str, context) -> str:
         try:
@@ -321,38 +269,6 @@ class RunSubagent(BaseTask):
         if len(raw) > _MAX_PARSED_CHARS:
             raw = raw[:_MAX_PARSED_CHARS] + "\n[Content truncated]"
         return f"\n[Input file: {path}]\n{raw}"
-
-    def _persist_run(self, context, run_id: str, job_name: str, conversation_id: int, title: str,
-                     prompt: str, final_answer: str, input_rows: list[dict],
-                     push_records: list[SubagentPushRecord], agent_name: str):
-        run_row = (run_id, job_name, conversation_id, title, prompt, final_answer, agent_name, time.time())
-        filled_inputs = [(run_id, row["input_index"], row["path"], row["modality"]) for row in input_rows]
-        push_rows = [
-            (run_id, idx, record.kind, record.title, record.message, record.sent_at)
-            for idx, record in enumerate(push_records)
-        ]
-        with context.db.lock:
-            context.db.conn.execute(
-                """
-                INSERT OR REPLACE INTO subagent_runs
-                (run_id, job_name, conversation_id, title, prompt, final_answer, agent, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                run_row,
-            )
-            context.db.conn.execute("DELETE FROM subagent_run_inputs WHERE run_id = ?", (run_id,))
-            context.db.conn.execute("DELETE FROM subagent_run_pushes WHERE run_id = ?", (run_id,))
-            if filled_inputs:
-                context.db.conn.executemany(
-                    "INSERT INTO subagent_run_inputs (run_id, input_index, path, modality) VALUES (?, ?, ?, ?)",
-                    filled_inputs,
-                )
-            if push_rows:
-                context.db.conn.executemany(
-                    "INSERT INTO subagent_run_pushes (run_id, push_index, kind, title, message, sent_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    push_rows,
-                )
-            context.db.conn.commit()
 
     @staticmethod
     def _normalize_input_paths(value) -> list[str]:

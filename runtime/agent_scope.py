@@ -71,6 +71,7 @@ def scoped_registry(base_registry: ToolRegistry, scope: AgentScope, db=None) -> 
     new_registry = ToolRegistry(target_db, base_registry.config, base_registry.services)
     new_registry.orchestrator = base_registry.orchestrator
     new_registry.is_subagent = base_registry.is_subagent
+    new_registry.runtime = base_registry.runtime
 
     if not scope.has_tool_filter:
         allowed_names = set(base_registry.tools.keys())

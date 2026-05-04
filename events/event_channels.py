@@ -123,8 +123,7 @@ Payload:
 # ConversationRuntime directly. Frontends emit and consume them too.
 
 SESSION_CREATED = "session_created"
-"""A new RuntimeSession was created (or replaced via /new, load_history, or
-create_subagent_session).
+"""A new RuntimeSession was created (or replaced via /new or load_history).
 Payload:
     session_key: str
     is_subagent: bool
@@ -156,6 +155,15 @@ Payload:
     role:        str   — "user" | "assistant" | "tool"
     content:     str
     actor_id:    str"""
+
+SESSION_TURN_COMPLETED = "session_turn_completed"
+"""One full user-prompted agent turn completed.
+Payload:
+    session_key:     str
+    conversation_id: int | None
+    final_text:      str
+    new_messages:    list[dict]
+    attachments:     list[str]"""
 
 SESSION_AGENT_PROFILE_CHANGED = "session_agent_profile_changed"
 """A plugin or command changed the agent profile pinned to a session.

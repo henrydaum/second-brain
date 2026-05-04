@@ -32,6 +32,7 @@ from events.event_channels import (
     SESSION_CREATED,
     SESSION_MESSAGE,
     SESSION_PHASE_CHANGED,
+    SESSION_TURN_COMPLETED,
     SESSION_TURN_CHANGED,
     SYSTEM_PROMPT_EXTRA_CHANGED,
     TOOL_CALL_FINISHED,
@@ -95,6 +96,7 @@ class RuntimeSession:
             "profile_override": self.profile_override,
             "is_subagent": self.is_subagent,
             "subagent_meta": self.subagent_meta,
+            "system_prompt_extras": self.system_prompt_extras,
             "busy": self.busy,
         })
         return state
@@ -374,16 +376,33 @@ class ConversationRuntime:
                 })
             return self.sessions[key]
 
-    def load_history(self, session_key: str, conversation_id: int) -> RuntimeResult:
+    def create_conversation(self, title: str = "New conversation", *, kind: str = "user") -> int | None:
+        return self.db.create_conversation(title, kind=kind) if self.db else None
+
+    def load_conversation(
+        self,
+        session_key: str,
+        conversation_id: int,
+        *,
+        agent_profile: str | None = None,
+        system_prompt_extras: dict[str, Any] | None = None,
+    ) -> RuntimeSession:
         rows = self.db.get_conversation_messages(conversation_id) if self.db else []
         marker = latest_state(rows) or {}
+        conv = self.db.get_conversation(conversation_id) if self.db else {}
+        is_subagent = (conv or {}).get("kind") == "subagent"
+        profile = agent_profile or marker.get("profile_override") or marker.get("active_agent_profile") or self.config.get("active_agent_profile") or "default"
         session = RuntimeSession(
             session_key,
             self._new_state(marker),
             messages_to_history(rows),
             conversation_id,
             False,
-            marker.get("active_agent_profile") or self.config.get("active_agent_profile") or "default",
+            profile,
+            profile_override=agent_profile or marker.get("profile_override"),
+            is_subagent=is_subagent,
+            subagent_meta=dict(marker.get("subagent_meta") or {}),
+            system_prompt_extras={**dict(marker.get("system_prompt_extras") or {}), **dict(system_prompt_extras or {})},
         )
         # Re-seed cs with session-aware specs.
         session.cs = self._new_state(marker, session=session)
@@ -391,86 +410,91 @@ class ConversationRuntime:
             self.sessions[session_key] = session
         bus.emit(SESSION_CREATED, {
             "session_key": session_key,
-            "is_subagent": False,
-            "agent_profile": session.active_agent_profile,
+            "is_subagent": is_subagent,
+            "agent_profile": profile,
         })
         self._restore_pending_requests(session)
+        return session
+
+    def load_history(self, session_key: str, conversation_id: int) -> RuntimeResult:
+        session = self.load_conversation(session_key, conversation_id)
         return RuntimeResult(
             messages=[f"Loaded conversation: {self._conversation_title(conversation_id)}"],
             data={"conversation_id": conversation_id, "history": session.history},
         )
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Subagent sessions: pinned to a profile, with optional pinned tool
-    # instances (e.g. MessageTool) and a persistent conversation_id. Each
-    # scheduled subagent owns one of these — same dispatcher, same approvals,
-    # same form/cancel machinery as a user session.
-    # ──────────────────────────────────────────────────────────────────────
-
-    def create_subagent_session(
-        self,
-        session_key: str,
-        *,
-        agent_profile: str = "default",
-        conversation_id: int | None = None,
-        extra_tool_instances: list | None = None,
-        subagent_meta: dict | None = None,
-        system_prompt_extras: dict | None = None,
-        history: list[dict[str, Any]] | None = None,
-    ) -> RuntimeSession:
-        """Create or replace a subagent-pinned session.
-
-        The session's profile, tool scope, and any pinned tool instances are
-        fixed at creation time. Subsequent ``handle_action`` calls on this
-        session_key will use them regardless of which profile the user has
-        active in the foreground.
-        """
-        session = RuntimeSession(
-            session_key,
-            self._new_state(),
-            list(history or []),
-            conversation_id,
-            False,
-            agent_profile,
-            profile_override=agent_profile,
-            extra_tool_instances=list(extra_tool_instances or []),
-            is_subagent=True,
-            subagent_meta=dict(subagent_meta or {}),
-            system_prompt_extras=dict(system_prompt_extras or {}),
-        )
-        session.cs = self._new_state(session=session)
+    def reset_conversation(self, session_key: str) -> RuntimeSession:
         with self._sessions_lock:
             existed = session_key in self.sessions
+            session = RuntimeSession(session_key, self._new_state())
+            session.cs = self._new_state(session=session)
             self.sessions[session_key] = session
         if existed:
             bus.emit(SESSION_CLOSED, {"session_key": session_key})
         bus.emit(SESSION_CREATED, {
             "session_key": session_key,
-            "is_subagent": True,
-            "agent_profile": agent_profile,
+            "is_subagent": False,
+            "agent_profile": session.active_agent_profile,
         })
         return session
 
-    def update_subagent_session(self, session_key: str, **fields) -> RuntimeSession | None:
-        """Update mutable fields on an existing subagent session in place.
-
-        Useful when the per-run notification mode or pending-message flag
-        changes between fires without rebuilding the whole session.
-        """
+    def iterate_agent_turn(
+        self,
+        session_key: str,
+        prompt: str,
+        *,
+        image_paths: list[str] | None = None,
+        actor_id: str = "user",
+    ) -> RuntimeResult:
+        payload = {"text": prompt, "actor_id": actor_id}
+        if image_paths:
+            payload["image_paths"] = image_paths
+        out = self.handle_action(session_key, "send_text", payload)
         session = self.sessions.get(session_key)
-        if session is None or not session.is_subagent:
-            return None
-        for key, value in fields.items():
-            if key == "system_prompt_extras":
-                session.system_prompt_extras = dict(value or {})
-            elif key == "extra_tool_instances":
-                session.extra_tool_instances = list(value or [])
-                self._refresh_session_specs(session)
-            elif key == "subagent_meta":
-                session.subagent_meta = dict(value or {})
-            elif hasattr(session, key):
-                setattr(session, key, value)
-        return session
+        if out.ok and session and self.db and session.conversation_id:
+            self.db.replace_conversation_messages(session.conversation_id, list(session.history))
+            self._persist_marker(session)
+        final_text = "\n".join(m for m in out.messages if m).strip()
+        event = {
+            "session_key": session_key,
+            "conversation_id": session.conversation_id if session else None,
+            "final_text": final_text,
+            "new_messages": list(out.data.get("new_messages") or []),
+            "attachments": list(out.attachments),
+        }
+        (self.emit_event or bus.emit)(SESSION_TURN_COMPLETED, event)
+        out.data.update(event)
+        return out
+
+    def inject_user_message(
+        self,
+        session_key: str,
+        text: str,
+        *,
+        conversation_id: int | None = None,
+        actor_id: str = "user",
+    ) -> RuntimeResult:
+        """Append a user-authored message without driving the agent turn."""
+        if conversation_id is not None:
+            session = self.sessions.get(session_key)
+            if session is None or session.conversation_id != conversation_id:
+                session = self.load_conversation(session_key, conversation_id)
+        else:
+            session = self.get_session(session_key)
+            self._ensure_conversation(session, text)
+        msg = {"role": "user", "content": text}
+        with session.lock:
+            session.history.append(msg)
+            if self.db and session.conversation_id:
+                save_history_message(self.db, session.conversation_id, msg)
+            bus.emit(SESSION_MESSAGE, {
+                "session_key": session.key,
+                "role": "user",
+                "content": text,
+                "actor_id": actor_id,
+            })
+            self._persist_marker(session)
+        return RuntimeResult(data={"conversation_id": session.conversation_id})
 
     def _restore_pending_requests(self, session: RuntimeSession) -> None:
         """Re-emit `approval_requested` events for any phase frames that were
@@ -497,26 +521,12 @@ class ConversationRuntime:
             self.emit_event("approval_requested", req)
 
     def new_conversation(self, session_key: str) -> RuntimeResult:
-        with self._sessions_lock:
-            existed = session_key in self.sessions
-            session = RuntimeSession(session_key, self._new_state())
-            session.cs = self._new_state(session=session)
-            self.sessions[session_key] = session
-        if existed:
-            bus.emit(SESSION_CLOSED, {"session_key": session_key})
-        bus.emit(SESSION_CREATED, {
-            "session_key": session_key,
-            "is_subagent": False,
-            "agent_profile": session.active_agent_profile,
-        })
+        self.reset_conversation(session_key)
         return RuntimeResult(messages=[f"New conversation started. Agent: {self.config.get('active_agent_profile') or 'default'}."])
 
     @staticmethod
     def subagent_session_key(job_name: str) -> str:
         return f"subagent:{job_name}"
-
-    def get_subagent_session(self, job_name: str) -> RuntimeSession | None:
-        return self.sessions.get(self.subagent_session_key(job_name))
 
     # ──────────────────────────────────────────────────────────────────────
     # Plugin-facing API.
@@ -660,6 +670,10 @@ class ConversationRuntime:
         if existed:
             bus.emit(SESSION_CLOSED, {"session_key": session_key})
         return existed
+
+    def unload_conversation(self, session_key: str) -> bool:
+        """Alias for plugin code that reads in conversation lifecycle terms."""
+        return self.close_session(session_key)
 
     def request_approval(self, session_key: str, title: str, body: str, pending_action: dict[str, Any]) -> StateMachineApprovalRequest:
         """Boolean-approval gate. Thin wrapper around `request_input`."""
@@ -870,6 +884,7 @@ class ConversationRuntime:
             cloned = ToolRegistry(registry.db, registry.config, registry.services)
             cloned.orchestrator = getattr(registry, "orchestrator", None)
             cloned.is_subagent = bool(session and session.is_subagent) or getattr(registry, "is_subagent", False)
+            cloned.runtime = getattr(registry, "runtime", None)
             cloned.tools.update(registry.tools)
             for tool in extras:
                 cloned.tools[tool.name] = tool
@@ -926,7 +941,8 @@ class ConversationRuntime:
     def _ensure_conversation(self, session: RuntimeSession, title_text: str = "") -> None:
         if session.conversation_id is None and self.db:
             session.conversation_id = self.db.create_conversation(
-                (title_text or "New conversation").replace("\n", " ")[:80] or "New conversation"
+                (title_text or "New conversation").replace("\n", " ")[:80] or "New conversation",
+                kind="subagent" if session.is_subagent else "user",
             )
 
     def _persist_marker(self, session: RuntimeSession) -> None:

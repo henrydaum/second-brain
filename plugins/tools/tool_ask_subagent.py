@@ -61,6 +61,8 @@ class AskSubagent(BaseTool):
             return ToolResult.failed("No active LLM profile is loaded.")
         if context.orchestrator is None:
             return ToolResult.failed("Orchestrator is not available.")
+        if getattr(context, "runtime", None) is None:
+            return ToolResult.failed("ConversationRuntime is not available.")
         if not bus.has_subscribers(SUBAGENT_RUN_CHANNEL):
             return ToolResult.failed("No subscriber is listening on subagent.run.")
 
@@ -79,10 +81,12 @@ class AskSubagent(BaseTool):
         poll_interval = self._coerce_poll(kwargs.get("poll_interval_seconds"), default=1.0)
 
         request_token = f"asksub:{uuid.uuid4().hex}"
+        conversation_id = context.runtime.create_conversation((title or prompt[:80] or "Subagent run")[:200], kind="subagent")
         payload = {
             "prompt": prompt,
             "title": title,
             "job_name": "ask_subagent",
+            "conversation_id": conversation_id,
             "input_paths": input_paths,
             "agent": agent_name,
             "_ask_subagent": {
@@ -115,7 +119,7 @@ class AskSubagent(BaseTool):
                 return ToolResult.failed(f"Subagent task run disappeared: {run_id}")
             last_status = str(run_row["status"] or "")
             if last_status == "DONE":
-                return self._build_success_result(context, run_id, prompt, title, input_paths)
+                return self._build_success_result(context, run_id, conversation_id, prompt, title, input_paths)
             if last_status == "FAILED":
                 error_text = self._extract_error(run_row)
                 return ToolResult.failed(f"Subagent run failed: {error_text}")
@@ -125,18 +129,8 @@ class AskSubagent(BaseTool):
             f"Timed out waiting for subagent completion after {timeout_seconds}s. Last status: {last_status}. Run id: {run_id}"
         )
 
-    def _build_success_result(self, context, run_id: str, prompt: str, title: str, input_paths: list[str]) -> ToolResult:
-        sub_row = self._get_subagent_run(context, run_id)
-        if sub_row is None:
-            return ToolResult.failed(
-                f"Subagent task run {run_id} completed but no row was found in subagent_runs."
-            )
-
-        final_answer = str(sub_row.get("final_answer") or "").strip()
-        conversation_id = sub_row.get("conversation_id")
-        pushes = self._get_pushes(context, run_id)
-        inputs = self._get_inputs(context, run_id)
-
+    def _build_success_result(self, context, run_id: str, conversation_id: int, prompt: str, title: str, input_paths: list[str]) -> ToolResult:
+        final_answer = self._latest_assistant_message(context, conversation_id)
         concise = final_answer if len(final_answer) <= 1200 else final_answer[:1200].rstrip() + "\n[truncated]"
         summary_lines = [
             f"Subagent completed. Run id: {run_id}.",
@@ -153,8 +147,8 @@ class AskSubagent(BaseTool):
                 "title": title,
                 "prompt": prompt,
                 "input_paths": input_paths,
-                "inputs": inputs,
-                "pushes": pushes,
+                "inputs": [{"input_index": i, "path": p} for i, p in enumerate(input_paths)],
+                "pushes": [],
                 "final_answer": final_answer,
             },
             llm_summary="\n".join(summary_lines),
@@ -182,32 +176,18 @@ class AskSubagent(BaseTool):
             row = cur.fetchone()
         return dict(row) if row else None
 
-    def _get_subagent_run(self, context, run_id: str):
-        with context.db.lock:
-            cur = context.db.conn.execute(
-                "SELECT run_id, job_name, conversation_id, title, prompt, final_answer, created_at FROM subagent_runs WHERE run_id = ?",
-                (run_id,),
-            )
-            row = cur.fetchone()
-        return dict(row) if row else None
-
-    def _get_pushes(self, context, run_id: str):
-        with context.db.lock:
-            cur = context.db.conn.execute(
-                "SELECT push_index, kind, title, message, sent_at FROM subagent_run_pushes WHERE run_id = ? ORDER BY push_index",
-                (run_id,),
-            )
-            rows = cur.fetchall()
-        return [dict(r) for r in rows]
-
-    def _get_inputs(self, context, run_id: str):
-        with context.db.lock:
-            cur = context.db.conn.execute(
-                "SELECT input_index, path, modality FROM subagent_run_inputs WHERE run_id = ? ORDER BY input_index",
-                (run_id,),
-            )
-            rows = cur.fetchall()
-        return [dict(r) for r in rows]
+    def _latest_assistant_message(self, context, conversation_id: int) -> str:
+        for row in reversed(context.db.get_conversation_messages(conversation_id)):
+            if row.get("role") != "assistant":
+                continue
+            content = row.get("content") or ""
+            try:
+                content = json.loads(content).get("content") or content
+            except Exception:
+                pass
+            if str(content).strip():
+                return str(content).strip()
+        return ""
 
     @staticmethod
     def _extract_error(run_row: dict) -> str:
