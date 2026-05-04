@@ -15,6 +15,7 @@ from state_machine.conversation_phases import BASE_PHASE, PHASE_AWAITING_INPUT
 
 Validator = Callable[[Any], tuple[bool, str | None]]
 Handler = Callable[["ConversationState", str, dict[str, Any]], Any]
+FormFactory = Callable[[dict[str, Any]], list["FormStep"]]
 
 
 @dataclass
@@ -28,6 +29,7 @@ class FormStep:
     enum: list[Any] | None = None
     default: Any = None
     validator: Validator | None = None
+    prompt_when_missing: bool = False
 
     def coerce(self, value: Any) -> Any:
         # Form values arrive from text boxes, buttons, or future callbacks, so
@@ -57,11 +59,11 @@ class FormStep:
         return self.validator(value) if self.validator else (True, None)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "prompt": self.prompt, "required": self.required, "type": self.type, "enum": self.enum, "default": self.default}
+        return {"name": self.name, "prompt": self.prompt, "required": self.required, "type": self.type, "enum": self.enum, "default": self.default, "prompt_when_missing": self.prompt_when_missing}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "FormStep":
-        return cls(data["name"], data.get("prompt", ""), data.get("required", True), data.get("type", "string"), data.get("enum"), data.get("default"))
+        return cls(data["name"], data.get("prompt", ""), data.get("required", True), data.get("type", "string"), data.get("enum"), data.get("default"), prompt_when_missing=data.get("prompt_when_missing", False))
 
 
 @dataclass
@@ -74,6 +76,7 @@ class CallableSpec:
     require_approval: bool = False
     approval_actor_id: str | None = None
     validator: Validator | None = None
+    form_factory: FormFactory | None = None
 
 
 @dataclass

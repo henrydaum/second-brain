@@ -10,8 +10,11 @@ frontends. Each frontend can add overrides on top.
 """
 
 import logging
+import json
 from dataclasses import dataclass
 from typing import Callable
+
+from state_machine.conversationClass import CallableSpec, FormStep
 
 logger = logging.getLogger("Commands")
 
@@ -35,6 +38,8 @@ class CommandEntry:
     arg_completions: Callable = None  # () -> list[str] — dynamic arg suggestions
     hide_from_help: bool = False      # if True, omit from /help and command menus
     category: str = "Other"           # grouping for /help output
+    form: list[FormStep] | None = None
+    form_factory: Callable | None = None
 
 
 class CommandRegistry:
@@ -73,6 +78,162 @@ class CommandRegistry:
             cmd for cmd in self.all_commands()
             if not getattr(cmd, "hide_from_help", False)
         ]
+
+    def to_callable_specs(self) -> dict[str, CallableSpec]:
+        """Bridge slash commands into state-machine callable specs."""
+        specs = {}
+        for entry in self.all_commands():
+            form = list(entry.form or [])
+            if not form and entry.arg_hint and entry.arg_hint.strip().startswith("<"):
+                form = [FormStep("arg", entry.arg_hint, required=True)]
+            specs[entry.name] = CallableSpec(
+                entry.name,
+                lambda _cs, _actor, args, e=entry: e.handler(_form_arg(args, e.name)) if e.handler else None,
+                form,
+                form_factory=entry.form_factory,
+            )
+        return specs
+
+
+def _form_arg(args: dict | None, name: str = "") -> str:
+    args = args or {}
+    if name == "llm":
+        return _llm_arg(args)
+    if name == "agent":
+        return _agent_arg(args)
+    if name == "schedule":
+        return _schedule_arg(args)
+    if name == "configure":
+        return f"{args.get('setting_name') or ''} {args.get('value') or ''}".strip()
+    if name == "call":
+        payload = {k: v for k, v in args.items() if k != "tool_name"}
+        return f"{args.get('tool_name') or ''} {json.dumps(payload, default=str)}".strip()
+    if name == "trigger":
+        payload = {k: v for k, v in args.items() if k != "task_name"}
+        return f"{args.get('task_name') or ''} {json.dumps(payload, default=str) if payload else ''}".strip()
+    if name == "message":
+        notify = f"--notify={args.get('notify')} " if args.get("notify") else ""
+        return f"{args.get('job_name') or ''} {notify}{args.get('text') or ''}".strip()
+    if "arg" in args:
+        return str(args.get("arg") or "")
+    if "subcommand" in args:
+        return f"{args.get('subcommand') or ''} {args.get('args') or ''}".strip()
+    return ""
+
+
+def _agent_arg(args: dict) -> str:
+    sub = args.get("subcommand") or "list"
+    if sub in {"list", "ls"}:
+        return str(sub)
+    if sub in {"switch", "remove", "show"}:
+        return f"{sub} {args.get('profile_name') or ''}".strip()
+    if sub == "edit":
+        return f"edit {args.get('profile_name') or ''} {args.get('field') or ''} {args.get('value') or ''}".strip()
+    if sub == "add":
+        profile = {
+            "llm": args.get("llm") or "default",
+            "prompt_suffix": args.get("prompt_suffix") or "",
+            "whitelist_or_blacklist_tools": args.get("whitelist_or_blacklist_tools") or "blacklist",
+            "tools_list": args.get("tools_list") or [],
+        }
+        return f"add {args.get('profile_name') or ''} {json.dumps(profile, default=str)}".strip()
+    return str(sub)
+
+
+def _schedule_arg(args: dict) -> str:
+    sub = args.get("subcommand") or "list"
+    if sub in {"list", "ls"}:
+        return str(sub)
+    if sub in {"show", "enable", "disable", "delete", "run"}:
+        return f"{sub} {args.get('job_name') or ''}".strip()
+    if sub == "create":
+        payload = args.get("payload") or {}
+        job = {
+            "channel": args.get("channel") or "",
+            "one_time": bool(args.get("one_time")),
+            "payload": payload if isinstance(payload, dict) else {},
+        }
+        job["run_at" if job["one_time"] else "cron"] = args.get("run_at" if job["one_time"] else "cron") or ""
+        return f"create {args.get('job_name') or ''} {json.dumps(job, default=str)}".strip()
+    return str(sub)
+
+
+def _agent_form(args: dict) -> list[FormStep]:
+    sub = args.get("subcommand")
+    steps = [FormStep("subcommand", "Subcommand", True, enum=["list", "switch", "add", "edit", "remove", "show"])]
+    if sub in {None, "", "list"}:
+        return steps
+    if sub in {"switch", "remove", "show"}:
+        return steps + [FormStep("profile_name", "Agent profile name", True)]
+    if sub == "edit":
+        return steps + [FormStep("profile_name", "Agent profile name", True), FormStep("field", "Field to edit", True, enum=list(_AGENT_PROFILE_FIELDS)), FormStep("value", "New value", True)]
+    if sub == "add":
+        return steps + [
+            FormStep("profile_name", "Agent profile name", True),
+            FormStep("llm", "LLM name or default", False, default="default", prompt_when_missing=True),
+            FormStep("prompt_suffix", "Prompt suffix", False, default="", prompt_when_missing=True),
+            FormStep("whitelist_or_blacklist_tools", "Tool filter mode", False, default="blacklist", enum=["whitelist", "blacklist"], prompt_when_missing=True),
+            FormStep("tools_list", "Tool names JSON array", False, "array", default=[], prompt_when_missing=True),
+        ]
+    return steps
+
+
+def _schedule_form(args: dict) -> list[FormStep]:
+    sub = args.get("subcommand")
+    steps = [FormStep("subcommand", "Subcommand", True, enum=["list", "show", "enable", "disable", "delete", "run", "create"])]
+    if sub in {None, "", "list"}:
+        return steps
+    if sub in {"show", "enable", "disable", "delete", "run"}:
+        return steps + [FormStep("job_name", "Job name", True)]
+    if sub == "create":
+        time_field = "run_at" if args.get("one_time") else "cron"
+        prompt = "Run at ISO datetime" if args.get("one_time") else "Cron expression"
+        return steps + [
+            FormStep("job_name", "Job name", True),
+            FormStep("channel", "Event channel", True),
+            FormStep("one_time", "One-time job?", False, "boolean", default=False, prompt_when_missing=True),
+            FormStep(time_field, prompt, True),
+            FormStep("payload", "Payload JSON object", False, "object", default={}, prompt_when_missing=True),
+        ]
+    return steps
+
+
+def _llm_arg(args: dict) -> str:
+    sub = args.get("subcommand") or "list"
+    if sub in {"list", "ls"}:
+        return str(sub)
+    if sub in {"default", "show", "remove"}:
+        return f"{sub} {args.get('model_name') or ''}".strip()
+    if sub == "edit":
+        return f"edit {args.get('model_name') or ''} {args.get('field') or ''} {args.get('value') or ''}".strip()
+    if sub == "add":
+        profile = {k: args.get(k) for k in _LLM_PROFILE_FIELDS if k in args}
+        return f"add {args.get('model_name') or ''} {json.dumps(profile)}".strip()
+    return f"{sub} {args.get('args') or ''}".strip()
+
+
+def _llm_form(args: dict) -> list[FormStep]:
+    sub = args.get("subcommand")
+    steps = [FormStep("subcommand", "Subcommand", True, enum=["list", "add", "edit", "remove", "show", "default"])]
+    if sub in {None, "", "list"}:
+        return steps
+    if sub in {"default", "show", "remove"}:
+        return steps + [FormStep("model_name", "Model name", True)]
+    if sub == "edit":
+        return steps + [
+            FormStep("model_name", "Model name", True),
+            FormStep("field", "Field to edit", True, enum=list(_LLM_PROFILE_FIELDS)),
+            FormStep("value", "New value", True),
+        ]
+    if sub == "add":
+        return steps + [
+            FormStep("model_name", "Model name", True),
+            FormStep("llm_service_class", "LLM service class", True, enum=["OpenAILLM", "LMStudioLLM"]),
+            FormStep("llm_endpoint", "Endpoint", False, default="", prompt_when_missing=True),
+            FormStep("llm_api_key", "API key or env var", False, default="", prompt_when_missing=True),
+            FormStep("llm_context_size", "Context size", False, "integer", default=0, prompt_when_missing=True),
+        ]
+    return steps
 
 
 def _build_help(registry: CommandRegistry) -> str:
@@ -1037,6 +1198,37 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
     _retry_names = lambda: ["all"] + _path_task_names()
     _render_tasks = lambda: format_tasks(ctrl.list_tasks())
 
+    def _configure_form(_args):
+        return [
+            FormStep("setting_name", "Setting name", True, enum=sorted(_all_setting_map().keys())),
+            FormStep("value", "New value", True),
+        ]
+
+    def _call_form(args):
+        steps = [FormStep("tool_name", "Tool name", True, enum=sorted(tool_registry.tools.keys()))]
+        schema = tool_registry.get_schema(args.get("tool_name")) if args.get("tool_name") else None
+        if schema:
+            from state_machine.forms import schema_to_form_steps
+            fields = schema_to_form_steps(schema.get("function", schema).get("parameters"))
+            for field in fields:
+                if not field.required:
+                    field.prompt_when_missing = True
+            steps.extend(fields)
+        return steps
+
+    def _trigger_form(args):
+        steps = [FormStep("task_name", "Event task name", True, enum=_event_task_names())]
+        task = ctrl.orchestrator.tasks.get(args.get("task_name")) if args.get("task_name") else None
+        schema = getattr(task, "event_payload_schema", None) if task else None
+        if schema:
+            from state_machine.forms import schema_to_form_steps
+            fields = schema_to_form_steps(schema)
+            for field in fields:
+                if not field.required:
+                    field.prompt_when_missing = True
+            steps.extend(fields)
+        return steps
+
     for entry in [
         # ── Conversation ───────────────────────────────────────────
         CommandEntry("help", "Show available commands",
@@ -1077,6 +1269,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      category="Services & Tools"),
         CommandEntry("call", "Call a tool directly", "<tool_name> {json_args}",
                      handler=_cmd_call, arg_completions=_tool_names,
+                     form_factory=_call_form,
                      category="Services & Tools"),
 
         # ── Tasks ──────────────────────────────────────────────────
@@ -1112,6 +1305,7 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
                      "<task_name> [json_payload]",
                      handler=_cmd_trigger,
                      arg_completions=_event_task_names,
+                     form_factory=_trigger_form,
                      category="Tasks"),
 
         # ── Config & System ────────────────────────────────────────
@@ -1121,24 +1315,33 @@ def register_core_commands(registry: CommandRegistry, ctrl, services, tool_regis
         CommandEntry("configure", "Update a config setting",
                      "<setting_name> <value>",
                      handler=_cmd_configure,
+                     form_factory=_configure_form,
                      category="Config & System"),
         CommandEntry("llm", "Manage LLM connection configs",
                      "[list|add|edit|remove|show|default] [args]",
                      handler=_cmd_llm, arg_completions=_llm_completions,
+                     form_factory=_llm_form,
                      category="Config & System"),
         CommandEntry("agent", "Manage scoped agent profiles",
                      "[list|switch|add|edit|remove|show] [args]",
                      handler=_cmd_agent, arg_completions=_agent_completions,
+                     form_factory=_agent_form,
                      category="Config & System"),
         CommandEntry("schedule", "Manage scheduled jobs",
                      "[list|show|enable|disable|delete|run|create] [args]",
                      handler=_cmd_schedule,
                      arg_completions=_schedule_completions,
+                     form_factory=_schedule_form,
                      category="Config & System"),
         CommandEntry("message", "Leave a message for a scheduled subagent",
                      "<job_name> [--notify=all|important|off] <text>",
                      handler=_cmd_message,
                      arg_completions=_message_completions,
+                     form=[
+                         FormStep("job_name", "Subagent job name", True),
+                         FormStep("notify", "Notification override", False, enum=["all", "important", "off"], default="", prompt_when_missing=True),
+                         FormStep("text", "Message text", True),
+                     ],
                      category="Config & System"),
         CommandEntry("locations", "List file-system locations",
                      "[tools|tasks|services]",

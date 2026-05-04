@@ -17,6 +17,7 @@ bridging across the event bus, session bookkeeping — lives in the base.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 
 from events.event_bus import bus
@@ -41,6 +42,7 @@ from state_machine.conversation_phases import (
     FORM_PHASES,
     PHASE_APPROVING_REQUEST,
 )
+from state_machine.approval import StateMachineApprovalRequest
 
 logger = logging.getLogger("Frontend")
 
@@ -126,6 +128,9 @@ class BaseFrontend:
         self.config: dict = {}
         self._unsubs: list = []
         self._bound = False
+        self._approval_lock = threading.RLock()
+        self._pending_approvals: dict[str, dict[str, object]] = {}
+        self._pending_approval_order: dict[str, list[str]] = {}
 
     # ──────────────────────────────────────────────────────────────────────
     # Lifecycle — override these.
@@ -251,6 +256,8 @@ class BaseFrontend:
             stripped = (text or "").strip()
             if stripped == "/cancel" and ACTION_CANCEL in legal:
                 return self.submit(session_key, ACTION_CANCEL)
+            if stripped == "/skip" and ACTION_SKIP_FORM in legal:
+                return self.submit(session_key, ACTION_SKIP_FORM)
             if not stripped and ACTION_SKIP_FORM in legal:
                 return self.submit(session_key, ACTION_SKIP_FORM)
             return self.submit(session_key, ACTION_SUBMIT_FORM_TEXT, stripped)
@@ -259,13 +266,30 @@ class BaseFrontend:
             return self.submit(session_key, ACTION_ANSWER_APPROVAL, text)
 
         stripped = (text or "").lstrip()
+        if stripped == "/cancel" and ACTION_CANCEL in legal:
+            return self.cancel(session_key)
+        if stripped == "/new":
+            return self.submit(session_key, "new_conversation")
+        if stripped.startswith("/history "):
+            _, _, arg = stripped.partition(" ")
+            if arg.strip().isdigit():
+                return self.submit(session_key, "load_history", {"conversation_id": int(arg.strip())})
         if stripped.startswith("/"):
             name, _, arg = stripped[1:].partition(" ")
-            if name and self.commands and name in {c.name for c in self.commands.all_commands()}:
+            cmd = next((c for c in self.commands.all_commands() if c.name == name), None) if name and self.commands else None
+            if cmd:
+                args = {}
+                if arg.strip():
+                    form = getattr(cmd, "form", None) or []
+                    if form and form[0].name == "subcommand":
+                        sub, _, rest = arg.strip().partition(" ")
+                        args = {"subcommand": sub, "args": rest.strip()}
+                    else:
+                        args = {"arg": arg.strip()}
                 return self.submit(
                     session_key,
                     ACTION_CALL_COMMAND,
-                    {"name": name, "args": {"arg": arg.strip()} if arg.strip() else {}},
+                    {"name": name, "args": args},
                 )
         return self.submit(session_key, ACTION_SEND_TEXT, text)
 
@@ -289,14 +313,40 @@ class BaseFrontend:
     def on_bus_approval_requested(self, req) -> None:
         for key in self._live_session_keys():
             try:
+                with self._approval_lock:
+                    self._pending_approvals.setdefault(key, {})[req.id] = req
+                    self._pending_approval_order.setdefault(key, []).append(req.id)
                 self.render_approval_request(key, req)
             except Exception:
                 logger.exception(f"render_approval_request failed for '{self.name}'")
 
     def on_bus_approval_resolved(self, req) -> None:
-        # Default: no-op. Frontends that draw lingering approval UI (Telegram
-        # inline keyboards, etc.) should override to clear it.
-        return
+        with self._approval_lock:
+            for key, pending in self._pending_approvals.items():
+                pending.pop(req.id, None)
+                self._pending_approval_order[key] = [item for item in self._pending_approval_order.get(key, []) if item != req.id]
+
+    def resolve_approval(self, session_key: str, request_id: str, value, resolved_by: str | None = None) -> bool:
+        with self._approval_lock:
+            req = self._pending_approvals.get(session_key, {}).get(request_id)
+            if req is None or getattr(req, "is_resolved", False):
+                return False
+            if resolved_by and hasattr(req, "metadata"):
+                req.metadata["resolved_by"] = resolved_by
+            req.resolve(value)
+            return True
+
+    def resolve_next_approval(self, session_key: str, value, resolved_by: str | None = None) -> bool:
+        with self._approval_lock:
+            order = self._pending_approval_order.setdefault(session_key, [])
+            pending = self._pending_approvals.setdefault(session_key, {})
+            while order and (order[0] not in pending or getattr(pending[order[0]], "is_resolved", False)):
+                order.pop(0)
+            return bool(order) and self.resolve_approval(session_key, order.pop(0), value, resolved_by)
+
+    def has_pending_approval(self, session_key: str) -> bool:
+        with self._approval_lock:
+            return any(not getattr(req, "is_resolved", False) for req in self._pending_approvals.get(session_key, {}).values())
 
     def on_bus_message_pushed(self, payload: dict) -> None:
         message = (payload or {}).get("message")
@@ -333,10 +383,28 @@ class BaseFrontend:
             self.render_buttons(session_key, list(result.buttons))
         if result.error:
             self.render_error(session_key, dict(result.error))
+        req = self._current_approval_request(session_key)
+        if req:
+            self.render_approval_request(session_key, req)
 
     def _current_phase(self, session_key: str) -> str:
         session = self.runtime.get_session(session_key)
         return session.cs.phase
+
+    def _current_approval_request(self, session_key: str):
+        if self._current_phase(session_key) != PHASE_APPROVING_REQUEST:
+            return None
+        frame = self.runtime.get_session(session_key).cs.frame
+        data = getattr(frame, "data", {}) or {}
+        return StateMachineApprovalRequest(
+            title=data.get("title") or frame.name or "Input required",
+            body=data.get("prompt") or "",
+            pending_action=data.get("pending"),
+            id=data.get("request_id") or "pending",
+            type=data.get("type", "boolean"),
+            enum=data.get("enum"),
+            default=data.get("default"),
+        )
 
     def _live_session_keys(self) -> list[str]:
         """Session keys this frontend currently has open.

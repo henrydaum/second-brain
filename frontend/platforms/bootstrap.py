@@ -1,14 +1,12 @@
 import logging
 import threading
 
-from frontend.platforms.platform_repl import ReplPlatformAdapter
 from frontend.platforms.platform_telegram import TelegramPlatformAdapter
 from frontend.runtime import FrontendRuntime
 
 logger = logging.getLogger("Frontends")
 
 _ADAPTERS = {
-    "repl": ReplPlatformAdapter,
     "telegram": TelegramPlatformAdapter,
 }
 

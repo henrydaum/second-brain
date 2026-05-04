@@ -33,7 +33,7 @@ from pipeline.watcher import Watcher
 from pipeline.event_trigger import EventTrigger
 from runtime.controller import Controller
 from agent.tool_registry import ToolRegistry
-from frontend.platforms import start_frontends
+from plugins.frontends.bootstrap import start_frontends
 from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
 
 

@@ -113,6 +113,7 @@ class ConversationRuntime:
         session = self.get_session(session_key)
         with session.lock:
             try:
+                self._refresh_session_specs(session)
                 return self._dispatch(session, action_type, payload)
             finally:
                 if action_type not in {"load_history", "new_conversation"}:
@@ -249,7 +250,7 @@ class ConversationRuntime:
 
     def _echo_callable_result(self, action_type: str, result: ActionResult, out: RuntimeResult) -> None:
         """Surface command/tool return values to the frontend (v1 behavior)."""
-        if action_type not in {"call_command", "call_tool"}:
+        if action_type not in {"call_command", "call_tool"} and getattr(result, "action", None) not in {"call_command", "call_tool"}:
             return
         if not result.ok:
             return
@@ -374,13 +375,13 @@ class ConversationRuntime:
             return req
 
     def _loop(self) -> ConversationLoop:
-        llm = self.services.get("llm")
+        llm = self._active_llm()
         if llm is None and hasattr(self, "llm"):
             llm = self.llm
-        if llm is None:
+        if llm is None or not getattr(llm, "loaded", True):
             raise RuntimeError("LLM service is not loaded.")
         return ConversationLoop(
-            llm, self.tool_registry, self.config, self.system_prompt,
+            llm, self._active_tool_registry(), self.config, self.system_prompt,
             self.on_tool_start, self.on_tool_result, self.on_notice,
         )
 
@@ -400,19 +401,53 @@ class ConversationRuntime:
         # Expose direct tool calls as callable specs for `/call`-style flows.
         # ConversationLoop still uses the registry schemas directly when
         # marshalling the agent's tool calls.
-        if not self.tool_registry:
+        registry = self._active_tool_registry()
+        if not registry:
             return {}
         specs = {}
-        for schema in self.tool_registry.get_all_schemas() or []:
+        for schema in registry.get_all_schemas() or []:
             fn = schema.get("function", schema)
             name = fn.get("name")
             if name:
                 specs[name] = CallableSpec(
                     name,
-                    lambda _cs, _actor, args, n=name: self.tool_registry.call(n, **args),
+                    lambda _cs, _actor, args, n=name: self._active_tool_registry().call(n, **args),
                     schema_to_form_steps(fn.get("parameters")),
                 )
         return specs
+
+    def refresh_session_specs(self) -> None:
+        for session in list(self.sessions.values()):
+            self._refresh_session_specs(session)
+
+    def _refresh_session_specs(self, session: RuntimeSession) -> None:
+        session.active_agent_profile = self.config.get("active_agent_profile") or "default"
+        session.cs.participants["user"].commands = dict(self.commands)
+        session.cs.participants["agent"].tools = self._tool_specs()
+
+    def _active_scope(self):
+        profile = self.config.get("active_agent_profile") or "default"
+        try:
+            from runtime.agent_scope import load_scope
+            scope = load_scope(profile, self.config)
+        except ValueError:
+            return None
+        return scope if scope.has_tool_filter or scope.prompt_suffix else None
+
+    def _active_tool_registry(self):
+        scope = self._active_scope()
+        if not scope or not self.tool_registry:
+            return self.tool_registry
+        from runtime.agent_scope import scoped_registry
+        return scoped_registry(self.tool_registry, scope, db=self.db)
+
+    def _active_llm(self):
+        profile = self.config.get("active_agent_profile") or "default"
+        try:
+            from runtime.agent_scope import resolve_agent_llm
+            return resolve_agent_llm(profile, self.config, self.services)
+        except Exception:
+            return self.services.get("llm")
 
     def _command_specs(self, specs: dict[str, dict]) -> dict[str, CallableSpec]:
         out = {}

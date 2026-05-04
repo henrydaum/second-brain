@@ -41,6 +41,14 @@ from state_machine.errors import (
 
 logger = logging.getLogger("actionClass")
 
+
+def _steps(spec: CallableSpec, args: dict[str, Any]) -> list[FormStep]:
+    return spec.form_factory(args) if spec.form_factory else spec.form
+
+
+def _missing(spec: CallableSpec, args: dict[str, Any]) -> list[FormStep]:
+    return [s for s in _steps(spec, args) if s.name not in args and (s.required or s.prompt_when_missing)]
+
 class Action(object):
     """Base action with shared legality/error handling."""
 
@@ -178,9 +186,10 @@ class _CallableAction(Action):
         payload, actor = self.payload(), self.actor_id
         spec = self.spec(payload)
         args = dict(payload.get("args") or {})
+        raw_arg = "arg" in args
         # Missing args turn into a PhaseFrame; subsequent text/callback input
         # fills the frame until the original callable can resume.
-        missing = [step for step in spec.form if step.name not in args]
+        missing = [] if raw_arg else _missing(spec, args)
         if missing:
             self.cs.push_phase(PhaseFrame(self.form_phase, self.action_type, actor, spec.name, {"args": args}, missing))
             event = self.cs.event("form_started", actor, name=spec.name, step=missing[0].name, prompt=missing[0].prompt)
@@ -191,7 +200,9 @@ class _CallableAction(Action):
         return self._run(spec, args)
 
     def _validate(self, spec: CallableSpec, args: dict[str, Any]) -> None:
-        for step in spec.form:
+        if "arg" in args:
+            return
+        for step in _steps(spec, args):
             ok, reason = step.validate(args.get(step.name))
             if not ok:
                 raise self.error(ERROR_INVALID_INPUT, reason or "Invalid input.", field=step.name)
@@ -257,8 +268,11 @@ class SubmitFormText(Action):
             raise self.error(ERROR_INVALID_INPUT, reason or "Invalid input.", field=frame.step.name)
         frame.data.setdefault("args", {})[frame.step.name] = frame.step.coerce(text)
         frame.step_index += 1
-        if frame.step:
-            event = self.cs.event("form_step", self.actor_id, name=frame.name, step=frame.step.name, prompt=frame.step.prompt)
+        spec = self.cs.spec(frame.actor_id, frame.action_type, frame.name)
+        missing = _missing(spec, frame.data["args"]) if spec else []
+        if missing:
+            frame.steps, frame.step_index = missing, 0
+            event = self.cs.event("form_step", self.actor_id, name=frame.name, step=missing[0].name, prompt=missing[0].prompt)
             return ActionResult(True, self.action_type, "Input required.", events=[event], data={"step": frame.step.name})
         pending = {"name": frame.name, "args": frame.data["args"]}
         actor, action_type = frame.actor_id, frame.action_type
@@ -368,8 +382,11 @@ class SkipForm(Action):
             raise self.error(ERROR_INVALID_INPUT, "Cannot skip a required field.", field=frame.step.name)
         frame.data.setdefault("args", {})[frame.step.name] = frame.step.default
         frame.step_index += 1
-        if frame.step:
-            event = self.cs.event("form_step", self.actor_id, name=frame.name, step=frame.step.name, prompt=frame.step.prompt)
+        spec = self.cs.spec(frame.actor_id, frame.action_type, frame.name)
+        missing = _missing(spec, frame.data["args"]) if spec else []
+        if missing:
+            frame.steps, frame.step_index = missing, 0
+            event = self.cs.event("form_step", self.actor_id, name=frame.name, step=missing[0].name, prompt=missing[0].prompt)
             return ActionResult(True, self.action_type, "Input required.", events=[event], data={"step": frame.step.name})
         pending = {"name": frame.name, "args": frame.data["args"]}
         actor, action_type = frame.actor_id, frame.action_type
