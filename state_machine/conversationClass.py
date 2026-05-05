@@ -30,6 +30,7 @@ class FormStep:
     default: Any = None
     validator: Validator | None = None
     prompt_when_missing: bool = False
+    columns: int | None = None
 
     def coerce(self, value: Any) -> Any:
         # Form values arrive from text boxes, buttons, or future callbacks, so
@@ -59,11 +60,11 @@ class FormStep:
         return self.validator(value) if self.validator else (True, None)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "prompt": self.prompt, "required": self.required, "type": self.type, "enum": self.enum, "default": self.default, "prompt_when_missing": self.prompt_when_missing}
+        return {"name": self.name, "prompt": self.prompt, "required": self.required, "type": self.type, "enum": self.enum, "default": self.default, "prompt_when_missing": self.prompt_when_missing, "columns": self.columns}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "FormStep":
-        return cls(data["name"], data.get("prompt", ""), data.get("required", True), data.get("type", "string"), data.get("enum"), data.get("default"), prompt_when_missing=data.get("prompt_when_missing", False))
+        return cls(data["name"], data.get("prompt", ""), data.get("required", True), data.get("type", "string"), data.get("enum"), data.get("default"), prompt_when_missing=data.get("prompt_when_missing", False), columns=data.get("columns"))
 
 
 @dataclass

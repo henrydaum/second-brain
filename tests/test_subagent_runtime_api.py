@@ -105,7 +105,7 @@ def test_command_discovery_loads_minimal_builtin_commands():
     registry = CommandRegistry()
     try:
         discover_commands(".", registry)
-        assert [cmd.name for cmd in registry.all_commands()] == ["agent", "cancel", "commands", "frontends", "llm", "locations", "new", "services", "tasks", "tools", "update"]
+        assert [cmd.name for cmd in registry.all_commands()] == ["agent", "cancel", "commands", "config", "frontends", "llm", "locations", "new", "services", "tasks", "tools", "update"]
     finally:
         discovery._COMMAND_CONFIG["sandbox_dir"] = old_sandbox
 
@@ -129,8 +129,8 @@ def test_host_commands_are_visible_and_user_approved():
     names = sorted(runtime.command_registry._commands)
     visible = [cmd.name for cmd in runtime.command_registry.visible_commands()]
 
-    assert names == ["agent", "cancel", "commands", "frontends", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools", "update"]
-    assert visible == ["agent", "cancel", "commands", "frontends", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools", "update"]
+    assert names == ["agent", "cancel", "commands", "config", "frontends", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools", "update"]
+    assert visible == ["agent", "cancel", "commands", "config", "frontends", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools", "update"]
     assert not runtime.commands["cancel"].require_approval
     assert not runtime.commands["commands"].require_approval
     assert runtime.commands["quit"].require_approval
@@ -141,7 +141,7 @@ def test_host_commands_are_visible_and_user_approved():
     assert runtime.commands["update"].approval_actor_id == "user"
 
     text = runtime.command_registry.dispatch_dict("commands", {}, session_key="default", _emit=False)
-    for name in names:
+    for name in visible:
         assert f"/{name}" in text
 
 
@@ -265,6 +265,23 @@ def test_profile_commands_use_add_then_item_actions():
     assert ctx.config["llm_profiles"]["gpt"]["llm_context_size"] == 2
 
 
+def test_config_command_uses_pick_then_edit_pattern():
+    from plugins.commands.command_config import ConfigCommand
+
+    refreshed = []
+    ctx = SimpleNamespace(config={"max_workers": 4, "plugin_rate": 1}, runtime=SimpleNamespace(refresh_session_specs=lambda: refreshed.append(True)))
+    with patch("plugins.commands.command_config.get_plugin_settings", return_value=[("Plugin Rate", "plugin_rate", "Plugin setting", 1, {})]), \
+         patch("config.config_manager.save"), patch("config.config_manager.load_plugin_config", return_value={}), patch("config.config_manager.save_plugin_config") as save_plugin:
+        steps = ConfigCommand().form({}, ctx)
+        assert steps[0].columns == 2
+        assert "max_workers" in steps[0].enum and "plugin_rate" in steps[0].enum
+        assert ConfigCommand().form({"setting_name": "max_workers"}, ctx)[1].enum == ["edit"]
+        assert ConfigCommand().run({"setting_name": "plugin_rate", "action": "edit", "value": "2"}, ctx) == "Set plugin_rate = 2"
+        save_plugin.assert_called_once_with({"plugin_rate": 2})
+    assert ctx.config["plugin_rate"] == 2
+    assert refreshed == [True]
+
+
 def test_agent_switch_uses_runtime_session_profile():
     from plugins.commands.command_agent import AgentCommand
 
@@ -322,6 +339,14 @@ def test_telegram_form_echo_shows_command_fragment():
     }
 
     assert tg._form_echo(form, "edit") == "/agent default edit"
+
+
+def test_telegram_enum_markup_honors_form_columns():
+    from plugins.frontends.telegram_frontend import TelegramFrontend
+
+    markup = TelegramFrontend()._enum_markup("s", {"field": {"enum": ["a", "b", "c"], "columns": 2}})
+
+    assert [[b.text for b in row] for row in markup.inline_keyboard] == [["a", "b"], ["c"], ["Cancel"]]
 
 
 class FakeCommand(BaseCommand):

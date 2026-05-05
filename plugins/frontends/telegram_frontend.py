@@ -370,7 +370,8 @@ class TelegramFrontend(BaseFrontend):
 
     def _enum_markup(self, key: str, form: dict):
         field = form.get("field") or {}
-        rows = [[self._button(str(v), key, str(v), self._form_echo(form, v))] for v in field.get("enum") or []]
+        cols, buttons = max(1, int(field.get("columns") or 1)), [self._button(str(v), key, str(v), self._form_echo(form, v)) for v in field.get("enum") or []]
+        rows = [buttons[i:i + cols] for i in range(0, len(buttons), cols)]
         if field.get("required") is False:
             rows.append([self._button("Skip", key, "/skip")])
         rows.append([self._button("Cancel", key, "/cancel")])
