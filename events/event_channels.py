@@ -46,8 +46,7 @@ Payload (event-triggered tasks):
 
 SERVICE_LOADED = "service_loaded"
 """A service finished (un)loading or was swapped. Lets the orchestrator
-re-check tasks that were blocked on services without the controller
-reaching sideways into it. Emitted on load, unload, and hot-reload.
+re-check tasks that were blocked on services without reaching sideways into it. Emitted on load, unload, and hot-reload.
 Payload:
     name:   str   — service name (may be None for bulk events)
     loaded: bool  — True after load, False after unload"""

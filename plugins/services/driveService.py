@@ -3,7 +3,7 @@ Google Drive Service.
 
 Handles OAuth 2.0 authentication and provides the Google Drive API
 service object. Follows the standard service interface (load/unload/loaded)
-so it integrates with the services dict and controller.
+so it integrates with the services dict.
 
 Usage:
     drive = GoogleDriveService()

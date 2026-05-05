@@ -728,8 +728,7 @@ class LLMRouter(BaseLLM):
         super().__init__()
         self.config = config
         # ``services`` is the live service registry. Mutations made by
-        # ``add_llm``/``remove_llm`` flow straight into ``ctrl.services``
-        # provided main.pyw rebinds this reference after Controller setup.
+        # ``add_llm``/``remove_llm`` flow straight into the service dict.
         self.services: dict = services if services is not None else {}
         self.model_name = "LLM Router"
 

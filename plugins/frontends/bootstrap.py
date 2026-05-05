@@ -31,17 +31,17 @@ class _HostCommand(BaseCommand):
         return self.callback() or None
 
 
-def _restart(ctrl):
-    fn = getattr(ctrl, "restart", None)
+def _restart(scaffold):
+    fn = getattr(scaffold, "restart", None)
     if fn is None:
         return "Restart is not supported in this frontend."
     threading.Timer(0.75, fn).start()
     return "Restarting - Second Brain will be back in a few seconds."
 
 
-def start_frontends(frontends: set[str], ctrl, shutdown_fn, shutdown_event,
+def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
                     tool_registry, services, config, root_dir):
-    runtime = _conversation_runtime(ctrl, shutdown_fn, tool_registry, services, config, root_dir) if frontends & {"repl", "telegram"} else None
+    runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir) if frontends & {"repl", "telegram"} else None
     adapters, threads = {}, []
     if runtime and "repl" in frontends:
         repl = ReplFrontend(shutdown_fn, shutdown_event)
@@ -56,42 +56,41 @@ def start_frontends(frontends: set[str], ctrl, shutdown_fn, shutdown_event,
     return runtime, adapters, threads
 
 
-def _conversation_runtime(ctrl, shutdown_fn, tool_registry, services, config, root_dir):
+def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir):
     ref = {}
     registry = CommandRegistry(
         lambda session_key=None: build_context(
-            ctrl.db, config, services, tool_registry=tool_registry,
-            orchestrator=ctrl.orchestrator, runtime=ref.get("runtime"),
-            controller=ctrl, root_dir=root_dir, session_key=session_key,
+            scaffold.db, config, services, tool_registry=tool_registry,
+            orchestrator=scaffold.orchestrator, runtime=ref.get("runtime"),
+            root_dir=root_dir, session_key=session_key,
         )
     )
     discover_commands(root_dir, registry, config)
     registry.register(_HostCommand("quit", "Shutdown", shutdown_fn))
-    registry.register(_HostCommand("restart", "Restart the app", lambda: _restart(ctrl)))
+    registry.register(_HostCommand("restart", "Restart the app", lambda: _restart(scaffold)))
 
     def prompt():
         profile = config.get("active_agent_profile") or "default"
         scope = _scope(profile, config)
-        registry_for_prompt = scoped_registry(tool_registry, scope, db=ctrl.db) if scope else tool_registry
-        return build_system_prompt(ctrl.db, ctrl.orchestrator, registry_for_prompt, services, scope=scope, profile_name=profile)
+        registry_for_prompt = scoped_registry(tool_registry, scope, db=scaffold.db) if scope else tool_registry
+        return build_system_prompt(scaffold.db, scaffold.orchestrator, registry_for_prompt, services, scope=scope, profile_name=profile)
 
     runtime = ConversationRuntime(
-        db=ctrl.db,
+        db=scaffold.db,
         services=services,
         config=config,
         tool_registry=tool_registry,
         system_prompt=prompt,
         commands=registry.to_callable_specs(),
         emit_event=lambda channel, payload: bus.emit(channel, payload),
-        title_callback=ctrl.maybe_generate_conversation_title_async,
     )
     runtime.command_registry = registry
-    runtime._orchestrator_ref = getattr(ctrl, "orchestrator", None)
+    runtime._orchestrator_ref = scaffold.orchestrator
     ref["runtime"] = runtime
     # Tasks running through the orchestrator (scheduled subagents in
     # particular) reach the runtime via context.runtime.
-    if getattr(ctrl, "orchestrator", None) is not None:
-        ctrl.orchestrator.runtime = runtime
+    if scaffold.orchestrator is not None:
+        scaffold.orchestrator.runtime = runtime
     if tool_registry is not None:
         tool_registry.runtime = runtime
         tool_registry.command_registry = registry

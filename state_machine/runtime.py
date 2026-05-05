@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 from state_machine.approval import StateMachineApprovalRequest
 from state_machine.conversationClass import CallableSpec, ConversationState, FormStep, Participant, PhaseFrame
+from state_machine.title_generator import TitleGenerator
 from state_machine.conversation_loop import ConversationLoop
 from state_machine.conversation_phases import BASE_PHASE, BUSY_PHASES, PHASE_APPROVING_REQUEST
 from state_machine.errors import ActionError, ActionResult
@@ -115,7 +116,6 @@ class ConversationRuntime:
         commands: dict[str, CallableSpec] | None = None,
         command_specs: dict[str, dict] | None = None,
         emit_event: Callable[[str, Any], None] | None = None,
-        title_callback: Callable[[int], None] | None = None,
         on_tool_start=None,
         on_tool_result=None,
         on_notice=None,
@@ -127,7 +127,7 @@ class ConversationRuntime:
         self.system_prompt = system_prompt
         self.commands = {**(commands or {}), **self._command_specs(command_specs or {})}
         self.emit_event = emit_event
-        self.title_callback = title_callback
+        self._title_generator = TitleGenerator(db, services or {}) if db else None
         self.on_tool_start = on_tool_start
         self.on_tool_result = on_tool_result
         self.on_notice = on_notice
@@ -260,9 +260,9 @@ class ConversationRuntime:
                 session.cs.set_priority("user")
             session.cancel_event.clear()
 
-        if (self.title_callback and session.conversation_id
+        if (self._title_generator and session.conversation_id
                 and any(m.get("role") == "assistant" and not m.get("tool_calls") for m in new_messages)):
-            self.title_callback(session.conversation_id)
+            self._title_generator.maybe_generate_async(session.conversation_id)
 
         if reply:
             out.messages.append(reply)

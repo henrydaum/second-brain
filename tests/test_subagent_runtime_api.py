@@ -117,14 +117,13 @@ def test_host_commands_are_visible_and_user_approved():
         tools = {}
         def get_all_schemas(self): return []
 
-    ctrl = SimpleNamespace(
+    scaffold = SimpleNamespace(
         db=None,
         config={},
         orchestrator=SimpleNamespace(tasks={}, runtime=None),
-        maybe_generate_conversation_title_async=None,
         restart=lambda: None,
     )
-    runtime = _conversation_runtime(ctrl, lambda: None, ToolRegistry(), {}, {}, Path("."))
+    runtime = _conversation_runtime(scaffold, lambda: None, ToolRegistry(), {}, {}, Path("."))
 
     names = sorted(runtime.command_registry._commands)
     visible = [cmd.name for cmd in runtime.command_registry.visible_commands()]

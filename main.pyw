@@ -27,15 +27,31 @@ logging.getLogger().addHandler(_file_handler)
 
 logger = logging.getLogger("Main")
 
+from dataclasses import dataclass, field
+from typing import Any
+
 from config import config_manager
 from pipeline.database import Database
 from pipeline.orchestrator import Orchestrator
 from pipeline.watcher import Watcher
 from pipeline.event_trigger import EventTrigger
-from runtime.controller import Controller
 from agent.tool_registry import ToolRegistry
 from plugins.frontends.bootstrap import start_frontends
 from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
+
+
+@dataclass
+class Scaffold:
+	"""Lightweight bag of runtime references for bootstrap and frontends."""
+	orchestrator: Any = None
+	db: Any = None
+	services: dict = field(default_factory=dict)
+	config: dict = field(default_factory=dict)
+	tool_registry: Any = None
+	watcher: Any = None
+	event_trigger: Any = None
+	frontend_runtime: Any = None
+	restart: Any = None
 
 
 _ROOT = Path(__file__).parent
@@ -113,8 +129,8 @@ def main():
 	# print(prompt)
 	# print("=" * 80 + "\n")
 
-	# --- 6. Initialize controller ---
-	ctrl = Controller(orchestrator, database, services, config, tool_registry)
+	# --- 6. Initialize app context ---
+	scaffold = Scaffold(orchestrator, database, services, config, tool_registry)
 
 	# --- 6b. Determine which frontends to start ---
 	frontends = set(config.get("enabled_frontends", ["repl", "telegram"]))
@@ -128,12 +144,12 @@ def main():
 
 	watcher = Watcher(orchestrator, database, config)
 	watcher.start()
-	ctrl.watcher = watcher
+	scaffold.watcher = watcher
 
 	# --- 8b. Start event trigger (bus-driven run enqueue for event tasks) ---
 	event_trigger = EventTrigger(orchestrator, database, config)
 	event_trigger.start()
-	ctrl.event_trigger = event_trigger
+	scaffold.event_trigger = event_trigger
 	logger.info("-----------------------------")
 	logger.info(f"SecondBrain started in {time.time() - t_start:.2f}s. Type 'help' for commands, 'quit' to exit.")
 
@@ -213,11 +229,11 @@ def main():
 		threading.Thread(target=watchdog_force_exec, daemon=True, name="restart-watchdog").start()
 		threading.Thread(target=graceful_then_exec, daemon=True, name="restart-graceful").start()
 
-	ctrl.restart = restart
+	scaffold.restart = restart
 
 	# --- 10. Start frontends via the shared runtime/bootstrap path ---
-	ctrl.frontend_runtime, _adapters, _frontend_threads = start_frontends(
-		frontends, ctrl, shutdown, _shutdown, tool_registry, services, config, _ROOT
+	scaffold.frontend_runtime, _adapters, _frontend_threads = start_frontends(
+		frontends, scaffold, shutdown, _shutdown, tool_registry, services, config, _ROOT
 	)
 
 	# --- 11. Main thread idles until shutdown ---

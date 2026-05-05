@@ -49,13 +49,10 @@ Tools can be called by:
 TRIGGERING EVENT TASKS FROM A TOOL
 ----------------------------------
 Event-triggered tasks (trigger="event") subscribe to bus channels. A tool
-can fire one by emitting on a channel the task declared, OR by calling
-the controller helper which emits on the task's first channel:
+can fire one by emitting on the channel the task declared:
 
     from events.event_bus import bus
     bus.emit("trigger.cluster_now", {"reason": "user asked"})
-    # or, without knowing the channel name:
-    # ctrl.trigger_event_task("cluster_embeddings", {"reason": "..."})
 
 This enqueues a run in task_runs; the orchestrator dispatches it on its
 next tick. The tool returns immediately — it doesn't wait for the run
