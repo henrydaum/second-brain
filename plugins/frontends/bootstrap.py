@@ -39,6 +39,11 @@ def _restart(scaffold):
     return "Restarting - Second Brain will be back in a few seconds."
 
 
+def _quit(shutdown_fn):
+    threading.Timer(0.75, shutdown_fn).start()
+    return "Shutting down."
+
+
 def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
                     tool_registry, services, config, root_dir):
     runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir) if frontends & {"repl", "telegram"} else None
@@ -66,7 +71,7 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
         )
     )
     discover_commands(root_dir, registry, config)
-    registry.register(_HostCommand("quit", "Shutdown", shutdown_fn))
+    registry.register(_HostCommand("quit", "Shutdown", lambda: _quit(shutdown_fn)))
     registry.register(_HostCommand("restart", "Restart the app", lambda: _restart(scaffold)))
 
     def prompt():

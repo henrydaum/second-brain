@@ -145,6 +145,19 @@ def test_host_commands_are_visible_and_user_approved():
         assert f"/{name}" in text
 
 
+def test_quit_host_command_delays_shutdown_until_after_command_finish():
+    from plugins.frontends.bootstrap import _quit
+    called = []
+
+    with patch("plugins.frontends.bootstrap.threading.Timer") as timer:
+        timer.return_value.start.side_effect = lambda: called.append("started")
+        assert _quit(lambda: called.append("shutdown")) == "Shutting down."
+
+    timer.assert_called_once()
+    assert timer.call_args.args[0] == 0.75
+    assert called == ["started"]
+
+
 def test_resource_commands_share_action_target_pattern():
     from plugins.commands.command_frontends import FrontendsCommand
     from plugins.commands.command_services import ServicesCommand
