@@ -59,9 +59,10 @@ payload)`. Telegram edits a single message in place: `⏳ /name` →
 
 ## Command plugins
 
-Slash commands now mirror the rest of the plugin system. Built-ins live in
-[plugins/commands/command_core.py](plugins/commands/command_core.py), sandbox
-commands live under `DATA_DIR/sandbox_commands`, and the registry in
+Slash commands now mirror the rest of the plugin system. The repo starts with a
+clean command slate: add built-ins as `command_*.py` files under
+[plugins/commands/](plugins/commands/), or create sandbox commands under
+`DATA_DIR/sandbox_commands`. The registry in
 [plugins/frontends/helpers/command_registry.py](plugins/frontends/helpers/command_registry.py)
 is only the adapter: it builds context-aware forms, parses one-shot `/cmd ...`
 input mechanically, and dispatches structured dict args.

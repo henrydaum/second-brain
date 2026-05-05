@@ -714,7 +714,7 @@ class LLMRouter(BaseLLM):
 
     config_settings = [
         ("LLM Profiles", "llm_profiles",
-         "LLM connection configs keyed by model name. Managed via /llm command.",
+         "LLM connection configs keyed by model name.",
          {},
          {"type": "json_dict", "hidden": True}),
 

@@ -308,7 +308,7 @@ def _format_schedule_summary(job: dict, timekeeper=None) -> str:
 def format_scheduled_jobs(jobs: dict, timekeeper=None) -> str:
     """Format the scheduled-jobs dict as an aligned status list."""
     if not jobs:
-        return "No scheduled jobs. Use /schedule create to add one."
+        return "No scheduled jobs."
 
     rows = []
     for name, job in sorted(jobs.items()):

@@ -19,6 +19,8 @@ logger = logging.getLogger("Frontends")
 
 class _HostCommand(BaseCommand):
     category = "Conversation"
+    require_approval = True
+    approval_actor_id = "user"
 
     def __init__(self, name: str, description: str, callback):
         self.name = name
@@ -27,6 +29,14 @@ class _HostCommand(BaseCommand):
 
     def run(self, _args, _context):
         return self.callback() or None
+
+
+def _restart(ctrl):
+    fn = getattr(ctrl, "restart", None)
+    if fn is None:
+        return "Restart is not supported in this frontend."
+    threading.Timer(0.75, fn).start()
+    return "Restarting - Second Brain will be back in a few seconds."
 
 
 def start_frontends(frontends: set[str], ctrl, shutdown_fn, shutdown_event,
@@ -57,7 +67,7 @@ def _conversation_runtime(ctrl, shutdown_fn, tool_registry, services, config, ro
     )
     discover_commands(root_dir, registry, config)
     registry.register(_HostCommand("quit", "Shutdown", shutdown_fn))
-    registry.register(_HostCommand("exit", "Shutdown", shutdown_fn))
+    registry.register(_HostCommand("restart", "Restart the app", lambda: _restart(ctrl)))
 
     def prompt():
         profile = config.get("active_agent_profile") or "default"

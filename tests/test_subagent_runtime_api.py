@@ -1,7 +1,4 @@
 from types import SimpleNamespace
-import ast
-import inspect
-import textwrap
 
 from events.event_bus import bus
 from events.event_channels import SESSION_TURN_COMPLETED
@@ -99,47 +96,45 @@ def test_ask_subagent_reads_final_answer_from_conversation():
     assert result.data["final_answer"] == "done"
 
 
-def test_message_command_injects_user_message_through_runtime():
-    class Timekeeper:
-        loaded = True
+def test_command_discovery_starts_with_clean_builtin_slate():
+    import plugins.plugin_discovery as discovery
 
-        def __init__(self):
-            self.payload = {"title": "Job"}
+    old_sandbox = discovery._COMMAND_CONFIG["sandbox_dir"]
+    discovery._COMMAND_CONFIG["sandbox_dir"] = discovery.ROOT_DIR / ".missing_sandbox_commands"
+    registry = CommandRegistry()
+    try:
+        discover_commands(".", registry)
+        assert registry.all_commands() == []
+    finally:
+        discovery._COMMAND_CONFIG["sandbox_dir"] = old_sandbox
 
-        def get_job(self, name):
-            return {"channel": "subagent.run", "payload": self.payload} if name == "job" else None
 
-        def update_job(self, name, patch):
-            self.payload = patch["payload"]
+def test_host_commands_are_visible_and_user_approved():
+    from pathlib import Path
+    from plugins.frontends.bootstrap import _conversation_runtime
 
-    runtime = FakeRuntime()
+    class ToolRegistry:
+        tools = {}
+        def get_all_schemas(self): return []
+
     ctrl = SimpleNamespace(
-        db=SimpleNamespace(get_conversation=lambda _cid: None, count_pending_inbox=lambda _cid: 1),
+        db=None,
         config={},
-        list_task_names=lambda *a, **k: [],
-        list_tasks=lambda: [],
-        frontend_runtime=runtime,
-        orchestrator=SimpleNamespace(tasks={}),
+        orchestrator=SimpleNamespace(tasks={}, runtime=None),
+        maybe_generate_conversation_title_async=None,
+        restart=lambda: None,
     )
-    tool_registry = SimpleNamespace(tools={}, runtime=runtime, get_schema=lambda _name: None)
-    registry = CommandRegistry(lambda _session_key=None: SimpleNamespace(
-        controller=ctrl,
-        db=ctrl.db,
-        config=ctrl.config,
-        services={"timekeeper": Timekeeper()},
-        tool_registry=tool_registry,
-        orchestrator=ctrl.orchestrator,
-        runtime=runtime,
-        root_dir=".",
-    ))
-    discover_commands(".", registry)
+    runtime = _conversation_runtime(ctrl, lambda: None, ToolRegistry(), {}, {}, Path("."))
 
-    output = registry.dispatch_dict("message", {"job_name": "job", "text": "hello there"}, _emit=False)
+    names = sorted(runtime.command_registry._commands)
+    visible = [cmd.name for cmd in runtime.command_registry.visible_commands()]
 
-    assert "Queued for 'job'" in output
-    assert ("create_conversation", "Job", "subagent") in runtime.calls
-    assert ("inject_user_message", "subagent:job", "hello there", 7, "user") in runtime.calls
-    assert ("unload_conversation", "subagent:job") in runtime.calls
+    assert names == ["quit", "restart"]
+    assert visible == ["quit", "restart"]
+    assert runtime.commands["quit"].require_approval
+    assert runtime.commands["quit"].approval_actor_id == "user"
+    assert runtime.commands["restart"].require_approval
+    assert runtime.commands["restart"].approval_actor_id == "user"
 
 
 class FakeCommand(BaseCommand):
@@ -201,61 +196,3 @@ def test_slash_command_tool_uses_dispatch_dict_once():
     assert result.success
     assert result.data == {"command": "fake", "output": "done"}
     assert context.calls == [{"tool_name": "echo", "text": "done"}]
-
-
-def test_builtin_command_handlers_read_form_fields():
-    from plugins.BaseCommand import BaseCommand
-    from plugins.commands import command_core
-
-    class Ctrl:
-        config = {}
-        db = SimpleNamespace()
-        orchestrator = SimpleNamespace(tasks={}, dependency_pipeline_graph=lambda: "")
-        def list_task_names(self, trigger=None): return []
-
-    ctx = SimpleNamespace(
-        controller=Ctrl(),
-        config={},
-        services={},
-        tool_registry=SimpleNamespace(tools={}, get_schema=lambda _name: None),
-        orchestrator=SimpleNamespace(tasks={}),
-    )
-
-    def command_classes(cls=BaseCommand):
-        for sub in cls.__subclasses__():
-            yield sub
-            yield from command_classes(sub)
-
-    for cls in command_classes():
-        if cls.__module__ != command_core.__name__ or not getattr(cls, "name", ""):
-            continue
-        command = cls()
-        forms = [command.form({}, ctx)]
-        first = forms[0][0] if forms[0] else None
-        if first and first.name == "subcommand":
-            forms += [command.form({"subcommand": sub}, ctx) for sub in first.enum or []]
-        form_keys = {step.name for form in forms for step in form}
-        source = inspect.getsource(cls.run)
-        tree = ast.parse(textwrap.dedent(source))
-        read_keys = {
-            node.args[0].value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "get"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "args"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-        }
-        read_keys |= {
-            node.slice.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Subscript)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "args"
-            and isinstance(node.slice, ast.Constant)
-            and isinstance(node.slice.value, str)
-        }
-        assert read_keys <= form_keys, f"{cls.__name__} reads keys not in form: {read_keys - form_keys}"

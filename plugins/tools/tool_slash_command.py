@@ -1,9 +1,4 @@
-"""Slash command tool — one-shot invocation of user slash commands by the agent.
-
-The same `/agent`, `/configure`, `/schedule`, `/llm`, etc. that a human runs
-through the UI's step-by-step form. The agent supplies the full structured
-arguments in a single call; no form is shown.
-"""
+"""Slash command tool — one-shot invocation of registered command plugins."""
 
 import logging
 
@@ -11,18 +6,15 @@ from plugins.BaseTool import BaseTool, ToolResult
 
 logger = logging.getLogger("SlashCommand")
 
-_BLOCKED = {"new", "cancel", "help", "refresh", "restart", "quit", "exit", "slash_command"}
+_BLOCKED = {"restart", "quit", "slash_command"}
 
 
 class SlashCommand(BaseTool):
     name = "slash_command"
     description = (
-        "Invoke a user slash command (the same ones a human runs in the UI) in "
-        "one shot, supplying all arguments at once. Examples: change a setting "
-        "via /configure, add an LLM via /llm add, edit an agent profile via "
-        "/agent edit, schedule a job via /schedule create. Use /help (via the "
-        "registry below) to discover available commands. UI-only commands "
-        "(new, cancel, refresh, etc.) are blocked.\n\n"
+        "Invoke a registered user slash-command plugin in one shot, supplying "
+        "all arguments at once. Commands are discovered from BaseCommand "
+        "plugins. Host commands such as quit and restart are blocked.\n\n"
         "Pass the command name without the leading slash. The args dict mirrors "
         "the fields the form would collect; see each command's form for the "
         "exact keys."
@@ -32,14 +24,13 @@ class SlashCommand(BaseTool):
         "properties": {
             "name": {
                 "type": "string",
-                "description": "Command name without the leading slash. E.g. 'configure', 'agent', 'llm'.",
+                "description": "Command name without the leading slash.",
             },
             "args": {
                 "type": "object",
                 "description": (
                     "Structured arguments for the command. Keys mirror the form "
-                    "fields the human UI would prompt for. Pass {} for arg-less "
-                    "commands like 'services' or 'tools'."
+                    "fields the human UI would prompt for. Pass {} for arg-less commands."
                 ),
             },
         },

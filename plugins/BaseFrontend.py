@@ -206,10 +206,10 @@ class BaseFrontend:
         ``runtime``  — ConversationRuntime instance (the only state-machine
                        entry point a frontend uses).
         ``commands`` — CommandRegistry built from the project's command
-                       plugins. Used for /-completions, /help rendering, and
-                       to validate command names before submitting actions.
+                       plugins. Used for /-completions and to validate command
+                       names before submitting actions.
         ``config``   — merged app config dict (read-only from a frontend's
-                       perspective; mutate via /configure).
+                       perspective; mutate through a command or tool).
         """
         if self._bound:
             return

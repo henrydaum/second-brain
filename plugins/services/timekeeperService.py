@@ -29,7 +29,7 @@ class TimekeeperService(BaseService):
         (
             "Scheduled Jobs",
             "scheduled_jobs",
-            "JSON object keyed by job name describing scheduled event emissions. Managed via /schedule command.",
+            "JSON object keyed by job name describing scheduled event emissions.",
             {},
             {"type": "text", "hidden": True},
         ),

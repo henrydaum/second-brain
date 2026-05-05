@@ -10,6 +10,8 @@ class BaseCommand:
     description: str = ""
     category: str = "Other"
     hide_from_help: bool = False
+    require_approval: bool = False
+    approval_actor_id: str | None = None
     config_settings: list = []
 
     def form(self, args: dict, context) -> list[FormStep]:

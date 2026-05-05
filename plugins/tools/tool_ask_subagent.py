@@ -34,7 +34,7 @@ class AskSubagent(BaseTool):
             },
             "agent": {
                 "type": "string",
-                "description": "Optional agent profile name to run under (see /agent list). Use this to pick a specialist subagent such as a builder, researcher, or communicator. Leave blank to use the current active profile.",
+                "description": "Optional agent profile name to run under. Use this to pick a specialist subagent such as a builder, researcher, or communicator. Leave blank to use the current active profile.",
             },
             "timeout_seconds": {
                 "type": "integer",

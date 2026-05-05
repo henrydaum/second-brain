@@ -28,7 +28,7 @@ class ReplFrontend(BaseFrontend):
 
     def start(self) -> None:
         key = self.session_key(None)
-        print("Second Brain REPL ready. Type /help for commands, /quit to exit.")
+        print("Second Brain REPL ready. Type /quit to exit.")
         while not self.shutdown_event.is_set():
             try:
                 raw = input("\n").strip()

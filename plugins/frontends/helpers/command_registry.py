@@ -43,7 +43,7 @@ class CommandRegistry:
     def dispatch_dict(self, name: str, args: dict | None = None, *, session_key: str | None = None, _emit: bool = True) -> str | None:
         entry = self._commands.get(name)
         if entry is None:
-            return f"Unknown command: '/{name}'. Run /help to see available commands."
+            return f"Unknown command: '/{name}'."
         call_id = None
         if _emit:
             call_id = _emit_started(name, args or {}, session_key)
@@ -78,6 +78,8 @@ class CommandRegistry:
                 entry.name,
                 lambda cs, _actor, args, e=entry: self.dispatch_dict(e.name, args, session_key=(cs.cache or {}).get("session_key"), _emit=False),
                 form_factory=lambda args, cs, e=entry: e.form(args, self.context((cs.cache or {}).get("session_key") if cs else None)),
+                require_approval=getattr(entry, "require_approval", False),
+                approval_actor_id=getattr(entry, "approval_actor_id", None),
             )
         return specs
 
