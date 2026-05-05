@@ -42,12 +42,14 @@ from state_machine.errors import (
 logger = logging.getLogger("actionClass")
 
 
-def _steps(spec: CallableSpec, args: dict[str, Any]) -> list[FormStep]:
-    return spec.form_factory(args) if spec.form_factory else spec.form
+def _steps(spec: CallableSpec, args: dict[str, Any], cs=None) -> list[FormStep]:
+    if not spec.form_factory:
+        return spec.form
+    return spec.form_factory(args, cs)
 
 
-def _missing(spec: CallableSpec, args: dict[str, Any]) -> list[FormStep]:
-    return [s for s in _steps(spec, args) if s.name not in args and (s.required or s.prompt_when_missing)]
+def _missing(spec: CallableSpec, args: dict[str, Any], cs=None) -> list[FormStep]:
+    return [s for s in _steps(spec, args, cs) if s.name not in args and (s.required or s.prompt_when_missing)]
 
 class Action(object):
     """Base action with shared legality/error handling."""
@@ -143,6 +145,23 @@ class Cancel(Action):
 
     def execute(self):
         frame = self.cs.pop_phase()
+        # If we were mid-form for a slash command, emit FINISHED so any UI
+        # showing a pending hourglass can resolve it as cancelled.
+        if frame is not None and frame.action_type == "call_command":
+            call_id = (frame.data or {}).get("call_id")
+            if call_id:
+                try:
+                    from events.event_bus import bus
+                    from events.event_channels import COMMAND_CALL_FINISHED
+                    bus.emit(COMMAND_CALL_FINISHED, {
+                        "session_key": self.cs.cache.get("session_key"),
+                        "call_id": call_id,
+                        "command_name": frame.name,
+                        "ok": False,
+                        "error": "cancelled",
+                    })
+                except Exception:
+                    pass
         event = self.cs.event("cancelled", self.actor_id, cancelled=frame.action_type if frame else None)
         return ActionResult(True, self.action_type, "Cancelled.", events=[event])
 
@@ -187,22 +206,31 @@ class _CallableAction(Action):
         spec = self.spec(payload)
         args = dict(payload.get("args") or {})
         raw_arg = "arg" in args
+        resumed_call_id = payload.get("_call_id")
         # Missing args turn into a PhaseFrame; subsequent text/callback input
         # fills the frame until the original callable can resume.
-        missing = [] if raw_arg else _missing(spec, args)
+        missing = [] if raw_arg else _missing(spec, args, self.cs)
         if missing:
-            self.cs.push_phase(PhaseFrame(self.form_phase, self.action_type, actor, spec.name, {"args": args}, missing))
+            # First invocation: emit STARTED so the UI can show a pending
+            # indicator while the user fills the form. The call_id is pinned
+            # to the phase frame so the matching FINISHED fires from the
+            # eventual _run with the same id.
+            call_id = resumed_call_id or self._emit_invocation_started(spec, args)
+            frame_data = {"args": args}
+            if call_id:
+                frame_data["call_id"] = call_id
+            self.cs.push_phase(PhaseFrame(self.form_phase, self.action_type, actor, spec.name, frame_data, missing))
             event = self.cs.event("form_started", actor, name=spec.name, step=missing[0].name, prompt=missing[0].prompt)
-            return ActionResult(True, self.action_type, "Input required.", events=[event], data={"step": missing[0].name})
+            return ActionResult(True, self.action_type, "Input required.", events=[event], data={"step": missing[0].name, "call_id": call_id})
         self._validate(spec, args)
         if spec.require_approval and not payload.get("_approved"):
             return self._approval(payload, spec)
-        return self._run(spec, args)
+        return self._run(spec, args, call_id=resumed_call_id)
 
     def _validate(self, spec: CallableSpec, args: dict[str, Any]) -> None:
         if "arg" in args:
             return
-        for step in _steps(spec, args):
+        for step in _steps(spec, args, self.cs):
             ok, reason = step.validate(args.get(step.name))
             if not ok:
                 raise self.error(ERROR_INVALID_INPUT, reason or "Invalid input.", field=step.name)
@@ -226,10 +254,10 @@ class _CallableAction(Action):
         event = self.cs.event("approval_requested", self.actor_id, name=spec.name, approver=approver, payload=payload)
         return ActionResult(True, self.action_type, "Approval required.", events=[event])
 
-    def _run(self, spec: CallableSpec, args: dict[str, Any]):
+    def _run(self, spec: CallableSpec, args: dict[str, Any], *, call_id: str | None = None):
         old_phase = self.cs.phase
         self.cs.phase = self.calling_phase
-        started = self._emit_command_started(spec, args)
+        started = call_id or self._emit_invocation_started(spec, args)
         try:
             value = spec.handler(self.cs, self.actor_id, args) if spec.handler else None
             if isinstance(value, ActionResult) and not value.ok:
@@ -241,22 +269,23 @@ class _CallableAction(Action):
             self.cs.reset_phase()
         self._emit_command_finished(started, spec, True, None)
         event = self.cs.event(self.action_type, self.actor_id, name=spec.name, args=args, result=value, previous_phase=old_phase)
-        return ActionResult(True, self.action_type, events=[event], data={"result": value})
+        return ActionResult(True, self.action_type, events=[event], data={"result": value, "call_id": started})
 
-    def _emit_command_started(self, spec: CallableSpec, args: dict[str, Any]):
+    def _emit_invocation_started(self, spec: CallableSpec, args: dict[str, Any]):
         if self.action_type != "call_command":
             return None
         try:
+            import uuid
             from events.event_bus import bus
             from events.event_channels import COMMAND_CALL_STARTED
-            call_id = f"cmd:{spec.name}:{id(args)}"
+            call_id = f"cmd:{spec.name}:{uuid.uuid4().hex[:8]}"
             bus.emit(COMMAND_CALL_STARTED, {"session_key": self.cs.cache.get("session_key"), "call_id": call_id, "command_name": spec.name, "args": args})
             return call_id
         except Exception:
             return None
 
     def _emit_command_finished(self, call_id, spec: CallableSpec, ok: bool, error: str | None):
-        if not call_id:
+        if not call_id or self.action_type != "call_command":
             return
         try:
             from events.event_bus import bus
@@ -301,12 +330,14 @@ class SubmitFormText(Action):
         frame.data.setdefault("args", {})[frame.step.name] = value
         frame.step_index += 1
         spec = self.cs.spec(frame.actor_id, frame.action_type, frame.name)
-        missing = _missing(spec, frame.data["args"]) if spec else []
+        missing = _missing(spec, frame.data["args"], self.cs) if spec else []
         if missing:
             frame.steps, frame.step_index = missing, 0
             event = self.cs.event("form_step", self.actor_id, name=frame.name, step=missing[0].name, prompt=missing[0].prompt)
             return ActionResult(True, self.action_type, "Input required.", events=[event], data={"step": frame.step.name})
         pending = {"name": frame.name, "args": frame.data["args"]}
+        if frame.data.get("call_id"):
+            pending["_call_id"] = frame.data["call_id"]
         actor, action_type = frame.actor_id, frame.action_type
         self.cs.pop_phase()
         from state_machine.action_map import create_action
@@ -415,12 +446,14 @@ class SkipForm(Action):
         frame.data.setdefault("args", {})[frame.step.name] = frame.step.default
         frame.step_index += 1
         spec = self.cs.spec(frame.actor_id, frame.action_type, frame.name)
-        missing = _missing(spec, frame.data["args"]) if spec else []
+        missing = _missing(spec, frame.data["args"], self.cs) if spec else []
         if missing:
             frame.steps, frame.step_index = missing, 0
             event = self.cs.event("form_step", self.actor_id, name=frame.name, step=missing[0].name, prompt=missing[0].prompt)
             return ActionResult(True, self.action_type, "Skipped.", events=[event], data={"step": frame.step.name})
         pending = {"name": frame.name, "args": frame.data["args"]}
+        if frame.data.get("call_id"):
+            pending["_call_id"] = frame.data["call_id"]
         actor, action_type = frame.actor_id, frame.action_type
         self.cs.pop_phase()
         from state_machine.action_map import create_action

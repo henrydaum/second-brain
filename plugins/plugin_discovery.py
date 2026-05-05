@@ -1,5 +1,5 @@
 """
-Plugin discovery — unified loader for tools, tasks, and services.
+Plugin discovery — unified loader for tools, tasks, services, and commands.
 
 Handles both baked-in (read-only, in source tree) and sandbox (mutable,
 in DATA_DIR) plugins. Used at startup for bulk discovery and by
@@ -10,6 +10,7 @@ Public API:
     discover_tools()        — tools only
     discover_tasks()        — tasks only
     discover_services()     — services only, returns dict
+    discover_commands()     — commands only
     load_single_plugin()    — load one sandbox file and register it
     unload_plugin()         — unregister a plugin by name
 """
@@ -22,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from paths import ROOT_DIR, SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES
+from paths import ROOT_DIR, SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS
 
 logger = logging.getLogger("Discovery")
 
@@ -135,6 +136,16 @@ _SERVICE_CONFIG = {
     "sandbox_ns":         "sandbox_services_{stem}",
 }
 
+_COMMAND_CONFIG = {
+    "baked_in_dir":       ROOT_DIR / "plugins" / "commands",
+    "sandbox_dir":        SANDBOX_COMMANDS,
+    "glob":               "command_*.py",
+    "baked_in_ns":        "plugins.commands.{stem}",
+    "sandbox_ns":         "sandbox_commands_{stem}",
+    "base_module":        "plugins.BaseCommand",
+    "base_class_name":    "BaseCommand",
+}
+
 
 # ── Bulk discovery (startup) ─────────────────────────────────────────
 
@@ -143,6 +154,53 @@ def discover_all(root_dir: Path, tool_registry, orchestrator, config: dict) -> d
     discover_tools(root_dir, tool_registry, config)
     discover_tasks(root_dir, orchestrator, config)
     return discover_services(root_dir, config)
+
+
+def discover_commands(root_dir: Path, command_registry, config: dict | None = None, reload: bool = False):
+    """Discover and register all slash commands (baked-in + sandbox)."""
+    from plugins.BaseCommand import BaseCommand
+    cfg = _COMMAND_CONFIG
+    t0 = time.time()
+    count = 0
+    baked_in_names = set()
+
+    if reload:
+        _purge_plugin_settings({"command"})
+
+    if cfg["baked_in_dir"].exists():
+        for py_file in sorted(cfg["baked_in_dir"].glob(cfg["glob"])):
+            module_name = cfg["baked_in_ns"].format(stem=py_file.stem)
+            module = _load_baked_in(module_name, reload)
+            if module is None:
+                continue
+            for instance in _find_subclass_instances(module, BaseCommand, module_name):
+                if not getattr(instance, "name", ""):
+                    continue
+                instance._mutable = False
+                command_registry.register(instance)
+                _collect_config_settings(instance, plugin_type="command")
+                baked_in_names.add(instance.name)
+                count += 1
+
+    if cfg["sandbox_dir"].exists():
+        for py_file in sorted(cfg["sandbox_dir"].glob(cfg["glob"])):
+            module_name = cfg["sandbox_ns"].format(stem=py_file.stem)
+            module = _load_sandbox(module_name, py_file, reload)
+            if module is None:
+                continue
+            for instance in _find_subclass_instances(module, BaseCommand, module_name):
+                if not getattr(instance, "name", ""):
+                    continue
+                if instance.name in baked_in_names:
+                    logger.warning(f"Sandbox command '{instance.name}' collides with baked-in — skipped")
+                    continue
+                instance._mutable = True
+                instance._source_path = str(py_file)
+                command_registry.register(instance)
+                _collect_config_settings(instance, plugin_type="command")
+                count += 1
+
+    logger.info(f"Discovered {count} command(s) in {time.time() - t0:.2f}s")
 
 
 def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = False):
@@ -294,7 +352,8 @@ def wire_peer_services(services: dict):
 
 def load_single_plugin(plugin_type: str, file_path: Path,
                        tool_registry=None, orchestrator=None,
-                       services: dict = None, config: dict = None) -> tuple[str | None, str | None]:
+                       services: dict = None, config: dict = None,
+                       command_registry=None) -> tuple[str | None, str | None]:
     """
     Load a single sandbox plugin file and register it.
 
@@ -307,19 +366,24 @@ def load_single_plugin(plugin_type: str, file_path: Path,
         return _load_single_task(file_path, orchestrator, config)
     elif plugin_type == "service":
         return _load_single_service(file_path, services, config)
+    elif plugin_type == "command":
+        return _load_single_command(file_path, command_registry or getattr(tool_registry, "command_registry", None))
     else:
         return None, f"Unknown plugin_type: {plugin_type}"
 
 
 def unload_plugin(plugin_type: str, plugin_name: str,
                   tool_registry=None, orchestrator=None,
-                  services: dict = None, source_path: str = None):
+                  services: dict = None, source_path: str = None,
+                  command_registry=None):
     """Unregister a plugin. For services, uses source_path to find all
     service names registered from that file."""
     if plugin_type == "tool" and tool_registry:
         tool_registry.unregister(plugin_name)
     elif plugin_type == "task" and orchestrator:
         orchestrator.unregister_task(plugin_name)
+    elif plugin_type == "command" and (command_registry or getattr(tool_registry, "command_registry", None)):
+        (command_registry or tool_registry.command_registry).unregister(plugin_name)
     elif plugin_type == "service" and services:
         _unload_services_by_source(services, source_path or plugin_name)
 
@@ -354,11 +418,36 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
     if not instances:
         return None, f"No BaseTool subclass found in {file_path.name}"
 
-    instance = instances[0]
+    instance = next((item for item in instances if getattr(item, "name", "")), None)
+    if instance is None:
+        return None, f"No named BaseCommand subclass found in {file_path.name}"
     instance._mutable = True
     instance._source_path = str(file_path)
     tool_registry.register(instance)
     _collect_config_settings(instance, plugin_type="tool")
+    return instance.name, None
+
+
+def _load_single_command(file_path: Path, command_registry) -> tuple[str | None, str | None]:
+    from plugins.BaseCommand import BaseCommand
+    cfg = _COMMAND_CONFIG
+    module_name = cfg["sandbox_ns"].format(stem=file_path.stem)
+    if command_registry is None:
+        return None, "No command registry available"
+
+    module = _load_sandbox(module_name, file_path, reload=True)
+    if module is None:
+        return None, f"Failed to import {file_path.name}"
+
+    instances = _find_subclass_instances(module, BaseCommand, module_name)
+    if not instances:
+        return None, f"No BaseCommand subclass found in {file_path.name}"
+
+    instance = instances[0]
+    instance._mutable = True
+    instance._source_path = str(file_path)
+    command_registry.register(instance)
+    _collect_config_settings(instance, plugin_type="command")
     return instance.name, None
 
 

@@ -291,14 +291,7 @@ class BaseFrontend:
             name, _, arg = stripped[1:].partition(" ")
             cmd = next((c for c in self.commands.all_commands() if c.name == name), None) if name and self.commands else None
             if cmd:
-                args = {}
-                if arg.strip():
-                    form = getattr(cmd, "form", None) or []
-                    if form and form[0].name == "subcommand":
-                        sub, _, rest = arg.strip().partition(" ")
-                        args = {"subcommand": sub, "args": rest.strip()}
-                    else:
-                        args = {"arg": arg.strip()}
+                args = self.commands.parse_args(name, arg, session_key=session_key) if arg.strip() else {}
                 return self.submit(
                     session_key,
                     ACTION_CALL_COMMAND,

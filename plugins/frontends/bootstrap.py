@@ -1,17 +1,32 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 import threading
 
 from agent.system_prompt import build_system_prompt
 from events.event_bus import bus
-from plugins.frontends.helpers.command_registry import CommandEntry, CommandRegistry, register_core_commands
+from plugins.BaseCommand import BaseCommand
+from plugins.frontends.helpers.command_registry import CommandRegistry
+from plugins.plugin_discovery import discover_commands
 from plugins.frontends.repl_frontend import ReplFrontend
 from plugins.frontends.telegram_frontend import TelegramFrontend
+from runtime.context import build_context
 from runtime.agent_scope import load_scope, scoped_registry
 from state_machine.runtime import ConversationRuntime
 
 logger = logging.getLogger("Frontends")
+
+
+@dataclass
+class _HostCommand(BaseCommand):
+    name: str
+    description: str
+    callback: object
+    category: str = "Conversation"
+
+    def run(self, _args, _context):
+        return self.callback() or None
 
 
 def start_frontends(frontends: set[str], ctrl, shutdown_fn, shutdown_event,
@@ -32,14 +47,17 @@ def start_frontends(frontends: set[str], ctrl, shutdown_fn, shutdown_event,
 
 
 def _conversation_runtime(ctrl, shutdown_fn, tool_registry, services, config, root_dir):
-    registry = CommandRegistry()
     ref = {}
-    register_core_commands(
-        registry, ctrl, services, tool_registry, root_dir,
-        rescope_agents=lambda: ref["runtime"].refresh_session_specs(),
+    registry = CommandRegistry(
+        lambda session_key=None: build_context(
+            ctrl.db, config, services, tool_registry=tool_registry,
+            orchestrator=ctrl.orchestrator, runtime=ref.get("runtime"),
+            controller=ctrl, root_dir=root_dir,
+        )
     )
-    registry.register(CommandEntry("quit", "Shutdown", handler=lambda _arg: shutdown_fn() or None, category="Conversation"))
-    registry.register(CommandEntry("exit", "Shutdown", handler=lambda _arg: shutdown_fn() or None, category="Conversation"))
+    discover_commands(root_dir, registry, config)
+    registry.register(_HostCommand("quit", "Shutdown", shutdown_fn))
+    registry.register(_HostCommand("exit", "Shutdown", shutdown_fn))
 
     def prompt():
         profile = config.get("active_agent_profile") or "default"
@@ -58,6 +76,7 @@ def _conversation_runtime(ctrl, shutdown_fn, tool_registry, services, config, ro
         title_callback=ctrl.maybe_generate_conversation_title_async,
     )
     runtime.command_registry = registry
+    runtime._orchestrator_ref = getattr(ctrl, "orchestrator", None)
     ref["runtime"] = runtime
     # Tasks running through the orchestrator (scheduled subagents in
     # particular) reach the runtime via context.runtime.
@@ -65,6 +84,7 @@ def _conversation_runtime(ctrl, shutdown_fn, tool_registry, services, config, ro
         ctrl.orchestrator.runtime = runtime
     if tool_registry is not None:
         tool_registry.runtime = runtime
+        tool_registry.command_registry = registry
     return runtime
 
 

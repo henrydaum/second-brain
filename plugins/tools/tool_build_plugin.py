@@ -2,7 +2,7 @@
 Build Plugin tool.
 
 Allows the LLM agent to create, edit (via FIND/REPLACE), and delete
-sandbox plugins (tools, tasks, services). Files are written to the
+sandbox plugins (tools, tasks, services, commands). Files are written to the
 sandbox directories in DATA_DIR and registered immediately.
 """
 
@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from plugins.BaseTool import BaseTool, ToolResult
-from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, ROOT_DIR
+from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, ROOT_DIR
 
 logger = logging.getLogger("BuildPlugin")
 
@@ -21,6 +21,7 @@ _PLUGIN_CONFIG = {
     "tool":    (SANDBOX_TOOLS,    "tool_",  "BaseTool"),
     "task":    (SANDBOX_TASKS,    "task_",  "BaseTask"),
     "service": (SANDBOX_SERVICES, None,     "BaseService"),
+    "command": (SANDBOX_COMMANDS, "command_", "BaseCommand"),
 }
 
 # Expected import statements for each plugin type
@@ -28,6 +29,7 @@ _EXPECTED_IMPORTS = {
     "tool":    ("plugins.BaseTool", {"BaseTool", "ToolResult"}),
     "task":    ("plugins.BaseTask", {"BaseTask", "TaskResult"}),
     "service": ("plugins.BaseService", {"BaseService"}),
+    "command": ("plugins.BaseCommand", {"BaseCommand"}),
 }
 
 # Baked-in source directories (read-only)
@@ -35,13 +37,14 @@ _BAKED_IN_DIRS = {
     "tool":    ROOT_DIR / "plugins" / "tools",
     "task":    ROOT_DIR / "plugins" / "tasks",
     "service": ROOT_DIR / "plugins" / "services",
+    "command": ROOT_DIR / "plugins" / "commands",
 }
 
 
 class BuildPlugin(BaseTool):
     name = "build_plugin"
     description = (
-        "Create, edit, or delete a sandbox plugin (tool, task, or service). "
+        "Create, edit, or delete a sandbox plugin (tool, task, service, or command). "
         "Use action='create' with full source code, action='edit' with exact "
         "search_block and replace_block text, and action='delete' to remove a "
         "sandbox plugin. Built-in plugins are read-only."
@@ -51,7 +54,7 @@ class BuildPlugin(BaseTool):
         "properties": {
             "plugin_type": {
                 "type": "string",
-                "enum": ["tool", "task", "service"],
+                "enum": ["tool", "task", "service", "command"],
                 "description": "Type of plugin to create/edit/delete.",
             },
             "file_name": {
@@ -94,7 +97,7 @@ class BuildPlugin(BaseTool):
         action = kwargs.get("action", "")
 
         if plugin_type not in _PLUGIN_CONFIG:
-            return ToolResult.failed(f"Invalid plugin_type: '{plugin_type}'. Must be tool, task, or service.")
+            return ToolResult.failed(f"Invalid plugin_type: '{plugin_type}'. Must be tool, task, service, or command.")
         if not file_name:
             return ToolResult.failed("file_name is required.")
         if action not in ("create", "edit", "delete"):
@@ -202,7 +205,8 @@ class BuildPlugin(BaseTool):
         plugin_name = _extract_plugin_name(sandbox_path, plugin_type)
         unload_plugin(plugin_type, plugin_name or file_name,
                       context.tool_registry, context.orchestrator,
-                      context.services, source_path=str(sandbox_path))
+                      context.services, source_path=str(sandbox_path),
+                      command_registry=getattr(context, "command_registry", None) or getattr(getattr(context, "runtime", None), "command_registry", None))
 
         # Clean up sys.modules
         _cleanup_module(sandbox_path, plugin_type)
@@ -250,6 +254,8 @@ def _check_naming(plugin_type: str, file_name: str) -> str | None:
         return f"Task files must start with 'task_', got '{file_name}'."
     if plugin_type == "service" and file_name.startswith("_"):
         return f"Service files must not start with '_', got '{file_name}'."
+    if plugin_type == "command" and not file_name.startswith("command_"):
+        return f"Command files must start with 'command_', got '{file_name}'."
     return None
 
 
@@ -277,7 +283,7 @@ def _validate_code(code: str, file_name: str, plugin_type: str, context) -> list
     _check_class_structure(tree, base_class, plugin_type, warnings)
     _check_import_statement(tree, plugin_type, warnings)
 
-    if plugin_type in ("tool", "task"):
+    if plugin_type in ("tool", "task", "command"):
         _check_name_collision(tree, plugin_type, context, warnings)
     elif plugin_type == "service":
         _check_service_structure(tree, warnings)
@@ -356,11 +362,12 @@ def _check_name_collision(tree: ast.Module, plugin_type: str, context, warnings:
         return
 
     # Check against baked-in registries
-    if plugin_type == "tool" and hasattr(context, "call_tool"):
+    if plugin_type in {"tool", "task", "command"}:
         # Check tool registry via the db's tool list isn't feasible here,
         # but we can check the baked-in directory for files
-        baked_in_dir = _BAKED_IN_DIRS["tool"]
-        for py_file in baked_in_dir.glob("tool_*.py"):
+        baked_in_dir = _BAKED_IN_DIRS[plugin_type]
+        prefix = _PLUGIN_CONFIG[plugin_type][1] or ""
+        for py_file in baked_in_dir.glob(f"{prefix}*.py"):
             try:
                 source = py_file.read_text(encoding="utf-8")
                 file_tree = ast.parse(source)
@@ -387,6 +394,7 @@ def _try_register(sandbox_path: Path, plugin_type: str, context, warnings: list)
         plugin_type, sandbox_path,
         context.tool_registry, context.orchestrator,
         context.services, context.config,
+        command_registry=getattr(context, "command_registry", None) or getattr(getattr(context, "runtime", None), "command_registry", None),
     )
     if error:
         warnings.append(f"Registration failed: {error}")
@@ -424,6 +432,7 @@ _SANDBOX_NS = {
     "tool":    "sandbox_tools_{stem}",
     "task":    "sandbox_tasks_{stem}",
     "service": "sandbox_services_{stem}",
+    "command": "sandbox_commands_{stem}",
 }
 
 

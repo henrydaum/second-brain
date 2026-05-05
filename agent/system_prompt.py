@@ -252,7 +252,7 @@ def _pipeline_status(db, orchestrator) -> str:
     lines = ["## Task pipeline"]
 
     # DAG
-    dag = orchestrator.dependency_pipeline_graph()
+    dag = orchestrator.dependency_pipeline_graph() if orchestrator else None
     if dag:
         lines.append(dag)
 
@@ -261,8 +261,9 @@ def _pipeline_status(db, orchestrator) -> str:
     if stats:
         lines.append("")
         lines.append("Status (P=pending, D=done, F=failed):")
+        paused_set = orchestrator.paused if orchestrator else set()
         for name, counts in sorted(stats.items()):
-            paused = " [PAUSED]" if name in orchestrator.paused else ""
+            paused = " [PAUSED]" if name in paused_set else ""
             lines.append(
                 f"  {name}: P:{counts['PENDING']} D:{counts['DONE']} F:{counts['FAILED']}{paused}"
             )

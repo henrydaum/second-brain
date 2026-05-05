@@ -593,8 +593,8 @@ class Controller:
     # =================================================================
 
     def reload_plugins(self, root_dir: Path) -> str:
-        """Re-discover tasks and tools from all plugin directories."""
-        from plugins.plugin_discovery import discover_tasks, discover_tools
+        """Re-discover tasks, tools, and commands from all plugin directories."""
+        from plugins.plugin_discovery import discover_commands, discover_tasks, discover_tools
 
         saved_pauses = set(self.orchestrator.paused)
         self.orchestrator.paused.update(self.orchestrator.tasks.keys())
@@ -614,8 +614,20 @@ class Controller:
             for name in mutable_tool_names:
                 self.tool_registry.unregister(name)
 
+            command_registry = getattr(self.tool_registry, "command_registry", None)
+            if command_registry is not None:
+                for name, command in list(command_registry._commands.items()):
+                    if getattr(command, "_mutable", False):
+                        command_registry.unregister(name)
+
             discover_tasks(root_dir, self.orchestrator, self.config, reload=True)
             discover_tools(root_dir, self.tool_registry, self.config, reload=True)
+            if command_registry is not None:
+                discover_commands(root_dir, command_registry, self.config, reload=True)
+                runtime = getattr(self.tool_registry, "runtime", None)
+                if runtime is not None:
+                    runtime.commands = command_registry.to_callable_specs()
+                    runtime.refresh_session_specs()
             self.orchestrator.refresh_event_subscriptions()
         finally:
             self.orchestrator.paused.clear()

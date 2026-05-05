@@ -15,7 +15,7 @@ from state_machine.conversation_phases import BASE_PHASE, PHASE_AWAITING_INPUT
 
 Validator = Callable[[Any], tuple[bool, str | None]]
 Handler = Callable[["ConversationState", str, dict[str, Any]], Any]
-FormFactory = Callable[[dict[str, Any]], list["FormStep"]]
+FormFactory = Callable[[dict[str, Any], Any], list["FormStep"]]
 
 
 @dataclass
