@@ -105,7 +105,7 @@ def test_command_discovery_loads_minimal_builtin_commands():
     registry = CommandRegistry()
     try:
         discover_commands(".", registry)
-        assert [cmd.name for cmd in registry.all_commands()] == ["agent", "cancel", "commands", "frontends", "llm", "locations", "new", "services", "tasks", "tools"]
+        assert [cmd.name for cmd in registry.all_commands()] == ["agent", "cancel", "commands", "frontends", "llm", "locations", "new", "services", "tasks", "tools", "update"]
     finally:
         discovery._COMMAND_CONFIG["sandbox_dir"] = old_sandbox
 
@@ -129,14 +129,16 @@ def test_host_commands_are_visible_and_user_approved():
     names = sorted(runtime.command_registry._commands)
     visible = [cmd.name for cmd in runtime.command_registry.visible_commands()]
 
-    assert names == ["agent", "cancel", "commands", "frontends", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools"]
-    assert visible == ["agent", "cancel", "commands", "frontends", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools"]
+    assert names == ["agent", "cancel", "commands", "frontends", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools", "update"]
+    assert visible == ["agent", "cancel", "commands", "frontends", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools", "update"]
     assert not runtime.commands["cancel"].require_approval
     assert not runtime.commands["commands"].require_approval
     assert runtime.commands["quit"].require_approval
     assert runtime.commands["quit"].approval_actor_id == "user"
     assert runtime.commands["restart"].require_approval
     assert runtime.commands["restart"].approval_actor_id == "user"
+    assert runtime.commands["update"].require_approval
+    assert runtime.commands["update"].approval_actor_id == "user"
 
     text = runtime.command_registry.dispatch_dict("commands", {}, session_key="default", _emit=False)
     for name in names:
@@ -381,3 +383,16 @@ def test_slash_command_tool_uses_dispatch_dict_once():
     assert result.success
     assert result.data == {"command": "fake", "output": "done"}
     assert context.calls == [{"tool_name": "echo", "text": "done"}]
+
+
+def test_slash_command_tool_blocks_approval_required_commands():
+    cmd = FakeCommand()
+    cmd.require_approval = True
+    registry = CommandRegistry()
+    registry.register(cmd)
+    runtime = SimpleNamespace(command_registry=registry, sessions={})
+
+    result = SlashCommand().run(SimpleNamespace(runtime=runtime), name="fake", args={})
+
+    assert not result.success
+    assert "requires user approval" in result.error

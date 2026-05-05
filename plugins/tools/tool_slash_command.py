@@ -54,6 +54,8 @@ class SlashCommand(BaseTool):
         registry = getattr(runtime, "command_registry", None) if runtime else None
         if registry is None:
             return ToolResult.failed("Command registry is not available in this context.")
+        if getattr((getattr(registry, "_commands", {}) or {}).get(name), "require_approval", False):
+            return ToolResult.failed(f"Command '/{name}' requires user approval and is not callable from an agent.")
 
         session_key = None
         sessions = getattr(runtime, "sessions", {}) or {}
