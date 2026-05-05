@@ -13,12 +13,8 @@ Payload shapes are documented here, not enforced at runtime.
 # ── Active channels ────────────────────────────────────────────────
 
 APPROVAL_REQUESTED = "approval_requested"
-"""Tool needs human approval for a destructive action.
-Payload: an ApprovalRequest object."""
-
-APPROVAL_RESOLVED = "approval_resolved"
-"""Tool approval was resolved (allowed or denied) by some frontend.
-Payload: the resolved ApprovalRequest object."""
+"""A conversation session is waiting for user approval or typed input.
+Payload: a StateMachineApprovalRequest object."""
 
 TASK_COMPLETED = "task_completed"
 """A task finished successfully.

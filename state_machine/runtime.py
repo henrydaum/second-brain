@@ -135,6 +135,7 @@ class ConversationRuntime:
         self.on_tool_result = on_tool_result
         self.on_notice = on_notice
         self.sessions: dict[str, RuntimeSession] = {}
+        self._approval_requests: dict[str, StateMachineApprovalRequest] = {}
         self._sessions_lock = threading.RLock()
 
     # ──────────────────────────────────────────────────────────────────────
@@ -148,9 +149,12 @@ class ConversationRuntime:
             if normalized == "cancel":
                 session.cancel_event.set()
                 return RuntimeResult(messages=["Cancelled."])
+            if normalized == "answer_approval" and session.cs.phase == PHASE_APPROVING_REQUEST:
+                pass
             if normalized == "send_text":
                 return RuntimeResult(messages=["Not your turn - I'm still working. Send /cancel to interrupt."])
-            return RuntimeResult(False, messages=["Still working. Send /cancel to interrupt."], error={"code": "busy", "message": "Still working."})
+            elif normalized != "answer_approval" or session.cs.phase != PHASE_APPROVING_REQUEST:
+                return RuntimeResult(False, messages=["Still working. Send /cancel to interrupt."], error={"code": "busy", "message": "Still working."})
         with session.lock:
             self._refresh_session_specs(session)
             history_id = self._pending_history_selection(session, action_type, payload)
@@ -211,10 +215,12 @@ class ConversationRuntime:
         old_priority = session.cs.turn_priority
 
         # ──────────────── THE enact() SITE (user-side) ────────────────
+        request_id = self._current_request_id(session, action_type)
         result = session.cs.enact(action_type, content, actor_id)
         # ──────────────────────────────────────────────────────────────
 
         out.add_action_result(result)
+        self._resolve_answered_request(request_id, result)
         text = self._result_text(action_type, text, result)
         image_paths = self._result_image_paths(action_type, image_paths, result)
         self._absorb_user_action(session, action_type, text, result)
@@ -548,6 +554,8 @@ class ConversationRuntime:
                 enum=data.get("enum"),
                 default=data.get("default"),
             )
+            req.metadata.update({"session_key": session.key, "conversation_id": session.conversation_id})
+            self._approval_requests.setdefault(req.id, req)
             self.emit_event("approval_requested", req)
 
     def new_conversation(self, session_key: str) -> RuntimeResult:
@@ -709,6 +717,9 @@ class ConversationRuntime:
         """Boolean-approval gate. Thin wrapper around `request_input`."""
         return self.request_input(session_key, title, body, type="boolean", pending_action=pending_action)
 
+    def answer_request(self, session_key: str, request_id: str, value) -> RuntimeResult:
+        return self.handle_action(session_key, "answer_approval", {"value": value, "request_id": request_id})
+
     def request_input(
         self,
         session_key: str,
@@ -732,6 +743,8 @@ class ConversationRuntime:
                 title=title, body=prompt, pending_action=pending_action,
                 type=type, enum=enum, default=default,
             )
+            req.metadata.update({"session_key": session_key, "conversation_id": session.conversation_id})
+            self._approval_requests[req.id] = req
             session.cs.push_phase(PhaseFrame(
                 PHASE_APPROVING_REQUEST, "answer_approval", "user", title,
                 {
@@ -750,6 +763,20 @@ class ConversationRuntime:
                 self.emit_event("approval_requested", req)
             self._persist_marker(session)
             return req
+
+    def _current_request_id(self, session: RuntimeSession, action_type: str) -> str | None:
+        frame = session.cs.frame
+        if action_type not in {"answer_approval", "send_text"} or not frame or frame.phase != PHASE_APPROVING_REQUEST:
+            return None
+        return (getattr(frame, "data", {}) or {}).get("request_id")
+
+    def _resolve_answered_request(self, request_id: str | None, result: ActionResult) -> None:
+        if not request_id or not result.ok:
+            return
+        req = self._approval_requests.pop(request_id, None)
+        if req and not req.is_resolved:
+            data = result.data or {}
+            req.resolve(data.get("value", data.get("approved", True)))
 
     def _loop(self, session_key: str | None = None) -> ConversationLoop:
         session = self.sessions.get(session_key) if session_key else None
@@ -876,7 +903,7 @@ class ConversationRuntime:
             if name:
                 specs[name] = CallableSpec(
                     name,
-                    lambda _cs, _actor, args, n=name, reg=registry: reg.call(n, **args),
+                    lambda cs, _actor, args, n=name, reg=registry: reg.call(n, _session_key=(cs.cache or {}).get("session_key"), **args),
                     schema_to_form_steps(fn.get("parameters")),
                 )
         return specs

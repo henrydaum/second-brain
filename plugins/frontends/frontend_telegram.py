@@ -217,11 +217,6 @@ class TelegramFrontend(BaseFrontend):
         name = payload.get("tool_name") or payload.get("command_name") or "call"
         self._send(self._send_tool_started(chat_id, key, name) if payload.get("status") == "started" else self._finish_tool_message(key, chat_id, name, bool(payload.get("ok")), payload.get("error")))
 
-    def on_bus_approval_resolved(self, req) -> None:
-        super().on_bus_approval_resolved(req)
-        for key in self._live_session_keys():
-            self._clear_last_keyboard(key)
-
     def _live_session_keys(self) -> list[str]:
         if self._chat_by_session:
             return list(self._chat_by_session)

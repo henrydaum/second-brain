@@ -13,13 +13,18 @@ running a single PokerMonster game with two scripted players.
 from __future__ import annotations
 
 import json
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
+from agent.tool_registry import ToolRegistry
+from plugins.BaseTool import BaseTool, ToolResult
 from state_machine.action_map import create_action
 from state_machine.conversationClass import CallableSpec, ConversationState, FormStep, Participant
 from state_machine.conversation_loop import ConversationLoop
+from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
 from state_machine.persistence import save_state_marker
 from state_machine.runtime import ConversationRuntime
 from events.event_channels import SESSION_CLOSED, SESSION_CREATED, SESSION_TURN_COMPLETED, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
@@ -351,6 +356,40 @@ def test_next_turn_after_history_load_sends_loaded_history_to_llm():
         ("assistant", "previous answer"),
         ("user", "continue"),
     ]
+
+
+def test_agent_tool_approval_uses_state_machine_phase_and_resumes():
+    class NeedsApproval(BaseTool):
+        name = "needs_approval"
+        description = "Needs approval"
+        parameters = {"type": "object", "properties": {}, "required": []}
+
+        def run(self, context, **_kwargs):
+            return ToolResult(data={"approved": context.approve_command("danger", "test approval")}, llm_summary="approved")
+
+    registry = ToolRegistry(None, {"tool_timeout": 10})
+    registry.register(NeedsApproval())
+    runtime = ConversationRuntime(
+        services={"llm": FakeLLM([
+            FakeResponse.tool([{"id": "tc1", "name": "needs_approval", "arguments": "{}"}]),
+            FakeResponse.text("done"),
+        ])},
+        tool_registry=registry,
+    )
+    registry.runtime = runtime
+    seen = []
+    worker = threading.Thread(target=lambda: seen.append(runtime.handle_action("chat", "send_text", "go")), daemon=True)
+
+    worker.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and runtime.sessions["chat"].cs.phase != PHASE_APPROVING_REQUEST:
+        time.sleep(0.01)
+    assert runtime.sessions["chat"].cs.phase == PHASE_APPROVING_REQUEST
+    assert runtime.handle_action("chat", "answer_approval", {"value": True}).ok
+    worker.join(timeout=5)
+
+    assert seen and seen[0].messages[-1] == "done"
+    assert runtime.sessions["chat"].cs.phase == "awaiting_input"
 
 
 def test_inject_user_message_appends_without_driving_agent_turn():

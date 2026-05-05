@@ -67,6 +67,7 @@ class ToolRegistry:
             - External callers such as the REPL, API, or agent
             - Other tools via context.call_tool
         """
+        session_key = kwargs.pop("_session_key", None)
         with self._lock:
             tool = self.tools.get(tool_name)
         if tool is None:
@@ -83,13 +84,14 @@ class ToolRegistry:
                 return ToolResult.failed(f"Required services not available: {not_ready}")
         
         # Build a fresh runtime context for this invocation. call_tool points
-        # back to the registry, and approve_command is wired inside build_context.
+        # back to the registry, and approvals go through the owning session.
         context = build_context(self.db, self.config, self.services,
                                 call_tool=self.call,
                                 tool_registry=self,
                                 orchestrator=self.orchestrator,
                                 is_subagent=self.is_subagent,
-                                runtime=self.runtime)
+                                runtime=self.runtime,
+                                session_key=session_key)
 
         t0 = time.time()
 

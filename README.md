@@ -305,10 +305,8 @@ Second Brain/
 │   └── config_manager.py   # Config + plugin-config persistence
 │
 ├── events/
-│   ├── approval_request.py # Approval request primitive
 │   ├── event_bus.py        # Internal pub/sub bus
-│   ├── event_channels.py   # Event channel registry
-│   └── ui_request.py       # Generic UI-mediated request primitive
+│   └── event_channels.py   # Event channel registry
 │
 ├── pipeline/
 │   ├── attachment_cache.py # Frontend upload persistence

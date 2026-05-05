@@ -30,7 +30,8 @@ class SecondBrainContext:
         context.call_tool("hybrid_search", query="revenue") -> ToolResult
     approve_command:
         Helper for user approval on sensitive actions. Tools only. None means
-        no subscribed UI is available, so tools should treat that as deny.
+        no state-machine session is available, so tools should treat that as
+        deny.
     is_subagent:
         True when this context belongs to a scheduled / unattended subagent
         run. Tools that need to apply tighter authority (e.g. restrict mail
@@ -60,9 +61,9 @@ def build_context(db, config: dict, services: dict, call_tool=None,
     """
     Build a fully wired runtime context.
 
-    approve_command is auto-wired to the event bus. If nothing is
-    subscribed to APPROVAL_REQUESTED, the field stays None so tools can
-    detect that no approval UI is available.
+    approve_command is backed by the conversation state machine when a tool
+    call belongs to a live session. The pending request is persisted with the
+    conversation marker and resolved through ``answer_approval``.
 
     Usage:
         # In orchestrator (tasks — no call_tool):
@@ -71,18 +72,23 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         # In tool registry (tools — with call_tool):
         context = build_context(self.db, self.config, self.services, call_tool=self.call)
     """
-    from events.event_bus import bus
-    from events.event_channels import APPROVAL_REQUESTED
-    from events.approval_request import ApprovalRequest
+    def call_tool_with_session(name, **kwargs):
+        if session_key and "_session_key" not in kwargs:
+            kwargs["_session_key"] = session_key
+        return call_tool(name, **kwargs)
 
     approve_command = None
-    if call_tool is not None and bus.has_subscribers(APPROVAL_REQUESTED):
+    if runtime is not None and session_key:
         def approve_command(command: str, justification: str) -> bool:
-            req = ApprovalRequest(command, justification)
-            bus.emit(APPROVAL_REQUESTED, req)
+            req = runtime.request_input(
+                session_key,
+                "Agent requests approval",
+                f"{command}\n\n{justification}".strip(),
+                type="boolean",
+            )
             if not req.wait(timeout=300.0):
                 req.metadata["timed_out"] = True
-                req.resolve(False)
+                runtime.answer_request(session_key, req.id, False)
                 return False
             return req.approved
 
@@ -90,7 +96,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         db=db,
         config=config,
         services=services,
-        call_tool=call_tool,
+        call_tool=call_tool_with_session if call_tool is not None else None,
         approve_command=approve_command,
         tool_registry=tool_registry,
         orchestrator=orchestrator,

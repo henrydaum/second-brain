@@ -10,8 +10,8 @@ the contract:
     2. Render the resulting RuntimeResult (and bus-borne events from other
        sessions) back to the user.
 
-Everything else — slash-command parsing, form-step prompting, approval
-bridging across the event bus, session bookkeeping — lives in the base.
+Everything else — slash-command parsing, form-step prompting, state-machine
+request rendering, session bookkeeping — lives in the base.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from dataclasses import dataclass
 from events.event_bus import bus
 from events.event_channels import (
     APPROVAL_REQUESTED,
-    APPROVAL_RESOLVED,
     CHAT_MESSAGE_PUSHED,
     COMMAND_CALL_FINISHED,
     COMMAND_CALL_STARTED,
@@ -218,7 +217,6 @@ class BaseFrontend:
         self.config = config or {}
         self._unsubs = [
             bus.subscribe(APPROVAL_REQUESTED, self.on_bus_approval_requested),
-            bus.subscribe(APPROVAL_RESOLVED, self.on_bus_approval_resolved),
             bus.subscribe(CHAT_MESSAGE_PUSHED, self.on_bus_message_pushed),
             bus.subscribe(COMMAND_CALL_STARTED, self.on_bus_command_call_started),
             bus.subscribe(COMMAND_CALL_FINISHED, self.on_bus_command_call_finished),
@@ -276,7 +274,9 @@ class BaseFrontend:
             return self.submit(session_key, ACTION_SUBMIT_FORM_TEXT, stripped)
 
         if phase == PHASE_APPROVING_REQUEST:
-            return self.submit(session_key, ACTION_ANSWER_APPROVAL, text)
+            result = self.submit(session_key, ACTION_ANSWER_APPROVAL, text)
+            self._clear_pending_approval(session_key)
+            return result
 
         stripped = (text or "").lstrip()
         if stripped == "/cancel":
@@ -317,7 +317,10 @@ class BaseFrontend:
     # ──────────────────────────────────────────────────────────────────────
 
     def on_bus_approval_requested(self, req) -> None:
-        for key in self._live_session_keys():
+        target = ((getattr(req, "metadata", None) or {}).get("session_key"))
+        live = self._live_session_keys()
+        keys = [target] if target in live else live
+        for key in keys:
             try:
                 with self._approval_lock:
                     self._pending_approvals.setdefault(key, {})[req.id] = req
@@ -326,21 +329,17 @@ class BaseFrontend:
             except Exception:
                 logger.exception(f"render_approval_request failed for '{self.name}'")
 
-    def on_bus_approval_resolved(self, req) -> None:
-        with self._approval_lock:
-            for key, pending in self._pending_approvals.items():
-                pending.pop(req.id, None)
-                self._pending_approval_order[key] = [item for item in self._pending_approval_order.get(key, []) if item != req.id]
-
     def resolve_approval(self, session_key: str, request_id: str, value, resolved_by: str | None = None) -> bool:
         with self._approval_lock:
             req = self._pending_approvals.get(session_key, {}).get(request_id)
-            if req is None or getattr(req, "is_resolved", False):
+            if req is None:
                 return False
             if resolved_by and hasattr(req, "metadata"):
                 req.metadata["resolved_by"] = resolved_by
-            req.resolve(value)
-            return True
+            target = (getattr(req, "metadata", {}) or {}).get("session_key") or session_key
+        result = self.runtime.handle_action(target, ACTION_ANSWER_APPROVAL, {"value": value, "request_id": request_id})
+        self._clear_pending_approval(session_key, request_id)
+        return bool(result and result.ok)
 
     def resolve_next_approval(self, session_key: str, value, resolved_by: str | None = None) -> bool:
         with self._approval_lock:
@@ -353,6 +352,15 @@ class BaseFrontend:
     def has_pending_approval(self, session_key: str) -> bool:
         with self._approval_lock:
             return any(not getattr(req, "is_resolved", False) for req in self._pending_approvals.get(session_key, {}).values())
+
+    def _clear_pending_approval(self, session_key: str, request_id: str | None = None) -> None:
+        with self._approval_lock:
+            if request_id is None:
+                self._pending_approvals.pop(session_key, None)
+                self._pending_approval_order.pop(session_key, None)
+                return
+            self._pending_approvals.get(session_key, {}).pop(request_id, None)
+            self._pending_approval_order[session_key] = [item for item in self._pending_approval_order.get(session_key, []) if item != request_id]
 
     def on_bus_message_pushed(self, payload: dict) -> None:
         message = (payload or {}).get("message")
@@ -426,6 +434,7 @@ class BaseFrontend:
             type=data.get("type", "boolean"),
             enum=data.get("enum"),
             default=data.get("default"),
+            metadata={"session_key": session_key},
         )
 
     def _live_session_keys(self) -> list[str]:
