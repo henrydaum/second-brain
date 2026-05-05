@@ -96,7 +96,7 @@ def test_ask_subagent_reads_final_answer_from_conversation():
     assert result.data["final_answer"] == "done"
 
 
-def test_command_discovery_starts_with_clean_builtin_slate():
+def test_command_discovery_loads_minimal_builtin_commands():
     import plugins.plugin_discovery as discovery
 
     old_sandbox = discovery._COMMAND_CONFIG["sandbox_dir"]
@@ -104,7 +104,7 @@ def test_command_discovery_starts_with_clean_builtin_slate():
     registry = CommandRegistry()
     try:
         discover_commands(".", registry)
-        assert registry.all_commands() == []
+        assert [cmd.name for cmd in registry.all_commands()] == ["cancel"]
     finally:
         discovery._COMMAND_CONFIG["sandbox_dir"] = old_sandbox
 
@@ -129,8 +129,9 @@ def test_host_commands_are_visible_and_user_approved():
     names = sorted(runtime.command_registry._commands)
     visible = [cmd.name for cmd in runtime.command_registry.visible_commands()]
 
-    assert names == ["quit", "restart"]
-    assert visible == ["quit", "restart"]
+    assert names == ["cancel", "quit", "restart"]
+    assert visible == ["cancel", "quit", "restart"]
+    assert not runtime.commands["cancel"].require_approval
     assert runtime.commands["quit"].require_approval
     assert runtime.commands["quit"].approval_actor_id == "user"
     assert runtime.commands["restart"].require_approval

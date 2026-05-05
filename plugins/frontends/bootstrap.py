@@ -62,7 +62,7 @@ def _conversation_runtime(ctrl, shutdown_fn, tool_registry, services, config, ro
         lambda session_key=None: build_context(
             ctrl.db, config, services, tool_registry=tool_registry,
             orchestrator=ctrl.orchestrator, runtime=ref.get("runtime"),
-            controller=ctrl, root_dir=root_dir,
+            controller=ctrl, root_dir=root_dir, session_key=session_key,
         )
     )
     discover_commands(root_dir, registry, config)

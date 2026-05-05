@@ -279,7 +279,7 @@ class BaseFrontend:
             return self.submit(session_key, ACTION_ANSWER_APPROVAL, text)
 
         stripped = (text or "").lstrip()
-        if stripped == "/cancel" and ACTION_CANCEL in legal:
+        if stripped == "/cancel":
             return self.cancel(session_key)
         if stripped == "/new":
             return self.submit(session_key, "new_conversation")

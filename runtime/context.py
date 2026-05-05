@@ -50,12 +50,14 @@ class SecondBrainContext:
     controller: Any = None       # Runtime controller for command plugins.
     root_dir: Any = None         # Project root for repo/plugin operations.
     command_registry: Any = None # Slash-command registry for command plugins.
+    session_key: str | None = None # Frontend conversation/session key, when available.
 
 
 def build_context(db, config: dict, services: dict, call_tool=None,
                    tool_registry=None, orchestrator=None,
                    is_subagent: bool = False, runtime=None,
-                   controller=None, root_dir=None, command_registry=None) -> SecondBrainContext:
+                   controller=None, root_dir=None, command_registry=None,
+                   session_key: str | None = None) -> SecondBrainContext:
     """
     Build a fully wired runtime context.
 
@@ -98,4 +100,5 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         controller=controller,
         root_dir=root_dir,
         command_registry=command_registry,
+        session_key=session_key,
     )
