@@ -206,6 +206,30 @@ def test_tasks_trigger_only_for_event_tasks():
     assert '"prompt": "go"' in created[0][1]["payload_json"]
 
 
+def test_tools_call_action_uses_tool_schema_form():
+    from plugins.BaseTool import ToolResult
+    from plugins.commands.command_tools import ToolsCommand
+
+    class Tool:
+        name = "echo"
+        requires_services = []
+        def to_schema(self):
+            return {"function": {"name": "echo", "description": "Echo text", "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}}
+
+    calls = []
+    registry = SimpleNamespace(
+        tools={"echo": Tool()},
+        call=lambda name, **kwargs: calls.append((name, kwargs)) or ToolResult(data={"ok": kwargs}, llm_summary="echoed"),
+    )
+    ctx = SimpleNamespace(tool_registry=registry)
+
+    assert [s.name for s in ToolsCommand().form({}, ctx)] == ["tool_name"]
+    assert [s.name for s in ToolsCommand().form({"tool_name": "echo"}, ctx)] == ["tool_name", "action"]
+    assert [s.name for s in ToolsCommand().form({"tool_name": "echo", "action": "call"}, ctx)] == ["tool_name", "action", "text"]
+    assert '"text": "hi"' in ToolsCommand().run({"tool_name": "echo", "action": "call", "text": "hi"}, ctx)
+    assert calls == [("echo", {"text": "hi"})]
+
+
 def test_profile_commands_use_add_then_item_actions():
     from plugins.commands.command_agent import AgentCommand
     from plugins.commands.command_llm import LlmCommand
