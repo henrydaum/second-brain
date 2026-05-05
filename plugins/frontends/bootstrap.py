@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 import threading
 
@@ -18,12 +17,13 @@ from state_machine.runtime import ConversationRuntime
 logger = logging.getLogger("Frontends")
 
 
-@dataclass
 class _HostCommand(BaseCommand):
-    name: str
-    description: str
-    callback: object
-    category: str = "Conversation"
+    category = "Conversation"
+
+    def __init__(self, name: str, description: str, callback):
+        self.name = name
+        self.description = description
+        self.callback = callback
 
     def run(self, _args, _context):
         return self.callback() or None
