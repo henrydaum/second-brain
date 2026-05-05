@@ -1,6 +1,7 @@
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -176,7 +177,12 @@ def main():
 			if not _restart_lock.acquire(blocking=False):
 				return
 			logger.info("Re-execing process now.")
-			os.execv(sys.executable, [sys.executable, *sys.argv])
+			subprocess.Popen(
+				[sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]],
+				cwd=str(_ROOT),
+				close_fds=True,
+			)
+			os._exit(0)
 
 		def graceful_then_exec():
 			try:
