@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from events.event_bus import bus
 from events.event_channels import SESSION_TURN_COMPLETED
@@ -104,7 +105,7 @@ def test_command_discovery_loads_minimal_builtin_commands():
     registry = CommandRegistry()
     try:
         discover_commands(".", registry)
-        assert [cmd.name for cmd in registry.all_commands()] == ["cancel", "commands", "frontends", "services", "tasks", "tools"]
+        assert [cmd.name for cmd in registry.all_commands()] == ["agent", "cancel", "commands", "frontends", "llm", "services", "tasks", "tools"]
     finally:
         discovery._COMMAND_CONFIG["sandbox_dir"] = old_sandbox
 
@@ -128,8 +129,8 @@ def test_host_commands_are_visible_and_user_approved():
     names = sorted(runtime.command_registry._commands)
     visible = [cmd.name for cmd in runtime.command_registry.visible_commands()]
 
-    assert names == ["cancel", "commands", "frontends", "quit", "restart", "services", "tasks", "tools"]
-    assert visible == ["cancel", "commands", "frontends", "quit", "restart", "services", "tasks", "tools"]
+    assert names == ["agent", "cancel", "commands", "frontends", "llm", "quit", "restart", "services", "tasks", "tools"]
+    assert visible == ["agent", "cancel", "commands", "frontends", "llm", "quit", "restart", "services", "tasks", "tools"]
     assert not runtime.commands["cancel"].require_approval
     assert not runtime.commands["commands"].require_approval
     assert runtime.commands["quit"].require_approval
@@ -140,6 +141,63 @@ def test_host_commands_are_visible_and_user_approved():
     text = runtime.command_registry.dispatch_dict("commands", {}, session_key="default", _emit=False)
     for name in names:
         assert f"/{name}" in text
+
+
+def test_resource_commands_share_action_target_pattern():
+    from plugins.commands.command_frontends import FrontendsCommand
+    from plugins.commands.command_services import ServicesCommand
+    from plugins.commands.command_tasks import TasksCommand
+
+    class Service:
+        loaded = False
+        model_name = "svc"
+        def load(self): self.loaded = True
+        def unload(self): self.loaded = False
+
+    svc = Service()
+    orch = SimpleNamespace(tasks={"index": object()}, paused=set(), clear_skip_cache=lambda *_: None)
+    db = SimpleNamespace(get_system_stats=lambda: {"tasks": {}}, get_run_stats=lambda: {})
+    ctx = SimpleNamespace(orchestrator=orch, db=db, services={"svc": svc}, config={"enabled_frontends": ["repl"]})
+
+    assert [s.name for s in TasksCommand().form({}, ctx)] == ["task_name"]
+    assert TasksCommand().form({}, ctx)[0].required
+    assert [s.name for s in TasksCommand().form({"task_name": "index"}, ctx)] == ["task_name", "action"]
+    assert TasksCommand().form({"task_name": "index"}, ctx)[1].enum == ["pause", "unpause"]
+    assert "Pending:" in TasksCommand().form({"task_name": "index"}, ctx)[1].prompt
+    assert TasksCommand().run({"task_name": "index", "action": "pause"}, ctx) == "Paused task: index"
+    assert "index" in orch.paused
+    assert ServicesCommand().form({"service_name": "svc"}, ctx)[1].enum == ["load", "unload"]
+    assert ServicesCommand().run({"service_name": "svc", "action": "load"}, ctx) == "Loaded service: svc"
+    assert svc.loaded
+    assert FrontendsCommand().form({"frontend_name": "repl"}, ctx)[1].enum == ["enable", "disable"]
+    with patch("config.config_manager.save"):
+        assert FrontendsCommand().run({"frontend_name": "repl", "action": "disable"}, ctx) == "Cannot disable the last enabled frontend."
+
+
+def test_profile_commands_use_add_then_item_actions():
+    from plugins.commands.command_agent import AgentCommand
+    from plugins.commands.command_llm import LlmCommand
+
+    ctx = SimpleNamespace(
+        config={
+            "llm_profiles": {"gpt": {"llm_service_class": "OpenAILLM", "llm_context_size": 1}},
+            "default_llm_profile": "gpt",
+            "agent_profiles": {"default": {"llm": "default", "prompt_suffix": "", "whitelist_or_blacklist_tools": "blacklist", "tools_list": []}},
+            "active_agent_profile": "default",
+        },
+        services={"gpt": SimpleNamespace(loaded=True), "llm": SimpleNamespace(add_llm=lambda *_: None, remove_llm=lambda *_: None)},
+        tool_registry=SimpleNamespace(tools={"read_file": object()}),
+    )
+
+    assert LlmCommand().form({}, ctx)[0].enum == ["gpt", "add"]
+    assert LlmCommand().form({"model_name": "gpt"}, ctx)[1].enum == ["edit", "remove"]
+    assert AgentCommand().form({}, ctx)[0].enum == ["default", "add"]
+    assert AgentCommand().form({"profile_name": "default"}, ctx)[1].enum == ["edit", "remove"]
+    with patch("config.config_manager.save"), patch("config.config_manager.load_plugin_config", return_value={}), patch("config.config_manager.save_plugin_config"):
+        assert AgentCommand().run({"profile_name": "add", "new_profile_name": "builder", "llm": "default", "prompt_suffix": "", "whitelist_or_blacklist_tools": "blacklist", "tools_list": []}, ctx) == "Added agent profile: builder"
+        assert LlmCommand().run({"model_name": "gpt", "action": "edit", "field": "llm_context_size", "value": "2"}, ctx) == "Updated LLM profile: gpt"
+    assert ctx.config["agent_profiles"]["builder"]["llm"] == "default"
+    assert ctx.config["llm_profiles"]["gpt"]["llm_context_size"] == 2
 
 
 class FakeCommand(BaseCommand):
