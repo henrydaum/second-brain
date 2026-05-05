@@ -48,14 +48,7 @@ class HistoryCommand(BaseCommand):
 
     def run(self, args, context):
         cid = _decode(args.get("conversation_id"))
-        if cid is None:
-            return "No conversation selected."
-
-        runtime = getattr(context, "runtime", None)
-        session_key = getattr(context, "session_key", None)
-        if not runtime or not session_key:
-            return "Cannot switch conversations from this context."
-        return "\n".join(runtime.handle_action(session_key, "load_history", {"conversation_id": cid}).messages)
+        return "History selection should be loaded by the runtime." if cid is not None else "No conversation selected."
 
 
 def _tag_label(origin) -> str:

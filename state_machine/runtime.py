@@ -152,8 +152,11 @@ class ConversationRuntime:
                 return RuntimeResult(messages=["Not your turn - I'm still working. Send /cancel to interrupt."])
             return RuntimeResult(False, messages=["Still working. Send /cancel to interrupt."], error={"code": "busy", "message": "Still working."})
         with session.lock:
+            self._refresh_session_specs(session)
+            history_id = self._pending_history_selection(session, action_type, payload)
+            if history_id is not None:
+                return self.load_history(session_key, history_id)
             try:
-                self._refresh_session_specs(session)
                 out = self._dispatch(session, action_type, payload)
             finally:
                 if action_type not in {"load_history", "new_conversation"}:
@@ -350,6 +353,19 @@ class ConversationRuntime:
             return text
         return payload
 
+    def _pending_history_selection(self, session: RuntimeSession, action_type: str, payload: Any) -> int | None:
+        frame, text = session.cs.frame, self._text(payload)
+        if action_type != "submit_form_text" or not frame or frame.action_type != "call_command" or frame.name != "history":
+            return None
+        if not frame.step or frame.step.name != "conversation_id" or not text or text == "(no conversations)":
+            return None
+        if text.startswith("#"):
+            text = text[1:]
+        try:
+            return int(text.split(" ", 1)[0].strip())
+        except (TypeError, ValueError):
+            return None
+
     def _result_text(self, action_type: str, text: str, result: ActionResult) -> str:
         if action_type != "send_attachment" or not result.ok:
             return text
@@ -424,6 +440,8 @@ class ConversationRuntime:
     def load_history(self, session_key: str, conversation_id: int) -> RuntimeResult:
         old = self.sessions.get(session_key)
         old_profile = (old.profile_override or old.active_agent_profile) if old else self.config.get("active_agent_profile") or "default"
+        if old:
+            bus.emit(SESSION_CLOSED, {"session_key": session_key})
         session = self.load_conversation(session_key, conversation_id)
         new_profile = session.profile_override or session.active_agent_profile
         msg = f"Loaded conversation: {self._conversation_title(conversation_id)}\nAgent: {new_profile}"
