@@ -414,7 +414,7 @@ def test_slash_command_tool_uses_dispatch_dict_once():
     registry = CommandRegistry(lambda _session_key=None: context)
     registry.register(FakeCommand())
     runtime = SimpleNamespace(command_registry=registry, sessions={"s": object()})
-    tool_context = SimpleNamespace(runtime=runtime, tool_registry=SimpleNamespace(runtime=runtime))
+    tool_context = SimpleNamespace(runtime=runtime, tool_registry=SimpleNamespace(runtime=runtime), approve_command=lambda *_: True)
 
     result = SlashCommand().run(tool_context, name="fake", args={"tool_name": "echo", "text": "done"})
 

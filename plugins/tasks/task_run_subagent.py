@@ -71,6 +71,11 @@ class RunSubagent(BaseTask):
         conversation_id = self._resolve_conversation(
             context, runtime, payload, is_scheduled, job_name, conversation_title,
         )
+        if is_scheduled and job_name and conversation_id is not None:
+            try:
+                context.db.set_conversation_origin(conversation_id, f"cron:{job_name}")
+            except Exception as e:
+                logger.warning(f"Failed to stamp origin for {job_name}: {e}")
 
         pending_user_messages = 0
         if is_scheduled:

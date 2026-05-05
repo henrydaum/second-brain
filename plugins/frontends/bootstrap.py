@@ -113,6 +113,7 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
     if not frontends:
         return None, {}, []
 
+    _backfill_cron_origins(scaffold.db, services)
     runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir)
     classes = discover_frontends(root_dir, config)
     manager = FrontendManager(runtime, runtime.command_registry, config)
@@ -174,6 +175,30 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
         tool_registry.runtime = runtime
         tool_registry.command_registry = registry
     return runtime
+
+
+def _backfill_cron_origins(db, services):
+    """Stamp ``cron:<job>`` origin onto conversations referenced by current
+    timekeeper jobs but missing the tag (pre-migration rows or jobs registered
+    before the origin column existed)."""
+    if db is None:
+        return
+    tk = (services or {}).get("timekeeper")
+    if tk is None:
+        return
+    try:
+        jobs = tk.list_jobs()
+    except Exception as e:
+        logger.warning(f"Cron-origin backfill: list_jobs failed: {e}")
+        return
+    for job_name, job in jobs.items():
+        conv_id = (job.get("payload") or {}).get("conversation_id")
+        if conv_id is None:
+            continue
+        try:
+            db.set_conversation_origin(int(conv_id), f"cron:{job_name}")
+        except Exception as e:
+            logger.warning(f"Cron-origin backfill: failed for {job_name}: {e}")
 
 
 def _scope(profile, config):

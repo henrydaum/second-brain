@@ -1,5 +1,6 @@
 """Slash command tool — one-shot invocation of registered command plugins."""
 
+import json
 import logging
 
 from plugins.BaseTool import BaseTool, ToolResult
@@ -57,6 +58,22 @@ class SlashCommand(BaseTool):
         if getattr((getattr(registry, "_commands", {}) or {}).get(name), "require_approval", False):
             return ToolResult.failed(f"Command '/{name}' requires user approval and is not callable from an agent.")
 
+        approve_fn = getattr(context, "approve_command", None)
+        if approve_fn is None:
+            return ToolResult.failed(
+                "Slash command execution is not available — no approval handler is configured."
+            )
+        detail = _format_args(args)
+        try:
+            approved = approve_fn(f"Run /{name}", detail)
+        except Exception as e:
+            logger.error(f"Approval callback failed: {e}")
+            return ToolResult.failed(f"Approval dialog error: {e}")
+        if not approved:
+            return ToolResult.failed(
+                f"User denied /{name}. STOP — do not retry. Ask the user what to do instead."
+            )
+
         session_key = None
         sessions = getattr(runtime, "sessions", {}) or {}
         if sessions:
@@ -70,3 +87,12 @@ class SlashCommand(BaseTool):
 
         text = "" if output is None else str(output)
         return ToolResult(data={"command": name, "output": text}, llm_summary=text or f"/{name} ran.")
+
+
+def _format_args(args: dict) -> str:
+    if not args:
+        return "(no arguments)"
+    try:
+        return json.dumps(args, indent=2, ensure_ascii=False, default=str)
+    except Exception:
+        return str(args)

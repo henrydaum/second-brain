@@ -70,7 +70,7 @@ def _encode(row: dict) -> str:
     title = (row.get("title") or "").strip() or "(untitled)"
     when = _ago(row.get("updated_at"))
     suffix = f" ({when})" if when else ""
-    return f"{cid}|#{cid} {title}{suffix}"
+    return f"#{cid} {title}{suffix}"
 
 
 def _decode(value) -> int | None:
@@ -78,7 +78,10 @@ def _decode(value) -> int | None:
         return None
     if isinstance(value, int):
         return value
-    head = str(value).split("|", 1)[0].strip()
+    text = str(value).strip()
+    if text.startswith("#"):
+        text = text[1:]
+    head = text.split(" ", 1)[0].strip()
     try:
         return int(head)
     except (TypeError, ValueError):

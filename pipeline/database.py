@@ -814,6 +814,15 @@ class Database:
 				(title, conversation_id))
 			self.conn.commit()
 
+	def set_conversation_origin(self, conversation_id, origin):
+		"""Set/overwrite the origin tag on a conversation row. No-op for legacy
+		rows that already have a non-empty origin matching ``origin``."""
+		with self.lock:
+			self.conn.execute(
+				"UPDATE conversations SET origin = ? WHERE id = ?",
+				(origin, conversation_id))
+			self.conn.commit()
+
 	def get_conversation(self, conversation_id):
 		with self.lock:
 			cur = self.conn.execute(
