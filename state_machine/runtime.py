@@ -726,6 +726,15 @@ class ConversationRuntime:
         llm = self._active_llm(session)
         if llm is None and hasattr(self, "llm"):
             llm = self.llm
+        if llm is not None and not getattr(llm, "loaded", True) and hasattr(llm, "load"):
+            try:
+                llm.load()
+            except Exception:
+                logger.exception("Failed to load active LLM")
+        if llm is not None and not getattr(llm, "loaded", True):
+            router = self.services.get("llm")
+            if router is not llm and getattr(router, "loaded", False):
+                llm = router
         if llm is None or not getattr(llm, "loaded", True):
             raise RuntimeError("LLM service is not loaded.")
         def notice(text: str):
