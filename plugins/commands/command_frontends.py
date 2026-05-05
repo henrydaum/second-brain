@@ -12,7 +12,7 @@ class FrontendsCommand(BaseCommand):
     category = "System"
 
     def form(self, args, context):
-        steps = [FormStep("frontend_name", "Frontend", True, enum=SUPPORTED)]
+        steps = [FormStep("frontend_name", "Frontend", True, enum=SUPPORTED, columns=2)]
         if args.get("frontend_name"):
             steps.append(FormStep("action", _describe(context.config, args["frontend_name"]), True, enum=ACTIONS))
         return steps

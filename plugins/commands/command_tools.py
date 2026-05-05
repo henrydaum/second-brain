@@ -15,7 +15,7 @@ class ToolsCommand(BaseCommand):
     def form(self, args, context):
         registry = getattr(context, "tool_registry", None)
         tools = getattr(registry, "tools", {}) or {}
-        steps = [FormStep("tool_name", "Tool", True, enum=sorted(tools))]
+        steps = [FormStep("tool_name", "Tool", True, enum=sorted(tools), columns=2)]
         tool = tools.get(args.get("tool_name"))
         if tool:
             steps.append(FormStep("action", _describe(tool), True, enum=ACTIONS))

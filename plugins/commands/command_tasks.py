@@ -19,7 +19,7 @@ class TasksCommand(BaseCommand):
 
     def form(self, args, context):
         tasks = sorted(getattr(getattr(context, "orchestrator", None), "tasks", {}))
-        steps = [FormStep("task_name", "Task", True, enum=[*tasks, PIPELINE])]
+        steps = [FormStep("task_name", "Task", True, enum=[*tasks, PIPELINE], columns=2)]
         if args.get("task_name") == PIPELINE:
             return steps
         task = _task(context, args.get("task_name"))

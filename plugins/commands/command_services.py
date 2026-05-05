@@ -13,7 +13,7 @@ class ServicesCommand(BaseCommand):
 
     def form(self, args, context):
         services = context.services or {}
-        steps = [FormStep("service_name", "Service", True, enum=sorted((context.services or {}).keys()))]
+        steps = [FormStep("service_name", "Service", True, enum=sorted((context.services or {}).keys()), columns=2)]
         if args.get("service_name"):
             steps.append(FormStep("action", _describe(services, args["service_name"]), True, enum=ACTIONS))
         return steps
