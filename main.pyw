@@ -151,7 +151,7 @@ def main():
 	event_trigger.start()
 	scaffold.event_trigger = event_trigger
 	logger.info("-----------------------------")
-	logger.info(f"SecondBrain started in {time.time() - t_start:.2f}s. Type 'help' for commands, 'quit' to exit.")
+	logger.info(f"SecondBrain started in {time.time() - t_start:.2f}s. Type /commands for commands, /quit to exit.")
 
 	# --- 9. Shutdown handler ---
 	def shutdown(sig=None, frame=None):

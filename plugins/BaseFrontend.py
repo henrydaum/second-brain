@@ -80,7 +80,7 @@ class BaseFrontend:
         name:
             Stable identifier — "repl", "telegram", "http", ...
         description:
-            Short operational description for /help-style listings.
+            Short operational description for /commands-style listings.
         capabilities:
             FrontendCapabilities describing the transport.
         config_settings:

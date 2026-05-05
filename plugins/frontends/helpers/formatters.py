@@ -251,13 +251,6 @@ def format_tools(tools: list[dict], compact: bool = False) -> str:
     return "Tools:\n" + "\n".join(lines)
 
 
-def format_help(commands: list[dict]) -> str:
-    """Format the help output as an aligned two-column list."""
-    return "Commands:\n" + "\n".join(
-        f"  {c['command']:<25} {c['description']}" for c in commands
-    )
-
-
 def format_locations(data: dict) -> str:
     """Format the locations data as a readable file tree."""
     lines = []

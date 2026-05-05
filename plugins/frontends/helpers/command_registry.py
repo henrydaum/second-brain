@@ -13,7 +13,7 @@ from state_machine.conversationClass import CallableSpec, FormStep
 
 logger = logging.getLogger("Commands")
 
-_HELP_SECTIONS = ["Conversation", "Services & Tools", "Tasks", "Config & System", "Other"]
+_HELP_SECTIONS = ["Conversation", "System", "Services & Tools", "Tasks", "Config & System", "Other"]
 
 
 class CommandRegistry:
