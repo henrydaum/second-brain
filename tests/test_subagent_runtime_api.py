@@ -174,6 +174,38 @@ def test_resource_commands_share_action_target_pattern():
         assert FrontendsCommand().run({"frontend_name": "repl", "action": "disable"}, ctx) == "Cannot disable the last enabled frontend."
 
 
+def test_tasks_trigger_only_for_event_tasks():
+    from plugins.commands.command_tasks import TasksCommand
+
+    created = []
+    path_task = SimpleNamespace(name="path", trigger="path", requires_services=[], trigger_channels=[])
+    event_task = SimpleNamespace(
+        name="event",
+        trigger="event",
+        requires_services=[],
+        trigger_channels=["manual"],
+        event_payload_schema={"type": "object", "properties": {"prompt": {"type": "string"}}, "required": ["prompt"]},
+    )
+    db = SimpleNamespace(
+        get_system_stats=lambda: {"tasks": {}},
+        get_run_stats=lambda: {},
+        create_run=lambda *args, **kwargs: created.append((args, kwargs)),
+    )
+    orch = SimpleNamespace(
+        tasks={"path": path_task, "event": event_task},
+        paused=set(),
+        clear_skip_cache=lambda *_: None,
+        on_run_enqueued=lambda run_id, task_name: created.append(((run_id, task_name), {"enqueued": True})),
+    )
+    ctx = SimpleNamespace(orchestrator=orch, db=db)
+
+    assert TasksCommand().form({"task_name": "path"}, ctx)[1].enum == ["pause", "unpause"]
+    assert TasksCommand().form({"task_name": "event"}, ctx)[1].enum == ["pause", "unpause", "trigger"]
+    assert [s.name for s in TasksCommand().form({"task_name": "event", "action": "trigger"}, ctx)] == ["task_name", "action", "prompt"]
+    assert TasksCommand().run({"task_name": "event", "action": "trigger", "prompt": "go"}, ctx).startswith("Triggered task: event")
+    assert '"prompt": "go"' in created[0][1]["payload_json"]
+
+
 def test_profile_commands_use_add_then_item_actions():
     from plugins.commands.command_agent import AgentCommand
     from plugins.commands.command_llm import LlmCommand
