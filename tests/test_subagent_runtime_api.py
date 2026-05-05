@@ -104,7 +104,7 @@ def test_command_discovery_loads_minimal_builtin_commands():
     registry = CommandRegistry()
     try:
         discover_commands(".", registry)
-        assert [cmd.name for cmd in registry.all_commands()] == ["cancel"]
+        assert [cmd.name for cmd in registry.all_commands()] == ["cancel", "help"]
     finally:
         discovery._COMMAND_CONFIG["sandbox_dir"] = old_sandbox
 
@@ -129,13 +129,20 @@ def test_host_commands_are_visible_and_user_approved():
     names = sorted(runtime.command_registry._commands)
     visible = [cmd.name for cmd in runtime.command_registry.visible_commands()]
 
-    assert names == ["cancel", "quit", "restart"]
-    assert visible == ["cancel", "quit", "restart"]
+    assert names == ["cancel", "help", "quit", "restart"]
+    assert visible == ["cancel", "help", "quit", "restart"]
     assert not runtime.commands["cancel"].require_approval
+    assert not runtime.commands["help"].require_approval
     assert runtime.commands["quit"].require_approval
     assert runtime.commands["quit"].approval_actor_id == "user"
     assert runtime.commands["restart"].require_approval
     assert runtime.commands["restart"].approval_actor_id == "user"
+
+    help_text = runtime.command_registry.dispatch_dict("help", {}, session_key="default", _emit=False)
+    assert "/cancel" in help_text
+    assert "/help" in help_text
+    assert "/quit" in help_text
+    assert "/restart" in help_text
 
 
 class FakeCommand(BaseCommand):
