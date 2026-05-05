@@ -20,6 +20,7 @@ import pytest
 from state_machine.action_map import create_action
 from state_machine.conversationClass import CallableSpec, ConversationState, FormStep, Participant
 from state_machine.conversation_loop import ConversationLoop
+from state_machine.persistence import save_state_marker
 from state_machine.runtime import ConversationRuntime
 from events.event_channels import SESSION_CLOSED, SESSION_CREATED, SESSION_TURN_COMPLETED, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from events.event_bus import bus
@@ -269,6 +270,24 @@ def test_iterate_agent_turn_loads_persists_and_emits_completion():
     assert events[-1][1]["session_key"] == "job"
     assert events[-1][1]["conversation_id"] == conv_id
     assert events[-1][1]["final_text"] == "done"
+
+
+def test_load_history_restores_saved_agent_profile_and_history():
+    db = FakeConversationDB()
+    conv_id = db.create_conversation("Builder chat")
+    db.save_message(conv_id, "user", "earlier")
+    save_state_marker(db, conv_id, {"active_agent_profile": "builder"})
+    runtime = ConversationRuntime(db=db, config={"active_agent_profile": "default"})
+    runtime.get_session("chat")
+
+    result = runtime.load_history("chat", conv_id)
+    session = runtime.sessions["chat"]
+    runtime._refresh_session_specs(session)
+
+    assert session.history == [{"role": "user", "content": "earlier"}]
+    assert session.profile_override == "builder"
+    assert runtime._profile_for_session(session) == "builder"
+    assert result.messages == ["Loaded conversation: Builder chat\nAgent: builder\nSwitched agent: default -> builder"]
 
 
 def test_inject_user_message_appends_without_driving_agent_turn():

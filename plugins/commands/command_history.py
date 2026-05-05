@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from plugins.BaseCommand import BaseCommand
 from state_machine.conversationClass import FormStep
+from state_machine.persistence import latest_state
 
 
 _LIMIT = 15
@@ -40,6 +41,7 @@ class HistoryCommand(BaseCommand):
             return steps
 
         rows, _ = db.list_conversations_page(offset=0, limit=_LIMIT, origin=_origin_from_label(picked))
+        _add_agent_labels(db, rows)
         enum = [_encode(r) for r in rows] or ["(no conversations)"]
         steps.append(FormStep("conversation_id", f"Recent under '{picked}' ({len(rows)})", True, enum=enum, columns=1))
         return steps
@@ -53,8 +55,7 @@ class HistoryCommand(BaseCommand):
         session_key = getattr(context, "session_key", None)
         if not runtime or not session_key:
             return "Cannot switch conversations from this context."
-        runtime.handle_action(session_key, "load_history", {"conversation_id": cid})
-        return None
+        return "\n".join(runtime.handle_action(session_key, "load_history", {"conversation_id": cid}).messages)
 
 
 def _tag_label(origin) -> str:
@@ -68,9 +69,16 @@ def _origin_from_label(label: str):
 def _encode(row: dict) -> str:
     cid = row.get("id")
     title = (row.get("title") or "").strip() or "(untitled)"
+    agent = (row.get("agent_profile") or "").strip()
     when = _ago(row.get("updated_at"))
     suffix = f" ({when})" if when else ""
-    return f"#{cid} {title}{suffix}"
+    return f"#{cid} {title}{f' [agent: {agent}]' if agent else ''}{suffix}"
+
+
+def _add_agent_labels(db, rows: list[dict]) -> None:
+    for row in rows:
+        marker = latest_state(db.get_conversation_messages(row.get("id"))) or {}
+        row["agent_profile"] = marker.get("profile_override") or marker.get("active_agent_profile") or ""
 
 
 def _decode(value) -> int | None:

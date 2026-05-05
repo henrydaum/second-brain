@@ -395,7 +395,8 @@ class ConversationRuntime:
         marker = latest_state(rows) or {}
         conv = self.db.get_conversation(conversation_id) if self.db else {}
         is_subagent = (conv or {}).get("kind") == "subagent"
-        profile = agent_profile or marker.get("profile_override") or marker.get("active_agent_profile") or self.config.get("active_agent_profile") or "default"
+        saved_profile = agent_profile or marker.get("profile_override") or marker.get("active_agent_profile")
+        profile = saved_profile or self.config.get("active_agent_profile") or "default"
         session = RuntimeSession(
             session_key,
             self._new_state(marker),
@@ -403,7 +404,7 @@ class ConversationRuntime:
             conversation_id,
             False,
             profile,
-            profile_override=agent_profile or marker.get("profile_override"),
+            profile_override=saved_profile,
             is_subagent=is_subagent,
             subagent_meta=dict(marker.get("subagent_meta") or {}),
             system_prompt_extras={**dict(marker.get("system_prompt_extras") or {}), **dict(system_prompt_extras or {})},
@@ -421,10 +422,16 @@ class ConversationRuntime:
         return session
 
     def load_history(self, session_key: str, conversation_id: int) -> RuntimeResult:
+        old = self.sessions.get(session_key)
+        old_profile = (old.profile_override or old.active_agent_profile) if old else self.config.get("active_agent_profile") or "default"
         session = self.load_conversation(session_key, conversation_id)
+        new_profile = session.profile_override or session.active_agent_profile
+        msg = f"Loaded conversation: {self._conversation_title(conversation_id)}\nAgent: {new_profile}"
+        if old_profile != new_profile:
+            msg += f"\nSwitched agent: {old_profile} -> {new_profile}"
         return RuntimeResult(
-            messages=[f"Loaded conversation: {self._conversation_title(conversation_id)}"],
-            data={"conversation_id": conversation_id, "history": session.history},
+            messages=[msg],
+            data={"conversation_id": conversation_id, "history": session.history, "agent_profile": new_profile},
         )
 
     def reset_conversation(self, session_key: str) -> RuntimeSession:
