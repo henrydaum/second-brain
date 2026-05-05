@@ -105,7 +105,7 @@ def test_command_discovery_loads_minimal_builtin_commands():
     registry = CommandRegistry()
     try:
         discover_commands(".", registry)
-        assert [cmd.name for cmd in registry.all_commands()] == ["agent", "cancel", "commands", "frontends", "llm", "services", "tasks", "tools"]
+        assert [cmd.name for cmd in registry.all_commands()] == ["agent", "cancel", "commands", "frontends", "llm", "locations", "new", "services", "tasks", "tools"]
     finally:
         discovery._COMMAND_CONFIG["sandbox_dir"] = old_sandbox
 
@@ -129,8 +129,8 @@ def test_host_commands_are_visible_and_user_approved():
     names = sorted(runtime.command_registry._commands)
     visible = [cmd.name for cmd in runtime.command_registry.visible_commands()]
 
-    assert names == ["agent", "cancel", "commands", "frontends", "llm", "quit", "restart", "services", "tasks", "tools"]
-    assert visible == ["agent", "cancel", "commands", "frontends", "llm", "quit", "restart", "services", "tasks", "tools"]
+    assert names == ["agent", "cancel", "commands", "frontends", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools"]
+    assert visible == ["agent", "cancel", "commands", "frontends", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools"]
     assert not runtime.commands["cancel"].require_approval
     assert not runtime.commands["commands"].require_approval
     assert runtime.commands["quit"].require_approval
@@ -155,17 +155,24 @@ def test_resource_commands_share_action_target_pattern():
         def unload(self): self.loaded = False
 
     svc = Service()
-    orch = SimpleNamespace(tasks={"index": object()}, paused=set(), clear_skip_cache=lambda *_: None)
-    db = SimpleNamespace(get_system_stats=lambda: {"tasks": {}}, get_run_stats=lambda: {})
+    orch = SimpleNamespace(tasks={"index": object()}, paused=set(), clear_skip_cache=lambda *_: None, dependency_pipeline_graph=lambda: "Path Pipeline:\n  index")
+    reset = []
+    db = SimpleNamespace(get_system_stats=lambda: {"tasks": {}}, get_run_stats=lambda: {}, reset_task=lambda n: reset.append(("reset", n)), reset_failed_tasks=lambda n: reset.append(("retry", n)))
     ctx = SimpleNamespace(orchestrator=orch, db=db, services={"svc": svc}, config={"enabled_frontends": ["repl"]})
 
     assert [s.name for s in TasksCommand().form({}, ctx)] == ["task_name"]
+    assert TasksCommand().form({}, ctx)[0].enum == ["index", "pipeline"]
     assert TasksCommand().form({}, ctx)[0].required
     assert [s.name for s in TasksCommand().form({"task_name": "index"}, ctx)] == ["task_name", "action"]
-    assert TasksCommand().form({"task_name": "index"}, ctx)[1].enum == ["pause", "unpause"]
+    assert TasksCommand().form({"task_name": "index"}, ctx)[1].enum == ["pause", "unpause", "reset", "retry"]
     assert "Pending:" in TasksCommand().form({"task_name": "index"}, ctx)[1].prompt
     assert TasksCommand().run({"task_name": "index", "action": "pause"}, ctx) == "Paused task: index"
     assert "index" in orch.paused
+    assert TasksCommand().run({"task_name": "index", "action": "reset"}, ctx) == "Reset task: index"
+    assert TasksCommand().run({"task_name": "index", "action": "retry"}, ctx) == "Retried failed entries for task: index"
+    assert reset == [("reset", "index"), ("retry", "index")]
+    assert TasksCommand().form({"task_name": "pipeline"}, ctx)[0].enum == ["index", "pipeline"]
+    assert TasksCommand().run({"task_name": "pipeline"}, ctx) == "Path Pipeline:\n  index"
     assert ServicesCommand().form({"service_name": "svc"}, ctx)[1].enum == ["load", "unload"]
     assert ServicesCommand().run({"service_name": "svc", "action": "load"}, ctx) == "Loaded service: svc"
     assert svc.loaded
@@ -199,7 +206,7 @@ def test_tasks_trigger_only_for_event_tasks():
     )
     ctx = SimpleNamespace(orchestrator=orch, db=db)
 
-    assert TasksCommand().form({"task_name": "path"}, ctx)[1].enum == ["pause", "unpause"]
+    assert TasksCommand().form({"task_name": "path"}, ctx)[1].enum == ["pause", "unpause", "reset", "retry"]
     assert TasksCommand().form({"task_name": "event"}, ctx)[1].enum == ["pause", "unpause", "trigger"]
     assert [s.name for s in TasksCommand().form({"task_name": "event", "action": "trigger"}, ctx)] == ["task_name", "action", "prompt"]
     assert TasksCommand().run({"task_name": "event", "action": "trigger", "prompt": "go"}, ctx).startswith("Triggered task: event")
@@ -214,20 +221,20 @@ def test_tools_call_action_uses_tool_schema_form():
         name = "echo"
         requires_services = []
         def to_schema(self):
-            return {"function": {"name": "echo", "description": "Echo text", "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}}
+            return {"function": {"name": "echo", "description": "Echo text", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "text": {"type": "string"}}, "required": ["name", "text"]}}}
 
     calls = []
     registry = SimpleNamespace(
         tools={"echo": Tool()},
-        call=lambda name, **kwargs: calls.append((name, kwargs)) or ToolResult(data={"ok": kwargs}, llm_summary="echoed"),
+        call=lambda tool_name, **kwargs: calls.append((tool_name, kwargs)) or ToolResult(data={"ok": kwargs}, llm_summary="echoed"),
     )
     ctx = SimpleNamespace(tool_registry=registry)
 
     assert [s.name for s in ToolsCommand().form({}, ctx)] == ["tool_name"]
     assert [s.name for s in ToolsCommand().form({"tool_name": "echo"}, ctx)] == ["tool_name", "action"]
-    assert [s.name for s in ToolsCommand().form({"tool_name": "echo", "action": "call"}, ctx)] == ["tool_name", "action", "text"]
-    assert '"text": "hi"' in ToolsCommand().run({"tool_name": "echo", "action": "call", "text": "hi"}, ctx)
-    assert calls == [("echo", {"text": "hi"})]
+    assert [s.name for s in ToolsCommand().form({"tool_name": "echo", "action": "call"}, ctx)] == ["tool_name", "action", "name", "text"]
+    assert '"text": "hi"' in ToolsCommand().run({"tool_name": "echo", "action": "call", "name": "doc", "text": "hi"}, ctx)
+    assert calls == [("echo", {"name": "doc", "text": "hi"})]
 
 
 def test_profile_commands_use_add_then_item_actions():

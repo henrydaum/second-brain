@@ -7,20 +7,24 @@ from state_machine.conversationClass import FormStep
 from state_machine.forms import schema_to_form_steps
 
 
-ACTIONS = ["pause", "unpause"]
+PATH_ACTIONS = ["pause", "unpause", "reset", "retry"]
+EVENT_ACTIONS = ["pause", "unpause", "trigger"]
+PIPELINE = "pipeline"
 
 
 class TasksCommand(BaseCommand):
     name = "tasks"
-    description = "Select a task, then pause or unpause it"
+    description = "Select a task, then pause, unpause, reset, retry, or trigger it"
     category = "System"
 
     def form(self, args, context):
         tasks = sorted(getattr(getattr(context, "orchestrator", None), "tasks", {}))
-        steps = [FormStep("task_name", "Task", True, enum=tasks)]
+        steps = [FormStep("task_name", "Task", True, enum=[*tasks, PIPELINE])]
+        if args.get("task_name") == PIPELINE:
+            return steps
         task = _task(context, args.get("task_name"))
         if task:
-            steps.append(FormStep("action", _describe(context, args["task_name"]), True, enum=[*ACTIONS, *(["trigger"] if getattr(task, "trigger", "path") == "event" else [])]))
+            steps.append(FormStep("action", _describe(context, args["task_name"]), True, enum=EVENT_ACTIONS if getattr(task, "trigger", "path") == "event" else PATH_ACTIONS))
         if task and args.get("action") == "trigger":
             steps += schema_to_form_steps(getattr(task, "event_payload_schema", {}) or {})
         return steps
@@ -30,6 +34,8 @@ class TasksCommand(BaseCommand):
         if not name:
             return _show(context)
         orch = getattr(context, "orchestrator", None)
+        if name == PIPELINE:
+            return orch.dependency_pipeline_graph() if orch and hasattr(orch, "dependency_pipeline_graph") else "Pipeline unavailable."
         task = _task(context, name)
         if not orch or not task:
             return "Unknown task."
@@ -40,6 +46,18 @@ class TasksCommand(BaseCommand):
             orch.paused.discard(name)
             orch.clear_skip_cache(name)
             return f"Unpaused task: {name}"
+        if action == "reset":
+            if getattr(task, "trigger", "path") == "event":
+                return "Only path-driven tasks can be reset."
+            context.db.reset_task(name)
+            orch.clear_skip_cache(name)
+            return f"Reset task: {name}"
+        if action == "retry":
+            if getattr(task, "trigger", "path") == "event":
+                return "Only path-driven tasks can be retried."
+            context.db.reset_failed_tasks(name)
+            orch.clear_skip_cache(name)
+            return f"Retried failed entries for task: {name}"
         if action == "trigger":
             if getattr(task, "trigger", "path") != "event":
                 return "Only event-driven tasks can be triggered manually."

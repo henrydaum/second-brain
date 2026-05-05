@@ -59,7 +59,7 @@ class ToolRegistry:
             logger.info(f"Unregistered tool: {name}")
             bus.emit(TOOLS_CHANGED, {"name": name, "action": "unregistered"})
 
-    def call(self, name: str, **kwargs) -> ToolResult:
+    def call(self, tool_name: str, **kwargs) -> ToolResult:
         """
         Execute a tool by name.
 
@@ -68,9 +68,9 @@ class ToolRegistry:
             - Other tools via context.call_tool
         """
         with self._lock:
-            tool = self.tools.get(name)
+            tool = self.tools.get(tool_name)
         if tool is None:
-            return ToolResult.failed(f"Unknown tool: {name}")
+            return ToolResult.failed(f"Unknown tool: {tool_name}")
 
         # Gate on required services before building a runtime context.
         if tool.requires_services:
@@ -99,15 +99,15 @@ class ToolRegistry:
         if getattr(_exec_state, "in_tool", False):
             try:
                 result = tool.run(context, **kwargs)
-                logger.debug(f"Tool '{name}' completed in {time.time() - t0:.3f}s")
+                logger.debug(f"Tool '{tool_name}' completed in {time.time() - t0:.3f}s")
                 return result
             except Exception as e:
-                logger.error(f"Tool '{name}' failed after {time.time() - t0:.3f}s: {e}")
+                logger.error(f"Tool '{tool_name}' failed after {time.time() - t0:.3f}s: {e}")
                 return ToolResult.failed(str(e))
 
         timeout = int(self.config.get("tool_timeout", 600))
         executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix=f"sb-tool-{name}")
+            max_workers=1, thread_name_prefix=f"sb-tool-{tool_name}")
 
         def _run_with_flag():
             _exec_state.in_tool = True
@@ -120,15 +120,15 @@ class ToolRegistry:
             future = executor.submit(_run_with_flag)
             try:
                 result = future.result(timeout=timeout)
-                logger.debug(f"Tool '{name}' completed in {time.time() - t0:.3f}s")
+                logger.debug(f"Tool '{tool_name}' completed in {time.time() - t0:.3f}s")
                 return result
             except concurrent.futures.TimeoutError:
-                logger.error(f"Tool '{name}' timed out after {timeout}s — abandoning thread")
+                logger.error(f"Tool '{tool_name}' timed out after {timeout}s — abandoning thread")
                 # Don't wait for the zombie thread — it may never finish.
                 return ToolResult.failed(
-                    f"Tool '{name}' timed out after {timeout}s and was abandoned.")
+                    f"Tool '{tool_name}' timed out after {timeout}s and was abandoned.")
             except Exception as e:
-                logger.error(f"Tool '{name}' failed after {time.time() - t0:.3f}s: {e}")
+                logger.error(f"Tool '{tool_name}' failed after {time.time() - t0:.3f}s: {e}")
                 return ToolResult.failed(str(e))
         finally:
             executor.shutdown(wait=False)
