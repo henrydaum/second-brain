@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from paths import ROOT_DIR, SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS
+from paths import ROOT_DIR, SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS
 
 logger = logging.getLogger("Discovery")
 
@@ -146,6 +146,16 @@ _COMMAND_CONFIG = {
     "base_class_name":    "BaseCommand",
 }
 
+_FRONTEND_CONFIG = {
+    "baked_in_dir":       ROOT_DIR / "plugins" / "frontends",
+    "sandbox_dir":        SANDBOX_FRONTENDS,
+    "glob":               "frontend_*.py",
+    "baked_in_ns":        "plugins.frontends.{stem}",
+    "sandbox_ns":         "sandbox_frontends_{stem}",
+    "base_module":        "plugins.BaseFrontend",
+    "base_class_name":    "BaseFrontend",
+}
+
 
 # ── Bulk discovery (startup) ─────────────────────────────────────────
 
@@ -201,6 +211,60 @@ def discover_commands(root_dir: Path, command_registry, config: dict | None = No
                 count += 1
 
     logger.info(f"Discovered {count} command(s) in {time.time() - t0:.2f}s")
+
+
+def discover_frontends(root_dir: Path, config: dict | None = None, reload: bool = False) -> dict[str, type]:
+    """Discover frontend plugin classes (baked-in + sandbox).
+
+    Returns ``{frontend_name: cls}``. Frontends are instantiated by the
+    bootstrap layer (which supplies transport-specific constructor args)
+    rather than at discovery time, so this returns classes — unlike the
+    other discoverers which return instances.
+    """
+    from plugins.BaseFrontend import BaseFrontend
+    cfg = _FRONTEND_CONFIG
+    t0 = time.time()
+    found: dict[str, type] = {}
+    baked_in_names: set[str] = set()
+
+    if reload:
+        _purge_plugin_settings({"frontend"})
+
+    if cfg["baked_in_dir"].exists():
+        for py_file in sorted(cfg["baked_in_dir"].glob(cfg["glob"])):
+            module_name = cfg["baked_in_ns"].format(stem=py_file.stem)
+            module = _load_baked_in(module_name, reload)
+            if module is None:
+                continue
+            for cls in _find_subclasses(module, BaseFrontend, module_name):
+                name = getattr(cls, "name", "") or ""
+                if not name:
+                    continue
+                cls._mutable = False
+                found[name] = cls
+                _collect_config_settings(cls, plugin_type="frontend")
+                baked_in_names.add(name)
+
+    if cfg["sandbox_dir"].exists():
+        for py_file in sorted(cfg["sandbox_dir"].glob(cfg["glob"])):
+            module_name = cfg["sandbox_ns"].format(stem=py_file.stem)
+            module = _load_sandbox(module_name, py_file, reload)
+            if module is None:
+                continue
+            for cls in _find_subclasses(module, BaseFrontend, module_name):
+                name = getattr(cls, "name", "") or ""
+                if not name:
+                    continue
+                if name in baked_in_names:
+                    logger.warning(f"Sandbox frontend '{name}' collides with baked-in — skipped")
+                    continue
+                cls._mutable = True
+                cls._source_path = str(py_file)
+                found[name] = cls
+                _collect_config_settings(cls, plugin_type="frontend")
+
+    logger.info(f"Discovered {len(found)} frontend(s) in {time.time() - t0:.2f}s")
+    return found
 
 
 def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = False):
@@ -353,7 +417,7 @@ def wire_peer_services(services: dict):
 def load_single_plugin(plugin_type: str, file_path: Path,
                        tool_registry=None, orchestrator=None,
                        services: dict = None, config: dict = None,
-                       command_registry=None) -> tuple[str | None, str | None]:
+                       command_registry=None, frontend_manager=None) -> tuple[str | None, str | None]:
     """
     Load a single sandbox plugin file and register it.
 
@@ -368,6 +432,8 @@ def load_single_plugin(plugin_type: str, file_path: Path,
         return _load_single_service(file_path, services, config)
     elif plugin_type == "command":
         return _load_single_command(file_path, command_registry or getattr(tool_registry, "command_registry", None))
+    elif plugin_type == "frontend":
+        return _load_single_frontend(file_path, frontend_manager)
     else:
         return None, f"Unknown plugin_type: {plugin_type}"
 
@@ -375,7 +441,7 @@ def load_single_plugin(plugin_type: str, file_path: Path,
 def unload_plugin(plugin_type: str, plugin_name: str,
                   tool_registry=None, orchestrator=None,
                   services: dict = None, source_path: str = None,
-                  command_registry=None):
+                  command_registry=None, frontend_manager=None):
     """Unregister a plugin. For services, uses source_path to find all
     service names registered from that file."""
     if plugin_type == "tool" and tool_registry:
@@ -386,6 +452,8 @@ def unload_plugin(plugin_type: str, plugin_name: str,
         (command_registry or tool_registry.command_registry).unregister(plugin_name)
     elif plugin_type == "service" and services:
         _unload_services_by_source(services, source_path or plugin_name)
+    elif plugin_type == "frontend" and frontend_manager:
+        frontend_manager.unregister(plugin_name)
 
 
 def _unload_services_by_source(services: dict, source_path: str):
@@ -426,6 +494,32 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
     tool_registry.register(instance)
     _collect_config_settings(instance, plugin_type="tool")
     return instance.name, None
+
+
+def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None, str | None]:
+    from plugins.BaseFrontend import BaseFrontend
+    cfg = _FRONTEND_CONFIG
+    module_name = cfg["sandbox_ns"].format(stem=file_path.stem)
+    if frontend_manager is None:
+        return None, "No frontend manager available"
+
+    module = _load_sandbox(module_name, file_path, reload=True)
+    if module is None:
+        return None, f"Failed to import {file_path.name}"
+
+    classes = _find_subclasses(module, BaseFrontend, module_name)
+    classes = [cls for cls in classes if getattr(cls, "name", "")]
+    if not classes:
+        return None, f"No named BaseFrontend subclass found in {file_path.name}"
+
+    cls = classes[0]
+    cls._mutable = True
+    cls._source_path = str(file_path)
+    _collect_config_settings(cls, plugin_type="frontend")
+    err = frontend_manager.register(cls)
+    if err:
+        return None, err
+    return cls.name, None
 
 
 def _load_single_command(file_path: Path, command_registry) -> tuple[str | None, str | None]:
@@ -541,13 +635,21 @@ def _load_sandbox(module_name: str, file_path: Path, reload: bool):
 def _find_subclass_instances(module, base_class, module_name: str) -> list:
     """Find and instantiate all subclasses of base_class in a module."""
     instances = []
+    for cls in _find_subclasses(module, base_class, module_name):
+        try:
+            instances.append(cls())
+        except Exception as e:
+            logger.error(f"Could not instantiate {cls.__name__}: {e}", exc_info=True)
+    return instances
+
+
+def _find_subclasses(module, base_class, module_name: str) -> list:
+    """Find all concrete subclasses of base_class declared in a module."""
+    found = []
     for _, cls in inspect.getmembers(module, inspect.isclass):
         if issubclass(cls, base_class) and cls is not base_class and cls.__module__ == module_name:
-            try:
-                instances.append(cls())
-            except Exception as e:
-                logger.error(f"Could not instantiate {cls.__name__}: {e}", exc_info=True)
-    return instances
+            found.append(cls)
+    return found
 
 
 def _call_build_services(module, module_name: str, config: dict) -> dict:

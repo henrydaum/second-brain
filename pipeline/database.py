@@ -157,12 +157,17 @@ class Database:
 				id          INTEGER PRIMARY KEY AUTOINCREMENT,
 				title       TEXT,
 				kind        TEXT DEFAULT 'user',
+				origin      TEXT,
 				created_at  REAL,
 				updated_at  REAL
 			)
 		""")
 		try:
 			self.conn.execute("ALTER TABLE conversations ADD COLUMN kind TEXT DEFAULT 'user'")
+		except sqlite3.OperationalError:
+			pass  # column already exists
+		try:
+			self.conn.execute("ALTER TABLE conversations ADD COLUMN origin TEXT")
 		except sqlite3.OperationalError:
 			pass  # column already exists
 		self.conn.execute("""
@@ -779,12 +784,12 @@ class Database:
 	# CONVERSATIONS
 	# =================================================================
 
-	def create_conversation(self, title="New conversation", kind="user") -> int:
+	def create_conversation(self, title="New conversation", kind="user", origin=None) -> int:
 		now = time.time()
 		with self.lock:
 			cur = self.conn.execute(
-				"INSERT INTO conversations (title, kind, created_at, updated_at) VALUES (?, ?, ?, ?)",
-				(title, kind, now, now))
+				"INSERT INTO conversations (title, kind, origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+				(title, kind, origin, now, now))
 			self.conn.commit()
 			return cur.lastrowid
 
@@ -823,6 +828,51 @@ class Database:
 				"SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?",
 				(limit,))
 			return [dict(row) for row in cur.fetchall()]
+
+	def list_conversations_page(self, offset=0, limit=10, origin=None) -> tuple[list[dict], bool]:
+		"""Return ``(rows, has_more)`` sorted by most-recent activity.
+
+		``origin``:
+		    - None → no filter (every conversation).
+		    - "" → conversations with NULL/empty origin (the "main" bucket).
+		    - any other string → exact match on the origin column.
+		"""
+		params: list = []
+		where = ""
+		if origin is not None:
+			if origin == "":
+				where = "WHERE origin IS NULL OR origin = ''"
+			else:
+				where = "WHERE origin = ?"
+				params.append(origin)
+		params += [limit + 1, offset]
+		with self.lock:
+			cur = self.conn.execute(
+				f"SELECT * FROM conversations {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+				params)
+			rows = [dict(row) for row in cur.fetchall()]
+		has_more = len(rows) > limit
+		return rows[:limit], has_more
+
+	def list_conversation_origins(self) -> list[str | None]:
+		"""Distinct origin values present in the conversations table.
+
+		``None`` is included if any row has NULL/empty origin.
+		"""
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT DISTINCT origin FROM conversations")
+			values = [row["origin"] for row in cur.fetchall()]
+		out: list[str | None] = []
+		seen_main = False
+		for v in values:
+			if v in (None, ""):
+				if not seen_main:
+					out.append(None)
+					seen_main = True
+			elif v not in out:
+				out.append(v)
+		return out
 
 	def list_user_conversations(self, limit=50):
 		with self.lock:

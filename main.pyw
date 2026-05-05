@@ -72,8 +72,8 @@ def main():
 		sys.exit(1)
 
 	# --- 1b. Ensure sandbox directories exist ---
-	from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES
-	for d in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES):
+	from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS
+	for d in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS):
 		d.mkdir(parents=True, exist_ok=True)
 
 	# --- 1c. Load existing plugin config into runtime config ---

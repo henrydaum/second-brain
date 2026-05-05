@@ -39,8 +39,8 @@ def build_system_prompt(
         _current_datetime(),
         _available_tools(r),
         _agent_profiles(orchestrator) if _has_any(r, "ask_subagent", "schedule_subagent") else "",
-        _authoring_guidance() if _has_tool(r, "build_plugin") else "",
-        _sandbox_files() if _has_tool(r, "build_plugin") else "",
+        _authoring_guidance() if _has_tool(r, "register_plugin") else "",
+        _sandbox_files() if _has_tool(r, "register_plugin") else "",
         _attachments() if _has_tool(r, "sql_query") else "",
         _database_tables(db) if _has_tool(r, "sql_query") else "",
         _services_status(services),
@@ -97,7 +97,7 @@ def _identity(services: dict, registry) -> str:
         ("read_file", "- For architecture or design intent, read README.md with read_file."),
         ("read_file", f"- A debug log for the current session is at {log_path} — read it with read_file if you need to investigate an error."),
         ("render_files", "- Use render_files when the user would benefit from seeing a file directly."),
-        ("build_plugin", "- If the current tools cannot reasonably complete a task, suggest creating a sandbox plugin with build_plugin."),
+        ("register_plugin", "- If the current tools cannot reasonably complete a task, suggest creating a sandbox plugin with register_plugin."),
         (None, "- Tool call limits are per message, not per session. If one tool reaches its limit, you may still use other tools."),
     ]
 
@@ -116,7 +116,7 @@ def _identity(services: dict, registry) -> str:
     habits = "\n".join(line for tool, line in habit_bullets if tool is None or _has_tool(registry, tool))
 
     capabilities = ["inspect local files", "query the SQLite database"]
-    if _has_tool(registry, "build_plugin"):
+    if _has_tool(registry, "register_plugin"):
         capabilities.append("extend the system through sandbox plugins")
     cap_line = ", ".join(capabilities[:-1]) + ", and " + capabilities[-1] if len(capabilities) > 1 else capabilities[0]
 
@@ -146,28 +146,25 @@ def _current_datetime() -> str:
 def _authoring_guidance() -> str:
     return (
         "## Building plugins\n"
-        "You can extend the system by creating sandbox plugins (tools, tasks, and services).\n\n"
+        "You can extend the system by authoring sandbox plugins (tools, tasks, services, commands, frontends).\n\n"
         "Project layout:\n"
-        "- Built-in plugins live under plugins/tools, plugins/tasks, and plugins/services.\n"
-        "- Core app code lives under agent, pipeline, runtime, config, events, and plugins/frontends.\n\n"
-        "Recommended workflow:\n"
-        "1. Read the relevant template with read_file(path='templates/tool_template.py') (or task_template.py / service_template.py).\n"
-        "2. Read a similar existing plugin for reference. Sandbox plugin paths are listed below; built-in plugins can be read with paths like 'plugins/tools/tool_hybrid_search.py'.\n"
-        "3. Create a new plugin with build_plugin(action='create', ...).\n"
-        "4. Refine it with build_plugin(action='edit', search_block='...', replace_block='...').\n"
-        "5. If needed, install packages with run_command.\n"
-        "6. If you created a tool, you will have immediate access to it. Call it to verify behavior.\n\n"
+        "- Built-in plugins live under plugins/tools, plugins/tasks, plugins/services, plugins/commands, plugins/frontends.\n"
+        "- Core app code lives under agent, pipeline, runtime, config, events.\n\n"
+        "Workflow:\n"
+        "1. Read the relevant template with read_file (templates/tool_template.py, task_template.py, service_template.py).\n"
+        "2. Read a similar existing plugin for reference. Sandbox plugin paths are listed below.\n"
+        "3. Write the file into the right sandbox directory using the file-editing tools.\n"
+        "4. Activate it with register_plugin(plugin_type=..., action='register', file_name=...).\n"
+        "5. To remove a plugin from the live system without deleting the file, call register_plugin(action='unregister', plugin_name=...).\n"
+        "6. If you need extra packages, install them with run_command.\n\n"
         "Naming:\n"
-        "- Tools use tool_<name>.py\n"
-        "- Tasks use task_<name>.py\n"
-        "- Services use <name>.py\n"
-        "- Names must be unique and must not collide with built-in plugins.\n\n"
+        "- Tools: tool_<name>.py    Tasks: task_<name>.py    Commands: command_<name>.py    Frontends: frontend_<name>.py    Services: <name>.py\n"
+        "- Names must be unique across baked-in and sandbox.\n\n"
         "Config settings:\n"
-        "Plugins can declare config_settings to add user-configurable values to the Settings UI.\n"
+        "Plugins can declare config_settings to add user-configurable values.\n"
         "Each entry: (title, variable_name, description, default, type_info).\n"
         "type_info options: {\"type\": \"text\"}, {\"type\": \"bool\"}, {\"type\": \"slider\", \"range\": (min, max, divs), \"is_float\": False}, {\"type\": \"json_list\"}.\n"
-        "Values are stored in plugin_config.json and accessed via context.config.get(key).\n"
-        "See the templates for full examples."
+        "Values are stored in plugin_config.json and read via context.config.get(key)."
     )
 
 
@@ -208,7 +205,7 @@ def _sandbox_files() -> str:
             sandbox_lines.append(f"  {py_file}")
 
     if not sandbox_lines:
-        return "## Sandbox plugins\nNone yet. Use build_plugin to create one."
+        return "## Sandbox plugins\nNone yet. Use register_plugin to create one."
 
     lines = ["## Sandbox plugins (read these exact paths with read_file)"]
     lines.extend(sandbox_lines)
@@ -229,7 +226,7 @@ def _attachments() -> str:
         "For a specific conversation's attachments, cross-reference mtime against the conversation's message timestamps in the conversation_messages table.\n"
         "\n"
         "If a user sends a file with an extension the pipeline doesn't understand, the file is still saved to the cache — "
-        "use read_file on the exact cache path, or create a new parser task plugin with build_plugin so future files of that type get indexed automatically."
+        "use read_file on the exact cache path, or create a new parser task plugin with register_plugin so future files of that type get indexed automatically."
     )
 
 

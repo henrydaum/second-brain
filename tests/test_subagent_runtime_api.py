@@ -105,7 +105,7 @@ def test_command_discovery_loads_minimal_builtin_commands():
     registry = CommandRegistry()
     try:
         discover_commands(".", registry)
-        assert [cmd.name for cmd in registry.all_commands()] == ["agent", "cancel", "commands", "config", "frontends", "llm", "locations", "new", "services", "tasks", "tools", "update"]
+        assert [cmd.name for cmd in registry.all_commands()] == ["agent", "cancel", "commands", "config", "frontends", "history", "llm", "locations", "new", "services", "tasks", "tools", "update"]
     finally:
         discovery._COMMAND_CONFIG["sandbox_dir"] = old_sandbox
 
@@ -129,8 +129,8 @@ def test_host_commands_are_visible_and_user_approved():
     names = sorted(runtime.command_registry._commands)
     visible = [cmd.name for cmd in runtime.command_registry.visible_commands()]
 
-    assert names == ["agent", "cancel", "commands", "config", "frontends", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools", "update"]
-    assert visible == ["agent", "cancel", "commands", "config", "frontends", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools", "update"]
+    assert names == ["agent", "cancel", "commands", "config", "frontends", "history", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools", "update"]
+    assert visible == ["agent", "cancel", "commands", "config", "frontends", "history", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools", "update"]
     assert not runtime.commands["cancel"].require_approval
     assert not runtime.commands["commands"].require_approval
     assert runtime.commands["quit"].require_approval
@@ -222,7 +222,7 @@ def test_tasks_trigger_only_for_event_tasks():
     ctx = SimpleNamespace(orchestrator=orch, db=db)
 
     assert TasksCommand().form({"task_name": "path"}, ctx)[1].enum == ["pause", "unpause", "reset", "retry"]
-    assert TasksCommand().form({"task_name": "event"}, ctx)[1].enum == ["pause", "unpause", "trigger"]
+    assert TasksCommand().form({"task_name": "event"}, ctx)[1].enum == ["pause", "unpause", "trigger", "schedule", "unschedule", "schedules"]
     assert [s.name for s in TasksCommand().form({"task_name": "event", "action": "trigger"}, ctx)] == ["task_name", "action", "prompt"]
     assert TasksCommand().run({"task_name": "event", "action": "trigger", "prompt": "go"}, ctx).startswith("Triggered task: event")
     assert '"prompt": "go"' in created[0][1]["payload_json"]
@@ -341,7 +341,7 @@ def test_agent_llm_edit_reroutes_active_session():
 
 
 def test_telegram_form_echo_shows_command_fragment():
-    from plugins.frontends.telegram_frontend import TelegramFrontend
+    from plugins.frontends.frontend_telegram import TelegramFrontend
 
     tg = TelegramFrontend()
     form = {
@@ -355,7 +355,7 @@ def test_telegram_form_echo_shows_command_fragment():
 
 
 def test_telegram_enum_markup_honors_form_columns():
-    from plugins.frontends.telegram_frontend import TelegramFrontend
+    from plugins.frontends.frontend_telegram import TelegramFrontend
 
     markup = TelegramFrontend()._enum_markup("s", {"field": {"enum": ["a", "b", "c"], "columns": 2}})
 

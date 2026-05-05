@@ -487,8 +487,10 @@ class SendAttachment(Action):
         if self.cs.allowed_attachment_extensions and ext not in self.cs.allowed_attachment_extensions:
             raise self.error(ERROR_ATTACHMENT_NOT_ALLOWED, f".{ext} attachments are not allowed for this model.", extension=ext)
         self.cs.phase = PHASE_PARSING_ATTACHMENT
-        parsed = self.cs.attachment_parser(content) if self.cs.attachment_parser else content
-        self.cs.reset_phase()
+        try:
+            parsed = self.cs.attachment_parser(content) if self.cs.attachment_parser else content
+        finally:
+            self.cs.reset_phase()
         actor = self.cs.participants.get(self.actor_id)
         if actor and actor.kind == "user":
             self.cs.switch_priority(self.actor_id)

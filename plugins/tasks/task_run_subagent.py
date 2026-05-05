@@ -177,6 +177,7 @@ class RunSubagent(BaseTask):
                 conv_id = None
             if conv_id is not None and context.db.get_conversation(conv_id) is not None:
                 return conv_id
+        origin = f"cron:{job_name}" if is_scheduled and job_name else None
         if not is_scheduled:
             return runtime.create_conversation(conversation_title[:200], kind="subagent")
 
@@ -194,7 +195,7 @@ class RunSubagent(BaseTask):
             if conv_id is not None and context.db.get_conversation(conv_id) is not None:
                 return conv_id
 
-        conv_id = runtime.create_conversation(conversation_title[:200], kind="subagent")
+        conv_id = runtime.create_conversation(conversation_title[:200], kind="subagent", origin=origin)
         if timekeeper is not None and getattr(timekeeper, "loaded", False):
             try:
                 job = timekeeper.get_job(job_name)

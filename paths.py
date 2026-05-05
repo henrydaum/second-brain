@@ -27,6 +27,7 @@ SANDBOX_TOOLS    = DATA_DIR / "sandbox_tools"
 SANDBOX_TASKS    = DATA_DIR / "sandbox_tasks"
 SANDBOX_SERVICES = DATA_DIR / "sandbox_services"
 SANDBOX_COMMANDS = DATA_DIR / "sandbox_commands"
+SANDBOX_FRONTENDS = DATA_DIR / "sandbox_frontends"
 
 # Attachment cache: files dropped in from frontends (e.g. Telegram).
 # Registered as a sync_directory by default so the Stage_2 pipeline indexes them.

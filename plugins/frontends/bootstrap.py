@@ -7,9 +7,7 @@ from agent.system_prompt import build_system_prompt
 from events.event_bus import bus
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.command_registry import CommandRegistry
-from plugins.plugin_discovery import discover_commands
-from plugins.frontends.repl_frontend import ReplFrontend
-from plugins.frontends.telegram_frontend import TelegramFrontend
+from plugins.plugin_discovery import discover_commands, discover_frontends
 from runtime.context import build_context
 from runtime.agent_scope import load_scope, scoped_registry
 from state_machine.runtime import ConversationRuntime
@@ -44,21 +42,97 @@ def _quit(shutdown_fn):
     return "Shutting down."
 
 
+class FrontendManager:
+    """Holds running frontend instances. Supports register/unregister at runtime.
+
+    Each frontend's transport-specific constructor args come from a factory
+    registered via ``set_factory(name, factory)``. When ``register(cls)`` is
+    called for a known frontend name, the factory builds the instance, the
+    base class binds it to the runtime + command registry, and it's started
+    on a daemon thread.
+    """
+
+    def __init__(self, runtime, command_registry, config: dict):
+        self.runtime = runtime
+        self.command_registry = command_registry
+        self.config = config
+        self._adapters: dict[str, object] = {}
+        self._threads: list[threading.Thread] = []
+        self._factories: dict[str, callable] = {}
+
+    def set_factory(self, name: str, factory) -> None:
+        self._factories[name] = factory
+
+    @property
+    def adapters(self) -> dict:
+        return self._adapters
+
+    @property
+    def threads(self) -> list:
+        return self._threads
+
+    def register(self, cls) -> str | None:
+        name = getattr(cls, "name", "")
+        if not name:
+            return "Frontend class has no name"
+        if name in self._adapters:
+            return f"Frontend '{name}' already running"
+        factory = self._factories.get(name)
+        try:
+            adapter = factory(cls) if factory else cls()
+        except Exception as e:
+            logger.exception(f"Frontend '{name}' instantiation failed")
+            return f"Frontend '{name}' instantiation failed: {e}"
+        try:
+            adapter.bind(self.runtime, self.command_registry, self.config)
+        except Exception as e:
+            logger.exception(f"Frontend '{name}' bind failed")
+            return f"Frontend '{name}' bind failed: {e}"
+        thread = threading.Thread(target=adapter.start, daemon=True, name=f"{name}-frontend")
+        thread.start()
+        self._adapters[name] = adapter
+        self._threads.append(thread)
+        return None
+
+    def unregister(self, name: str) -> str | None:
+        adapter = self._adapters.pop(name, None)
+        if adapter is None:
+            return f"Frontend '{name}' is not running"
+        try:
+            if hasattr(adapter, "unbind"):
+                adapter.unbind()
+            if hasattr(adapter, "stop"):
+                adapter.stop()
+        except Exception:
+            logger.exception(f"Frontend '{name}' stop failed")
+        return None
+
+
 def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
                     tool_registry, services, config, root_dir):
-    runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir) if frontends & {"repl", "telegram"} else None
-    adapters, threads = {}, []
-    if runtime and "repl" in frontends:
-        repl = ReplFrontend(shutdown_fn, shutdown_event)
-        repl.bind(runtime, runtime.command_registry, config)
-        _start("repl", repl.start, adapters, threads, repl)
-    if runtime and "telegram" in frontends:
-        telegram = TelegramFrontend(shutdown_event, services)
-        telegram.bind(runtime, runtime.command_registry, config)
-        _start("telegram", telegram.start, adapters, threads, telegram)
-    for name in sorted(frontends - {"repl", "telegram"}):
-        logger.warning(f"Unknown frontend '{name}' - skipping.")
-    return runtime, adapters, threads
+    if not frontends:
+        return None, {}, []
+
+    runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir)
+    classes = discover_frontends(root_dir, config)
+    manager = FrontendManager(runtime, runtime.command_registry, config)
+
+    # Transport-specific constructor args: discovery returns the class, the
+    # bootstrap supplies what each frontend needs to talk to the host.
+    manager.set_factory("repl", lambda cls: cls(shutdown_fn, shutdown_event))
+    manager.set_factory("telegram", lambda cls: cls(shutdown_event, services))
+
+    for name in sorted(frontends):
+        cls = classes.get(name)
+        if cls is None:
+            logger.warning(f"Unknown frontend '{name}' - skipping.")
+            continue
+        err = manager.register(cls)
+        if err:
+            logger.warning(err)
+
+    runtime.frontend_manager = manager
+    return runtime, manager.adapters, manager.threads
 
 
 def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir):
@@ -109,10 +183,3 @@ def _scope(profile, config):
         logger.warning(f"Invalid scope for profile '{profile}': {e}")
         return None
     return scope if scope.has_tool_filter or scope.prompt_suffix else None
-
-
-def _start(name, target, adapters, threads, adapter):
-    thread = threading.Thread(target=target, daemon=True, name=f"{name}-frontend")
-    thread.start()
-    adapters[name] = adapter
-    threads.append(thread)

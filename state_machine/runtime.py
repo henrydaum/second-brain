@@ -13,11 +13,14 @@ That two-call-site shape mirrors PokerMonster's `run_game`: one obvious line
 where everything flows through, easy to find, easy to read.
 """
 
+import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+
+logger = logging.getLogger("Runtime")
 
 from state_machine.approval import StateMachineApprovalRequest
 from state_machine.conversationClass import CallableSpec, ConversationState, FormStep, Participant, PhaseFrame
@@ -366,18 +369,19 @@ class ConversationRuntime:
     def get_session(self, key: str) -> RuntimeSession:
         with self._sessions_lock:
             if key not in self.sessions:
-                session = RuntimeSession(key, self._new_state())
+                is_subagent = key.startswith("subagent:")
+                session = RuntimeSession(key, self._new_state(), is_subagent=is_subagent)
                 session.cs = self._new_state(session=session)
                 self.sessions[key] = session
                 bus.emit(SESSION_CREATED, {
                     "session_key": key,
-                    "is_subagent": False,
+                    "is_subagent": is_subagent,
                     "agent_profile": session.active_agent_profile,
                 })
             return self.sessions[key]
 
-    def create_conversation(self, title: str = "New conversation", *, kind: str = "user") -> int | None:
-        return self.db.create_conversation(title, kind=kind) if self.db else None
+    def create_conversation(self, title: str = "New conversation", *, kind: str = "user", origin: str | None = None) -> int | None:
+        return self.db.create_conversation(title, kind=kind, origin=origin) if self.db else None
 
     def load_conversation(
         self,
@@ -424,16 +428,17 @@ class ConversationRuntime:
         )
 
     def reset_conversation(self, session_key: str) -> RuntimeSession:
+        is_subagent = session_key.startswith("subagent:")
         with self._sessions_lock:
             existed = session_key in self.sessions
-            session = RuntimeSession(session_key, self._new_state())
+            session = RuntimeSession(session_key, self._new_state(), is_subagent=is_subagent)
             session.cs = self._new_state(session=session)
             self.sessions[session_key] = session
         if existed:
             bus.emit(SESSION_CLOSED, {"session_key": session_key})
         bus.emit(SESSION_CREATED, {
             "session_key": session_key,
-            "is_subagent": False,
+            "is_subagent": is_subagent,
             "agent_profile": session.active_agent_profile,
         })
         return session
