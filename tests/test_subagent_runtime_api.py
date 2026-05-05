@@ -192,12 +192,71 @@ def test_profile_commands_use_add_then_item_actions():
     assert LlmCommand().form({}, ctx)[0].enum == ["gpt", "add"]
     assert LlmCommand().form({"model_name": "gpt"}, ctx)[1].enum == ["edit", "remove"]
     assert AgentCommand().form({}, ctx)[0].enum == ["default", "add"]
-    assert AgentCommand().form({"profile_name": "default"}, ctx)[1].enum == ["edit", "remove"]
+    assert AgentCommand().form({"profile_name": "default"}, ctx)[1].enum == ["switch", "edit", "remove"]
     with patch("config.config_manager.save"), patch("config.config_manager.load_plugin_config", return_value={}), patch("config.config_manager.save_plugin_config"):
         assert AgentCommand().run({"profile_name": "add", "new_profile_name": "builder", "llm": "default", "prompt_suffix": "", "whitelist_or_blacklist_tools": "blacklist", "tools_list": []}, ctx) == "Added agent profile: builder"
         assert LlmCommand().run({"model_name": "gpt", "action": "edit", "field": "llm_context_size", "value": "2"}, ctx) == "Updated LLM profile: gpt"
     assert ctx.config["agent_profiles"]["builder"]["llm"] == "default"
     assert ctx.config["llm_profiles"]["gpt"]["llm_context_size"] == 2
+
+
+def test_agent_switch_uses_runtime_session_profile():
+    from plugins.commands.command_agent import AgentCommand
+
+    runtime = SimpleNamespace(calls=[], set_agent_profile=lambda session_key, profile: runtime.calls.append((session_key, profile)) or True)
+    ctx = SimpleNamespace(
+        runtime=runtime,
+        session_key="chat:1",
+        config={"agent_profiles": {"default": {}, "builder": {}}},
+    )
+
+    assert AgentCommand().run({"profile_name": "builder", "action": "switch"}, ctx) == "Switched agent profile to: builder"
+    assert runtime.calls == [("chat:1", "builder")]
+
+
+def test_runtime_agent_switch_keeps_session_override_metadata():
+    from state_machine.runtime import ConversationRuntime
+
+    runtime = ConversationRuntime(config={"active_agent_profile": "default"})
+    session = runtime.get_session("s")
+
+    assert runtime.set_agent_profile("s", "builder")
+    assert session.profile_override == "builder"
+    assert session.active_agent_profile == "builder"
+
+
+def test_agent_llm_edit_reroutes_active_session():
+    from plugins.commands.command_agent import AgentCommand
+    from state_machine.runtime import ConversationRuntime
+
+    config = {
+        "agent_profiles": {"builder": {"llm": "old", "prompt_suffix": "", "whitelist_or_blacklist_tools": "blacklist", "tools_list": []}},
+        "active_agent_profile": "default",
+        "default_llm_profile": "old",
+    }
+    runtime = ConversationRuntime(config=config, services={"old": object(), "new": object()})
+    runtime.get_session("s")
+    runtime.set_agent_profile("s", "builder")
+    ctx = SimpleNamespace(config=config, runtime=runtime, session_key="s")
+
+    with patch("config.config_manager.save"):
+        assert AgentCommand().run({"profile_name": "builder", "action": "edit", "field": "llm", "value": "new"}, ctx) == "Updated agent profile: builder"
+
+    assert runtime._active_llm(runtime.sessions["s"]) is runtime.services["new"]
+
+
+def test_telegram_form_echo_shows_command_fragment():
+    from plugins.frontends.telegram_frontend import TelegramFrontend
+
+    tg = TelegramFrontend()
+    form = {
+        "name": "agent",
+        "action_type": "call_command",
+        "collected": {"profile_name": "default"},
+        "field": {"name": "action", "enum": ["edit", "remove"]},
+    }
+
+    assert tg._form_echo(form, "edit") == "/agent default edit"
 
 
 class FakeCommand(BaseCommand):

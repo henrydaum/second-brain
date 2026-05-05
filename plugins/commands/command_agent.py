@@ -5,13 +5,13 @@ from plugins.BaseCommand import BaseCommand
 from state_machine.conversationClass import FormStep
 
 
-ACTIONS = ["edit", "remove"]
+ACTIONS = ["switch", "edit", "remove"]
 FIELDS = ["llm", "prompt_suffix", "whitelist_or_blacklist_tools", "tools_list"]
 
 
 class AgentCommand(BaseCommand):
     name = "agent"
-    description = "Select an agent profile, then edit or remove it"
+    description = "Select an agent profile, then switch, edit, or remove it"
     category = "System"
 
     def form(self, args, context):
@@ -45,10 +45,18 @@ class AgentCommand(BaseCommand):
             return f"Added agent profile: {name}"
         if name not in profiles:
             return "Unknown agent profile."
+        if args.get("action") == "switch":
+            runtime, session_key = getattr(context, "runtime", None), getattr(context, "session_key", None)
+            if runtime and session_key and runtime.set_agent_profile(session_key, name):
+                return f"Switched agent profile to: {name}"
+            context.config["active_agent_profile"] = name
+            _save(context.config)
+            return f"Active agent profile set to: {name}"
         if args.get("action") == "edit":
             field = args.get("field")
             profiles[name][field] = _coerce(field, args.get("value"))
             _save(context.config)
+            _refresh(context)
             return f"Updated agent profile: {name}"
         if args.get("action") == "remove":
             if name == "default":
@@ -57,6 +65,7 @@ class AgentCommand(BaseCommand):
             if context.config.get("active_agent_profile") == name:
                 context.config["active_agent_profile"] = "default"
             _save(context.config)
+            _refresh(context)
             return f"Removed agent profile: {name}"
         return f"Unknown action: {args.get('action')}"
 
@@ -81,3 +90,9 @@ def _describe(context, name):
 
 def _save(config):
     config_manager.save(config)
+
+
+def _refresh(context):
+    runtime = getattr(context, "runtime", None)
+    if runtime and hasattr(runtime, "refresh_session_specs"):
+        runtime.refresh_session_specs()

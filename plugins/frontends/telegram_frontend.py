@@ -73,7 +73,7 @@ class TelegramFrontend(BaseFrontend):
         self.loop = None
         self.app = None
         self._chat_by_session: dict[str, int] = {}
-        self._callbacks: dict[str, tuple[str, str]] = {}
+        self._callbacks: dict[str, tuple[str, str, str | None]] = {}
         self._tool_messages: dict[str, tuple[int, int, str]] = {}
         self._last_keyboard: dict[str, tuple[int, int]] = {}
 
@@ -119,14 +119,14 @@ class TelegramFrontend(BaseFrontend):
             await query.answer()
             token = query.data or ""
             if token in self._callbacks:
-                key, value = self._callbacks.pop(token)
+                key, value, echo = self._callbacks.pop(token)
                 try:
                     await query.edit_message_reply_markup(reply_markup=None)
                 except Exception:
                     pass
                 self._last_keyboard.pop(key, None)
                 try:
-                    await query.message.reply_text(value.split(":", 2)[-1] if value.startswith("approval:") else value)
+                    await query.message.reply_text(echo or (value.split(":", 2)[-1] if value.startswith("approval:") else value))
                 except Exception:
                     pass
                 if value.startswith("approval:"):
@@ -196,7 +196,7 @@ class TelegramFrontend(BaseFrontend):
 
     def render_form_field(self, session_key: str, form: dict) -> None:
         field = form.get("field") or {}
-        self._send_text(session_key, self._prompt(form.get("name"), field), markup=self._enum_markup(session_key, field))
+        self._send_text(session_key, self._prompt(form.get("name"), field), markup=self._enum_markup(session_key, form))
 
     def render_approval_request(self, session_key: str, req) -> None:
         body = html.escape(f"{getattr(req, 'title', 'Approval requested')}\n\n{getattr(req, 'body', '')}".strip())
@@ -368,8 +368,9 @@ class TelegramFrontend(BaseFrontend):
             bits.append("<i>/skip to skip. /cancel to cancel.</i>")
         return "\n".join(bits)
 
-    def _enum_markup(self, key: str, field: dict):
-        rows = [[self._button(str(v), key, str(v))] for v in field.get("enum") or []]
+    def _enum_markup(self, key: str, form: dict):
+        field = form.get("field") or {}
+        rows = [[self._button(str(v), key, str(v), self._form_echo(form, v))] for v in field.get("enum") or []]
         if field.get("required") is False:
             rows.append([self._button("Skip", key, "/skip")])
         rows.append([self._button("Cancel", key, "/cancel")])
@@ -386,11 +387,19 @@ class TelegramFrontend(BaseFrontend):
     def _buttons_markup(self, key: str, buttons: list[dict]):
         return self._markup([[self._button(str(b.get("label") or b.get("text") or b.get("value") or "Option"), key, str(b.get("value") or b.get("text") or b.get("label") or ""))] for b in buttons])
 
-    def _button(self, label: str, key: str, value: str):
+    def _button(self, label: str, key: str, value: str, echo: str | None = None):
         from telegram import InlineKeyboardButton
         token = "bf:" + uuid.uuid4().hex[:16]
-        self._callbacks[token] = (key, value)
+        self._callbacks[token] = (key, value, echo)
         return InlineKeyboardButton(label[:64], callback_data=token)
+
+    def _form_echo(self, form: dict, value) -> str | None:
+        if form.get("action_type") != "call_command" or not form.get("name"):
+            return None
+        parts = ["/" + str(form["name"])]
+        parts += [_quote(v) for v in (form.get("collected") or {}).values()]
+        parts.append(_quote(value))
+        return " ".join(parts)
 
     def _next_approval(self, key: str):
         with self._approval_lock:
@@ -421,3 +430,11 @@ class TelegramFrontend(BaseFrontend):
             await self.app.bot.edit_message_reply_markup(chat_id=entry[0], message_id=entry[1], reply_markup=None)
         except Exception:
             pass
+
+
+def _quote(value) -> str:
+    import json
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    text = str(value)
+    return json.dumps(text) if any(ch.isspace() for ch in text) else text

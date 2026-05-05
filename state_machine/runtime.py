@@ -762,21 +762,21 @@ class ConversationRuntime:
         if session is None:
             return self.system_prompt
 
-        if session.is_subagent:
+        if session.is_subagent or session.profile_override:
             from agent.system_prompt import build_system_prompt
             profile = session.profile_override or session.active_agent_profile or "default"
             scope = self._scope_for_profile(profile)
             registry = self._active_tool_registry(session)
             extras = session.system_prompt_extras or {}
 
-            def _subagent_prompt():
+            def _session_prompt():
                 text = build_system_prompt(
                     self.db, getattr(self, "_orchestrator_ref", None) or self.services.get("orchestrator"),
                     registry, self.services,
                     scope=scope,
                     profile_name=profile,
-                    subagent_mode=extras.get("subagent_mode"),
-                    subagent_has_pending_messages=bool(extras.get("subagent_has_pending_messages")),
+                    subagent_mode=extras.get("subagent_mode") if session.is_subagent else None,
+                    subagent_has_pending_messages=bool(extras.get("subagent_has_pending_messages")) if session.is_subagent else False,
                 )
                 # Plugin-supplied addenda (anything that isn't a known
                 # subagent-mode key) gets appended verbatim.
@@ -786,7 +786,7 @@ class ConversationRuntime:
                     if isinstance(value, str) and value:
                         text += "\n\n" + value
                 return text
-            return _subagent_prompt
+            return _session_prompt
 
         base = self.system_prompt
         extras = session.system_prompt_extras
@@ -856,7 +856,7 @@ class ConversationRuntime:
             self._refresh_session_specs(session)
 
     def _refresh_session_specs(self, session: RuntimeSession) -> None:
-        if not session.is_subagent:
+        if not session.is_subagent and not session.profile_override:
             session.active_agent_profile = self.config.get("active_agent_profile") or "default"
         session.cs.participants["user"].commands = dict(self.commands)
         session.cs.participants["agent"].tools = self._tool_specs(session)
@@ -967,6 +967,7 @@ class ConversationRuntime:
         if frame and frame.step:
             out.form = {
                 "name": frame.name,
+                "action_type": frame.action_type,
                 "field": frame.step.to_dict(),
                 "collected": frame.data.get("args", {}),
             }
