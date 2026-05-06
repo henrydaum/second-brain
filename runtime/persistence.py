@@ -224,7 +224,7 @@ def iterate_agent_turn(
     session_key: str,
     prompt: str,
     *,
-    image_paths: list[str] | None = None,
+    attachments=None,
     actor_id: str = "user",
 ):
     """Drive one user prompt → agent reply round-trip.
@@ -233,10 +233,15 @@ def iterate_agent_turn(
     pushes a turn from outside a frontend. After the turn completes the
     full provider history is replaced atomically and a fresh state
     marker is saved.
+
+    ``attachments`` accepts an iterable of :class:`attachments.Attachment`
+    dataclasses (or dicts produced by ``Attachment.to_dict``). They are
+    queued onto the session's pending bundle and consumed on the next
+    LLM call.
     """
     payload = {"text": prompt, "actor_id": actor_id}
-    if image_paths:
-        payload["image_paths"] = image_paths
+    if attachments:
+        payload["attachments"] = list(attachments)
     out = runtime.handle_action(session_key, "send_text", payload)
     session = runtime.sessions.get(session_key)
     if out.ok and session and runtime.db and session.conversation_id:

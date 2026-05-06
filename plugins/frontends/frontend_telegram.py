@@ -8,7 +8,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from pipeline.attachment_cache import save as save_attachment
+from attachments.cache import save as save_attachment
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
 from plugins.frontends.helpers.command_registry import format_command_call
 from plugins.frontends.helpers.telegram_renderers import (

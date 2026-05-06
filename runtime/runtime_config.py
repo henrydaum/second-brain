@@ -108,13 +108,22 @@ def new_state(
     if session:
         cache["session_key"] = session.key
     phase = (marker or {}).get("phase", BASE_PHASE)
-    return ConversationState(
+    cs = ConversationState(
         [Participant("user", "user", commands=commands), Participant("agent", "agent", tools=tools)],
         (marker or {}).get("turn_priority", "user"),
         phase,
         cache,
         attachment_parser=lambda content: parse_attachment(runtime, content),
+        attachment_lifecycle=runtime.config.get("attachment_lifecycle", "per_turn"),
     )
+    # Restore persisted attachments (only present when lifecycle == "persistent"
+    # and the marker was saved mid-conversation).
+    from attachments.attachment import Attachment
+    cs.pending_attachments = [
+        Attachment.from_dict(a) if isinstance(a, dict) else a
+        for a in (marker or {}).get("pending_attachments") or []
+    ]
+    return cs
 
 
 def tool_specs_for(runtime, session: RuntimeSession | None = None) -> dict[str, CallableSpec]:
@@ -287,29 +296,28 @@ def command_specs_from_dicts(specs: dict[str, dict]) -> dict[str, CallableSpec]:
 
 
 def parse_attachment(runtime, content: dict[str, Any]) -> dict[str, Any]:
-    """Extract text + image paths from an attachment payload using the
-    parser/services available on the runtime. Used by ``SendAttachment``."""
+    """Build an Attachment from a SendAttachment payload using the
+    runtime's services, then return a dict carrying both the dataclass
+    and the user-facing text the dispatch layer should record in
+    history. The Attachment itself is what flows to the LLM."""
+    from attachments import parse_attachment as build_attachment
+
     path = Path(str(content.get("path") or ""))
     file_name = content.get("file_name") or path.name or "attachment"
     caption = str(content.get("caption") or content.get("text") or "").strip()
-    suffix = path.suffix or ("." + str(content.get("extension") or "").lstrip(".") if content.get("extension") else "")
-    try:
-        from plugins.services.helpers.parser_registry import get_modality
-        modality = get_modality(suffix) if suffix else "unknown"
-    except Exception:
-        modality = "unknown"
-    text, image_paths = caption, list(content.get("image_paths") or [])
-    if modality == "image" or content.get("is_photo"):
-        has_vision = runtime.services.get("llm") and getattr(runtime.services["llm"], "vision", True) is not False
-        image_paths = [str(path)] if has_vision and path else image_paths
-        text = (text + f"\n\n[The user attached an image: {file_name} (cached at {path})]").strip()
-    elif modality in {"text", "tabular", "unknown"} and runtime.services.get("parser"):
-        try:
-            parsed = runtime.services["parser"].parse(str(path), config={"max_chars": 4000}).output
-            raw = parsed if isinstance(parsed, str) else str(parsed)
-            text = (text + f"\n\n[The user attached a file: {file_name} (cached at {path})]\n{raw[:4000]}").strip()
-        except Exception:
-            text = (text + f"\n\n[The user attached a file: {file_name} (cached at {path}). Use read_file or search tools to access it.]").strip()
-    else:
-        text = (text + f"\n\n[The user attached a file: {file_name} (cached at {path}). Use read_file or search tools to access it.]").strip()
-    return {**content, "text": text, "image_paths": image_paths}
+
+    attachment = build_attachment(
+        str(path),
+        file_name=file_name,
+        services=runtime.services,
+        config={"max_chars": 4000},
+    )
+
+    # History row text: caption plus a short pointer line so future
+    # replays of the conversation still know a file existed. The full
+    # parsed-text blurb is added to the prompt only when we hit the
+    # LLM (see AttachmentBundle.for_llm in the LLM service layer).
+    pointer = f"[Attached {attachment.modality} file: {file_name} (cached at {path})]"
+    text = f"{caption}\n\n{pointer}".strip() if caption else pointer
+
+    return {**content, "text": text, "attachment": attachment}

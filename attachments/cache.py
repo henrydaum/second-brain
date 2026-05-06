@@ -47,8 +47,6 @@ def save(filename_hint: str, data: bytes, size_cap_gb: float = 2.0) -> Path:
     safe = _sanitize(filename_hint)
     path = ATTACHMENT_CACHE / f"{ts}_{safe}"
 
-    # In the rare case two attachments arrive in the same second with the
-    # same sanitized name, disambiguate with a counter.
     n = 1
     while path.exists():
         path = ATTACHMENT_CACHE / f"{ts}_{n}_{safe}"
@@ -67,7 +65,6 @@ def _evict_if_over_cap(cap_bytes: int) -> None:
     if total <= cap_bytes:
         return
 
-    # Oldest first — uses mtime so "access" via a touch() could extend life if desired.
     entries.sort(key=lambda e: e[1].st_mtime)
     freed = 0
     for p, st in entries:

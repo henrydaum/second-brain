@@ -137,9 +137,8 @@ class ConversationRuntime:
         # round-trip. Per-mutation atomicity is preserved by the dispatch
         # lock above and the lock acquired in ``inject_user_message`` and
         # in ``iterate_agent_turn`` after the handle_action returns.
-        drive_images = out.data.pop("_drive_agent_image_paths", None)
-        if drive_images is not None:
-            self._drive_agent_turn(session, out, drive_images)
+        if out.data.pop("_drive_agent_turn", False):
+            self._drive_agent_turn(session, out)
             with session.lock:
                 _persist.persist_marker(self, session)
 
@@ -163,12 +162,23 @@ class ConversationRuntime:
             action_type = "send_text"
 
         text = _disp.text_of(payload)
-        image_paths = _disp.image_paths_of(payload)
+        inbound_attachments = _disp.attachments_of(payload)
         actor_id = _disp.actor_id_of(payload)
+
+        # Callers that bypass SendAttachment (e.g. iterate_agent_turn from a
+        # subagent task) can pass attachments straight on the payload — push
+        # them onto cs.pending_attachments so the next agent turn picks them up.
+        if inbound_attachments:
+            from attachments.attachment import Attachment
+            for entry in inbound_attachments:
+                if isinstance(entry, Attachment):
+                    session.cs.pending_attachments.append(entry)
+                elif isinstance(entry, dict):
+                    session.cs.pending_attachments.append(Attachment.from_dict(entry))
 
         # Empty-input guard, matching v1 behavior. Skips state-machine entry
         # so we don't pollute history/events with a doomed action.
-        if action_type in {"send_text", "send_attachment"} and not text and not image_paths and action_type != "send_attachment":
+        if action_type == "send_text" and not text:
             return RuntimeResult(False, error={"code": "empty_input", "message": "No input."})
 
         # Predicate captured *before* enact, since the action itself may
@@ -194,7 +204,6 @@ class ConversationRuntime:
         out.add_action_result(result)
         _approvals.resolve_answered_request(self, request_id, result)
         text = _disp.text_after_action(action_type, text, result)
-        image_paths = _disp.image_paths_after_action(action_type, image_paths, result)
         _disp.absorb_user_action(self, session, action_type, text, result)
         _disp.emit_state_change(session, old_phase, old_priority)
         _disp.decorate_form(session, out)
@@ -204,7 +213,7 @@ class ConversationRuntime:
                 and result.ok
                 and session.cs.turn_priority == "agent"
                 and session.cs.phase == BASE_PHASE):
-            out.data["_drive_agent_image_paths"] = image_paths
+            out.data["_drive_agent_turn"] = True
 
         return out
 
@@ -218,7 +227,7 @@ class ConversationRuntime:
     # tells the next runtime "this session was mid-turn — recover."
     # ──────────────────────────────────────────────────────────────────
 
-    def _drive_agent_turn(self, session: RuntimeSession, out: RuntimeResult, image_paths: list[str] | None) -> RuntimeResult:
+    def _drive_agent_turn(self, session: RuntimeSession, out: RuntimeResult) -> RuntimeResult:
         _persist.ensure_conversation(session=session, runtime=self, title_text=_disp.latest_user_text(session))
         session.busy = True
         session.cancel_event.clear()
@@ -231,7 +240,6 @@ class ConversationRuntime:
                 session.history,
                 self.db,
                 session.conversation_id,
-                image_paths,
             )
         except Exception as e:
             err = ActionError("agent_failed", str(e))
@@ -325,8 +333,8 @@ class ConversationRuntime:
     def new_conversation(self, session_key: str) -> RuntimeResult:
         return _persist.new_conversation(self, session_key)
 
-    def iterate_agent_turn(self, session_key: str, prompt: str, *, image_paths: list[str] | None = None, actor_id: str = "user") -> RuntimeResult:
-        return _persist.iterate_agent_turn(self, session_key, prompt, image_paths=image_paths, actor_id=actor_id)
+    def iterate_agent_turn(self, session_key: str, prompt: str, *, attachments=None, actor_id: str = "user") -> RuntimeResult:
+        return _persist.iterate_agent_turn(self, session_key, prompt, attachments=attachments, actor_id=actor_id)
 
     def inject_user_message(self, session_key: str, text: str, *, conversation_id: int | None = None, actor_id: str = "user") -> RuntimeResult:
         return _persist.inject_user_message(self, session_key, text, conversation_id=conversation_id, actor_id=actor_id)

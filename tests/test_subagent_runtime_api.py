@@ -30,8 +30,8 @@ class FakeRuntime:
     def add_session_tool(self, session_key, tool):
         self.calls.append(("add_session_tool", session_key, tool.name))
 
-    def iterate_agent_turn(self, session_key, prompt, *, image_paths=None, actor_id="user"):
-        self.calls.append(("iterate_agent_turn", session_key, prompt, image_paths, actor_id))
+    def iterate_agent_turn(self, session_key, prompt, *, attachments=None, actor_id="user"):
+        self.calls.append(("iterate_agent_turn", session_key, prompt, attachments, actor_id))
         bus.emit(SESSION_TURN_COMPLETED, {"session_key": session_key, "conversation_id": 7, "final_text": "done", "new_messages": [], "attachments": []})
         return SimpleNamespace(ok=True, error=None, messages=["done"], attachments=[], data={})
 

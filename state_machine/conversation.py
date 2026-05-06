@@ -157,6 +157,7 @@ class ConversationState:
         cache: dict[str, Any] | None = None,
         allowed_attachment_extensions: Iterable[str] = (),
         attachment_parser: Callable[[dict[str, Any]], Any] | None = None,
+        attachment_lifecycle: str = "per_turn",
     ):
         self.participants = {p.id: p for p in participants}
         self.turn_order = list(self.participants)
@@ -172,6 +173,12 @@ class ConversationState:
         self.last_error = None
         self.allowed_attachment_extensions = {e.lower().lstrip(".") for e in allowed_attachment_extensions}
         self.attachment_parser = attachment_parser
+        # "per_turn" (default): drained after the first LLM call of the next
+        # agent turn. "persistent": kept on the cs and re-bundled every turn.
+        self.attachment_lifecycle = attachment_lifecycle if attachment_lifecycle in {"per_turn", "persistent"} else "per_turn"
+        # Holds Attachment dataclasses produced by SendAttachment until the
+        # next agent turn pulls them.
+        self.pending_attachments: list[Any] = []
 
     @property
     def active(self) -> Participant:
@@ -230,10 +237,21 @@ class ConversationState:
         return (content.get("extension") or Path(str(content.get("path", ""))).suffix).lower().lstrip(".")
 
     def to_dict(self) -> dict[str, Any]:
+        # Only serialize pending attachments when the lifecycle says they
+        # should outlive the current turn — otherwise they're per-turn
+        # buffer state and replaying them after a restart is wrong.
+        attachments_payload: list[dict[str, Any]] = []
+        if self.attachment_lifecycle == "persistent":
+            for a in self.pending_attachments:
+                if hasattr(a, "to_dict"):
+                    attachments_payload.append(a.to_dict())
+                elif isinstance(a, dict):
+                    attachments_payload.append(a)
         return {
             "turn_priority": self.turn_priority,
             "phase": self.phase,
             "cache": {**self.cache, "phases": [f.to_dict() if hasattr(f, "to_dict") else f for f in self.cache.get("phases", [])]},
             "history": self.history,
             "participants": [{"id": p.id, "kind": p.kind, "name": p.name} for p in self.participants.values()],
+            "pending_attachments": attachments_payload,
         }

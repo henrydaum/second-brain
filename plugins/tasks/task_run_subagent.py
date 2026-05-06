@@ -2,7 +2,6 @@ import logging
 import time
 from pathlib import Path
 
-from plugins.services.helpers.parser_registry import get_modality
 from plugins.BaseTask import BaseTask, TaskResult
 from runtime.token_stripper import strip_model_tokens
 from events.event_bus import bus
@@ -96,7 +95,7 @@ class RunSubagent(BaseTask):
 
         session_key = runtime.subagent_session_key(job_name)
         input_paths = self._normalize_input_paths(payload.get("input_paths"))
-        compiled_prompt, image_paths = self._compile_prompt(prompt, input_paths, context)
+        compiled_prompt, sub_attachments = self._compile_prompt(prompt, input_paths, context)
 
         turn_events = []
         unsub = bus.subscribe(SESSION_TURN_COMPLETED, lambda event: turn_events.append(event) if (event or {}).get("session_key") == session_key else None)
@@ -112,7 +111,7 @@ class RunSubagent(BaseTask):
             )
             if notify_tool:
                 runtime.add_session_tool(session_key, notify_tool)
-            result = runtime.iterate_agent_turn(session_key, compiled_prompt, image_paths=image_paths)
+            result = runtime.iterate_agent_turn(session_key, compiled_prompt, attachments=sub_attachments)
         except Exception as e:
             logger.error(f"Subagent run {run_id} failed: {e}", exc_info=True)
             return TaskResult.failed(str(e))
@@ -226,47 +225,25 @@ class RunSubagent(BaseTask):
         })
 
     def _compile_prompt(self, prompt: str, input_paths: list[str], context):
-        prompt_parts = [prompt]
-        image_paths = []
+        from attachments import parse_attachment as build_attachment
 
-        for idx, raw_path in enumerate(input_paths):
+        prompt_parts = [prompt]
+        attachments = []
+
+        for raw_path in input_paths:
             path = str(raw_path).strip()
             if not path:
                 continue
-            ext = Path(path).suffix.lower()
-            modality = get_modality(ext) if ext else "unknown"
+            attachments.append(
+                build_attachment(
+                    path,
+                    services=getattr(context, "services", None),
+                    config={"max_chars": _MAX_PARSED_CHARS},
+                )
+            )
+            prompt_parts.append(f"\n[Input file: {path}]")
 
-            if modality == "image":
-                image_paths.append(path)
-                prompt_parts.append(f"\n[Input image: {path}]")
-                continue
-            if modality in ("text", "tabular"):
-                prompt_parts.append(self._parse_input_file(path, modality, context))
-                continue
-            prompt_parts.append(f"\n[Input file: {path} (type: {modality}). This file type is not auto-parsed for the subagent.]")
-
-        return "\n".join(prompt_parts).strip(), image_paths
-
-    def _parse_input_file(self, path: str, modality: str, context) -> str:
-        try:
-            result = context.services.get("parser").parse(path, modality, config={"max_chars": _MAX_PARSED_CHARS})
-        except Exception as e:
-            return f"\n[Input file: {path}. Parsing failed: {e}]"
-        if not getattr(result, "success", False):
-            return f"\n[Input file: {path}. Parsing failed: {getattr(result, 'error', 'unknown error')}]"
-        output = getattr(result, "output", None)
-        if output is None:
-            return f"\n[Input file: {path}. No parsed content was produced.]"
-        if isinstance(output, str):
-            raw = output
-        elif isinstance(output, dict):
-            df = output.get("default")
-            raw = df.to_string(max_rows=50) if df is not None else str(output)
-        else:
-            raw = str(output)
-        if len(raw) > _MAX_PARSED_CHARS:
-            raw = raw[:_MAX_PARSED_CHARS] + "\n[Content truncated]"
-        return f"\n[Input file: {path}]\n{raw}"
+        return "\n".join(prompt_parts).strip(), attachments
 
     @staticmethod
     def _normalize_input_paths(value) -> list[str]:

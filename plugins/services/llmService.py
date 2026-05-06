@@ -134,8 +134,27 @@ class BaseLLM(BaseService):
     def __init__(self):
         super().__init__()
         self.shared = True  # LLM clients are typically thread-safe
-        self.vision = None  # True/False/None (None = unknown)
+        # Generalized capability dict so new modalities (image, audio,
+        # video, ...) can be added without touching call sites. None
+        # means "unknown" — treated as False for routing.
+        self.capabilities: dict[str, bool | None] = {
+            "image": None,
+            "audio": None,
+            "video": None,
+        }
         self.context_size = None  # Max context window in tokens (auto-detected or from config)
+
+    @property
+    def vision(self) -> bool | None:
+        """Back-compat shim. Reads ``capabilities['image']``."""
+        return self.capabilities.get("image")
+
+    @vision.setter
+    def vision(self, value: bool | None) -> None:
+        self.capabilities["image"] = value
+
+    def has_capability(self, modality: str) -> bool:
+        return bool(self.capabilities.get(modality))
 
     def _load(self):
         raise NotImplementedError
@@ -143,17 +162,53 @@ class BaseLLM(BaseService):
     def unload(self):
         raise NotImplementedError
 
-    def invoke(self, messages: list[dict], image_paths: list[str] = None, **kwargs) -> LLMResponse:
+    def invoke(self, messages: list[dict], attachments=None, **kwargs) -> LLMResponse:
         """Send messages and return a complete response."""
         raise NotImplementedError
 
-    def stream(self, messages: list[dict], image_paths: list[str] = None, **kwargs):
+    def stream(self, messages: list[dict], attachments=None, **kwargs):
         """Send messages and yield response chunks."""
         raise NotImplementedError
 
     def chat_with_tools(self, messages: list[dict], tools: list[dict] = None, **kwargs) -> LLMResponse:
         """Send messages with tool schemas. Returns tool calls or text."""
         raise NotImplementedError
+
+    # =================================================================
+    # ATTACHMENT ROUTING
+    # =================================================================
+
+    def _resolve_attachments(self, messages: list[dict], attachments) -> tuple[list[dict], list[str]]:
+        """Apply the 3-tier attachment routing for this LLM's capabilities.
+
+        Returns ``(messages, native_paths)``:
+        - ``messages``: a copy of the input with the suffix appended to
+          the last user message (only if a suffix was produced).
+        - ``native_paths``: file paths the caller should inline using its
+          provider-native image/audio/video plumbing.
+        """
+        if attachments is None:
+            return messages, []
+        from attachments.attachment import AttachmentBundle
+        bundle = attachments if isinstance(attachments, AttachmentBundle) else AttachmentBundle.from_iterable(attachments)
+        if not bundle:
+            return messages, []
+        native_paths, suffix = bundle.for_llm(self.capabilities)
+        if not suffix:
+            return messages, native_paths
+        out = [m.copy() for m in messages]
+        for i in range(len(out) - 1, -1, -1):
+            if out[i].get("role") == "user":
+                content = out[i].get("content")
+                # content can be a str (most cases) or a list of OpenAI
+                # content blocks (when the caller pre-built blocks). Both
+                # are handled.
+                if isinstance(content, list):
+                    out[i]["content"] = content + [{"type": "text", "text": "\n\n" + suffix}]
+                else:
+                    out[i]["content"] = (str(content or "") + "\n\n" + suffix).strip()
+                break
+        return out, native_paths
 
     # =================================================================
     # SHARED IMAGE UTILITIES
@@ -199,7 +254,6 @@ class LMStudioLLM(BaseLLM):
         super().__init__()
         self.model_name = model_name
         self.model = None
-        self.vision = None
         self.loaded = False
 
     def _load(self):
@@ -207,8 +261,8 @@ class LMStudioLLM(BaseLLM):
             import lmstudio as lms
             self.model = lms.llm(self.model_name)
             info = self.model.get_info()
-            self.vision = info.vision
-            logger.info(f"Model has vision support: {self.vision}")
+            self.capabilities["image"] = bool(getattr(info, "vision", False))
+            logger.info(f"Model has vision support: {self.capabilities['image']}")
             # Auto-detect context size
             ctx = getattr(info, "max_context_length", None) or getattr(info, "context_length", None)
             if ctx:
@@ -316,7 +370,7 @@ class LMStudioLLM(BaseLLM):
             except Exception as e:
                 logger.debug(f"Temp cleanup failed for {f_path}: {e}")
 
-    def invoke(self, messages, image_paths=None, **kwargs):
+    def invoke(self, messages, attachments=None, **kwargs):
         if not self.loaded or not self.model:
             logger.error("Model not loaded. Call load() first.")
             return LLMResponse(
@@ -327,7 +381,8 @@ class LMStudioLLM(BaseLLM):
 
         temp_files = []
         try:
-            image_handles, valid_names, temp_files = self._prepare_images(image_paths)
+            messages, native_paths = self._resolve_attachments(messages, attachments)
+            image_handles, valid_names, temp_files = self._prepare_images(native_paths)
             messages = self._annotate_messages_with_images(messages, valid_names)
 
             chat = self._messages_to_chat(messages, image_handles)
@@ -357,14 +412,15 @@ class LMStudioLLM(BaseLLM):
                 time.sleep(0.1)
                 self._cleanup_temp_files(temp_files)
 
-    def stream(self, messages, image_paths=None, **kwargs):
+    def stream(self, messages, attachments=None, **kwargs):
         if not self.loaded or not self.model:
             logger.error("Model not loaded. Call load() first.")
             return
 
         temp_files = []
         try:
-            image_handles, valid_names, temp_files = self._prepare_images(image_paths)
+            messages, native_paths = self._resolve_attachments(messages, attachments)
+            image_handles, valid_names, temp_files = self._prepare_images(native_paths)
             messages = self._annotate_messages_with_images(messages, valid_names)
 
             chat = self._messages_to_chat(messages, image_handles)
@@ -412,6 +468,13 @@ class OpenAILLM(BaseLLM):
         self.base_url = base_url
         self.client = None
         self.loaded = False
+        # Best-effort capability inference from the model name. Users can
+        # override by editing ``capabilities`` after construction.
+        m = (model_name or "").lower()
+        if any(s in m for s in ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "claude-3", "claude-4", "gemini")):
+            self.capabilities["image"] = True
+        if "gpt-4o" in m or "gpt-5" in m or "audio" in m:
+            self.capabilities["audio"] = True
 
     def _load(self):
         try:
@@ -483,7 +546,7 @@ class OpenAILLM(BaseLLM):
 
         return messages
 
-    def invoke(self, messages, image_paths=None, **kwargs):
+    def invoke(self, messages, attachments=None, **kwargs):
         if not self.loaded or not self.client:
             logger.error("Model not loaded. Call load() first.")
             return LLMResponse(
@@ -493,7 +556,8 @@ class OpenAILLM(BaseLLM):
             )
 
         try:
-            messages = self._inject_images(messages, image_paths)
+            messages, native_paths = self._resolve_attachments(messages, attachments)
+            messages = self._inject_images(messages, native_paths)
 
             has_tools = "tools" in kwargs and kwargs["tools"]
             logger.debug(
@@ -538,13 +602,14 @@ class OpenAILLM(BaseLLM):
                 error_code="provider_error",
             )
 
-    def stream(self, messages, image_paths=None, **kwargs):
+    def stream(self, messages, attachments=None, **kwargs):
         if not self.loaded or not self.client:
             logger.error("Model not loaded. Call load() first.")
             return
 
         try:
-            messages = self._inject_images(messages, image_paths)
+            messages, native_paths = self._resolve_attachments(messages, attachments)
+            messages = self._inject_images(messages, native_paths)
 
             response = self.client.chat.completions.create(
                 model=self.model_name,
@@ -788,7 +853,7 @@ class LLMRouter(BaseLLM):
         """Copy key attributes from the resolved default LLM."""
         a = self.active
         if a:
-            self.vision = a.vision
+            self.capabilities = dict(a.capabilities)
             self.context_size = a.context_size
             self.loaded = a.loaded
             name = self._resolve_default_name() or "?"
@@ -817,7 +882,7 @@ class LLMRouter(BaseLLM):
         self.model_name = "LLM Router"
         logger.info("All LLMs unloaded.")
 
-    def invoke(self, messages, image_paths=None, **kwargs):
+    def invoke(self, messages, attachments=None, **kwargs):
         a = self.active
         if not a or not a.loaded:
             return LLMResponse(
@@ -825,13 +890,13 @@ class LLMRouter(BaseLLM):
                 error="no LLM loaded",
                 error_code="not_loaded",
             )
-        return a.invoke(messages, image_paths, **kwargs)
+        return a.invoke(messages, attachments, **kwargs)
 
-    def stream(self, messages, image_paths=None, **kwargs):
+    def stream(self, messages, attachments=None, **kwargs):
         a = self.active
         if not a or not a.loaded:
             return
-        yield from a.stream(messages, image_paths, **kwargs)
+        yield from a.stream(messages, attachments, **kwargs)
 
     def chat_with_tools(self, messages, tools=None, **kwargs):
         a = self.active

@@ -521,6 +521,11 @@ class SendAttachment(Action):
             parsed = self.cs.attachment_parser(content) if self.cs.attachment_parser else content
         finally:
             self.cs.reset_phase()
+        # If the parser produced an Attachment dataclass, queue it so the
+        # next agent turn can hand it to the LLM service.
+        attachment = (parsed or {}).get("attachment") if isinstance(parsed, dict) else None
+        if attachment is not None:
+            self.cs.pending_attachments.append(attachment)
         actor = self.cs.participants.get(self.actor_id)
         if actor and actor.kind == "user":
             self.cs.switch_priority(self.actor_id)

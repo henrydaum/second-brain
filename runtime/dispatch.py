@@ -34,8 +34,16 @@ def text_of(payload: dict | str | None) -> str:
     return payload if isinstance(payload, str) else str((payload or {}).get("text") or "")
 
 
-def image_paths_of(payload: dict | str | None) -> list[str]:
-    return list((payload or {}).get("image_paths") or []) if isinstance(payload, dict) else []
+def attachments_of(payload: dict | str | None):
+    """Pull a list of attachment dicts/dataclasses out of an inbound payload.
+
+    Used by ``iterate_agent_turn`` so callers (subagent tasks, tools) can
+    pass attachments through to the agent without first emitting a
+    SendAttachment action.
+    """
+    if not isinstance(payload, dict):
+        return []
+    return list(payload.get("attachments") or [])
 
 
 def actor_id_of(payload: dict | str | None) -> str | None:
@@ -83,13 +91,6 @@ def text_after_action(action_type: str, text: str, result: ActionResult) -> str:
         return text
     parsed = (result.data or {}).get("parsed")
     return str((parsed or {}).get("text") or text) if isinstance(parsed, dict) else text
-
-
-def image_paths_after_action(action_type: str, image_paths: list[str], result: ActionResult) -> list[str]:
-    if action_type != "send_attachment" or not result.ok:
-        return image_paths
-    parsed = (result.data or {}).get("parsed")
-    return list((parsed or {}).get("image_paths") or image_paths) if isinstance(parsed, dict) else image_paths
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -58,8 +58,8 @@ class FakeLLM:
         self.calls = 0
         self.seen = []
 
-    def chat_with_tools(self, messages, tools, image_paths=None):
-        self.seen.append((messages, tools, image_paths))
+    def chat_with_tools(self, messages, tools, attachments=None):
+        self.seen.append((messages, tools, attachments))
         if self.calls >= len(self.responses):
             raise AssertionError("FakeLLM ran out of scripted responses")
         r = self.responses[self.calls]
@@ -234,18 +234,32 @@ def test_runtime_emits_session_scoped_tool_status_events():
     assert events[1][1]["ok"] is True
 
 
-def test_runtime_attachment_parser_feeds_agent_history_and_images():
-    class Parser:
-        def parse(self, path, config=None):
-            return SimpleNamespace(output="parsed file text")
+def test_runtime_attachment_bundle_reaches_llm():
+    import tempfile, os
+    fd, note_path = tempfile.mkstemp(suffix=".txt")
+    try:
+        os.write(fd, b"parsed file text")
+        os.close(fd)
 
-    llm = FakeLLM([FakeResponse.text("saw it")])
-    runtime = ConversationRuntime(services={"llm": llm, "parser": Parser()}, tool_registry=FakeToolRegistry())
+        llm = FakeLLM([FakeResponse.text("saw it")])
+        runtime = ConversationRuntime(services={"llm": llm}, tool_registry=FakeToolRegistry())
 
-    result = runtime.handle_action("chat-attach", "send_attachment", {"path": "note.txt", "extension": "txt", "caption": "see this"})
+        result = runtime.handle_action("chat-attach", "send_attachment", {"path": note_path, "extension": "txt", "caption": "see this"})
 
-    assert result.messages[-1] == "saw it"
-    assert "parsed file text" in llm.seen[0][0][1]["content"]
+        assert result.messages[-1] == "saw it"
+        bundle = llm.seen[0][2]
+        assert bundle is not None and len(bundle) == 1
+        attachment = list(bundle)[0]
+        assert attachment.parsed_text == "parsed file text"
+        assert attachment.modality == "text"
+        # History row carries the caption + pointer line, not the parsed body.
+        user_msg = llm.seen[0][0][1]
+        assert "see this" in user_msg["content"]
+    finally:
+        try:
+            os.unlink(note_path)
+        except OSError:
+            pass
 
 
 def test_iterate_agent_turn_loads_persists_and_emits_completion():

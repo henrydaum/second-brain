@@ -94,12 +94,16 @@ class ConversationLoop:
         history: list[dict[str, Any]],
         db=None,
         conversation_id: int | None = None,
-        image_paths: list[str] | None = None,
     ) -> tuple[str | None, list[dict[str, Any]], list[str]]:
         """Run iterations of choose-action / enact / record until turn ends.
 
         `history` is the provider-shaped transcript and is mutated in place;
         `new_messages` is what was appended this turn (returned for adapters).
+
+        Attachments queued on ``cs.pending_attachments`` are bundled and
+        passed to the LLM on the first call of the turn; the bundle is
+        then cleared (``per_turn`` lifecycle) or kept for the next turn
+        (``persistent`` lifecycle).
         """
         self.running = True
         self.cancelled = False
@@ -110,7 +114,11 @@ class ConversationLoop:
 
         new_messages: list[dict[str, Any]] = []
         attachments: list[str] = []
-        images = list(image_paths or [])
+
+        from attachments.attachment import AttachmentBundle
+        bundle = AttachmentBundle.from_iterable(cs.pending_attachments)
+        if getattr(cs, "attachment_lifecycle", "per_turn") == "per_turn":
+            cs.pending_attachments = []
 
         # Generous upper bound so multi-call rounds (k tool calls per LLM turn,
         # potentially several rounds) cannot infinite-loop.
@@ -121,11 +129,12 @@ class ConversationLoop:
                 if self._cancelled() or cs.turn_priority != actor_id:
                     break
 
-                action_type, content = self._next_action(cs, history, images)
+                action_type, content = self._next_action(cs, history, bundle)
                 if not action_type:
                     break
-                if images:
-                    images = []  # Only the first LLM call sees attached images.
+                if bundle:
+                    # Only the first LLM call of the turn sees the bundle.
+                    bundle = AttachmentBundle()
 
                 if self._cancelled():
                     break
@@ -161,7 +170,7 @@ class ConversationLoop:
         self,
         cs,
         history: list[dict[str, Any]],
-        image_paths: list[str],
+        bundle,
     ) -> tuple[str | None, Any]:
         """Return `(action_type, content)` for the agent's next move.
 
@@ -194,14 +203,15 @@ class ConversationLoop:
             return "end_turn", {"final_text": text}
 
         # 3) Otherwise call the LLM for the next response.
-        response = self._invoke(self._messages(history), self.tool_registry.get_all_schemas() or None, image_paths or None, history)
+        from attachments.attachment import AttachmentBundle
+        response = self._invoke(self._messages(history), self.tool_registry.get_all_schemas() or None, bundle, history)
 
         if getattr(response, "has_tool_calls", False):
             self._pending_tool_calls = list(response.tool_calls)
             self._assistant_text_for_pending = getattr(response, "content", None)
             self._compact_if_needed(response, history)
             # Recurse to immediately return the first call as an action.
-            return self._next_action(cs, history, [])
+            return self._next_action(cs, history, AttachmentBundle())
 
         # Text-only response: emit `send_text` now; next iteration will end_turn.
         text = _clean(getattr(response, "content", ""))
@@ -301,18 +311,19 @@ class ConversationLoop:
         prompt = self.system_prompt() if callable(self.system_prompt) else self.system_prompt
         return [{"role": "system", "content": prompt}, *[m for m in history if m.get("role") != "system"]]
 
-    def _invoke(self, messages, tools, image_paths=None, history=None):
+    def _invoke(self, messages, tools, attachments=None, history=None):
         from plugins.services.llmService import is_context_limit_error
 
+        bundle = attachments or None
         try:
-            response = self.llm.chat_with_tools(messages, tools, image_paths=image_paths)
+            response = self.llm.chat_with_tools(messages, tools, attachments=bundle)
         except Exception as e:
             if history is None or not is_context_limit_error(e):
                 raise
             logger.warning("Context limit hit, compacting and retrying: %s", e)
             self._compact(history)
             try:
-                response = self.llm.chat_with_tools(self._messages(history), tools, image_paths=None)
+                response = self.llm.chat_with_tools(self._messages(history), tools, attachments=None)
             except Exception as retry_error:
                 if is_context_limit_error(retry_error):
                     raise RuntimeError("Context limit reached even after compacting. Use /new to start fresh.") from retry_error
@@ -322,7 +333,7 @@ class ConversationLoop:
             if history is not None and is_context_limit_error(err):
                 logger.warning("Context limit hit (response error), compacting and retrying: %s", err)
                 self._compact(history)
-                response = self.llm.chat_with_tools(self._messages(history), tools, image_paths=None)
+                response = self.llm.chat_with_tools(self._messages(history), tools, attachments=None)
                 if getattr(response, "is_error", False):
                     raise RuntimeError("Context limit reached even after compacting. Use /new to start fresh.")
             else:

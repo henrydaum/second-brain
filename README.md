@@ -308,8 +308,13 @@ Second Brain/
 │   ├── event_bus.py        # Internal pub/sub bus
 │   └── event_channels.py   # Event channel registry
 │
+├── attachments/
+│   ├── attachment.py       # Attachment + AttachmentBundle dataclasses
+│   ├── cache.py            # Frontend upload persistence
+│   ├── registry.py         # ext -> text-blurb parser registry
+│   └── parsers/            # parser_text, parser_pdf, parser_audio, ...
+│
 ├── pipeline/
-│   ├── attachment_cache.py # Frontend upload persistence
 │   ├── database.py         # SQLite state + task queue
 │   ├── event_trigger.py    # Bus-driven task-run enqueue
 │   ├── orchestrator.py     # Task registration + dispatch
