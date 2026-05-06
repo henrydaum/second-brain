@@ -81,7 +81,15 @@ class AskSubagent(BaseTool):
         poll_interval = self._coerce_poll(kwargs.get("poll_interval_seconds"), default=1.0)
 
         request_token = f"asksub:{uuid.uuid4().hex}"
-        conversation_id = context.runtime.create_conversation((title or prompt[:80] or "Subagent run")[:200], kind="subagent")
+        # Tag spawned conversations distinctly so /history can list them
+        # under their own group instead of mixing them into 'main'.
+        parent_session_key = getattr(context, "session_key", None) or "agent"
+        origin = f"ask_subagent:{parent_session_key}"
+        conversation_id = context.runtime.create_conversation(
+            (title or prompt[:80] or "Subagent run")[:200],
+            kind="subagent",
+            origin=origin,
+        )
         payload = {
             "prompt": prompt,
             "title": title,

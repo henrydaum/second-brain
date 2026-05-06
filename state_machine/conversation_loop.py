@@ -23,20 +23,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from state_machine.persistence import save_history_message
+from runtime.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("ConversationLoop")
 
 
 def _clean(text: str | None) -> str:
-    text = text or ""
-    while "<think>" in text or "</think>" in text:
-        start = text.find("<think>")
-        end = text.find("</think>")
-        if start >= 0 and end > start:
-            text = text[:start] + text[end + len("</think>"):]
-        else:
-            text = text.replace("<think>", "").replace("</think>", "")
-    return text.strip()
+    return strip_model_tokens(text or "")[0]
 
 
 class ConversationLoop:
