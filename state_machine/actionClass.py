@@ -239,7 +239,7 @@ class _CallableAction(Action):
                 frame_data["call_id"] = call_id
             self.cs.push_phase(PhaseFrame(self.form_phase, self.action_type, actor, spec.name, frame_data, missing))
             event = self.cs.event("form_started", actor, name=spec.name, step=missing[0].name, prompt=missing[0].prompt)
-            return ActionResult(True, self.action_type, "Input required.", events=[event], data={"step": missing[0].name, "call_id": call_id})
+            return ActionResult(True, self.action_type, events=[event], data={"step": missing[0].name, "call_id": call_id})
         self._validate(spec, args)
         if spec.require_approval and not payload.get("_approved"):
             return self._approval(payload, spec)
@@ -363,7 +363,7 @@ class SubmitFormText(Action):
         if missing:
             frame.steps, frame.step_index = missing, 0
             event = self.cs.event("form_step", self.actor_id, name=frame.name, step=missing[0].name, prompt=missing[0].prompt)
-            return ActionResult(True, self.action_type, "Input required.", events=[event], data={"step": frame.step.name})
+            return ActionResult(True, self.action_type, events=[event], data={"step": frame.step.name})
         pending = {"name": frame.name, "args": frame.data["args"]}
         if frame.data.get("call_id"):
             pending["_call_id"] = frame.data["call_id"]

@@ -633,9 +633,16 @@ def _load_sandbox(module_name: str, file_path: Path, reload: bool):
 
 
 def _find_subclass_instances(module, base_class, module_name: str) -> list:
-    """Find and instantiate all subclasses of base_class in a module."""
+    """Find and instantiate all subclasses of base_class in a module.
+
+    Skips classes with ``auto_register = False`` — these are special tools
+    that carry per-call construction state and are instantiated manually
+    by their callers (e.g. NotifyTool).
+    """
     instances = []
     for cls in _find_subclasses(module, base_class, module_name):
+        if getattr(cls, "auto_register", True) is False:
+            continue
         try:
             instances.append(cls())
         except Exception as e:

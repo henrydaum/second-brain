@@ -1,3 +1,13 @@
+"""
+Notify tool — pushes a user-visible message to chat from inside a session.
+
+This tool is special: it carries per-session construction state (source,
+source_id, session_key, recorder closure) and is instantiated manually by
+its caller (see plugins/tasks/task_run_subagent.py), not via the generic
+plugin discoverer. `auto_register = False` keeps discovery from picking it
+up as a stateless, globally-registered tool.
+"""
+
 import time
 from dataclasses import dataclass
 
@@ -33,6 +43,7 @@ class NotifyTool(BaseTool):
     }
     max_calls = 10
     background_safe = True
+    auto_register = False
 
     def __init__(self, *, source: str = "session", source_id: str | None = None, session_key: str | None = None, recorder=None, **extra):
         self._source = source

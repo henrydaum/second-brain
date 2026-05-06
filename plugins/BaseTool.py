@@ -154,6 +154,12 @@ class BaseTool:
     max_calls: int = 3           # Max times the agent can call this tool per message
     background_safe: bool = True # Whether unattended subagents may call this tool
 
+    # --- Discovery ---
+    # When False, the plugin discoverer skips this tool. Use for tools that
+    # need per-session construction args (e.g. session-pinned NotifyTool) and
+    # are instantiated manually at their call site instead.
+    auto_register: bool = True
+
     # --- Config settings this plugin needs ---
     # Each entry is a tuple:
     # (title, variable_name, description, default, type_info)

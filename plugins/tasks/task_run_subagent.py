@@ -7,7 +7,7 @@ from plugins.BaseTask import BaseTask, TaskResult
 from runtime.token_stripper import strip_model_tokens
 from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED, SESSION_TURN_COMPLETED, SUBAGENT_RUN
-from agent.session_tools import NotifyTool, NotificationRecord
+from plugins.tools.tool_notify import NotifyTool, NotificationRecord
 from plugins.tasks.helpers.notifications import NOTIFICATION_MODES, notification_mode
 
 logger = logging.getLogger("TaskRunSubagent")
