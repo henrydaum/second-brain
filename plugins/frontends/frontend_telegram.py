@@ -126,10 +126,11 @@ class TelegramFrontend(BaseFrontend):
                 except Exception:
                     pass
                 self._last_keyboard.pop(key, None)
-                try:
-                    await query.message.reply_text(echo or (value.split(":", 2)[-1] if value.startswith("approval:") else value))
-                except Exception:
-                    pass
+                # Disabled: echoing the command/value is redundant since the banner shows the current command
+                # try:
+                #     await query.message.reply_text(echo or (value.split(":", 2)[-1] if value.startswith("approval:") else value))
+                # except Exception:
+                #     pass
                 if value.startswith("approval:"):
                     request_id, answer = value.split(":", 2)[1:]
                     resolved = True if answer == "allow" else False if answer == "deny" else answer
