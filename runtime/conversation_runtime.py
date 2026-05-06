@@ -144,7 +144,7 @@ class ConversationRuntime:
         if (user_driven and self.db is not None
                 and normalized in {"send_text", "send_attachment"}
                 and session.conversation_id is None):
-            return RuntimeResult(False, messages=["No conversation loaded.\nTry /conversations to create a new one."])
+            return RuntimeResult(False, messages=["No conversation loaded.\nTry /conversations to add a new one."])
 
         with session.lock:
             _cfg.refresh_specs(self, session)
