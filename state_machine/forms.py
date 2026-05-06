@@ -10,7 +10,7 @@ def schema_to_form_steps(schema: dict | None) -> list[FormStep]:
     props = (schema or {}).get("properties", {})
     required = set((schema or {}).get("required", []))
     return [
-        FormStep(name, info.get("description", ""), name in required, info.get("type", "string"), info.get("enum"), info.get("default"))
+        FormStep(name, info.get("description", ""), name in required, info.get("type", "string"), info.get("enum"), default=info.get("default"))
         for name, info in props.items()
     ]
 

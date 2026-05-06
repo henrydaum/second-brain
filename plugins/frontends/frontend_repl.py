@@ -117,7 +117,8 @@ class ReplFrontend(BaseFrontend):
     def _hints(field: dict) -> str:
         parts = []
         if field.get("enum"):
-            parts.append("options: " + ", ".join(map(str, field["enum"])))
+            display = field.get("enum_labels") or field["enum"]
+            parts.append("options: " + ", ".join(map(str, display)))
         if field.get("required") is False:
             parts.append("/skip to skip")
         if field.get("default") is not None:

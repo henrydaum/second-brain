@@ -40,8 +40,13 @@ class HistoryCommand(BaseCommand):
 
         rows, _ = db.list_conversations_page(offset=0, limit=_LIMIT, origin=_origin_from_label(picked))
         _add_agent_labels(db, rows)
-        enum = [_encode(r) for r in rows] or ["(no conversations)"]
-        steps.append(FormStep("conversation_id", f"Recent under '{picked}' ({len(rows)})", True, enum=enum, columns=1))
+        if rows:
+            enum = [str(r.get("id")) for r in rows]
+            labels = [_encode(r) for r in rows]
+        else:
+            enum = ["(no conversations)"]
+            labels = ["(no conversations)"]
+        steps.append(FormStep("conversation_id", f"Recent under '{picked}' ({len(rows)})", True, enum=enum, enum_labels=labels, columns=1))
         return steps
 
     def run(self, args, context):
