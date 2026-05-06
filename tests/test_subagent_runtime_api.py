@@ -112,7 +112,7 @@ def test_command_discovery_loads_minimal_builtin_commands():
 
 def test_host_commands_are_visible_and_user_approved():
     from pathlib import Path
-    from plugins.frontends.bootstrap import _conversation_runtime
+    from plugins.frontends.helpers.bootstrap import _conversation_runtime
 
     class ToolRegistry:
         tools = {}
@@ -146,10 +146,10 @@ def test_host_commands_are_visible_and_user_approved():
 
 
 def test_quit_host_command_delays_shutdown_until_after_command_finish():
-    from plugins.frontends.bootstrap import _quit
+    from plugins.frontends.helpers.bootstrap import _quit
     called = []
 
-    with patch("plugins.frontends.bootstrap.threading.Timer") as timer:
+    with patch("plugins.frontends.helpers.bootstrap.threading.Timer") as timer:
         timer.return_value.start.side_effect = lambda: called.append("started")
         assert _quit(lambda: called.append("shutdown")) == "Shutting down."
 

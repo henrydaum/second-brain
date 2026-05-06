@@ -36,7 +36,7 @@ from pipeline.orchestrator import Orchestrator
 from pipeline.watcher import Watcher
 from pipeline.event_trigger import EventTrigger
 from agent.tool_registry import ToolRegistry
-from plugins.frontends.bootstrap import start_frontends
+from plugins.frontends.helpers.bootstrap import start_frontends
 from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
 
 
