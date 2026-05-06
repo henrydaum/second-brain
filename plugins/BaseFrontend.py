@@ -51,6 +51,22 @@ from state_machine.approval import StateMachineApprovalRequest
 logger = logging.getLogger("Frontend")
 
 
+def _form_step_accepts(step, text: str) -> bool:
+    """Would ``text`` be a valid value for this form step?
+
+    Used to decide whether typed input should fill the form or abort the
+    form and become a chat message. Empty text is treated as "no" so the
+    explicit /skip path stays in charge of optional fields.
+    """
+    if not text:
+        return False
+    try:
+        ok, _ = step.validate(text)
+    except Exception:
+        return False
+    return bool(ok)
+
+
 @dataclass
 class FrontendCapabilities:
     """What a frontend transport can do.
@@ -279,6 +295,15 @@ class BaseFrontend:
                     return self.submit(session_key, ACTION_CALL_COMMAND, {"name": name, "args": args})
             if not stripped and ACTION_SKIP_FORM in legal:
                 return self.submit(session_key, ACTION_SKIP_FORM)
+            # If the typed text doesn't fit the current form step (e.g. user
+            # abandoned a half-finished command and started typing a chat
+            # message), bail out of the form and dispatch as a regular
+            # send_text. REPL-style form filling still works because valid
+            # text falls through to ACTION_SUBMIT_FORM_TEXT below.
+            step = self._current_form_step(session_key)
+            if step is not None and not _form_step_accepts(step, stripped):
+                self.cancel(session_key)
+                return self.submit(session_key, ACTION_SEND_TEXT, text)
             return self.submit(session_key, ACTION_SUBMIT_FORM_TEXT, stripped)
 
         if phase == PHASE_APPROVING_REQUEST:
@@ -425,6 +450,10 @@ class BaseFrontend:
     def _current_phase(self, session_key: str) -> str:
         session = self.runtime.get_session(session_key)
         return session.cs.phase
+
+    def _current_form_step(self, session_key: str):
+        frame = self.runtime.get_session(session_key).cs.frame
+        return getattr(frame, "step", None) if frame else None
 
     def _current_approval_request(self, session_key: str):
         if self._current_phase(session_key) != PHASE_APPROVING_REQUEST:

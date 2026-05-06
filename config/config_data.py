@@ -117,4 +117,9 @@ SETTINGS_DATA = [
      "default",
      {"type": "text", "hidden": True}),
 
+    ("Last Active Conversation", "last_active_conversation_id",
+     "Conversation id last touched by a user-driven session. Restored on startup so the user reopens where they left off.",
+     None,
+     {"type": "integer", "hidden": True}),
+
 ]

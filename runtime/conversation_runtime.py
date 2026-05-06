@@ -99,6 +99,13 @@ class ConversationRuntime:
         # session_key. Automation paths (subagent runs, scheduled cron jobs)
         # explicitly opt out via ``handle_action(..., user_driven=False)``.
         self.active_session_key: str | None = None
+        # The first user-driven session after startup gets the previously
+        # active conversation auto-restored, so the user lands back where
+        # they left off. The id is persisted to config on every conversation
+        # switch (see ``_persist_active_conversation``).
+        self._pending_restore_conv_id = self.config.get("last_active_conversation_id") if self.config else None
+        self._restore_consumed = False
+        self._persisted_active_conv_id = self._pending_restore_conv_id
 
     # ──────────────────────────────────────────────────────────────────
     # Public entrypoint — every action a frontend can take ends up here.
@@ -107,8 +114,10 @@ class ConversationRuntime:
     def handle_action(self, session_key: str, action_type: str, payload: dict | str | None = None, *, user_driven: bool = True) -> RuntimeResult:
         session = self.get_session(session_key)
         normalized = "send_text" if action_type == "chat_message" else action_type
+        restore_notice = self._maybe_restore_last_active(session_key) if user_driven else None
         if user_driven:
             self.active_session_key = session_key
+            prior_conv = getattr(self, "_persisted_active_conv_id", None)
 
         # Busy guard: if the session is mid-turn, only ``cancel`` and the
         # specific ``answer_approval`` for an active approval frame may
@@ -123,6 +132,19 @@ class ConversationRuntime:
                 return RuntimeResult(messages=["Not your turn - I'm still working. Send /cancel to interrupt."])
             elif normalized != "answer_approval" or session.cs.phase != PHASE_APPROVING_REQUEST:
                 return RuntimeResult(False, messages=["Still working. Send /cancel to interrupt."], error={"code": "busy", "message": "Still working."})
+
+        # No-conversation guard: chat actions need a conversation to write
+        # into. Fresh installs (and sessions whose saved conversation was
+        # deleted out from under them) land here with conversation_id=None
+        # and would otherwise silently auto-create a "main" conversation —
+        # the new model funnels conversation creation through
+        # /conversations, so route the user there instead. Skipped when
+        # there is no DB (unit tests without persistence rely on the
+        # implicit auto-create path).
+        if (user_driven and self.db is not None
+                and normalized in {"send_text", "send_attachment"}
+                and session.conversation_id is None):
+            return RuntimeResult(False, messages=["No conversation loaded.\nTry /conversations to make a new one."])
 
         with session.lock:
             _cfg.refresh_specs(self, session)
@@ -144,6 +166,13 @@ class ConversationRuntime:
             self._drive_agent_turn(session, out)
             with session.lock:
                 _persist.persist_marker(self, session)
+
+        if user_driven:
+            current_conv = self.active_conversation_id
+            if current_conv != prior_conv:
+                self._persist_active_conversation(current_conv)
+            if restore_notice:
+                out.messages.insert(0, restore_notice)
 
         return out
 
@@ -365,6 +394,57 @@ class ConversationRuntime:
             return None
         session = self.sessions.get(key)
         return session.conversation_id if session else None
+
+    # ──────────────────────────────────────────────────────────────────
+    # Reopen-where-you-left-off persistence.
+    #
+    # The first user-driven action after process restart picks up the last
+    # active conversation from config. After that, every conversation
+    # *change* writes the new id back to config so the next restart lands
+    # in the same place. Per-action persistence is intentionally avoided —
+    # only the actual switch event hits disk.
+    # ──────────────────────────────────────────────────────────────────
+
+    def _maybe_restore_last_active(self, session_key: str) -> str | None:
+        if self._restore_consumed:
+            return None
+        self._restore_consumed = True
+        conv_id = self._pending_restore_conv_id
+        try:
+            conv_id = int(conv_id) if conv_id not in (None, "") else None
+        except (TypeError, ValueError):
+            conv_id = None
+        if conv_id is None or self.db is None or self.db.get_conversation(conv_id) is None:
+            return None
+        existing = self.sessions.get(session_key)
+        if existing is not None and existing.conversation_id is not None:
+            # Frontend re-attached to a session that already has a
+            # conversation (mid-process reload, hot reattach) — leave it
+            # alone, no restore needed.
+            return None
+        try:
+            session = _persist.load_conversation(self, session_key, conv_id)
+        except Exception:
+            logger.exception(f"Failed to restore last active conversation {conv_id}")
+            return None
+        self._persisted_active_conv_id = conv_id
+        title = (self.db.get_conversation(conv_id) or {}).get("title") or ""
+        profile = session.profile_override or session.active_agent_profile or "default"
+        suffix = f": {title.strip()}" if title.strip() else ""
+        return f"Loaded last conversation{suffix}.\nAgent: {profile}"
+
+    def _persist_active_conversation(self, conv_id: int | None) -> None:
+        self._persisted_active_conv_id = conv_id
+        if self.config is None:
+            return
+        if self.config.get("last_active_conversation_id") == conv_id:
+            return
+        self.config["last_active_conversation_id"] = conv_id
+        try:
+            import config.config_manager as config_manager
+            config_manager.save(self.config)
+        except Exception:
+            logger.exception("Failed to persist last_active_conversation_id")
 
     # ──────────────────────────────────────────────────────────────────
     # Approval / typed-input requests.
