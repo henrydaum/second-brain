@@ -10,8 +10,6 @@ bypassing the picker. For older conversations not in the recent 15,
 query the ``conversations`` table with the SQL tool.
 """
 
-from datetime import datetime, timezone
-
 from plugins.BaseCommand import BaseCommand
 from state_machine.conversationClass import FormStep
 from state_machine.persistence import latest_state
@@ -63,9 +61,7 @@ def _encode(row: dict) -> str:
     cid = row.get("id")
     title = (row.get("title") or "").strip() or "(untitled)"
     agent = (row.get("agent_profile") or "").strip()
-    when = _ago(row.get("updated_at"))
-    suffix = f" ({when})" if when else ""
-    return f"#{cid} {title}{f' [agent: {agent}]' if agent else ''}{suffix}"
+    return f"#{cid} {title}{f' [agent: {agent}]' if agent else ''}"
 
 
 def _add_agent_labels(db, rows: list[dict]) -> None:
@@ -87,21 +83,3 @@ def _decode(value) -> int | None:
         return int(head)
     except (TypeError, ValueError):
         return None
-
-
-def _ago(ts) -> str:
-    try:
-        ts = float(ts)
-    except (TypeError, ValueError):
-        return ""
-    now = datetime.now(timezone.utc).timestamp()
-    delta = max(0, now - ts)
-    if delta < 60:
-        return "just now"
-    if delta < 3600:
-        return f"{int(delta // 60)}m ago"
-    if delta < 86400:
-        return f"{int(delta // 3600)}h ago"
-    if delta < 86400 * 7:
-        return f"{int(delta // 86400)}d ago"
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
