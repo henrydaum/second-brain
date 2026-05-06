@@ -17,6 +17,8 @@ Replaces the old /history and /new commands. Walks a multi-step form:
 
 from __future__ import annotations
 
+import time
+
 from plugins.BaseCommand import BaseCommand
 from state_machine.conversation import FormStep
 from state_machine.serialization import latest_state
@@ -151,10 +153,34 @@ def _lookup_value(label: str) -> str:
 # ──────────────────────────────────────────────────────────────────────
 
 def _label_for(db, row: dict) -> str:
-    cid = row.get("id")
     title = (row.get("title") or "").strip() or "(untitled)"
-    agent = _agent_for(db, cid)
-    return f"#{cid} {title}{f' [agent: {agent}]' if agent else ''}"
+    rel = _relative_time(row.get("updated_at"))
+    return f"{title}  ({rel})" if rel else title
+
+
+def _relative_time(timestamp) -> str:
+    """Format an absolute timestamp as a coarse "(N units ago)" string."""
+    try:
+        ts = float(timestamp)
+    except (TypeError, ValueError):
+        return ""
+    delta = max(0, time.time() - ts)
+    units = (
+        (60, "second", "seconds"),
+        (60, "minute", "minutes"),
+        (24, "hour", "hours"),
+        (7, "day", "days"),
+        (4, "week", "weeks"),
+        (12, "month", "months"),
+        (None, "year", "years"),
+    )
+    value = delta
+    for step, singular, plural in units:
+        if step is None or value < step:
+            n = int(value) if value >= 1 else 1
+            return f"just now" if singular == "second" and n < 5 else f"{n} {singular if n == 1 else plural} ago"
+        value /= step
+    return ""
 
 
 def _agent_for(db, conversation_id) -> str:
@@ -171,6 +197,10 @@ def _preview_for(db, conversation_id) -> str:
     """
     msgs = db.get_conversation_messages(conversation_id) or []
     agent = _agent_for(db, conversation_id) or "(unknown)"
+    title = ""
+    row = db.get_conversation(conversation_id) if hasattr(db, "get_conversation") else None
+    if row:
+        title = (row.get("title") or "").strip()
     snippets: list[str] = []
     for m in reversed(msgs):
         role = m.get("role")
@@ -183,7 +213,7 @@ def _preview_for(db, conversation_id) -> str:
         if len(snippets) >= 2:
             break
     snippets.reverse()
-    head = f"#{conversation_id} · agent: {agent}"
+    head = f"{title or '(untitled)'} · agent: {agent}"
     return head + ("\n" + "\n".join(snippets) if snippets else "")
 
 

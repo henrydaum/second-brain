@@ -225,6 +225,10 @@ class RunSubagent(BaseTask):
                 conv_id = None
             if conv_id is not None and context.db.get_conversation(conv_id) is not None:
                 return conv_id, conv_id == active_id
+            # Stored id refers to a deleted conversation (or was malformed).
+            # Fall through and mint a fresh one — the timekeeper-persist
+            # branch below will rewrite the job's payload so subsequent fires
+            # use the new conversation.
 
         # No usable id on the payload — eagerly create one. ask_subagent
         # (non-scheduled) makes throwaway "Subagent" conversations; scheduled
