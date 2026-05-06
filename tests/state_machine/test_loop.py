@@ -315,7 +315,7 @@ def test_load_history_restores_saved_agent_profile_and_history():
     assert session.history == [{"role": "user", "content": "earlier"}]
     assert session.profile_override == "builder"
     assert runtime._profile_for_session(session) == "builder"
-    assert result.messages == ["Loaded conversation: Builder chat\nAgent: builder\nSwitched agent: default -> builder\n\nWhere you left off:\n> [you] earlier"]
+    assert result.messages == ["Loaded conversation: Builder chat\nAgent: builder\nSwitched agent: default -> builder"]
     assert [name for name, _ in events[-2:]] == [SESSION_CLOSED, SESSION_CREATED]
     assert events[-1][1]["agent_profile"] == "builder"
 

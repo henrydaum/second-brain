@@ -163,9 +163,11 @@ def load_conversation(
 def load_history(runtime, session_key: str, conversation_id: int):
     """Switch a session into a previous conversation.
 
-    Returns a :class:`RuntimeResult` with a short status line (and a
-    preview of the most recent messages, so the user has context for
-    where they left off).
+    Returns a :class:`RuntimeResult` with a short status line. The recent-
+    message preview is intentionally omitted: callers (notably the
+    /conversations picker) already show those messages on the
+    Load/Delete confirmation step, so re-printing them here would just
+    be a duplicate.
     """
     from runtime.session import RuntimeResult
 
@@ -180,9 +182,6 @@ def load_history(runtime, session_key: str, conversation_id: int):
     msg = f"Loaded conversation: {title}\nAgent: {new_profile}"
     if old_profile != new_profile:
         msg += f"\nSwitched agent: {old_profile} -> {new_profile}"
-    preview = _format_history_preview(session.history)
-    if preview:
-        msg += f"\n\nWhere you left off:\n{preview}"
 
     return RuntimeResult(
         messages=[msg],
