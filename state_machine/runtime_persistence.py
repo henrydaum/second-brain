@@ -180,6 +180,9 @@ def load_history(runtime, session_key: str, conversation_id: int):
     msg = f"Loaded conversation: {title}\nAgent: {new_profile}"
     if old_profile != new_profile:
         msg += f"\nSwitched agent: {old_profile} -> {new_profile}"
+    preview = _format_history_preview(session.history)
+    if preview:
+        msg += f"\n\nWhere you left off:\n{preview}"
 
     return RuntimeResult(
         messages=[msg],

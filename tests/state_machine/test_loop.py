@@ -27,7 +27,7 @@ from state_machine.conversation_loop import ConversationLoop
 from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
 from state_machine.persistence import save_state_marker
 from state_machine.runtime import ConversationRuntime
-from events.event_channels import SESSION_CLOSED, SESSION_CREATED, SESSION_TURN_COMPLETED, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from events.event_channels import COMMAND_CALL_FINISHED, SESSION_CLOSED, SESSION_CREATED, SESSION_TURN_COMPLETED, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from events.event_bus import bus
 
 
@@ -301,7 +301,7 @@ def test_load_history_restores_saved_agent_profile_and_history():
     assert session.history == [{"role": "user", "content": "earlier"}]
     assert session.profile_override == "builder"
     assert runtime._profile_for_session(session) == "builder"
-    assert result.messages == ["Loaded conversation: Builder chat\nAgent: builder\nSwitched agent: default -> builder"]
+    assert result.messages == ["Loaded conversation: Builder chat\nAgent: builder\nSwitched agent: default -> builder\n\nWhere you left off:\n> [you] earlier"]
     assert [name for name, _ in events[-2:]] == [SESSION_CLOSED, SESSION_CREATED]
     assert events[-1][1]["agent_profile"] == "builder"
 
@@ -335,7 +335,7 @@ def test_history_picker_selection_loads_directly_without_running_command():
 
     assert runtime.sessions["chat"].history == [{"role": "user", "content": "earlier"}]
     assert runtime.sessions["chat"].profile_override == "builder"
-    assert result.messages == ["Loaded conversation: Builder chat\nAgent: builder\nSwitched agent: default -> builder"]
+    assert result.messages == ["Loaded conversation: Builder chat\nAgent: builder\nSwitched agent: default -> builder\n\nWhere you left off:\n> [you] earlier"]
 
 
 def test_next_turn_after_history_load_sends_loaded_history_to_llm():
@@ -504,6 +504,25 @@ def test_invalid_integer_form_input_keeps_same_field_active():
     assert cs.frame.step.name == "n"
 
 
+def test_new_command_supersedes_pending_form():
+    events = []
+    unsub = bus.subscribe(COMMAND_CALL_FINISHED, lambda payload: events.append(payload))
+    cs = make_cs(commands={
+        "old": CallableSpec("old", handler=lambda *_: None, form=[FormStep("x", required=True)]),
+        "new": CallableSpec("new", handler=lambda *_: "ok", form=[FormStep("y", required=True)]),
+    })
+    try:
+        assert create_action(cs, "call_command", {"name": "old"}, "user").enact().ok
+        old_call_id = cs.frame.data["call_id"]
+        result = create_action(cs, "call_command", {"name": "new"}, "user").enact()
+    finally:
+        unsub()
+
+    assert result.ok
+    assert cs.frame.name == "new"
+    assert events[-1] == {"session_key": None, "call_id": old_call_id, "command_name": "old", "ok": False, "error": "superseded"}
+
+
 def test_tool_optional_args_do_not_start_forms():
     captured: dict = {}
 
@@ -614,5 +633,6 @@ def test_legal_actions_in_phase_returns_registered_types():
     assert "end_turn" in base
 
     form = legal_actions_in_phase("filling_command_form")
+    assert "call_command" in form
     assert "submit_form_text" in form
     assert "cancel" in form

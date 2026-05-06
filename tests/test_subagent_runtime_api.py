@@ -219,10 +219,18 @@ def test_tasks_trigger_only_for_event_tasks():
         clear_skip_cache=lambda *_: None,
         on_run_enqueued=lambda run_id, task_name: created.append(((run_id, task_name), {"enqueued": True})),
     )
-    ctx = SimpleNamespace(orchestrator=orch, db=db)
+    tk = SimpleNamespace(
+        loaded=True,
+        list_jobs=lambda: {"daily-event": {"channel": "manual", "cron": "0 9 * * *", "enabled": True}},
+        cron_to_text=lambda _cron: "every day at 09:00",
+        get_next_fire_at=lambda _name: None,
+    )
+    ctx = SimpleNamespace(orchestrator=orch, db=db, services={"timekeeper": tk})
 
     assert TasksCommand().form({"task_name": "path"}, ctx)[1].enum == ["pause", "unpause", "reset", "retry"]
-    assert TasksCommand().form({"task_name": "event"}, ctx)[1].enum == ["pause", "unpause", "trigger", "schedule", "unschedule", "schedules"]
+    event_action = TasksCommand().form({"task_name": "event"}, ctx)[1]
+    assert event_action.enum == ["pause", "unpause", "trigger", "schedule", "unschedule"]
+    assert "daily-event" in event_action.prompt
     assert [s.name for s in TasksCommand().form({"task_name": "event", "action": "trigger"}, ctx)] == ["task_name", "action", "prompt"]
     assert TasksCommand().run({"task_name": "event", "action": "trigger", "prompt": "go"}, ctx).startswith("Triggered task: event")
     assert '"prompt": "go"' in created[0][1]["payload_json"]

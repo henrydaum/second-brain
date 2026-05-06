@@ -51,6 +51,22 @@ def _steps(spec: CallableSpec, args: dict[str, Any], cs=None) -> list[FormStep]:
 def _missing(spec: CallableSpec, args: dict[str, Any], cs=None) -> list[FormStep]:
     return [s for s in _steps(spec, args, cs) if s.name not in args and (s.required or s.prompt_when_missing)]
 
+
+def _emit_command_event(channel: str, cs, payload: dict[str, Any]) -> None:
+    try:
+        from events.event_bus import bus
+        bus.emit(channel, {"session_key": cs.cache.get("session_key"), **payload})
+    except Exception:
+        pass
+
+
+def _emit_command_progress(cs, frame) -> None:
+    call_id = (frame.data or {}).get("call_id")
+    if frame.action_type == "call_command" and call_id:
+        from events.event_channels import COMMAND_CALL_PROGRESSED
+        _emit_command_event(COMMAND_CALL_PROGRESSED, cs, {"call_id": call_id, "command_name": frame.name, "args": dict((frame.data or {}).get("args") or {})})
+
+
 class Action(object):
     """Base action with shared legality/error handling."""
 
@@ -207,6 +223,8 @@ class _CallableAction(Action):
         args = dict(payload.get("args") or {})
         raw_arg = "arg" in args
         resumed_call_id = payload.get("_call_id")
+        if not resumed_call_id:
+            self._supersede_pending_form()
         # Missing args turn into a PhaseFrame; subsequent text/callback input
         # fills the frame until the original callable can resume.
         missing = [] if raw_arg else _missing(spec, args, self.cs)
@@ -284,6 +302,16 @@ class _CallableAction(Action):
         except Exception:
             return None
 
+    def _supersede_pending_form(self):
+        frame = self.cs.peek_phase() if hasattr(self.cs, "peek_phase") else self.cs.frame
+        if not frame or frame.phase not in {PHASE_FILLING_COMMAND_FORM, PHASE_FILLING_TOOL_FORM}:
+            return
+        call_id = (frame.data or {}).get("call_id")
+        if call_id:
+            from events.event_channels import COMMAND_CALL_FINISHED
+            _emit_command_event(COMMAND_CALL_FINISHED, self.cs, {"call_id": call_id, "command_name": frame.name, "ok": False, "error": "superseded"})
+        self.cs.pop_phase()
+
     def _emit_command_finished(self, call_id, spec: CallableSpec, ok: bool, error: str | None):
         if not call_id or self.action_type != "call_command":
             return
@@ -328,6 +356,7 @@ class SubmitFormText(Action):
             if not ok:
                 raise self.error(ERROR_INVALID_INPUT, reason or "Invalid input.", field=frame.step.name)
         frame.data.setdefault("args", {})[frame.step.name] = value
+        _emit_command_progress(self.cs, frame)
         frame.step_index += 1
         spec = self.cs.spec(frame.actor_id, frame.action_type, frame.name)
         missing = _missing(spec, frame.data["args"], self.cs) if spec else []
@@ -444,6 +473,7 @@ class SkipForm(Action):
         if frame.step.required:
             raise self.error(ERROR_INVALID_INPUT, "Cannot skip a required field.", field=frame.step.name)
         frame.data.setdefault("args", {})[frame.step.name] = frame.step.default
+        _emit_command_progress(self.cs, frame)
         frame.step_index += 1
         spec = self.cs.spec(frame.actor_id, frame.action_type, frame.name)
         missing = _missing(spec, frame.data["args"], self.cs) if spec else []

@@ -128,6 +128,16 @@ def parse_command_line(raw: str, form_factory: Callable[[dict, object], list[For
     return args
 
 
+def format_command_call(name: str, args: dict | None = None) -> str:
+    parts = ["/" + str(name or "").strip().lstrip("/")]
+    for value in (args or {}).values():
+        if value is None:
+            continue
+        text = json.dumps(value, separators=(",", ":")) if isinstance(value, (dict, list)) else str(value)
+        parts.append(shlex.quote(text))
+    return " ".join(parts)
+
+
 def _peel(rest: str, *, last: bool, field_type: str) -> tuple[object, str]:
     rest = rest.strip()
     if not rest:

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pipeline.attachment_cache import save as save_attachment
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
+from plugins.frontends.helpers.command_registry import format_command_call
 from plugins.frontends.helpers.telegram_renderers import (
     VIDEO_EXTENSIONS,
     file_bytes,
@@ -74,7 +75,7 @@ class TelegramFrontend(BaseFrontend):
         self.app = None
         self._chat_by_session: dict[str, int] = {}
         self._callbacks: dict[str, tuple[str, str, str | None]] = {}
-        self._tool_messages: dict[str, tuple[int, int, str]] = {}
+        self._tool_messages: dict[str, tuple[int, int, str, str]] = {}
         self._last_keyboard: dict[str, tuple[int, int]] = {}
 
     def session_key(self, ctx) -> str:
@@ -215,7 +216,14 @@ class TelegramFrontend(BaseFrontend):
             return
         key = f"{session_key}:{payload.get('call_id')}"
         name = payload.get("tool_name") or payload.get("command_name") or "call"
-        self._send(self._send_tool_started(chat_id, key, name) if payload.get("status") == "started" else self._finish_tool_message(key, chat_id, name, bool(payload.get("ok")), payload.get("error")))
+        text = format_command_call(name, payload.get("args")) if payload.get("kind") == "command" else name
+        status = payload.get("status")
+        if status == "started":
+            self._send(self._send_tool_started(chat_id, key, name, text))
+        elif status == "progressed":
+            self._send(self._progress_tool_message(chat_id, key, name, text))
+        else:
+            self._send(self._finish_tool_message(key, chat_id, name, text, bool(payload.get("ok")), payload.get("error")))
 
     def _live_session_keys(self) -> list[str]:
         if self._chat_by_session:
@@ -316,15 +324,26 @@ class TelegramFrontend(BaseFrontend):
                 logger.error(f"Failed to send Telegram attachment: {e}")
                 await self.app.bot.send_message(chat_id, f"Failed to send attachment: {e}")
 
-    async def _send_tool_started(self, chat_id: int, key: str, name: str):
-        sent = await self.app.bot.send_message(chat_id, f"⏳ <code>{html.escape(name)}</code>", parse_mode="HTML", disable_notification=True)
-        self._tool_messages[key] = (chat_id, sent.message_id, name)
+    async def _send_tool_started(self, chat_id: int, key: str, name: str, text: str):
+        sent = await self.app.bot.send_message(chat_id, f"⏳ <code>{html.escape(text)}</code>", parse_mode="HTML", disable_notification=True)
+        self._tool_messages[key] = (chat_id, sent.message_id, name, text)
 
-    async def _finish_tool_message(self, key: str, chat_id: int, name: str, ok: bool, error: str | None):
+    async def _progress_tool_message(self, chat_id: int, key: str, name: str, text: str):
+        entry = self._tool_messages.get(key)
+        if not entry:
+            return await self._send_tool_started(chat_id, key, name, text)
+        self._tool_messages[key] = (entry[0], entry[1], name, text)
+        try:
+            await self.app.bot.edit_message_text(f"⏳ <code>{html.escape(text)}</code>", chat_id=entry[0], message_id=entry[1], parse_mode="HTML")
+        except Exception:
+            pass
+
+    async def _finish_tool_message(self, key: str, chat_id: int, name: str, text: str, ok: bool, error: str | None):
         entry = self._tool_messages.pop(key, None)
-        text = f"{'✓' if ok else '✗'} <code>{html.escape(name)}</code>"
+        display = entry[3] if entry else text
+        text = f"{'✓' if ok else '✗'} <code>{html.escape(display)}</code>"
         if error and not ok:
-            text += f"\n{html.escape(str(error))}"
+            text += f" ({html.escape(str(error))})"
         if entry:
             try:
                 await self.app.bot.edit_message_text(text, chat_id=entry[0], message_id=entry[1], parse_mode="HTML")

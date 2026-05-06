@@ -8,7 +8,7 @@ from state_machine.forms import schema_to_form_steps
 
 
 PATH_ACTIONS = ["pause", "unpause", "reset", "retry"]
-EVENT_ACTIONS = ["pause", "unpause", "trigger", "schedule", "unschedule", "schedules"]
+EVENT_ACTIONS = ["pause", "unpause", "trigger", "schedule", "unschedule"]
 PIPELINE = "pipeline"
 
 
@@ -76,8 +76,6 @@ class TasksCommand(BaseCommand):
             return _schedule_create(context, task, args)
         if action == "unschedule":
             return _schedule_remove(context, args)
-        if action == "schedules":
-            return _schedules_show(context, task)
         return f"Unknown action: {action}"
 
 
@@ -101,7 +99,7 @@ def _describe(context, task_name):
     db = getattr(context, "db", None)
     counts = (db.get_system_stats().get("tasks", {}) if db else {}) | (db.get_run_stats() if db and hasattr(db, "get_run_stats") else {})
     c = {"PENDING": 0, "PROCESSING": 0, "DONE": 0, "FAILED": 0} | counts.get(task_name, {})
-    return f"{task_name}\nPending: {c['PENDING']}      Running: {c['PROCESSING']}      Done: {c['DONE']}      Failed: {c['FAILED']}"
+    return f"{task_name}\nPending: {c['PENDING']}      Running: {c['PROCESSING']}      Done: {c['DONE']}      Failed: {c['FAILED']}\n\n{_schedules_context(context, orch.tasks[task_name])}"
 
 
 def _task(context, name):
@@ -140,6 +138,23 @@ def _jobs_for_task(context, task) -> list[str]:
     return sorted(name for name, job in tk.list_jobs().items() if (job.get("channel") or "") in channels)
 
 
+def _schedules_context(context, task) -> str:
+    tk = _timekeeper(context)
+    rows = [] if tk is None else [(name, job) for name, job in tk.list_jobs().items() if (job.get("channel") or "") in set(_task_channels(task))]
+    if not rows:
+        return "Schedules:\n  (none)"
+    lines = ["Schedules:"]
+    for name, job in sorted(rows):
+        cron = job.get("cron", "")
+        try:
+            desc = tk.cron_to_text(cron)
+        except Exception:
+            desc = cron or "?"
+        nf = tk.get_next_fire_at(name)
+        lines.append(f"  • {name} — {desc} — next: {nf.strftime('%Y-%m-%d %H:%M') if nf else '(disabled)'}")
+    return "\n".join(lines)
+
+
 def _schedule_create(context, task, args):
     tk = _timekeeper(context)
     if tk is None:
@@ -173,23 +188,3 @@ def _schedule_remove(context, args):
         return "Pick a job to remove."
     return f"Removed job: {job_name}" if tk.remove_job(job_name) else f"No such job: {job_name}"
 
-
-def _schedules_show(context, task):
-    tk = _timekeeper(context)
-    if tk is None:
-        return "Timekeeper service is not available."
-    channels = set(_task_channels(task))
-    rows = [(name, job) for name, job in tk.list_jobs().items() if (job.get("channel") or "") in channels]
-    if not rows:
-        return f"No cron jobs scheduled for task '{task.name}'."
-    lines = [f"Schedules for task '{task.name}':"]
-    for name, job in sorted(rows):
-        try:
-            desc = tk.cron_to_text(job.get("cron", ""))
-        except Exception:
-            desc = job.get("cron", "?")
-        nf = tk.get_next_fire_at(name)
-        nf_str = nf.strftime("%Y-%m-%d %H:%M") if nf else "(disabled)"
-        flag = "" if job.get("enabled", True) else " [disabled]"
-        lines.append(f"  - {name}: {desc}; next: {nf_str}{flag}")
-    return "\n".join(lines)

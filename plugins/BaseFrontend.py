@@ -25,6 +25,7 @@ from events.event_channels import (
     APPROVAL_REQUESTED,
     CHAT_MESSAGE_PUSHED,
     COMMAND_CALL_FINISHED,
+    COMMAND_CALL_PROGRESSED,
     COMMAND_CALL_STARTED,
     TASKS_CHANGED,
     TOOL_CALL_FINISHED,
@@ -219,6 +220,7 @@ class BaseFrontend:
             bus.subscribe(APPROVAL_REQUESTED, self.on_bus_approval_requested),
             bus.subscribe(CHAT_MESSAGE_PUSHED, self.on_bus_message_pushed),
             bus.subscribe(COMMAND_CALL_STARTED, self.on_bus_command_call_started),
+            bus.subscribe(COMMAND_CALL_PROGRESSED, self.on_bus_command_call_progressed),
             bus.subscribe(COMMAND_CALL_FINISHED, self.on_bus_command_call_finished),
             bus.subscribe(TOOL_CALL_STARTED, self.on_bus_tool_call_started),
             bus.subscribe(TOOL_CALL_FINISHED, self.on_bus_tool_call_finished),
@@ -269,6 +271,12 @@ class BaseFrontend:
                 return self.submit(session_key, ACTION_CANCEL)
             if stripped == "/skip" and ACTION_SKIP_FORM in legal:
                 return self.submit(session_key, ACTION_SKIP_FORM)
+            if stripped.startswith("/") and ACTION_CALL_COMMAND in legal:
+                name, _, arg = stripped[1:].partition(" ")
+                cmd = next((c for c in self.commands.all_commands() if c.name == name), None) if name and self.commands else None
+                if cmd:
+                    args = self.commands.parse_args(name, arg, session_key=session_key) if arg.strip() else {}
+                    return self.submit(session_key, ACTION_CALL_COMMAND, {"name": name, "args": args})
             if not stripped and ACTION_SKIP_FORM in legal:
                 return self.submit(session_key, ACTION_SKIP_FORM)
             return self.submit(session_key, ACTION_SUBMIT_FORM_TEXT, stripped)
@@ -386,6 +394,9 @@ class BaseFrontend:
 
     def on_bus_command_call_started(self, payload: dict) -> None:
         self._render_tool_status_event({**(payload or {}), "status": "started", "kind": "command"})
+
+    def on_bus_command_call_progressed(self, payload: dict) -> None:
+        self._render_tool_status_event({**(payload or {}), "status": "progressed", "kind": "command"})
 
     def on_bus_command_call_finished(self, payload: dict) -> None:
         self._render_tool_status_event({**(payload or {}), "status": "finished", "kind": "command"})

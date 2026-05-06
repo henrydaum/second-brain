@@ -105,6 +105,8 @@ class ReplFrontend(BaseFrontend):
             sys.stdout.write(f"\n⏳ {name}...")
             sys.stdout.flush()
             return
+        if payload.get("status") != "finished":
+            return
         sys.stdout.write(f"\r{'✓' if payload.get('ok') else '✗'} {name}   \n")
         sys.stdout.flush()
 

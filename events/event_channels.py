@@ -112,6 +112,14 @@ Payload:
     command_name: str
     args:         dict"""
 
+COMMAND_CALL_PROGRESSED = "command_call_progressed"
+"""The runtime collected another slash-command form value.
+Payload:
+    session_key:  str
+    call_id:      str
+    command_name: str
+    args:         dict"""
+
 COMMAND_CALL_FINISHED = "command_call_finished"
 """The runtime finished a slash command.
 Payload:
