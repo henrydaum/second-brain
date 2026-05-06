@@ -5,6 +5,7 @@ import uuid
 from plugins.BaseTool import BaseTool, ToolResult
 from events.event_bus import bus
 from events.event_channels import SUBAGENT_RUN
+from state_machine.serialization import save_state_marker
 
 
 class AskSubagent(BaseTool):
@@ -81,22 +82,22 @@ class AskSubagent(BaseTool):
         poll_interval = self._coerce_poll(kwargs.get("poll_interval_seconds"), default=1.0)
 
         request_token = f"asksub:{uuid.uuid4().hex}"
-        # Tag spawned conversations distinctly so /history can list them
-        # under their own group instead of mixing them into 'main'.
-        parent_session_key = getattr(context, "session_key", None) or "agent"
-        origin = f"ask_subagent:{parent_session_key}"
         conversation_id = context.runtime.create_conversation(
             (title or prompt[:80] or "Subagent run")[:200],
             kind="subagent",
-            origin=origin,
+            category="Subagent",
         )
+        # Pin the requested agent profile onto the new conversation via a
+        # state marker so run_subagent (which reads the agent from the
+        # conversation, not the payload) picks it up.
+        if agent_name and conversation_id is not None and context.db is not None:
+            save_state_marker(context.db, conversation_id, {"profile_override": agent_name})
         payload = {
             "prompt": prompt,
             "title": title,
             "job_name": "ask_subagent",
             "conversation_id": conversation_id,
             "input_paths": input_paths,
-            "agent": agent_name,
             "_ask_subagent": {
                 "request_token": request_token,
                 "requested_at": time.time(),

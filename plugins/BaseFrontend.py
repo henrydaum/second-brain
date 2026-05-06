@@ -289,12 +289,6 @@ class BaseFrontend:
         stripped = (text or "").lstrip()
         if stripped == "/cancel":
             return self.cancel(session_key)
-        if stripped == "/new":
-            return self.submit(session_key, "new_conversation")
-        if stripped.startswith("/history "):
-            _, _, arg = stripped.partition(" ")
-            if arg.strip().isdigit():
-                return self.submit(session_key, "load_history", {"conversation_id": int(arg.strip())})
         if stripped.startswith("/"):
             name, _, arg = stripped[1:].partition(" ")
             cmd = next((c for c in self.commands.all_commands() if c.name == name), None) if name and self.commands else None

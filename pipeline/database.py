@@ -157,7 +157,7 @@ class Database:
 				id          INTEGER PRIMARY KEY AUTOINCREMENT,
 				title       TEXT,
 				kind        TEXT DEFAULT 'user',
-				origin      TEXT,
+				category    TEXT,
 				created_at  REAL,
 				updated_at  REAL
 			)
@@ -166,8 +166,14 @@ class Database:
 			self.conn.execute("ALTER TABLE conversations ADD COLUMN kind TEXT DEFAULT 'user'")
 		except sqlite3.OperationalError:
 			pass  # column already exists
+		# Migration: legacy `origin` column → `category`. Try to rename in place;
+		# if the column doesn't exist (fresh DB) or already renamed, fall through.
 		try:
-			self.conn.execute("ALTER TABLE conversations ADD COLUMN origin TEXT")
+			self.conn.execute("ALTER TABLE conversations RENAME COLUMN origin TO category")
+		except sqlite3.OperationalError:
+			pass
+		try:
+			self.conn.execute("ALTER TABLE conversations ADD COLUMN category TEXT")
 		except sqlite3.OperationalError:
 			pass  # column already exists
 		self.conn.execute("""
@@ -784,12 +790,12 @@ class Database:
 	# CONVERSATIONS
 	# =================================================================
 
-	def create_conversation(self, title="New conversation", kind="user", origin=None) -> int:
+	def create_conversation(self, title="New conversation", kind="user", category=None) -> int:
 		now = time.time()
 		with self.lock:
 			cur = self.conn.execute(
-				"INSERT INTO conversations (title, kind, origin, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-				(title, kind, origin, now, now))
+				"INSERT INTO conversations (title, kind, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+				(title, kind, category, now, now))
 			self.conn.commit()
 			return cur.lastrowid
 
@@ -814,13 +820,12 @@ class Database:
 				(title, conversation_id))
 			self.conn.commit()
 
-	def set_conversation_origin(self, conversation_id, origin):
-		"""Set/overwrite the origin tag on a conversation row. No-op for legacy
-		rows that already have a non-empty origin matching ``origin``."""
+	def set_conversation_category(self, conversation_id, category):
+		"""Set/overwrite the category on a conversation row."""
 		with self.lock:
 			self.conn.execute(
-				"UPDATE conversations SET origin = ? WHERE id = ?",
-				(origin, conversation_id))
+				"UPDATE conversations SET category = ? WHERE id = ?",
+				(category, conversation_id))
 			self.conn.commit()
 
 	def get_conversation(self, conversation_id):
@@ -838,22 +843,22 @@ class Database:
 				(limit,))
 			return [dict(row) for row in cur.fetchall()]
 
-	def list_conversations_page(self, offset=0, limit=10, origin=None) -> tuple[list[dict], bool]:
+	def list_conversations_page(self, offset=0, limit=10, category=None) -> tuple[list[dict], bool]:
 		"""Return ``(rows, has_more)`` sorted by most-recent activity.
 
-		``origin``:
+		``category``:
 		    - None → no filter (every conversation).
-		    - "" → conversations with NULL/empty origin (the "main" bucket).
-		    - any other string → exact match on the origin column.
+		    - "" → conversations with NULL/empty category (the "Main" bucket).
+		    - any other string → exact match on the category column.
 		"""
 		params: list = []
 		where = ""
-		if origin is not None:
-			if origin == "":
-				where = "WHERE origin IS NULL OR origin = ''"
+		if category is not None:
+			if category == "":
+				where = "WHERE category IS NULL OR category = ''"
 			else:
-				where = "WHERE origin = ?"
-				params.append(origin)
+				where = "WHERE category = ?"
+				params.append(category)
 		params += [limit + 1, offset]
 		with self.lock:
 			cur = self.conn.execute(
@@ -863,15 +868,15 @@ class Database:
 		has_more = len(rows) > limit
 		return rows[:limit], has_more
 
-	def list_conversation_origins(self) -> list[str | None]:
-		"""Distinct origin values present in the conversations table.
+	def list_conversation_categories(self) -> list[str | None]:
+		"""Distinct category values present in the conversations table.
 
-		``None`` is included if any row has NULL/empty origin.
+		``None`` is included if any row has NULL/empty category.
 		"""
 		with self.lock:
 			cur = self.conn.execute(
-				"SELECT DISTINCT origin FROM conversations")
-			values = [row["origin"] for row in cur.fetchall()]
+				"SELECT DISTINCT category FROM conversations")
+			values = [row["category"] for row in cur.fetchall()]
 		out: list[str | None] = []
 		seen_main = False
 		for v in values:

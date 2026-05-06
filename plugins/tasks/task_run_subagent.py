@@ -8,10 +8,25 @@ from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED, SESSION_TURN_COMPLETED, SUBAGENT_RUN
 from plugins.tools.tool_notify import NotifyTool, NotificationRecord
 from plugins.tasks.helpers.notifications import NOTIFICATION_MODES, notification_mode
+from state_machine.serialization import latest_state
 
 logger = logging.getLogger("TaskRunSubagent")
 
 _MAX_PARSED_CHARS = 4000
+_ACTIVE = "active"
+
+
+def _category_for_job(is_scheduled: bool, is_one_time: bool) -> str | None:
+    """Built-in category bucket for an auto-created subagent conversation.
+
+    Recurring cron → ``Scheduled``; single-fire cron → ``Scheduled (one-time)``;
+    everything else (synchronous ask_subagent calls) → ``Subagent``.
+    """
+    if is_scheduled and is_one_time:
+        return "Scheduled (one-time)"
+    if is_scheduled:
+        return "Scheduled"
+    return "Subagent"
 
 
 class RunSubagent(BaseTask):
@@ -21,8 +36,16 @@ class RunSubagent(BaseTask):
     ``subagent:{job_name}``. Firing the timekeeper amounts to dispatching
     one ``send_text`` action on that session, which goes through the same
     enact() path as a user turn — same approvals, same forms, same cancel
-    semantics. The NotifyTool is registered as a per-session pinned tool
-    so the agent's pushes still flow through CHAT_MESSAGE_PUSHED.
+    semantics.
+
+    Conversation binding: every job carries either a concrete
+    ``conversation_id`` (eagerly created at scheduling time) or the
+    sentinel ``"active"`` to track the user's currently-focused
+    conversation. The agent profile is read from that conversation's
+    state marker — there is no per-job ``agent`` parameter. The
+    NotifyTool is only attached when the chosen conversation is **not**
+    the active one; otherwise the cron's output is already visible to
+    the user in their session.
     """
 
     name = "run_subagent"
@@ -35,7 +58,9 @@ class RunSubagent(BaseTask):
             "title": {"type": "string", "description": "Optional user-facing title for the run."},
             "job_name": {"type": "string", "description": "Optional stable internal name for the run."},
             "input_paths": {"type": "array", "description": "Optional list of file paths to include as inputs."},
-            "agent": {"type": "string", "description": "Optional agent profile name to run under."},
+            "conversation_id": {
+                "description": "Conversation to run inside. An integer id, or the literal 'active' to track the user's current conversation.",
+            },
         },
         "required": ["prompt"],
     }
@@ -52,29 +77,25 @@ class RunSubagent(BaseTask):
         if not prompt:
             return TaskResult.failed("Subagent payload is missing 'prompt'.")
 
-        # Resolve target agent profile.
-        requested_agent = (payload.get("agent") or "").strip()
-        target_agent = (requested_agent or context.config.get("active_agent_profile") or "").strip() or "default"
-        agent_profiles = context.config.get("agent_profiles", {}) or {}
-        if target_agent not in agent_profiles:
-            return TaskResult.failed(f"Unknown agent profile: '{target_agent}'.")
-
         title = (payload.get("title") or "").strip()
         timekeeper_meta = payload.get("_timekeeper") or {}
         job_name = (str(timekeeper_meta.get("job_name") or "").strip() or "scheduled_subagent")
         conversation_title = title or job_name or prompt[:80].replace("\n", " ").strip() or "Scheduled subagent run"
         is_scheduled = bool(timekeeper_meta)
+        is_one_time = bool(timekeeper_meta.get("one_time"))
 
         mode = self._resolve_mode(payload, timekeeper_meta, context, is_scheduled, job_name)
 
-        conversation_id = self._resolve_conversation(
-            context, runtime, payload, is_scheduled, job_name, conversation_title,
+        conversation_id, treat_as_active = self._resolve_conversation(
+            context, runtime, payload, is_scheduled, is_one_time, job_name, conversation_title,
         )
-        if is_scheduled and job_name and conversation_id is not None:
-            try:
-                context.db.set_conversation_origin(conversation_id, f"cron:{job_name}")
-            except Exception as e:
-                logger.warning(f"Failed to stamp origin for {job_name}: {e}")
+        if conversation_id is None:
+            return TaskResult.failed("Could not resolve a conversation for this subagent run.")
+
+        target_agent = self._resolve_agent_from_conversation(context, conversation_id)
+        agent_profiles = context.config.get("agent_profiles", {}) or {}
+        if target_agent not in agent_profiles:
+            return TaskResult.failed(f"Unknown agent profile: '{target_agent}'.")
 
         pending_user_messages = 0
         if is_scheduled:
@@ -88,7 +109,11 @@ class RunSubagent(BaseTask):
 
         push_records: list[NotificationRecord] = []
         notify_tool = None
-        if mode != "off":
+        # NotifyTool only lives on cron sessions that are not the user's active
+        # conversation. When ``treat_as_active`` is True the run's output is
+        # already streaming into the user's foreground session — a notify push
+        # would just duplicate it.
+        if mode != "off" and not treat_as_active:
             def _record_push(record: NotificationRecord):
                 push_records.append(record)
             notify_tool = NotifyTool(source="subagent", source_id=run_id, job_name=job_name, recorder=_record_push)
@@ -136,8 +161,10 @@ class RunSubagent(BaseTask):
             return TaskResult.failed(clean_answer)
 
         # Fallback push: in 'all' mode or when the user left a /message reply,
-        # guarantee a single user-visible response.
-        if (mode == "all" or has_pending) and not push_records and clean_answer.strip():
+        # guarantee a single user-visible response. Skipped when the run is
+        # already in the user's active conversation — they have already seen
+        # the agent's reply, no separate push needed.
+        if (mode == "all" or has_pending) and not push_records and not treat_as_active and clean_answer.strip():
             self._emit_fallback_push(run_id, job_name, conversation_title, clean_answer, push_records)
 
         return TaskResult(success=True)
@@ -171,25 +198,25 @@ class RunSubagent(BaseTask):
                     logger.warning(f"Failed to clear next_notifications for job '{job_name}': {e}")
         return mode
 
-    def _resolve_conversation(self, context, runtime, payload: dict, is_scheduled: bool, job_name: str,
-                              conversation_title: str) -> int:
-        existing = payload.get("conversation_id")
-        if not is_scheduled and existing is not None:
-            try:
-                conv_id = int(existing)
-            except (TypeError, ValueError):
-                conv_id = None
-            if conv_id is not None and context.db.get_conversation(conv_id) is not None:
-                return conv_id
-        origin = f"cron:{job_name}" if is_scheduled and job_name else None
-        if not is_scheduled:
-            return runtime.create_conversation(conversation_title[:200], kind="subagent")
+    def _resolve_conversation(self, context, runtime, payload: dict, is_scheduled: bool,
+                              is_one_time: bool, job_name: str,
+                              conversation_title: str) -> tuple[int | None, bool]:
+        """Pick the conversation this run should write into.
 
-        timekeeper = context.services.get("timekeeper")
-        if timekeeper is not None and getattr(timekeeper, "loaded", False):
-            job = timekeeper.get_job(job_name)
-            if job is not None:
-                existing = (job.get("payload") or {}).get("conversation_id")
+        Returns ``(conversation_id, treat_as_active)``. ``treat_as_active`` is
+        True when the chosen conversation matches the user's currently active
+        conversation — used downstream to skip NotifyTool registration.
+        """
+        active_id = runtime.active_conversation_id
+        existing = payload.get("conversation_id")
+
+        # Sentinel: track whatever the user is focused on right now.
+        if isinstance(existing, str) and existing.strip().lower() == _ACTIVE:
+            if active_id is not None:
+                return active_id, True
+            # No active session yet → fall through and create a fresh
+            # conversation for this run so it does not silently drop.
+            existing = None
 
         if existing is not None:
             try:
@@ -197,19 +224,45 @@ class RunSubagent(BaseTask):
             except (TypeError, ValueError):
                 conv_id = None
             if conv_id is not None and context.db.get_conversation(conv_id) is not None:
-                return conv_id
+                return conv_id, conv_id == active_id
 
-        conv_id = runtime.create_conversation(conversation_title[:200], kind="subagent", origin=origin)
-        if timekeeper is not None and getattr(timekeeper, "loaded", False):
-            try:
-                job = timekeeper.get_job(job_name)
-                if job is not None:
-                    new_payload = dict(job.get("payload") or {})
-                    new_payload["conversation_id"] = conv_id
-                    timekeeper.update_job(job_name, {"payload": new_payload})
-            except Exception as e:
-                logger.warning(f"Failed to persist conversation_id for job '{job_name}': {e}")
-        return conv_id
+        # No usable id on the payload — eagerly create one. ask_subagent
+        # (non-scheduled) makes throwaway "Subagent" conversations; scheduled
+        # jobs split into recurring vs one-time buckets.
+        category = _category_for_job(is_scheduled, is_one_time)
+        conv_id = runtime.create_conversation(conversation_title[:200], kind="subagent", category=category)
+
+        if is_scheduled:
+            timekeeper = context.services.get("timekeeper")
+            if timekeeper is not None and getattr(timekeeper, "loaded", False):
+                try:
+                    job = timekeeper.get_job(job_name)
+                    if job is not None:
+                        new_payload = dict(job.get("payload") or {})
+                        new_payload["conversation_id"] = conv_id
+                        timekeeper.update_job(job_name, {"payload": new_payload})
+                except Exception as e:
+                    logger.warning(f"Failed to persist conversation_id for job '{job_name}': {e}")
+
+        return conv_id, conv_id == active_id
+
+    @staticmethod
+    def _resolve_agent_from_conversation(context, conversation_id: int) -> str:
+        """Read the agent profile off the conversation's latest state marker.
+
+        Falls back to the global active agent profile, then "default", so a
+        brand-new conversation that has never been briefed still has a sane
+        default to run under.
+        """
+        try:
+            rows = context.db.get_conversation_messages(conversation_id) or []
+        except Exception:
+            rows = []
+        marker = latest_state(rows) or {}
+        candidate = (marker.get("profile_override") or marker.get("active_agent_profile") or "").strip()
+        if candidate:
+            return candidate
+        return (context.config.get("active_agent_profile") or "").strip() or "default"
 
     def _emit_fallback_push(self, run_id: str, job_name: str, title: str,
                             final_answer: str, push_records: list[NotificationRecord]) -> None:

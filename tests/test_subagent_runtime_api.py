@@ -16,8 +16,9 @@ from state_machine.conversation import FormStep
 class FakeRuntime:
     def __init__(self):
         self.calls = []
+        self.active_conversation_id = None
 
-    def create_conversation(self, title, *, kind="user"):
+    def create_conversation(self, title, *, kind="user", category=None):
         self.calls.append(("create_conversation", title, kind))
         return 7
 
@@ -45,6 +46,9 @@ class FakeRuntime:
 class FakeDB:
     def get_conversation(self, conversation_id):
         return {"id": conversation_id, "kind": "subagent"}
+
+    def get_conversation_messages(self, conversation_id):
+        return []
 
     def replace_conversation_messages(self, *_):
         raise AssertionError("task_run_subagent should not replace history directly")
@@ -105,7 +109,7 @@ def test_command_discovery_loads_minimal_builtin_commands():
     registry = CommandRegistry()
     try:
         discover_commands(".", registry)
-        assert [cmd.name for cmd in registry.all_commands()] == ["agent", "cancel", "commands", "config", "frontends", "history", "llm", "locations", "new", "services", "tasks", "tools", "update"]
+        assert [cmd.name for cmd in registry.all_commands()] == ["agent", "cancel", "commands", "config", "conversations", "frontends", "llm", "locations", "services", "tasks", "tools", "update"]
     finally:
         discovery._COMMAND_CONFIG["sandbox_dir"] = old_sandbox
 
@@ -129,8 +133,8 @@ def test_host_commands_are_visible_and_user_approved():
     names = sorted(runtime.command_registry._commands)
     visible = [cmd.name for cmd in runtime.command_registry.visible_commands()]
 
-    assert names == ["agent", "cancel", "commands", "config", "frontends", "history", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools", "update"]
-    assert visible == ["agent", "cancel", "commands", "config", "frontends", "history", "llm", "locations", "new", "quit", "restart", "services", "tasks", "tools", "update"]
+    assert names == ["agent", "cancel", "commands", "config", "conversations", "frontends", "llm", "locations", "quit", "restart", "services", "tasks", "tools", "update"]
+    assert visible == ["agent", "cancel", "commands", "config", "conversations", "frontends", "llm", "locations", "quit", "restart", "services", "tasks", "tools", "update"]
     assert not runtime.commands["cancel"].require_approval
     assert not runtime.commands["commands"].require_approval
     assert runtime.commands["quit"].require_approval

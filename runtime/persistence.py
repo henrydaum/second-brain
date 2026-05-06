@@ -60,7 +60,7 @@ def open_session(
     *,
     conversation_id: int | None = None,
     kind: str = "user",
-    origin: str | None = None,
+    category: str | None = None,
     title: str = "New conversation",
     agent_profile: str | None = None,
     system_prompt_extras: dict[str, Any] | None = None,
@@ -89,7 +89,7 @@ def open_session(
     if conversation_id is None:
         if runtime.db is None:
             raise RuntimeError("Cannot create a conversation without a database.")
-        conversation_id = runtime.db.create_conversation(title, kind=kind, origin=origin)
+        conversation_id = runtime.db.create_conversation(title, kind=kind, category=category)
 
     return load_conversation(
         runtime, session_key, conversation_id,
@@ -103,13 +103,13 @@ def create_conversation(
     title: str = "New conversation",
     *,
     kind: str = "user",
-    origin: str | None = None,
+    category: str | None = None,
 ) -> int | None:
     """Create a conversation row only — does not load it into a session.
 
     Use ``open_session`` instead unless you really want a detached row.
     """
-    return runtime.db.create_conversation(title, kind=kind, origin=origin) if runtime.db else None
+    return runtime.db.create_conversation(title, kind=kind, category=category) if runtime.db else None
 
 
 def load_conversation(
@@ -242,7 +242,7 @@ def iterate_agent_turn(
     payload = {"text": prompt, "actor_id": actor_id}
     if attachments:
         payload["attachments"] = list(attachments)
-    out = runtime.handle_action(session_key, "send_text", payload)
+    out = runtime.handle_action(session_key, "send_text", payload, user_driven=False)
     session = runtime.sessions.get(session_key)
     if out.ok and session and runtime.db and session.conversation_id:
         # Hold the session lock so the post-turn full-history write is

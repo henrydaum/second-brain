@@ -320,38 +320,6 @@ def test_load_history_restores_saved_agent_profile_and_history():
     assert events[-1][1]["agent_profile"] == "builder"
 
 
-def test_history_picker_selection_loads_directly_without_running_command():
-    db = FakeConversationDB()
-    conv_id = db.create_conversation("Builder chat")
-    db.save_message(conv_id, "user", "earlier")
-    save_state_marker(db, conv_id, {"active_agent_profile": "builder"})
-
-    def form(args, _cs):
-        if args.get("origin") == "main":
-            return [
-                FormStep("origin", required=True, enum=["main"]),
-                FormStep("conversation_id", required=True, enum=[f"#{conv_id} Builder chat [agent: builder]"]),
-            ]
-        return [FormStep("origin", required=True, enum=["main"])]
-
-    def run_history(*_):
-        raise AssertionError("HistoryCommand.run should not load selected conversations")
-
-    runtime = ConversationRuntime(
-        db=db,
-        config={"active_agent_profile": "default"},
-        commands={"history": CallableSpec("history", handler=run_history, form_factory=form)},
-    )
-
-    assert runtime.handle_action("chat", "call_command", {"name": "history"}).form["field"]["name"] == "origin"
-    assert runtime.handle_action("chat", "submit_form_text", "main").form["field"]["name"] == "conversation_id"
-    result = runtime.handle_action("chat", "submit_form_text", f"#{conv_id} Builder chat [agent: builder]")
-
-    assert runtime.sessions["chat"].history == [{"role": "user", "content": "earlier"}]
-    assert runtime.sessions["chat"].profile_override == "builder"
-    assert result.messages == ["Loaded conversation: Builder chat\nAgent: builder\nSwitched agent: default -> builder\n\nWhere you left off:\n> [you] earlier"]
-
-
 def test_next_turn_after_history_load_sends_loaded_history_to_llm():
     db = FakeConversationDB()
     conv_id = db.create_conversation("Old chat")

@@ -95,14 +95,20 @@ class ConversationRuntime:
         self.sessions: dict[str, RuntimeSession] = {}
         self._approval_requests: dict[str, StateMachineApprovalRequest] = {}
         self._sessions_lock = threading.RLock()
+        # Single global "active" session — the most recent user-driven
+        # session_key. Automation paths (subagent runs, scheduled cron jobs)
+        # explicitly opt out via ``handle_action(..., user_driven=False)``.
+        self.active_session_key: str | None = None
 
     # ──────────────────────────────────────────────────────────────────
     # Public entrypoint — every action a frontend can take ends up here.
     # ──────────────────────────────────────────────────────────────────
 
-    def handle_action(self, session_key: str, action_type: str, payload: dict | str | None = None) -> RuntimeResult:
+    def handle_action(self, session_key: str, action_type: str, payload: dict | str | None = None, *, user_driven: bool = True) -> RuntimeResult:
         session = self.get_session(session_key)
         normalized = "send_text" if action_type == "chat_message" else action_type
+        if user_driven:
+            self.active_session_key = session_key
 
         # Busy guard: if the session is mid-turn, only ``cancel`` and the
         # specific ``answer_approval`` for an active approval frame may
@@ -120,9 +126,6 @@ class ConversationRuntime:
 
         with session.lock:
             _cfg.refresh_specs(self, session)
-            history_id = _disp.pending_history_selection(session, action_type, payload)
-            if history_id is not None:
-                return self.load_history(session_key, history_id)
             try:
                 out = self._dispatch(session, action_type, payload)
             finally:
@@ -302,7 +305,7 @@ class ConversationRuntime:
         *,
         conversation_id: int | None = None,
         kind: str = "user",
-        origin: str | None = None,
+        category: str | None = None,
         title: str = "New conversation",
         agent_profile: str | None = None,
         system_prompt_extras: dict[str, Any] | None = None,
@@ -313,13 +316,13 @@ class ConversationRuntime:
         """
         return _persist.open_session(
             self, session_key,
-            conversation_id=conversation_id, kind=kind, origin=origin,
+            conversation_id=conversation_id, kind=kind, category=category,
             title=title, agent_profile=agent_profile,
             system_prompt_extras=system_prompt_extras,
         )
 
-    def create_conversation(self, title: str = "New conversation", *, kind: str = "user", origin: str | None = None) -> int | None:
-        return _persist.create_conversation(self, title, kind=kind, origin=origin)
+    def create_conversation(self, title: str = "New conversation", *, kind: str = "user", category: str | None = None) -> int | None:
+        return _persist.create_conversation(self, title, kind=kind, category=category)
 
     def load_conversation(self, session_key: str, conversation_id: int, *, agent_profile: str | None = None, system_prompt_extras: dict[str, Any] | None = None) -> RuntimeSession:
         return _persist.load_conversation(self, session_key, conversation_id, agent_profile=agent_profile, system_prompt_extras=system_prompt_extras)
@@ -349,6 +352,19 @@ class ConversationRuntime:
     @staticmethod
     def subagent_session_key(job_name: str) -> str:
         return f"subagent:{job_name}"
+
+    @property
+    def active_conversation_id(self) -> int | None:
+        """Conversation id bound to the most recent user-driven session.
+
+        Returns ``None`` if no user session has been touched yet, or if the
+        active session has no conversation row.
+        """
+        key = self.active_session_key
+        if not key:
+            return None
+        session = self.sessions.get(key)
+        return session.conversation_id if session else None
 
     # ──────────────────────────────────────────────────────────────────
     # Approval / typed-input requests.

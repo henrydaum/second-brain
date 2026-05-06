@@ -64,25 +64,6 @@ def content_for_action(action_type: str, text: str, payload: Any) -> Any:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Special-case: clicking an item in /history is "load this conversation"
-# rather than "submit form text", so detect the case before dispatch.
-# ──────────────────────────────────────────────────────────────────────
-
-def pending_history_selection(session: RuntimeSession, action_type: str, payload: Any) -> int | None:
-    frame, text = session.cs.frame, text_of(payload)
-    if action_type != "submit_form_text" or not frame or frame.action_type != "call_command" or frame.name != "history":
-        return None
-    if not frame.step or frame.step.name != "conversation_id" or not text or text == "(no conversations)":
-        return None
-    if text.startswith("#"):
-        text = text[1:]
-    try:
-        return int(text.split(" ", 1)[0].strip())
-    except (TypeError, ValueError):
-        return None
-
-
-# ──────────────────────────────────────────────────────────────────────
 # After enact: read parsed-attachment results back out
 # ──────────────────────────────────────────────────────────────────────
 

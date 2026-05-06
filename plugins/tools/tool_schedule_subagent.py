@@ -14,6 +14,29 @@ def _coerce_input_paths(value) -> list[str]:
     return [str(value)]
 
 
+def _coerce_conversation_id(value):
+    """Accept an integer id or the literal string 'active'.
+
+    Empty string is treated as "unspecified" (returns None) so that an
+    update call clearing the field also strips it from the payload.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("conversation_id cannot be a boolean.")
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.lower() == "active":
+        return "active"
+    try:
+        return int(text)
+    except ValueError:
+        raise ValueError("conversation_id must be an integer id or the string 'active'.")
+
+
 def _ensure_timekeeper_autoload(context):
     services = list(context.config.get("autoload_services", []))
     if "timekeeper" in services:
@@ -46,8 +69,9 @@ class ScheduleSubagent(BaseTool):
     description = (
         "Create and manage scheduled background subagent jobs. Use this for "
         "reminders, recurring briefs, periodic checks, or unattended research. "
-        "Jobs can also be pinned to a specific agent profile so recurring work runs with the intended scope and toolset. "
-        "Mutating actions require user approval."
+        "Each job runs inside a specific conversation — the agent profile is "
+        "inherited from that conversation. Multiple jobs can share a conversation "
+        "to build up shared context. Mutating actions require user approval."
     )
     parameters = {
         "type": "object",
@@ -86,9 +110,16 @@ class ScheduleSubagent(BaseTool):
                 "type": "string",
                 "description": "Optional short title.",
             },
-            "agent": {
-                "type": "string",
-                "description": "Optional agent profile name to run the job under. Useful for specialist jobs like a research agent, builder agent, or communication agent. Leave blank to use whatever agent profile is active when the job fires.",
+            "conversation_id": {
+                "description": (
+                    "Conversation the job should run inside. Either an integer id "
+                    "of an existing conversation, or the literal string 'active' "
+                    "to track whatever conversation the user has open at fire time. "
+                    "Leave blank to auto-create a fresh conversation for this job; "
+                    "the new conversation appears in /conversations under "
+                    "'Scheduled' (or 'Scheduled (one-time)') so the user can brief "
+                    "it before the first run."
+                ),
             },
             "enabled": {
                 "type": "boolean",
@@ -101,7 +132,8 @@ class ScheduleSubagent(BaseTool):
                     "How chatty the subagent should be when the job fires. "
                     "'all' (default): the agent pushes regularly via the notify tool, and if it forgets, the final answer is sent automatically as a single push. "
                     "'important': the agent has the notify tool but is told to use it only when something noteworthy comes up; silence is allowed. "
-                    "'off': the agent runs silently with no notify tool and produces no user-visible chat output (final answer is still stored)."
+                    "'off': the agent runs silently with no notify tool and produces no user-visible chat output (final answer is still stored). "
+                    "When the chosen conversation is the user's currently active one, the notify tool is suppressed regardless of mode — the user already sees the run."
                 ),
                 "default": DEFAULT_NOTIFICATION_MODE,
             },
@@ -174,10 +206,24 @@ class ScheduleSubagent(BaseTool):
                     return ToolResult.failed(f"Unknown subagent job: '{job_name}'.")
 
             job_def = self._build_job_def(
-                {**kwargs, "_agent_profiles": context.config.get("agent_profiles", {}) or {}},
+                kwargs,
                 require_prompt=(action == "create"),
                 current_job=current_job,
             )
+
+            # Eagerly create a conversation for new jobs that didn't get one
+            # specified. This way the user can see and brief the conversation
+            # in /conversations before the cron ever fires.
+            if action == "create" and "conversation_id" not in (job_def.get("payload") or {}):
+                runtime = getattr(context, "runtime", None)
+                if runtime is not None:
+                    is_one_time = bool(job_def.get("one_time"))
+                    category = "Scheduled (one-time)" if is_one_time else "Scheduled"
+                    title = (str((job_def.get("payload") or {}).get("title") or "").strip()
+                             or job_name or "Scheduled subagent run")
+                    conv_id = runtime.create_conversation(title[:200], kind="subagent", category=category)
+                    if conv_id is not None:
+                        job_def["payload"]["conversation_id"] = conv_id
             denied = _require_schedule_approval(
                 context,
                 action=action,
@@ -213,16 +259,13 @@ class ScheduleSubagent(BaseTool):
         title = kwargs.get("title")
         if title is not None:
             payload["title"] = str(title)
-        agent = kwargs.get("agent")
-        if agent is not None:
-            agent_name = str(agent).strip()
-            profiles = kwargs.get("_agent_profiles") or {}
-            if agent_name and agent_name not in profiles:
-                raise ValueError(f"Unknown agent profile: '{agent_name}'.")
-            if agent_name:
-                payload["agent"] = agent_name
+
+        if "conversation_id" in kwargs:
+            coerced = _coerce_conversation_id(kwargs.get("conversation_id"))
+            if coerced is None:
+                payload.pop("conversation_id", None)
             else:
-                payload.pop("agent", None)
+                payload["conversation_id"] = coerced
 
         notifications = kwargs.get("notifications")
         if notifications is not None:
@@ -284,9 +327,9 @@ class ScheduleSubagent(BaseTool):
                 lines.append(f"  next run: {next_fire_str}")
             if title:
                 lines.append(f"  title: {title}")
-            agent = str((job.get("payload") or {}).get("agent") or "").strip()
-            if agent:
-                lines.append(f"  agent: {agent}")
+            conv = (job.get("payload") or {}).get("conversation_id")
+            if conv is not None:
+                lines.append(f"  conversation: {conv}")
             notifications = str(
                 (job.get("payload") or {}).get("notifications")
                 or DEFAULT_NOTIFICATION_MODE
@@ -300,7 +343,7 @@ class ScheduleSubagent(BaseTool):
                 "schedule": schedule,
                 "next_run_at": next_fire_str,
                 "title": title,
-                "agent": agent,
+                "conversation_id": conv,
                 "notifications": notifications,
                 "prompt": prompt,
             })
@@ -326,9 +369,9 @@ class ScheduleSubagent(BaseTool):
         lines = [prefix, f"State: {state}", f"Schedule: {schedule}"]
         if title:
             lines.append(f"Title: {title}")
-        agent = str((job.get("payload") or {}).get("agent") or "").strip()
-        if agent:
-            lines.append(f"Agent: {agent}")
+        conv = (job.get("payload") or {}).get("conversation_id")
+        if conv is not None:
+            lines.append(f"Conversation: {conv}")
         notifications = str(
             (job.get("payload") or {}).get("notifications")
             or DEFAULT_NOTIFICATION_MODE
@@ -359,7 +402,7 @@ def _require_schedule_approval(context, action: str, job_name: str, job: dict, s
     payload = deepcopy(job.get("payload") or {})
     prompt = str(payload.get("prompt") or "").strip()
     title = str(payload.get("title") or "").strip()
-    agent = str(payload.get("agent") or "").strip()
+    conversation_id = payload.get("conversation_id")
     input_paths = payload.get("input_paths") or []
     state = "enabled" if job.get("enabled", True) else "disabled"
 
@@ -371,8 +414,8 @@ def _require_schedule_approval(context, action: str, job_name: str, job: dict, s
     ]
     if title:
         lines.append(f"Title: {title}")
-    if agent:
-        lines.append(f"Agent: {agent}")
+    if conversation_id is not None:
+        lines.append(f"Conversation: {conversation_id}")
     notifications = str(
         payload.get("notifications") or DEFAULT_NOTIFICATION_MODE
     ).strip().lower()

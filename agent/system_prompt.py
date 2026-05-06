@@ -58,7 +58,7 @@ def build_system_prompt(
     if extra_suffix:
         prompt += extra_suffix
     if subagent_mode is not None:
-        prompt += _subagent_block(subagent_mode, subagent_has_pending_messages)
+        prompt += _subagent_block(subagent_mode, subagent_has_pending_messages, has_notify=_has_tool(r, "notify"))
     return prompt
 
 
@@ -337,7 +337,7 @@ def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
     )
 
 
-def _subagent_block(mode: str, has_pending_messages: bool = False) -> str:
+def _subagent_block(mode: str, has_pending_messages: bool = False, *, has_notify: bool = True) -> str:
     header = (
         "\n\n## Scheduled subagent\n"
         "You are running unattended on a schedule.\n"
@@ -348,7 +348,19 @@ def _subagent_block(mode: str, has_pending_messages: bool = False) -> str:
         "the user left for you via /message appear in your history as user "
         "turns. Read them and respond to anything they asked.\n"
     )
-    if mode == "off":
+    # When the cron lands inside the user's currently active conversation
+    # the notify tool is intentionally withheld — the user already sees
+    # everything the agent says in their UI, so a separate push would
+    # just duplicate. Tell the agent that explicitly so it does not try
+    # to reach for a tool that is not in its registry.
+    if not has_notify:
+        body = (
+            "Notifications: not applicable. This run is happening inside the user's currently active "
+            "conversation, so anything you say is already visible to them in real time. "
+            "The notify tool is intentionally not available — do not try to call it. "
+            "Speak directly to the user as you normally would, then finish with a concise final answer.\n"
+        )
+    elif mode == "off":
         body = (
             "Notifications: OFF. You are running silently and have no way to message the user during this run. "
             "The notify tool is not available. "
