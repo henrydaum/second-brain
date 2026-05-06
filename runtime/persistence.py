@@ -173,8 +173,8 @@ def load_history(runtime, session_key: str, conversation_id: int):
 
     old = runtime.sessions.get(session_key)
     old_profile = (old.profile_override or old.active_agent_profile) if old else runtime.config.get("active_agent_profile") or "default"
-    if old:
-        bus.emit(SESSION_CLOSED, {"session_key": session_key})
+    if old and old.conversation_id != conversation_id:
+        close_session(runtime, session_key)
     session = load_conversation(runtime, session_key, conversation_id)
     new_profile = session.profile_override or session.active_agent_profile
 
