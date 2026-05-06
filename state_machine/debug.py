@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 from state_machine.action_map import legal_actions_in_phase
 
 if TYPE_CHECKING:  # pragma: no cover
-    from state_machine.conversationClass import ConversationState
+    from state_machine.conversation import ConversationState
 
 
 # ANSI colors, matching PokerMonster's palette.

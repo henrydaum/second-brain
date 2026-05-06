@@ -1,6 +1,6 @@
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.formatters import format_services
-from state_machine.conversationClass import FormStep
+from state_machine.conversation import FormStep
 
 
 ACTIONS = ["load", "unload"]

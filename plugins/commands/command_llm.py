@@ -2,7 +2,7 @@ import json
 
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
-from state_machine.conversationClass import FormStep
+from state_machine.conversation import FormStep
 
 
 ACTIONS = ["edit", "remove"]

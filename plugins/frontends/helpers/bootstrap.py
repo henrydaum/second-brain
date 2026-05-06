@@ -10,7 +10,7 @@ from plugins.frontends.helpers.command_registry import CommandRegistry
 from plugins.plugin_discovery import discover_commands, discover_frontends
 from runtime.context import build_context
 from runtime.agent_scope import load_scope, scoped_registry
-from state_machine.runtime import ConversationRuntime
+from runtime.conversation_runtime import ConversationRuntime
 
 logger = logging.getLogger("Frontends")
 

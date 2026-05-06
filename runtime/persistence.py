@@ -27,9 +27,9 @@ from events.event_channels import (
 )
 from state_machine.approval import StateMachineApprovalRequest
 from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
-from state_machine.persistence import latest_state, messages_to_history, save_history_message, save_state_marker
-from state_machine.runtime_config import new_state, refresh_specs
-from state_machine.session import RuntimeSession, SessionConflict
+from state_machine.serialization import latest_state, messages_to_history, save_history_message, save_state_marker
+from runtime.runtime_config import new_state, refresh_specs
+from runtime.session import RuntimeSession, SessionConflict
 
 logger = logging.getLogger("Runtime.persistence")
 
@@ -167,7 +167,7 @@ def load_history(runtime, session_key: str, conversation_id: int):
     preview of the most recent messages, so the user has context for
     where they left off).
     """
-    from state_machine.session import RuntimeResult
+    from runtime.session import RuntimeResult
 
     old = runtime.sessions.get(session_key)
     old_profile = (old.profile_override or old.active_agent_profile) if old else runtime.config.get("active_agent_profile") or "default"
@@ -208,7 +208,7 @@ def reset_conversation(runtime, session_key: str) -> RuntimeSession:
 
 
 def new_conversation(runtime, session_key: str):
-    from state_machine.session import RuntimeResult
+    from runtime.session import RuntimeResult
 
     reset_conversation(runtime, session_key)
     profile = runtime.config.get("active_agent_profile") or "default"
@@ -268,7 +268,7 @@ def inject_user_message(
     actor_id: str = "user",
 ):
     """Append a user-authored message without driving the agent turn."""
-    from state_machine.session import RuntimeResult
+    from runtime.session import RuntimeResult
 
     if conversation_id is not None:
         session = runtime.sessions.get(session_key)

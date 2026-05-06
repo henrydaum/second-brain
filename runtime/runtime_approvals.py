@@ -24,10 +24,10 @@ from typing import Any
 
 from state_machine.approval import StateMachineApprovalRequest
 from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
-from state_machine.conversationClass import PhaseFrame
+from state_machine.conversation import PhaseFrame
 from state_machine.errors import ActionResult
-from state_machine.runtime_persistence import get_or_create_session, persist_marker
-from state_machine.session import RuntimeSession
+from runtime.persistence import get_or_create_session, persist_marker
+from runtime.session import RuntimeSession
 
 
 def request_input(

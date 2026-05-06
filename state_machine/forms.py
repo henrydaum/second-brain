@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from state_machine.conversationClass import FormStep
+from state_machine.conversation import FormStep
 
 
 def schema_to_form_steps(schema: dict | None) -> list[FormStep]:

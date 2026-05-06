@@ -22,7 +22,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable
 
-from state_machine.persistence import save_history_message
+from state_machine.serialization import save_history_message
 from runtime.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("ConversationLoop")

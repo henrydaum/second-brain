@@ -22,8 +22,8 @@ from events.event_channels import (
     SESSION_TURN_CHANGED,
 )
 from state_machine.errors import ActionResult
-from state_machine.persistence import save_history_message
-from state_machine.session import RuntimeResult, RuntimeSession
+from state_machine.serialization import save_history_message
+from runtime.session import RuntimeResult, RuntimeSession
 
 
 # ──────────────────────────────────────────────────────────────────────

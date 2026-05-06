@@ -17,7 +17,7 @@ collected inputs.
 from typing import Any, Tuple, Optional
 import logging
 
-from state_machine.conversationClass import CallableSpec, FormStep, PhaseFrame
+from state_machine.conversation import CallableSpec, FormStep, PhaseFrame
 from state_machine.conversation_phases import (
     PHASE_APPROVING_REQUEST,
     PHASE_CALLING_COMMAND,

@@ -17,7 +17,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
-from state_machine.conversationClass import ConversationState
+from state_machine.conversation import ConversationState
 from state_machine.errors import ActionResult
 
 

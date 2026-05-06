@@ -3,7 +3,7 @@ from pathlib import Path
 from paths import DATA_DIR, ROOT_DIR, SANDBOX_COMMANDS, SANDBOX_SERVICES, SANDBOX_TASKS, SANDBOX_TOOLS
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.formatters import format_locations
-from state_machine.conversationClass import FormStep
+from state_machine.conversation import FormStep
 
 
 KINDS = {

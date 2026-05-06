@@ -9,7 +9,7 @@ import uuid
 from typing import Callable
 
 from plugins.BaseCommand import BaseCommand
-from state_machine.conversationClass import CallableSpec, FormStep
+from state_machine.conversation import CallableSpec, FormStep
 
 logger = logging.getLogger("Commands")
 

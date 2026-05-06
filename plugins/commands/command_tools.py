@@ -1,6 +1,6 @@
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.formatters import format_tool_result, format_tools
-from state_machine.conversationClass import FormStep
+from state_machine.conversation import FormStep
 from state_machine.forms import schema_to_form_steps
 
 

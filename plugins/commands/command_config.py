@@ -4,7 +4,7 @@ from config.config_data import SETTINGS_DATA
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
 from plugins.plugin_discovery import get_plugin_settings
-from state_machine.conversationClass import FormStep
+from state_machine.conversation import FormStep
 
 
 def _hidden(info):

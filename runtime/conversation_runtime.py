@@ -50,16 +50,16 @@ from events.event_channels import (
 )
 
 from state_machine.approval import StateMachineApprovalRequest
-from state_machine.conversationClass import CallableSpec
+from state_machine.conversation import CallableSpec
 from state_machine.conversation_phases import BASE_PHASE, BUSY_PHASES, PHASE_APPROVING_REQUEST
 from state_machine.errors import ActionError
-from state_machine.session import RuntimeResult, RuntimeSession, SessionConflict
-from state_machine.title_generator import TitleGenerator
+from runtime.session import RuntimeResult, RuntimeSession, SessionConflict
+from agent.title_generator import TitleGenerator
 
-from state_machine import runtime_approvals as _approvals
-from state_machine import runtime_config as _cfg
-from state_machine import runtime_dispatch as _disp
-from state_machine import runtime_persistence as _persist
+from runtime import runtime_approvals as _approvals
+from runtime import runtime_config as _cfg
+from runtime import dispatch as _disp
+from runtime import persistence as _persist
 
 logger = logging.getLogger("Runtime")
 

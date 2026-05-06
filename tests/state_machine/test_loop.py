@@ -22,11 +22,11 @@ import pytest
 from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult
 from state_machine.action_map import create_action
-from state_machine.conversationClass import CallableSpec, ConversationState, FormStep, Participant
-from state_machine.conversation_loop import ConversationLoop
+from state_machine.conversation import CallableSpec, ConversationState, FormStep, Participant
+from runtime.conversation_loop import ConversationLoop
 from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
-from state_machine.persistence import save_state_marker
-from state_machine.runtime import ConversationRuntime
+from state_machine.serialization import save_state_marker
+from runtime.conversation_runtime import ConversationRuntime
 from events.event_channels import COMMAND_CALL_FINISHED, SESSION_CLOSED, SESSION_CREATED, SESSION_TURN_COMPLETED, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from events.event_bus import bus
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from state_machine.conversationClass import FormStep
+from state_machine.conversation import FormStep
 
 
 class BaseCommand:

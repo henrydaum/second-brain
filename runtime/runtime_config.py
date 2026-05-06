@@ -18,11 +18,11 @@ import logging
 from pathlib import Path
 from typing import Any, Callable
 
-from state_machine.conversationClass import CallableSpec, ConversationState, Participant
-from state_machine.conversation_loop import ConversationLoop
+from state_machine.conversation import CallableSpec, ConversationState, Participant
+from runtime.conversation_loop import ConversationLoop
 from state_machine.conversation_phases import BASE_PHASE
 from state_machine.forms import schema_to_form_steps
-from state_machine.session import RuntimeSession
+from runtime.session import RuntimeSession
 from events.event_bus import bus
 from events.event_channels import (
     CHAT_MESSAGE_PUSHED,

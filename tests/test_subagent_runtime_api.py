@@ -10,7 +10,7 @@ from plugins.plugin_discovery import discover_commands
 from plugins.tasks.task_run_subagent import RunSubagent
 from plugins.tools.tool_slash_command import SlashCommand
 from plugins.tools.tool_ask_subagent import AskSubagent
-from state_machine.conversationClass import FormStep
+from state_machine.conversation import FormStep
 
 
 class FakeRuntime:
@@ -318,7 +318,7 @@ def test_agent_switch_uses_runtime_session_profile():
 
 
 def test_runtime_agent_switch_keeps_session_override_metadata():
-    from state_machine.runtime import ConversationRuntime
+    from runtime.conversation_runtime import ConversationRuntime
 
     runtime = ConversationRuntime(config={"active_agent_profile": "default"})
     session = runtime.get_session("s")
@@ -330,7 +330,7 @@ def test_runtime_agent_switch_keeps_session_override_metadata():
 
 def test_agent_llm_edit_reroutes_active_session():
     from plugins.commands.command_agent import AgentCommand
-    from state_machine.runtime import ConversationRuntime
+    from runtime.conversation_runtime import ConversationRuntime
 
     config = {
         "agent_profiles": {"builder": {"llm": "old", "prompt_suffix": "", "whitelist_or_blacklist_tools": "blacklist", "tools_list": []}},
