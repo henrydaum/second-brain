@@ -7,26 +7,13 @@ from runtime.token_stripper import strip_model_tokens
 from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED, SESSION_TURN_COMPLETED, SUBAGENT_RUN
 from plugins.tools.tool_notify import NotifyTool, NotificationRecord
-from plugins.tasks.helpers.notifications import NOTIFICATION_MODES, notification_mode
+from plugins.tasks.helpers.notifications import NOTIFICATION_MODES, category_for_job, notification_mode
 from state_machine.serialization import latest_state
 
 logger = logging.getLogger("TaskRunSubagent")
 
 _MAX_PARSED_CHARS = 4000
 _ACTIVE = "active"
-
-
-def _category_for_job(is_scheduled: bool, is_one_time: bool) -> str | None:
-    """Built-in category bucket for an auto-created subagent conversation.
-
-    Recurring cron → ``Scheduled``; single-fire cron → ``Scheduled (one-time)``;
-    everything else (synchronous ask_subagent calls) → ``Subagent``.
-    """
-    if is_scheduled and is_one_time:
-        return "Scheduled (one-time)"
-    if is_scheduled:
-        return "Scheduled"
-    return "Subagent"
 
 
 class RunSubagent(BaseTask):
@@ -215,7 +202,7 @@ class RunSubagent(BaseTask):
         # No usable id on the payload — eagerly create one. ask_subagent
         # (non-scheduled) makes throwaway "Subagent" conversations; scheduled
         # jobs split into recurring vs one-time buckets.
-        category = _category_for_job(is_scheduled, is_one_time)
+        category = category_for_job(is_scheduled, is_one_time)
         conv_id = runtime.create_conversation(conversation_title[:200], kind="subagent", category=category)
 
         if is_scheduled:

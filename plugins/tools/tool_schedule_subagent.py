@@ -1,9 +1,18 @@
+import logging
 from copy import deepcopy
 
 import config.config_manager as config_manager
 from plugins.BaseTool import BaseTool, ToolResult
 from events.event_channels import SUBAGENT_RUN
-from plugins.tasks.helpers.notifications import DEFAULT_NOTIFICATION_MODE, NOTIFICATION_MODES, notification_mode
+from plugins.tasks.helpers.notifications import (
+    DEFAULT_NOTIFICATION_MODE,
+    NOTIFICATION_MODES,
+    category_for_job,
+    load_conversation_suffix,
+    notification_mode,
+)
+
+logger = logging.getLogger("ScheduleSubagent")
 
 
 def _coerce_input_paths(value) -> list[str]:
@@ -157,7 +166,7 @@ class ScheduleSubagent(BaseTool):
             if not job_name:
                 return ToolResult.failed("job_name is required for this action.")
             if action == "get":
-                return self._get_job(svc, job_name)
+                return self._get_job(svc, job_name, context=context)
             current = _get_subagent_job_or_none(svc, job_name)
             if current is None:
                 return ToolResult.failed(f"Unknown subagent job: '{job_name}'.")
@@ -213,17 +222,23 @@ class ScheduleSubagent(BaseTool):
 
             # Eagerly create a conversation for new jobs that didn't get one
             # specified. This way the user can see and brief the conversation
-            # in /conversations before the cron ever fires.
-            if action == "create" and "conversation_id" not in (job_def.get("payload") or {}):
-                runtime = getattr(context, "runtime", None)
-                if runtime is not None:
-                    is_one_time = bool(job_def.get("one_time"))
-                    category = "Scheduled (one-time)" if is_one_time else "Scheduled"
-                    title = (str((job_def.get("payload") or {}).get("title") or "").strip()
-                             or job_name or "Scheduled subagent run")
-                    conv_id = runtime.create_conversation(title[:200], kind="subagent", category=category)
-                    if conv_id is not None:
-                        job_def["payload"]["conversation_id"] = conv_id
+            # in /conversations before the cron ever fires. The "active"
+            # sentinel is left untouched — that's an explicit user choice to
+            # track whatever conversation the user has open at fire time.
+            existing_conv = (job_def.get("payload") or {}).get("conversation_id")
+            if action == "create" and existing_conv is None:
+                is_one_time = bool(job_def.get("one_time"))
+                category = category_for_job(is_scheduled=True, is_one_time=is_one_time)
+                title = (str((job_def.get("payload") or {}).get("title") or "").strip()
+                         or job_name or "Scheduled subagent run")
+                conv_id = self._create_subagent_conversation(context, title[:200], category)
+                if conv_id is not None:
+                    job_def["payload"]["conversation_id"] = conv_id
+                else:
+                    logger.warning(
+                        "Eager conversation creation for job '%s' returned None — "
+                        "the cron will mint one at fire time.", job_name,
+                    )
             denied = _require_schedule_approval(
                 context,
                 action=action,
@@ -238,7 +253,7 @@ class ScheduleSubagent(BaseTool):
                 job = svc.create_job(job_name, job_def) if action == "create" else svc.update_job(job_name, job_def)
             except ValueError as e:
                 return ToolResult.failed(str(e))
-            return self._format_job_result(svc, job_name, job, created=(action == "create"))
+            return self._format_job_result(svc, job_name, job, created=(action == "create"), context=context)
 
         return ToolResult.failed("action must be one of: create, update, delete, get, list, enable, disable.")
 
@@ -349,13 +364,30 @@ class ScheduleSubagent(BaseTool):
             })
         return ToolResult(data=data, llm_summary="\n".join(lines))
 
-    def _get_job(self, svc, job_name: str) -> ToolResult:
+    def _get_job(self, svc, job_name: str, context=None) -> ToolResult:
         job = _get_subagent_job_or_none(svc, job_name)
         if job is None:
             return ToolResult.failed(f"Unknown subagent job: '{job_name}'.")
-        return self._format_job_result(svc, job_name, job, created=None)
+        return self._format_job_result(svc, job_name, job, created=None, context=context)
 
-    def _format_job_result(self, svc, job_name: str, job: dict, created: bool | None) -> ToolResult:
+    @staticmethod
+    def _create_subagent_conversation(context, title: str, category: str | None) -> int | None:
+        runtime = getattr(context, "runtime", None)
+        if runtime is not None:
+            try:
+                return runtime.create_conversation(title, kind="subagent", category=category)
+            except Exception as e:
+                logger.warning("runtime.create_conversation failed (%s); falling back to db.", e)
+        db = getattr(context, "db", None)
+        if db is None:
+            return None
+        try:
+            return db.create_conversation(title, kind="subagent", category=category)
+        except Exception as e:
+            logger.warning("db.create_conversation failed: %s", e)
+            return None
+
+    def _format_job_result(self, svc, job_name: str, job: dict, created: bool | None, context=None) -> ToolResult:
         title, prompt = _job_payload_summary(job)
         schedule = svc.describe_job(job_name)
         state = "enabled" if job.get("enabled", True) else "disabled"
@@ -372,6 +404,11 @@ class ScheduleSubagent(BaseTool):
         conv = (job.get("payload") or {}).get("conversation_id")
         if conv is not None:
             lines.append(f"Conversation: {conv}")
+            db = getattr(context, "db", None) if context is not None else None
+            if isinstance(conv, int) and db is not None:
+                suffix = load_conversation_suffix(db, conv).strip()
+                if suffix:
+                    lines.append(suffix)
         notifications = str(
             (job.get("payload") or {}).get("notifications")
             or DEFAULT_NOTIFICATION_MODE

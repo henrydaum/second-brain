@@ -9,6 +9,21 @@ def notification_mode(value, default=DEFAULT_NOTIFICATION_MODE) -> str:
     return mode if mode in NOTIFICATION_MODES else default
 
 
+def category_for_job(is_scheduled: bool, is_one_time: bool) -> str | None:
+    """Built-in category bucket for a subagent conversation.
+
+    Recurring cron → ``Scheduled``; single-fire cron → ``Scheduled (one-time)``;
+    everything else (synchronous ask_subagent calls) → ``Subagent``. Shared by
+    the schedule tool (eager creation at scheduling time) and the run task
+    (fallback creation at fire time) so both paths agree on the bucket.
+    """
+    if is_scheduled and is_one_time:
+        return "Scheduled (one-time)"
+    if is_scheduled:
+        return "Scheduled"
+    return "Subagent"
+
+
 def load_conversation_suffix(db, conversation_id: int | None) -> str:
     """Render the trailing line that lets the user jump to the
     conversation a notification came from. Shared by ``NotifyTool``
