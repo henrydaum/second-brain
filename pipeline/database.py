@@ -1023,6 +1023,13 @@ class Database:
 				(conversation_id,))
 			return cur.fetchone()["cnt"]
 
+	def clear_conversation_messages(self, conversation_id):
+		with self.lock:
+			self.conn.execute(
+				"DELETE FROM conversation_messages WHERE conversation_id = ?",
+				(conversation_id,))
+			self.conn.commit()
+
 	def delete_conversation(self, conversation_id):
 		with self.lock:
 			self.conn.execute(
