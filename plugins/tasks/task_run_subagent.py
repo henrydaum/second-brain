@@ -7,7 +7,7 @@ from runtime.token_stripper import strip_model_tokens
 from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED, SESSION_TURN_COMPLETED, SUBAGENT_RUN
 from plugins.tools.tool_notify import NotifyTool, NotificationRecord
-from plugins.tasks.helpers.notifications import NOTIFICATION_MODES, category_for_job, notification_mode
+from plugins.tasks.helpers.notifications import NOTIFICATION_MODES, notification_mode
 from state_machine.serialization import latest_state
 
 logger = logging.getLogger("TaskRunSubagent")
@@ -71,7 +71,6 @@ class RunSubagent(BaseTask):
         job_name = explicit_name or f"adhoc:{run_id}"
         conversation_title = title or job_name or prompt[:80].replace("\n", " ").strip() or "Scheduled subagent run"
         is_scheduled = bool(timekeeper_meta)
-        is_one_time = bool(timekeeper_meta.get("one_time"))
 
         if timekeeper_meta.get("source"):
             source = str(timekeeper_meta.get("source"))
@@ -83,7 +82,7 @@ class RunSubagent(BaseTask):
         mode = self._resolve_mode(payload, timekeeper_meta, context, is_scheduled, job_name)
 
         conversation_id, treat_as_active = self._resolve_conversation(
-            context, runtime, payload, is_scheduled, is_one_time, job_name, conversation_title,
+            context, runtime, payload, job_name,
         )
         if conversation_id is None:
             return TaskResult.failed("Could not resolve a conversation for this subagent run.")
@@ -124,6 +123,12 @@ class RunSubagent(BaseTask):
         input_paths = self._normalize_input_paths(payload.get("input_paths"))
         compiled_prompt, sub_attachments = self._compile_prompt(prompt, input_paths, context)
 
+        # Take turns: queue behind the user (mid-form) or other cron jobs
+        # already running on this session_key. After 300s force-cancel and
+        # proceed — the queue must drain eventually.
+        deadline = time.time() + 300.0
+        self._wait_for_idle(runtime, session_key, timeout=max(1.0, deadline - time.time()))
+
         turn_events = []
         unsub = bus.subscribe(SESSION_TURN_COMPLETED, lambda event: turn_events.append(event) if (event or {}).get("session_key") == session_key else None)
         try:
@@ -138,7 +143,17 @@ class RunSubagent(BaseTask):
                 )
                 if notify_tool:
                     runtime.add_session_tool(session_key, notify_tool)
-            result = runtime.iterate_agent_turn(session_key, compiled_prompt, attachments=sub_attachments)
+
+            # Retry on the rare race where the user opens a form between the
+            # idle check above and this dispatch. The runtime's cron-handoff
+            # guard rejects send_text under FORM_PHASES with code=busy; we
+            # just wait for idle and try again until the deadline.
+            while True:
+                result = runtime.iterate_agent_turn(session_key, compiled_prompt, attachments=sub_attachments)
+                err_code = ((result.error or {}).get("code") if not result.ok else "")
+                if err_code != "busy" or time.time() >= deadline:
+                    break
+                self._wait_for_idle(runtime, session_key, timeout=max(1.0, deadline - time.time()))
         except Exception as e:
             logger.error(f"Subagent run {run_id} failed: {e}", exc_info=True)
             return TaskResult.failed(str(e))
@@ -194,47 +209,78 @@ class RunSubagent(BaseTask):
                     logger.warning(f"Failed to clear next_notifications for job '{job_name}': {e}")
         return mode
 
-    def _resolve_conversation(self, context, runtime, payload: dict, is_scheduled: bool,
-                              is_one_time: bool, job_name: str,
-                              conversation_title: str) -> tuple[int | None, bool]:
-        """Pick the conversation this run should write into.
+    @staticmethod
+    def _wait_for_idle(runtime, session_key: str, timeout: float = 300.0, poll: float = 0.5) -> bool:
+        """Block until ``session_key`` is idle (BASE_PHASE, not busy).
 
-        Returns ``(conversation_id, treat_as_active)``. ``treat_as_active`` is
-        True when the chosen conversation matches the user's currently active
-        conversation — used downstream to skip NotifyTool registration.
+        Used so cron fires take turns: if the user is mid-form or another
+        cron is mid-turn on the same session_key, queue behind them rather
+        than racing. After ``timeout`` seconds, force-cancel and continue —
+        the queue must drain eventually.
+
+        Returns ``True`` if the session became idle, ``False`` if cancel was
+        forced.
+        """
+        from state_machine.conversation_phases import BASE_PHASE
+
+        def _idle() -> bool:
+            sess = runtime.sessions.get(session_key)
+            if sess is None:
+                return True
+            if sess.busy:
+                return False
+            return getattr(sess.cs, "phase", None) == BASE_PHASE
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if _idle():
+                return True
+            time.sleep(poll)
+
+        logger.warning(
+            f"Session '{session_key}' still busy after {timeout:.0f}s — force-cancelling."
+        )
+        try:
+            runtime.cancel_session(session_key)
+        except Exception as e:
+            logger.warning(f"cancel_session('{session_key}') failed: {e}")
+        # Give cancel a brief moment to land, then proceed regardless.
+        cancel_deadline = time.time() + 5.0
+        while time.time() < cancel_deadline and not _idle():
+            time.sleep(poll)
+        return False
+
+    def _resolve_conversation(self, context, runtime, payload: dict, job_name: str) -> tuple[int | None, bool]:
+        """Look up the conversation this run was scheduled into.
+
+        Returns ``(conversation_id, treat_as_active)``. The conversation is
+        always created at *schedule* time (by ``schedule_subagent``) or up
+        front by ``ask_subagent``; this task never mints one. If the payload
+        has no id or the id is missing from the DB, the run fails — that is
+        a contract violation by whoever emitted SUBAGENT_RUN.
         """
         active_id = runtime.active_conversation_id
         existing = payload.get("conversation_id")
 
-        if existing is not None:
-            try:
-                conv_id = int(existing)
-            except (TypeError, ValueError):
-                conv_id = None
-            if conv_id is not None and context.db.get_conversation(conv_id) is not None:
-                return conv_id, conv_id == active_id
-            # Stored id refers to a deleted conversation (or was malformed).
-            # Fall through and mint a fresh one — the timekeeper-persist
-            # branch below will rewrite the job's payload so subsequent fires
-            # use the new conversation.
+        if existing is None:
+            logger.error(
+                f"Subagent payload for job '{job_name}' has no conversation_id. "
+                "Conversations must be created at schedule time, not at fire time."
+            )
+            return None, False
 
-        # No usable id on the payload — eagerly create one. ask_subagent
-        # (non-scheduled) makes throwaway "Subagent" conversations; scheduled
-        # jobs split into recurring vs one-time buckets.
-        category = category_for_job(is_scheduled, is_one_time)
-        conv_id = runtime.create_conversation(conversation_title[:200], kind="subagent", category=category)
+        try:
+            conv_id = int(existing)
+        except (TypeError, ValueError):
+            logger.error(f"Subagent payload conversation_id is not an int: {existing!r}")
+            return None, False
 
-        if is_scheduled:
-            timekeeper = context.services.get("timekeeper")
-            if timekeeper is not None and getattr(timekeeper, "loaded", False):
-                try:
-                    job = timekeeper.get_job(job_name)
-                    if job is not None:
-                        new_payload = dict(job.get("payload") or {})
-                        new_payload["conversation_id"] = conv_id
-                        timekeeper.update_job(job_name, {"payload": new_payload})
-                except Exception as e:
-                    logger.warning(f"Failed to persist conversation_id for job '{job_name}': {e}")
+        if context.db.get_conversation(conv_id) is None:
+            logger.error(
+                f"Subagent job '{job_name}' targets conversation #{conv_id} which "
+                "no longer exists. Re-schedule the job."
+            )
+            return None, False
 
         return conv_id, conv_id == active_id
 

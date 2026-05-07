@@ -212,25 +212,6 @@ class ScheduleSubagent(BaseTool):
                 current_job=current_job,
             )
 
-            # Eagerly create a conversation for new jobs that didn't get one
-            # specified. This way the user can see and brief the conversation
-            # in /conversations before the cron ever fires. The "active"
-            # sentinel is left untouched — that's an explicit user choice to
-            # track whatever conversation the user has open at fire time.
-            existing_conv = (job_def.get("payload") or {}).get("conversation_id")
-            if action == "create" and existing_conv is None:
-                is_one_time = bool(job_def.get("one_time"))
-                category = category_for_job(is_scheduled=True, is_one_time=is_one_time)
-                title = (str((job_def.get("payload") or {}).get("title") or "").strip()
-                         or job_name or "Scheduled subagent run")
-                conv_id = self._create_subagent_conversation(context, title[:200], category)
-                if conv_id is not None:
-                    job_def["payload"]["conversation_id"] = conv_id
-                else:
-                    logger.warning(
-                        "Eager conversation creation for job '%s' returned None — "
-                        "the cron will mint one at fire time.", job_name,
-                    )
             denied = _require_schedule_approval(
                 context,
                 action=action,
@@ -240,6 +221,24 @@ class ScheduleSubagent(BaseTool):
             )
             if denied:
                 return denied
+
+            # Eagerly create a conversation for new jobs that didn't get one
+            # specified. Done *after* approval so denied schedules don't
+            # leak orphan conversation rows into /conversations.
+            existing_conv = (job_def.get("payload") or {}).get("conversation_id")
+            if action == "create" and existing_conv is None:
+                is_one_time = bool(job_def.get("one_time"))
+                category = category_for_job(is_scheduled=True, is_one_time=is_one_time)
+                title = (str((job_def.get("payload") or {}).get("title") or "").strip()
+                         or job_name or "Scheduled subagent run")
+                conv_id = self._create_subagent_conversation(context, title[:200], category)
+                if conv_id is None:
+                    return ToolResult.failed(
+                        f"Could not create the conversation for job '{job_name}'. "
+                        "Check that the database is reachable and try again."
+                    )
+                job_def["payload"]["conversation_id"] = conv_id
+
             _ensure_timekeeper_autoload(context)
             try:
                 job = svc.create_job(job_name, job_def) if action == "create" else svc.update_job(job_name, job_def)

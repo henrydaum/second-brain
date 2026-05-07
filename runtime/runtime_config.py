@@ -189,7 +189,6 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
                 scope=scope,
                 profile_name=profile,
                 subagent_mode=extras.get("subagent_mode") if session.is_subagent else None,
-                runtime=runtime,
             )
             for key, value in extras.items():
                 if key == "subagent_mode":

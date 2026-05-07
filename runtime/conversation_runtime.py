@@ -51,7 +51,7 @@ from events.event_channels import (
 
 from state_machine.approval import StateMachineApprovalRequest
 from state_machine.conversation import CallableSpec
-from state_machine.conversation_phases import BASE_PHASE, BUSY_PHASES, PHASE_APPROVING_REQUEST
+from state_machine.conversation_phases import BASE_PHASE, BUSY_PHASES, FORM_PHASES, PHASE_APPROVING_REQUEST
 from state_machine.errors import ActionError
 from runtime.session import RuntimeResult, RuntimeSession, SessionConflict
 
@@ -121,6 +121,18 @@ class ConversationRuntime:
         if user_driven:
             self.active_session_key = session_key
             prior_conv = getattr(self, "_persisted_active_conv_id", None)
+
+        # Cron-handoff guard: a non-user-driven send_text (a cron firing into
+        # the user's active session) must never be interpreted as form input.
+        # If the user is mid-form, refuse the turn — task_run_subagent's
+        # _wait_for_idle catches this earlier, but the race between its check
+        # and this dispatch lands here.
+        if (not user_driven
+                and normalized == "send_text"
+                and session.cs.phase in FORM_PHASES):
+            return RuntimeResult(False,
+                                 messages=["Session is mid-form — handoff deferred."],
+                                 error={"code": "busy", "message": "form in progress"})
 
         # Busy guard: if the session is mid-turn, only ``cancel`` and the
         # specific ``answer_approval`` for an active approval frame may
