@@ -32,10 +32,6 @@ class SecondBrainContext:
         Helper for user approval on sensitive actions. Tools only. None means
         no state-machine session is available, so tools should treat that as
         deny.
-    is_subagent:
-        True when this context belongs to a scheduled / unattended subagent
-        run. Tools that need to apply tighter authority (e.g. restrict mail
-        access to a scoped alias) should branch on this flag.
     """
     db: Any = None
     config: dict = field(default_factory=dict)
@@ -44,10 +40,8 @@ class SecondBrainContext:
     approve_command: Any = None  # callable(command, justification) -> bool (tools only)
     tool_registry: Any = None    # ToolRegistry instance (tools only)
     orchestrator: Any = None     # Orchestrator instance (tools only)
-    is_subagent: bool = False    # True inside task_run_subagent execution
     runtime: Any = None          # ConversationRuntime — present for tasks that
-                                 # need to drive a state-machine session
-                                 # (scheduled subagents in particular).
+                                 # need to drive a state-machine session.
     root_dir: Any = None         # Project root for repo/plugin operations.
     command_registry: Any = None # Slash-command registry for command plugins.
     session_key: str | None = None # Frontend conversation/session key, when available.
@@ -55,7 +49,7 @@ class SecondBrainContext:
 
 def build_context(db, config: dict, services: dict, call_tool=None,
                    tool_registry=None, orchestrator=None,
-                   is_subagent: bool = False, runtime=None,
+                   runtime=None,
                    root_dir=None, command_registry=None,
                    session_key: str | None = None) -> SecondBrainContext:
     """
@@ -100,7 +94,6 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         approve_command=approve_command,
         tool_registry=tool_registry,
         orchestrator=orchestrator,
-        is_subagent=is_subagent,
         runtime=runtime,
         root_dir=root_dir,
         command_registry=command_registry,

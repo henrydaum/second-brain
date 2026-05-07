@@ -3,7 +3,7 @@ from __future__ import annotations
 """Per-session configuration: profile, scope, registry, system prompt, loop.
 
 The runtime owns one global agent profile + tool registry, but each session
-can override the profile and pin extra tools (subagent runs do this). The
+can override the profile and pin extra tools. The
 helpers in this module compute the *effective* configuration for a given
 session — the LLM to use, the tool registry the agent sees, the system
 prompt that gets sent on every turn — and build the :class:`ConversationLoop`
@@ -60,8 +60,7 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
     """The tool registry as the agent in this session sees it.
 
     Layered: global registry → optional profile-scoped view → optional
-    session-pinned tools (subagent NotifyTool, etc.). Returns the
-    deepest layer applicable.
+    session-pinned tools. Returns the deepest layer applicable.
     """
     if not runtime.tool_registry:
         return None
@@ -75,7 +74,6 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
         from agent.tool_registry import ToolRegistry
         cloned = ToolRegistry(registry.db, registry.config, registry.services)
         cloned.orchestrator = getattr(registry, "orchestrator", None)
-        cloned.is_subagent = bool(session and session.is_subagent) or getattr(registry, "is_subagent", False)
         cloned.runtime = getattr(registry, "runtime", None)
         cloned.tools.update(registry.tools)
         for tool in extras:
@@ -151,7 +149,7 @@ def tool_specs_for(runtime, session: RuntimeSession | None = None) -> dict[str, 
 def refresh_specs(runtime, session: RuntimeSession) -> None:
     """Re-bind the session's command/tool specs to the runtime's current
     registries. Called when the active profile or registries change."""
-    if not session.is_subagent and not session.profile_override:
+    if not session.profile_override:
         session.active_agent_profile = runtime.config.get("active_agent_profile") or "default"
     session.cs.participants["user"].commands = dict(runtime.commands)
     session.cs.participants["agent"].tools = tool_specs_for(runtime, session)
@@ -164,17 +162,16 @@ def refresh_specs(runtime, session: RuntimeSession) -> None:
 def session_system_prompt(runtime, session: RuntimeSession | None):
     """Return a system_prompt callable bound to this session.
 
-    Subagent / profile-overridden sessions go through ``build_system_prompt``
-    directly so the scoped registry, profile name, and notification mode
-    feed into the prompt. Plain user sessions reuse the runtime's default
-    system_prompt and append the session's ``system_prompt_extras`` —
-    letting any plugin pin contextual snippets to the prompt without
-    touching the bootstrap closure.
+    Profile-overridden sessions go through ``build_system_prompt`` directly
+    so the scoped registry and profile name feed into the prompt. Plain
+    user sessions reuse the runtime's default system_prompt and append the
+    session's ``system_prompt_extras`` — letting any plugin pin contextual
+    snippets to the prompt without touching the bootstrap closure.
     """
     if session is None:
         return runtime.system_prompt
 
-    if session.is_subagent or session.profile_override:
+    if session.profile_override:
         from agent.system_prompt import build_system_prompt
         profile = session.profile_override or session.active_agent_profile or "default"
         scope = scope_for_profile(runtime, profile)
@@ -188,11 +185,8 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
                 registry, runtime.services,
                 scope=scope,
                 profile_name=profile,
-                subagent_mode=extras.get("subagent_mode") if session.is_subagent else None,
             )
-            for key, value in extras.items():
-                if key == "subagent_mode":
-                    continue
+            for value in extras.values():
                 if isinstance(value, str) and value:
                     text += "\n\n" + value
             return text

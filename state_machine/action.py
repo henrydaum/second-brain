@@ -390,7 +390,7 @@ class AnswerApproval(Action):
     `data["type"]` is "boolean" with a `pending` action, a truthy value
     re-enacts the gated action with `_approved=True` (the legacy approval
     gate). For other types, the value is simply returned in the result data
-    for the caller (subagent, tool, etc.) to consume.
+    for the caller (tool, etc.) to consume.
     """
 
     action_type = "answer_approval"

@@ -376,12 +376,12 @@ def test_agent_tool_approval_uses_state_machine_phase_and_resumes():
 
 def test_inject_user_message_appends_without_driving_agent_turn():
     db = FakeConversationDB()
-    conv_id = db.create_conversation("Inbox", kind="subagent")
+    conv_id = db.create_conversation("Inbox")
     runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([FakeResponse.text("should not run")])})
 
-    runtime.inject_user_message("subagent:job", "later please", conversation_id=conv_id)
+    runtime.inject_user_message("inbox:job", "later please", conversation_id=conv_id)
 
-    session = runtime.sessions["subagent:job"]
+    session = runtime.sessions["inbox:job"]
     rows = [r for r in db.get_conversation_messages(conv_id) if r["role"] != "system"]
     assert session.cs.turn_priority == "user"
     assert session.history == [{"role": "user", "content": "later please"}]

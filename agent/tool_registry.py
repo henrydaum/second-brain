@@ -41,7 +41,6 @@ class ToolRegistry:
         self.tools: dict[str, BaseTool] = {}
         self._lock = threading.Lock()
         self.orchestrator = None        # set after construction in main.pyw
-        self.is_subagent = False        # set True by task_run_subagent for scoped registries
         self.runtime = None             # ConversationRuntime, set by frontend bootstrap
 
     def register(self, tool: BaseTool):
@@ -73,6 +72,17 @@ class ToolRegistry:
         if tool is None:
             return ToolResult.failed(f"Unknown tool: {tool_name}")
 
+        # Background-safety gate: tools marked background_safe=False are
+        # interactive (they need a human watching). Refuse if the call is
+        # coming from a session that isn't the currently active one.
+        if (not getattr(tool, "background_safe", True)
+                and session_key is not None
+                and self.runtime is not None
+                and session_key != getattr(self.runtime, "active_session_key", None)):
+            return ToolResult.failed(
+                f"Tool '{tool_name}' requires an active conversation and cannot run in the background."
+            )
+
         # Gate on required services before building a runtime context.
         if tool.requires_services:
             not_ready = []
@@ -89,7 +99,6 @@ class ToolRegistry:
                                 call_tool=self.call,
                                 tool_registry=self,
                                 orchestrator=self.orchestrator,
-                                is_subagent=self.is_subagent,
                                 runtime=self.runtime,
                                 session_key=session_key)
 

@@ -933,7 +933,6 @@ class Database:
 				"""
 				SELECT *
 				FROM conversations c
-				WHERE COALESCE(c.kind, 'user') != 'subagent'
 				ORDER BY c.updated_at DESC
 				LIMIT ?
 				""",
@@ -950,14 +949,8 @@ class Database:
 	def replace_conversation_messages(self, conversation_id, history: list[dict]) -> None:
 		"""Atomically replace a conversation's persisted messages with `history`.
 
-		Used after a scheduled subagent run finishes, so any in-memory compaction
-		the agent did (history rewrite when context filled up) is preserved for
-		the next wake — otherwise we'd reload the full uncompacted log and
-		re-compact every run.
-
 		`history` is in provider-message shape: list of {role, content, ...} dicts.
-		Assistant turns with tool_calls get JSON-packed into the content column,
-		matching the encoding used by task_run_subagent's on_message callback.
+		Assistant turns with tool_calls get JSON-packed into the content column.
 		"""
 		import json as _json
 		base = time.time()

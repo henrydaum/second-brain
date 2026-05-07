@@ -4,7 +4,7 @@
 
 Second Brain is an attempt to make a digital brain that approximates the real thing. It's part knowledge engine, part personal operator, and part programmable automation layer.
 
-It continuously indexes your files, remembers durable context, searches the web when local knowledge is not enough, runs tools and shell commands, and can spin up background subagents that act on schedules or events. It lives in your terminal and Telegram, so your assistant is available everywhere.
+It continuously indexes your files, remembers durable context, searches the web when local knowledge is not enough, and runs tools and shell commands. It lives in your terminal and Telegram, so your assistant is available everywhere.
 
 Instead of being "just a chatbot," it turns your machine into a system that can observe, search, reason, and act. Point it at your world, give it tools, and it becomes a private AI layer for research, reminders, recurring work, and everyday operations.
 
@@ -17,7 +17,6 @@ It can:
 - search by keyword, semantics, or a hybrid of both
 - remember durable facts and preferences across sessions
 - search the web when local knowledge is not enough
-- run proactive subagents on schedules
 - fire tasks from events, not just file changes
 - push reminders, findings, daily briefs, and alerts into Telegram
 - proactively send emails and text messages
@@ -57,27 +56,7 @@ Second Brain ships with multiple retrieval tools:
 
 If an LLM can mess something up, it will mess something up. That's not to say that this happens often, but Second Brain was built with that in mind. It has safety and fallbacks, including manual controls when they are called for.
 
-### 3. Run Background Subagents
-
-Second Brain can schedule background agents to run later or run repeatedly.
-
-That means you can create jobs like:
-
-- "Every weekday at 8:00 AM, send me a briefing on new files in my research folder."
-- "At 6:00 PM, remind me what is still unfinished."
-- "Every hour, search the web for updates on a topic and send me only important changes."
-- "On April 30 at 9:00 AM, review this folder and message me the top risks."
-
-Jobs can be:
-
-- one-time with an ISO datetime
-- recurring with cron
-- enabled or disabled without deleting them
-- backed by input files you explicitly attach to the job
-
-Scheduled subagents keep their own stored run history in SQL and can proactively push user-visible messages into chat. Each subagent owns its own conversation, browseable via `/conversations` — you can switch into it, read its history, and leave a message that the next run will pick up.
-
-### 4. Event-Driven Tasks
+### 3. Event-Driven Tasks
 
 The system is no longer only file-driven, either.
 
@@ -91,7 +70,7 @@ Tasks can be triggered by events through the internal event bus. That opens the 
 
 Path-triggered tasks and event-triggered tasks share the same orchestration layer. One abstraction, two kinds of trigger. The event bus can be triggered from anywhere in the system, and it's possible to create a new `service` for things like text messages and webhooks.
 
-### 5. Telegram As a First-Class Frontend
+### 4. Telegram As a First-Class Frontend
 
 Second Brain now ships with two primary frontends (but it's possible to add more):
 
@@ -106,13 +85,13 @@ Telegram is free and supports:
 - file and media delivery
 - interactive tool invocation
 - approval prompts for sensitive actions
-- proactive subagent push messages
+- proactive push messages from background tasks
 
 This means your local system can act like a private mobile AI assistant—an *agent*. To set up Telegram, simply message @BotFather and get the API token, then message @userinfobot to find your ID and put both in config.json manually or with /configure.
 
 The frontend code was designed to be modular and expandable. Other messaging platforms, like Discord, can be added easily using a coding agent.
 
-### 6. Durable Memory
+### 5. Durable Memory
 
 Second Brain includes agent memory through `memory.md` in the data directory.
 
@@ -127,7 +106,7 @@ It is not meant for one-off reminders, transient task state, or short-lived upda
 
 On top of that, conversation history is stored in SQLite and can be revisited later with read-only SQL. Nothing is thrown away unless you throw it away; simply ask the agent to look at your most recent conversations for context.
 
-### 7. Web Search
+### 6. Web Search
 
 Second Brain can search the public web through the built-in `web_search` tool.
 
@@ -139,7 +118,7 @@ It supports:
 
 The agent is not trapped inside the local corpus. It can blend your private knowledge with current public information when appropriate.
 
-### 8. Self-Extending Runtime
+### 7. Self-Extending Runtime
 
 One of the most unusual parts of the project is that the agent can build new capabilities inside a sandbox at runtime.
 
@@ -159,7 +138,6 @@ This means Second Brain is not a fixed assistant. It can inspect its own archite
 - Codebase analyst over local repositories
 - Research assistant that combines file search with live web search
 - Daily briefings pushed to Telegram
-- Reminder and recurring-task system powered by scheduled subagents
 - AI calendar-like workflows using one-time and recurring jobs
 - Archive and media intelligence across PDFs, images, video, audio, and spreadsheets
 - Private long-term assistant with memory and conversation history

@@ -169,8 +169,8 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
     runtime.command_registry = registry
     runtime._orchestrator_ref = scaffold.orchestrator
     ref["runtime"] = runtime
-    # Tasks running through the orchestrator (scheduled subagents in
-    # particular) reach the runtime via context.runtime.
+    # Tasks running through the orchestrator reach the runtime via
+    # context.runtime.
     if scaffold.orchestrator is not None:
         scaffold.orchestrator.runtime = runtime
     if tool_registry is not None:

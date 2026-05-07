@@ -94,8 +94,8 @@ class ConversationRuntime:
         self._approval_requests: dict[str, StateMachineApprovalRequest] = {}
         self._sessions_lock = threading.RLock()
         # Single global "active" session — the most recent user-driven
-        # session_key. Automation paths (subagent runs, scheduled cron jobs)
-        # explicitly opt out via ``handle_action(..., user_driven=False)``.
+        # session_key. Automation paths explicitly opt out via
+        # ``handle_action(..., user_driven=False)``.
         self.active_session_key: str | None = None
         # The first user-driven session after startup gets the previously
         # active conversation auto-restored, so the user lands back where
@@ -122,11 +122,8 @@ class ConversationRuntime:
             self.active_session_key = session_key
             prior_conv = getattr(self, "_persisted_active_conv_id", None)
 
-        # Cron-handoff guard: a non-user-driven send_text (a cron firing into
-        # the user's active session) must never be interpreted as form input.
-        # If the user is mid-form, refuse the turn — task_run_subagent's
-        # _wait_for_idle catches this earlier, but the race between its check
-        # and this dispatch lands here.
+        # Cron-handoff guard: a non-user-driven send_text must never be
+        # interpreted as form input. If the user is mid-form, refuse the turn.
         if (not user_driven
                 and normalized == "send_text"
                 and session.cs.phase in FORM_PHASES):
@@ -210,9 +207,9 @@ class ConversationRuntime:
         inbound_attachments = _disp.attachments_of(payload)
         actor_id = _disp.actor_id_of(payload)
 
-        # Callers that bypass SendAttachment (e.g. iterate_agent_turn from a
-        # subagent task) can pass attachments straight on the payload — push
-        # them onto cs.pending_attachments so the next agent turn picks them up.
+        # Callers that bypass SendAttachment (e.g. iterate_agent_turn) can
+        # pass attachments straight on the payload — push them onto
+        # cs.pending_attachments so the next agent turn picks them up.
         if inbound_attachments:
             from attachments.attachment import Attachment
             for entry in inbound_attachments:
@@ -387,10 +384,6 @@ class ConversationRuntime:
         """Alias for plugin code that reads in conversation lifecycle terms."""
         return self.close_session(session_key)
 
-    @staticmethod
-    def subagent_session_key(job_name: str) -> str:
-        return f"subagent:{job_name}"
-
     @property
     def active_conversation_id(self) -> int | None:
         """Conversation id bound to the most recent user-driven session.
@@ -545,7 +538,6 @@ class ConversationRuntime:
         for key, s in list(self.sessions.items()):
             out.append({
                 "key": key,
-                "is_subagent": s.is_subagent,
                 "agent_profile": s.profile_override or s.active_agent_profile,
                 "phase": s.cs.phase,
                 "turn_priority": s.cs.turn_priority,

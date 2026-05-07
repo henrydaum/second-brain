@@ -3,9 +3,8 @@ Notify tool — pushes a user-visible message to chat from inside a session.
 
 This tool is special: it carries per-session construction state (source,
 source_id, session_key, recorder closure) and is instantiated manually by
-its caller (see plugins/tasks/task_run_subagent.py), not via the generic
-plugin discoverer. `auto_register = False` keeps discovery from picking it
-up as a stateless, globally-registered tool.
+its caller, not via the generic plugin discoverer. `auto_register = False`
+keeps discovery from picking it up as a stateless, globally-registered tool.
 This is a system-level plugin, and should not be removed.
 """
 
@@ -54,10 +53,6 @@ class NotifyTool(BaseTool):
         self._conversation_id = conversation_id
         self._extra = extra
 
-    def _build_load_suffix(self, context) -> str:
-        from plugins.tasks.helpers.notifications import load_conversation_suffix
-        return load_conversation_suffix(getattr(context, "db", None), self._conversation_id)
-
     def run(self, context, **kwargs):
         message = (kwargs.get("message") or "").strip()
         if not message:
@@ -65,7 +60,6 @@ class NotifyTool(BaseTool):
         kind = (kwargs.get("kind") or "note").strip().lower()
         kind = kind if kind in NOTIFY_KINDS else "note"
         title = (kwargs.get("title") or "").strip()
-        message = message + self._build_load_suffix(context)
         sent_at = time.time()
         record = NotificationRecord(kind, title, message, sent_at)
         if self._recorder:

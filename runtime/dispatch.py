@@ -37,9 +37,8 @@ def text_of(payload: dict | str | None) -> str:
 def attachments_of(payload: dict | str | None):
     """Pull a list of attachment dicts/dataclasses out of an inbound payload.
 
-    Used by ``iterate_agent_turn`` so callers (subagent tasks, tools) can
-    pass attachments through to the agent without first emitting a
-    SendAttachment action.
+    Used by ``iterate_agent_turn`` so callers can pass attachments through
+    to the agent without first emitting a SendAttachment action.
     """
     if not isinstance(payload, dict):
         return []

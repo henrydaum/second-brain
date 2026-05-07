@@ -61,8 +61,6 @@ class RuntimeSession:
     # active profile and uses the global tool registry.
     profile_override: str | None = None
     extra_tool_instances: list = field(default_factory=list)
-    is_subagent: bool = False
-    subagent_meta: dict[str, Any] = field(default_factory=dict)
     system_prompt_extras: dict[str, Any] = field(default_factory=dict)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -73,8 +71,6 @@ class RuntimeSession:
             "conversation_id": self.conversation_id,
             "active_agent_profile": self.active_agent_profile,
             "profile_override": self.profile_override,
-            "is_subagent": self.is_subagent,
-            "subagent_meta": self.subagent_meta,
             "system_prompt_extras": self.system_prompt_extras,
             "busy": self.busy,
         })
@@ -85,9 +81,8 @@ class SessionConflict(RuntimeError):
     """Raised when a session_key is requested for a conversation_id that
     conflicts with an existing live session.
 
-    Realistic case: two cron jobs configured with the same name both target
-    ``subagent:<job_name>``. Without this guard the second job silently
-    stomps on the first; with it, the second job fails loudly.
+    Without this guard a second binding could silently stomp on the first;
+    with it, the second bind fails loudly.
     """
 
     def __init__(self, session_key: str, existing_id: int | None, requested_id: int | None):

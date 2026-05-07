@@ -88,18 +88,15 @@ Payload:
 
 CHAT_MESSAGE_PUSHED = "chat_message_pushed"
 """Something in the system wants to proactively surface a message in the user's
-chat view. Used by scheduled subagents pushing notes and any other background
-producer that needs to reach the user.
+chat view. Used by any background producer that needs to reach the user.
 Payload:
     message:  str            — the body text to display (required)
     title:    str (optional) — rendered as a header above the message
     kind:     str (optional) — categorical label (e.g. "note", "alert"); if
                                title is empty, may be used as a fallback header
-    source:   str (optional) — identifier for the producer (e.g. "subagent",
-                               "timekeeper"); frontends may show this as
-                               attribution
-    source_id:str (optional) — producer-specific id (subagent run_id,
-                               timekeeper job_name, etc.)"""
+    source:   str (optional) — identifier for the producer; frontends may
+                               show this as attribution
+    source_id:str (optional) — producer-specific id"""
 
 TOOL_CALL_STARTED = "tool_call_started"
 """The agent started a tool call.
@@ -153,7 +150,6 @@ SESSION_CREATED = "session_created"
 """A new RuntimeSession was created (or replaced via /new or load_history).
 Payload:
     session_key: str
-    is_subagent: bool
     agent_profile: str"""
 
 SESSION_CLOSED = "session_closed"

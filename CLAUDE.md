@@ -8,9 +8,9 @@ SQLite. Solo dev (Henry). The Flet GUI was removed; do not reintroduce.
 The conversation layer was unified around a single state machine
 (`ConversationState` in [state_machine/conversationClass.py](state_machine/conversationClass.py))
 driven by [state_machine/runtime.py](state_machine/runtime.py)
-(`ConversationRuntime`). Every frontend action — REPL, Telegram, scheduled
-subagent — flows through one labeled `cs.enact(...)` site in `_dispatch`,
-mirroring PokerMonster's `run_game`. Agent turns hand off to
+(`ConversationRuntime`). Every frontend action — REPL, Telegram, future
+background drivers — flows through one labeled `cs.enact(...)` site in
+`_dispatch`, mirroring PokerMonster's `run_game`. Agent turns hand off to
 `ConversationLoop.drive()`, which has its own labeled enact site for the
 agent's moves.
 
@@ -20,11 +20,13 @@ handler, an optional form (list of `FormStep`), and an optional
 the cache stack, surviving restarts via the persistence layer
 ([state_machine/persistence.py](state_machine/persistence.py)).
 
-Subagent cron jobs were rewired onto the same runtime:
-[plugins/tasks/task_run_subagent.py](plugins/tasks/task_run_subagent.py) now
-loads a session keyed by `subagent:<job_name>` and calls
-`runtime.iterate_agent_turn(...)`. Approvals, forms, cancel semantics — all
-the same path as user turns.
+The runtime exposes `runtime.active_session_key` / `active_conversation_id`
+so background drivers can identify themselves: anything with a session key
+that doesn't match the active one is, by definition, running unattended.
+The tool registry uses this to refuse `background_safe=False` tools from
+non-active sessions. The scheduled-subagent layer was deleted and is
+slated for a clean rebuild on top of these primitives — there is no
+`is_subagent` flag in the runtime.
 
 ## Command lifecycle (current)
 
@@ -51,7 +53,9 @@ payload)`. Telegram edits a single message in place: `⏳ /name` →
   it's discovered automatically. Tools receive `SecondBrainContext` from
   [runtime/context.py](runtime/context.py).
 - **Drive an agent from a task**: call `context.runtime.iterate_agent_turn(...)`
-  on a session key. See `task_run_subagent.py` for the canonical example.
+  on a session key. The runtime persists history and markers atomically
+  for you. Background drivers should keep their session key distinct from
+  the active one so the registry's `background_safe` gate kicks in.
 - **Let an agent run a slash command**: the `slash_command` tool
   ([plugins/tools/tool_slash_command.py](plugins/tools/tool_slash_command.py))
   dispatches with a structured dict, skipping the form. Same

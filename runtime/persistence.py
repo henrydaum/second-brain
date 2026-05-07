@@ -42,13 +42,11 @@ def get_or_create_session(runtime, key: str) -> RuntimeSession:
     """Return the existing session for ``key`` or create an empty one."""
     with runtime._sessions_lock:
         if key not in runtime.sessions:
-            is_subagent = key.startswith("subagent:")
-            session = RuntimeSession(key, new_state(runtime), is_subagent=is_subagent)
+            session = RuntimeSession(key, new_state(runtime))
             session.cs = new_state(runtime, session=session)
             runtime.sessions[key] = session
             bus.emit(SESSION_CREATED, {
                 "session_key": key,
-                "is_subagent": is_subagent,
                 "agent_profile": session.active_agent_profile,
             })
         return runtime.sessions[key]
@@ -70,8 +68,7 @@ def open_session(
     - If a session exists for ``session_key`` and (a) ``conversation_id`` is
       None or matches the existing one, returns it.
     - If the session exists but its ``conversation_id`` differs from the
-      requested one, raises :class:`SessionConflict`. Realistic case: two
-      cron jobs sharing a name both trying to claim ``subagent:<name>``.
+      requested one, raises :class:`SessionConflict`.
     - If no session exists and ``conversation_id`` is given, loads it.
     - If no session exists and ``conversation_id`` is None, creates a new
       conversation row first, then loads it.
@@ -131,8 +128,6 @@ def load_conversation(
 
     rows = runtime.db.get_conversation_messages(conversation_id) if runtime.db else []
     marker = latest_state(rows) or {}
-    conv = runtime.db.get_conversation(conversation_id) if runtime.db else {}
-    is_subagent = (conv or {}).get("kind") == "subagent"
     saved_profile = agent_profile or marker.get("profile_override") or marker.get("active_agent_profile")
     profile = saved_profile or runtime.config.get("active_agent_profile") or "default"
     session = RuntimeSession(
@@ -143,8 +138,6 @@ def load_conversation(
         False,
         profile,
         profile_override=saved_profile,
-        is_subagent=is_subagent,
-        subagent_meta=dict(marker.get("subagent_meta") or {}),
         system_prompt_extras={**dict(marker.get("system_prompt_extras") or {}), **dict(system_prompt_extras or {})},
     )
     # Re-seed cs with session-aware specs.
@@ -153,7 +146,6 @@ def load_conversation(
         runtime.sessions[session_key] = session
     bus.emit(SESSION_CREATED, {
         "session_key": session_key,
-        "is_subagent": is_subagent,
         "agent_profile": profile,
     })
     restore_pending_requests(runtime, session)
@@ -190,17 +182,15 @@ def load_history(runtime, session_key: str, conversation_id: int):
 
 
 def reset_conversation(runtime, session_key: str) -> RuntimeSession:
-    is_subagent = session_key.startswith("subagent:")
     with runtime._sessions_lock:
         existed = session_key in runtime.sessions
-        session = RuntimeSession(session_key, new_state(runtime), is_subagent=is_subagent)
+        session = RuntimeSession(session_key, new_state(runtime))
         session.cs = new_state(runtime, session=session)
         runtime.sessions[session_key] = session
     if existed:
         bus.emit(SESSION_CLOSED, {"session_key": session_key})
     bus.emit(SESSION_CREATED, {
         "session_key": session_key,
-        "is_subagent": is_subagent,
         "agent_profile": session.active_agent_profile,
     })
     return session
@@ -228,10 +218,9 @@ def iterate_agent_turn(
 ):
     """Drive one user prompt → agent reply round-trip.
 
-    Used by tools (ask_subagent) and tasks (run_subagent) — anything that
-    pushes a turn from outside a frontend. After the turn completes the
-    full provider history is replaced atomically and a fresh state
-    marker is saved.
+    Used by anything that pushes a turn from outside a frontend. After the
+    turn completes the full provider history is replaced atomically and a
+    fresh state marker is saved.
 
     ``attachments`` accepts an iterable of :class:`attachments.Attachment`
     dataclasses (or dicts produced by ``Attachment.to_dict``). They are
@@ -358,7 +347,6 @@ def ensure_conversation(runtime, session: RuntimeSession, title_text: str = "") 
     if session.conversation_id is None and runtime.db:
         session.conversation_id = runtime.db.create_conversation(
             (title_text or "New Conversation").replace("\n", " ")[:80] or "New Conversation",
-            kind="subagent" if session.is_subagent else "user",
         )
 
 

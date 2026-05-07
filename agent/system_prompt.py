@@ -4,8 +4,8 @@ System prompt builder.
 Single entry point for assembling the agent system prompt. Sections are
 gated on which tools the calling agent's registry actually exposes, so a
 restricted profile doesn't get a wall of guidance about tools it can't
-call. Also handles the scope-limits note, prompt suffixes, and the
-scheduled-subagent header so callers don't have to stitch strings.
+call. Also handles the scope-limits note and prompt suffixes so callers
+don't have to stitch strings.
 
 Built fresh each turn so the LLM always sees current state (newly
 registered plugins, service status changes, current memory.md, etc.).
@@ -29,7 +29,6 @@ def build_system_prompt(
     scope: AgentScope | None = None,
     profile_name: str = "default",
     extra_suffix: str = "",
-    subagent_mode: str | None = None,
 ) -> str:
     r = tool_registry  # short alias for gating checks
 
@@ -37,7 +36,6 @@ def build_system_prompt(
         _identity(services, r),
         _current_datetime(),
         _available_tools(r),
-        _agent_profiles(orchestrator) if _has_any(r, "ask_subagent", "schedule_subagent") else "",
         _authoring_guidance() if _has_tool(r, "register_plugin") else "",
         _sandbox_files() if _has_tool(r, "register_plugin") else "",
         _attachments() if _has_tool(r, "sql_query") else "",
@@ -56,8 +54,6 @@ def build_system_prompt(
         prompt += "\n\n" + scope.prompt_suffix
     if extra_suffix:
         prompt += extra_suffix
-    if subagent_mode is not None:
-        prompt += _subagent_block(subagent_mode, has_notify=_has_tool(r, "notify"))
     return prompt
 
 
@@ -183,12 +179,6 @@ def _available_tools(tool_registry) -> str:
     else:
         lines.append("No tools are currently registered.")
     return "\n".join(lines)
-
-
-def _agent_profiles(orchestrator) -> str:
-    config = getattr(orchestrator, "config", {}) or {}
-    names = sorted((config.get("agent_profiles") or {"default": {}}).keys())
-    return "## Agents\nDifferent agents have different abilities. You can call ask_subagent and schedule_subagent using these available agents: " + ", ".join(names) + "."
 
 
 def _sandbox_files() -> str:
@@ -318,7 +308,7 @@ def _agent_memory() -> str:
     return f"\n\n{header}\nCurrent contents: (empty — the file will be created on first update_memory call)"
 
 
-# ── Scope + subagent trailers ────────────────────────────────────────
+# ── Scope trailer ────────────────────────────────────────────────────
 
 def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
     if profile_name == "default" or not scope:
@@ -336,49 +326,3 @@ def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
     )
 
 
-def _subagent_block(mode: str, *, has_notify: bool = True) -> str:
-    header = (
-        "\n\n## Scheduled subagent\n"
-        "You are running unattended on a schedule.\n"
-        "Work as if no one will answer follow-up questions during this run.\n"
-        "Do not rely on permission dialogs or back-and-forth clarification.\n"
-        "Do not ask questions.\n"
-        "Your conversation persists across runs: prior turns and any messages "
-        "the user left for you (by switching to this conversation via "
-        "/conversations) appear in your history as user turns. Read them and "
-        "respond to anything they asked.\n"
-    )
-    # When the cron lands inside the user's currently active conversation
-    # the notify tool is intentionally withheld — the user already sees
-    # everything the agent says in their UI, so a separate push would
-    # just duplicate. Tell the agent that explicitly so it does not try
-    # to reach for a tool that is not in its registry.
-    if not has_notify:
-        body = (
-            "Notifications: not applicable. This run is happening inside the user's currently active "
-            "conversation, so anything you say is already visible to them in real time. "
-            "The notify tool is intentionally not available — do not try to call it. "
-            "Speak directly to the user as you normally would, then finish with a concise final answer.\n"
-        )
-    elif mode == "off":
-        body = (
-            "Notifications: OFF. You are running silently and have no way to message the user during this run. "
-            "The notify tool is not available. "
-            "Do your work and finish with a concise final answer that will be stored for later review.\n"
-        )
-    elif mode == "important":
-        body = (
-            "Notifications: IMPORTANT-ONLY. The notify tool is available but should be used only when something noteworthy comes up — "
-            "a real finding, an alert, a needed nudge, or information the user actually needs to see now. "
-            "Routine completion is not important; stay silent in that case. "
-            "Always finish with a concise final answer that will be stored for later review.\n"
-        )
-    else:  # "all"
-        body = (
-            "Notifications: ALL. The notify tool is the main way to send a user-visible message during the run. "
-            "Use it for reminders, alerts, briefs, findings, check-ins, or anything the user should actually see in chat. "
-            "If you do not call notify, the system will fall back to sending your final answer as a single push so the user is not left in the dark. "
-            "update_memory stores durable lessons for future sessions but does not notify anyone — never use it in place of notify when the user is expecting to hear from you. "
-            "Finish with a concise final answer that can be stored and reviewed later.\n"
-        )
-    return header + body

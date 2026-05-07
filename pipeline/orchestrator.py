@@ -36,7 +36,7 @@ class Orchestrator:
 		self.services = services or {}
 		# ConversationRuntime ref, populated by frontend bootstrap once the
 		# runtime is constructed. Tasks that need to drive a state-machine
-		# session (scheduled subagents) reach it via context.runtime.
+		# session reach it via context.runtime.
 		self.runtime = None
 
 		# Task registry: name -> BaseTask instance
