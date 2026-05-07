@@ -102,7 +102,7 @@ class ConversationRuntime:
         # they left off. The id is persisted to config on every conversation
         # switch (see ``_persist_active_conversation``).
         self._pending_restore_conv_id = self.config.get("last_active_conversation_id") if self.config else None
-        self._restore_consumed = False
+        self._restore_consumed_keys: set[str] = set()
         self._persisted_active_conv_id = self._pending_restore_conv_id
 
     # ──────────────────────────────────────────────────────────────────
@@ -401,9 +401,9 @@ class ConversationRuntime:
         before the user's first action — so the "Loaded last
         conversation" notice arrives right after the frontend's
         ready/online banner instead of mid-command."""
-        if self._restore_consumed:
+        if session_key in self._restore_consumed_keys:
             return None
-        self._restore_consumed = True
+        self._restore_consumed_keys.add(session_key)
         if self.config and not self.config.get("startup_restore_conversation", True):
             return None
         conv_id = self._pending_restore_conv_id
