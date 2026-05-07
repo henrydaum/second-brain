@@ -401,6 +401,7 @@ class ConversationRuntime:
         before the user's first action — so the "Loaded last
         conversation" notice arrives right after the frontend's
         ready/online banner instead of mid-command."""
+        logger.info(f"restore_last_active({session_key}): pending={self._pending_restore_conv_id}, consumed_keys={self._restore_consumed_keys}, enabled={(self.config or {}).get('startup_restore_conversation', True)}")
         if session_key in self._restore_consumed_keys:
             return None
         self._restore_consumed_keys.add(session_key)
@@ -440,6 +441,7 @@ class ConversationRuntime:
         try:
             import config.config_manager as config_manager
             config_manager.save(self.config)
+            logger.info(f"Persisted last_active_conversation_id={conv_id}")
         except Exception:
             logger.exception("Failed to persist last_active_conversation_id")
 
