@@ -61,7 +61,9 @@ class CompactChat(BaseTask):
             self._finish(context, token, summary=None, error="LLM not loaded")
             return TaskResult.failed("LLM service is not loaded.")
 
-        self._push(session_key, "Compacting…")
+        is_active = self._is_active_session(runtime, session_key)
+        if is_active:
+            self._push(session_key, "Compacting…")
         try:
             response = llm.chat_with_tools([
                 {"role": "system", "content": self.SYSTEM_PROMPT},
@@ -80,8 +82,15 @@ class CompactChat(BaseTask):
 
         summary = (getattr(response, "content", "") or "").strip()
         self._finish(context, token, summary=summary)
-        self._push(session_key, "Compaction complete.")
+        if is_active:
+            self._push(session_key, "Compaction complete.")
         return TaskResult(success=True)
+
+    @staticmethod
+    def _is_active_session(runtime, session_key: str | None) -> bool:
+        if not session_key:
+            return False
+        return getattr(runtime, "active_session_key", None) == session_key
 
     @staticmethod
     def _llm_for_session(runtime, session_key: str | None):
