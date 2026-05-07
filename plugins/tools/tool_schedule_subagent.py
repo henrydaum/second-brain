@@ -121,13 +121,17 @@ class ScheduleSubagent(BaseTool):
             },
             "conversation_id": {
                 "description": (
-                    "Conversation the job should run inside. Either an integer id "
-                    "of an existing conversation, or the literal string 'active' "
-                    "to track whatever conversation the user has open at fire time. "
-                    "Leave blank to auto-create a fresh conversation for this job; "
-                    "the new conversation appears in /conversations under "
-                    "'Scheduled' (or 'Scheduled (one-time)') so the user can brief "
-                    "it before the first run."
+                    "DEFAULT: leave this blank. A fresh conversation is auto-created "
+                    "for the job and appears in /conversations under 'Scheduled' "
+                    "(or 'Scheduled (one-time)') so the user can brief it before the "
+                    "first run. This is what you want almost every time. "
+                    "Only set this if the user has explicitly asked to reuse a "
+                    "specific conversation: pass an integer id of an existing "
+                    "conversation. The literal string 'active' is a rarely-used "
+                    "special case that pins the job to whatever conversation the "
+                    "user happens to have open at fire time — do NOT pick it just "
+                    "because the user is currently chatting; only use it if they "
+                    "explicitly ask for that 'follow my active chat' behavior."
                 ),
             },
             "enabled": {
