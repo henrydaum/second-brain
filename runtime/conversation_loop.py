@@ -340,24 +340,74 @@ class ConversationLoop:
             if history is None or not is_context_limit_error(e):
                 raise
             logger.warning("Context limit hit, compacting and retrying: %s", e)
-            self._compact(history)
-            try:
-                response = self.llm.chat_with_tools(self._messages(history), tools, attachments=None)
-            except Exception as retry_error:
-                if is_context_limit_error(retry_error):
-                    raise RuntimeError("Context limit reached even after compacting. Use /new to start fresh.") from retry_error
-                raise
+            response = self._retry_after_overflow(tools, history)
         if getattr(response, "is_error", False):
             err = getattr(response, "error", None) or getattr(response, "content", None) or "LLM provider error."
             if history is not None and is_context_limit_error(err):
                 logger.warning("Context limit hit (response error), compacting and retrying: %s", err)
-                self._compact(history)
-                response = self.llm.chat_with_tools(self._messages(history), tools, attachments=None)
-                if getattr(response, "is_error", False):
-                    raise RuntimeError("Context limit reached even after compacting. Use /new to start fresh.")
+                response = self._retry_after_overflow(tools, history)
             else:
                 raise RuntimeError(err)
         return response
+
+    def _retry_after_overflow(self, tools, history):
+        """Compact + retry. If retry still overflows, drop history down to
+        a single emergency stub and retry once more. Only after THAT
+        fails do we surface the unrecoverable error."""
+        from plugins.services.llmService import is_context_limit_error
+
+        self._compact(history)
+        try:
+            return self.llm.chat_with_tools(self._messages(history), tools, attachments=None)
+        except Exception as retry_error:
+            if not is_context_limit_error(retry_error):
+                raise
+            logger.warning("Post-compact retry still over context, doing emergency truncation: %s", retry_error)
+
+        self._emergency_truncate(history)
+        try:
+            response = self.llm.chat_with_tools(self._messages(history), tools, attachments=None)
+        except Exception as final_error:
+            if is_context_limit_error(final_error):
+                raise RuntimeError("Context limit reached even after compacting. Use /new to start fresh.") from final_error
+            raise
+        if getattr(response, "is_error", False):
+            err = getattr(response, "error", None) or "LLM provider error."
+            if is_context_limit_error(err):
+                raise RuntimeError("Context limit reached even after compacting. Use /new to start fresh.")
+            raise RuntimeError(err)
+        return response
+
+    def _emergency_truncate(self, history) -> None:
+        """Last-resort shrink that does NOT call the LLM. Keeps only the
+        most recent user message (and any in-flight tool_call/result pair
+        that immediately follows it), aggressively truncating any string
+        content. Used when compaction itself can't help — either because
+        the compact_chat task didn't run, the summary came back empty, or
+        the post-compact retry still overflowed."""
+        if not history:
+            return
+        last_user_idx = next((i for i in range(len(history) - 1, -1, -1) if history[i].get("role") == "user"), None)
+        if last_user_idx is None:
+            keep = history[-1:]
+        else:
+            keep = history[last_user_idx:]
+        cap = 2000
+        shrunk = []
+        for msg in keep:
+            content = msg.get("content")
+            if isinstance(content, str) and len(content) > cap:
+                msg = {**msg, "content": _truncate_middle(content, cap)}
+            shrunk.append(msg)
+        original_count = len(history)
+        history[:] = [
+            {"role": "user", "content": "[Earlier conversation dropped to fit context. Continue from the message below.]"},
+            {"role": "assistant", "content": "Understood."},
+            *shrunk,
+        ]
+        logger.warning(f"Emergency-truncated history from {original_count} -> {len(history)} messages.")
+        if self.on_notice:
+            self.on_notice(f"Context overflow: dropped earlier messages to keep going (was {original_count}).")
 
     def _compact_if_needed(self, response, history) -> None:
         # Proactive compaction: trigger before hitting the context limit when
@@ -379,6 +429,7 @@ class ConversationLoop:
             transcript = transcript[:20000]
             summary = self.runtime.request_compaction(self.session_key, transcript)
             if not summary:
+                logger.warning("Compaction returned no summary (timeout or empty). History will not shrink via summary.")
                 return
             old_count = len(history)
             tail = [self._shrink_for_tail(m) for m in history[-2:]]
