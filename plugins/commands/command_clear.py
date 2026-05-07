@@ -17,6 +17,10 @@ class ClearCommand(BaseCommand):
         if conv_id is None:
             return "No conversation loaded."
         db.clear_conversation_messages(conv_id)
+        conv = db.get_conversation(conv_id) or {}
+        title = (conv.get("title") or "").strip()
+        if title and not title.endswith(" (cleared)"):
+            db.update_conversation_title(conv_id, f"{title} (cleared)")
         runtime.close_session(session_key)
         runtime.load_conversation(session_key, conv_id)
         return "Conversation cleared."
