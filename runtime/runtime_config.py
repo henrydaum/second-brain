@@ -249,6 +249,8 @@ def build_loop(runtime, session_key: str | None = None) -> ConversationLoop:
         session_system_prompt(runtime, session),
         started, finished, notice,
         session.cancel_event if session else None,
+        runtime=runtime,
+        session_key=session_key,
     )
 
 

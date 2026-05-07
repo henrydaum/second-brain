@@ -32,6 +32,20 @@ def _clean(text: str | None) -> str:
     return strip_model_tokens(text or "")[0]
 
 
+def _truncate_middle(text: str, max_chars: int) -> str:
+    """Cap a string by keeping the head and tail and inserting a marker.
+
+    Used to keep oversized tool results from blowing the context window
+    while preserving enough signal that the LLM can tell what kind of
+    payload was elided.
+    """
+    if not text or len(text) <= max_chars:
+        return text
+    head = max_chars // 2
+    tail = max_chars - head
+    return f"{text[:head]}\n…[truncated {len(text) - max_chars} chars]…\n{text[-tail:]}"
+
+
 class ConversationLoop:
     """Drive a participant's turn until they end it.
 
@@ -43,6 +57,7 @@ class ConversationLoop:
     """
 
     OVER_BUDGET_MESSAGE = "I've made too many tool calls. Could you try a more specific question?"
+    MAX_TOOL_RESULT_CHARS = 12000
 
     def __init__(
         self,
@@ -54,6 +69,8 @@ class ConversationLoop:
         on_tool_result=None,
         on_notice=None,
         cancel_event=None,
+        runtime=None,
+        session_key: str | None = None,
     ):
         self.llm = llm
         self.tool_registry = tool_registry
@@ -63,6 +80,8 @@ class ConversationLoop:
         self.on_tool_result = on_tool_result
         self.on_notice = on_notice
         self.cancel_event = cancel_event
+        self.runtime = runtime
+        self.session_key = session_key
         self.cancelled = False
         self.running = False
         self._tool_call_counts: dict[str, int] = {}
@@ -299,7 +318,7 @@ class ConversationLoop:
                 getattr(tool_result, "llm_summary", None)
                 or json.dumps(getattr(tool_result, "data", None), default=str)
             )
-            return text, paths
+            return _truncate_middle(text, self.MAX_TOOL_RESULT_CHARS), paths
         except (TypeError, ValueError) as e:
             return json.dumps({"error": f"Result serialization failed: {e}"}), []
 
@@ -350,32 +369,38 @@ class ConversationLoop:
         self._compact(history)
 
     def _compact(self, history) -> None:
-        """Summarize the head of `history` in place. Used by both proactive
-        and reactive compaction."""
-        if len(history) <= 2:
+        """Summarize the head of `history` in place by delegating to the
+        ``compact_chat`` task. The runtime call blocks until the task
+        finishes (or times out)."""
+        if len(history) <= 2 or self.runtime is None:
             return
         try:
             transcript = "\n".join(f"{m.get('role', '').upper()}: {(m.get('content') or '')[:1000]}" for m in history[:-2])
-            summary_response = self.llm.chat_with_tools([
-                {"role": "system", "content": "Summarize this Second Brain conversation so the assistant can continue with minimal loss."},
-                {"role": "user", "content": transcript[:20000]},
-            ], None)
-            if getattr(summary_response, "is_error", False):
-                logger.debug("Compaction summarization returned error: %s", getattr(summary_response, "error", None))
-                return
-            summary = _clean(getattr(summary_response, "content", ""))
+            transcript = transcript[:20000]
+            summary = self.runtime.request_compaction(self.session_key, transcript)
             if not summary:
                 return
             old_count = len(history)
+            tail = [self._shrink_for_tail(m) for m in history[-2:]]
             history[:] = [
                 {"role": "user", "content": f"[Conversation summary from earlier]\n{summary}"},
                 {"role": "assistant", "content": "Understood - I have the earlier context."},
-                *history[-2:],
+                *tail,
             ]
             if self.on_notice:
                 self.on_notice(f"Compacted {old_count} messages.")
         except Exception as e:
             logger.debug("Compaction failed: %s", e, exc_info=True)
+
+    def _shrink_for_tail(self, msg: dict[str, Any]) -> dict[str, Any]:
+        """Aggressively truncate any oversized message preserved through
+        compaction. Without this, a huge ``role: tool`` result in the last
+        two messages would survive compaction intact and the post-compact
+        retry would overflow again."""
+        content = msg.get("content")
+        if not isinstance(content, str) or len(content) <= self.MAX_TOOL_RESULT_CHARS:
+            return msg
+        return {**msg, "content": _truncate_middle(content, self.MAX_TOOL_RESULT_CHARS)}
 
     def _over_budget_summary(self, cs, actor_id, history, new_messages, attachments, db, conversation_id) -> None:
         try:

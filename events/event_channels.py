@@ -77,6 +77,15 @@ Payload:
     input_paths:     list[str] (optional)
     agent:           str (optional)"""
 
+COMPACT_CHAT = "compact_chat"
+"""The runtime is asking a task to compact (summarize) the head of a
+conversation history. The task does the LLM call and posts the summary
+back via ``runtime._finish_compaction(token, summary)``.
+Payload:
+    request_token: str         — unique token; the runtime waits on it
+    session_key:   str         — used to resolve the session's LLM
+    transcript:    str         — pre-rendered transcript to summarize"""
+
 CHAT_MESSAGE_PUSHED = "chat_message_pushed"
 """Something in the system wants to proactively surface a message in the user's
 chat view. Used by scheduled subagents pushing notes and any other background
