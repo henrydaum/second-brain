@@ -30,6 +30,12 @@ from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
 from state_machine.serialization import latest_state, messages_to_history, save_history_message, save_state_marker
 from runtime.runtime_config import new_state, refresh_specs
 from runtime.session import RuntimeSession, SessionConflict
+from runtime.notifications import (
+    DEFAULT_NOTIFICATION_MODE,
+    emit_fallback_push,
+    make_session_notify_tool,
+    notification_mode as normalize_notification_mode,
+)
 
 logger = logging.getLogger("Runtime.persistence")
 
@@ -45,11 +51,35 @@ def get_or_create_session(runtime, key: str) -> RuntimeSession:
             session = RuntimeSession(key, new_state(runtime))
             session.cs = new_state(runtime, session=session)
             runtime.sessions[key] = session
+            _attach_notify_tool(session)
             bus.emit(SESSION_CREATED, {
                 "session_key": key,
                 "agent_profile": session.active_agent_profile,
             })
         return runtime.sessions[key]
+
+
+def _attach_notify_tool(session: RuntimeSession) -> None:
+    """Idempotently sync ``session.extra_tool_instances`` with the current
+    ``notification_mode``: a NotifyTool is present iff mode is "all" or
+    "important". The recorder closure appends to ``session.notification_records``
+    so the fallback-push check can tell whether the agent actually called notify
+    during a turn."""
+    session.extra_tool_instances = [
+        t for t in session.extra_tool_instances
+        if getattr(t, "name", None) != "notify"
+    ]
+    mode = normalize_notification_mode(session.notification_mode)
+    session.notification_mode = mode
+    if mode == "off":
+        return
+    records = session.notification_records
+    tool = make_session_notify_tool(
+        session_key=session.key,
+        conversation_id=session.conversation_id,
+        recorder=lambda record: records.append(record),
+    )
+    session.extra_tool_instances.append(tool)
 
 
 def open_session(
@@ -61,6 +91,7 @@ def open_session(
     category: str | None = None,
     title: str = "New Conversation",
     agent_profile: str | None = None,
+    notification_mode: str | None = None,
     system_prompt_extras: dict[str, Any] | None = None,
 ) -> RuntimeSession:
     """Single entry point for "address this conversation".
@@ -91,6 +122,7 @@ def open_session(
     return load_conversation(
         runtime, session_key, conversation_id,
         agent_profile=agent_profile,
+        notification_mode=notification_mode,
         system_prompt_extras=system_prompt_extras,
     )
 
@@ -115,6 +147,7 @@ def load_conversation(
     conversation_id: int,
     *,
     agent_profile: str | None = None,
+    notification_mode: str | None = None,
     system_prompt_extras: dict[str, Any] | None = None,
 ) -> RuntimeSession:
     """Hydrate a session from a stored conversation.
@@ -130,6 +163,9 @@ def load_conversation(
     marker = latest_state(rows) or {}
     saved_profile = agent_profile or marker.get("profile_override") or marker.get("active_agent_profile")
     profile = saved_profile or runtime.config.get("active_agent_profile") or "default"
+    saved_mode = normalize_notification_mode(
+        notification_mode or marker.get("notification_mode") or DEFAULT_NOTIFICATION_MODE
+    )
     session = RuntimeSession(
         session_key,
         new_state(runtime, marker),
@@ -139,14 +175,17 @@ def load_conversation(
         profile,
         profile_override=saved_profile,
         system_prompt_extras={**dict(marker.get("system_prompt_extras") or {}), **dict(system_prompt_extras or {})},
+        notification_mode=saved_mode,
     )
     # Re-seed cs with session-aware specs.
     session.cs = new_state(runtime, marker, session=session)
+    _attach_notify_tool(session)
     with runtime._sessions_lock:
         runtime.sessions[session_key] = session
     bus.emit(SESSION_CREATED, {
         "session_key": session_key,
         "agent_profile": profile,
+        "notification_mode": saved_mode,
     })
     restore_pending_requests(runtime, session)
     return session
@@ -186,6 +225,7 @@ def reset_conversation(runtime, session_key: str) -> RuntimeSession:
         existed = session_key in runtime.sessions
         session = RuntimeSession(session_key, new_state(runtime))
         session.cs = new_state(runtime, session=session)
+        _attach_notify_tool(session)
         runtime.sessions[session_key] = session
     if existed:
         bus.emit(SESSION_CLOSED, {"session_key": session_key})
@@ -230,6 +270,9 @@ def iterate_agent_turn(
     payload = {"text": prompt, "actor_id": actor_id}
     if attachments:
         payload["attachments"] = list(attachments)
+    pre_session = runtime.sessions.get(session_key)
+    if pre_session is not None:
+        pre_session.notification_records.clear()
     out = runtime.handle_action(session_key, "send_text", payload, user_driven=False)
     session = runtime.sessions.get(session_key)
     if out.ok and session and runtime.db and session.conversation_id:
@@ -249,6 +292,23 @@ def iterate_agent_turn(
     }
     (runtime.emit_event or bus.emit)(SESSION_TURN_COMPLETED, event)
     out.data.update(event)
+
+    # "all"-mode fallback: a background turn that finished without the
+    # agent calling notify gets its final answer relayed via the same
+    # CHAT_MESSAGE_PUSHED channel. Foreground turns are skipped — the user
+    # already saw the agent's reply in their session.
+    if (out.ok and session is not None
+            and session.notification_mode == "all"
+            and session_key != getattr(runtime, "active_session_key", None)
+            and not session.notification_records
+            and final_text):
+        emit_fallback_push(
+            session_key=session_key,
+            conversation_id=session.conversation_id,
+            title=conversation_title(runtime, session.conversation_id) if session.conversation_id else "",
+            final_text=final_text,
+            db=runtime.db,
+        )
     return out
 
 

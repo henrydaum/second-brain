@@ -70,7 +70,10 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
     if scope:
         registry = scoped_registry(runtime.tool_registry, scope, db=runtime.db)
     extras = list((session.extra_tool_instances if session else []) or [])
-    if extras:
+    # Cloning needs the real ToolRegistry shape (db/config/services). When
+    # the runtime is wired with a stub registry (tests), extras can't be
+    # plumbed through anyway — fall back to the base registry.
+    if extras and hasattr(registry, "db") and hasattr(registry, "config") and hasattr(registry, "services"):
         from agent.tool_registry import ToolRegistry
         cloned = ToolRegistry(registry.db, registry.config, registry.services)
         cloned.orchestrator = getattr(registry, "orchestrator", None)
@@ -167,9 +170,13 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
     user sessions reuse the runtime's default system_prompt and append the
     session's ``system_prompt_extras`` — letting any plugin pin contextual
     snippets to the prompt without touching the bootstrap closure.
+    The conversation's notification mode contributes its own suffix on
+    both paths.
     """
     if session is None:
         return runtime.system_prompt
+
+    from runtime.notifications import notify_block
 
     if session.profile_override:
         from agent.system_prompt import build_system_prompt
@@ -189,6 +196,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             for value in extras.values():
                 if isinstance(value, str) and value:
                     text += "\n\n" + value
+            text += notify_block(session.notification_mode)
             return text
         return _session_prompt
 
@@ -200,6 +208,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         for value in (extras or {}).values():
             if isinstance(value, str) and value:
                 text += "\n\n" + value
+        text += notify_block(session.notification_mode)
         return text
     return _user_prompt
 

@@ -54,12 +54,14 @@ class NotifyTool(BaseTool):
         self._extra = extra
 
     def run(self, context, **kwargs):
+        from runtime.notifications import load_conversation_suffix
         message = (kwargs.get("message") or "").strip()
         if not message:
             return ToolResult.failed("message is required.")
         kind = (kwargs.get("kind") or "note").strip().lower()
         kind = kind if kind in NOTIFY_KINDS else "note"
         title = (kwargs.get("title") or "").strip()
+        message = message + load_conversation_suffix(getattr(context, "db", None), self._conversation_id)
         sent_at = time.time()
         record = NotificationRecord(kind, title, message, sent_at)
         if self._recorder:

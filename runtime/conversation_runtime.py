@@ -384,6 +384,24 @@ class ConversationRuntime:
         """Alias for plugin code that reads in conversation lifecycle terms."""
         return self.close_session(session_key)
 
+    def set_notification_mode(self, session_key: str, mode: str) -> str:
+        """Update a session's notification mode in place.
+
+        Re-syncs the NotifyTool attached to the session and persists the
+        new mode in the conversation's state marker. Returns the
+        normalized mode actually applied.
+        """
+        from runtime.notifications import notification_mode as normalize
+        session = self.sessions.get(session_key)
+        if session is None:
+            raise KeyError(f"No live session for '{session_key}'.")
+        normalized = normalize(mode)
+        with session.lock:
+            session.notification_mode = normalized
+            _persist._attach_notify_tool(session)
+            _persist.persist_marker(self, session)
+        return normalized
+
     @property
     def active_conversation_id(self) -> int | None:
         """Conversation id bound to the most recent user-driven session.

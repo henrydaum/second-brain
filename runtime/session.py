@@ -19,6 +19,7 @@ from typing import Any
 
 from state_machine.conversation import ConversationState
 from state_machine.errors import ActionResult
+from runtime.notifications import DEFAULT_NOTIFICATION_MODE
 
 
 @dataclass
@@ -62,6 +63,10 @@ class RuntimeSession:
     profile_override: str | None = None
     extra_tool_instances: list = field(default_factory=list)
     system_prompt_extras: dict[str, Any] = field(default_factory=dict)
+    notification_mode: str = DEFAULT_NOTIFICATION_MODE
+    # Reset per turn by the runtime; the NotifyTool's recorder appends
+    # one entry per call. Used by the fallback-push check.
+    notification_records: list = field(default_factory=list)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
@@ -71,6 +76,7 @@ class RuntimeSession:
             "conversation_id": self.conversation_id,
             "active_agent_profile": self.active_agent_profile,
             "profile_override": self.profile_override,
+            "notification_mode": self.notification_mode,
             "system_prompt_extras": self.system_prompt_extras,
             "busy": self.busy,
         })
