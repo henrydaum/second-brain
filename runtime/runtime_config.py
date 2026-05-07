@@ -189,10 +189,9 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
                 scope=scope,
                 profile_name=profile,
                 subagent_mode=extras.get("subagent_mode") if session.is_subagent else None,
-                subagent_has_pending_messages=bool(extras.get("subagent_has_pending_messages")) if session.is_subagent else False,
             )
             for key, value in extras.items():
-                if key in {"subagent_mode", "subagent_has_pending_messages"}:
+                if key == "subagent_mode":
                     continue
                 if isinstance(value, str) and value:
                     text += "\n\n" + value

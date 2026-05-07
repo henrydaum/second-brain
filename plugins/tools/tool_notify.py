@@ -6,6 +6,7 @@ source_id, session_key, recorder closure) and is instantiated manually by
 its caller (see plugins/tasks/task_run_subagent.py), not via the generic
 plugin discoverer. `auto_register = False` keeps discovery from picking it
 up as a stateless, globally-registered tool.
+This is a system-level plugin, and should not be removed.
 """
 
 import time
@@ -54,22 +55,8 @@ class NotifyTool(BaseTool):
         self._extra = extra
 
     def _build_load_suffix(self, context) -> str:
-        cid = self._conversation_id
-        db = getattr(context, "db", None)
-        if cid is None or db is None:
-            return ""
-        try:
-            conv = db.get_conversation(cid)
-        except Exception:
-            return ""
-        if not conv:
-            return ""
-        category = (conv.get("category") or "").strip()
-        if not category:
-            return ""
-        import shlex
-        cmd = f"/conversations {shlex.quote(category)} {cid} 'Load conversation'"
-        return f"\n\nLoad this conversation: `{cmd}`"
+        from plugins.tasks.helpers.notifications import load_conversation_suffix
+        return load_conversation_suffix(getattr(context, "db", None), self._conversation_id)
 
     def run(self, context, **kwargs):
         message = (kwargs.get("message") or "").strip()

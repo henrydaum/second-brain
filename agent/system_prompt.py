@@ -30,7 +30,6 @@ def build_system_prompt(
     profile_name: str = "default",
     extra_suffix: str = "",
     subagent_mode: str | None = None,
-    subagent_has_pending_messages: bool = False,
 ) -> str:
     r = tool_registry  # short alias for gating checks
 
@@ -58,7 +57,7 @@ def build_system_prompt(
     if extra_suffix:
         prompt += extra_suffix
     if subagent_mode is not None:
-        prompt += _subagent_block(subagent_mode, subagent_has_pending_messages, has_notify=_has_tool(r, "notify"))
+        prompt += _subagent_block(subagent_mode, has_notify=_has_tool(r, "notify"))
     return prompt
 
 
@@ -337,7 +336,7 @@ def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
     )
 
 
-def _subagent_block(mode: str, has_pending_messages: bool = False, *, has_notify: bool = True) -> str:
+def _subagent_block(mode: str, *, has_notify: bool = True) -> str:
     header = (
         "\n\n## Scheduled subagent\n"
         "You are running unattended on a schedule.\n"
@@ -345,8 +344,9 @@ def _subagent_block(mode: str, has_pending_messages: bool = False, *, has_notify
         "Do not rely on permission dialogs or back-and-forth clarification.\n"
         "Do not ask questions.\n"
         "Your conversation persists across runs: prior turns and any messages "
-        "the user left for you via /message appear in your history as user "
-        "turns. Read them and respond to anything they asked.\n"
+        "the user left for you (by switching to this conversation via "
+        "/conversations) appear in your history as user turns. Read them and "
+        "respond to anything they asked.\n"
     )
     # When the cron lands inside the user's currently active conversation
     # the notify tool is intentionally withheld — the user already sees
@@ -381,11 +381,4 @@ def _subagent_block(mode: str, has_pending_messages: bool = False, *, has_notify
             "update_memory stores durable lessons for future sessions but does not notify anyone — never use it in place of notify when the user is expecting to hear from you. "
             "Finish with a concise final answer that can be stored and reviewed later.\n"
         )
-    pending_note = ""
-    if has_pending_messages:
-        pending_note = (
-            "\nThe user left a message for this run via /message. You MUST answer them by calling "
-            "the `message` tool before finishing — even on `important` or `off` modes, treat this as "
-            "a direct question that requires a reply.\n"
-        )
-    return header + body + pending_note
+    return header + body

@@ -97,16 +97,6 @@ class RunSubagent(BaseTask):
         if target_agent not in agent_profiles:
             return TaskResult.failed(f"Unknown agent profile: '{target_agent}'.")
 
-        pending_user_messages = 0
-        if is_scheduled:
-            try:
-                pending_user_messages = context.db.count_pending_inbox(conversation_id)
-            except Exception as e:
-                logger.warning(f"Failed to count pending inbox for {job_name}: {e}")
-        has_pending = pending_user_messages > 0
-        if has_pending and mode == "off":
-            mode = "important"
-
         push_records: list[NotificationRecord] = []
         notify_tool = None
         # NotifyTool only lives on cron sessions that are not the user's active
@@ -129,7 +119,6 @@ class RunSubagent(BaseTask):
                 session_key, conversation_id, agent_profile=target_agent,
                 system_prompt_extras={
                     "subagent_mode": mode,
-                    "subagent_has_pending_messages": has_pending,
                     "subagent_run_id": run_id,
                     "subagent_job_name": job_name,
                 },
@@ -148,24 +137,17 @@ class RunSubagent(BaseTask):
             err = (result.error or {}).get("message") or "Subagent run failed."
             return TaskResult.failed(err)
 
-        # Drain /message replies once the run produced an answer.
-        if is_scheduled:
-            try:
-                context.db.mark_inbox_consumed(conversation_id)
-            except Exception as e:
-                logger.warning(f"Failed to mark inbox consumed for {job_name}: {e}")
-
         final_answer = ((turn_events[-1] or {}).get("final_text") if turn_events else "") or "\n".join(m for m in result.messages if m).strip()
         clean_answer, _ = strip_model_tokens(final_answer)
         if clean_answer.startswith("Error: no active LLM profile loaded"):
             return TaskResult.failed(clean_answer)
 
-        # Fallback push: in 'all' mode or when the user left a /message reply,
-        # guarantee a single user-visible response. Skipped when the run is
-        # already in the user's active conversation — they have already seen
-        # the agent's reply, no separate push needed.
-        if (mode == "all" or has_pending) and not push_records and not treat_as_active and clean_answer.strip():
-            self._emit_fallback_push(run_id, job_name, conversation_title, clean_answer, push_records)
+        # Fallback push: in 'all' mode, guarantee a single user-visible
+        # response. Skipped when the run is already in the user's active
+        # conversation — they have already seen the agent's reply, no
+        # separate push needed.
+        if mode == "all" and not push_records and not treat_as_active and clean_answer.strip():
+            self._emit_fallback_push(run_id, job_name, conversation_title, clean_answer, push_records, context, conversation_id)
 
         return TaskResult(success=True)
 
@@ -269,8 +251,10 @@ class RunSubagent(BaseTask):
         return (context.config.get("active_agent_profile") or "").strip() or "default"
 
     def _emit_fallback_push(self, run_id: str, job_name: str, title: str,
-                            final_answer: str, push_records: list[NotificationRecord]) -> None:
-        message = final_answer.strip()
+                            final_answer: str, push_records: list[NotificationRecord],
+                            context, conversation_id: int | None) -> None:
+        from plugins.tasks.helpers.notifications import load_conversation_suffix
+        message = final_answer.strip() + load_conversation_suffix(getattr(context, "db", None), conversation_id)
         push_title = (title or job_name or "").strip()
         sent_at = time.time()
         push_records.append(NotificationRecord(
