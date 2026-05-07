@@ -61,7 +61,7 @@ def open_session(
     conversation_id: int | None = None,
     kind: str = "user",
     category: str | None = None,
-    title: str = "New conversation",
+    title: str = "New Conversation",
     agent_profile: str | None = None,
     system_prompt_extras: dict[str, Any] | None = None,
 ) -> RuntimeSession:
@@ -100,7 +100,7 @@ def open_session(
 
 def create_conversation(
     runtime,
-    title: str = "New conversation",
+    title: str = "New Conversation",
     *,
     kind: str = "user",
     category: str | None = None,
@@ -351,13 +351,13 @@ def persist_marker(runtime, session: RuntimeSession) -> None:
 
 def conversation_title(runtime, conversation_id: int) -> str:
     row = runtime.db.get_conversation(conversation_id) if runtime.db else None
-    return ((row or {}).get("title") or "").strip() or "New conversation"
+    return ((row or {}).get("title") or "").strip() or "New Conversation"
 
 
 def ensure_conversation(runtime, session: RuntimeSession, title_text: str = "") -> None:
     if session.conversation_id is None and runtime.db:
         session.conversation_id = runtime.db.create_conversation(
-            (title_text or "New conversation").replace("\n", " ")[:80] or "New conversation",
+            (title_text or "New Conversation").replace("\n", " ")[:80] or "New Conversation",
             kind="subagent" if session.is_subagent else "user",
         )
 

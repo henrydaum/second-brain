@@ -62,6 +62,11 @@ Payload:
     name:   str — task name
     action: str — 'registered' or 'unregistered'"""
 
+UPDATE_TITLES = "update_titles"
+"""Periodic trigger asking the title-update task to re-evaluate conversation
+titles whose message count has advanced beyond the last-checked threshold.
+Payload: empty (the task pulls candidates from the DB)."""
+
 SUBAGENT_RUN = "subagent.run"
 """A scheduled or delegated agent conversation should run one turn.
 Payload:

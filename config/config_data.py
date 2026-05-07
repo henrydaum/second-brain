@@ -117,6 +117,11 @@ SETTINGS_DATA = [
      "default",
      {"type": "text", "hidden": True}),
 
+    ("Restore Last Conversation on Startup", "startup_restore_conversation",
+     "When enabled, the most recently active conversation is reloaded automatically when a frontend starts.",
+     True,
+     {"type": "bool"}),
+
     ("Last Active Conversation", "last_active_conversation_id",
      "Conversation id last touched by a user-driven session. Restored on startup so the user reopens where they left off.",
      None,

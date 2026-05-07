@@ -29,6 +29,12 @@ class ReplFrontend(BaseFrontend):
     def start(self) -> None:
         key = self.session_key(None)
         print("Second Brain REPL ready. Type /quit to exit.")
+        try:
+            notice = self.runtime.restore_last_active(key)
+            if notice:
+                self.render_messages(key, [notice])
+        except Exception:
+            logger.exception("REPL restore_last_active failed")
         while not self.shutdown_event.is_set():
             try:
                 raw = input("\n").strip()

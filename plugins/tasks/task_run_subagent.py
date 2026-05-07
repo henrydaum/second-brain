@@ -116,7 +116,7 @@ class RunSubagent(BaseTask):
         if mode != "off" and not treat_as_active:
             def _record_push(record: NotificationRecord):
                 push_records.append(record)
-            notify_tool = NotifyTool(source="subagent", source_id=run_id, job_name=job_name, recorder=_record_push)
+            notify_tool = NotifyTool(source="subagent", source_id=run_id, job_name=job_name, recorder=_record_push, conversation_id=conversation_id)
 
         session_key = runtime.subagent_session_key(job_name)
         input_paths = self._normalize_input_paths(payload.get("input_paths"))

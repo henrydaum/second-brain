@@ -176,6 +176,12 @@ class Database:
 			self.conn.execute("ALTER TABLE conversations ADD COLUMN category TEXT")
 		except sqlite3.OperationalError:
 			pass  # column already exists
+		try:
+			self.conn.execute(
+				"ALTER TABLE conversations ADD COLUMN last_title_check_message_count INTEGER NOT NULL DEFAULT 0"
+			)
+		except sqlite3.OperationalError:
+			pass  # column already exists
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS conversation_messages (
 				id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -790,7 +796,7 @@ class Database:
 	# CONVERSATIONS
 	# =================================================================
 
-	def create_conversation(self, title="New conversation", kind="user", category=None) -> int:
+	def create_conversation(self, title="New Conversation", kind="user", category=None) -> int:
 		now = time.time()
 		with self.lock:
 			cur = self.conn.execute(
@@ -819,6 +825,45 @@ class Database:
 				"UPDATE conversations SET title = ? WHERE id = ?",
 				(title, conversation_id))
 			self.conn.commit()
+
+	def update_conversation_title_check_count(self, conversation_id, count: int):
+		"""Record the message count seen by the last title-update sweep.
+
+		The title-update task uses this together with the live message count
+		to decide whether enough new turns have accumulated to justify a
+		re-titling LLM call.
+		"""
+		with self.lock:
+			self.conn.execute(
+				"UPDATE conversations SET last_title_check_message_count = ? WHERE id = ?",
+				(int(count), conversation_id))
+			self.conn.commit()
+
+	def list_conversations_for_title_check(self, threshold: int = 4) -> list[dict]:
+		"""Return conversations whose unseen-message delta meets ``threshold``.
+
+		Each row carries ``id``, ``title``, ``message_count``, and
+		``last_title_check_message_count`` so the caller can decide which
+		ones to re-title and persist the new high-water mark.
+		"""
+		with self.lock:
+			cur = self.conn.execute(
+				"""
+				SELECT c.id            AS id,
+				       c.title         AS title,
+				       COALESCE(c.last_title_check_message_count, 0) AS last_title_check_message_count,
+				       (SELECT COUNT(*) FROM conversation_messages m
+				          WHERE m.conversation_id = c.id) AS message_count
+				FROM conversations c
+				WHERE (
+				    (SELECT COUNT(*) FROM conversation_messages m
+				        WHERE m.conversation_id = c.id)
+				    - COALESCE(c.last_title_check_message_count, 0)
+				) >= ?
+				ORDER BY c.updated_at DESC
+				""",
+				(int(threshold),))
+			return [dict(row) for row in cur.fetchall()]
 
 	def set_conversation_category(self, conversation_id, category):
 		"""Set/overwrite the category on a conversation row."""

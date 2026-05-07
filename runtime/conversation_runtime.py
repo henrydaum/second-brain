@@ -54,7 +54,6 @@ from state_machine.conversation import CallableSpec
 from state_machine.conversation_phases import BASE_PHASE, BUSY_PHASES, PHASE_APPROVING_REQUEST
 from state_machine.errors import ActionError
 from runtime.session import RuntimeResult, RuntimeSession, SessionConflict
-from agent.title_generator import TitleGenerator
 
 from runtime import runtime_approvals as _approvals
 from runtime import runtime_config as _cfg
@@ -88,7 +87,6 @@ class ConversationRuntime:
         self.system_prompt = system_prompt
         self.commands = {**(commands or {}), **_cfg.command_specs_from_dicts(command_specs or {})}
         self.emit_event = emit_event
-        self._title_generator = TitleGenerator(db, services or {}) if db else None
         self.on_tool_start = on_tool_start
         self.on_tool_result = on_tool_result
         self.on_notice = on_notice
@@ -114,7 +112,6 @@ class ConversationRuntime:
     def handle_action(self, session_key: str, action_type: str, payload: dict | str | None = None, *, user_driven: bool = True) -> RuntimeResult:
         session = self.get_session(session_key)
         normalized = "send_text" if action_type == "chat_message" else action_type
-        restore_notice = self._maybe_restore_last_active(session_key) if user_driven else None
         if user_driven:
             self.active_session_key = session_key
             prior_conv = getattr(self, "_persisted_active_conv_id", None)
@@ -171,8 +168,6 @@ class ConversationRuntime:
             current_conv = self.active_conversation_id
             if current_conv != prior_conv:
                 self._persist_active_conversation(current_conv)
-            if restore_notice:
-                out.messages.insert(0, restore_notice)
 
         return out
 
@@ -289,10 +284,6 @@ class ConversationRuntime:
                 session.cs.set_priority("user")
             session.cancel_event.clear()
 
-        if (self._title_generator and session.conversation_id
-                and any(m.get("role") == "assistant" and not m.get("tool_calls") for m in new_messages)):
-            self._title_generator.maybe_generate_async(session.conversation_id)
-
         if reply:
             out.messages.append(reply)
             from events.event_channels import SESSION_MESSAGE
@@ -335,7 +326,7 @@ class ConversationRuntime:
         conversation_id: int | None = None,
         kind: str = "user",
         category: str | None = None,
-        title: str = "New conversation",
+        title: str = "New Conversation",
         agent_profile: str | None = None,
         system_prompt_extras: dict[str, Any] | None = None,
     ) -> RuntimeSession:
@@ -350,7 +341,7 @@ class ConversationRuntime:
             system_prompt_extras=system_prompt_extras,
         )
 
-    def create_conversation(self, title: str = "New conversation", *, kind: str = "user", category: str | None = None) -> int | None:
+    def create_conversation(self, title: str = "New Conversation", *, kind: str = "user", category: str | None = None) -> int | None:
         return _persist.create_conversation(self, title, kind=kind, category=category)
 
     def load_conversation(self, session_key: str, conversation_id: int, *, agent_profile: str | None = None, system_prompt_extras: dict[str, Any] | None = None) -> RuntimeSession:
@@ -405,10 +396,16 @@ class ConversationRuntime:
     # only the actual switch event hits disk.
     # ──────────────────────────────────────────────────────────────────
 
-    def _maybe_restore_last_active(self, session_key: str) -> str | None:
+    def restore_last_active(self, session_key: str) -> str | None:
+        """Eager restore entry point for frontends to call at startup,
+        before the user's first action — so the "Loaded last
+        conversation" notice arrives right after the frontend's
+        ready/online banner instead of mid-command."""
         if self._restore_consumed:
             return None
         self._restore_consumed = True
+        if self.config and not self.config.get("startup_restore_conversation", True):
+            return None
         conv_id = self._pending_restore_conv_id
         try:
             conv_id = int(conv_id) if conv_id not in (None, "") else None

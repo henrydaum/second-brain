@@ -155,8 +155,15 @@ class TelegramFrontend(BaseFrontend):
                 logger.warning(f"Failed to register Telegram commands: {e}")
             user_id = int(self.config.get("telegram_allowed_user_id", 0) or 0)
             if user_id:
-                self._chat_by_session[self.session_key(type("Ctx", (), {"user_id": user_id, "chat_id": user_id})())] = user_id
+                key = self.session_key(type("Ctx", (), {"user_id": user_id, "chat_id": user_id})())
+                self._chat_by_session[key] = user_id
                 await self.app.bot.send_message(user_id, "Second Brain online.")
+                try:
+                    notice = self.runtime.restore_last_active(key)
+                    if notice:
+                        await self.app.bot.send_message(user_id, notice)
+                except Exception:
+                    logger.exception("Telegram restore_last_active failed")
             while not self.shutdown_event.is_set():
                 await asyncio.sleep(1)
             await self.app.updater.stop()
