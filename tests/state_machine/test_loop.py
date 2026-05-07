@@ -329,7 +329,6 @@ def test_next_turn_after_history_load_sends_loaded_history_to_llm():
     runtime = ConversationRuntime(db=db, services={"llm": llm}, tool_registry=FakeToolRegistry())
 
     runtime.load_history("chat", conv_id)
-    runtime.set_notification_mode("chat", "off")
     result = runtime.handle_action("chat", "send_text", "continue")
 
     assert result.messages[-1] == "next"

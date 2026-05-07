@@ -51,7 +51,7 @@ def get_or_create_session(runtime, key: str) -> RuntimeSession:
             session = RuntimeSession(key, new_state(runtime))
             session.cs = new_state(runtime, session=session)
             runtime.sessions[key] = session
-            _attach_notify_tool(session)
+            _attach_notify_tool(runtime, session)
             bus.emit(SESSION_CREATED, {
                 "session_key": key,
                 "agent_profile": session.active_agent_profile,
@@ -59,12 +59,21 @@ def get_or_create_session(runtime, key: str) -> RuntimeSession:
         return runtime.sessions[key]
 
 
-def _attach_notify_tool(session: RuntimeSession) -> None:
+def _attach_notify_tool(runtime, session: RuntimeSession) -> None:
     """Idempotently sync ``session.extra_tool_instances`` with the current
-    ``notification_mode``: a NotifyTool is present iff mode is "all" or
-    "important". The recorder closure appends to ``session.notification_records``
-    so the fallback-push check can tell whether the agent actually called notify
-    during a turn."""
+    ``notification_mode`` AND active-conversation status.
+
+    Notification semantics only apply when the session is *not* the user's
+    currently active conversation: in foreground, anything the agent says
+    is already visible to the user, so a notify push would just duplicate.
+    A NotifyTool is present iff the mode is "all" or "important" AND this
+    session is not the active one. The recorder closure appends to
+    ``session.notification_records`` so the fallback-push check can tell
+    whether the agent actually called notify during a turn.
+
+    Called from session-lifecycle paths and from ``refresh_specs`` on every
+    turn, so a session that flips between foreground and background sees
+    its tool registry update accordingly."""
     session.extra_tool_instances = [
         t for t in session.extra_tool_instances
         if getattr(t, "name", None) != "notify"
@@ -72,6 +81,8 @@ def _attach_notify_tool(session: RuntimeSession) -> None:
     mode = normalize_notification_mode(session.notification_mode)
     session.notification_mode = mode
     if mode == "off":
+        return
+    if session.key == getattr(runtime, "active_session_key", None):
         return
     records = session.notification_records
     tool = make_session_notify_tool(
@@ -179,7 +190,7 @@ def load_conversation(
     )
     # Re-seed cs with session-aware specs.
     session.cs = new_state(runtime, marker, session=session)
-    _attach_notify_tool(session)
+    _attach_notify_tool(runtime, session)
     with runtime._sessions_lock:
         runtime.sessions[session_key] = session
     bus.emit(SESSION_CREATED, {
@@ -225,7 +236,7 @@ def reset_conversation(runtime, session_key: str) -> RuntimeSession:
         existed = session_key in runtime.sessions
         session = RuntimeSession(session_key, new_state(runtime))
         session.cs = new_state(runtime, session=session)
-        _attach_notify_tool(session)
+        _attach_notify_tool(runtime, session)
         runtime.sessions[session_key] = session
     if existed:
         bus.emit(SESSION_CLOSED, {"session_key": session_key})

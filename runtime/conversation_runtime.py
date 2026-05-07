@@ -398,7 +398,7 @@ class ConversationRuntime:
         normalized = normalize(mode)
         with session.lock:
             session.notification_mode = normalized
-            _persist._attach_notify_tool(session)
+            _persist._attach_notify_tool(self, session)
             _persist.persist_marker(self, session)
         return normalized
 

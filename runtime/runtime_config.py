@@ -151,9 +151,17 @@ def tool_specs_for(runtime, session: RuntimeSession | None = None) -> dict[str, 
 
 def refresh_specs(runtime, session: RuntimeSession) -> None:
     """Re-bind the session's command/tool specs to the runtime's current
-    registries. Called when the active profile or registries change."""
+    registries. Called when the active profile or registries change.
+
+    Also re-syncs the session-pinned NotifyTool: a session that flips
+    between foreground (active) and background needs its tool registry to
+    reflect that — notify is only attached when the session is *not* the
+    user's currently active conversation.
+    """
     if not session.profile_override:
         session.active_agent_profile = runtime.config.get("active_agent_profile") or "default"
+    from runtime.persistence import _attach_notify_tool
+    _attach_notify_tool(runtime, session)
     session.cs.participants["user"].commands = dict(runtime.commands)
     session.cs.participants["agent"].tools = tool_specs_for(runtime, session)
 
@@ -178,6 +186,15 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
 
     from runtime.notifications import notify_block
 
+    def _notify_suffix() -> str:
+        # Only meaningful when the session is not the user's currently
+        # active conversation — otherwise notify is redundant with the
+        # agent's regular output. Evaluated lazily inside the prompt
+        # closure so it reflects the active session at turn time.
+        if session.key == getattr(runtime, "active_session_key", None):
+            return ""
+        return notify_block(session.notification_mode)
+
     if session.profile_override:
         from agent.system_prompt import build_system_prompt
         profile = session.profile_override or session.active_agent_profile or "default"
@@ -196,7 +213,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             for value in extras.values():
                 if isinstance(value, str) and value:
                     text += "\n\n" + value
-            text += notify_block(session.notification_mode)
+            text += _notify_suffix()
             return text
         return _session_prompt
 
@@ -208,7 +225,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         for value in (extras or {}).values():
             if isinstance(value, str) and value:
                 text += "\n\n" + value
-        text += notify_block(session.notification_mode)
+        text += _notify_suffix()
         return text
     return _user_prompt
 
