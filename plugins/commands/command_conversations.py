@@ -235,6 +235,9 @@ def _create_and_switch(args, runtime, session_key) -> str:
     new_id = runtime.create_conversation(title, kind="user", category=db_category or None)
     if new_id is None:
         return "Failed to create conversation."
+    existing = runtime.sessions.get(session_key)
+    if existing is not None and existing.conversation_id not in (None, new_id):
+        runtime.close_session(session_key)
     runtime.load_conversation(session_key, new_id, agent_profile=profile)
     return f"Started new conversation #{new_id} under '{category or _MAIN}'.\nAgent: {profile}"
 
