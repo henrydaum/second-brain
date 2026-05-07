@@ -24,11 +24,7 @@ def _coerce_input_paths(value) -> list[str]:
 
 
 def _coerce_conversation_id(value):
-    """Accept an integer id or the literal string 'active'.
-
-    Empty string is treated as "unspecified" (returns None) so that an
-    update call clearing the field also strips it from the payload.
-    """
+    """Accept an integer id. Empty string clears the field on update."""
     if value is None:
         return None
     if isinstance(value, bool):
@@ -38,12 +34,10 @@ def _coerce_conversation_id(value):
     text = str(value).strip()
     if not text:
         return None
-    if text.lower() == "active":
-        return "active"
     try:
         return int(text)
     except ValueError:
-        raise ValueError("conversation_id must be an integer id or the string 'active'.")
+        raise ValueError("conversation_id must be an integer id of an existing conversation.")
 
 
 def _ensure_timekeeper_autoload(context):
@@ -126,12 +120,10 @@ class ScheduleSubagent(BaseTool):
                     "(or 'Scheduled (one-time)') so the user can brief it before the "
                     "first run. This is what you want almost every time. "
                     "Only set this if the user has explicitly asked to reuse a "
-                    "specific conversation: pass an integer id of an existing "
-                    "conversation. The literal string 'active' is a rarely-used "
-                    "special case that pins the job to whatever conversation the "
-                    "user happens to have open at fire time — do NOT pick it just "
-                    "because the user is currently chatting; only use it if they "
-                    "explicitly ask for that 'follow my active chat' behavior."
+                    "specific existing conversation — pass its integer id. If the "
+                    "user happens to have that conversation open when the cron "
+                    "fires, the run shows up live in their chat automatically; "
+                    "no special sentinel is needed."
                 ),
             },
             "enabled": {

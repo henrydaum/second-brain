@@ -13,7 +13,6 @@ from state_machine.serialization import latest_state
 logger = logging.getLogger("TaskRunSubagent")
 
 _MAX_PARSED_CHARS = 4000
-_ACTIVE = "active"
 
 
 class RunSubagent(BaseTask):
@@ -25,14 +24,13 @@ class RunSubagent(BaseTask):
     enact() path as a user turn — same approvals, same forms, same cancel
     semantics.
 
-    Conversation binding: every job carries either a concrete
-    ``conversation_id`` (eagerly created at scheduling time) or the
-    sentinel ``"active"`` to track the user's currently-focused
-    conversation. The agent profile is read from that conversation's
-    state marker — there is no per-job ``agent`` parameter. The
-    NotifyTool is only attached when the chosen conversation is **not**
-    the active one; otherwise the cron's output is already visible to
-    the user in their session.
+    Conversation binding: every job carries a concrete ``conversation_id``
+    (eagerly created at scheduling time, or supplied explicitly). The agent
+    profile is read from that conversation's state marker — there is no
+    per-job ``agent`` parameter. The NotifyTool is only attached when the
+    chosen conversation is **not** the user's currently-focused one;
+    otherwise the cron's output is already visible to the user in their
+    session.
     """
 
     name = "run_subagent"
@@ -46,7 +44,7 @@ class RunSubagent(BaseTask):
             "job_name": {"type": "string", "description": "Optional stable internal name for the run."},
             "input_paths": {"type": "array", "description": "Optional list of file paths to include as inputs."},
             "conversation_id": {
-                "description": "Conversation to run inside. An integer id, or the literal 'active' to track the user's current conversation.",
+                "description": "Integer id of the conversation this run writes into.",
             },
         },
         "required": ["prompt"],
@@ -78,6 +76,16 @@ class RunSubagent(BaseTask):
         )
         if conversation_id is None:
             return TaskResult.failed("Could not resolve a conversation for this subagent run.")
+
+        conv_row = context.db.get_conversation(conversation_id) if context.db else None
+        conv_title = (conv_row or {}).get("title") or "(untitled)"
+        conv_category = (conv_row or {}).get("category") or "Main"
+        logger.info(
+            f"Subagent fire: job='{job_name}' run_id={run_id} → "
+            f"conversation #{conversation_id} '{conv_title}' "
+            f"[{conv_category}]{' (user-active)' if treat_as_active else ''} "
+            f"mode={mode}"
+        )
 
         target_agent = self._resolve_agent_from_conversation(context, conversation_id)
         agent_profiles = context.config.get("agent_profiles", {}) or {}
@@ -178,14 +186,6 @@ class RunSubagent(BaseTask):
         """
         active_id = runtime.active_conversation_id
         existing = payload.get("conversation_id")
-
-        # Sentinel: track whatever the user is focused on right now.
-        if isinstance(existing, str) and existing.strip().lower() == _ACTIVE:
-            if active_id is not None:
-                return active_id, True
-            # No active session yet → fall through and create a fresh
-            # conversation for this run so it does not silently drop.
-            existing = None
 
         if existing is not None:
             try:
