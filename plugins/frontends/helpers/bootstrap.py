@@ -155,7 +155,10 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
         profile = config.get("active_agent_profile") or "default"
         scope = _scope(profile, config)
         registry_for_prompt = scoped_registry(tool_registry, scope, db=scaffold.db) if scope else tool_registry
-        return build_system_prompt(scaffold.db, scaffold.orchestrator, registry_for_prompt, services, scope=scope, profile_name=profile)
+        return build_system_prompt(
+            scaffold.db, scaffold.orchestrator, registry_for_prompt, services,
+            scope=scope, profile_name=profile, runtime=ref.get("runtime"),
+        )
 
     runtime = ConversationRuntime(
         db=scaffold.db,

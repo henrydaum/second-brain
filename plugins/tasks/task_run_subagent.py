@@ -64,10 +64,21 @@ class RunSubagent(BaseTask):
 
         title = (payload.get("title") or "").strip()
         timekeeper_meta = payload.get("_timekeeper") or {}
-        job_name = (str(timekeeper_meta.get("job_name") or "").strip() or "scheduled_subagent")
+        explicit_name = (
+            str(timekeeper_meta.get("job_name") or "").strip()
+            or str(payload.get("job_name") or "").strip()
+        )
+        job_name = explicit_name or f"adhoc:{run_id}"
         conversation_title = title or job_name or prompt[:80].replace("\n", " ").strip() or "Scheduled subagent run"
         is_scheduled = bool(timekeeper_meta)
         is_one_time = bool(timekeeper_meta.get("one_time"))
+
+        if timekeeper_meta.get("source"):
+            source = str(timekeeper_meta.get("source"))
+        elif payload.get("_ask_subagent"):
+            source = "ask_subagent"
+        else:
+            source = "unknown"
 
         mode = self._resolve_mode(payload, timekeeper_meta, context, is_scheduled, job_name)
 
@@ -77,20 +88,27 @@ class RunSubagent(BaseTask):
         if conversation_id is None:
             return TaskResult.failed("Could not resolve a conversation for this subagent run.")
 
-        conv_row = context.db.get_conversation(conversation_id) if context.db else None
-        conv_title = (conv_row or {}).get("title") or "(untitled)"
-        conv_category = (conv_row or {}).get("category") or "Main"
-        logger.info(
-            f"Subagent fire: job='{job_name}' run_id={run_id} → "
-            f"conversation #{conversation_id} '{conv_title}' "
-            f"[{conv_category}]{' (user-active)' if treat_as_active else ''} "
-            f"mode={mode}"
-        )
-
         target_agent = self._resolve_agent_from_conversation(context, conversation_id)
         agent_profiles = context.config.get("agent_profiles", {}) or {}
         if target_agent not in agent_profiles:
             return TaskResult.failed(f"Unknown agent profile: '{target_agent}'.")
+
+        # Handoff: when the target conversation is the user's currently-
+        # focused one, run under their session_key instead of opening a
+        # parallel subagent session. Single session, single lock, messages
+        # stream live to the frontend, and no fallback push is needed.
+        active_key = runtime.active_session_key
+        handoff = bool(treat_as_active and active_key)
+        session_key = active_key if handoff else runtime.subagent_session_key(job_name)
+
+        conv_row = context.db.get_conversation(conversation_id) if context.db else None
+        conv_title = (conv_row or {}).get("title") or "(untitled)"
+        conv_category = (conv_row or {}).get("category") or "Main"
+        logger.info(
+            f"Subagent fire: source={source} job='{job_name}' run_id={run_id} "
+            f"session={session_key} → conversation #{conversation_id} "
+            f"'{conv_title}' [{conv_category}] mode={mode} handoff={handoff}"
+        )
 
         push_records: list[NotificationRecord] = []
         notify_tool = None
@@ -103,30 +121,31 @@ class RunSubagent(BaseTask):
                 push_records.append(record)
             notify_tool = NotifyTool(source="subagent", source_id=run_id, job_name=job_name, recorder=_record_push, conversation_id=conversation_id)
 
-        session_key = runtime.subagent_session_key(job_name)
         input_paths = self._normalize_input_paths(payload.get("input_paths"))
         compiled_prompt, sub_attachments = self._compile_prompt(prompt, input_paths, context)
 
         turn_events = []
         unsub = bus.subscribe(SESSION_TURN_COMPLETED, lambda event: turn_events.append(event) if (event or {}).get("session_key") == session_key else None)
         try:
-            runtime.load_conversation(
-                session_key, conversation_id, agent_profile=target_agent,
-                system_prompt_extras={
-                    "subagent_mode": mode,
-                    "subagent_run_id": run_id,
-                    "subagent_job_name": job_name,
-                },
-            )
-            if notify_tool:
-                runtime.add_session_tool(session_key, notify_tool)
+            if not handoff:
+                runtime.load_conversation(
+                    session_key, conversation_id, agent_profile=target_agent,
+                    system_prompt_extras={
+                        "subagent_mode": mode,
+                        "subagent_run_id": run_id,
+                        "subagent_job_name": job_name,
+                    },
+                )
+                if notify_tool:
+                    runtime.add_session_tool(session_key, notify_tool)
             result = runtime.iterate_agent_turn(session_key, compiled_prompt, attachments=sub_attachments)
         except Exception as e:
             logger.error(f"Subagent run {run_id} failed: {e}", exc_info=True)
             return TaskResult.failed(str(e))
         finally:
             unsub()
-            runtime.unload_conversation(session_key)
+            if not handoff:
+                runtime.unload_conversation(session_key)
 
         if not result.ok:
             err = (result.error or {}).get("message") or "Subagent run failed."

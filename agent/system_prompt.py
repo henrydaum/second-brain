@@ -30,12 +30,14 @@ def build_system_prompt(
     profile_name: str = "default",
     extra_suffix: str = "",
     subagent_mode: str | None = None,
+    runtime=None,
 ) -> str:
     r = tool_registry  # short alias for gating checks
 
     sections = [
         _identity(services, r),
         _current_datetime(),
+        _active_conversation(db, runtime),
         _available_tools(r),
         _agent_profiles(orchestrator) if _has_any(r, "ask_subagent", "schedule_subagent") else "",
         _authoring_guidance() if _has_tool(r, "register_plugin") else "",
@@ -140,6 +142,33 @@ def _identity(services: dict, registry) -> str:
 def _current_datetime() -> str:
     now = datetime.now()
     return f"Current date and time: {now.strftime('%A, %B %d, %Y %I:%M %p')}"
+
+
+def _active_conversation(db, runtime) -> str:
+    """One-line note about the user's currently-focused conversation.
+
+    Lets the agent reason about whether scheduling a subagent into a given
+    conversation will hand off to the user's session (cron message streams
+    live, NotifyTool is suppressed) or run silently in the background.
+    """
+    if runtime is None or db is None:
+        return ""
+    try:
+        conv_id = runtime.active_conversation_id
+    except Exception:
+        return ""
+    if conv_id is None:
+        return ""
+    row = db.get_conversation(conv_id) or {}
+    title = (row.get("title") or "").strip() or "(untitled)"
+    category = (row.get("category") or "").strip() or "Main"
+    return (
+        "## Active conversation\n"
+        f"#{conv_id} — '{title}' [{category}]. "
+        "Scheduling a subagent into this conversation hands off to the user's "
+        "session: the cron's reply streams live into their chat instead of "
+        "going through NotifyTool."
+    )
 
 
 def _authoring_guidance() -> str:

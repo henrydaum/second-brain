@@ -126,10 +126,6 @@ class ScheduleSubagent(BaseTool):
                     "no special sentinel is needed."
                 ),
             },
-            "enabled": {
-                "type": "boolean",
-                "description": "Whether the job should be enabled.",
-            },
             "notifications": {
                 "type": "string",
                 "enum": list(NOTIFICATION_MODES),
@@ -296,9 +292,8 @@ class ScheduleSubagent(BaseTool):
         for key in ("cron", "run_at"):
             if kwargs.get(key) is not None:
                 job_def[key] = kwargs.get(key)
-        for key in ("one_time", "enabled"):
-            if kwargs.get(key) is not None:
-                job_def[key] = bool(kwargs.get(key))
+        if kwargs.get("one_time") is not None:
+            job_def["one_time"] = bool(kwargs.get("one_time"))
         return job_def
 
     def _describe_candidate_job(self, svc, job: dict) -> str:
