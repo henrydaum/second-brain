@@ -25,7 +25,7 @@ from state_machine.action_map import create_action
 from state_machine.conversation import CallableSpec, ConversationState, FormStep, Participant
 from runtime.conversation_loop import ConversationLoop
 from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
-from state_machine.serialization import save_state_marker
+from state_machine.serialization import latest_state, save_state_marker
 from runtime.conversation_runtime import ConversationRuntime
 from events.event_channels import COMMAND_CALL_FINISHED, SESSION_CLOSED, SESSION_CREATED, SESSION_TURN_COMPLETED, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from events.event_bus import bus
@@ -318,6 +318,29 @@ def test_load_history_restores_saved_agent_profile_and_history():
     assert result.messages == ["Loaded conversation: Builder chat\nAgent: builder\nSwitched agent: default -> builder"]
     assert [name for name, _ in events[-2:]] == [SESSION_CLOSED, SESSION_CREATED]
     assert events[-1][1]["agent_profile"] == "builder"
+
+
+def test_set_conversation_notification_mode_updates_stored_marker():
+    db = FakeConversationDB()
+    conv_id = db.create_conversation("Cron")
+    save_state_marker(db, conv_id, {"active_agent_profile": "builder"})
+    runtime = ConversationRuntime(db=db)
+
+    assert runtime.set_conversation_notification_mode(conv_id, "IMPORTANT") == "important"
+    assert latest_state(db.get_conversation_messages(conv_id))["notification_mode"] == "important"
+    assert runtime.load_conversation("job", conv_id).notification_mode == "important"
+
+
+def test_set_conversation_notification_mode_updates_live_session():
+    db = FakeConversationDB()
+    conv_id = db.create_conversation("Cron")
+    runtime = ConversationRuntime(db=db)
+    session = runtime.load_conversation("job", conv_id)
+
+    assert any(getattr(t, "name", None) == "notify" for t in session.extra_tool_instances)
+    assert runtime.set_conversation_notification_mode(conv_id, "off") == "off"
+    assert session.notification_mode == latest_state(db.get_conversation_messages(conv_id))["notification_mode"] == "off"
+    assert not any(getattr(t, "name", None) == "notify" for t in session.extra_tool_instances)
 
 
 def test_next_turn_after_history_load_sends_loaded_history_to_llm():

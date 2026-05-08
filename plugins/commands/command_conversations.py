@@ -20,6 +20,7 @@ from __future__ import annotations
 import time
 
 from plugins.BaseCommand import BaseCommand
+from runtime.notifications import NOTIFICATION_MODES, notification_mode
 from state_machine.conversation import FormStep
 from state_machine.serialization import latest_state
 
@@ -30,6 +31,7 @@ _NEW_CONV = "➕ New conversation"
 _NEW_CAT = "➕ New category"
 _LOAD = "Load conversation"
 _DELETE = "Delete conversation"
+_CHANGE_NOTIF = "Change notification mode"
 
 
 class ConversationsCommand(BaseCommand):
@@ -73,6 +75,9 @@ class ConversationsCommand(BaseCommand):
         if action == _DELETE:
             db.delete_conversation(cid)
             return f"Deleted conversation #{cid}."
+        if action == _CHANGE_NOTIF:
+            mode = runtime.set_conversation_notification_mode(cid, args.get("mode"))
+            return f"Notifications for #{cid} → {mode}."
 
         # Default: load. load_history reads the conversation's stored
         # state marker, so the agent profile follows the conversation
@@ -122,7 +127,9 @@ def _existing_conversation_steps(args, context, category):
         return steps
 
     prompt = _preview_for(db, cid) or "Action"
-    steps.append(FormStep("action", prompt, True, enum=[_LOAD, _DELETE], columns=1))
+    steps.append(FormStep("action", prompt, True, enum=[_LOAD, _DELETE, _CHANGE_NOTIF], columns=1))
+    if args.get("action") == _CHANGE_NOTIF:
+        steps.append(FormStep("mode", "Notification mode", True, enum=list(NOTIFICATION_MODES), columns=1))
     return steps
 
 
@@ -188,6 +195,10 @@ def _agent_for(db, conversation_id) -> str:
     return (marker.get("profile_override") or marker.get("active_agent_profile") or "").strip()
 
 
+def _notification_mode_for(db, conversation_id) -> str:
+    return notification_mode((latest_state(db.get_conversation_messages(conversation_id)) or {}).get("notification_mode"))
+
+
 def _preview_for(db, conversation_id) -> str:
     """A scannable header for the Load/Delete step.
 
@@ -197,6 +208,7 @@ def _preview_for(db, conversation_id) -> str:
     """
     msgs = db.get_conversation_messages(conversation_id) or []
     agent = _agent_for(db, conversation_id) or "(unknown)"
+    mode = _notification_mode_for(db, conversation_id)
     title = ""
     row = db.get_conversation(conversation_id) if hasattr(db, "get_conversation") else None
     if row:
@@ -213,7 +225,7 @@ def _preview_for(db, conversation_id) -> str:
         if len(snippets) >= 2:
             break
     snippets.reverse()
-    head = f"{title or '(untitled)'} · agent: {agent}"
+    head = f"{title or '(untitled)'} · agent: {agent} · notifications: {mode}"
     return head + ("\n" + "\n".join(snippets) if snippets else "")
 
 

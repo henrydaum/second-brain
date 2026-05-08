@@ -402,6 +402,20 @@ class ConversationRuntime:
             _persist.persist_marker(self, session)
         return normalized
 
+    def set_conversation_notification_mode(self, conversation_id: int, mode: str) -> str:
+        """Update notification mode for a live or stored conversation."""
+        from runtime.notifications import notification_mode as normalize
+        from state_machine.serialization import latest_state, save_state_marker
+        normalized = normalize(mode)
+        for session in list(self.sessions.values()):
+            if session.conversation_id == conversation_id:
+                return self.set_notification_mode(session.key, normalized)
+        if self.db:
+            marker = (latest_state(self.db.get_conversation_messages(conversation_id)) or {}).copy()
+            marker["notification_mode"] = normalized
+            save_state_marker(self.db, conversation_id, marker)
+        return normalized
+
     @property
     def active_conversation_id(self) -> int | None:
         """Conversation id bound to the most recent user-driven session.
