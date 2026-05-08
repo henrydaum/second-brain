@@ -31,6 +31,13 @@ def test_json_display_gives_concrete_guidance():
     assert "/skip" in display["assist"]
 
 
+def test_boolean_display_uses_true_false_choices():
+    display = form_step_display(FormStep("run_immediately", "Run immediately?", False, "boolean", default=False))
+
+    assert display["choices"] == [{"value": True, "label": "True"}, {"value": False, "label": "False"}]
+    assert display["assist"] == "Select an option. Send /skip to use the default: False."
+
+
 def test_runtime_decorates_form_with_display_payload():
     cs = ConversationState([
         Participant("user", "user", commands={"agent": CallableSpec("agent", form=[FormStep("profile_name", "Select an agent profile.", True, enum=["default"])])}),
@@ -59,6 +66,7 @@ def test_telegram_form_prompt_omits_command_header_and_raw_type():
     assert "Select an agent profile." in text
     assert not text.startswith("<b>agent</b>")
     assert "Type:" not in text
+    assert "/cancel" not in text
 
 
 def test_repl_form_rendering_uses_display_payload(capsys):

@@ -24,6 +24,8 @@ def _prompt(step: FormStep) -> str:
 
 
 def _choices(step: FormStep) -> list[dict[str, Any]]:
+    if step.type in {"boolean", "bool"} and not step.enum:
+        return [{"value": True, "label": "True"}, {"value": False, "label": "False"}]
     labels = step.enum_labels or []
     return [
         {"value": value, "label": str(labels[i]) if i < len(labels) else str(value)}
@@ -43,8 +45,6 @@ def _assist(step: FormStep, has_choices: bool) -> str:
         bits.append("Send a JSON array.")
     elif step.type == "object":
         bits.append("Send a JSON object.")
-    elif step.type in {"boolean", "bool"}:
-        bits.append("Reply yes or no.")
     if step.required is False:
         bits.append(_skip_text(step))
     return " ".join(bits)

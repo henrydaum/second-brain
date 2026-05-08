@@ -389,8 +389,6 @@ class TelegramFrontend(BaseFrontend):
         assist = display.get("assist")
         if assist:
             bits.append(f"<i>{html.escape(str(assist))}</i>")
-        if display.get("allow_cancel", True):
-            bits.append("<i>Send /cancel to cancel.</i>")
         return "\n".join(bits)
 
     def _enum_markup(self, key: str, form: dict):
