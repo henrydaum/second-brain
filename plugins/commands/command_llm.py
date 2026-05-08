@@ -5,13 +5,14 @@ from plugins.BaseCommand import BaseCommand
 from state_machine.conversation import FormStep
 
 
-ACTIONS = ["edit", "remove"]
+ACTIONS = ["edit", "set_default", "remove"]
+ACTION_LABELS = ["Edit", "Set default", "Remove"]
 FIELDS = ["llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class"]
 
 
 class LlmCommand(BaseCommand):
     name = "llm"
-    description = "Select an LLM profile, then edit or remove it"
+    description = "Select an LLM profile, then edit, set default, or remove it"
     category = "System"
 
     def form(self, args, context):
@@ -26,7 +27,7 @@ class LlmCommand(BaseCommand):
                 FormStep("llm_context_size", "Context size", False, "integer", default=0, prompt_when_missing=True),
             ]
         if args.get("model_name"):
-            steps.append(FormStep("action", _describe(context, args["model_name"]), True, enum=ACTIONS))
+            steps.append(FormStep("action", _describe(context, args["model_name"]), True, enum=ACTIONS, enum_labels=ACTION_LABELS))
         if args.get("action") == "edit":
             steps += [FormStep("field", "Field", True, enum=FIELDS), FormStep("value", "Value", True)]
         return steps
@@ -54,6 +55,10 @@ class LlmCommand(BaseCommand):
                 router.add_llm(name, profiles[name])
             _save(context.config)
             return f"Updated LLM profile: {name}"
+        if args.get("action") == "set_default":
+            context.config["default_llm_profile"] = name
+            _save(context.config)
+            return f"Default LLM profile set to: {name}"
         if args.get("action") == "remove":
             profiles.pop(name, None)
             if router and hasattr(router, "remove_llm"):
