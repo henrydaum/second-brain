@@ -1,6 +1,6 @@
 """/conversations — unified picker for conversation history + new chats.
 
-Replaces the old /history and /new commands. Walks a multi-step form:
+Walks a multi-step form:
 
     1. Pick a category (or "New conversation").
     2a. (New) Pick an agent profile.
@@ -84,6 +84,20 @@ class ConversationsCommand(BaseCommand):
         # automatically — no need to pass it explicitly.
         result = runtime.load_history(session_key, cid)
         return "\n".join(m for m in result.messages if m).strip() or f"Loaded conversation #{cid}."
+
+
+class NewCommand(BaseCommand):
+    name = "new"
+    description = "Start a default Main conversation"
+    category = "Conversation"
+
+    def run(self, args, context):
+        runtime = getattr(context, "runtime", None)
+        db = getattr(context, "db", None)
+        session_key = getattr(context, "session_key", None)
+        if runtime is None or db is None or not session_key:
+            return "Conversations are not available in this context."
+        return _create_and_switch({"category": _NEW_CONV, "agent_profile": "default", "new_category": _MAIN}, runtime, session_key)
 
 
 # ──────────────────────────────────────────────────────────────────────

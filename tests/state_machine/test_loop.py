@@ -22,6 +22,7 @@ import pytest
 
 from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.commands.command_conversations import NewCommand
 from plugins.commands.command_tools import ToolsCommand
 from plugins.services.llmService import LLMResponse
 from plugins.services import timekeeperService as timekeeper_module
@@ -749,6 +750,17 @@ def test_new_conversation_action_uses_reset_lifecycle():
     assert result.messages == ["New conversation started. Agent: default."]
     assert runtime.sessions["chat"].history == []
     assert [name for name, _ in events[-2:]] == ["session_closed", "session_created"]
+
+
+def test_new_command_starts_default_main_conversation():
+    db = FakeConversationDB()
+    runtime = ConversationRuntime(db=db)
+    result = NewCommand().run({}, SimpleNamespace(db=db, runtime=runtime, session_key="chat"))
+
+    assert result == "Started new conversation #1 under 'Main'.\nAgent: default"
+    assert db.conversations[1]["category"] is None
+    assert runtime.sessions["chat"].conversation_id == 1
+    assert runtime.sessions["chat"].profile_override == "default"
 
 
 def test_tool_budget_gets_one_final_model_summary():
