@@ -158,10 +158,11 @@ def _task_detail_lines(task: dict) -> list[str]:
     details = []
     channels = task.get("trigger_channels") or []
     if channels:
-        details.append(f"channels: {', '.join(channels)}")
+        details.append(f"listens on: {', '.join(channels)}")
     services = task.get("requires_services") or []
     if services:
         details.append(f"needs: {services}")
+    details.extend(task.get("schedules") or [])
     return details
 
 
@@ -200,11 +201,9 @@ def format_tasks(tasks: list[dict], compact: bool = False) -> str:
         for task in section:
             counts = task["counts"]
             lines.append(
-                f"  {task['name']:<22} "
-                f"{TASK_STATE_LABELS['PENDING']}: {counts['PENDING']:<6} "
-                f"{TASK_STATE_LABELS['PROCESSING']}: {counts['PROCESSING']:<6} "
-                f"{TASK_STATE_LABELS['DONE']}: {counts['DONE']:<6} "
-                f"{TASK_STATE_LABELS['FAILED']}: {counts['FAILED']:<6}"
+                f"  {task['name']}: "
+                f"{counts['PENDING']} pending, {counts['PROCESSING']} running, "
+                f"{counts['DONE']} done, {counts['FAILED']} failed"
                 f"{paused_suffix(task['paused'])}"
             )
             for detail in _task_detail_lines(task):

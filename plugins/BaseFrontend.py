@@ -67,6 +67,11 @@ def _form_step_accepts(step, text: str) -> bool:
     return bool(ok)
 
 
+def _approval_body(text: str, limit: int = 900) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= limit else f"{text[:limit].rstrip()}\n\n...preview trimmed for readability."
+
+
 @dataclass
 class FrontendCapabilities:
     """What a frontend transport can do.
@@ -464,7 +469,7 @@ class BaseFrontend:
         data = getattr(frame, "data", {}) or {}
         return StateMachineApprovalRequest(
             title=data.get("title") or frame.name or "Input required",
-            body=data.get("prompt") or "",
+            body=_approval_body(data.get("prompt") or ""),
             pending_action=data.get("pending"),
             id=data.get("request_id") or "pending",
             type=data.get("type", "boolean"),

@@ -17,7 +17,8 @@ class AgentCommand(BaseCommand):
 
     def form(self, args, context):
         profiles = context.config.get("agent_profiles", {}) or {}
-        steps = [FormStep("profile_name", "Select an agent profile, or add a new one.", True, enum=[*sorted(profiles), "add"])]
+        names = [*sorted(profiles), "add"]
+        steps = [FormStep("profile_name", "Select an agent profile, or add a new one.", True, enum=names, enum_labels=[_profile_label(context, n) for n in names])]
         llms = ["default", *sorted((context.config.get("llm_profiles", {}) or {}).keys())]
         tools = sorted(getattr(getattr(context, "tool_registry", None), "tools", {}))
         if args.get("profile_name") == "add":
@@ -85,8 +86,12 @@ def _describe(context, name):
     p = (context.config.get("agent_profiles", {}) or {}).get(name)
     if not p:
         return "Action"
-    active = " active" if context.config.get("active_agent_profile") == name else ""
+    active = " (active)" if context.config.get("active_agent_profile") == name else ""
     return f"{name}{active}\nLLM: {p.get('llm', 'default')}\nTool mode: {p.get('whitelist_or_blacklist_tools', 'blacklist')}\nTools: {', '.join(p.get('tools_list') or []) or '(none)'}"
+
+
+def _profile_label(context, name):
+    return "Add profile" if name == "add" else f"{name} (active)" if context.config.get("active_agent_profile") == name else name
 
 
 def _value_prompt(field):

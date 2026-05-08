@@ -11,6 +11,6 @@ def test_schema_form_prompts_include_action_and_description():
         "required": ["title"],
     }, prompt_optional=True)
 
-    assert steps[0].prompt == "Enter title.\nShort title for the scheduled conversation."
+    assert steps[0].prompt == "Enter a title.\nShort title for the scheduled conversation."
     assert steps[1].prompt == "Choose run immediately.\nIf true, run one turn immediately."
     assert steps[1].prompt_when_missing is True

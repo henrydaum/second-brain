@@ -44,7 +44,7 @@ class ScheduleSubagent(BaseTool):
         if not prompt:
             return ToolResult.failed("prompt is required.")
         if not cron and not run_now:
-            return ToolResult.failed("Provide cron or set run_immediately=true.")
+            return ToolResult.failed("Choose at least one: enter a cron expression, or set run_immediately to True.")
 
         db = getattr(context, "db", None)
         runtime = getattr(context, "runtime", None)
@@ -119,8 +119,13 @@ def _approval_text(title: str, prompt: str, schedule: dict, run_now: bool) -> st
         f"Title: {title}\n"
         f"When: {when}\n"
         f"Run immediately: {bool(run_now)}\n\n"
-        f"Prompt:\n{prompt}"
+        f"Prompt preview:\n{_preview(prompt)}"
     )
+
+
+def _preview(text: str, limit: int = 700) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else text[:limit - 3].rstrip() + "..."
 
 
 def _unique_job_name(tk, title: str) -> str:

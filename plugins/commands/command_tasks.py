@@ -89,6 +89,7 @@ def _show(context):
         "paused": name in getattr(orch, "paused", set()),
         "requires_services": getattr(task, "requires_services", []),
         "trigger_channels": getattr(task, "trigger_channels", []),
+        "schedules": _schedule_summaries(context, task),
     } for name, task in sorted((getattr(orch, "tasks", {}) or {}).items())])
 
 
@@ -139,20 +140,25 @@ def _jobs_for_task(context, task) -> list[str]:
 
 
 def _schedules_context(context, task) -> str:
+    rows = _schedule_summaries(context, task)
+    return "Schedules:\n  " + "\n  ".join(rows or ["(none)"])
+
+
+def _schedule_summaries(context, task) -> list[str]:
     tk = _timekeeper(context)
     rows = [] if tk is None else [(name, job) for name, job in tk.list_jobs().items() if (job.get("channel") or "") in set(_task_channels(task))]
     if not rows:
-        return "Schedules:\n  (none)"
-    lines = ["Schedules:"]
+        return []
+    lines = []
     for name, job in sorted(rows):
         cron = job.get("cron", "")
         try:
-            desc = tk.cron_to_text(cron)
+            desc = tk.cron_to_text(cron).lower()
         except Exception:
             desc = cron or "?"
         nf = tk.get_next_fire_at(name)
-        lines.append(f"  • {name} — {desc} — next: {nf.strftime('%Y-%m-%d %H:%M') if nf else '(disabled)'}")
-    return "\n".join(lines)
+        lines.append(f"{name}: runs {desc}; next {nf.strftime('%Y-%m-%d %H:%M') if nf else 'disabled'}")
+    return lines
 
 
 def _schedule_create(context, task, args):
@@ -165,7 +171,7 @@ def _schedule_create(context, task, args):
     job_name = (args.get("job_name") or "").strip()
     cron = (args.get("cron") or "").strip()
     if not job_name or not cron:
-        return "job_name and cron are required."
+        return "Enter both a schedule name and a cron expression before creating the schedule."
     payload_keys = (getattr(task, "event_payload_schema", {}) or {}).get("properties", {}).keys()
     payload = {k: args[k] for k in payload_keys if k in args}
     try:
@@ -176,7 +182,7 @@ def _schedule_create(context, task, args):
         when = tk.cron_to_text(cron)
     except Exception:
         when = cron
-    return f"Scheduled job '{job_name}' for task '{task.name}': {when}"
+    return f"Created schedule '{job_name}' for {task.name}: {when}."
 
 
 def _schedule_remove(context, args):

@@ -42,9 +42,11 @@ def _assist(step: FormStep, has_choices: bool) -> str:
     elif step.type == "number":
         bits.append("Reply with a number.")
     elif step.type == "array":
-        bits.append("Send a JSON array.")
+        bits.append('Send a JSON array, for example: ["search", "read_file"].')
     elif step.type == "object":
-        bits.append("Send a JSON object.")
+        bits.append('Send a JSON object, for example: {"key": "value"}.')
+    elif "cron" in step.name:
+        bits.append("Use five-field cron, for example: 0 20 * * *.")
     if step.required is False:
         bits.append(_skip_text(step))
     return " ".join(bits)

@@ -579,7 +579,7 @@ def test_schedule_subagent_validation_and_job_name_collision():
 
     assert "title" in tool.run(ctx, title="", prompt="x", run_immediately=True).error
     assert "prompt" in tool.run(ctx, title="x", prompt="", run_immediately=True).error
-    assert "Provide cron" in tool.run(ctx, title="x", prompt="y").error
+    assert "cron expression" in tool.run(ctx, title="x", prompt="y").error
     assert "Timekeeper" in tool.run(SimpleNamespace(db=db, runtime=runtime, services={}, config={}, approve_command=lambda *_: True), title="x", prompt="y", cron="0 8 * * *").error
 
     result = tool.run(ctx, title="Morning Brief", prompt="brief me", cron="0 9 * * *")

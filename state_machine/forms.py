@@ -19,8 +19,12 @@ def _schema_prompt(name: str, info: dict) -> str:
     label = str(name or "value").replace("_", " ")
     desc = str((info or {}).get("description") or "").strip()
     action = "Choose" if (info or {}).get("enum") or (info or {}).get("type") == "boolean" else "Enter"
-    prompt = f"{action} {label}."
+    prompt = f"{action} {_article(label) if action == 'Enter' else label}."
     return f"{prompt}\n{desc}" if desc else prompt
+
+
+def _article(label: str) -> str:
+    return label if label.startswith(("a ", "an ", "the ")) else f"{'an' if label[:1].lower() in 'aeiou' else 'a'} {label}"
 
 
 def coerce_form_value(raw: Any, step: FormStep) -> Any:
