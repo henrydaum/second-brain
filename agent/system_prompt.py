@@ -147,16 +147,24 @@ def _authoring_guidance() -> str:
         "You can extend the system by authoring sandbox plugins (tools, tasks, services, commands, frontends).\n\n"
         "Project layout:\n"
         "- Built-in plugins live under plugins/tools, plugins/tasks, plugins/services, plugins/commands, plugins/frontends.\n"
+        "- Sandbox plugins live under the matching sandbox directory in DATA_DIR.\n"
         "- Core app code lives under agent, pipeline, runtime, config, events.\n\n"
+        "Templates:\n"
+        "- tools: templates/tool_template.py -> sandbox_tools/tool_<name>.py\n"
+        "- tasks: templates/task_template.py -> sandbox_tasks/task_<name>.py\n"
+        "- services: templates/service_template.py -> sandbox_services/<name>Service.py or <name>.py\n"
+        "- commands: templates/command_template.py -> sandbox_commands/command_<name>.py\n"
+        "- frontends: templates/frontend_template.py -> sandbox_frontends/frontend_<name>.py\n\n"
         "Workflow:\n"
-        "1. Read the relevant template with read_file (templates/tool_template.py, task_template.py, service_template.py).\n"
+        "1. Read the relevant template with read_file.\n"
         "2. Read a similar existing plugin for reference. Sandbox plugin paths are listed below.\n"
         "3. Write the file into the right sandbox directory using the file-editing tools.\n"
         "4. Call register_plugin(plugin_type=..., file_name=...) to validate and hot-load it.\n"
         "5. If registration fails, read the error, edit the same file, and call register_plugin again.\n"
-        "6. Valid sandbox files are loaded automatically on startup; there is no save-time watchdog.\n"
-        "7. To remove a plugin from the live system without deleting the file, call unregister_plugin(plugin_type=..., plugin_name=...). To keep it from loading next startup, delete the sandbox file too.\n"
-        "8. If you need extra packages, install them with run_command.\n\n"
+        "6. Valid sandbox files are loaded automatically on startup; the only way to register it in real time is to call register_plugin.\n"
+        "7. To update a plugin, edit the same sandbox file and call register_plugin again.\n"
+        "8. To remove a plugin from the live system without deleting the file, call unregister_plugin(plugin_type=..., plugin_name=...). To keep it from loading next startup, delete the sandbox file too. To keep parity, do both.\n"
+        "9. If you need extra packages, install them with run_command.\n\n"
         "Naming:\n"
         "- Tools: tool_<name>.py    Tasks: task_<name>.py    Commands: command_<name>.py    Frontends: frontend_<name>.py    Services: <name>.py\n"
         "- Names must be unique across baked-in and sandbox.\n\n"
@@ -187,10 +195,10 @@ def _available_tools(tool_registry) -> str:
 
 
 def _sandbox_files() -> str:
-    from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES
+    from paths import SANDBOX_COMMANDS, SANDBOX_FRONTENDS, SANDBOX_SERVICES, SANDBOX_TASKS, SANDBOX_TOOLS
 
     sandbox_lines = []
-    for label, sd in [("tools", SANDBOX_TOOLS), ("tasks", SANDBOX_TASKS), ("services", SANDBOX_SERVICES)]:
+    for label, sd in [("tools", SANDBOX_TOOLS), ("tasks", SANDBOX_TASKS), ("services", SANDBOX_SERVICES), ("commands", SANDBOX_COMMANDS), ("frontends", SANDBOX_FRONTENDS)]:
         if not sd.exists():
             continue
         for py_file in sorted(sd.glob("*.py")):
@@ -199,7 +207,7 @@ def _sandbox_files() -> str:
             sandbox_lines.append(f"  {py_file}")
 
     if not sandbox_lines:
-        return "## Sandbox plugins\nNone yet. Use register_plugin to create one."
+        return "## Sandbox plugins\nNone yet. Use the templates plus edit_file to create one, then register_plugin to load it."
 
     lines = ["## Sandbox plugins (read these exact paths with read_file)"]
     lines.extend(sandbox_lines)

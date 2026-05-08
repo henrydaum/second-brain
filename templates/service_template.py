@@ -7,18 +7,23 @@ It is NOT imported by the running system — it exists for LLM consumption only.
 Write services so their role is obvious: what capability they provide, what
 config they need, when they are loaded, and how callers should access them.
 
-To create a new service:
-  1. Use build_plugin(plugin_type="service", file_name="<name>Service.py",
-     action="create", code="...") to write the file to the sandbox.
-  2. The code MUST inherit from BaseService and include:
+Service authoring flow:
+  1. Read this template, then read one similar built-in service for style.
+  2. Create sandbox_services/<name>Service.py or sandbox_services/<name>.py with edit_file.
+  3. The code MUST inherit from BaseService and include:
        from plugins.BaseService import BaseService
-  3. Implement _load(), unload(), and your service methods.
-  4. Add a build_services(config) factory function at the bottom.
-  5. Hot-reload picks it up automatically — no restart needed.
-  6. If the service needs extra packages, install them first with
+  4. Implement _load(), unload(), and your service methods.
+  5. Add a build_services(config) factory function at the bottom.
+  6. Call register_plugin(plugin_type="service", file_name="<name>Service.py").
+  7. If registration fails, read the error, edit the same file, and retry.
+  8. Valid sandbox service files are loaded automatically on startup.
+  9. To update: edit the file and call register_plugin again.
+ 10. To remove live only: unregister_plugin(plugin_type="service", plugin_name="<service name>").
+     To remove durably: also delete the sandbox file with edit_file.
+ 11. If the service needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
-build_plugin automatically validates:
+register_plugin validates:
   - Correct import (from plugins.BaseService import BaseService)
   - Class inheriting BaseService
   - Presence of build_services() function

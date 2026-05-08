@@ -10,17 +10,22 @@ Write tools in the same voice the system expects elsewhere:
 - clear about when to use it
 - clear about important limits or safety constraints
 
-To create a new tool:
-  1. Use build_plugin(plugin_type="tool", file_name="tool_<your_name>.py",
-     action="create", code="...") to write the file to the sandbox.
-  2. The code MUST inherit from BaseTool and include:
+Tool authoring flow:
+  1. Read this template, then read one similar built-in tool for style.
+  2. Create sandbox_tools/tool_<your_name>.py with edit_file.
+  3. The code MUST inherit from BaseTool and include:
        from plugins.BaseTool import BaseTool, ToolResult
-  3. Fill in the class attributes and implement run().
-  4. Hot-reload picks it up automatically — no restart needed.
-  5. If the tool needs extra packages, install them first with
+  4. Fill in the class attributes and implement run().
+  5. Call register_plugin(plugin_type="tool", file_name="tool_<your_name>.py").
+  6. If registration fails, read the error, edit the same file, and retry.
+  7. Valid sandbox tool files are loaded automatically on startup.
+  8. To update: edit the file and call register_plugin again.
+  9. To remove live only: unregister_plugin(plugin_type="tool", plugin_name="<tool name>").
+     To remove durably: also delete the sandbox file with edit_file.
+ 10. If the tool needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
-build_plugin automatically validates:
+register_plugin validates:
   - Correct import (from plugins.BaseTool import BaseTool, ToolResult)
   - Class inheriting BaseTool with a `name` attribute
   - No name collisions with baked-in tools
@@ -73,10 +78,6 @@ Every tool receives a `context` object with:
   context.services  Dict of {name: service_instance}. Access shared models:
                       llm = context.services.get("llm")
                       embedder = context.services.get("text_embedder")
-
-  context.parse     Parse a file using the Stage 1 parser system:
-                      result = context.services.get("parser").parse(path)
-                      result = context.services.get("parser").parse(path, "image")
 
   context.call_tool Call another tool (tool-to-tool chaining):
                       result = context.call_tool("lexical_search", query="hello")

@@ -7,17 +7,22 @@ It is NOT imported by the running system — it exists for LLM consumption only.
 Write tasks in a practical, explicit style. A task should make its trigger,
 inputs, outputs, and failure modes easy to inspect from code and database rows.
 
-To create a new task:
-  1. Use build_plugin(plugin_type="task", file_name="task_<your_name>.py",
-     action="create", code="...") to write the file to the sandbox.
-  2. The code MUST inherit from BaseTask and include:
+Task authoring flow:
+  1. Read this template, then read one similar built-in task for style.
+  2. Create sandbox_tasks/task_<your_name>.py with edit_file.
+  3. The code MUST inherit from BaseTask and include:
        from plugins.BaseTask import BaseTask, TaskResult
-  3. Fill in the class attributes and implement run().
-  4. Hot-reload picks it up automatically — no restart needed.
-  5. If the task needs extra packages, install them first with
+  4. Fill in the class attributes and implement run() or run_event().
+  5. Call register_plugin(plugin_type="task", file_name="task_<your_name>.py").
+  6. If registration fails, read the error, edit the same file, and retry.
+  7. Valid sandbox task files are loaded automatically on startup.
+  8. To update: edit the file and call register_plugin again.
+  9. To remove live only: unregister_plugin(plugin_type="task", plugin_name="<task name>").
+     To remove durably: also delete the sandbox file with edit_file.
+ 10. If the task needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
-build_plugin automatically validates:
+register_plugin validates:
   - Correct import (from plugins.BaseTask import BaseTask, TaskResult)
   - Class inheriting BaseTask with a `name` attribute
   - No name collisions with baked-in tasks
