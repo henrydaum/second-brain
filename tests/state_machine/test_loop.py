@@ -24,6 +24,8 @@ from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.commands.command_tools import ToolsCommand
 from plugins.services.llmService import LLMResponse
+from plugins.services import timekeeperService as timekeeper_module
+from plugins.services.timekeeperService import TimekeeperService
 from plugins.tools.tool_schedule_subagent import SCHEDULED, SCHEDULED_ONCE, ScheduleSubagent
 from plugins.tasks.task_spawn_subagent import SpawnSubagent
 from state_machine.action_map import create_action
@@ -141,6 +143,10 @@ class FakeTimekeeper:
         if name in self.jobs:
             raise ValueError(f"Job '{name}' already exists.")
         self.jobs[name] = dict(job_def)
+        return self.jobs[name]
+
+    def update_job(self, name, patch):
+        self.jobs[name].update(patch)
         return self.jobs[name]
 
     def cron_to_text(self, expr):
@@ -448,6 +454,32 @@ def test_spawn_subagent_drives_inactive_conversation():
     ]
 
 
+def test_spawn_subagent_creates_missing_conversation():
+    db = FakeConversationDB()
+    runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([FakeResponse.text("done")])}, tool_registry=FakeToolRegistry())
+
+    result = SpawnSubagent().run_event("run", {"title": "Morning Brief", "prompt": "wake up"}, SimpleNamespace(db=db, runtime=runtime, services={}, config={}))
+
+    assert result.success
+    cid = result.data["conversation_id"]
+    assert db.get_conversation(cid)["title"] == "Morning Brief"
+    assert db.get_conversation(cid)["category"] == SCHEDULED
+    assert latest_state(db.get_conversation_messages(cid))["profile_override"] == "default"
+
+
+def test_spawn_subagent_repairs_deleted_conversation_and_updates_recurring_job():
+    db = FakeConversationDB()
+    tk = FakeTimekeeper({"brief": {"payload": {"title": "Brief", "prompt": "wake up", "conversation_id": 999}}})
+    runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([FakeResponse.text("done")])}, tool_registry=FakeToolRegistry())
+    payload = {"title": "Brief", "prompt": "wake up", "conversation_id": 999, "_timekeeper": {"job_name": "brief", "one_time": False}}
+
+    result = SpawnSubagent().run_event("run", payload, SimpleNamespace(db=db, runtime=runtime, services={"timekeeper": tk}, config={}))
+
+    assert result.success
+    assert result.data["conversation_id"] != 999
+    assert tk.jobs["brief"]["payload"]["conversation_id"] == result.data["conversation_id"]
+
+
 def test_spawn_subagent_rejects_active_conversation():
     db = FakeConversationDB()
     conv_id = db.create_conversation("Main")
@@ -503,24 +535,7 @@ def test_spawn_subagent_validates_payload_and_attachment():
     conv_id = db.create_conversation("Cron")
 
     assert "prompt" in task.run_event("run", {"conversation_id": conv_id}, ctx).error
-    assert "not found" in task.run_event("run", {"conversation_id": 999, "prompt": "x"}, ctx).error
     assert "Attachment not found" in task.run_event("run", {"conversation_id": conv_id, "prompt": "x", "attachments": [".missing_spawn_attachment.txt"]}, ctx).error
-
-
-def test_schedule_subagent_immediate_creates_default_one_time_conversation():
-    db = FakeConversationDB()
-    runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([FakeResponse.text("done now")])}, tool_registry=FakeToolRegistry(), config={"active_agent_profile": "builder"})
-    ctx = SimpleNamespace(db=db, runtime=runtime, services={}, config={}, approve_command=None)
-
-    result = ScheduleSubagent().run(ctx, title="Quick Reminder", prompt="remind me", run_immediately=True)
-
-    assert result.success
-    cid = result.data["conversation_id"]
-    assert result.data["scheduled"] is False
-    assert "No schedule was created" in result.llm_summary
-    assert db.get_conversation(cid)["category"] == SCHEDULED_ONCE
-    assert latest_state(db.get_conversation_messages(cid))["profile_override"] == "default"
-    assert result.data["final_text"] == "done now"
 
 
 def test_schedule_subagent_recurring_cron_requires_approval_and_creates_job():
@@ -532,16 +547,14 @@ def test_schedule_subagent_recurring_cron_requires_approval_and_creates_job():
 
     result = ScheduleSubagent().run(ctx, title="Morning Brief", prompt="brief me", cron="0 8 * * *")
 
-    cid = result.data["conversation_id"]
     job = tk.jobs["morning_brief"]
     assert result.success
     assert approvals and approvals[0][0] == "schedule_subagent"
-    assert db.get_conversation(cid)["category"] == SCHEDULED
+    assert db.conversations == {}
     assert job["channel"] == "subagent.spawn"
     assert job["cron"] == "0 8 * * *"
     assert job["one_time"] is False
-    assert job["payload"]["conversation_id"] == cid
-    assert job["payload"]["job_name"] == "morning_brief"
+    assert job["payload"] == {"title": "Morning Brief", "prompt": "brief me", "attachments": []}
 
 
 def test_tools_command_user_initiated_schedule_creates_cron_without_second_approval():
@@ -559,10 +572,9 @@ def test_tools_command_user_initiated_schedule_creates_cron_without_second_appro
         "prompt": "send wisdom",
         "cron": "0 20 * * *",
         "one_time": False,
-        "run_immediately": False,
     }, SimpleNamespace(tool_registry=registry))
 
-    assert result == "Done: Created default-agent subagent conversation #1: Nightly Wisdom. Scheduled job 'nightly_wisdom' on subagent.spawn."
+    assert result == "Done: Scheduled subagent job 'nightly_wisdom' on subagent.spawn: Nightly Wisdom."
     assert tk.jobs["nightly_wisdom"]["cron"] == "0 20 * * *"
     assert tk.jobs["nightly_wisdom"]["one_time"] is False
 
@@ -577,10 +589,35 @@ def test_schedule_subagent_one_time_cron_computes_run_at():
 
     job = tk.jobs["one_shot"]
     assert result.success
-    assert db.get_conversation(result.data["conversation_id"])["category"] == SCHEDULED_ONCE
+    assert db.conversations == {}
     assert job["one_time"] is True
     assert "run_at" in job and job["run_at"]
     assert "cron" not in job
+
+
+def test_schedule_subagent_stores_attachments_in_payload():
+    db = FakeConversationDB()
+    tk = FakeTimekeeper()
+    runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([])}, tool_registry=FakeToolRegistry())
+    ctx = SimpleNamespace(db=db, runtime=runtime, services={"timekeeper": tk}, config={}, approve_command=lambda *_: True)
+
+    result = ScheduleSubagent().run(ctx, title="With Files", prompt="read", cron="0 8 * * *", attachments=["a.txt", "b.txt"])
+
+    assert result.success
+    assert tk.jobs["with_files"]["payload"]["attachments"] == ["a.txt", "b.txt"]
+
+
+def test_timekeeper_one_time_jobs_auto_delete_after_emit(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(timekeeper_module.config_manager, "load_plugin_config", lambda: {})
+    monkeypatch.setattr(timekeeper_module.config_manager, "save_plugin_config", saved.update)
+    run_at = timekeeper_module._now_local().isoformat()
+    tk = TimekeeperService({"scheduled_jobs": {"once": {"channel": "test.once", "run_at": run_at, "one_time": True, "payload": {}}}})
+
+    tk._emit_job("once", tk.get_job("once"), timekeeper_module._now_local())
+
+    assert tk.get_job("once") is None
+    assert "once" not in saved["scheduled_jobs"]
 
 
 def test_schedule_subagent_denied_approval_has_no_side_effects():
@@ -603,8 +640,8 @@ def test_schedule_subagent_validation_and_job_name_collision():
     ctx = SimpleNamespace(db=db, runtime=runtime, services={"timekeeper": tk}, config={}, approve_command=lambda *_: True)
     tool = ScheduleSubagent()
 
-    assert "title" in tool.run(ctx, title="", prompt="x", run_immediately=True).error
-    assert "prompt" in tool.run(ctx, title="x", prompt="", run_immediately=True).error
+    assert "title" in tool.run(ctx, title="", prompt="x", cron="0 8 * * *").error
+    assert "prompt" in tool.run(ctx, title="x", prompt="", cron="0 8 * * *").error
     assert "cron expression" in tool.run(ctx, title="x", prompt="y").error
     assert "Timekeeper" in tool.run(SimpleNamespace(db=db, runtime=runtime, services={}, config={}, approve_command=lambda *_: True), title="x", prompt="y", cron="0 8 * * *").error
 

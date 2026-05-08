@@ -247,7 +247,7 @@ Built-in tools include:
 | `build_plugin` | Create, edit, or delete sandbox plugins |
 | `update_memory` | Update durable memory in `memory.md` |
 | `web_search` | Search the public web when local data is not enough |
-| `schedule_subagent` | Create and manage scheduled background subagent jobs |
+| `schedule_subagent` | Schedule background subagent jobs with Timekeeper |
 | `ask_subagent` | The main agent can delegate a complex task to a subagent to get a high-level answer |
 
 ## Frontends

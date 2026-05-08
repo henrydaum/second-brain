@@ -70,7 +70,8 @@ Payload: empty (the task pulls candidates from the DB)."""
 SPAWN_SUBAGENT = "subagent.spawn"
 """A scheduled or delegated inactive conversation should run one agent turn.
 Payload:
-    conversation_id: int
+    conversation_id: int (optional; task creates/repairs one when missing)
+    title:           str (optional)
     prompt:          str
     attachments:     list[str] (optional)
     _timekeeper:     dict (optional)"""

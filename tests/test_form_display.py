@@ -32,7 +32,7 @@ def test_json_display_gives_concrete_guidance():
 
 
 def test_boolean_display_uses_true_false_choices():
-    display = form_step_display(FormStep("run_immediately", "Run immediately?", False, "boolean", default=False))
+    display = form_step_display(FormStep("one_time", "Run once?", False, "boolean", default=False))
 
     assert display["choices"] == [{"value": True, "label": "True"}, {"value": False, "label": "False"}]
     assert display["assist"] == "Select an option. Send /skip to use the default: False."

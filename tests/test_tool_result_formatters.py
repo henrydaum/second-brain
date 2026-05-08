@@ -7,14 +7,13 @@ def test_tool_result_prefers_success_summary_over_json():
     result = SimpleNamespace(
         success=True,
         error="",
-        llm_summary="Created default-agent subagent conversation #3: Nightly Wisdom. Ran one subagent turn immediately.",
-        data={"conversation_id": 3, "final_text": "2 + 2 = 4"},
+        llm_summary="Scheduled subagent job 'nightly_wisdom' on subagent.spawn: Nightly Wisdom.",
+        data={"job_name": "nightly_wisdom", "scheduled": True},
     )
 
     text = format_tool_result(result)
 
-    assert text.startswith("Done: Created default-agent subagent conversation #3")
-    assert "2 + 2 = 4" in text
+    assert text.startswith("Done: Scheduled subagent job 'nightly_wisdom'")
     assert '"conversation_id"' not in text
 
 

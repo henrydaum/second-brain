@@ -6,11 +6,11 @@ def test_schema_form_prompts_include_action_and_description():
         "type": "object",
         "properties": {
             "title": {"type": "string", "description": "Short title for the scheduled conversation."},
-            "run_immediately": {"type": "boolean", "description": "If true, run one turn immediately.", "default": False},
+            "one_time": {"type": "boolean", "description": "If true, run once at the next cron match.", "default": False},
         },
         "required": ["title"],
     }, prompt_optional=True)
 
     assert steps[0].prompt == "Enter a title.\nShort title for the scheduled conversation."
-    assert steps[1].prompt == "Choose run immediately.\nIf true, run one turn immediately."
+    assert steps[1].prompt == "Choose one time.\nIf true, run once at the next cron match."
     assert steps[1].prompt_when_missing is True
