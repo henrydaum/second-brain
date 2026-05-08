@@ -368,6 +368,8 @@ def test_iterate_agent_turn_loads_persists_and_emits_completion():
     assert events[-1][1]["conversation_id"] == conv_id
     assert events[-1][1]["final_text"] == "done"
     assert pushed[-1]["message"] == "done\n\nLoad this conversation: `/conversations Scheduled 1 'Load conversation'`"
+    assert pushed[-1]["source_session_key"] == "job"
+    assert "session_key" not in pushed[-1]
 
 
 def test_load_history_restores_saved_agent_profile_and_history():

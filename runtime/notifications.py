@@ -74,6 +74,6 @@ def emit_fallback_push(
         "kind": "brief",
         "source": "session",
         "source_id": session_key,
-        "session_key": session_key,
+        "source_session_key": session_key,
         "sent_at": time.time(),
     })
