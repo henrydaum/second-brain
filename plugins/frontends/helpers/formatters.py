@@ -47,7 +47,7 @@ def format_tool_result(result) -> str:
     everything else falls back to pretty-printed JSON.
     """
     if not result.success:
-        return f"Error: {result.error}"
+        return f"Failed: {result.error or result.llm_summary or '(no details)'}"
     data = result.data
     if isinstance(data, dict) and "columns" in data and "rows" in data:
         columns = data["columns"]
@@ -69,6 +69,10 @@ def format_tool_result(result) -> str:
         return "\n".join(lines)
     if data is None:
         return result.llm_summary or "(no output)"
+    if result.llm_summary:
+        text = f"Done: {result.llm_summary.strip()}"
+        final = data.get("final_text") if isinstance(data, dict) else None
+        return f"{text}\n\n{str(final).strip()}" if final else text
     try:
         return json.dumps(data, indent=2, default=str)
     except Exception:

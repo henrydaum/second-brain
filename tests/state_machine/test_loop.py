@@ -536,7 +536,7 @@ def test_tools_command_user_initiated_schedule_creates_cron_without_second_appro
         "run_immediately": False,
     }, SimpleNamespace(tool_registry=registry))
 
-    assert '"job_name": "nightly_wisdom"' in result
+    assert result == "Done: Created default-agent subagent conversation #1: Nightly Wisdom. Scheduled job 'nightly_wisdom' on subagent.spawn."
     assert tk.jobs["nightly_wisdom"]["cron"] == "0 20 * * *"
     assert tk.jobs["nightly_wisdom"]["one_time"] is False
 
