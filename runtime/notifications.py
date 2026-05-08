@@ -50,9 +50,7 @@ def load_conversation_suffix(db, conversation_id: int | None) -> str:
         return ""
     if not conv:
         return ""
-    category = (conv.get("category") or "").strip()
-    if not category:
-        return ""
+    category = (conv.get("category") or "").strip() or "Main"
     cmd = f"/conversations {shlex.quote(category)} {conversation_id} 'Load conversation'"
     return f"\n\nLoad this conversation: `{cmd}`"
 

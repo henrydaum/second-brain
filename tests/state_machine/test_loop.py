@@ -331,7 +331,7 @@ def test_runtime_attachment_bundle_reaches_llm():
 
 def test_iterate_agent_turn_loads_persists_and_emits_completion():
     db = FakeConversationDB()
-    conv_id = db.create_conversation("Cron")
+    conv_id = db.create_conversation("Cron", category="Scheduled")
     db.save_message(conv_id, "user", "earlier")
     events = []
     runtime = ConversationRuntime(
@@ -361,7 +361,7 @@ def test_iterate_agent_turn_loads_persists_and_emits_completion():
     assert events[-1][1]["session_key"] == "job"
     assert events[-1][1]["conversation_id"] == conv_id
     assert events[-1][1]["final_text"] == "done"
-    assert pushed[-1]["message"] == "done"
+    assert pushed[-1]["message"] == "done\n\nLoad this conversation: `/conversations Scheduled 1 'Load conversation'`"
 
 
 def test_load_history_restores_saved_agent_profile_and_history():
