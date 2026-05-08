@@ -1,42 +1,29 @@
 """Per-conversation notification mode.
 
-Each conversation persists a notification mode alongside its agent profile.
-The mode controls three things at once: whether NotifyTool is attached to
-the session's tool registry, what the system prompt says about
-notifications, and whether a fallback push fires when the agent finishes
-a background turn without calling notify.
-
-Modes:
-    off        — no NotifyTool, no system-prompt addition.
-    all        — NotifyTool attached; agent is told to use it; if a
-                 background turn completes without a notify call, the
-                 final answer is relayed via CHAT_MESSAGE_PUSHED.
-    important  — NotifyTool attached; agent is told to call it only when
-                 something is genuinely worth surfacing. No fallback.
-
-The "background" distinction (where fallback fires) reuses the same
-active-conversation heuristic as ``background_safe`` tool gating — a
-session whose key differs from ``runtime.active_session_key`` is, by
-definition, running unattended.
+Background sessions either replay the agent's final answer to chat ("on")
+or stay silent ("off"). Older "all" / "important" markers normalize to
+"on" so existing scheduled conversations keep surfacing results.
 """
 
 from __future__ import annotations
 
 import shlex
 import time
-from typing import Any, Callable
+from typing import Any
 
 from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED
 
 
-NOTIFICATION_MODES = ("all", "important", "off")
-DEFAULT_NOTIFICATION_MODE = "all"
+NOTIFICATION_MODES = ("on", "off")
+DEFAULT_NOTIFICATION_MODE = "on"
 
 
 def notification_mode(value: Any, default: str = DEFAULT_NOTIFICATION_MODE) -> str:
     """Normalize an arbitrary input to one of NOTIFICATION_MODES."""
-    mode = str(value or default).strip().lower()
+    raw = str(value or default).strip().lower()
+    mode = {"all": "on", "important": "on", "true": "on", "yes": "on", "1": "on",
+            "false": "off", "no": "off", "0": "off"}.get(raw, raw)
     return mode if mode in NOTIFICATION_MODES else default
 
 
@@ -45,19 +32,10 @@ def notify_block(mode: str) -> str:
     mode = notification_mode(mode)
     if mode == "off":
         return ""
-    if mode == "important":
-        return (
-            "\n\n## Notifications\n"
-            "The notify tool is available but should be used only when something noteworthy comes up — "
-            "a real finding, an alert, a needed nudge, or information the user actually needs to see now. "
-            "Routine completion is not important; stay silent in that case."
-        )
     return (
         "\n\n## Notifications\n"
-        "The notify tool is the main way to send a user-visible message. "
-        "Use it for reminders, alerts, briefs, findings, check-ins, or anything the user should actually see in chat. "
-        "If you do not call notify during a background run, the system will fall back to surfacing your final answer "
-        "as a single push so the user is not left in the dark."
+        "Notifications are on for this background conversation. The final answer you give for this run will be sent "
+        "to the user, so make your last message the concise update they should see."
     )
 
 
@@ -79,24 +57,6 @@ def load_conversation_suffix(db, conversation_id: int | None) -> str:
     return f"\n\nLoad this conversation: `{cmd}`"
 
 
-def make_session_notify_tool(
-    *,
-    session_key: str,
-    conversation_id: int | None,
-    recorder: Callable[[Any], None],
-):
-    """Build a NotifyTool wired to this session's recorder."""
-    from plugins.tools.tool_notify import NotifyTool
-
-    return NotifyTool(
-        source="session",
-        source_id=session_key,
-        session_key=session_key,
-        conversation_id=conversation_id,
-        recorder=recorder,
-    )
-
-
 def emit_fallback_push(
     *,
     session_key: str,
@@ -105,12 +65,7 @@ def emit_fallback_push(
     final_text: str,
     db,
 ) -> None:
-    """Emit a CHAT_MESSAGE_PUSHED carrying the agent's final answer.
-
-    Used when ``mode == "all"`` and a background turn finished without the
-    agent calling notify. Mirrors the payload shape NotifyTool emits, so
-    downstream subscribers (frontends) handle both paths identically.
-    """
+    """Emit a CHAT_MESSAGE_PUSHED carrying the agent's final answer."""
     text = (final_text or "").strip()
     if not text:
         return

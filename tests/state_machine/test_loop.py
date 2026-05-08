@@ -340,9 +340,14 @@ def test_iterate_agent_turn_loads_persists_and_emits_completion():
         tool_registry=FakeToolRegistry(),
         emit_event=lambda channel, payload: events.append((channel, payload)),
     )
+    pushed = []
+    unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, pushed.append)
 
-    runtime.load_conversation("job", conv_id)
-    result = runtime.iterate_agent_turn("job", "wake up")
+    try:
+        runtime.load_conversation("job", conv_id)
+        result = runtime.iterate_agent_turn("job", "wake up")
+    finally:
+        unsub()
 
     rows = [r for r in db.get_conversation_messages(conv_id) if r["role"] != "system"]
     assert result.messages[-1] == "done"
@@ -356,6 +361,7 @@ def test_iterate_agent_turn_loads_persists_and_emits_completion():
     assert events[-1][1]["session_key"] == "job"
     assert events[-1][1]["conversation_id"] == conv_id
     assert events[-1][1]["final_text"] == "done"
+    assert pushed[-1]["message"] == "done"
 
 
 def test_load_history_restores_saved_agent_profile_and_history():
@@ -393,9 +399,9 @@ def test_set_conversation_notification_mode_updates_stored_marker():
     save_state_marker(db, conv_id, {"active_agent_profile": "builder"})
     runtime = ConversationRuntime(db=db)
 
-    assert runtime.set_conversation_notification_mode(conv_id, "IMPORTANT") == "important"
-    assert latest_state(db.get_conversation_messages(conv_id))["notification_mode"] == "important"
-    assert runtime.load_conversation("job", conv_id).notification_mode == "important"
+    assert runtime.set_conversation_notification_mode(conv_id, "IMPORTANT") == "on"
+    assert latest_state(db.get_conversation_messages(conv_id))["notification_mode"] == "on"
+    assert runtime.load_conversation("job", conv_id).notification_mode == "on"
 
 
 def test_set_conversation_notification_mode_updates_live_session():
@@ -404,10 +410,28 @@ def test_set_conversation_notification_mode_updates_live_session():
     runtime = ConversationRuntime(db=db)
     session = runtime.load_conversation("job", conv_id)
 
-    assert any(getattr(t, "name", None) == "notify" for t in session.extra_tool_instances)
+    assert session.notification_mode == "on"
+    assert not any(getattr(t, "name", None) == "notify" for t in session.extra_tool_instances)
     assert runtime.set_conversation_notification_mode(conv_id, "off") == "off"
     assert session.notification_mode == latest_state(db.get_conversation_messages(conv_id))["notification_mode"] == "off"
     assert not any(getattr(t, "name", None) == "notify" for t in session.extra_tool_instances)
+
+
+def test_notification_off_suppresses_background_final_answer_push():
+    db = FakeConversationDB()
+    conv_id = db.create_conversation("Cron")
+    save_state_marker(db, conv_id, {"notification_mode": "off"})
+    runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([FakeResponse.text("quiet")])}, tool_registry=FakeToolRegistry())
+    pushed = []
+    unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, pushed.append)
+    try:
+        runtime.load_conversation("job", conv_id)
+        result = runtime.iterate_agent_turn("job", "wake up")
+    finally:
+        unsub()
+
+    assert result.ok
+    assert pushed == []
 
 
 def test_spawn_subagent_drives_inactive_conversation():

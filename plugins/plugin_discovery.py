@@ -636,8 +636,7 @@ def _find_subclass_instances(module, base_class, module_name: str) -> list:
     """Find and instantiate all subclasses of base_class in a module.
 
     Skips classes with ``auto_register = False`` — these are special tools
-    that carry per-call construction state and are instantiated manually
-    by their callers (e.g. NotifyTool).
+    that carry per-call construction state and are instantiated manually.
     """
     instances = []
     for cls in _find_subclasses(module, base_class, module_name):

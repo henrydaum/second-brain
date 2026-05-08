@@ -393,7 +393,7 @@ class ConversationRuntime:
             if session.conversation_id == conversation_id:
                 with session.lock:
                     session.notification_mode = normalized
-                    _persist._attach_notify_tool(self, session)
+                    _persist._sync_notification_mode(session)
                     _persist.persist_marker(self, session)
                 return normalized
         if self.db:

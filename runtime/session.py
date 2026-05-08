@@ -57,16 +57,12 @@ class RuntimeSession:
     busy: bool = False
     active_agent_profile: str = "default"
     # Subagent / specialist sessions pin a profile and can register extra tool
-    # instances (e.g. NotifyTool) that are not part of the global
-    # tool_registry. When None / empty, the session follows the runtime's
-    # active profile and uses the global tool registry.
+    # instances that are not part of the global tool_registry. When None /
+    # empty, the session follows the runtime's active profile and registry.
     profile_override: str | None = None
     extra_tool_instances: list = field(default_factory=list)
     system_prompt_extras: dict[str, Any] = field(default_factory=dict)
     notification_mode: str = DEFAULT_NOTIFICATION_MODE
-    # Reset per turn by the runtime; the NotifyTool's recorder appends
-    # one entry per call. Used by the fallback-push check.
-    notification_records: list = field(default_factory=list)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 

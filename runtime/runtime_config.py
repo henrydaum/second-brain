@@ -153,15 +153,12 @@ def refresh_specs(runtime, session: RuntimeSession) -> None:
     """Re-bind the session's command/tool specs to the runtime's current
     registries. Called when the active profile or registries change.
 
-    Also re-syncs the session-pinned NotifyTool: a session that flips
-    between foreground (active) and background needs its tool registry to
-    reflect that — notify is only attached when the session is *not* the
-    user's currently active conversation.
+    Also normalizes per-session notification mode.
     """
     if not session.profile_override:
         session.active_agent_profile = runtime.config.get("active_agent_profile") or "default"
-    from runtime.persistence import _attach_notify_tool
-    _attach_notify_tool(runtime, session)
+    from runtime.persistence import _sync_notification_mode
+    _sync_notification_mode(session)
     session.cs.participants["user"].commands = dict(runtime.commands)
     session.cs.participants["agent"].tools = tool_specs_for(runtime, session)
 
@@ -178,8 +175,8 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
     user sessions reuse the runtime's default system_prompt and append the
     session's ``system_prompt_extras`` — letting any plugin pin contextual
     snippets to the prompt without touching the bootstrap closure.
-    The conversation's notification mode contributes its own suffix on
-    both paths.
+    Background conversations with notifications on get a short suffix
+    explaining that the final answer will be replayed to the user.
     """
     if session is None:
         return runtime.system_prompt

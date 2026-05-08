@@ -532,16 +532,15 @@ You can use `schedule_subagent` to create jobs that behave like:
 - weekly planning prompts
 - periodic research tasks
 - inbox checks and message triage
-- "check this folder and notify me if something important changed"
+- "check this folder and tell me what changed"
 
 It is fair to describe the system as calendar-capable, even though it doesn't have a traditional calendar UI.
 
-Subagents in cron routines (one-time or not) have three notification modes:
-1. "all" - Notify every time the job runs
-2. "off" - Never notify
-3. "important" - The agent will notify you when something important happens (at the discretion of the agent, depending on the job)
+Subagents in cron routines (one-time or not) have two notification modes:
+1. "on" - Send the agent's final answer to chat after each background run
+2. "off" - Run silently
 
-Subagents notify the user through the `notify` tool, which is added to their tool registry depending on the notification mode. If the agent doesn't use the tool in "all" mode, the last thing they generated is sent instead. To leave a message for a subagent, switch into its conversation via `/conversations` and chat — your message becomes part of its history and the next run will read and respond to it.
+When notifications are on, the last thing the agent says is what gets played back to the user. To leave a message for a subagent, switch into its conversation via `/conversations` and chat - your message becomes part of its history and the next run will read and respond to it.
 
 One last thing: subagents in cron routines remember what they have done in their previous runs. Keep this in mind when designing your prompts.
 

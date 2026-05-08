@@ -156,8 +156,7 @@ class BaseTool:
 
     # --- Discovery ---
     # When False, the plugin discoverer skips this tool. Use for tools that
-    # need per-session construction args (e.g. session-pinned NotifyTool) and
-    # are instantiated manually at their call site instead.
+    # need per-call construction args and are instantiated manually instead.
     auto_register: bool = True
 
     # --- Config settings this plugin needs ---
@@ -186,4 +185,3 @@ class BaseTool:
                 "parameters": self.parameters,
             }
         }
-

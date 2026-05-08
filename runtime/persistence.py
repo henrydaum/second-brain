@@ -33,7 +33,6 @@ from runtime.session import RuntimeSession, SessionConflict
 from runtime.notifications import (
     DEFAULT_NOTIFICATION_MODE,
     emit_fallback_push,
-    make_session_notify_tool,
     notification_mode as normalize_notification_mode,
 )
 
@@ -51,7 +50,7 @@ def get_or_create_session(runtime, key: str) -> RuntimeSession:
             session = RuntimeSession(key, new_state(runtime))
             session.cs = new_state(runtime, session=session)
             runtime.sessions[key] = session
-            _attach_notify_tool(runtime, session)
+            _sync_notification_mode(session)
             bus.emit(SESSION_CREATED, {
                 "session_key": key,
                 "agent_profile": session.active_agent_profile,
@@ -59,38 +58,13 @@ def get_or_create_session(runtime, key: str) -> RuntimeSession:
         return runtime.sessions[key]
 
 
-def _attach_notify_tool(runtime, session: RuntimeSession) -> None:
-    """Idempotently sync ``session.extra_tool_instances`` with the current
-    ``notification_mode`` AND active-conversation status.
-
-    Notification semantics only apply when the session is *not* the user's
-    currently active conversation: in foreground, anything the agent says
-    is already visible to the user, so a notify push would just duplicate.
-    A NotifyTool is present iff the mode is "all" or "important" AND this
-    session is not the active one. The recorder closure appends to
-    ``session.notification_records`` so the fallback-push check can tell
-    whether the agent actually called notify during a turn.
-
-    Called from session-lifecycle paths and from ``refresh_specs`` on every
-    turn, so a session that flips between foreground and background sees
-    its tool registry update accordingly."""
+def _sync_notification_mode(session: RuntimeSession) -> None:
+    """Normalize notification mode and drop stale notification extras."""
     session.extra_tool_instances = [
         t for t in session.extra_tool_instances
         if getattr(t, "name", None) != "notify"
     ]
-    mode = normalize_notification_mode(session.notification_mode)
-    session.notification_mode = mode
-    if mode == "off":
-        return
-    if session.key == getattr(runtime, "active_session_key", None):
-        return
-    records = session.notification_records
-    tool = make_session_notify_tool(
-        session_key=session.key,
-        conversation_id=session.conversation_id,
-        recorder=lambda record: records.append(record),
-    )
-    session.extra_tool_instances.append(tool)
+    session.notification_mode = normalize_notification_mode(session.notification_mode)
 
 
 def open_session(
@@ -190,7 +164,7 @@ def load_conversation(
     )
     # Re-seed cs with session-aware specs.
     session.cs = new_state(runtime, marker, session=session)
-    _attach_notify_tool(runtime, session)
+    _sync_notification_mode(session)
     with runtime._sessions_lock:
         runtime.sessions[session_key] = session
     bus.emit(SESSION_CREATED, {
@@ -236,7 +210,7 @@ def reset_conversation(runtime, session_key: str) -> RuntimeSession:
         existed = session_key in runtime.sessions
         session = RuntimeSession(session_key, new_state(runtime))
         session.cs = new_state(runtime, session=session)
-        _attach_notify_tool(runtime, session)
+        _sync_notification_mode(session)
         runtime.sessions[session_key] = session
     if existed:
         bus.emit(SESSION_CLOSED, {"session_key": session_key})
@@ -281,9 +255,6 @@ def iterate_agent_turn(
     payload = {"text": prompt, "actor_id": actor_id}
     if attachments:
         payload["attachments"] = list(attachments)
-    pre_session = runtime.sessions.get(session_key)
-    if pre_session is not None:
-        pre_session.notification_records.clear()
     out = runtime.handle_action(session_key, "send_text", payload, user_driven=False)
     session = runtime.sessions.get(session_key)
     if out.ok and session and runtime.db and session.conversation_id:
@@ -304,14 +275,12 @@ def iterate_agent_turn(
     (runtime.emit_event or bus.emit)(SESSION_TURN_COMPLETED, event)
     out.data.update(event)
 
-    # "all"-mode fallback: a background turn that finished without the
-    # agent calling notify gets its final answer relayed via the same
-    # CHAT_MESSAGE_PUSHED channel. Foreground turns are skipped — the user
-    # already saw the agent's reply in their session.
+    # Background notification: replay the final answer when notifications
+    # are on. Foreground turns are skipped because the reply is already
+    # visible in the active session.
     if (out.ok and session is not None
-            and session.notification_mode == "all"
+            and session.notification_mode == "on"
             and session_key != getattr(runtime, "active_session_key", None)
-            and not session.notification_records
             and final_text):
         emit_fallback_push(
             session_key=session_key,
