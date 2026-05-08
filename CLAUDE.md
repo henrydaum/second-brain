@@ -40,8 +40,8 @@ and FINISHED match up. See
 
 `BaseFrontend` ([plugins/BaseFrontend.py](plugins/BaseFrontend.py)) subscribes
 both events and routes them through `render_tool_status(session_key,
-payload)`. Telegram edits a single message in place: `⟳ /name` →
-`✓ /name` or `✗ /name` with error. REPL prints the same shapes to stdout.
+payload)`. Telegram edits a single message in place: `⋯ /name` →
+`✓ /name` or `✕ /name` with error. REPL prints the same shapes to stdout.
 
 ## Where to plug in
 

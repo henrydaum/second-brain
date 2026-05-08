@@ -110,12 +110,12 @@ class ReplFrontend(BaseFrontend):
     def render_tool_status(self, _session_key: str, payload: dict) -> None:
         name = payload.get("tool_name") or payload.get("command_name") or "call"
         if payload.get("status") == "started":
-            sys.stdout.write(f"\n⟳ {name}...")
+            sys.stdout.write(f"\n⋯ {name}...")
             sys.stdout.flush()
             return
         if payload.get("status") != "finished":
             return
-        sys.stdout.write(f"\r{'✓' if payload.get('ok') else '✗'} {name}   \n")
+        sys.stdout.write(f"\r{'✓' if payload.get('ok') else '✕'} {name}   \n")
         sys.stdout.flush()
 
     def _live_session_keys(self) -> list[str]:
