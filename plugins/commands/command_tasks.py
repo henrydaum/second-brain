@@ -19,24 +19,24 @@ class TasksCommand(BaseCommand):
 
     def form(self, args, context):
         tasks = sorted(getattr(getattr(context, "orchestrator", None), "tasks", {}))
-        steps = [FormStep("task_name", "Task", True, enum=[*tasks, PIPELINE], columns=2)]
+        steps = [FormStep("task_name", "Select a task to manage, or view the pipeline.", True, enum=[*tasks, PIPELINE], columns=2)]
         if args.get("task_name") == PIPELINE:
             return steps
         task = _task(context, args.get("task_name"))
         if task:
-            steps.append(FormStep("action", _describe(context, args["task_name"]), True, enum=EVENT_ACTIONS if getattr(task, "trigger", "path") == "event" else PATH_ACTIONS))
+            steps.append(FormStep("action", f"What do you want to do with this task?\n\n{_describe(context, args['task_name'])}", True, enum=EVENT_ACTIONS if getattr(task, "trigger", "path") == "event" else PATH_ACTIONS))
         action = args.get("action")
         if task and action == "trigger":
             steps += schema_to_form_steps(getattr(task, "event_payload_schema", {}) or {}, prompt_optional=True)
         elif task and action == "schedule":
             steps += [
-                FormStep("job_name", "Job name (unique)", True),
-                FormStep("cron", "Cron expression (e.g. '0 9 * * *')", True),
+                FormStep("job_name", "Enter a unique name for this schedule.", True),
+                FormStep("cron", "Enter the cron expression, for example 0 9 * * *.", True),
             ]
             steps += schema_to_form_steps(getattr(task, "event_payload_schema", {}) or {}, prompt_optional=True)
         elif task and action == "unschedule":
             jobs = _jobs_for_task(context, task)
-            steps.append(FormStep("job_name", "Job to remove", True, enum=jobs or ["(no jobs scheduled)"]))
+            steps.append(FormStep("job_name", "Select the scheduled job to remove.", True, enum=jobs or ["(no jobs scheduled)"]))
         return steps
 
     def run(self, args, context):

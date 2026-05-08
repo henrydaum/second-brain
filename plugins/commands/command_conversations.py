@@ -47,7 +47,7 @@ class ConversationsCommand(BaseCommand):
         # Step 1 — pick a top-level category, or branch off to "New".
         cats = _existing_categories(db)
         cat_enum = list(cats) + [_NEW_CONV]
-        steps = [FormStep("category", "Category", True, enum=cat_enum, columns=1)]
+        steps = [FormStep("category", "Choose a conversation category, or start a new conversation.", True, enum=cat_enum, columns=1)]
 
         picked = args.get("category")
         if not picked:
@@ -94,7 +94,7 @@ def _new_conversation_steps(args, context):
     profiles = list((getattr(context, "config", None) or {}).get("agent_profiles") or {})
     if not profiles:
         profiles = ["default"]
-    steps = [FormStep("agent_profile", "Agent profile", True, enum=profiles, columns=1)]
+    steps = [FormStep("agent_profile", "Choose the agent profile for the new conversation.", True, enum=profiles, columns=1)]
     if not args.get("agent_profile"):
         return steps
 
@@ -103,10 +103,10 @@ def _new_conversation_steps(args, context):
     if _MAIN not in cats:
         cats = [_MAIN] + cats
     cat_enum = list(cats) + [_NEW_CAT]
-    steps.append(FormStep("new_category", "Category", True, enum=cat_enum, columns=1))
+    steps.append(FormStep("new_category", "Choose where to file the new conversation.", True, enum=cat_enum, columns=1))
 
     if args.get("new_category") == _NEW_CAT:
-        steps.append(FormStep("custom_category", "New category name", True, columns=1))
+        steps.append(FormStep("custom_category", "Enter a name for the new category.", True, columns=1))
     return steps
 
 
@@ -114,22 +114,22 @@ def _existing_conversation_steps(args, context, category):
     db = getattr(context, "db", None)
     rows, _ = db.list_conversations_page(offset=0, limit=_LIMIT, category=_lookup_value(category))
     if not rows:
-        return [FormStep("conversation_id", f"No conversations under '{category}'.", True,
+        return [FormStep("conversation_id", f"No conversations found under '{category}'.", True,
                          enum=["(none)"], enum_labels=["(none)"], columns=1)]
 
     enum = [str(r.get("id")) for r in rows]
     labels = [_label_for(db, r) for r in rows]
-    steps = [FormStep("conversation_id", f"Recent under '{category}' ({len(rows)})",
+    steps = [FormStep("conversation_id", f"Choose a recent conversation under '{category}'.",
                       True, enum=enum, enum_labels=labels, columns=1)]
 
     cid = _decode_id(args.get("conversation_id"))
     if cid is None:
         return steps
 
-    prompt = _preview_for(db, cid) or "Action"
+    prompt = f"What do you want to do with this conversation?\n\n{_preview_for(db, cid) or ''}".strip()
     steps.append(FormStep("action", prompt, True, enum=[_LOAD, _DELETE, _CHANGE_NOTIF], columns=1))
     if args.get("action") == _CHANGE_NOTIF:
-        steps.append(FormStep("mode", "Notification mode", True, enum=list(NOTIFICATION_MODES), columns=1))
+        steps.append(FormStep("mode", "Choose how this conversation should notify you while it runs in the background.", True, enum=list(NOTIFICATION_MODES), columns=1))
     return steps
 
 

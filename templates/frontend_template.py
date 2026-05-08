@@ -90,8 +90,9 @@ from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
 #             print(f"[attachment] {path}")
 #
 #     def render_form_field(self, session_key: str, form: dict) -> None:
+#         display = form.get("display") or {}
 #         field = form.get("field") or {}
-#         print(field.get("prompt") or field.get("name") or "Input required")
+#         print(display.get("prompt") or field.get("prompt") or field.get("name") or "Input required")
 #
 #     def render_approval_request(self, session_key: str, req) -> None:
 #         print(f"{req.title}\n{req.body}")

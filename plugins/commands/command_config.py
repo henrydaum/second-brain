@@ -21,11 +21,11 @@ class ConfigCommand(BaseCommand):
     category = "Config & System"
 
     def form(self, args, context):
-        steps = [FormStep("setting_name", "Setting", True, enum=sorted(_settings()), columns=2)]
+        steps = [FormStep("setting_name", "Select a setting to inspect or edit.", True, enum=sorted(_settings()), columns=2)]
         if args.get("setting_name"):
-            steps.append(FormStep("action", _describe(context, args["setting_name"]), True, enum=ACTIONS))
+            steps.append(FormStep("action", f"What do you want to do with this setting?\n\n{_describe(context, args['setting_name'])}", True, enum=ACTIONS, enum_labels=["Edit setting"]))
         if args.get("action") == "edit":
-            steps.append(FormStep("value", "New value", True))
+            steps.append(FormStep("value", "Enter the new value. JSON values are accepted for lists, objects, booleans, and numbers.", True))
         return steps
 
     def run(self, args, context):

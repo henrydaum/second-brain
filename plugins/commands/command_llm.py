@@ -8,6 +8,7 @@ from state_machine.conversation import FormStep
 ACTIONS = ["edit", "set_default", "remove"]
 ACTION_LABELS = ["Edit", "Set default", "Remove"]
 FIELDS = ["llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class"]
+FIELD_LABELS = ["Endpoint", "API key", "Context size", "Service class"]
 
 
 class LlmCommand(BaseCommand):
@@ -20,16 +21,16 @@ class LlmCommand(BaseCommand):
         steps = [FormStep("model_name", _default_prompt(context), True, enum=[*sorted(profiles), "add"])]
         if args.get("model_name") == "add":
             return steps + [
-                FormStep("new_model_name", "Model name", True),
-                FormStep("llm_service_class", "Service class", True, enum=["OpenAILLM", "LMStudioLLM"], default="OpenAILLM"),
-                FormStep("llm_endpoint", "Endpoint", False, default="", prompt_when_missing=True),
-                FormStep("llm_api_key", "API key env/name", False, default="OPENAI_API_KEY", prompt_when_missing=True),
-                FormStep("llm_context_size", "Context size", False, "integer", default=0, prompt_when_missing=True),
+                FormStep("new_model_name", "Enter the provider's model name exactly.", True),
+                FormStep("llm_service_class", "Choose how Second Brain should connect to this model.", True, enum=["OpenAILLM", "LMStudioLLM"], default="OpenAILLM"),
+                FormStep("llm_endpoint", "Optional OpenAI-compatible endpoint URL.", False, default="", prompt_when_missing=True),
+                FormStep("llm_api_key", "API key value, or the environment variable name that contains it.", False, default="OPENAI_API_KEY", prompt_when_missing=True),
+                FormStep("llm_context_size", "Optional context window size in tokens. Use 0 if unknown.", False, "integer", default=0, prompt_when_missing=True),
             ]
         if args.get("model_name"):
-            steps.append(FormStep("action", _describe(context, args["model_name"]), True, enum=ACTIONS, enum_labels=ACTION_LABELS))
+            steps.append(FormStep("action", f"What do you want to do with this LLM profile?\n\n{_describe(context, args['model_name'])}", True, enum=ACTIONS, enum_labels=ACTION_LABELS))
         if args.get("action") == "edit":
-            steps += [FormStep("field", "Field", True, enum=FIELDS), FormStep("value", "Value", True)]
+            steps += [FormStep("field", "Choose which LLM setting to edit.", True, enum=FIELDS, enum_labels=FIELD_LABELS), FormStep("value", _value_prompt(args.get("field")), True)]
         return steps
 
     def run(self, args, context):
@@ -91,7 +92,16 @@ def _describe(context, name):
 
 def _default_prompt(context):
     default = (context.config.get("default_llm_profile") or "").strip()
-    return f"LLM\nDefault: {default or '(none)'}"
+    return f"Select an LLM profile, or add a new one.\nDefault: {default or '(none)'}"
+
+
+def _value_prompt(field):
+    return {
+        "llm_endpoint": "Enter the endpoint URL, or leave it blank for the provider default.",
+        "llm_api_key": "Enter the API key value or environment variable name.",
+        "llm_context_size": "Enter the context window size in tokens. Use 0 if unknown.",
+        "llm_service_class": "Enter OpenAILLM or LMStudioLLM.",
+    }.get(field, "Enter the new value.")
 
 
 def _save(config):

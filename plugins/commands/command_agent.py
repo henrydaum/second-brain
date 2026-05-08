@@ -7,6 +7,7 @@ from state_machine.conversation import FormStep
 
 ACTIONS = ["switch", "edit", "remove"]
 FIELDS = ["llm", "prompt_suffix", "whitelist_or_blacklist_tools", "tools_list"]
+FIELD_LABELS = ["LLM", "Prompt suffix", "Tool mode", "Tool list"]
 
 
 class AgentCommand(BaseCommand):
@@ -16,21 +17,21 @@ class AgentCommand(BaseCommand):
 
     def form(self, args, context):
         profiles = context.config.get("agent_profiles", {}) or {}
-        steps = [FormStep("profile_name", "Agent", True, enum=[*sorted(profiles), "add"])]
+        steps = [FormStep("profile_name", "Select an agent profile, or add a new one.", True, enum=[*sorted(profiles), "add"])]
         llms = ["default", *sorted((context.config.get("llm_profiles", {}) or {}).keys())]
         tools = sorted(getattr(getattr(context, "tool_registry", None), "tools", {}))
         if args.get("profile_name") == "add":
             return steps + [
-                FormStep("new_profile_name", "Profile name", True),
-                FormStep("llm", "LLM", True, enum=llms, default="default"),
-                FormStep("prompt_suffix", "Prompt suffix", False, default="", prompt_when_missing=True),
-                FormStep("whitelist_or_blacklist_tools", "Tool mode", True, enum=["blacklist", "whitelist"], default="blacklist"),
-                FormStep("tools_list", f"Tools JSON array. Available: {', '.join(tools) or '(none)'}", False, "array", default=[], prompt_when_missing=True),
+                FormStep("new_profile_name", "Enter a short name for the new agent profile.", True),
+                FormStep("llm", "Choose the LLM this agent should use. Select default to follow the current default LLM.", True, enum=llms, default="default"),
+                FormStep("prompt_suffix", "Optional extra instructions to append to this agent's system prompt.", False, default="", prompt_when_missing=True),
+                FormStep("whitelist_or_blacklist_tools", "Choose how this profile should treat the tool list.", True, enum=["blacklist", "whitelist"], default="blacklist", enum_labels=["Block listed tools", "Allow only listed tools"]),
+                FormStep("tools_list", f"Optional tool names as a JSON array. Available: {', '.join(tools) or '(none)'}", False, "array", default=[], prompt_when_missing=True),
             ]
         if args.get("profile_name"):
-            steps.append(FormStep("action", _describe(context, args["profile_name"]), True, enum=ACTIONS))
+            steps.append(FormStep("action", f"What do you want to do with this agent profile?\n\n{_describe(context, args['profile_name'])}", True, enum=ACTIONS, enum_labels=["Switch to it", "Edit it", "Remove it"]))
         if args.get("action") == "edit":
-            steps += [FormStep("field", "Field", True, enum=FIELDS), FormStep("value", "Value", True)]
+            steps += [FormStep("field", "Choose which part of the agent profile to edit.", True, enum=FIELDS, enum_labels=FIELD_LABELS), FormStep("value", _value_prompt(args.get("field")), True)]
         return steps
 
     def run(self, args, context):
@@ -86,6 +87,15 @@ def _describe(context, name):
         return "Action"
     active = " active" if context.config.get("active_agent_profile") == name else ""
     return f"{name}{active}\nLLM: {p.get('llm', 'default')}\nTool mode: {p.get('whitelist_or_blacklist_tools', 'blacklist')}\nTools: {', '.join(p.get('tools_list') or []) or '(none)'}"
+
+
+def _value_prompt(field):
+    return {
+        "llm": "Enter the LLM profile name, or default.",
+        "prompt_suffix": "Enter the extra system-prompt instructions for this agent.",
+        "whitelist_or_blacklist_tools": "Enter blacklist to block listed tools, or whitelist to allow only listed tools.",
+        "tools_list": "Enter a JSON array of tool names.",
+    }.get(field, "Enter the new value.")
 
 
 def _save(config):

@@ -13,9 +13,9 @@ class ServicesCommand(BaseCommand):
 
     def form(self, args, context):
         services = context.services or {}
-        steps = [FormStep("service_name", "Service", True, enum=sorted((context.services or {}).keys()), columns=2)]
+        steps = [FormStep("service_name", "Select a service to load or unload.", True, enum=sorted((context.services or {}).keys()), columns=2)]
         if args.get("service_name"):
-            steps.append(FormStep("action", _describe(services, args["service_name"]), True, enum=ACTIONS))
+            steps.append(FormStep("action", f"What do you want to do with this service?\n\n{_describe(services, args['service_name'])}", True, enum=ACTIONS, enum_labels=["Load it", "Unload it"]))
         return steps
 
     def run(self, args, context):

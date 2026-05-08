@@ -15,10 +15,10 @@ class ToolsCommand(BaseCommand):
     def form(self, args, context):
         registry = getattr(context, "tool_registry", None)
         tools = getattr(registry, "tools", {}) or {}
-        steps = [FormStep("tool_name", "Tool", True, enum=sorted(tools), columns=2)]
+        steps = [FormStep("tool_name", "Select a tool to inspect or call.", True, enum=sorted(tools), columns=2)]
         tool = tools.get(args.get("tool_name"))
         if tool:
-            steps.append(FormStep("action", _describe(tool), True, enum=ACTIONS))
+            steps.append(FormStep("action", f"What do you want to do with this tool?\n\n{_describe(tool)}", True, enum=ACTIONS, enum_labels=["Call tool"]))
         if tool and args.get("action") == "call":
             steps += schema_to_form_steps(tool.to_schema()["function"].get("parameters"), prompt_optional=True)
         return steps

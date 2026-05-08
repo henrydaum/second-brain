@@ -22,6 +22,7 @@ from events.event_channels import (
     SESSION_TURN_CHANGED,
 )
 from state_machine.errors import ActionResult
+from state_machine.form_display import form_step_display
 from state_machine.serialization import save_history_message
 from runtime.session import RuntimeResult, RuntimeSession
 
@@ -142,6 +143,7 @@ def decorate_form(session: RuntimeSession, out: RuntimeResult) -> None:
             "action_type": frame.action_type,
             "field": frame.step.to_dict(),
             "collected": frame.data.get("args", {}),
+            "display": form_step_display(frame.step),
         }
 
 

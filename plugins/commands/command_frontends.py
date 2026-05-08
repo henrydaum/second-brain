@@ -12,9 +12,9 @@ class FrontendsCommand(BaseCommand):
     category = "System"
 
     def form(self, args, context):
-        steps = [FormStep("frontend_name", "Frontend", True, enum=SUPPORTED, columns=2)]
+        steps = [FormStep("frontend_name", "Select a frontend to enable or disable.", True, enum=SUPPORTED, columns=2)]
         if args.get("frontend_name"):
-            steps.append(FormStep("action", _describe(context.config, args["frontend_name"]), True, enum=ACTIONS))
+            steps.append(FormStep("action", f"What do you want to do with this frontend?\n\n{_describe(context.config, args['frontend_name'])}", True, enum=ACTIONS, enum_labels=["Enable it", "Disable it"]))
         return steps
 
     def run(self, args, context):

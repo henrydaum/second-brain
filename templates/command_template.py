@@ -34,7 +34,8 @@ FORMS
 `form(args, context)` returns FormStep objects for missing input. The runtime
 collects each field, coerces types, and calls run(args, context) when complete.
 For dynamic forms, inspect already-collected args and return the next needed
-steps.
+steps. Write each FormStep prompt as a user-facing instruction, not just a
+field label: "Enter the note text." is better than "Text".
 
 COMMAND RESULT
 --------------
@@ -83,7 +84,7 @@ class BaseCommand:
 #     category = "Memory"
 #
 #     def form(self, args, context):
-#         return [FormStep("text", "Note text", True)]
+#         return [FormStep("text", "Enter the note text to append.", True)]
 #
 #     def run(self, args, context):
 #         text = (args.get("text") or "").strip()
@@ -107,11 +108,11 @@ class BaseCommand:
 #     category = "System"
 #
 #     def form(self, args, context):
-#         steps = [FormStep("mode", "Mode", True, enum=["say", "count"])]
+#         steps = [FormStep("mode", "Choose what the demo command should do.", True, enum=["say", "count"])]
 #         if args.get("mode") == "say":
-#             steps.append(FormStep("text", "Text", True))
+#             steps.append(FormStep("text", "Enter the text to return.", True))
 #         if args.get("mode") == "count":
-#             steps.append(FormStep("n", "Count", True, type="integer"))
+#             steps.append(FormStep("n", "Enter the number to count up to.", True, type="integer"))
 #         return steps
 #
 #     def run(self, args, context):

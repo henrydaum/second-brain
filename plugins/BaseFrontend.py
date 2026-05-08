@@ -186,6 +186,8 @@ class BaseFrontend:
                 "field":     dict,       # FormStep.to_dict() — name, prompt,
                                          # required, type, enum, default, ...
                 "collected": dict,       # args gathered so far
+                "display":   dict,       # frontend-neutral prompt, assist,
+                                         # choices, skip/cancel affordances
             }
         """
         raise NotImplementedError

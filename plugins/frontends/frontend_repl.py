@@ -89,8 +89,10 @@ class ReplFrontend(BaseFrontend):
 
     def render_form_field(self, _session_key: str, form: dict) -> None:
         field = form.get("field") or {}
-        hints = self._hints(field)
-        print(f"\n{form.get('name')}: {field.get('prompt') or field.get('name')}{hints}")
+        display = form.get("display") or {}
+        prompt = display.get("prompt") or field.get("prompt") or field.get("name") or "Input required"
+        hints = self._hints(display or field)
+        print(f"\n{prompt}{hints}")
 
     def render_approval_request(self, _session_key: str, req) -> None:
         hints = self._hints({"type": getattr(req, "type", "boolean"), "enum": getattr(req, "enum", None), "default": getattr(req, "default", None)})
@@ -122,15 +124,18 @@ class ReplFrontend(BaseFrontend):
     @staticmethod
     def _hints(field: dict) -> str:
         parts = []
-        if field.get("enum"):
+        choices = field.get("choices") or []
+        if choices:
+            parts.append("options: " + ", ".join(str(c.get("label") or c.get("value")) for c in choices))
+        elif field.get("enum"):
             display = field.get("enum_labels") or field["enum"]
             parts.append("options: " + ", ".join(map(str, display)))
-        if field.get("required") is False:
+        if field.get("assist"):
+            parts.append(str(field["assist"]))
+        elif field.get("required") is False:
             parts.append("/skip to skip")
-        if field.get("default") is not None:
+        if field.get("default") is not None and not field.get("assist"):
             parts.append(f"default: {field['default']}")
-        if field.get("type"):
-            parts.append(f"type: {field['type']}")
         return f" ({'; '.join(parts)})" if parts else ""
 
     @staticmethod

@@ -21,7 +21,7 @@ class LocationsCommand(BaseCommand):
     category = "System"
 
     def form(self, args, context):
-        return [FormStep("kind", "Location", True, enum=list(KINDS))]
+        return [FormStep("kind", "Choose which location map to show.", True, enum=list(KINDS))]
 
     def run(self, args, context):
         root, data = KINDS.get(args.get("kind") or "root", KINDS["root"])

@@ -204,8 +204,7 @@ class TelegramFrontend(BaseFrontend):
         self._send(self._send_media(self._chat_id(session_key), paths))
 
     def render_form_field(self, session_key: str, form: dict) -> None:
-        field = form.get("field") or {}
-        self._send_text(session_key, self._prompt(form.get("name"), field), markup=self._enum_markup(session_key, form))
+        self._send_text(session_key, self._prompt(form), markup=self._enum_markup(session_key, form))
 
     def render_approval_request(self, session_key: str, req) -> None:
         body = html.escape(f"{getattr(req, 'title', 'Approval requested')}\n\n{getattr(req, 'body', '')}".strip())
@@ -382,24 +381,28 @@ class TelegramFrontend(BaseFrontend):
         except Exception:
             return None
 
-    def _prompt(self, name: str | None, field: dict) -> str:
-        bits = [f"<b>{html.escape(name or 'Input required')}</b>", html.escape(field.get("prompt") or field.get("name") or "Input required")]
-        if field.get("type"):
-            bits.append(f"<i>Type: {html.escape(str(field['type']))}</i>")
-        if field.get("required") is False:
-            bits.append("<i>/skip to skip. /cancel to cancel.</i>")
+    def _prompt(self, form: dict) -> str:
+        field = form.get("field") or {}
+        display = form.get("display") or {}
+        prompt = display.get("prompt") or field.get("prompt") or field.get("name") or "Input required"
+        bits = [html.escape(str(prompt))]
+        assist = display.get("assist")
+        if assist:
+            bits.append(f"<i>{html.escape(str(assist))}</i>")
+        if display.get("allow_cancel", True):
+            bits.append("<i>Send /cancel to cancel.</i>")
         return "\n".join(bits)
 
     def _enum_markup(self, key: str, form: dict):
         field = form.get("field") or {}
-        values = field.get("enum") or []
-        labels = field.get("enum_labels") or []
-        def _label(i, v): return str(labels[i]) if i < len(labels) else str(v)
-        cols, buttons = max(1, int(field.get("columns") or 1)), [self._button(_label(i, v), key, str(v), self._form_echo(form, v)) for i, v in enumerate(values)]
+        display = form.get("display") or {}
+        choices = display.get("choices") or [{"value": v, "label": str(v)} for v in (field.get("enum") or [])]
+        cols, buttons = max(1, int(field.get("columns") or 1)), [self._button(str(c.get("label") or c.get("value")), key, str(c.get("value")), self._form_echo(form, c.get("value"))) for c in choices]
         rows = [buttons[i:i + cols] for i in range(0, len(buttons), cols)]
-        if field.get("required") is False:
+        if display.get("allow_skip", field.get("required") is False):
             rows.append([self._button("Skip", key, "/skip")])
-        rows.append([self._button("Cancel", key, "/cancel")])
+        if display.get("allow_cancel", True):
+            rows.append([self._button("Cancel", key, "/cancel")])
         return self._markup(rows)
 
     def _approval_markup(self, key: str, req):
