@@ -80,7 +80,7 @@ class ConversationsCommand(BaseCommand):
 
 class NewCommand(BaseCommand):
     name = "new"
-    description = "Start a default Main conversation"
+    description = "Start a conversation with default settings"
     category = "Conversation"
 
     def run(self, args, context):
