@@ -17,7 +17,7 @@ class LlmCommand(BaseCommand):
 
     def form(self, args, context):
         profiles = context.config.get("llm_profiles", {}) or {}
-        steps = [FormStep("model_name", "LLM", True, enum=[*sorted(profiles), "add"])]
+        steps = [FormStep("model_name", _default_prompt(context), True, enum=[*sorted(profiles), "add"])]
         if args.get("model_name") == "add":
             return steps + [
                 FormStep("new_model_name", "Model name", True),
@@ -87,6 +87,11 @@ def _describe(context, name):
     loaded = getattr((context.services or {}).get(name), "loaded", False)
     mark = " default" if context.config.get("default_llm_profile") == name else ""
     return f"{name}{mark}\nStatus: {'Loaded' if loaded else 'Unloaded'}\nClass: {p.get('llm_service_class', 'OpenAILLM')}\nContext: {p.get('llm_context_size', 0)}"
+
+
+def _default_prompt(context):
+    default = (context.config.get("default_llm_profile") or "").strip()
+    return f"LLM\nDefault: {default or '(none)'}"
 
 
 def _save(config):

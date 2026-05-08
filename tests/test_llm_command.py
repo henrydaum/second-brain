@@ -11,6 +11,7 @@ def test_llm_command_can_set_default(monkeypatch):
     steps = LlmCommand().form({"model_name": "b"}, context)
     result = LlmCommand().run({"model_name": "b", "action": "set_default"}, context)
 
+    assert steps[0].prompt == "LLM\nDefault: a"
     assert steps[1].enum == ["edit", "set_default", "remove"]
     assert steps[1].enum_labels == ["Edit", "Set default", "Remove"]
     assert result == "Default LLM profile set to: b"
