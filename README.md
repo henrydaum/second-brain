@@ -2,377 +2,171 @@
 
 # Second Brain
 
-Second Brain is an attempt to make a digital brain that approximates the real thing. It's part knowledge engine, part personal operator, and part programmable automation layer.
+Second Brain is a local-first AI runtime for your machine.
 
-It continuously indexes your files, remembers durable context, searches the web when local knowledge is not enough, and runs tools and shell commands. It lives in your terminal and Telegram, so your assistant is available everywhere.
+It indexes your files, remembers durable context, searches the web, runs tools, schedules cron jobs, sends Telegram updates, and lets agents extend the system while it is running. It is not a fixed chatbot wrapped around a folder search. It is a programmable conversation runtime with memory, retrieval, automation, and live plugin authoring built in.
 
-Instead of being "just a chatbot," it turns your machine into a system that can observe, search, reason, and act. Point it at your world, give it tools, and it becomes a private AI layer for research, reminders, recurring work, and everyday operations.
+The most important architectural shift is the conversation layer. Second Brain now routes conversations through a robust state machine: participants take actions, turns move between actors, phases suspend and resume multi-step flows, and frontends submit actions instead of owning conversation logic. Commands and frontends are plugins too, so the system can grow new user interfaces and slash-command workflows the same way it grows tools, tasks, and services.
 
-## Why It Matters
+## What It Can Do
 
-It can:
+- Index documents, code, PDFs, slides, spreadsheets, archives, images, audio, and video.
+- Search local files by keyword, semantics, or hybrid ranking.
+- Answer from your own corpus with citations and exact file reads.
+- Keep durable memory in `memory.md`.
+- Store and resume conversation history in SQLite.
+- Search the public web when local knowledge is not enough.
+- Run path-driven indexing tasks and event-driven background jobs.
+- Schedule one-time and recurring subagents through Timekeeper cron jobs.
+- Push reminders, findings, daily briefs, and alerts into Telegram.
+- Use REPL and Telegram frontends out of the box.
+- Author and hot-load new tools, tasks, services, commands, and frontends.
 
-- index your documents, code, PDFs, slides, spreadsheets, archives, images, audio, and video
-- answer questions grounded in your own files with citations
-- search by keyword, semantics, or a hybrid of both
-- remember durable facts and preferences across sessions
-- search the web when local knowledge is not enough
-- fire tasks from events, not just file changes
-- push reminders, findings, daily briefs, and alerts into Telegram
-- proactively send emails and text messages
-- build and load new tools, tasks, and services without a restart
+The result is a private AI layer for your computer: part knowledge engine, part personal operator, part automation substrate.
 
-It can be your personal assistant. It can be a file intelligence layer for your whole machine. It can be a reminder system. It can be a daily briefing engine. It can absolutely function like a personal AI calendar and operator for recurring work. It's a general-intelligence system for your computer. Some might even say it can be a new operating system.
+## Core Architecture
 
-## Core Capabilities
+Second Brain is built from a few durable pieces:
 
-### 1. Index Your World
+- `state_machine/` contains the pure conversation primitives: participants, turns, phases, actions, forms, approvals, and serializable phase frames.
+- `runtime/` owns sessions, persistence, approvals, state-machine dispatch, agent turns, and the context passed into plugins.
+- `plugins/` holds every extension family: tools, tasks, services, commands, and frontends.
+- `pipeline/` watches files, manages the SQLite task queue, and runs path-driven and event-driven tasks.
+- `agent/` builds the dynamic system prompt, manages the tool registry, and drives LLM tool calls.
+- `events/` provides the pub/sub bus used by tasks, progress updates, notifications, and runtime signals.
+- `config/` owns core settings plus plugin setting persistence.
 
-Point it at one or more directories and it will continuously watch them, parse supported files, and keep the database in sync as files appear, change, or disappear.
+The runtime is deliberately split this way so the state machine stays pure, frontends stay transport-specific, and plugins get a stable host API instead of reaching through the whole application.
 
-Built-in indexing pipeline includes:
+## Conversation Runtime
 
+The conversation runtime is the heart of the current system.
+
+`ConversationRuntime.handle_action(...)` is the adapter-facing entry point. A frontend, scheduled job, or other driver submits a labeled action such as `send_text`, `send_attachment`, `call_command`, `submit_form_text`, `answer_approval`, or `cancel`. The runtime loads the session, refreshes command and tool specs, enters the state machine, persists the marker, and drives the agent turn when the action hands priority to the agent.
+
+The state machine models conversations the same way a turn-based game models play:
+
+- participants have permissions and identities
+- one participant has turn priority
+- actions are legal or illegal depending on phase
+- forms and approvals suspend the current flow
+- phase frames are serializable, so interrupted flows can be restored
+- attachments are carried into the next agent turn with explicit lifecycle rules
+
+This was inspired by the same turn/phase/action model used in a turn-based card game. The important point is not the game; it is the shape. A chatbot conversation, a slash-command form, a tool approval, and a scheduled agent handoff are all stateful turn flows.
+
+Frontends do not own that flow. `BaseFrontend` turns transport input into runtime actions, then renders `RuntimeResult`, attachments, forms, approvals, buttons, errors, and progress events. This is why the REPL and Telegram can share command behavior, approval behavior, form behavior, cancellation, status updates, and session persistence without duplicating the core conversation logic.
+
+## Plugin System
+
+Everything user-extensible is a plugin family:
+
+| Family | Built-in path | Sandbox path | Contract |
+|---|---|---|---|
+| Tools | `plugins/tools/` | `sandbox_tools/` | LLM-callable actions via `BaseTool` |
+| Tasks | `plugins/tasks/` | `sandbox_tasks/` | Pipeline and event work via `BaseTask` |
+| Services | `plugins/services/` | `sandbox_services/` | Shared backends via `BaseService` |
+| Commands | `plugins/commands/` | `sandbox_commands/` | User slash commands via `BaseCommand` |
+| Frontends | `plugins/frontends/` | `sandbox_frontends/` | User transports via `BaseFrontend` |
+
+Built-in plugins are source-controlled. Sandbox plugins live in the Second Brain data directory and can be created while the app is running. Valid sandbox plugins are also discovered on startup.
+
+The live authoring loop is:
+
+1. Read the relevant template in `templates/`.
+2. Read a similar built-in plugin.
+3. Create or edit the sandbox plugin with `edit_file`.
+4. Call `register_plugin(plugin_type=..., file_name=...)`.
+5. If registration fails, fix the same file and call `register_plugin` again.
+6. To remove a plugin from the live runtime, call `unregister_plugin(plugin_type=..., plugin_name=...)`.
+7. To remove it durably, delete the sandbox file too.
+
+That loop matters. Second Brain can inspect its own templates, write a focused extension, validate it, hot-load it, and use it immediately. A new command is not a special case. A new frontend is not a rewrite. They are plugins with contracts.
+
+## File Indexing And Retrieval
+
+Point Second Brain at folders with `sync_directories` and it keeps a live SQLite knowledge base over those files.
+
+The built-in pipeline includes:
+
+- file watching and debounced change detection
+- parser service dispatch by extension and modality
 - text extraction
 - OCR for images
+- speech-to-text for audio and video
 - archive/container extraction
-- text chunking (for text embedding)
+- tabular textualization
+- text chunking
 - text embeddings
 - image embeddings
 - lexical full-text indexing
-- tabular textualization for turning spreadsheets into searchable data
+- dependency invalidation when upstream file outputs change
 
-The result is a live knowledge base over your local files, not a one-shot import. If you don't see something you need, just ask Second Brain to build it for you and it'll create a sandboxed task to do the job. The pipeline is robust and safe, correctly handling file/folder renames, debouncing/misfires, hidden folders, and other special cases. When a file is updated, added, or removed, all data within the dependency pipeline with that file key get updated.
-
-### 2. Search Like a Real System
-
-You can type /call to call any tool that the LLM agent can. This is useful for manual searches and situations where precision is imperative.
-
-Second Brain ships with multiple retrieval tools:
-
-- `lexical_search` for exact terms and keyword-heavy queries
-- `semantic_search` for meaning-based retrieval over embeddings
-- `hybrid_search` for fused lexical + semantic ranking
-- `sql_query` for direct inspection of the underlying SQLite database
-
-If an LLM can mess something up, it will mess something up. That's not to say that this happens often, but Second Brain was built with that in mind. It has safety and fallbacks, including manual controls when they are called for.
-
-### 3. Event-Driven Tasks
-
-The system is no longer only file-driven, either.
-
-Tasks can be triggered by events through the internal event bus. That opens the door to workflows like:
-
-- scheduled events from the timekeeper service
-- chained background runs
-- approval workflows
-- proactive notifications
-- respond to emails immediately and maintain an inbox
-
-Path-triggered tasks and event-triggered tasks share the same orchestration layer. One abstraction, two kinds of trigger. The event bus can be triggered from anywhere in the system, and it's possible to create a new `service` for things like text messages and webhooks.
-
-### 4. Telegram As a First-Class Frontend
-
-Second Brain now ships with two primary frontends (but it's possible to add more):
-
-- Telegram bot
-- Terminal REPL
-
-Telegram is free and supports:
-
-- slash commands
-- autocomplete
-- mobile-friendly responses
-- file and media delivery
-- interactive tool invocation
-- approval prompts for sensitive actions
-- proactive push messages from background tasks
-
-This means your local system can act like a private mobile AI assistant—an *agent*. To set up Telegram, simply message @BotFather and get the API token, then message @userinfobot to find your ID and put both in config.json manually or with /configure.
-
-The frontend code was designed to be modular and expandable. Other messaging platforms, like Discord, can be added easily using a coding agent.
-
-### 5. Durable Memory
-
-Second Brain includes agent memory through `memory.md` in the data directory.
-
-The agent can update that memory intentionally with `update_memory`. It is meant for durable context such as:
-
-- preferences
-- standing instructions
-- durable facts
-- recurring context that should shape future behavior
-
-It is not meant for one-off reminders, transient task state, or short-lived updates that only matter in the moment.
-
-On top of that, conversation history is stored in SQLite and can be revisited later with read-only SQL. Nothing is thrown away unless you throw it away; simply ask the agent to look at your most recent conversations for context.
-
-### 6. Web Search
-
-Second Brain can search the public web through the built-in `web_search` tool.
-
-It supports:
-
-- Brave Search
-- Brave Answers
-- DuckDuckGo fallback when a Brave Search key is not configured (API keys are free from https://brave.com/search/api/ — the $5/month free tier is more than enough, and you can set the spending limit to $5 so you never spend a cent)
-
-The agent is not trapped inside the local corpus. It can blend your private knowledge with current public information when appropriate.
-
-### 7. Self-Extending Runtime
-
-One of the most unusual parts of the project is that the agent can build new capabilities inside a sandbox at runtime.
-
-If the current toolset cannot reasonably complete a task, the agent can use `build_plugin` to create, edit, or delete plugins:
-
-- **services** can be loaded and unloaded to help carry out complex and repetitive tasks and tools
-- **tasks** extract data tables from computer folders, and they can also be triggered at certain times of day (cron jobs)
-- **tools** are used by LLMs to access the data resulting from tasks, as well as perform other agentic abilities (searching the web)
-
-Plugins cover all basic use-cases for an agentic system. They can be designed and written by an LLM with no code written by the user. They are hot-registered immediately, no restart needed.
-
-This means Second Brain is not a fixed assistant. It can inspect its own architecture, generate a focused extension, and use that new capability right away. Modular and extensible, Second Brain is a general intelligence system, which is much like an OS.
-
-## What You Can Use It For
-
-- Personal search engine for your entire document corpus
-- Codebase analyst over local repositories
-- Research assistant that combines file search with live web search
-- Daily briefings pushed to Telegram
-- AI calendar-like workflows using one-time and recurring jobs
-- Archive and media intelligence across PDFs, images, video, audio, and spreadsheets
-- Private long-term assistant with memory and conversation history
-- Design a personal assistant to write emails and send text messages for you
-- Agentic automation that can build its own plugins when the right tool does not exist yet
-
-## Architecture
-
-System responsibilities live in clear, top-level packages:
-
-- `plugins/` for built-in tools, tasks, services, and discovery
-- `pipeline/` for watching files, queueing work, and dispatching tasks
-- `agent/` for prompt construction, tool execution, history healing, and subagent runtime
-- `runtime/` for controller and task/tool context wiring
-- `config/` and `events/` for shared system infrastructure
-- `plugins/frontends/` for REPL, Telegram, and shared slash-command helpers
-
-### Services + Parsers
-
-Shared backends with explicit load and unload lifecycles, implemented as built-in plugins under `plugins/services/`.
-
-Built-in services include:
-
-- `llm` - default-LLM router; one service per entry in `llm_profiles` is also registered (keyed by model name) so multiple LLMs can be loaded concurrently
-- `web_search_provider` - Brave Search / Brave Answers / DuckDuckGo fallback
-- `timekeeper` - cron and one-time scheduling
-- `ocr` - Windows OCR
-- `whisper` - speech-to-text
-- `text_embedder` - text embeddings
-- `image_embedder` - image embeddings
-- `google_drive` - Drive integration
-
-The LLM layer is split into two separate config tables:
-
-- `llm_profiles` — connection metadata for each model (endpoint, API key, context size, backend class). Each entry is registered as its own service keyed by the model name, and managed via `/llm`.
-- `agent_profiles` — named agent definitions that reference an LLM by model name (or the literal `"default"` sentinel that follows whatever LLM is currently the default) and add optional scope: a prompt suffix plus tool whitelist/blacklist filters. Managed via `/agent`.
-
-A fresh install ships with one agent profile (`default`) that uses the default LLM and has no restrictions, so you only ever touch `/agent` if you want more than one agent.
-
-Within the same plugin family, extension-driven parsers normalize raw files into structured outputs. Parser helpers live under `plugins/services/helpers/`, and the parser service wires them into the rest of the runtime.
-
-Supported modalities include:
-
-- text
-- image
-- audio
-- video
-- tabular
-- container
-
-Parsers can also report `also_contains` hints, which allows multi-modal follow-up work. For example, a file can yield text and still announce that it contains images worth OCRing. The parser does not have to do everything in one pass.
-
-### Task Pipeline + Orchestration
-
-This is the always-on execution layer. The heart of the system.
-
-Core pipeline code lives under `pipeline/`, while built-in tasks live under `plugins/tasks/`.
-
-It includes:
-
-- a filesystem watcher
-- a SQLite-backed task queue
-- an event-trigger runner
-- automatic dependency resolution from task reads/writes
-- concurrency controls
-- task pause, retry, reset, and timeout recovery
-- downstream invalidation when upstream outputs change
-
-There are now two kinds of work in the system:
-
-- path-keyed tasks for files
-- event-keyed tasks for runs triggered by bus events
-
-That split is what allows continuous file indexing and scheduled/proactive agents to coexist inside one architecture. For example, you can create embeddings for every new file and then run a clustering algorithm once a day using those embeddings. Since clusters change slightly whenever a new file is added, it makes more sense to run it once a day, than to recalculate on every file change. Use event-driven tasks on a timer for similar situations.
-
-### Agent + Tools
-
-This is the reasoning and action layer.
-
-Core agent code lives under `agent/`, and built-in tools live under `plugins/tools/`.
-
-The agent gets a dynamically rebuilt system prompt that includes:
-
-- current date and time
-- current tools
-- current services
-- current task pipeline state
-- current file inventory
-- current durable memory
-- current sandbox plugins
-
-The prompt pushes the assistant toward concise, grounded behavior. Among other things, it tells it to cite its sources and use the right tools for the job.
-
-The system prompt is built dynamically for each message, ensuring that the model always has the freshest information available.
-
-Built-in tools include:
+Search tools include:
 
 | Tool | Purpose |
 |---|---|
-| `hybrid_search` | Best default search over indexed local files |
-| `lexical_search` | Exact-term and keyword search |
-| `semantic_search` | Meaning-based retrieval |
-| `sql_query` | Inspect the SQLite database with read-only SQL |
-| `read_file` | Read exact contents of local text files |
-| `render_files` | Display local files directly in chat |
-| `run_command` | Run whitelisted plugin-development commands |
-| `build_plugin` | Create, edit, or delete sandbox plugins |
-| `update_memory` | Update durable memory in `memory.md` |
-| `web_search` | Search the public web when local data is not enough |
-| `schedule_subagent` | Schedule background subagent jobs with Timekeeper |
-| `ask_subagent` | The main agent can delegate a complex task to a subagent to get a high-level answer |
+| `hybrid_search` | Best default local search over indexed files |
+| `lexical_search` | Exact terms and keyword-heavy queries |
+| `semantic_search` | Meaning-based retrieval over embeddings |
+| `sql_query` | Read-only inspection of the SQLite database |
+| `read_file` | Exact text reads from source, docs, templates, or sandbox plugins |
+| `render_files` | Return local files to the frontend |
+
+Supported modalities:
+
+| Modality | Examples |
+|---|---|
+| Text | `.txt`, `.md`, `.py`, `.js`, `.ts`, `.html`, `.css`, `.json`, `.yaml`, `.toml`, `.xml`, `.pdf`, `.docx`, `.pptx`, `.gdoc` |
+| Image | `.png`, `.jpg`, `.jpeg`, `.webp`, `.tiff`, `.bmp`, `.ico`, `.heic`, `.heif` |
+| Audio | `.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`, `.aac`, `.wma` |
+| Video | `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, `.wmv`, `.flv` |
+| Tabular | `.csv`, `.tsv`, `.xlsx`, `.xls`, `.parquet`, `.feather`, `.sqlite`, `.db` |
+| Container | `.zip`, `.tar`, `.gz`, `.7z`, `.rar` |
+
+## Events, Cron Jobs, And Subagents
+
+Second Brain is proactive, not just reactive.
+
+Path-driven tasks process files. Event-driven tasks respond to bus events. Timekeeper creates one-time and recurring jobs using cron expressions. Scheduled subagents can wake up, read their conversation history, run tools, and optionally send their final result back into chat.
+
+This supports workflows like:
+
+- reminders and follow-ups
+- daily or weekly briefings
+- recurring research checks
+- inbox checks and message triage
+- "watch this folder and tell me what changed"
+- scheduled maintenance or database cleanup
+- background subagents that remember prior runs
+
+It is calendar-capable without being trapped in a traditional calendar UI. Jobs can run silently or notify the active frontend, and subagent conversations remain available through the conversation system.
 
 ## Frontends
 
-Current frontends:
+Built-in frontends:
 
 - `repl` - local terminal interface
-- `telegram` - private bot frontend
+- `telegram` - private mobile chat interface
 
-Config enables both by default.
+Both are plugins under `plugins/frontends/`:
 
-The Telegram frontend is especially useful because it makes the system feel less like a dev tool and more like a personal AI operator that can reach out to you when something matters. Works anywhere on a phone.
+- `frontend_repl.py`
+- `frontend_telegram.py`
 
-The frontend code is modular enough such that it is possible to create a new frontend (Discord, etc.) with minimal issues.
+`BaseFrontend` provides the shared runtime binding, command parsing path, form and approval submission, bus subscriptions, progress rendering hooks, session helpers, and `FrontendCapabilities` model. Each frontend implements only the transport-specific parts: receiving input, deriving a session key, rendering messages, sending attachments, showing buttons, and stopping cleanly.
 
-## Project Structure
+Telegram is useful because the local runtime can reach you anywhere: approvals, proactive reminders, file delivery, scheduled-agent results, and mobile command menus all become part of the same conversation system.
 
-```text
-Second Brain/
-├── main.py                 # Cross-platform entry point
-├── main.pyw                # Canonical startup script
-├── paths.py                # Root/data/sandbox path definitions
-│
-├── agent/
-│   ├── agent.py            # Main reasoning loop
-│   ├── history_utils.py    # Conversation repair helpers
-│   ├── subagent_runtime.py # Scheduled/subagent runtime support
-│   ├── system_prompt.py    # Dynamic system prompt builder
-│   └── tool_registry.py    # Tool registration + execution
-│
-├── config/
-│   ├── config_data.py      # Core config schema
-│   └── config_manager.py   # Config + plugin-config persistence
-│
-├── events/
-│   ├── event_bus.py        # Internal pub/sub bus
-│   └── event_channels.py   # Event channel registry
-│
-├── attachments/
-│   ├── attachment.py       # Attachment + AttachmentBundle dataclasses
-│   ├── cache.py            # Frontend upload persistence
-│   ├── registry.py         # ext -> text-blurb parser registry
-│   └── parsers/            # parser_text, parser_pdf, parser_audio, ...
-│
-├── pipeline/
-│   ├── database.py         # SQLite state + task queue
-│   ├── event_trigger.py    # Bus-driven task-run enqueue
-│   ├── orchestrator.py     # Task registration + dispatch
-│   └── watcher.py          # Filesystem watcher
-│
-├── plugins/
-│   ├── BaseFrontend.py
-│   ├── BaseService.py
-│   ├── BaseTask.py
-│   ├── BaseTool.py
-│   ├── plugin_discovery.py # Built-in + sandbox discovery and hot registration
-│   ├── frontends/
-│   │   ├── repl_frontend.py
-│   │   ├── telegram_frontend.py
-│   │   └── helpers/
-│   │
-│   ├── services/
-│   │   ├── llmService.py
-│   │   ├── embedService.py
-│   │   ├── ocrService.py
-│   │   ├── whisperService.py
-│   │   ├── webSearchService.py
-│   │   ├── timekeeperService.py
-│   │   ├── driveService.py
-│   │   ├── parserService.py
-│   │   └── helpers/
-│   │
-│   ├── tasks/
-│   │   ├── task_extract_text.py
-│   │   ├── task_extract_container.py
-│   │   ├── task_ocr_images.py
-│   │   ├── task_chunk_text.py
-│   │   ├── task_embed_text.py
-│   │   ├── task_embed_images.py
-│   │   ├── task_textualize_tabular.py
-│   │   ├── task_lexical_index.py
-│   │   └── task_run_subagent.py
-│   │
-│   └── tools/
-│       ├── tool_hybrid_search.py
-│       ├── tool_lexical_search.py
-│       ├── tool_semantic_search.py
-│       ├── tool_sql_query.py
-│       ├── tool_read_file.py
-│       ├── tool_render_files.py
-│       ├── tool_run_command.py
-│       ├── tool_build_plugin.py
-│       ├── tool_update_memory.py
-│       ├── tool_web_search.py
-│       ├── tool_schedule_subagent.py
-│       ├── tool_ask_subagent.py
-│       └── helpers/
-│
-├── runtime/
-│   ├── context.py          # Shared runtime context for tools and tasks
-│   ├── controller.py       # Command/control surface used by frontends
-│   └── token_stripper.py   # Model-token cleanup
-│
-├── templates/
-│   ├── tool_template.py
-│   ├── task_template.py
-│   └── service_template.py
-│
-└── DATA_DIR/
-    ├── config.json
-    ├── plugin_config.json
-    ├── database.db
-    ├── memory.md
-    ├── sandbox_tools/
-    ├── sandbox_tasks/
-    └── sandbox_services/
-```
+Custom frontends are first-class plugins. A Discord bot, HTTP bridge, desktop shell, or narrow operational UI can be built as a sandbox frontend and registered like any other extension.
 
 ## Setup
 
 ### Requirements
 
 - Python 3.11+
-- A configured LLM if you want agent features
-- Windows if you want the built-in native OCR service
+- An LLM profile for agent features
+- Windows for the built-in native OCR service, or macOS for Apple Vision OCR
 - Telegram bot token and allowed user ID if you want the Telegram frontend
 
 ### Install
@@ -387,7 +181,7 @@ Key dependencies include:
 
 - `openai`
 - `lmstudio`
-- `sentence-transformers` (heaviest import; optional; only needed for local embedding)
+- `sentence-transformers`
 - `faster-whisper`
 - `PyMuPDF`
 - `python-docx`
@@ -406,9 +200,9 @@ On first run, Second Brain creates its data directory automatically:
 - macOS: `~/Library/Application Support/Second Brain/`
 - Linux: `${XDG_DATA_HOME:-~/.local/share}/Second Brain/`
 
-The most important setting is `sync_directories`. Fill it with the folders you want to know everything about. Use /configure to set your sync_directory.
+The most important setting is `sync_directories`: the folders Second Brain should watch and index. The attachment cache is included by default so files sent through frontends can enter the same pipeline.
 
-Minimal example:
+Minimal shape:
 
 ```json
 {
@@ -417,57 +211,38 @@ Minimal example:
     "C:/Users/you/AppData/Local/Second Brain/attachment_cache"
   ],
   "enabled_frontends": ["repl", "telegram"],
-  "autoload_services": ["web_search_provider", "timekeeper", "llm"],
+  "autoload_services": ["web_search_provider", "timekeeper", "llm", "parser"],
   "telegram_bot_token": "",
   "telegram_allowed_user_id": 0,
   "llm_profiles": {
     "gpt-4.1-mini": {
       "llm_endpoint": "",
-      "llm_api_key": "sk-p...oMMA",
+      "llm_api_key": "OPENAI_API_KEY",
       "llm_context_size": 0,
       "llm_service_class": "OpenAILLM"
     }
   },
-  "default_llm_profile": "gpt-4.1-mini"
+  "default_llm_profile": "gpt-4.1-mini",
+  "agent_profiles": {
+    "default": {
+      "llm": "default",
+      "prompt_suffix": "",
+      "whitelist_or_blacklist_tools": "blacklist",
+      "tools_list": []
+    }
+  }
 }
 ```
 
-You will need an LLM API key. A MiniMax API key for $10/month is more than sufficient for basic operations with their M2.7 model. If you are writing complicated plugins, I recommend a stronger model like Claude Opus, GPT 5.5, or higher. You can configure multiple llm profiles with /llm.
-
 Notes:
 
-- Tool calling isn't available with LM Studio.
-- Setting the LLM context size to 0 is recommended for automatic compaction.
-- Brave Search and Brave Answers are optional for web search and configured through plugin settings.
-- LLM and agent configuration is manual; you can't ask the agent to do it for you. This is to prevent the LLM from leaking your API keys, and for the sake of transparency.
-- Every entry in `llm_profiles` gets registered as its own service keyed by model name, plus an `llm` router service that resolves to whatever `default_llm_profile` points at. Load and unload individual LLMs with `/load <model_name>` and `/unload <model_name>`. The default LLM is loaded automatically.
-
-### Agent Profiles for Safe Delegation
-
-Agent profiles let you split work across specialized agents without giving every agent the same model, prompt, and tool surface.
-
-This matters most when one of those agents is outward-facing. If you build a communication-focused agent that writes updates, emails, summaries, or outward messages, you may not want it to have every high-power tool in the system. A scoped profile lets you reduce what that agent can call. For narrower database or folder behavior, build a purpose-specific tool that applies the exact filter you want.
-
-A practical setup looks like:
-
-- a builder agent with coding and file-editing tools
-- a researcher agent with broader search and database access
-- a communicator agent with a much smaller toolset
-
-In other words, you can treat Second Brain less like one monolithic assistant and more like a small team of specialists, each with the model, instructions, and tool access needed for its job. Having multiple agents is easy and optional.
-
-Each agent profile carries:
-
-- `llm` — a model name from `llm_profiles`, or the literal string `"default"` to follow whatever LLM is currently the default at runtime
-- `prompt_suffix` — extra text appended to the system prompt for this agent
-- `whitelist_or_blacklist_tools` — `"whitelist"` or `"blacklist"` for tool filtering
-- `tools_list` — tool names for that filter; `blacklist` plus `[]` allows all tools
-
-Tool dependencies are auto-expanded: if you allow `hybrid_search`, the underlying `lexical_search` and `semantic_search` are also callable automatically.
-
-Switch the active profile with `/agent switch <name>`. The switch carries the conversation history forward but applies the new scope to the next turn. The `default` profile is permanent and cannot be removed.
-
-In Telegram, `/agent` and `/llm` open profile-list menus. Tap a profile to see its attributes and `[Set active|default]`, `[Edit]`, and `[Remove]` actions.
+- Configure LLM profiles with `/llm`.
+- Configure agent profiles with `/agent`.
+- Configure app and plugin settings with `/config`.
+- Tool calling is not available with LM Studio.
+- `llm_context_size: 0` lets automatic compaction manage context.
+- Brave Search and Brave Answers are optional web-search providers configured through plugin settings.
+- Each `llm_profiles` entry is registered as its own service, and the `llm` router follows `default_llm_profile`.
 
 ### Run
 
@@ -475,136 +250,158 @@ In Telegram, `/agent` and `/llm` open profile-list menus. Tap a profile to see i
 python main.py
 ```
 
-On startup, the system:
+Startup does the following:
 
-1. loads config
-2. creates sandbox directories if needed
-3. initializes the database
-4. discovers services, tasks, and tools
-5. starts the task orchestrator
-6. starts the filesystem watcher
-7. starts the event-trigger runner
-8. launches the enabled frontends
+1. Loads config and plugin config.
+2. Creates data, attachment, and sandbox directories.
+3. Initializes SQLite.
+4. Discovers services, tasks, tools, commands, and frontends.
+5. Starts the task orchestrator.
+6. Starts the filesystem watcher.
+7. Starts the event-trigger runner.
+8. Launches enabled frontends.
 
-## Commands
+## Commands And Tools
 
-Available in the REPL and as slash commands in Telegram.
+Commands are user-facing plugins. They are available in the REPL and Telegram as slash commands, and they can collect forms through the state machine.
 
-| Command | Description |
+Built-in commands include:
+
+| Command | Purpose |
 |---|---|
-| `call <tool> {json}` | Call a tool directly |
-| `cancel` | Interrupt the active agent |
-| `config [key]` | Show config values |
-| `configure <key> <value>` | Update config |
-| `conversations` | Browse, switch, recategorize, or tune conversation notifications |
-| `help` | Show all commands |
-| `history [id]` | List or load saved conversations |
-| `llm [list\|add\|edit\|remove\|show\|default]` | Manage LLM connection profiles (model, endpoint, key, context, class) |
-| `agent [list\|switch\|add\|edit\|remove\|show]` | Manage scoped agent profiles (LLM reference + tool allow-deny + prompt suffix) |
-| `load <service>` | Load a service |
-| `locations [tools\|tasks\|services]` | Inspect plugin-related file locations |
-| `new` | Start a default Main conversation |
-| `pause <task>` | Pause a task |
-| `pipeline` | Show the path-driven dependency graph |
-| `refresh` | Refresh the agent in case of breakage |
-| `reload` | Hot-reload sandbox tasks and tools |
-| `reset <task>` | Reset all entries for a path-driven task |
-| `restart` | Restart the whole app |
-| `retry <task>` | Retry failed entries for a path-driven task |
-| `retry all` | Retry failed entries across all path-driven tasks |
-| `services` | List services and load state |
-| `tasks` | List path-driven and event-driven tasks |
-| `tools` | List registered tools |
-| `trigger <task> [json]` | Manually fire an event-triggered task with an optional JSON payload |
-| `unload <service>` | Unload a service |
-| `unpause <task>` | Resume a task |
-| `update` | `git pull` to get the latest version of Second Brain |
-| `message` | Leave a note for a scheduled subagent |
+| `/agent` | Select, switch, edit, or remove agent profiles |
+| `/cancel` | Cancel the current interaction |
+| `/clear` | Clear the current conversation |
+| `/commands` | List available commands |
+| `/config` | Select and edit config settings |
+| `/conversations` | Browse, switch, and manage conversations |
+| `/frontends` | Enable or disable frontend plugins |
+| `/llm` | Select, edit, set default, or remove LLM profiles |
+| `/locations` | Show project and plugin directories |
+| `/new` | Start a conversation with default settings |
+| `/schedule` | Manage Timekeeper scheduled jobs |
+| `/services` | Select and load or unload services |
+| `/tasks` | Pause, resume, reset, retry, or trigger tasks |
+| `/tools` | Select and call tools |
+| `/update` | Pull latest changes from the repo |
 
-## Scheduling and Calendar-Like Workflows
+Built-in tools include:
 
-Second Brain can operate proactively, not just reactively, using a built-in cron scheduler (timekeeperService).
-
-You can use `schedule_subagent` to create jobs that behave like:
-
-- reminders
-- recurring reviews
-- daily briefings
-- weekly planning prompts
-- periodic research tasks
-- inbox checks and message triage
-- "check this folder and tell me what changed"
-
-It is fair to describe the system as calendar-capable, even though it doesn't have a traditional calendar UI.
-
-Subagents in cron routines (one-time or not) have two notification modes:
-1. "on" - Send the agent's final answer to chat after each background run
-2. "off" - Run silently
-
-When notifications are on, the last thing the agent says is what gets played back to the user. To leave a message for a subagent, switch into its conversation via `/conversations` and chat - your message becomes part of its history and the next run will read and respond to it.
-
-One last thing: subagents in cron routines remember what they have done in their previous runs. Keep this in mind when designing your prompts.
-
-## Extending the System
-
-Second Brain supports two extension modes:
-
-- built-in plugins committed to the repo
-- sandbox plugins that can be created live
-
-### Sandbox Plugins
-
-Sandbox plugins live in the mutable data directory and are safe from overwriting built-in code.
-
-The agent can:
-
-- create them
-- edit them with exact search/replace patches
-- delete them
-- register them immediately
-
-This gives you a very unusual loop:
-
-1. Ask the assistant for a new capability.
-2. Let it author a plugin.
-3. Approve the change.
-4. Potentially make another edit in the core code.
-5. Use the new capability immediately.
-
-The software is extensible and self-expanding. Technically, just the llmService and build_plugin tool are strictly necessary because they can build everything else with some careful prompting.
-
-### Built-In Plugins
-
-If you want permanent source-controlled additions, move sandbox plugins from the DATA_DIR to:
-
-- `plugins/services/`
-- `plugins/tasks/`
-- `plugins/tools/`
-
-Parser helpers live in `plugins/services/helpers/` and are registered by extension through the parser service. You can put extra helper functions inside the /helpers folders inside of those main plugin folders.
-
-## Supported File Types
-
-| Modality | Examples |
+| Tool | Purpose |
 |---|---|
-| Text | `.txt`, `.md`, `.py`, `.js`, `.ts`, `.html`, `.css`, `.json`, `.yaml`, `.toml`, `.xml`, `.pdf`, `.docx`, `.pptx`, `.gdoc` |
-| Image | `.png`, `.jpg`, `.jpeg`, `.webp`, `.tiff`, `.bmp`, `.ico`, `.heic`, `.heif` |
-| Audio | `.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`, `.aac`, `.wma` |
-| Video | `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, `.wmv`, `.flv` |
-| Tabular | `.csv`, `.tsv`, `.xlsx`, `.xls`, `.parquet`, `.feather`, `.sqlite`, `.db` |
-| Container | `.zip`, `.tar`, `.gz`, `.7z`, `.rar` |
+| `edit_file` | Create, overwrite, replace, append to, or delete UTF-8 text files |
+| `hybrid_search` | Search local files with fused lexical and semantic ranking |
+| `lexical_search` | Search local files by exact terms and keywords |
+| `read_file` | Read exact text from files |
+| `register_plugin` | Validate and hot-load a sandbox plugin |
+| `render_files` | Send local files back through the frontend |
+| `run_command` | Run scoped terminal commands, with approval for broad actions |
+| `schedule_subagent` | Schedule one-time or recurring background agents |
+| `semantic_search` | Search local files by embedding similarity |
+| `sql_query` | Query SQLite read-only |
+| `unregister_plugin` | Live-unload a sandbox plugin without deleting its file |
+| `update_memory` | Update durable memory |
+| `web_search` | Search the public web |
 
-## Final Words
+## Project Layout
 
-Most AI tools are built to be impressive in a demo and forgotten by the weekend. Second Brain is built for the opposite. It is meant to quietly keep running, watch the things you care about, and do real work while you are not looking.
+```text
+Second Brain/
+├── main.py                 # Console entry point
+├── main.pyw                # Windowed startup script
+├── paths.py                # Root, data, attachment, and sandbox paths
+│
+├── state_machine/
+│   ├── conversation.py     # Participants, callable specs, forms, phases
+│   ├── action_map.py       # Action constructors and legal action routing
+│   ├── action.py           # State-machine action implementations
+│   ├── forms.py            # Multi-step form handling
+│   └── approval.py         # Runtime approval request shape
+│
+├── runtime/
+│   ├── conversation_runtime.py # Session gateway for frontend/automation actions
+│   ├── conversation_loop.py    # Agent-turn driver
+│   ├── dispatch.py             # Runtime action helpers
+│   ├── persistence.py          # Conversation/session persistence
+│   ├── runtime_approvals.py    # State-machine approval bridge
+│   ├── runtime_config.py       # Active profile, tools, commands, prompt
+│   └── session.py              # RuntimeSession and RuntimeResult
+│
+├── plugins/
+│   ├── BaseCommand.py
+│   ├── BaseFrontend.py
+│   ├── BaseService.py
+│   ├── BaseTask.py
+│   ├── BaseTool.py
+│   ├── plugin_discovery.py
+│   ├── commands/
+│   ├── frontends/
+│   ├── services/
+│   ├── tasks/
+│   └── tools/
+│
+├── pipeline/
+│   ├── database.py
+│   ├── event_trigger.py
+│   ├── orchestrator.py
+│   └── watcher.py
+│
+├── agent/
+│   ├── agent.py
+│   ├── system_prompt.py
+│   └── tool_registry.py
+│
+├── attachments/
+├── config/
+├── events/
+├── templates/
+│   ├── command_template.py
+│   ├── frontend_template.py
+│   ├── service_template.py
+│   ├── task_template.py
+│   └── tool_template.py
+└── DATA_DIR/
+    ├── config.json
+    ├── plugin_config.json
+    ├── database.db
+    ├── memory.md
+    ├── attachment_cache/
+    ├── sandbox_tools/
+    ├── sandbox_tasks/
+    ├── sandbox_services/
+    ├── sandbox_commands/
+    └── sandbox_frontends/
+```
 
-A personal AI system should know your files, remember your context, respect your privacy, and grow with your use. It should be local, patient, and honest about what it does not know.
+## Extension Authoring Guide
 
-OpenClaw is great, but it's bloated. Second Brain is meant to be a lightweight and easy to learn alternative that doesn't try to do a million things out of the box.
+Use the templates as the source of truth:
 
-Building your own runtime is its own kind of pleasure, because there is a sense of ownership and control. Furthermore, the patterns learned along the way (tools, tasks, and services) generalize to almost any serious agentic system somebody might want to build next.
+- `templates/tool_template.py`
+- `templates/task_template.py`
+- `templates/service_template.py`
+- `templates/command_template.py`
+- `templates/frontend_template.py`
 
-One file at a time.
+Authoring rules:
+
+- Tools expose LLM-callable capabilities and return `ToolResult`.
+- Tasks are pipeline/event workers and should be idempotent where possible.
+- Services own reusable backends with explicit load/unload lifecycle.
+- Commands are user-facing conversation actions and can define `FormStep` flows.
+- Frontends are transports; they submit runtime actions and render runtime output.
+- Plugins can declare `config_settings`, which appear in config views and are stored in `plugin_config.json`.
+- Sandbox plugins must follow naming conventions: `tool_*.py`, `task_*.py`, `command_*.py`, `frontend_*.py`, and service files that do not start with `_`.
+
+For source-controlled additions, move stable sandbox plugins into the matching built-in plugin directory. For live experimentation, keep them in the data directory and let `register_plugin` load them.
+
+## Philosophy
+
+Second Brain is built around a simple bet: a personal AI system should live close to your files, remember what matters, act on your behalf, and become more capable as you use it.
+
+Most AI apps are fixed products. Second Brain is closer to a runtime. It has an opinionated core, but the edges are meant to be authored: a new task for a new file type, a command for a personal workflow, a frontend for a new surface, a service for a new API, a scheduled agent for work that should happen while you are away.
+
+That is the point. Your assistant should not just answer questions. It should become infrastructure you can shape.
 
 ## License
 
