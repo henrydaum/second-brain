@@ -1,16 +1,11 @@
-"""/conversations — unified picker for conversation history + new chats.
+"""/conversations — picker for loading and managing existing chats.
 
 Walks a multi-step form:
 
-    1. Pick a category (or "New conversation").
-    2a. (New) Pick an agent profile.
-    2b. (New) Pick a category for the new conversation; "Main" is always
-        offered, plus an option to type a fresh category.
-    2c. (New + new category) Free-text the category name.
-
-       (Existing) Pick one of the 15 most-recent conversations under
-       the category.
-    3.  (Existing) Pick "Load conversation" or "Delete conversation".
+    1. Pick a category.
+    2. Pick one of the 15 most-recent conversations under the category.
+    3. Pick "Load conversation", "Delete conversation", "Change category",
+       or "Change notification mode".
         The step prompt previews the chosen conversation's agent and
         most recent messages.
 """
@@ -27,16 +22,16 @@ from state_machine.serialization import latest_state
 
 _LIMIT = 15
 _MAIN = "Main"
-_NEW_CONV = "➕ New conversation"
 _NEW_CAT = "➕ New category"
 _LOAD = "Load conversation"
 _DELETE = "Delete conversation"
+_CHANGE_CATEGORY = "Change category"
 _CHANGE_NOTIF = "Change notification mode"
 
 
 class ConversationsCommand(BaseCommand):
     name = "conversations"
-    description = "Browse, switch, or start conversations"
+    description = "Browse, switch, or manage conversations"
     category = "Conversation"
 
     def form(self, args, context):
@@ -44,17 +39,13 @@ class ConversationsCommand(BaseCommand):
         if db is None:
             return []
 
-        # Step 1 — pick a top-level category, or branch off to "New".
         cats = _existing_categories(db)
-        cat_enum = list(cats) + [_NEW_CONV]
-        steps = [FormStep("category", "Choose a conversation category, or start a new conversation.", True, enum=cat_enum, columns=1)]
+        steps = [FormStep("category", "Choose a conversation category.", True, enum=cats, columns=1)]
 
         picked = args.get("category")
         if not picked:
             return steps
 
-        if picked == _NEW_CONV:
-            return steps + _new_conversation_steps(args, context)
         return steps + _existing_conversation_steps(args, context, picked)
 
     def run(self, args, context):
@@ -63,9 +54,6 @@ class ConversationsCommand(BaseCommand):
         session_key = getattr(context, "session_key", None)
         if runtime is None or db is None or not session_key:
             return "Conversations are not available in this context."
-
-        if args.get("category") == _NEW_CONV:
-            return _create_and_switch(args, runtime, session_key)
 
         cid = _decode_id(args.get("conversation_id"))
         if cid is None:
@@ -78,6 +66,10 @@ class ConversationsCommand(BaseCommand):
         if action == _CHANGE_NOTIF:
             mode = runtime.set_conversation_notification_mode(cid, args.get("mode"))
             return f"Notifications for #{cid} → {mode}."
+        if action == _CHANGE_CATEGORY:
+            category = _resolve_category(args)
+            db.set_conversation_category(cid, _lookup_value(category) or None)
+            return f"Conversation #{cid} moved to '{category}'."
 
         # Default: load. load_history reads the conversation's stored
         # state marker, so the agent profile follows the conversation
@@ -97,32 +89,12 @@ class NewCommand(BaseCommand):
         session_key = getattr(context, "session_key", None)
         if runtime is None or db is None or not session_key:
             return "Conversations are not available in this context."
-        return _create_and_switch({"category": _NEW_CONV, "agent_profile": "default", "new_category": _MAIN}, runtime, session_key)
+        return _create_and_switch(runtime, session_key)
 
 
 # ──────────────────────────────────────────────────────────────────────
 # Step builders
 # ──────────────────────────────────────────────────────────────────────
-
-def _new_conversation_steps(args, context):
-    profiles = list((getattr(context, "config", None) or {}).get("agent_profiles") or {})
-    if not profiles:
-        profiles = ["default"]
-    steps = [FormStep("agent_profile", "Choose the agent profile for the new conversation.", True, enum=profiles, columns=1)]
-    if not args.get("agent_profile"):
-        return steps
-
-    db = getattr(context, "db", None)
-    cats = _existing_categories(db) if db else []
-    if _MAIN not in cats:
-        cats = [_MAIN] + cats
-    cat_enum = list(cats) + [_NEW_CAT]
-    steps.append(FormStep("new_category", "Choose where to file the new conversation.", True, enum=cat_enum, columns=1))
-
-    if args.get("new_category") == _NEW_CAT:
-        steps.append(FormStep("custom_category", "Enter a name for the new category.", True, columns=1))
-    return steps
-
 
 def _existing_conversation_steps(args, context, category):
     db = getattr(context, "db", None)
@@ -141,7 +113,11 @@ def _existing_conversation_steps(args, context, category):
         return steps
 
     prompt = f"What do you want to do with this conversation?\n\n{_preview_for(db, cid) or ''}".strip()
-    steps.append(FormStep("action", prompt, True, enum=[_LOAD, _DELETE, _CHANGE_NOTIF], columns=1))
+    steps.append(FormStep("action", prompt, True, enum=[_LOAD, _DELETE, _CHANGE_CATEGORY, _CHANGE_NOTIF], columns=1))
+    if args.get("action") == _CHANGE_CATEGORY:
+        steps.append(FormStep("target_category", "Choose the new category.", True, enum=_category_choices(db) + [_NEW_CAT], columns=1))
+        if args.get("target_category") == _NEW_CAT:
+            steps.append(FormStep("custom_category", "Enter a name for the new category.", True, columns=1))
     if args.get("action") == _CHANGE_NOTIF:
         steps.append(FormStep("mode", "Choose how this conversation should notify you while it runs in the background.", True, enum=list(NOTIFICATION_MODES), columns=1))
     return steps
@@ -164,9 +140,19 @@ def _existing_categories(db) -> list[str]:
     return out
 
 
+def _category_choices(db) -> list[str]:
+    cats = _existing_categories(db)
+    return cats if _MAIN in cats else [_MAIN] + cats
+
+
 def _lookup_value(label: str) -> str:
     """Map a UI label back to the value stored in the DB."""
     return "" if label == _MAIN else label
+
+
+def _resolve_category(args) -> str:
+    chosen = (args.get("target_category") or "").strip()
+    return ((args.get("custom_category") or "").strip() if chosen == _NEW_CAT else chosen) or _MAIN
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -252,20 +238,15 @@ def _truncate(text: str, limit: int) -> str:
 # Handlers
 # ──────────────────────────────────────────────────────────────────────
 
-def _create_and_switch(args, runtime, session_key) -> str:
-    profile = (args.get("agent_profile") or "").strip() or "default"
-    chosen = (args.get("new_category") or "").strip()
-    category = (args.get("custom_category") or "").strip() if chosen == _NEW_CAT else chosen
-    title = f"New conversation ({category or _MAIN})"
-    db_category = _lookup_value(category or _MAIN)
-    new_id = runtime.create_conversation(title, kind="user", category=db_category or None)
+def _create_and_switch(runtime, session_key) -> str:
+    new_id = runtime.create_conversation(f"New conversation ({_MAIN})", kind="user", category=None)
     if new_id is None:
         return "Failed to create conversation."
     existing = runtime.sessions.get(session_key)
     if existing is not None and existing.conversation_id not in (None, new_id):
         runtime.close_session(session_key)
-    runtime.load_conversation(session_key, new_id, agent_profile=profile)
-    return f"Started new conversation #{new_id} under '{category or _MAIN}'.\nAgent: {profile}"
+    runtime.load_conversation(session_key, new_id, agent_profile="default")
+    return f"Started new conversation #{new_id} under '{_MAIN}'.\nAgent: default"
 
 
 def _decode_id(value) -> int | None:

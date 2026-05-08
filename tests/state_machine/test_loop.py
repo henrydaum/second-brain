@@ -22,7 +22,7 @@ import pytest
 
 from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult
-from plugins.commands.command_conversations import NewCommand
+from plugins.commands.command_conversations import ConversationsCommand, NewCommand
 from plugins.commands.command_tools import ToolsCommand
 from plugins.services.llmService import LLMResponse
 from plugins.services import timekeeperService as timekeeper_module
@@ -129,6 +129,26 @@ class FakeConversationDB:
 
     def get_system_stats(self):
         return {"files": {}, "tasks": {}}
+
+    def list_conversations_page(self, offset=0, limit=10, category=None):
+        rows = list(self.conversations.values())
+        if category == "":
+            rows = [r for r in rows if r.get("category") in (None, "")]
+        elif category is not None:
+            rows = [r for r in rows if r.get("category") == category]
+        return rows[offset:offset + limit], len(rows) > offset + limit
+
+    def list_conversation_categories(self):
+        out = []
+        for r in self.conversations.values():
+            c = r.get("category")
+            v = None if c in (None, "") else c
+            if v not in out:
+                out.append(v)
+        return out
+
+    def set_conversation_category(self, conversation_id, category):
+        self.conversations[conversation_id]["category"] = category
 
 
 class FakeTimekeeper:
@@ -761,6 +781,27 @@ def test_new_command_starts_default_main_conversation():
     assert db.conversations[1]["category"] is None
     assert runtime.sessions["chat"].conversation_id == 1
     assert runtime.sessions["chat"].profile_override == "default"
+
+
+def test_conversations_command_changes_category_after_selection():
+    db = FakeConversationDB()
+    cid = db.create_conversation("Old", category=None)
+    result = ConversationsCommand().run({"category": "Main", "conversation_id": str(cid), "action": "Change category", "target_category": "Projects"}, SimpleNamespace(db=db, runtime=ConversationRuntime(db=db), session_key="chat"))
+
+    assert result == "Conversation #1 moved to 'Projects'."
+    assert db.conversations[cid]["category"] == "Projects"
+
+
+def test_conversations_command_form_manages_existing_conversations_only():
+    db = FakeConversationDB()
+    cid = db.create_conversation("Old", category=None)
+    cmd = ConversationsCommand()
+
+    top = cmd.form({}, SimpleNamespace(db=db))[0]
+    steps = cmd.form({"category": "Main", "conversation_id": str(cid)}, SimpleNamespace(db=db))
+
+    assert "➕ New conversation" not in top.enum
+    assert "Change category" in steps[-1].enum
 
 
 def test_tool_budget_gets_one_final_model_summary():

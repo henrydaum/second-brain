@@ -496,13 +496,14 @@ Available in the REPL and as slash commands in Telegram.
 | `cancel` | Interrupt the active agent |
 | `config [key]` | Show config values |
 | `configure <key> <value>` | Update config |
+| `conversations` | Browse, switch, recategorize, or tune conversation notifications |
 | `help` | Show all commands |
 | `history [id]` | List or load saved conversations |
 | `llm [list\|add\|edit\|remove\|show\|default]` | Manage LLM connection profiles (model, endpoint, key, context, class) |
 | `agent [list\|switch\|add\|edit\|remove\|show]` | Manage scoped agent profiles (LLM reference + tool allow-deny + prompt suffix) |
 | `load <service>` | Load a service |
 | `locations [tools\|tasks\|services]` | Inspect plugin-related file locations |
-| `new` | Start a new conversation |
+| `new` | Start a default Main conversation |
 | `pause <task>` | Pause a task |
 | `pipeline` | Show the path-driven dependency graph |
 | `refresh` | Refresh the agent in case of breakage |
