@@ -67,6 +67,7 @@ class ToolRegistry:
             - Other tools via context.call_tool
         """
         session_key = kwargs.pop("_session_key", None)
+        user_initiated = bool(kwargs.pop("_user_initiated", False))
         with self._lock:
             tool = self.tools.get(tool_name)
         if tool is None:
@@ -100,7 +101,8 @@ class ToolRegistry:
                                 tool_registry=self,
                                 orchestrator=self.orchestrator,
                                 runtime=self.runtime,
-                                session_key=session_key)
+                                session_key=session_key,
+                                user_initiated=user_initiated)
 
         t0 = time.time()
 

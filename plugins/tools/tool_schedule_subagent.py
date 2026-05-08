@@ -105,6 +105,8 @@ def _schedule_def(tk, cron: str, one_time: bool) -> dict:
 
 
 def _approved(context, text: str) -> bool:
+    if getattr(context, "user_initiated", False):
+        return True
     approve = getattr(context, "approve_command", None)
     return bool(approve and approve("schedule_subagent", text))
 

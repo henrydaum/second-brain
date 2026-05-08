@@ -31,7 +31,7 @@ class ToolsCommand(BaseCommand):
                 return "Unknown tool."
             if args.get("action") == "call":
                 fields = tool.to_schema()["function"].get("parameters", {}).get("properties", {}).keys()
-                return format_tool_result(registry.call(args["tool_name"], **{k: args[k] for k in fields if k in args}))
+                return format_tool_result(registry.call(args["tool_name"], _user_initiated=True, **{k: args[k] for k in fields if k in args}))
             return f"Unknown action: {args.get('action')}"
         schemas = [tool.to_schema()["function"] for tool in registry.tools.values()] if registry else []
         return format_tools([{

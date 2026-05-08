@@ -506,6 +506,29 @@ def test_schedule_subagent_recurring_cron_requires_approval_and_creates_job():
     assert job["payload"]["job_name"] == "morning_brief"
 
 
+def test_tools_command_user_initiated_schedule_creates_cron_without_second_approval():
+    db = FakeConversationDB()
+    tk = FakeTimekeeper()
+    runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([])}, tool_registry=FakeToolRegistry())
+    registry = ToolRegistry(db, {"tool_timeout": 10}, {"timekeeper": tk})
+    registry.runtime = runtime
+    registry.register(ScheduleSubagent())
+
+    result = ToolsCommand().run({
+        "tool_name": "schedule_subagent",
+        "action": "call",
+        "title": "Nightly Wisdom",
+        "prompt": "send wisdom",
+        "cron": "0 20 * * *",
+        "one_time": False,
+        "run_immediately": False,
+    }, SimpleNamespace(tool_registry=registry))
+
+    assert '"job_name": "nightly_wisdom"' in result
+    assert tk.jobs["nightly_wisdom"]["cron"] == "0 20 * * *"
+    assert tk.jobs["nightly_wisdom"]["one_time"] is False
+
+
 def test_schedule_subagent_one_time_cron_computes_run_at():
     db = FakeConversationDB()
     tk = FakeTimekeeper()
