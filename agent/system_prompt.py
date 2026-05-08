@@ -93,7 +93,7 @@ def _identity(services: dict, registry) -> str:
         ("edit_file", "- For code or text changes, use read_file first; pass line_numbers=false when copying old_text for edit_file replace."),
         ("read_file", f"- A debug log for the current session is at {log_path} — read it with read_file if you need to investigate an error."),
         ("render_files", "- Use render_files when the user would benefit from seeing a file directly."),
-        ("register_plugin", "- If the current tools cannot reasonably complete a task, suggest creating a sandbox plugin with register_plugin."),
+        ("register_plugin", "- If the current tools cannot reasonably complete a task, create a sandbox plugin, validate it with register_plugin, and retry until it loads."),
         (None, "- Tool call limits are per message, not per session. If one tool reaches its limit, you may still use other tools."),
     ]
 
@@ -152,9 +152,11 @@ def _authoring_guidance() -> str:
         "1. Read the relevant template with read_file (templates/tool_template.py, task_template.py, service_template.py).\n"
         "2. Read a similar existing plugin for reference. Sandbox plugin paths are listed below.\n"
         "3. Write the file into the right sandbox directory using the file-editing tools.\n"
-        "4. Activate it with register_plugin(plugin_type=..., action='register', file_name=...).\n"
-        "5. To remove a plugin from the live system without deleting the file, call register_plugin(action='unregister', plugin_name=...).\n"
-        "6. If you need extra packages, install them with run_command.\n\n"
+        "4. Call register_plugin(plugin_type=..., file_name=...) to validate and hot-load it.\n"
+        "5. If registration fails, read the error, edit the same file, and call register_plugin again.\n"
+        "6. Valid sandbox files are loaded automatically on startup; there is no save-time watchdog.\n"
+        "7. To remove a plugin from the live system without deleting the file, call unregister_plugin(plugin_type=..., plugin_name=...). To keep it from loading next startup, delete the sandbox file too.\n"
+        "8. If you need extra packages, install them with run_command.\n\n"
         "Naming:\n"
         "- Tools: tool_<name>.py    Tasks: task_<name>.py    Commands: command_<name>.py    Frontends: frontend_<name>.py    Services: <name>.py\n"
         "- Names must be unique across baked-in and sandbox.\n\n"

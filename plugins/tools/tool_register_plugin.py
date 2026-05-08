@@ -1,9 +1,9 @@
 """
 Register Plugin tool.
 
-Activates or deactivates a sandbox plugin in the live registry. The agent
-authors the file with the general file-editing tools; this tool only
-manipulates the registry.
+Hot-loads a sandbox plugin file into the live registry. The agent authors
+the file with the general file-editing tools; this tool validates and
+activates it without waiting for restart.
 
 Plugin types: tool, task, service, command, frontend.
 """
@@ -33,12 +33,10 @@ _PLUGIN_CONFIG = {
 class RegisterPlugin(BaseTool):
     name = "register_plugin"
     description = (
-        "Register or unregister a sandbox plugin in the live registry. "
-        "Use action='register' with file_name to load the file from its "
-        "sandbox directory and add it to the registry. Use action='unregister' "
-        "with plugin_name to remove a plugin from the registry. "
-        "File creation, editing, and deletion are done with the general file "
-        "tools, not this one. Built-in plugins cannot be (un)registered here."
+        "Load or reload a sandbox plugin file into the live registry. "
+        "Use this after creating or editing a sandbox plugin file so the runtime "
+        "can validate it and make it available immediately. Valid sandbox files "
+        "are also loaded automatically on startup. Use unregister_plugin for live removal."
     )
     parameters = {
         "type": "object",
@@ -48,28 +46,15 @@ class RegisterPlugin(BaseTool):
                 "enum": list(_PLUGIN_CONFIG.keys()),
                 "description": "Kind of plugin.",
             },
-            "action": {
-                "type": "string",
-                "enum": ["register", "unregister"],
-                "description": "Whether to add the plugin to the registry or remove it.",
-            },
             "file_name": {
                 "type": "string",
                 "description": (
                     "Sandbox file name (e.g. tool_get_weather.py). Required for "
-                    "action='register'. Must follow the naming convention for "
-                    "the plugin_type."
-                ),
-            },
-            "plugin_name": {
-                "type": "string",
-                "description": (
-                    "Registered name of the plugin. Required for "
-                    "action='unregister'."
+                    "the selected plugin_type and must follow its naming convention."
                 ),
             },
         },
-        "required": ["plugin_type", "action"],
+        "required": ["plugin_type", "file_name"],
     }
     requires_services = []
     max_calls = 10
@@ -77,25 +62,17 @@ class RegisterPlugin(BaseTool):
 
     def run(self, context, **kwargs) -> ToolResult:
         plugin_type = kwargs.get("plugin_type", "")
-        action = kwargs.get("action", "")
 
         if plugin_type not in _PLUGIN_CONFIG:
             return ToolResult.failed(
                 f"Invalid plugin_type '{plugin_type}'. Must be one of: "
                 f"{', '.join(_PLUGIN_CONFIG)}."
             )
-        if action not in ("register", "unregister"):
-            return ToolResult.failed(
-                f"Invalid action '{action}'. Must be 'register' or 'unregister'."
-            )
-
-        if action == "register":
-            return self._register(plugin_type, kwargs.get("file_name", "").strip(), context)
-        return self._unregister(plugin_type, kwargs.get("plugin_name", "").strip(), context)
+        return self._register(plugin_type, kwargs.get("file_name", "").strip(), context)
 
     def _register(self, plugin_type: str, file_name: str, context) -> ToolResult:
         if not file_name:
-            return ToolResult.failed("file_name is required for action='register'.")
+            return ToolResult.failed("file_name is required.")
 
         err = _check_naming(plugin_type, file_name)
         if err:
@@ -133,25 +110,6 @@ class RegisterPlugin(BaseTool):
             logger.warning(f"reconcile_plugin_config failed: {e}")
 
         return ToolResult(llm_summary=f"Registered {plugin_type} '{name}' from {file_name}.")
-
-    def _unregister(self, plugin_type: str, plugin_name: str, context) -> ToolResult:
-        if not plugin_name:
-            return ToolResult.failed("plugin_name is required for action='unregister'.")
-
-        from plugins.plugin_discovery import unload_plugin
-        try:
-            unload_plugin(
-                plugin_type, plugin_name,
-                tool_registry=context.tool_registry,
-                orchestrator=context.orchestrator,
-                services=context.services,
-                command_registry=_command_registry(context),
-                frontend_manager=_frontend_manager(context),
-            )
-        except Exception as e:
-            return ToolResult.failed(f"Unregister failed: {e}")
-        return ToolResult(llm_summary=f"Unregistered {plugin_type} '{plugin_name}'.")
-
 
 def _check_naming(plugin_type: str, file_name: str) -> str | None:
     if not file_name.endswith(".py"):
