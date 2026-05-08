@@ -20,7 +20,7 @@ class ToolsCommand(BaseCommand):
         if tool:
             steps.append(FormStep("action", _describe(tool), True, enum=ACTIONS))
         if tool and args.get("action") == "call":
-            steps += schema_to_form_steps(tool.to_schema()["function"].get("parameters"))
+            steps += schema_to_form_steps(tool.to_schema()["function"].get("parameters"), prompt_optional=True)
         return steps
 
     def run(self, args, context):

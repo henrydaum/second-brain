@@ -6,11 +6,11 @@ from typing import Any
 from state_machine.conversation import FormStep
 
 
-def schema_to_form_steps(schema: dict | None) -> list[FormStep]:
+def schema_to_form_steps(schema: dict | None, *, prompt_optional: bool = False) -> list[FormStep]:
     props = (schema or {}).get("properties", {})
     required = set((schema or {}).get("required", []))
     return [
-        FormStep(name, info.get("description", ""), name in required, info.get("type", "string"), info.get("enum"), default=info.get("default"))
+        FormStep(name, info.get("description", ""), name in required, info.get("type", "string"), info.get("enum"), default=info.get("default"), prompt_when_missing=prompt_optional and name not in required)
         for name, info in props.items()
     ]
 

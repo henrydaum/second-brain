@@ -27,13 +27,13 @@ class TasksCommand(BaseCommand):
             steps.append(FormStep("action", _describe(context, args["task_name"]), True, enum=EVENT_ACTIONS if getattr(task, "trigger", "path") == "event" else PATH_ACTIONS))
         action = args.get("action")
         if task and action == "trigger":
-            steps += schema_to_form_steps(getattr(task, "event_payload_schema", {}) or {})
+            steps += schema_to_form_steps(getattr(task, "event_payload_schema", {}) or {}, prompt_optional=True)
         elif task and action == "schedule":
             steps += [
                 FormStep("job_name", "Job name (unique)", True),
                 FormStep("cron", "Cron expression (e.g. '0 9 * * *')", True),
             ]
-            steps += schema_to_form_steps(getattr(task, "event_payload_schema", {}) or {})
+            steps += schema_to_form_steps(getattr(task, "event_payload_schema", {}) or {}, prompt_optional=True)
         elif task and action == "unschedule":
             jobs = _jobs_for_task(context, task)
             steps.append(FormStep("job_name", "Job to remove", True, enum=jobs or ["(no jobs scheduled)"]))
@@ -187,4 +187,3 @@ def _schedule_remove(context, args):
     if not job_name or job_name == "(no jobs scheduled)":
         return "Pick a job to remove."
     return f"Removed job: {job_name}" if tk.remove_job(job_name) else f"No such job: {job_name}"
-

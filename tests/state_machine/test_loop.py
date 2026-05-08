@@ -22,6 +22,7 @@ import pytest
 
 from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.commands.command_tools import ToolsCommand
 from plugins.tools.tool_schedule_subagent import SCHEDULED, SCHEDULED_ONCE, ScheduleSubagent
 from plugins.tasks.task_spawn_subagent import SpawnSubagent
 from state_machine.action_map import create_action
@@ -798,6 +799,24 @@ def test_optional_prompted_args_can_be_skipped():
     assert r3.message == "Skipped."
     assert captured == {"subcommand": "list", "args": ""}
     assert (r3.data or {}).get("result") == "ok"
+
+
+def test_tools_command_prompts_optional_schema_args_before_calling_tool():
+    registry = SimpleNamespace(tools={"schedule_subagent": ScheduleSubagent()})
+    tools = ToolsCommand()
+    cmd = CallableSpec(
+        "tools",
+        handler=lambda *_: "ok",
+        form_factory=lambda args, _cs: tools.form(args, SimpleNamespace(tool_registry=registry)),
+    )
+    cs = make_cs(commands={"tools": cmd})
+
+    assert create_action(cs, "call_command", {"name": "tools", "args": {"tool_name": "schedule_subagent", "action": "call"}}, "user").enact().ok
+    assert cs.frame.step.name == "title"
+    assert create_action(cs, "submit_form_text", "Nightly Wisdom", "user").enact().ok
+    assert cs.frame.step.name == "prompt"
+    assert create_action(cs, "submit_form_text", "send wisdom", "user").enact().ok
+    assert cs.frame.step.name == "cron"
 
 
 def test_cancel_and_skip_confirm_when_no_handler_message():
