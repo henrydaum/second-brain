@@ -67,15 +67,13 @@ UPDATE_TITLES = "update_titles"
 titles whose message count has advanced beyond the last-checked threshold.
 Payload: empty (the task pulls candidates from the DB)."""
 
-SUBAGENT_RUN = "subagent.run"
-"""A scheduled or delegated agent conversation should run one turn.
+SPAWN_SUBAGENT = "subagent.spawn"
+"""A scheduled or delegated inactive conversation should run one agent turn.
 Payload:
+    conversation_id: int
     prompt:          str
-    title:           str (optional)
-    job_name:        str (optional)
-    conversation_id: int (optional)
-    input_paths:     list[str] (optional)
-    agent:           str (optional)"""
+    attachments:     list[str] (optional)
+    _timekeeper:     dict (optional)"""
 
 COMPACT_CHAT = "compact_chat"
 """The runtime is asking a task to compact (summarize) the head of a
