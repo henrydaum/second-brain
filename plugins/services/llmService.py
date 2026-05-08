@@ -32,6 +32,12 @@ _CONTEXT_LIMIT_HINTS = (
 
 _CONTEXT_RELATED_TERMS = ("context", "token", "prompt", "input")
 _LIMIT_RELATED_TERMS = ("limit", "limits", "length", "maximum", "max", "too long", "too many", "exceed", "exceeds", "exceeded")
+_NON_CONTEXT_LIMIT_HINTS = (
+    "not support model",
+    "not supported model",
+    "current token plan",
+    "token plan not support",
+)
 
 
 def _stringify_error_detail(value) -> str:
@@ -65,6 +71,9 @@ def is_context_limit_error(error) -> bool:
     """Heuristic classifier for provider-specific context overflow failures."""
     text = extract_llm_error_text(error).lower()
     if not text:
+        return False
+
+    if any(hint in text for hint in _NON_CONTEXT_LIMIT_HINTS):
         return False
 
     if any(hint in text for hint in _CONTEXT_LIMIT_HINTS):

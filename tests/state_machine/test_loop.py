@@ -23,6 +23,7 @@ import pytest
 from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.commands.command_tools import ToolsCommand
+from plugins.services.llmService import LLMResponse
 from plugins.tools.tool_schedule_subagent import SCHEDULED, SCHEDULED_ONCE, ScheduleSubagent
 from plugins.tasks.task_spawn_subagent import SpawnSubagent
 from state_machine.action_map import create_action
@@ -287,6 +288,17 @@ def test_runtime_can_chat_without_tool_registry():
 
     assert result.messages[-1] == "plain reply"
     assert llm.seen[0][1] is None
+
+
+def test_runtime_surfaces_llm_provider_error_to_chat():
+    err = "your current token plan not support model, MiniMax-M2.7 (2061)"
+    llm = FakeLLM([LLMResponse(error=err, error_code="provider_error")])
+
+    result = ConversationRuntime(services={"llm": llm}).handle_action("chat", "send_text", "hello")
+
+    assert not result.ok
+    assert err in result.messages[-1]
+    assert result.error["code"] == "agent_failed"
 
 
 def test_runtime_attachment_bundle_reaches_llm():
