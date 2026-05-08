@@ -142,6 +142,8 @@ def _summary(title: str, conv_id: int, job_name: str | None, schedule: dict | No
     parts = [f"Created default-agent subagent conversation #{conv_id}: {title}."]
     if job_name:
         parts.append(f"Scheduled job '{job_name}' on {SPAWN_SUBAGENT}.")
+    elif schedule is None:
+        parts.append("No schedule was created because no cron expression was provided.")
     if ran is not None:
         parts.append("Ran one subagent turn immediately.")
     return " ".join(parts)

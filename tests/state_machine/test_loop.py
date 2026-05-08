@@ -492,6 +492,8 @@ def test_schedule_subagent_immediate_creates_default_one_time_conversation():
 
     assert result.success
     cid = result.data["conversation_id"]
+    assert result.data["scheduled"] is False
+    assert "No schedule was created" in result.llm_summary
     assert db.get_conversation(cid)["category"] == SCHEDULED_ONCE
     assert latest_state(db.get_conversation_messages(cid))["profile_override"] == "default"
     assert result.data["final_text"] == "done now"
