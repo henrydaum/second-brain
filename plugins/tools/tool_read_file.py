@@ -35,6 +35,10 @@ class ReadFile(BaseTool):
                 "type": "integer",
                 "description": "Maximum number of lines to return. Output is also capped at ~20k chars regardless.",
             },
+            "line_numbers": {
+                "type": "boolean",
+                "description": "Include 1-indexed line numbers. Defaults to true; pass false when you need raw text for exact replacement.",
+            },
         },
         "required": ["path"],
     }
@@ -85,6 +89,8 @@ class ReadFile(BaseTool):
         start = min(offset - 1, total_lines)
         end = total_lines if limit is None else min(start + limit, total_lines)
         window = lines[start:end]
+        if kwargs.get("line_numbers", True):
+            window = [f"{i}: {line}" for i, line in enumerate(window, start + 1)]
         content = "\n".join(window)
 
         char_truncated = False

@@ -90,6 +90,7 @@ def _identity(services: dict, registry) -> str:
         (None, "- Use the built-in tools to inspect the system before making assumptions."),
         ("sql_query", "- Past conversations live in the database (conversations and conversation_messages tables) and can be recalled with sql_query."),
         ("read_file", "- For architecture or design intent, read README.md with read_file."),
+        ("edit_file", "- For code or text changes, use read_file first; pass line_numbers=false when copying old_text for edit_file replace."),
         ("read_file", f"- A debug log for the current session is at {log_path} — read it with read_file if you need to investigate an error."),
         ("render_files", "- Use render_files when the user would benefit from seeing a file directly."),
         ("register_plugin", "- If the current tools cannot reasonably complete a task, suggest creating a sandbox plugin with register_plugin."),
@@ -111,6 +112,8 @@ def _identity(services: dict, registry) -> str:
     habits = "\n".join(line for tool, line in habit_bullets if tool is None or _has_tool(registry, tool))
 
     capabilities = ["inspect local files", "query the SQLite database"]
+    if _has_tool(registry, "edit_file"):
+        capabilities.append("edit local text files")
     if _has_tool(registry, "register_plugin"):
         capabilities.append("extend the system through sandbox plugins")
     cap_line = ", ".join(capabilities[:-1]) + ", and " + capabilities[-1] if len(capabilities) > 1 else capabilities[0]
@@ -324,5 +327,3 @@ def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
         f"{' and '.join(limits)}.\n"
         "If something is unavailable or denied, work within that scope instead of assuming full system access."
     )
-
-

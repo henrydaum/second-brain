@@ -1,15 +1,15 @@
 """
-Run Command tool (whitelisted).
+Run Command tool.
 
-Scoped to plugin development: package management, environment inspection,
-and code search within the project. All other commands are blocked.
+Small read-only commands run directly; anything broader requires active user
+approval before execution.
 
 Allowed commands:
   pip install/uninstall          — requires user approval
   pip list/show/freeze           — auto-approved
   python --version, pip --version — auto-approved
-  grep, findstr                  — auto-approved, project-scoped
-  dir, ls, tree                  — auto-approved, project-scoped
+  rg/grep/findstr, dir/ls/tree   — auto-approved, project-scoped
+  everything else                — requires user approval
 """
 
 import logging
@@ -40,7 +40,8 @@ def _truncate_stream(label: str, text: str, cap: int = _OUTPUT_CHAR_CAP) -> tupl
 # ── Whitelist configuration ──────────────────────────────────────────
 
 # Commands that are always safe (read-only, no approval needed)
-_READ_ONLY_COMMANDS = {"grep", "findstr", "dir", "ls", "tree"}
+_READ_ONLY_COMMANDS = {"cat", "dir", "findstr", "grep", "ls", "pwd", "rg", "tree", "type"}
+_GIT_READ_ONLY = {"branch", "diff", "grep", "log", "ls-files", "rev-parse", "show", "status"}
 
 # Pip subcommands that are read-only (no approval needed)
 _PIP_READ_ONLY = {"list", "show", "freeze", "--version"}
@@ -134,12 +135,18 @@ def _rewrite_for_current_python(command: str) -> str:
     return command
 
 
+def _resolve_cwd(raw: str | None) -> tuple[Path | None, str | None]:
+    cwd = Path((raw or "").strip()) if raw else Path(ROOT_DIR)
+    cwd = (cwd if cwd.is_absolute() else ROOT_DIR / cwd).resolve()
+    return (cwd, None) if any(cwd == root or root in cwd.parents for root in _ALLOWED_ROOTS) else (None, f"cwd is outside the allowed roots: {cwd}")
+
+
 def _classify(command: str) -> tuple[str, bool, str | None]:
     """Classify a command.
 
     Returns:
         (category, needs_approval, error_message)
-        - category: "pip_modify", "pip_read", "version", "search", "listing", or "blocked"
+        - category: "pip_modify", "pip_read", "version", "search", "listing", "git_read", "shell", or "blocked"
         - needs_approval: whether to prompt the user
         - error_message: if blocked, a helpful message; otherwise None
     """
@@ -167,57 +174,45 @@ def _classify(command: str) -> tuple[str, bool, str | None]:
             f"Allowed pip subcommands: {', '.join(sorted(_PIP_ALLOWED))}."
         )
 
-    # Search commands (project-scoped)
+    if base == "git":
+        sub = tokens[1].lower() if len(tokens) > 1 else "status"
+        if sub in _GIT_READ_ONLY:
+            path_err = _check_paths_in_bounds(tokens)
+            return ("git_read", False, path_err) if path_err else ("git_read", False, None)
+        return "shell", True, None
+
+    # Search/list/read commands (project-scoped)
     if base in _READ_ONLY_COMMANDS:
         path_err = _check_paths_in_bounds(tokens)
         if path_err:
             return "blocked", False, path_err
-        return "search" if base in ("grep", "findstr") else "listing", False, None
+        return "search" if base in ("grep", "findstr", "rg") else "listing", False, None
 
-    # Everything else is blocked
-    return "blocked", False, (
-        f"'{base}' is not an allowed command. This tool is scoped to plugin development.\n"
-        f"\n"
-        f"Allowed commands:\n"
-        f"  pip install/uninstall <pkg>  — install or remove packages (requires approval)\n"
-        f"  pip list / pip show / pip freeze — check installed packages\n"
-        f"  python --version / pip --version — check environment\n"
-        f"  grep / findstr — search code in the project directory\n"
-        f"  dir / ls / tree — list files in the project directory\n"
-        f"\n"
-        f"Use the right tool instead:\n"
-        f"  Reading files → read_file\n"
-        f"  Creating/editing/deleting plugins → build_plugin\n"
-        f"  Searching indexed files → hybrid_search, lexical_search, semantic_search"
-    )
+    return "shell", True, None
 
 
 class RunCommand(BaseTool):
     name = "run_command"
     description = (
-        "Run a small set of whitelisted terminal commands for plugin development "
-        "and environment inspection. Prefer purpose-built tools when they already "
-        "cover the task. Every command requires a justification, and package-changing "
-        "commands also require user approval.\n\n"
-        "Allowed commands:\n"
+        "Run terminal commands from the project root. Prefer read_file/edit_file and "
+        "retrieval tools for ordinary file work. Small read-only commands run immediately; package "
+        "changes and arbitrary shell commands require active user approval.\n\n"
+        "Common commands:\n"
         "- pip install <pkg> / pip uninstall <pkg> — install or remove Python packages (requires user approval)\n"
         "- pip list / pip show <pkg> / pip freeze — check installed packages\n"
         "- python --version / pip --version — check Python environment\n"
-        "- grep / findstr — search code within the project directory\n"
-        "- dir / ls / tree — list files within the project directory\n"
+        "- rg / grep / findstr — search code within the project directory\n"
+        "- dir / ls / tree / cat / type / pwd — inspect project files\n"
+        "- git status / diff / show / log / branch / ls-files / grep — inspect git state\n"
         "\n"
-        "Use another tool instead when possible:\n"
-        "- Reading files → use read_file\n"
-        "- Creating/editing/deleting plugins → use build_plugin\n"
-        "- Searching your indexed files → use hybrid_search, lexical_search, or semantic_search\n"
-        "- All other commands are blocked for safety."
+        "All other commands are allowed only after the user approves the exact command."
     )
     parameters = {
         "type": "object",
         "properties": {
             "command": {
                 "type": "string",
-                "description": "Terminal command to execute. It must be one of the allowed commands.",
+                "description": "Terminal command to execute. Broad commands require user approval.",
             },
             "justification": {
                 "type": "string",
@@ -230,6 +225,15 @@ class RunCommand(BaseTool):
                     "Use higher values for pip install. Max 600."
                 ),
             },
+            "cwd": {
+                "type": "string",
+                "description": "Working directory, relative to the project root or absolute under the project/data roots. Defaults to project root.",
+            },
+            "shell": {
+                "type": "string",
+                "enum": ["default", "powershell", "cmd"],
+                "description": "Shell to use. Defaults to the platform default shell.",
+            },
         },
         "required": ["command", "justification"],
     }
@@ -241,11 +245,17 @@ class RunCommand(BaseTool):
         command = kwargs.get("command", "").strip()
         justification = kwargs.get("justification", "").strip()
         timeout = min(max(int(kwargs.get("timeout", 30)), 5), 600)
+        cwd, cwd_err = _resolve_cwd(kwargs.get("cwd"))
+        shell_name = (kwargs.get("shell") or "default").strip().lower()
 
         if not command:
             return ToolResult.failed("No command provided.")
         if not justification:
             return ToolResult.failed("A justification is required for every command.")
+        if cwd_err:
+            return ToolResult.failed(cwd_err)
+        if shell_name not in {"default", "powershell", "cmd"}:
+            return ToolResult.failed("shell must be default, powershell, or cmd.")
 
         # ── Whitelist check ──────────────────────────────────────
         category, needs_approval, error = _classify(command)
@@ -262,7 +272,7 @@ class RunCommand(BaseTool):
                     "Command execution is not available — no approval handler is configured."
                 )
             try:
-                approved = approve_fn(command, justification)
+                approved = approve_fn(command, f"{justification}\n\ncwd: {cwd}\nshell: {shell_name}\ntimeout: {timeout}s")
             except Exception as e:
                 logger.error(f"Approval callback failed: {e}")
                 return ToolResult.failed(f"Approval dialog error: {e}")
@@ -274,15 +284,21 @@ class RunCommand(BaseTool):
 
         # ── Execute ──────────────────────────────────────────────
         resolved = _rewrite_for_current_python(command)
-        logger.info(f"Running ({category}): {resolved}")
+        cmd = resolved
+        use_shell = True
+        if shell_name == "powershell":
+            cmd, use_shell = ["powershell", "-NoProfile", "-Command", resolved], False
+        elif shell_name == "cmd":
+            cmd, use_shell = ["cmd", "/c", resolved], False
+        logger.info(f"Running ({category}) in {cwd}: {resolved}")
         try:
             result = subprocess.run(
-                resolved,
-                shell=True,
+                cmd,
+                shell=use_shell,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                cwd=str(ROOT_DIR),
+                cwd=str(cwd),
             )
         except subprocess.TimeoutExpired:
             return ToolResult.failed(f"Command timed out after {timeout} seconds.")
@@ -302,7 +318,7 @@ class RunCommand(BaseTool):
                     dir=str(DATA_DIR),
                 )
                 with open(fd, "w", encoding="utf-8") as f:
-                    f.write(f"$ {resolved}\n\n=== STDOUT ===\n{result.stdout or ''}\n\n=== STDERR ===\n{result.stderr or ''}\n")
+                    f.write(f"$ {resolved}\n# cwd: {cwd}\n\n=== STDOUT ===\n{result.stdout or ''}\n\n=== STDERR ===\n{result.stderr or ''}\n")
             except Exception as e:
                 logger.warning(f"Failed to spill full output: {e}")
                 spill_path = None
@@ -320,6 +336,6 @@ class RunCommand(BaseTool):
         output = "\n".join(parts) if parts else "(no output)"
 
         return ToolResult(
-            data={"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode, "spill_path": spill_path},
+            data={"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode, "spill_path": spill_path, "cwd": str(cwd), "shell": shell_name, "category": category},
             llm_summary=output,
         )
