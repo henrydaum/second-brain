@@ -399,6 +399,10 @@ class AnswerApproval(Action):
         frame = self.cs.frame
         if not frame or frame.phase != PHASE_APPROVING_REQUEST:
             raise self.error(ERROR_INVALID_ACTION, "No request is pending.")
+        if isinstance(self.content, dict):
+            got, expected = self.content.get("request_id"), (frame.data or {}).get("request_id")
+            if got and expected and got != expected:
+                raise self.error(ERROR_INVALID_INPUT, "That request is no longer active.", request_id=got)
         value = self._coerce(frame)
         pending = frame.data.get("pending")
         original_actor = (pending or {}).get("actor_id") or self.cs.other_id(self.actor_id) or self.actor_id

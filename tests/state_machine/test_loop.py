@@ -234,6 +234,25 @@ def test_tool_call_path_records_assistant_then_tool_then_final_text():
     assert cs.turn_priority == "user"
 
 
+def test_tool_budget_blocks_before_second_execution():
+    schema = {"function": {"name": "echo", "parameters": {"type": "object", "properties": {}, "required": []}}}
+    registry = FakeToolRegistry([schema], {"echo": FakeToolResult(success=True, data={}, llm_summary="ok", attachment_paths=[])})
+    registry.tools["echo"].max_calls = 1
+    cs = make_cs(tools={"echo": CallableSpec("echo", handler=lambda _cs, _actor, args: registry.call("echo", **args))})
+    cs.set_priority("agent")
+    llm = FakeLLM([
+        FakeResponse.tool([{"id": "tc1", "name": "echo", "arguments": "{}"}]),
+        FakeResponse.tool([{"id": "tc2", "name": "echo", "arguments": "{}"}]),
+        FakeResponse.text("stopped"),
+    ])
+
+    final_text, new_messages, _ = ConversationLoop(llm, registry, {}, "").drive(cs, "agent", [{"role": "user", "content": "loop"}])
+
+    assert final_text == "stopped"
+    assert len(registry.called) == 1
+    assert "call limit" in new_messages[3]["content"]
+
+
 def test_runtime_emits_session_scoped_tool_status_events():
     events = []
     schema = {"function": {"name": "echo", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}}}
@@ -259,6 +278,14 @@ def test_runtime_emits_session_scoped_tool_status_events():
     ]
     assert events[0][1]["args"] == {"q": "x"}
     assert events[1][1]["ok"] is True
+
+
+def test_runtime_can_chat_without_tool_registry():
+    llm = FakeLLM([FakeResponse.text("plain reply")])
+    result = ConversationRuntime(services={"llm": llm}).handle_action("chat", "send_text", "hello")
+
+    assert result.messages[-1] == "plain reply"
+    assert llm.seen[0][1] is None
 
 
 def test_runtime_attachment_bundle_reaches_llm():
@@ -576,6 +603,17 @@ def test_agent_tool_approval_uses_state_machine_phase_and_resumes():
 
     assert seen and seen[0].messages[-1] == "done"
     assert runtime.sessions["chat"].cs.phase == "awaiting_input"
+
+
+def test_stale_approval_request_id_does_not_answer_current_frame():
+    runtime = ConversationRuntime()
+    req = runtime.request_input("chat", "Pick", "Pick one", type="string")
+
+    result = runtime.handle_action("chat", "answer_approval", {"request_id": "old", "value": "x"})
+
+    assert not result.ok
+    assert req.id in runtime._approval_requests
+    assert runtime.sessions["chat"].cs.phase == PHASE_APPROVING_REQUEST
 
 
 def test_inject_user_message_appends_without_driving_agent_turn():

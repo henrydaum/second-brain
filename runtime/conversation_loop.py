@@ -157,6 +157,13 @@ class ConversationLoop:
 
                 if self._cancelled():
                     break
+                if action_type == "call_tool":
+                    budget_error = self._tool_budget_error(content)
+                    if budget_error:
+                        from state_machine.errors import ActionResult
+                        result = ActionResult.fail("call_tool", budget_error, code="tool_budget_exceeded")
+                        self._absorb(result, action_type, content, history, new_messages, attachments, db, conversation_id)
+                        continue
                 started = self._tool_started(action_type, content)
                 try:
                     # ──────────────────── THE enact() SITE ────────────────────
@@ -223,7 +230,8 @@ class ConversationLoop:
 
         # 3) Otherwise call the LLM for the next response.
         from attachments.attachment import AttachmentBundle
-        response = self._invoke(self._messages(history), self.tool_registry.get_all_schemas() or None, bundle, history)
+        schemas = self.tool_registry.get_all_schemas() if self.tool_registry else None
+        response = self._invoke(self._messages(history), schemas or None, bundle, history)
 
         if getattr(response, "has_tool_calls", False):
             self._pending_tool_calls = list(response.tool_calls)
@@ -297,12 +305,6 @@ class ConversationLoop:
         payload = (getattr(result, "data", None) or {})
         tool_result = payload.get("result")
 
-        # Apply call-budget bookkeeping (mirror previous behavior).
-        tool = getattr(self.tool_registry, "tools", {}).get(name)
-        if tool and self._tool_call_counts.get(name, 0) >= getattr(tool, "max_calls", 1):
-            return json.dumps({"error": f"Tool '{name}' has reached its call limit ({tool.max_calls}). Try a different approach."}), []
-        self._tool_call_counts[name] = self._tool_call_counts.get(name, 0) + 1
-
         # Action-level failure (legality, exec error) → tool error message.
         if not getattr(result, "ok", True):
             err = getattr(result, "error", None)
@@ -329,6 +331,17 @@ class ConversationLoop:
     def _messages(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
         prompt = self.system_prompt() if callable(self.system_prompt) else self.system_prompt
         return [{"role": "system", "content": prompt}, *[m for m in history if m.get("role") != "system"]]
+
+    def _tool_budget_error(self, content: Any) -> str | None:
+        name = (content or {}).get("name") or "unknown"
+        tool = (getattr(self.tool_registry, "tools", {}) or {}).get(name) if self.tool_registry else None
+        if not tool:
+            return None
+        used, limit = self._tool_call_counts.get(name, 0), getattr(tool, "max_calls", 1)
+        if used >= limit:
+            return f"Tool '{name}' has reached its call limit ({limit}). Try a different approach."
+        self._tool_call_counts[name] = used + 1
+        return None
 
     def _invoke(self, messages, tools, attachments=None, history=None):
         from plugins.services.llmService import is_context_limit_error
