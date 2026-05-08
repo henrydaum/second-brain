@@ -332,7 +332,7 @@ class TelegramFrontend(BaseFrontend):
                 await self.app.bot.send_message(chat_id, f"Failed to send attachment: {e}")
 
     async def _send_tool_started(self, chat_id: int, key: str, name: str, text: str):
-        sent = await self.app.bot.send_message(chat_id, f"⏳ <code>{html.escape(text)}</code>", parse_mode="HTML", disable_notification=True)
+        sent = await self.app.bot.send_message(chat_id, f"⟳ <code>{html.escape(text)}</code>", parse_mode="HTML", disable_notification=True)
         self._tool_messages[key] = (chat_id, sent.message_id, name, text)
 
     async def _progress_tool_message(self, chat_id: int, key: str, name: str, text: str):
@@ -341,7 +341,7 @@ class TelegramFrontend(BaseFrontend):
             return await self._send_tool_started(chat_id, key, name, text)
         self._tool_messages[key] = (entry[0], entry[1], name, text)
         try:
-            await self.app.bot.edit_message_text(f"⏳ <code>{html.escape(text)}</code>", chat_id=entry[0], message_id=entry[1], parse_mode="HTML")
+            await self.app.bot.edit_message_text(f"⟳ <code>{html.escape(text)}</code>", chat_id=entry[0], message_id=entry[1], parse_mode="HTML")
         except Exception:
             pass
 

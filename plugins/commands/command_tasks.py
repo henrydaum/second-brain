@@ -8,13 +8,13 @@ from state_machine.forms import schema_to_form_steps
 
 
 PATH_ACTIONS = ["pause", "unpause", "reset", "retry"]
-EVENT_ACTIONS = ["pause", "unpause", "trigger", "schedule", "unschedule"]
+EVENT_ACTIONS = ["pause", "unpause", "trigger"]
 PIPELINE = "pipeline"
 
 
 class TasksCommand(BaseCommand):
     name = "tasks"
-    description = "Pick a task — pause, unpause, reset, retry, trigger, or manage its cron schedules"
+    description = "Pick a task — pause, unpause, reset, retry, or trigger"
     category = "System"
 
     def form(self, args, context):
@@ -28,15 +28,6 @@ class TasksCommand(BaseCommand):
         action = args.get("action")
         if task and action == "trigger":
             steps += schema_to_form_steps(getattr(task, "event_payload_schema", {}) or {}, prompt_optional=True)
-        elif task and action == "schedule":
-            steps += [
-                FormStep("job_name", "Enter a unique name for this schedule.", True),
-                FormStep("cron", "Enter the cron expression, for example 0 9 * * *.", True),
-            ]
-            steps += schema_to_form_steps(getattr(task, "event_payload_schema", {}) or {}, prompt_optional=True)
-        elif task and action == "unschedule":
-            jobs = _jobs_for_task(context, task)
-            steps.append(FormStep("job_name", "Select the scheduled job to remove.", True, enum=jobs or ["(no jobs scheduled)"]))
         return steps
 
     def run(self, args, context):
@@ -72,10 +63,6 @@ class TasksCommand(BaseCommand):
             if getattr(task, "trigger", "path") != "event":
                 return "Only event-driven tasks can be triggered manually."
             return _trigger(context, task, args)
-        if action == "schedule":
-            return _schedule_create(context, task, args)
-        if action == "unschedule":
-            return _schedule_remove(context, args)
         return f"Unknown action: {action}"
 
 
@@ -89,7 +76,6 @@ def _show(context):
         "paused": name in getattr(orch, "paused", set()),
         "requires_services": getattr(task, "requires_services", []),
         "trigger_channels": getattr(task, "trigger_channels", []),
-        "schedules": _schedule_summaries(context, task),
     } for name, task in sorted((getattr(orch, "tasks", {}) or {}).items())])
 
 
@@ -100,7 +86,8 @@ def _describe(context, task_name):
     db = getattr(context, "db", None)
     counts = (db.get_system_stats().get("tasks", {}) if db else {}) | (db.get_run_stats() if db and hasattr(db, "get_run_stats") else {})
     c = {"PENDING": 0, "PROCESSING": 0, "DONE": 0, "FAILED": 0} | counts.get(task_name, {})
-    return f"{task_name}\nPending: {c['PENDING']}      Running: {c['PROCESSING']}      Done: {c['DONE']}      Failed: {c['FAILED']}\n\n{_schedules_context(context, orch.tasks[task_name])}"
+    hint = _schedule_hint(context, orch.tasks[task_name])
+    return f"{task_name}\nPending: {c['PENDING']}      Running: {c['PROCESSING']}      Done: {c['DONE']}      Failed: {c['FAILED']}" + (f"\n\n{hint}" if hint else "")
 
 
 def _task(context, name):
@@ -139,57 +126,8 @@ def _jobs_for_task(context, task) -> list[str]:
     return sorted(name for name, job in tk.list_jobs().items() if (job.get("channel") or "") in channels)
 
 
-def _schedules_context(context, task) -> str:
-    rows = _schedule_summaries(context, task)
-    return "Schedules:\n  " + "\n  ".join(rows or ["(none)"])
-
-
-def _schedule_summaries(context, task) -> list[str]:
-    tk = _timekeeper(context)
-    rows = [] if tk is None else [(name, job) for name, job in tk.list_jobs().items() if (job.get("channel") or "") in set(_task_channels(task))]
-    if not rows:
-        return []
-    lines = []
-    for name, job in sorted(rows):
-        cron = job.get("cron", "")
-        try:
-            desc = tk.cron_to_text(cron).lower()
-        except Exception:
-            desc = cron or "?"
-        nf = tk.get_next_fire_at(name)
-        lines.append(f"{name}: runs {desc}; next {nf.strftime('%Y-%m-%d %H:%M') if nf else 'disabled'}")
-    return lines
-
-
-def _schedule_create(context, task, args):
-    tk = _timekeeper(context)
-    if tk is None:
-        return "Timekeeper service is not available."
-    channels = _task_channels(task)
-    if not channels:
-        return f"Task '{task.name}' has no trigger_channels — cannot schedule."
-    job_name = (args.get("job_name") or "").strip()
-    cron = (args.get("cron") or "").strip()
-    if not job_name or not cron:
-        return "Enter both a schedule name and a cron expression before creating the schedule."
-    payload_keys = (getattr(task, "event_payload_schema", {}) or {}).get("properties", {}).keys()
-    payload = {k: args[k] for k in payload_keys if k in args}
-    try:
-        tk.create_job(job_name, {"cron": cron, "channel": channels[0], "payload": payload, "enabled": True})
-    except Exception as e:
-        return f"Failed to create job: {e}"
-    try:
-        when = tk.cron_to_text(cron)
-    except Exception:
-        when = cron
-    return f"Created schedule '{job_name}' for {task.name}: {when}."
-
-
-def _schedule_remove(context, args):
-    tk = _timekeeper(context)
-    if tk is None:
-        return "Timekeeper service is not available."
-    job_name = (args.get("job_name") or "").strip()
-    if not job_name or job_name == "(no jobs scheduled)":
-        return "Pick a job to remove."
-    return f"Removed job: {job_name}" if tk.remove_job(job_name) else f"No such job: {job_name}"
+def _schedule_hint(context, task) -> str:
+    if getattr(task, "trigger", "path") != "event":
+        return ""
+    count = len(_jobs_for_task(context, task))
+    return f"Scheduled jobs: {count}. Use /schedule to manage them." if count else ""

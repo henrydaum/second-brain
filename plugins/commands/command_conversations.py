@@ -22,7 +22,7 @@ from state_machine.serialization import latest_state
 
 _LIMIT = 15
 _MAIN = "Main"
-_NEW_CAT = "➕ New category"
+_NEW_CAT = "Add New category"
 _LOAD = "Load conversation"
 _DELETE = "Delete conversation"
 _CHANGE_CATEGORY = "Change category"
