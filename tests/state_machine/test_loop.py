@@ -28,6 +28,7 @@ from plugins.services.llmService import LLMResponse
 from plugins.services import timekeeperService as timekeeper_module
 from plugins.services.timekeeperService import TimekeeperService
 from plugins.tools.tool_schedule_subagent import SCHEDULED, SCHEDULED_ONCE, ScheduleSubagent
+from plugins.tools.tool_ask_user_question import AskUserQuestion
 from plugins.tasks.task_spawn_subagent import SpawnSubagent
 from state_machine.action_map import create_action
 from state_machine.conversation import CallableSpec, ConversationState, FormStep, Participant
@@ -798,6 +799,79 @@ def test_stale_approval_request_id_does_not_answer_current_frame():
     assert not result.ok
     assert req.id in runtime._approval_requests
     assert runtime.sessions["chat"].cs.phase == PHASE_APPROVING_REQUEST
+
+
+def test_cancel_resolves_pending_user_input_without_value():
+    runtime = ConversationRuntime()
+    req = runtime.request_input("chat", "Pick", "Pick one", type="string")
+
+    result = runtime.handle_action("chat", "cancel")
+
+    assert result.ok
+    assert req.wait(timeout=0)
+    assert req.value is None
+    assert req.metadata["cancelled"] is True
+    assert req.id not in runtime._approval_requests
+    assert runtime.sessions["chat"].cs.phase == "awaiting_input"
+
+
+def test_ask_user_question_returns_typed_values():
+    runtime = ConversationRuntime()
+
+    def ask(type_, answer):
+        ctx = SimpleNamespace(
+            request_user_input=lambda title, prompt, **kw: runtime.request_input("chat", title, prompt, **kw),
+            runtime=runtime,
+            session_key="chat",
+        )
+        seen = []
+        worker = threading.Thread(target=lambda: seen.append(AskUserQuestion().run(ctx, question="Value?", type=type_)), daemon=True)
+        worker.start()
+        deadline = time.time() + 5
+        while time.time() < deadline and ("chat" not in runtime.sessions or runtime.sessions["chat"].cs.phase != PHASE_APPROVING_REQUEST):
+            time.sleep(0.01)
+        assert runtime.handle_action("chat", "answer_approval", {"value": answer}).ok
+        worker.join(timeout=5)
+        assert seen and seen[0].success
+        return seen[0].data["value"]
+
+    assert ask("integer", "7") == 7
+    assert ask("number", "1.5") == 1.5
+    assert ask("array", '["a", "b"]') == ["a", "b"]
+    assert ask("object", '{"x": 1}') == {"x": 1}
+
+
+def test_ask_user_question_fails_when_cancelled():
+    runtime = ConversationRuntime()
+    ctx = SimpleNamespace(
+        request_user_input=lambda title, prompt, **kw: runtime.request_input("chat", title, prompt, **kw),
+        runtime=runtime,
+        session_key="chat",
+    )
+    seen = []
+    worker = threading.Thread(target=lambda: seen.append(AskUserQuestion().run(ctx, question="Value?")), daemon=True)
+
+    worker.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and ("chat" not in runtime.sessions or runtime.sessions["chat"].cs.phase != PHASE_APPROVING_REQUEST):
+        time.sleep(0.01)
+    assert runtime.handle_action("chat", "cancel").ok
+    worker.join(timeout=5)
+
+    assert seen and not seen[0].success
+    assert "cancelled" in seen[0].error.lower()
+
+
+def test_enum_user_input_rejects_invalid_then_accepts_valid():
+    runtime = ConversationRuntime()
+    req = runtime.request_input("chat", "Pick", "Pick one", type="string", enum=["a", "b"])
+
+    bad = runtime.handle_action("chat", "answer_approval", {"value": "c"})
+    good = runtime.handle_action("chat", "answer_approval", {"value": "b"})
+
+    assert not bad.ok
+    assert good.ok
+    assert req.value == "b"
 
 
 def test_inject_user_message_appends_without_driving_agent_turn():

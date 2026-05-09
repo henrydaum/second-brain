@@ -407,11 +407,15 @@ class TelegramFrontend(BaseFrontend):
 
     def _approval_markup(self, key: str, req):
         request_id = getattr(req, "id", "pending")
+        is_boolean = getattr(req, "type", "boolean") == "boolean"
         if getattr(req, "enum", None):
-            return self._markup([[self._button(str(v), key, f"approval:{request_id}:{v}")] for v in req.enum])
-        if getattr(req, "type", "boolean") == "boolean":
+            rows = [[self._button(str(v), key, f"approval:{request_id}:{v}")] for v in req.enum]
+            if not is_boolean:
+                rows.append([self._button("✕ Cancel", key, "/cancel")])
+            return self._markup(rows)
+        if is_boolean:
             return self._markup([[self._button("Approve", key, f"approval:{request_id}:allow"), self._button("Deny", key, f"approval:{request_id}:deny")]])
-        return None
+        return self._markup([[self._button("✕ Cancel", key, "/cancel")]])
 
     def _buttons_markup(self, key: str, buttons: list[dict]):
         return self._markup([[self._button(str(b.get("label") or b.get("text") or b.get("value") or "Option"), key, str(b.get("value") or b.get("text") or b.get("label") or ""))] for b in buttons])

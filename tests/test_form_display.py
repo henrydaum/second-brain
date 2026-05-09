@@ -144,3 +144,19 @@ def test_telegram_enum_markup_shows_back_button_when_available():
     rows = tg._enum_markup("default", {"field": step.to_dict(), "display": display})
 
     assert [("⟵ Back", "/back")] in rows
+
+
+def test_telegram_approval_markup_keeps_boolean_clean_and_adds_typed_cancel():
+    tg = TelegramFrontend()
+    tg._button = lambda label, _key, value, echo=None: (label, value)
+    tg._markup = lambda rows: rows
+
+    boolean_rows = tg._approval_markup("default", SimpleNamespace(id="r1", type="boolean", enum=None))
+    enum_rows = tg._approval_markup("default", SimpleNamespace(id="r2", type="string", enum=["a"]))
+    text_rows = tg._approval_markup("default", SimpleNamespace(id="r3", type="string", enum=None))
+
+    assert ("Approve", "approval:r1:allow") in boolean_rows[0]
+    assert all(("✕ Cancel", "/cancel") not in row for row in boolean_rows)
+    assert [("a", "approval:r2:a")] in enum_rows
+    assert [("✕ Cancel", "/cancel")] in enum_rows
+    assert text_rows == [[("✕ Cancel", "/cancel")]]

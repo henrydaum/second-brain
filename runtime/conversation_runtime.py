@@ -134,7 +134,9 @@ class ConversationRuntime:
         # specific ``answer_approval`` for an active approval frame may
         # proceed. Everything else is told to wait or cancel first.
         if session.busy or session.cs.phase in BUSY_PHASES:
-            if action_type == "cancel":
+            if action_type == "cancel" and session.cs.phase == PHASE_APPROVING_REQUEST:
+                pass
+            elif action_type == "cancel":
                 session.cancel_event.set()
                 return RuntimeResult(messages=["Cancelled."])
             if action_type == "answer_approval" and session.cs.phase == PHASE_APPROVING_REQUEST:

@@ -316,6 +316,10 @@ class BaseFrontend:
             return self.submit(session_key, ACTION_SUBMIT_FORM_TEXT, stripped)
 
         if phase == PHASE_APPROVING_REQUEST:
+            if (text or "").strip() == "/cancel" and ACTION_CANCEL in legal:
+                result = self.submit(session_key, ACTION_CANCEL)
+                self._clear_pending_approval(session_key)
+                return result
             result = self.submit(session_key, ACTION_ANSWER_APPROVAL, text)
             self._clear_pending_approval(session_key)
             return result

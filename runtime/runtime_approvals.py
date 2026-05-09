@@ -67,6 +67,7 @@ def request_input(
                 "title": title,
                 "prompt": prompt,
                 "pending": pending_action,
+                "previous_priority": session.cs.turn_priority,
             },
         ))
         session.cs.set_priority("user")
@@ -100,7 +101,7 @@ def current_request_id(session: RuntimeSession, action_type: str) -> str | None:
     """Return the request_id of the top approval frame, if the action that
     is about to be enacted could resolve it."""
     frame = session.cs.frame
-    if action_type not in {"answer_approval", "send_text"} or not frame or frame.phase != PHASE_APPROVING_REQUEST:
+    if action_type not in {"answer_approval", "send_text", "cancel"} or not frame or frame.phase != PHASE_APPROVING_REQUEST:
         return None
     return (getattr(frame, "data", {}) or {}).get("request_id")
 
@@ -113,4 +114,8 @@ def resolve_answered_request(runtime, request_id: str | None, result: ActionResu
     req = runtime._approval_requests.pop(request_id, None)
     if req and not req.is_resolved:
         data = result.data or {}
+        if result.action == "cancel":
+            req.metadata["cancelled"] = True
+            req.resolve(None)
+            return
         req.resolve(data.get("value", True))

@@ -38,6 +38,7 @@ class SecondBrainContext:
     services: dict = field(default_factory=dict)
     call_tool: Any = None        # callable(name, **kwargs) -> ToolResult (tools only)
     approve_command: Any = None  # callable(command, justification) -> bool (tools only)
+    request_user_input: Any = None # callable(...)->StateMachineApprovalRequest (tools only)
     tool_registry: Any = None    # ToolRegistry instance (tools only)
     orchestrator: Any = None     # Orchestrator instance (tools only)
     runtime: Any = None          # ConversationRuntime — present for tasks that
@@ -74,7 +75,11 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         return call_tool(name, **kwargs)
 
     approve_command = None
+    request_user_input = None
     if runtime is not None and session_key:
+        def request_user_input(title: str, prompt: str, **kwargs):
+            return runtime.request_input(session_key, title, prompt, **kwargs)
+
         def approve_command(command: str, justification: str) -> bool:
             req = runtime.request_input(
                 session_key,
@@ -86,6 +91,8 @@ def build_context(db, config: dict, services: dict, call_tool=None,
                 req.metadata["timed_out"] = True
                 runtime.answer_request(session_key, req.id, False)
                 return False
+            if req.metadata.get("cancelled"):
+                return False
             return req.approved
 
     return SecondBrainContext(
@@ -94,6 +101,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         services=services,
         call_tool=call_tool_with_session if call_tool is not None else None,
         approve_command=approve_command,
+        request_user_input=request_user_input,
         tool_registry=tool_registry,
         orchestrator=orchestrator,
         runtime=runtime,

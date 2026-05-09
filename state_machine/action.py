@@ -178,6 +178,10 @@ class Cancel(Action):
 
     def execute(self):
         frame = self.cs.pop_phase()
+        if frame is not None and frame.phase == PHASE_APPROVING_REQUEST:
+            data = frame.data or {}
+            pending = data.get("pending") or {}
+            self.cs.set_priority(pending.get("actor_id") or data.get("previous_priority") or self.cs.other_id(self.actor_id) or self.actor_id)
         # If we were mid-form for a slash command, emit FINISHED so any UI
         # showing a pending hourglass can resolve it as cancelled.
         if frame is not None and frame.action_type == "call_command":
