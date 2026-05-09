@@ -115,7 +115,6 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
         return None, {}, []
 
     _ensure_default_cron_jobs(services)
-    _backfill_cron_categories(scaffold.db, services)
     runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir)
     classes = discover_frontends(root_dir, config)
     manager = FrontendManager(runtime, runtime.command_registry, config)
@@ -205,32 +204,6 @@ def _ensure_default_cron_jobs(services):
             logger.info(f"Installed default cron job '{name}'.")
         except Exception as e:
             logger.warning(f"Failed to install default cron job '{name}': {e}")
-
-
-def _backfill_cron_categories(db, services):
-    """Stamp the appropriate built-in category onto conversations referenced
-    by current timekeeper jobs but missing one (pre-migration rows or jobs
-    registered before the category column existed). One-time jobs land under
-    ``Scheduled (one-time)``; recurring jobs under ``Scheduled``."""
-    if db is None:
-        return
-    tk = (services or {}).get("timekeeper")
-    if tk is None:
-        return
-    try:
-        jobs = tk.list_jobs()
-    except Exception as e:
-        logger.warning(f"Cron-category backfill: list_jobs failed: {e}")
-        return
-    for job_name, job in jobs.items():
-        conv_id = (job.get("payload") or {}).get("conversation_id")
-        if conv_id is None:
-            continue
-        category = "Scheduled (one-time)" if job.get("one_time") else "Scheduled"
-        try:
-            db.set_conversation_category(int(conv_id), category)
-        except Exception as e:
-            logger.warning(f"Cron-category backfill: failed for {job_name}: {e}")
 
 
 def _scope(profile, config):

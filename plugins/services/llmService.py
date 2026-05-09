@@ -153,15 +153,6 @@ class BaseLLM(BaseService):
         }
         self.context_size = None  # Max context window in tokens (auto-detected or from config)
 
-    @property
-    def vision(self) -> bool | None:
-        """Back-compat shim. Reads ``capabilities['image']``."""
-        return self.capabilities.get("image")
-
-    @vision.setter
-    def vision(self, value: bool | None) -> None:
-        self.capabilities["image"] = value
-
     def has_capability(self, modality: str) -> bool:
         return bool(self.capabilities.get(modality))
 

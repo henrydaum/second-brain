@@ -113,4 +113,4 @@ def resolve_answered_request(runtime, request_id: str | None, result: ActionResu
     req = runtime._approval_requests.pop(request_id, None)
     if req and not req.is_resolved:
         data = result.data or {}
-        req.resolve(data.get("value", data.get("approved", True)))
+        req.resolve(data.get("value", True))

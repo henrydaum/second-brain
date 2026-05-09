@@ -117,7 +117,6 @@ class ConversationRuntime:
 
     def handle_action(self, session_key: str, action_type: str, payload: dict | str | None = None, *, user_driven: bool = True) -> RuntimeResult:
         session = self.get_session(session_key)
-        normalized = "send_text" if action_type == "chat_message" else action_type
         if user_driven:
             self.active_session_key = session_key
             prior_conv = getattr(self, "_persisted_active_conv_id", None)
@@ -125,7 +124,7 @@ class ConversationRuntime:
         # Cron-handoff guard: a non-user-driven send_text must never be
         # interpreted as form input. If the user is mid-form, refuse the turn.
         if (not user_driven
-                and normalized == "send_text"
+                and action_type == "send_text"
                 and session.cs.phase in FORM_PHASES):
             return RuntimeResult(False,
                                  messages=["Session is mid-form — handoff deferred."],
@@ -135,14 +134,14 @@ class ConversationRuntime:
         # specific ``answer_approval`` for an active approval frame may
         # proceed. Everything else is told to wait or cancel first.
         if session.busy or session.cs.phase in BUSY_PHASES:
-            if normalized == "cancel":
+            if action_type == "cancel":
                 session.cancel_event.set()
                 return RuntimeResult(messages=["Cancelled."])
-            if normalized == "answer_approval" and session.cs.phase == PHASE_APPROVING_REQUEST:
+            if action_type == "answer_approval" and session.cs.phase == PHASE_APPROVING_REQUEST:
                 pass  # fall through and dispatch
-            elif normalized == "send_text":
+            elif action_type == "send_text":
                 return RuntimeResult(messages=["Not your turn - I'm still working. Send /cancel to interrupt."])
-            elif normalized != "answer_approval" or session.cs.phase != PHASE_APPROVING_REQUEST:
+            elif action_type != "answer_approval" or session.cs.phase != PHASE_APPROVING_REQUEST:
                 return RuntimeResult(False, messages=["Still working. Send /cancel to interrupt."], error={"code": "busy", "message": "Still working."})
 
         # No-conversation guard: chat actions need a conversation to write
@@ -154,7 +153,7 @@ class ConversationRuntime:
         # there is no DB (unit tests without persistence rely on the
         # implicit auto-create path).
         if (user_driven and self.db is not None
-                and normalized in {"send_text", "send_attachment"}
+                and action_type in {"send_text", "send_attachment"}
                 and session.conversation_id is None):
             return RuntimeResult(False, messages=["No conversation loaded.\nTry /conversations to add a new one."])
 
@@ -198,10 +197,6 @@ class ConversationRuntime:
             return self.load_history(session.key, int((payload or {}).get("conversation_id")))
         if action_type == "new_conversation":
             return self.new_conversation(session.key)
-
-        # Normalize legacy aliases.
-        if action_type == "chat_message":
-            action_type = "send_text"
 
         text = _disp.text_of(payload)
         inbound_attachments = _disp.attachments_of(payload)
@@ -323,12 +318,6 @@ class ConversationRuntime:
 
     # ──────────────────────────────────────────────────────────────────
     # Session lifecycle.
-    #
-    # The unified entry point is ``open_session`` — every plugin should
-    # call it instead of stitching ``create_conversation`` +
-    # ``load_conversation`` themselves. The other methods are kept for
-    # backwards compatibility and for the cases where an explicit shape
-    # is clearer.
     # ──────────────────────────────────────────────────────────────────
 
     def get_session(self, key: str) -> RuntimeSession:
@@ -644,27 +633,3 @@ class ConversationRuntime:
         """
         for session in list(self.sessions.values()):
             _cfg.refresh_specs(self, session)
-
-    def _refresh_session_specs(self, session: RuntimeSession) -> None:
-        """Internal alias kept for tests and inline call sites."""
-        _cfg.refresh_specs(self, session)
-
-    def _profile_for_session(self, session: RuntimeSession | None) -> str:
-        """Back-compat shim — prefer ``runtime_config.profile_for``."""
-        return _cfg.profile_for(self, session)
-
-    def _active_llm(self, session: RuntimeSession | None = None):
-        """Back-compat shim — prefer ``runtime_config.active_llm``."""
-        return _cfg.active_llm(self, session)
-
-    def _active_tool_registry(self, session: RuntimeSession | None = None):
-        """Back-compat shim — prefer ``runtime_config.active_tool_registry``."""
-        return _cfg.active_tool_registry(self, session)
-
-    def _persist_marker(self, session: RuntimeSession) -> None:
-        """Back-compat shim — prefer ``runtime_persistence.persist_marker``."""
-        _persist.persist_marker(self, session)
-
-
-# Re-exports for compatibility with the previous flat-runtime layout.
-__all__ = ["ConversationRuntime", "RuntimeResult", "RuntimeSession", "SessionConflict"]

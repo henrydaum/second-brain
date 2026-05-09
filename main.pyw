@@ -116,7 +116,7 @@ def main():
 	discover_tools(_ROOT, tool_registry, config)
 	logger.info(f"Tools registered: {list(tool_registry.tools.keys())} ({time.time() - t0:.2f}s)")
 
-	# --- 5c. Reconcile plugin config (defaults + migration) ---
+	# --- 5c. Reconcile plugin config defaults ---
 	config_manager.reconcile_plugin_config(config, get_plugin_settings())
 
 	# --- Debug: print the full system prompt ---

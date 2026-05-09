@@ -418,11 +418,12 @@ def test_load_history_restores_saved_agent_profile_and_history():
             unsub()
 
     session = runtime.sessions["chat"]
-    runtime._refresh_session_specs(session)
+    from runtime.runtime_config import profile_for, refresh_specs
+    refresh_specs(runtime, session)
 
     assert session.history == [{"role": "user", "content": "earlier"}]
     assert session.profile_override == "builder"
-    assert runtime._profile_for_session(session) == "builder"
+    assert profile_for(runtime, session) == "builder"
     assert result.messages == ["Loaded conversation: Builder chat\nAgent: builder\nSwitched agent: default -> builder"]
     assert [name for name, _ in events[-2:]] == [SESSION_CLOSED, SESSION_CREATED]
     assert events[-1][1]["agent_profile"] == "builder"

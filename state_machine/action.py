@@ -406,9 +406,8 @@ class AnswerApproval(Action):
     Despite the historical name, this carries any typed value (string,
     integer, number, boolean, array, object, enum). For a frame whose
     `data["type"]` is "boolean" with a `pending` action, a truthy value
-    re-enacts the gated action with `_approved=True` (the legacy approval
-    gate). For other types, the value is simply returned in the result data
-    for the caller (tool, etc.) to consume.
+    re-enacts the gated action with `_approved=True`. For other types, the
+    value is simply returned in the result data for the caller to consume.
     """
 
     action_type = "answer_approval"
@@ -428,7 +427,6 @@ class AnswerApproval(Action):
         self.cs.set_priority(original_actor)
         event = self.cs.event("approval_answered", self.actor_id, value=value, approved=bool(value), pending=pending)
 
-        # Boolean-with-pending: legacy approval-gate replay.
         if pending and frame.data.get("type", "boolean") == "boolean":
             if not value:
                 self.cs.reset_phase()
@@ -453,11 +451,8 @@ class AnswerApproval(Action):
         required = frame.data.get("required", True)
         raw = self.content
         if isinstance(raw, dict):
-            # Accept {"value": ...}, legacy {"approved": ...}, or {"text": "..."}.
             if "value" in raw:
                 raw = raw["value"]
-            elif "approved" in raw:
-                raw = raw["approved"]
             elif "text" in raw:
                 raw = raw["text"]
 

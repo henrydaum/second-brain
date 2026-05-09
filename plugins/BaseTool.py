@@ -57,15 +57,12 @@ class ToolResult:
         data: Any = None,
         llm_summary: str = "",
         attachment_paths: list[str] | None = None,
-        gui_display_paths: list[str] | None = None,
     ):
         self.success = success
         self.error = error
         self.data = data
         self.llm_summary = llm_summary
-        self.attachment_paths = self._normalize_attachment_paths(
-            attachment_paths, gui_display_paths
-        )
+        self.attachment_paths = self._normalize_attachment_paths(attachment_paths)
 
     @staticmethod
     def _normalize_attachment_paths(*path_lists) -> list[str]:
@@ -80,15 +77,6 @@ class ToolResult:
                 seen.add(path)
                 normalized.append(path)
         return normalized
-
-    @property
-    def gui_display_paths(self) -> list[str]:
-        """Backward-compatible alias for older tools and frontends."""
-        return self.attachment_paths
-
-    @gui_display_paths.setter
-    def gui_display_paths(self, value: list[str]):
-        self.attachment_paths = self._normalize_attachment_paths(value)
 
     def to_dict(self, base_url: str = "") -> dict:
         """Serialize for HTTP API responses.

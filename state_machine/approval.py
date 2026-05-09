@@ -10,9 +10,8 @@ from typing import Any
 class StateMachineApprovalRequest:
     """A user-facing request for typed input.
 
-    Despite the name (kept for backwards compatibility), this carries any
-    typed value — not just a boolean approval. `type` controls how the
-    answering action coerces the user's response (boolean, string, integer,
+    This carries any typed value, not just a boolean approval. `type` controls
+    how the answering action coerces the user's response (boolean, string, integer,
     number, array, object). `value` holds the resolved answer.
 
     For boolean ("approve / deny") flows, `approved` is a convenience

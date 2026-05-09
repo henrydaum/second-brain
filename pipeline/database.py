@@ -76,12 +76,6 @@ class Database:
 			)
 		""")
 
-		# Migration: add source column for existing databases
-		try:
-			self.conn.execute("ALTER TABLE files ADD COLUMN source TEXT DEFAULT 'watched'")
-		except sqlite3.OperationalError:
-			pass  # column already exists
-
 		# Task queue — one row per (file, task) pair
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS task_queue (
@@ -96,14 +90,6 @@ class Database:
 				PRIMARY KEY (path, task_name)
 			)
 		""")
-		# Migration: add priority column for existing databases
-		try:
-			self.conn.execute("ALTER TABLE task_queue ADD COLUMN priority INTEGER DEFAULT 0")
-		except sqlite3.OperationalError:
-			pass  # column already exists
-		# Drop the old index (pre-priority schema) so the recreated one below
-		# can include the priority column used by claim_tasks.
-		self.conn.execute("DROP INDEX IF EXISTS idx_queue_dispatch")
 		self.conn.execute("""
 			CREATE INDEX IF NOT EXISTS idx_queue_dispatch
 			ON task_queue (task_name, status, priority DESC, created_at)
@@ -120,16 +106,6 @@ class Database:
 				trigger_channels TEXT DEFAULT ''
 			)
 		""")
-		# Migration: add event-task metadata for existing databases
-		try:
-			self.conn.execute("ALTER TABLE registered_tasks ADD COLUMN trigger TEXT DEFAULT 'path'")
-		except sqlite3.OperationalError:
-			pass  # column already exists
-		try:
-			self.conn.execute("ALTER TABLE registered_tasks ADD COLUMN trigger_channels TEXT DEFAULT ''")
-		except sqlite3.OperationalError:
-			pass  # column already exists
-
 		# Event-task runs — one row per triggered run for trigger="event" tasks.
 		# Path-keyed tasks use task_queue; event-keyed tasks use this table.
 		self.conn.execute("""
@@ -162,26 +138,6 @@ class Database:
 				updated_at  REAL
 			)
 		""")
-		try:
-			self.conn.execute("ALTER TABLE conversations ADD COLUMN kind TEXT DEFAULT 'user'")
-		except sqlite3.OperationalError:
-			pass  # column already exists
-		# Migration: legacy `origin` column → `category`. Try to rename in place;
-		# if the column doesn't exist (fresh DB) or already renamed, fall through.
-		try:
-			self.conn.execute("ALTER TABLE conversations RENAME COLUMN origin TO category")
-		except sqlite3.OperationalError:
-			pass
-		try:
-			self.conn.execute("ALTER TABLE conversations ADD COLUMN category TEXT")
-		except sqlite3.OperationalError:
-			pass  # column already exists
-		try:
-			self.conn.execute(
-				"ALTER TABLE conversations ADD COLUMN last_title_check_message_count INTEGER NOT NULL DEFAULT 0"
-			)
-		except sqlite3.OperationalError:
-			pass  # column already exists
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS conversation_messages (
 				id              INTEGER PRIMARY KEY AUTOINCREMENT,

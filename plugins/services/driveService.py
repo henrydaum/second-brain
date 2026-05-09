@@ -12,9 +12,7 @@ Usage:
     # Load when ready (opens browser for OAuth if needed)
     drive.load()
 
-    # Parsers access it via config["_services"]["drive"].service
-    api = drive.service
-    api.files().list(...).execute()
+    text = drive.download_text(doc_id)
 
     # Unload to release
     drive.unload()
@@ -46,7 +44,6 @@ class GoogleDriveService(BaseService):
         self.model_name = "google_drive"
         self.shared = False  # Each client is a separate instance (build() is cheap)
         self._creds = None       # Authenticated credentials (thread-safe, reusable)
-        self.service = None      # Keep one instance for backward compat / quick checks
 
     @staticmethod
     def _is_connected() -> bool:
@@ -73,7 +70,6 @@ class GoogleDriveService(BaseService):
             from google.auth.transport.requests import Request
             from google.oauth2.credentials import Credentials
             from google_auth_oauthlib.flow import InstalledAppFlow
-            from googleapiclient.discovery import build
         except ImportError:
             logger.error("[Drive] Google client libraries not installed. "
                          "pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib")
@@ -109,8 +105,6 @@ class GoogleDriveService(BaseService):
             # Store creds — the important part
             self._creds = creds
 
-            # Keep a default instance for backward compat
-            self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
             self.loaded = True
             return True
 
@@ -150,7 +144,6 @@ class GoogleDriveService(BaseService):
     def unload(self):
         """Release the Drive API service and credentials."""
         self._creds = None
-        self.service = None
         self.loaded = False
         logger.info("[Drive] Service unloaded.")
     

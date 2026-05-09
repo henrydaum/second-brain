@@ -33,7 +33,7 @@ def _normalize_frontends(value) -> list[str]:
     seen = set()
     for item in value:
         name = str(item).strip().lower()
-        if name == "gui" or name not in _SUPPORTED_FRONTENDS or name in seen:
+        if name not in _SUPPORTED_FRONTENDS or name in seen:
             continue
         seen.add(name)
         normalized.append(name)
@@ -121,8 +121,6 @@ def save_plugin_config(plugin_values: dict, path: str = None):
 def load_plugin_config_early(config: dict):
     """Phase 1 (before discovery): load existing plugin_config.json values
     into the runtime config so that build_services() etc. can see them.
-
-    Also migrates any known plugin keys still sitting in config.json on disk.
     """
     saved = load_plugin_config()
     if saved:
