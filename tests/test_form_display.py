@@ -27,8 +27,12 @@ def test_json_display_gives_concrete_guidance():
     display = form_step_display(FormStep("tools_list", "Optional tool names.", False, "array", default=[]))
 
     assert display["input_mode"] == "json"
-    assert "JSON array" in display["assist"]
+    assert "Enter a list of items, one on each line" in display["assist"]
     assert "/skip" in display["assist"]
+
+
+def test_array_form_values_accept_one_item_per_line():
+    assert FormStep("tools_list", type="array").coerce("lexical_search\nsemantic_search") == ["lexical_search", "semantic_search"]
 
 
 def test_boolean_display_uses_true_false_choices():
@@ -139,4 +143,4 @@ def test_telegram_enum_markup_shows_back_button_when_available():
 
     rows = tg._enum_markup("default", {"field": step.to_dict(), "display": display})
 
-    assert [("Back", "/back")] in rows
+    assert [("⟵ Back", "/back")] in rows

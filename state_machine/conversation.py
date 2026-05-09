@@ -44,7 +44,13 @@ class FormStep:
             value = float(value)
         if self.type == "boolean":
             value = value if isinstance(value, bool) else str(value).strip().lower() in {"true", "yes", "1", "y"}
-        if self.type in {"array", "object"} and isinstance(value, str):
+        if self.type == "array" and isinstance(value, str):
+            import json
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                value = [line.strip() for line in value.splitlines() if line.strip()]
+        if self.type == "object" and isinstance(value, str):
             import json
             value = json.loads(value)
         if self.enum and value not in self.enum:
