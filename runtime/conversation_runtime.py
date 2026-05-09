@@ -134,16 +134,14 @@ class ConversationRuntime:
         # specific ``answer_approval`` for an active approval frame may
         # proceed. Everything else is told to wait or cancel first.
         if session.busy or session.cs.phase in BUSY_PHASES:
-            if action_type == "cancel" and session.cs.phase == PHASE_APPROVING_REQUEST:
-                pass
-            elif action_type == "cancel":
+            if action_type == "cancel" and session.cs.phase != PHASE_APPROVING_REQUEST:
                 session.cancel_event.set()
                 return RuntimeResult(messages=["Cancelled."])
-            if action_type == "answer_approval" and session.cs.phase == PHASE_APPROVING_REQUEST:
+            if action_type in {"answer_approval", "cancel"} and session.cs.phase == PHASE_APPROVING_REQUEST:
                 pass  # fall through and dispatch
             elif action_type == "send_text":
                 return RuntimeResult(messages=["Not your turn - I'm still working. Send /cancel to interrupt."])
-            elif action_type != "answer_approval" or session.cs.phase != PHASE_APPROVING_REQUEST:
+            else:
                 return RuntimeResult(False, messages=["Still working. Send /cancel to interrupt."], error={"code": "busy", "message": "Still working."})
 
         # No-conversation guard: chat actions need a conversation to write

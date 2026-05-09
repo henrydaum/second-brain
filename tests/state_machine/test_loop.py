@@ -815,6 +815,19 @@ def test_cancel_resolves_pending_user_input_without_value():
     assert runtime.sessions["chat"].cs.phase == "awaiting_input"
 
 
+def test_cancel_resolves_pending_user_input_while_busy():
+    runtime = ConversationRuntime()
+    req = runtime.request_input("chat", "Pick", "Pick one", type="string")
+    runtime.sessions["chat"].busy = True
+
+    result = runtime.handle_action("chat", "cancel")
+
+    assert result.ok
+    assert req.wait(timeout=0)
+    assert req.metadata["cancelled"] is True
+    assert runtime.sessions["chat"].cs.phase == "awaiting_input"
+
+
 def test_ask_user_question_returns_typed_values():
     runtime = ConversationRuntime()
 
