@@ -4,9 +4,11 @@ from pathlib import Path
 
 from paths import DATA_DIR, ROOT_DIR
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.helpers.plugin_paths import iter_plugin_dirs
 
 ROOTS = tuple(p.resolve() for p in (ROOT_DIR, DATA_DIR))
 ROOT_WARNING = "WARNING: this edits a source-controlled ROOT file."
+PLUGIN_EDIT_REMINDER = " You edited or created a plugin file. Use test_plugin(plugin_path=...) to make sure it is correct."
 
 
 def _path(raw: str) -> tuple[Path | None, str | None]:
@@ -86,7 +88,7 @@ class EditFile(BaseTool):
                 prior = p.read_text(encoding="utf-8") if op == "append" and p.exists() else ""
                 p.write_text((prior + text) if op == "append" else text, encoding="utf-8")
                 verb = {"create": "Created", "overwrite": "Overwrote", "append": "Appended to"}[op]
-                return ToolResult(data={"path": str(p), "operation": op}, llm_summary=f"{verb} {p}.")
+                return ToolResult(data={"path": str(p), "operation": op}, llm_summary=f"{verb} {p}.{_plugin_edit_reminder(p)}")
             if op == "replace":
                 old, new = kwargs.get("old_text"), kwargs.get("new_text")
                 if old in (None, ""):
@@ -106,7 +108,7 @@ class EditFile(BaseTool):
                 if denied:
                     return denied
                 p.write_text(text.replace(old, new, -1 if kwargs.get("replace_all") else 1), encoding="utf-8")
-                return ToolResult(data={"path": str(p), "operation": op, "replacements": replacements}, llm_summary=f"Replaced text in {p}.")
+                return ToolResult(data={"path": str(p), "operation": op, "replacements": replacements}, llm_summary=f"Replaced text in {p}.{_plugin_edit_reminder(p)}")
             return ToolResult.failed("operation must be create, overwrite, replace, append, or delete.")
         except UnicodeDecodeError:
             return ToolResult.failed(f"Cannot edit binary or non-UTF-8 file: {p}")
@@ -118,3 +120,10 @@ def _is_root_file(p: Path) -> bool:
     root = ROOT_DIR.resolve()
     data = DATA_DIR.resolve()
     return (p == root or root in p.parents) and not (p == data or data in p.parents)
+
+
+def _plugin_edit_reminder(p: Path) -> str:
+    if p.suffix != ".py":
+        return ""
+    parent = p.parent.resolve()
+    return PLUGIN_EDIT_REMINDER if any(parent == d.resolve() for _kind, d in iter_plugin_dirs()) else ""

@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from plugins.tools.tool_edit_file import EditFile, ROOT_WARNING
+from plugins.tools.tool_edit_file import EditFile, PLUGIN_EDIT_REMINDER, ROOT_WARNING
 from plugins.tools.tool_read_file import ReadFile
 from plugins.tools.tool_run_command import RunCommand
 
@@ -68,6 +68,51 @@ def test_edit_file_data_dir_edit_has_no_root_warning(monkeypatch):
         assert not result.success
         assert approvals
         assert ROOT_WARNING not in approvals[0][1]
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_edit_file_plugin_edit_reminds_to_test(monkeypatch):
+    import plugins.tools.tool_edit_file as edit_mod
+
+    plugin_dir = Path(".codex_file_tools_plugins").resolve()
+    path = plugin_dir / "tool_demo.py"
+    try:
+        plugin_dir.mkdir(exist_ok=True)
+        monkeypatch.setattr(edit_mod, "iter_plugin_dirs", lambda: [("tool", plugin_dir)])
+
+        result = EditFile().run(
+            _ctx(lambda *_: True),
+            operation="create",
+            path=str(path),
+            content="x",
+            justification="create a sandbox tool",
+        )
+
+        assert result.success
+        assert PLUGIN_EDIT_REMINDER.strip() in result.llm_summary
+    finally:
+        path.unlink(missing_ok=True)
+        plugin_dir.rmdir()
+
+
+def test_edit_file_non_plugin_edit_has_no_plugin_reminder(monkeypatch):
+    import plugins.tools.tool_edit_file as edit_mod
+
+    path = Path(".codex_file_tools_test.txt")
+    try:
+        monkeypatch.setattr(edit_mod, "iter_plugin_dirs", lambda: [])
+
+        result = EditFile().run(
+            _ctx(lambda *_: True),
+            operation="create",
+            path=str(path),
+            content="x",
+            justification="create a normal file",
+        )
+
+        assert result.success
+        assert PLUGIN_EDIT_REMINDER.strip() not in result.llm_summary
     finally:
         path.unlink(missing_ok=True)
 
