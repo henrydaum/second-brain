@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from plugins.tools.tool_edit_file import EditFile
+from plugins.tools.tool_edit_file import EditFile, ROOT_WARNING
 from plugins.tools.tool_read_file import ReadFile
 from plugins.tools.tool_run_command import RunCommand
 
@@ -42,7 +42,32 @@ def test_edit_file_requires_approval_and_keeps_dialog_concise():
         assert not path.exists()
         assert approvals and approvals[0][0].startswith("edit_file create ")
         assert "create a smoke-test file" in approvals[0][1]
+        assert ROOT_WARNING in approvals[0][1]
         assert "secret full file text" not in approvals[0][1]
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_edit_file_data_dir_edit_has_no_root_warning(monkeypatch):
+    import plugins.tools.tool_edit_file as edit_mod
+
+    data_dir = Path(".codex_file_tools_data").resolve()
+    path = data_dir / "sandbox_tools" / "tool_demo.py"
+    approvals = []
+    try:
+        monkeypatch.setattr(edit_mod, "DATA_DIR", data_dir)
+        monkeypatch.setattr(edit_mod, "ROOTS", tuple(p.resolve() for p in (edit_mod.ROOT_DIR, data_dir)))
+        result = EditFile().run(
+            _ctx(lambda c, j: approvals.append((c, j)) or False),
+            operation="create",
+            path=str(path),
+            content="x",
+            justification="create a sandbox tool",
+        )
+
+        assert not result.success
+        assert approvals
+        assert ROOT_WARNING not in approvals[0][1]
     finally:
         path.unlink(missing_ok=True)
 

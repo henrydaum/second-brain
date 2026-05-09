@@ -15,12 +15,11 @@ Command authoring flow:
        from plugins.BaseCommand import BaseCommand
        from state_machine.conversation import FormStep
   4. Fill in name, description, category, optional form(), and run().
-  5. Call register_plugin(plugin_type="command", file_name="command_<your_name>.py").
-  6. If registration fails, read the error, edit the same file, and retry.
+  5. Let the plugin watcher load it, or call test_plugin(plugin_path="sandbox_commands/command_<your_name>.py").
+  6. If testing fails, read the error, edit the same file, and retry.
   7. Valid sandbox command files are loaded automatically on startup.
-  8. To update: edit the file and call register_plugin again.
-  9. To remove live only: unregister_plugin(plugin_type="command", plugin_name="<command name>").
-     To remove durably: also delete the sandbox file with edit_file.
+  8. To update: edit the file; the watcher reloads it.
+  9. To remove live and durably: delete the sandbox file with edit_file.
 
 AUTO-DISCOVERY RULES
 --------------------

@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 
 from paths import ROOT_DIR, SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS
+from plugins.helpers.plugin_paths import plugin_info
 
 logger = logging.getLogger("Discovery")
 
@@ -186,7 +187,7 @@ def discover_commands(root_dir: Path, command_registry, config: dict | None = No
             for instance in _find_subclass_instances(module, BaseCommand, module_name):
                 if not getattr(instance, "name", ""):
                     continue
-                instance._mutable = False
+                instance._source_path = str(py_file)
                 command_registry.register(instance)
                 _collect_config_settings(instance, plugin_type="command")
                 baked_in_names.add(instance.name)
@@ -204,7 +205,6 @@ def discover_commands(root_dir: Path, command_registry, config: dict | None = No
                 if instance.name in baked_in_names:
                     logger.warning(f"Sandbox command '{instance.name}' collides with baked-in — skipped")
                     continue
-                instance._mutable = True
                 instance._source_path = str(py_file)
                 command_registry.register(instance)
                 _collect_config_settings(instance, plugin_type="command")
@@ -240,7 +240,7 @@ def discover_frontends(root_dir: Path, config: dict | None = None, reload: bool 
                 name = getattr(cls, "name", "") or ""
                 if not name:
                     continue
-                cls._mutable = False
+                cls._source_path = str(py_file)
                 found[name] = cls
                 _collect_config_settings(cls, plugin_type="frontend")
                 baked_in_names.add(name)
@@ -258,7 +258,6 @@ def discover_frontends(root_dir: Path, config: dict | None = None, reload: bool 
                 if name in baked_in_names:
                     logger.warning(f"Sandbox frontend '{name}' collides with baked-in — skipped")
                     continue
-                cls._mutable = True
                 cls._source_path = str(py_file)
                 found[name] = cls
                 _collect_config_settings(cls, plugin_type="frontend")
@@ -285,7 +284,7 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
         if module is None:
             continue
         for instance in _find_subclass_instances(module, BaseTool, module_name):
-            instance._mutable = False
+            instance._source_path = str(py_file)
             tool_registry.register(instance)
             _collect_config_settings(instance, plugin_type="tool")
             baked_in_names.add(instance.name)
@@ -302,7 +301,6 @@ def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = F
                 if instance.name in baked_in_names:
                     logger.warning(f"Sandbox tool '{instance.name}' collides with baked-in — skipped")
                     continue
-                instance._mutable = True
                 instance._source_path = str(py_file)
                 tool_registry.register(instance)
                 _collect_config_settings(instance, plugin_type="tool")
@@ -329,7 +327,7 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
         if module is None:
             continue
         for instance in _find_subclass_instances(module, BaseTask, module_name):
-            instance._mutable = False
+            instance._source_path = str(py_file)
             orchestrator.register_task(instance)
             _collect_config_settings(instance, plugin_type="task")
             baked_in_names.add(instance.name)
@@ -346,7 +344,6 @@ def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = Fa
                 if instance.name in baked_in_names:
                     logger.warning(f"Sandbox task '{instance.name}' collides with baked-in — skipped")
                     continue
-                instance._mutable = True
                 instance._source_path = str(py_file)
                 orchestrator.register_task(instance)
                 _collect_config_settings(instance, plugin_type="task")
@@ -375,7 +372,7 @@ def discover_services(root_dir: Path, config: dict) -> dict:
         built = _call_build_services(module, module_name, config)
         built_names = list(built.keys())
         for svc_name, svc in built.items():
-            svc._mutable = False
+            svc._source_path = str(py_file)
             _collect_config_settings(svc, service_names=built_names, plugin_type="service")
             services[svc_name] = svc
             baked_in_names.add(svc_name)
@@ -395,7 +392,6 @@ def discover_services(root_dir: Path, config: dict) -> dict:
                 if svc_name in baked_in_names:
                     logger.warning(f"Sandbox service '{svc_name}' collides with baked-in — skipped")
                     continue
-                svc._mutable = True
                 svc._source_path = str(py_file)
                 _collect_config_settings(svc, service_names=built_names, plugin_type="service")
                 services[svc_name] = svc
@@ -445,15 +441,30 @@ def unload_plugin(plugin_type: str, plugin_name: str,
     """Unregister a plugin. For services, uses source_path to find all
     service names registered from that file."""
     if plugin_type == "tool" and tool_registry:
-        tool_registry.unregister(plugin_name)
+        for name in _names_by_source(getattr(tool_registry, "tools", {}), plugin_name, source_path):
+            tool_registry.unregister(name)
     elif plugin_type == "task" and orchestrator:
-        orchestrator.unregister_task(plugin_name)
+        for name in _names_by_source(getattr(orchestrator, "tasks", {}), plugin_name, source_path):
+            orchestrator.unregister_task(name)
     elif plugin_type == "command" and (command_registry or getattr(tool_registry, "command_registry", None)):
-        (command_registry or tool_registry.command_registry).unregister(plugin_name)
+        registry = command_registry or tool_registry.command_registry
+        for name in _names_by_source(getattr(registry, "_commands", {}), plugin_name, source_path):
+            registry.unregister(name)
     elif plugin_type == "service" and services:
-        _unload_services_by_source(services, source_path or plugin_name)
+        if source_path:
+            _unload_services_by_source(services, source_path)
+        else:
+            _unload_service_by_name(services, plugin_name)
     elif plugin_type == "frontend" and frontend_manager:
-        frontend_manager.unregister(plugin_name)
+        adapters = getattr(frontend_manager, "adapters", {})
+        for name in _names_by_source({k: v.__class__ for k, v in adapters.items()}, plugin_name, source_path):
+            frontend_manager.unregister(name)
+
+
+def _names_by_source(items: dict, plugin_name: str, source_path: str | None) -> list[str]:
+    if source_path:
+        return [name for name, item in items.items() if getattr(item, "_source_path", None) == source_path]
+    return [plugin_name] if plugin_name else []
 
 
 def _unload_services_by_source(services: dict, source_path: str):
@@ -473,10 +484,24 @@ def _unload_services_by_source(services: dict, source_path: str):
         logger.info(f"Unregistered service: {name}")
 
 
+def _unload_service_by_name(services: dict, plugin_name: str):
+    svc = services.pop(plugin_name, None)
+    if svc and hasattr(svc, "unload") and getattr(svc, "loaded", False):
+        try:
+            svc.unload()
+            logger.info(f"Unloaded service: {plugin_name}")
+        except Exception as e:
+            logger.error(f"Error unloading service '{plugin_name}': {e}")
+    if svc:
+        logger.info(f"Unregistered service: {plugin_name}")
+
+
 def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str | None]:
     from plugins.BaseTool import BaseTool
-    cfg = _TOOL_CONFIG
-    module_name = cfg["sandbox_ns"].format(stem=file_path.stem)
+    info, err = plugin_info(file_path)
+    if err:
+        return None, err
+    module_name = info.module_name
 
     module = _load_sandbox(module_name, file_path, reload=True)
     if module is None:
@@ -488,8 +513,7 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
 
     instance = next((item for item in instances if getattr(item, "name", "")), None)
     if instance is None:
-        return None, f"No named BaseCommand subclass found in {file_path.name}"
-    instance._mutable = True
+        return None, f"No named BaseTool subclass found in {file_path.name}"
     instance._source_path = str(file_path)
     tool_registry.register(instance)
     _collect_config_settings(instance, plugin_type="tool")
@@ -498,8 +522,10 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
 
 def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None, str | None]:
     from plugins.BaseFrontend import BaseFrontend
-    cfg = _FRONTEND_CONFIG
-    module_name = cfg["sandbox_ns"].format(stem=file_path.stem)
+    info, err = plugin_info(file_path)
+    if err:
+        return None, err
+    module_name = info.module_name
     if frontend_manager is None:
         return None, "No frontend manager available"
 
@@ -513,7 +539,6 @@ def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None
         return None, f"No named BaseFrontend subclass found in {file_path.name}"
 
     cls = classes[0]
-    cls._mutable = True
     cls._source_path = str(file_path)
     _collect_config_settings(cls, plugin_type="frontend")
     err = frontend_manager.register(cls)
@@ -524,8 +549,10 @@ def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None
 
 def _load_single_command(file_path: Path, command_registry) -> tuple[str | None, str | None]:
     from plugins.BaseCommand import BaseCommand
-    cfg = _COMMAND_CONFIG
-    module_name = cfg["sandbox_ns"].format(stem=file_path.stem)
+    info, err = plugin_info(file_path)
+    if err:
+        return None, err
+    module_name = info.module_name
     if command_registry is None:
         return None, "No command registry available"
 
@@ -538,7 +565,6 @@ def _load_single_command(file_path: Path, command_registry) -> tuple[str | None,
         return None, f"No BaseCommand subclass found in {file_path.name}"
 
     instance = instances[0]
-    instance._mutable = True
     instance._source_path = str(file_path)
     command_registry.register(instance)
     _collect_config_settings(instance, plugin_type="command")
@@ -547,8 +573,10 @@ def _load_single_command(file_path: Path, command_registry) -> tuple[str | None,
 
 def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str | None, str | None]:
     from plugins.BaseTask import BaseTask
-    cfg = _TASK_CONFIG
-    module_name = cfg["sandbox_ns"].format(stem=file_path.stem)
+    info, err = plugin_info(file_path)
+    if err:
+        return None, err
+    module_name = info.module_name
 
     module = _load_sandbox(module_name, file_path, reload=True)
     if module is None:
@@ -559,7 +587,6 @@ def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str 
         return None, f"No BaseTask subclass found in {file_path.name}"
 
     instance = instances[0]
-    instance._mutable = True
     instance._source_path = str(file_path)
     orchestrator.register_task(instance)
     _collect_config_settings(instance, plugin_type="task")
@@ -567,10 +594,22 @@ def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str 
 
 
 def _load_single_service(file_path: Path, services: dict, config: dict) -> tuple[str | None, str | None]:
-    cfg = _SERVICE_CONFIG
-    module_name = cfg["sandbox_ns"].format(stem=file_path.stem)
+    info, err = plugin_info(file_path)
+    if err:
+        return None, err
+    module_name = info.module_name
 
     # Unload any existing services from this file first (frees models/GPU)
+    source = str(file_path)
+    was_loaded = {
+        name for name, svc in services.items()
+        if getattr(svc, "_source_path", None) == source and getattr(svc, "loaded", False)
+    }
+    runtime_bindings = {
+        name: dict(getattr(svc, "_runtime", {}) or {})
+        for name, svc in services.items()
+        if getattr(svc, "_source_path", None) == source
+    }
     _unload_services_by_source(services, str(file_path))
 
     module = _load_sandbox(module_name, file_path, reload=True)
@@ -583,10 +622,16 @@ def _load_single_service(file_path: Path, services: dict, config: dict) -> tuple
 
     names = list(built.keys())
     for svc_name, svc in built.items():
-        svc._mutable = True
         svc._source_path = str(file_path)
         _collect_config_settings(svc, service_names=names, plugin_type="service")
         services[svc_name] = svc
+        if runtime_bindings.get(svc_name) and hasattr(svc, "bind_runtime"):
+            svc.bind_runtime(**runtime_bindings[svc_name])
+        if svc_name in was_loaded:
+            try:
+                svc.load()
+            except Exception as e:
+                return None, f"Reloaded service '{svc_name}' failed to load: {e}"
 
     wire_peer_services(services)
     return ", ".join(names), None

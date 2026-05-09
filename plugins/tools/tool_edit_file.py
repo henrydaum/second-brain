@@ -6,6 +6,7 @@ from paths import DATA_DIR, ROOT_DIR
 from plugins.BaseTool import BaseTool, ToolResult
 
 ROOTS = tuple(p.resolve() for p in (ROOT_DIR, DATA_DIR))
+ROOT_WARNING = "WARNING: this edits a source-controlled ROOT file."
 
 
 def _path(raw: str) -> tuple[Path | None, str | None]:
@@ -55,7 +56,8 @@ class EditFile(BaseTool):
             if context.approve_command is None:
                 return ToolResult.failed("File editing is not available — no approval handler is configured.")
             try:
-                ok = context.approve_command(f"edit_file {op} {p}", f"{justification}\n\npath: {p}{extra}".strip())
+                warning = f"\n\n{ROOT_WARNING}" if _is_root_file(p) else ""
+                ok = context.approve_command(f"edit_file {op} {p}", f"{justification}{warning}\n\npath: {p}{extra}".strip())
             except Exception as e:
                 return ToolResult.failed(f"Approval dialog error: {e}")
             return None if ok else ToolResult.failed("Edit denied by user. STOP — do not retry this edit. Ask the user what they would like you to do instead.")
@@ -110,3 +112,9 @@ class EditFile(BaseTool):
             return ToolResult.failed(f"Cannot edit binary or non-UTF-8 file: {p}")
         except Exception as e:
             return ToolResult.failed(f"Edit failed: {e}")
+
+
+def _is_root_file(p: Path) -> bool:
+    root = ROOT_DIR.resolve()
+    data = DATA_DIR.resolve()
+    return (p == root or root in p.parents) and not (p == data or data in p.parents)

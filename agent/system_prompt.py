@@ -36,8 +36,8 @@ def build_system_prompt(
         _identity(services, r),
         _current_datetime(),
         _available_tools(r),
-        _authoring_guidance() if _has_tool(r, "register_plugin") else "",
-        _sandbox_files() if _has_tool(r, "register_plugin") else "",
+        _authoring_guidance() if _has_tool(r, "test_plugin") else "",
+        _sandbox_files() if _has_tool(r, "test_plugin") else "",
         _attachments() if _has_tool(r, "sql_query") else "",
         _database_tables(db) if _has_tool(r, "sql_query") else "",
         _services_status(services),
@@ -93,7 +93,7 @@ def _identity(services: dict, registry) -> str:
         ("edit_file", "- For code or text changes, use read_file first; pass line_numbers=false when copying old_text for edit_file replace."),
         ("read_file", f"- A debug log for the current session is at {log_path} — read it with read_file if you need to investigate an error."),
         ("render_files", "- Use render_files when the user would benefit from seeing a file directly."),
-        ("register_plugin", "- If the current tools cannot reasonably complete a task, create a sandbox plugin, validate it with register_plugin, and retry until it loads."),
+        ("test_plugin", "- If the current tools cannot reasonably complete a task, create or edit a plugin file, let the plugin watcher load it, and use test_plugin(plugin_path=...) for diagnostics."),
         (None, "- Tool call limits are per message, not per session. If one tool reaches its limit, you may still use other tools."),
     ]
 
@@ -114,8 +114,8 @@ def _identity(services: dict, registry) -> str:
     capabilities = ["inspect local files", "query the SQLite database"]
     if _has_tool(registry, "edit_file"):
         capabilities.append("edit local text files")
-    if _has_tool(registry, "register_plugin"):
-        capabilities.append("extend the system through sandbox plugins")
+    if _has_tool(registry, "test_plugin"):
+        capabilities.append("extend the system through plugins")
     cap_line = ", ".join(capabilities[:-1]) + ", and " + capabilities[-1] if len(capabilities) > 1 else capabilities[0]
 
     return (
@@ -144,7 +144,7 @@ def _current_datetime() -> str:
 def _authoring_guidance() -> str:
     return (
         "## Building plugins\n"
-        "You can extend the system by authoring sandbox plugins (tools, tasks, services, commands, frontends).\n\n"
+        "You can extend the system by authoring plugins (tools, tasks, services, commands, frontends).\n\n"
         "Project layout:\n"
         "- Built-in plugins live under plugins/tools, plugins/tasks, plugins/services, plugins/commands, plugins/frontends.\n"
         "- Sandbox plugins live under the matching sandbox directory in DATA_DIR.\n"
@@ -158,12 +158,12 @@ def _authoring_guidance() -> str:
         "Workflow:\n"
         "1. Read the relevant template with read_file.\n"
         "2. Read a similar existing plugin for reference. Sandbox plugin paths are listed below.\n"
-        "3. Write the file into the right sandbox directory using the file-editing tools.\n"
-        "4. Call register_plugin(plugin_type=..., file_name=...) to validate and hot-load it.\n"
-        "5. If registration fails, read the error, edit the same file, and call register_plugin again.\n"
-        "6. Valid sandbox files are loaded automatically on startup; the only way to register it in real time is to call register_plugin.\n"
-        "7. To update a plugin, edit the same sandbox file and call register_plugin again.\n"
-        "8. To remove a plugin from the live system without deleting the file, call unregister_plugin(plugin_type=..., plugin_name=...). To keep it from loading next startup, delete the sandbox file too. To keep parity, do both.\n"
+        "3. Write the file into the right plugin directory using the file-editing tools.\n"
+        "4. The plugin watcher auto-loads valid plugin files when they are added or changed.\n"
+        "5. Call test_plugin(plugin_path=...) when you need naming, import, contract, or pytest diagnostics.\n"
+        "6. If testing or watcher logs show a failure, edit the same file and test again.\n"
+        "7. To update a plugin, edit the same file; the watcher reloads it.\n"
+        "8. To remove a plugin durably and from the live runtime, delete its plugin file; the watcher unloads it.\n"
         "9. If you need extra packages, install them with run_command.\n\n"
         "Naming:\n"
         "- Tools: tool_<name>.py    Tasks: task_<name>.py    Commands: command_<name>.py    Frontends: frontend_<name>.py    Services: <name>.py\n"
@@ -186,8 +186,7 @@ def _available_tools(tool_registry) -> str:
     if tools:
         for tool in tools:
             desc = (tool.description or "").strip()
-            tag = " [sandbox]" if getattr(tool, '_mutable', False) else ""
-            lines.append(f"### {tool.name}{tag}")
+            lines.append(f"### {tool.name}")
             lines.append(desc)
     else:
         lines.append("No tools are currently registered.")
@@ -207,7 +206,7 @@ def _sandbox_files() -> str:
             sandbox_lines.append(f"  {py_file}")
 
     if not sandbox_lines:
-        return "## Sandbox plugins\nNone yet. Use the templates plus edit_file to create one, then register_plugin to load it."
+        return "## Sandbox plugins\nNone yet. Use the templates plus edit_file to create one; the plugin watcher loads valid plugin files automatically."
 
     lines = ["## Sandbox plugins (read these exact paths with read_file)"]
     lines.extend(sandbox_lines)
@@ -228,7 +227,7 @@ def _attachments() -> str:
         "For a specific conversation's attachments, cross-reference mtime against the conversation's message timestamps in the conversation_messages table.\n"
         "\n"
         "If a user sends a file with an extension the pipeline doesn't understand, the file is still saved to the cache — "
-        "use read_file on the exact cache path, or create a new parser task plugin with register_plugin so future files of that type get indexed automatically."
+        "use read_file on the exact cache path, or create a new parser task plugin and test it with test_plugin so future files of that type get indexed automatically."
     )
 
 

@@ -14,16 +14,15 @@ Service authoring flow:
        from plugins.BaseService import BaseService
   4. Implement _load(), unload(), and your service methods.
   5. Add a build_services(config) factory function at the bottom.
-  6. Call register_plugin(plugin_type="service", file_name="<name>Service.py").
-  7. If registration fails, read the error, edit the same file, and retry.
+  6. Let the plugin watcher load it, or call test_plugin(plugin_path="sandbox_services/<name>Service.py").
+  7. If testing fails, read the error, edit the same file, and retry.
   8. Valid sandbox service files are loaded automatically on startup.
-  9. To update: edit the file and call register_plugin again.
- 10. To remove live only: unregister_plugin(plugin_type="service", plugin_name="<service name>").
-     To remove durably: also delete the sandbox file with edit_file.
+  9. To update: edit the file; the watcher reloads it.
+ 10. To remove live and durably: delete the sandbox file with edit_file.
  11. If the service needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
-register_plugin validates:
+test_plugin validates:
   - Correct import (from plugins.BaseService import BaseService)
   - Class inheriting BaseService
   - Presence of build_services() function

@@ -75,11 +75,10 @@ The live authoring loop is:
 
 1. Read the relevant template in `templates/`.
 2. Read a similar built-in plugin.
-3. Create or edit the sandbox plugin with `edit_file`.
-4. Call `register_plugin(plugin_type=..., file_name=...)`.
-5. If registration fails, fix the same file and call `register_plugin` again.
-6. To remove a plugin from the live runtime, call `unregister_plugin(plugin_type=..., plugin_name=...)`.
-7. To remove it durably, delete the sandbox file too.
+3. Create or edit the plugin file with `edit_file`.
+4. Let the plugin watcher auto-load the file, or call `test_plugin(plugin_path=...)` for diagnostics.
+5. If testing fails, fix the same file and call `test_plugin` again.
+6. To remove it durably and from the live runtime, delete the sandbox file.
 
 That loop matters. Second Brain can inspect its own templates, write a focused extension, validate it, hot-load it, and use it immediately. A new command is not a special case. A new frontend is not a rewrite. They are plugins with contracts.
 
@@ -293,13 +292,12 @@ Built-in tools include:
 | `hybrid_search` | Search local files with fused lexical and semantic ranking |
 | `lexical_search` | Search local files by exact terms and keywords |
 | `read_file` | Read exact text from files |
-| `register_plugin` | Validate and hot-load a sandbox plugin |
 | `render_files` | Send local files back through the frontend |
 | `run_command` | Run scoped terminal commands, with approval for broad actions |
 | `schedule_subagent` | List, add, edit, and remove scheduled background agents |
 | `semantic_search` | Search local files by embedding similarity |
 | `sql_query` | Query SQLite read-only |
-| `unregister_plugin` | Live-unload a sandbox plugin without deleting its file |
+| `test_plugin` | Validate a plugin source file and run tests |
 | `update_memory` | Update durable memory |
 | `web_search` | Search the public web |
 
@@ -393,7 +391,7 @@ Authoring rules:
 - Plugins can declare `config_settings`, which appear in config views and are stored in `plugin_config.json`.
 - Sandbox plugins must follow naming conventions: `tool_*.py`, `task_*.py`, `command_*.py`, `frontend_*.py`, and service files that do not start with `_`.
 
-For source-controlled additions, move stable sandbox plugins into the matching built-in plugin directory. For live experimentation, keep them in the data directory and let `register_plugin` load them.
+For source-controlled additions, move stable sandbox plugins into the matching built-in plugin directory. For live experimentation, keep them in the data directory and let the plugin watcher load them.
 
 ## Philosophy
 

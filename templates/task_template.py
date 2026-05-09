@@ -13,16 +13,15 @@ Task authoring flow:
   3. The code MUST inherit from BaseTask and include:
        from plugins.BaseTask import BaseTask, TaskResult
   4. Fill in the class attributes and implement run() or run_event().
-  5. Call register_plugin(plugin_type="task", file_name="task_<your_name>.py").
-  6. If registration fails, read the error, edit the same file, and retry.
+  5. Let the plugin watcher load it, or call test_plugin(plugin_path="sandbox_tasks/task_<your_name>.py").
+  6. If testing fails, read the error, edit the same file, and retry.
   7. Valid sandbox task files are loaded automatically on startup.
-  8. To update: edit the file and call register_plugin again.
-  9. To remove live only: unregister_plugin(plugin_type="task", plugin_name="<task name>").
-     To remove durably: also delete the sandbox file with edit_file.
+  8. To update: edit the file; the watcher reloads it.
+  9. To remove live and durably: delete the sandbox file with edit_file.
  10. If the task needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
-register_plugin validates:
+test_plugin validates:
   - Correct import (from plugins.BaseTask import BaseTask, TaskResult)
   - Class inheriting BaseTask with a `name` attribute
   - No name collisions with baked-in tasks

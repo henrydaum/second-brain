@@ -1,66 +1,89 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from plugins.tools.tool_register_plugin import RegisterPlugin, _PLUGIN_CONFIG
-from plugins.tools.tool_unregister_plugin import UnregisterPlugin
+from plugins.tools.tool_test_plugin import TestPlugin
 
 
-def _ctx(**kwargs):
-    defaults = {"tool_registry": object(), "orchestrator": object(), "services": {}, "config": {}}
-    defaults.update(kwargs)
-    return SimpleNamespace(**defaults)
+def _ctx():
+    return SimpleNamespace(config={"plugin_test_timeout": 5})
 
 
-def test_register_plugin_schema_is_load_only():
-    props = RegisterPlugin.parameters["properties"]
+def _patch_plugin_dir(monkeypatch, plugin_type, directory):
+    import plugins.helpers.plugin_paths as paths
 
-    assert set(props) == {"plugin_type", "file_name"}
-    assert RegisterPlugin.parameters["required"] == ["plugin_type", "file_name"]
+    config = dict(paths.PLUGIN_CONFIG)
+    built, sandbox, prefix, namespaces = config[plugin_type]
+    config[plugin_type] = (Path(directory).resolve(), sandbox, prefix, namespaces)
+    monkeypatch.setattr(paths, "PLUGIN_CONFIG", config)
 
 
-def test_register_plugin_loads_valid_sandbox_file(monkeypatch):
+def test_test_plugin_schema_is_path_only():
+    props = TestPlugin.parameters["properties"]
+
+    assert set(props) == {"plugin_path"}
+    assert TestPlugin.parameters["required"] == ["plugin_path"]
+
+
+def test_test_plugin_validates_bad_extension_before_load(monkeypatch):
     calls = []
-    sandbox = Path(".codex_register_plugin_test")
-    path = sandbox / "tool_demo.py"
-    try:
-        sandbox.mkdir(exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-        monkeypatch.setitem(_PLUGIN_CONFIG, "tool", (sandbox, "tool_", "sandbox_tools_{stem}"))
-        monkeypatch.setattr("plugins.plugin_discovery.load_single_plugin", lambda *a, **k: calls.append((a, k)) or ("demo", None))
-        monkeypatch.setattr("config.config_manager.reconcile_plugin_config", lambda *_: None)
+    monkeypatch.setattr("plugins.tools.tool_test_plugin.load_single_plugin", lambda *a, **k: calls.append(a) or ("demo", None))
 
-        result = RegisterPlugin().run(_ctx(), plugin_type="tool", file_name="tool_demo.py")
+    result = TestPlugin().run(_ctx(), plugin_path="plugins/tools/tool_demo.txt")
+
+    assert not result.success
+    assert "File name must end" in result.error
+    assert not calls
+
+
+def test_test_plugin_validates_folder_mismatch(monkeypatch):
+    calls = []
+    monkeypatch.setattr("plugins.tools.tool_test_plugin.load_single_plugin", lambda *a, **k: calls.append(a) or ("demo", None))
+
+    result = TestPlugin().run(_ctx(), plugin_path="plugins/tasks/tool_wrong.py")
+
+    assert not result.success
+    assert "files must start" in result.error
+    assert not calls
+
+
+def test_test_plugin_reports_load_and_pytest_success(monkeypatch):
+    root_dir = Path(".codex_test_plugin_tools")
+    path = root_dir / "tool_demo.py"
+    try:
+        root_dir.mkdir(exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+        _patch_plugin_dir(monkeypatch, "tool", root_dir)
+        monkeypatch.setattr("plugins.tools.tool_test_plugin.load_single_plugin", lambda *a, **k: ("demo", None))
+        monkeypatch.setattr("plugins.tools.tool_test_plugin.unload_plugin", lambda *a, **k: None)
+        monkeypatch.setattr("plugins.tools.tool_test_plugin.subprocess.run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="1 passed", stderr=""))
+
+        result = TestPlugin().run(_ctx(), plugin_path=str(path))
 
         assert result.success
-        assert calls and calls[0][0][:2] == ("tool", path)
-        assert "Registered tool 'demo'" in result.llm_summary
+        assert "Load check: ok: demo" in result.llm_summary
+        assert "Pytest: passed" in result.llm_summary
     finally:
         path.unlink(missing_ok=True)
-        sandbox.rmdir()
+        root_dir.rmdir()
 
 
-def test_register_plugin_validates_type_and_file_name():
-    tool = RegisterPlugin()
+def test_test_plugin_reports_pytest_failure(monkeypatch):
+    root_dir = Path(".codex_test_plugin_tools")
+    path = root_dir / "tool_demo.py"
+    try:
+        root_dir.mkdir(exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+        _patch_plugin_dir(monkeypatch, "tool", root_dir)
+        monkeypatch.setattr("plugins.tools.tool_test_plugin.load_single_plugin", lambda *a, **k: ("demo", None))
+        monkeypatch.setattr("plugins.tools.tool_test_plugin.unload_plugin", lambda *a, **k: None)
+        monkeypatch.setattr("plugins.tools.tool_test_plugin.subprocess.run", lambda *a, **k: SimpleNamespace(returncode=1, stdout="FAILED test_x", stderr=""))
 
-    assert "Invalid plugin_type" in tool.run(_ctx(), plugin_type="nope", file_name="x.py").error
-    assert "Tool files must start" in tool.run(_ctx(), plugin_type="tool", file_name="demo.py").error
-    assert "File name must end" in tool.run(_ctx(), plugin_type="tool", file_name="tool_demo.txt").error
+        result = TestPlugin().run(_ctx(), plugin_path=str(path))
 
-
-def test_unregister_plugin_calls_unload(monkeypatch):
-    calls = []
-    monkeypatch.setattr("plugins.plugin_discovery.unload_plugin", lambda *a, **k: calls.append((a, k)))
-
-    result = UnregisterPlugin().run(_ctx(), plugin_type="tool", plugin_name="demo")
-
-    assert result.success
-    assert calls and calls[0][0][:2] == ("tool", "demo")
-    assert "Unregistered tool 'demo'" in result.llm_summary
-
-
-def test_unregister_plugin_validates_inputs_and_handles():
-    tool = UnregisterPlugin()
-
-    assert "Invalid plugin_type" in tool.run(_ctx(), plugin_type="nope", plugin_name="demo").error
-    assert "plugin_name is required" in tool.run(_ctx(), plugin_type="tool", plugin_name="").error
-    assert "No tool registry" in tool.run(_ctx(tool_registry=None), plugin_type="tool", plugin_name="demo").error
+        assert not result.success
+        assert result.error == "Plugin test failed."
+        assert "Pytest: failed" in result.llm_summary
+        assert "FAILED test_x" in result.llm_summary
+    finally:
+        path.unlink(missing_ok=True)
+        root_dir.rmdir()

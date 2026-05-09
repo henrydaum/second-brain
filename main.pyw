@@ -90,6 +90,8 @@ def main():
 
 	# --- 3b. Auto-load services ---
 	for svc_name in config.get("autoload_services", []):
+		if svc_name == "plugin_watcher":
+			continue
 		svc = services.get(svc_name)
 		if svc is None:
 			logger.warning(f"Auto-load: unknown service '{svc_name}', skipping.")
@@ -233,10 +235,31 @@ def main():
 	scaffold.frontend_runtime, _adapters, _frontend_threads = start_frontends(
 		frontends, scaffold, shutdown, _shutdown, tool_registry, services, config, _ROOT
 	)
+	_start_plugin_watcher_if_enabled(config, services, tool_registry, orchestrator, scaffold.frontend_runtime)
 
 	# --- 11. Main thread idles until shutdown ---
 	while not _shutdown.is_set():
 		_shutdown.wait(timeout=1.0)
+
+def _start_plugin_watcher_if_enabled(config, services, tool_registry, orchestrator, runtime):
+	if "plugin_watcher" not in config.get("autoload_services", []):
+		return
+	svc = services.get("plugin_watcher")
+	if svc is None:
+		logger.warning("Auto-load: unknown service 'plugin_watcher', skipping.")
+		return
+	if hasattr(svc, "bind_runtime"):
+		svc.bind_runtime(
+			tool_registry=tool_registry,
+			orchestrator=orchestrator,
+			command_registry=getattr(runtime, "command_registry", None),
+			frontend_manager=getattr(runtime, "frontend_manager", None),
+		)
+	try:
+		svc.load()
+		logger.info("Auto-loaded service: plugin_watcher")
+	except Exception as e:
+		logger.error(f"Auto-load failed for 'plugin_watcher': {e}")
 
 
 if __name__ == "__main__":
