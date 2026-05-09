@@ -34,6 +34,7 @@ from events.event_channels import (
 )
 from state_machine.action_map import (
     ACTION_ANSWER_APPROVAL,
+    ACTION_BACK_FORM,
     ACTION_CALL_COMMAND,
     ACTION_CANCEL,
     ACTION_SEND_ATTACHMENT,
@@ -278,9 +279,8 @@ class BaseFrontend:
     def submit_text(self, session_key: str, text: str):
         """Coerce raw user text into the right action for the current phase.
 
-        - In a form phase, ``/cancel`` becomes ``cancel``, blank text becomes
-          ``skip_form`` (when the field is optional), anything else becomes
-          ``submit_form_text``.
+        - In a form phase, ``/cancel`` cancels, ``/back`` rewinds,
+          blank text skips optional fields, and other text submits the field.
         - In an approval phase, text becomes ``answer_approval``.
         - Otherwise ``/foo args`` becomes ``call_command`` and plain text
           becomes ``send_text``.
@@ -294,6 +294,8 @@ class BaseFrontend:
                 return self.submit(session_key, ACTION_CANCEL)
             if stripped == "/skip" and ACTION_SKIP_FORM in legal:
                 return self.submit(session_key, ACTION_SKIP_FORM)
+            if stripped == "/back" and ACTION_BACK_FORM in legal:
+                return self.submit(session_key, ACTION_BACK_FORM)
             if stripped.startswith("/") and ACTION_CALL_COMMAND in legal:
                 name, _, arg = stripped[1:].partition(" ")
                 cmd = next((c for c in self.commands.all_commands() if c.name == name), None) if name and self.commands else None

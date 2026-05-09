@@ -132,6 +132,8 @@ class ReplFrontend(BaseFrontend):
             parts.append("options: " + ", ".join(map(str, display)))
         if field.get("assist"):
             parts.append(str(field["assist"]))
+        if field.get("allow_back"):
+            parts.append("/back to go back")
         elif field.get("required") is False:
             parts.append("/skip to skip")
         if field.get("default") is not None and not field.get("assist"):

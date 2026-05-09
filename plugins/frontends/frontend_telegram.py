@@ -397,6 +397,8 @@ class TelegramFrontend(BaseFrontend):
         choices = display.get("choices") or [{"value": v, "label": str(v)} for v in (field.get("enum") or [])]
         cols, buttons = max(1, int(field.get("columns") or 1)), [self._button(str(c.get("label") or c.get("value")), key, str(c.get("value")), self._form_echo(form, c.get("value"))) for c in choices]
         rows = [buttons[i:i + cols] for i in range(0, len(buttons), cols)]
+        if display.get("allow_back"):
+            rows.append([self._button("Back", key, "/back")])
         if display.get("allow_skip", field.get("required") is False):
             rows.append([self._button("Skip", key, "/skip")])
         if display.get("allow_cancel", True):

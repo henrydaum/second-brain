@@ -67,6 +67,23 @@ def _emit_command_progress(cs, frame) -> None:
         _emit_command_event(COMMAND_CALL_PROGRESSED, cs, {"call_id": call_id, "command_name": frame.name, "args": dict((frame.data or {}).get("args") or {})})
 
 
+def _record_form_field(frame) -> None:
+    frame.data.setdefault("form_history", []).append(frame.step.name)
+
+
+def _rewind_form(cs, frame):
+    history = frame.data.setdefault("form_history", [])
+    if not history:
+        return None
+    args = frame.data.setdefault("args", {})
+    args.pop(history.pop(), None)
+    spec = cs.spec(frame.actor_id, frame.action_type, frame.name)
+    missing = _missing(spec, args, cs) if spec else []
+    frame.steps, frame.step_index = missing, 0
+    _emit_command_progress(cs, frame)
+    return missing[0] if missing else None
+
+
 class Action(object):
     """Base action with shared legality/error handling."""
 
@@ -356,6 +373,7 @@ class SubmitFormText(Action):
             if not ok:
                 raise self.error(ERROR_INVALID_INPUT, reason or "Invalid input.", field=frame.step.name)
         frame.data.setdefault("args", {})[frame.step.name] = value
+        _record_form_field(frame)
         _emit_command_progress(self.cs, frame)
         frame.step_index += 1
         spec = self.cs.spec(frame.actor_id, frame.action_type, frame.name)
@@ -477,6 +495,7 @@ class SkipForm(Action):
         if frame.step.required:
             raise self.error(ERROR_INVALID_INPUT, "Cannot skip a required field.", field=frame.step.name)
         frame.data.setdefault("args", {})[frame.step.name] = frame.step.default
+        _record_form_field(frame)
         _emit_command_progress(self.cs, frame)
         frame.step_index += 1
         spec = self.cs.spec(frame.actor_id, frame.action_type, frame.name)
@@ -501,6 +520,20 @@ class SkipForm(Action):
         if result.ok:
             result.message = result.message or "Skipped."
         return result
+
+
+class BackForm(Action):
+    action_type = "back_form"
+
+    def execute(self):
+        frame = self.cs.frame
+        if not frame or not frame.step:
+            raise self.error(ERROR_INVALID_ACTION, "No form is awaiting input.")
+        step = _rewind_form(self.cs, frame)
+        if step is None:
+            raise self.error(ERROR_INVALID_ACTION, "Nothing to go back to.")
+        event = self.cs.event("form_step", self.actor_id, name=frame.name, step=step.name, prompt=step.prompt)
+        return ActionResult(True, self.action_type, "Back.", events=[event], data={"step": step.name})
 
 
 class SendAttachment(Action):

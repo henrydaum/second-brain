@@ -138,12 +138,14 @@ def decorate_form(session: RuntimeSession, out: RuntimeResult) -> None:
     descriptor to ``out`` so the frontend can render the next field."""
     frame = session.cs.frame
     if frame and frame.step:
+        display = form_step_display(frame.step)
+        display["allow_back"] = bool((frame.data or {}).get("form_history"))
         out.form = {
             "name": frame.name,
             "action_type": frame.action_type,
             "field": frame.step.to_dict(),
             "collected": frame.data.get("args", {}),
-            "display": form_step_display(frame.step),
+            "display": display,
         }
 
 

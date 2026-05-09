@@ -1078,6 +1078,72 @@ def test_dynamic_form_steps_follow_collected_args():
     assert captured == {"subcommand": "add", "model": "gpt", "endpoint": ""}
 
 
+def test_back_form_revisits_static_step_and_uses_replacement_value():
+    captured = {}
+    cs = make_cs(commands={"hello": CallableSpec("hello", handler=lambda _cs, _actor, args: captured.update(args) or "ok", form=[FormStep("name", required=True), FormStep("count", required=True, type="integer")])})
+
+    assert create_action(cs, "call_command", {"name": "hello", "args": {}}, "user").enact().ok
+    assert create_action(cs, "submit_form_text", "old", "user").enact().ok
+    assert create_action(cs, "back_form", None, "user").enact().ok
+    assert cs.frame.step.name == "name"
+    assert create_action(cs, "submit_form_text", "new", "user").enact().ok
+    assert create_action(cs, "submit_form_text", "2", "user").enact().ok
+    assert captured == {"name": "new", "count": 2}
+
+
+def test_back_form_follows_dynamic_form_factory():
+    def form(args, _cs):
+        return [FormStep("subcommand", required=True, enum=["list", "add"])] + ([FormStep("model", required=True), FormStep("endpoint", required=False, default="", prompt_when_missing=True)] if args.get("subcommand") == "add" else [])
+
+    cs = make_cs(commands={"llm": CallableSpec("llm", handler=lambda *_: "ok", form_factory=form)})
+
+    assert create_action(cs, "call_command", {"name": "llm", "args": {}}, "user").enact().ok
+    assert create_action(cs, "submit_form_text", "add", "user").enact().ok
+    assert create_action(cs, "submit_form_text", "gpt", "user").enact().ok
+    assert cs.frame.step.name == "endpoint"
+    assert create_action(cs, "back_form", None, "user").enact().ok
+    assert cs.frame.step.name == "model"
+    assert cs.frame.data["args"] == {"subcommand": "add"}
+
+
+def test_back_form_can_undo_skipped_optional_before_next_field():
+    captured = {}
+    cs = make_cs(commands={"setup": CallableSpec("setup", handler=lambda _cs, _actor, args: captured.update(args) or "ok", form=[FormStep("name", required=True), FormStep("note", required=False, default="", prompt_when_missing=True), FormStep("count", required=True, type="integer")])})
+
+    assert create_action(cs, "call_command", {"name": "setup", "args": {}}, "user").enact().ok
+    assert create_action(cs, "submit_form_text", "job", "user").enact().ok
+    assert create_action(cs, "skip_form", None, "user").enact().ok
+    assert cs.frame.step.name == "count"
+    assert create_action(cs, "back_form", None, "user").enact().ok
+    assert cs.frame.step.name == "note"
+    assert create_action(cs, "submit_form_text", "changed", "user").enact().ok
+    assert create_action(cs, "submit_form_text", "7", "user").enact().ok
+    assert captured == {"name": "job", "note": "changed", "count": 7}
+
+
+def test_back_form_at_first_step_fails_without_mutating_prompt():
+    cs = make_cs(commands={"hello": CallableSpec("hello", handler=lambda *_: "ok", form=[FormStep("name", required=True)])})
+
+    assert create_action(cs, "call_command", {"name": "hello", "args": {}}, "user").enact().ok
+    result = create_action(cs, "back_form", None, "user").enact()
+
+    assert not result.ok
+    assert result.error.message == "Nothing to go back to."
+    assert cs.frame.step.name == "name"
+
+
+def test_back_form_does_not_remove_prefilled_command_args():
+    cs = make_cs(commands={"hello": CallableSpec("hello", handler=lambda *_: "ok", form=[FormStep("name", required=True), FormStep("count", required=True, type="integer")])})
+
+    assert create_action(cs, "call_command", {"name": "hello", "args": {"name": "prefilled"}}, "user").enact().ok
+    assert cs.frame.step.name == "count"
+    result = create_action(cs, "back_form", None, "user").enact()
+
+    assert not result.ok
+    assert cs.frame.data["args"] == {"name": "prefilled"}
+    assert cs.frame.step.name == "count"
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # 4. legal_actions_in_phase smoke
 # ──────────────────────────────────────────────────────────────────────────
@@ -1094,4 +1160,5 @@ def test_legal_actions_in_phase_returns_registered_types():
     form = legal_actions_in_phase("filling_command_form")
     assert "call_command" in form
     assert "submit_form_text" in form
+    assert "back_form" in form
     assert "cancel" in form

@@ -3,6 +3,7 @@ from state_machine.action import (
     CallCommand,
     CallTool,
     Cancel,
+    BackForm,
     EndTurn,
     InvalidAction,
     SendAttachment,
@@ -28,6 +29,7 @@ ACTION_CANCEL = "cancel"
 ACTION_ANSWER_APPROVAL = "answer_approval"
 ACTION_SUBMIT_FORM_TEXT = "submit_form_text"
 ACTION_SKIP_FORM = "skip_form"
+ACTION_BACK_FORM = "back_form"
 
 ACTION_MAP = {
     PHASE_AWAITING_INPUT: {
@@ -37,8 +39,8 @@ ACTION_MAP = {
         ACTION_SEND_ATTACHMENT: SendAttachment,
         ACTION_END_TURN: EndTurn,
     },
-    PHASE_FILLING_COMMAND_FORM: {ACTION_CALL_COMMAND: CallCommand, ACTION_SEND_TEXT: SubmitFormText, ACTION_SUBMIT_FORM_TEXT: SubmitFormText, ACTION_SKIP_FORM: SkipForm, ACTION_CANCEL: Cancel},
-    PHASE_FILLING_TOOL_FORM: {ACTION_CALL_COMMAND: CallCommand, ACTION_SEND_TEXT: SubmitFormText, ACTION_SUBMIT_FORM_TEXT: SubmitFormText, ACTION_SKIP_FORM: SkipForm, ACTION_CANCEL: Cancel},
+    PHASE_FILLING_COMMAND_FORM: {ACTION_CALL_COMMAND: CallCommand, ACTION_SEND_TEXT: SubmitFormText, ACTION_SUBMIT_FORM_TEXT: SubmitFormText, ACTION_SKIP_FORM: SkipForm, ACTION_BACK_FORM: BackForm, ACTION_CANCEL: Cancel},
+    PHASE_FILLING_TOOL_FORM: {ACTION_CALL_COMMAND: CallCommand, ACTION_SEND_TEXT: SubmitFormText, ACTION_SUBMIT_FORM_TEXT: SubmitFormText, ACTION_SKIP_FORM: SkipForm, ACTION_BACK_FORM: BackForm, ACTION_CANCEL: Cancel},
     PHASE_APPROVING_REQUEST: {ACTION_SEND_TEXT: AnswerApproval, ACTION_ANSWER_APPROVAL: AnswerApproval},
     PHASE_PARSING_ATTACHMENT: {ACTION_CANCEL: Cancel},
 }
