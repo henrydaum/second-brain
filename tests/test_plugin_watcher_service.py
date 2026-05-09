@@ -123,3 +123,19 @@ def test_plugin_watcher_wrong_name_does_not_load(monkeypatch):
     finally:
         path.unlink(missing_ok=True)
         root_dir.rmdir()
+
+
+def test_plugin_watcher_unload_cancels_pending_timers():
+    service = PluginWatcherService({})
+    handler = service._handler = _FakeHandler()
+
+    service.unload()
+
+    assert handler.cancelled
+
+
+class _FakeHandler:
+    cancelled = False
+
+    def cancel_pending(self):
+        self.cancelled = True

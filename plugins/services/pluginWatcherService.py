@@ -20,6 +20,7 @@ class PluginWatcherService(BaseService):
         super().__init__()
         self.config = config
         self.observer = None
+        self._handler = None
         self._known_mtimes: dict[str, float] = {}
         self._runtime = {}
         self._lock = threading.RLock()
@@ -35,6 +36,7 @@ class PluginWatcherService(BaseService):
     def _load(self) -> bool:
         self.observer = Observer()
         handler = _PluginEventHandler(self)
+        self._handler = handler
         watched = 0
         for _plugin_type, directory in iter_plugin_dirs():
             directory.mkdir(parents=True, exist_ok=True)
@@ -47,11 +49,14 @@ class PluginWatcherService(BaseService):
         return True
 
     def unload(self):
+        if self._handler:
+            self._handler.cancel_pending()
         observer = self.observer
         if observer and observer.is_alive():
             observer.stop()
             observer.join(timeout=5.0)
         self.observer = None
+        self._handler = None
         self.loaded = False
 
     def _scan_existing(self):
@@ -154,8 +159,15 @@ class _PluginEventHandler(FileSystemEventHandler):
             if timer:
                 timer.cancel()
             timer = threading.Timer(self.debounce_interval, self._fire, [path])
+            timer.daemon = True
             self.pending[path] = timer
             timer.start()
+
+    def cancel_pending(self):
+        with self.lock:
+            for timer in self.pending.values():
+                timer.cancel()
+            self.pending.clear()
 
     def _fire(self, path: str):
         with self.lock:
