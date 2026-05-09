@@ -112,6 +112,7 @@ def new_state(
     cache = dict((marker or {}).get("cache") or {})
     if session:
         cache["session_key"] = session.key
+    cache["agent_scoped_tool_names"] = scoped_tool_names(runtime, session, tools)
     phase = (marker or {}).get("phase", BASE_PHASE)
     cs = ConversationState(
         [Participant("user", "user", commands=commands), Participant("agent", "agent", tools=tools)],
@@ -164,7 +165,16 @@ def refresh_specs(runtime, session: RuntimeSession) -> None:
     from runtime.persistence import _sync_notification_mode
     _sync_notification_mode(session)
     session.cs.participants["user"].commands = dict(runtime.commands)
-    session.cs.participants["agent"].tools = tool_specs_for(runtime, session)
+    tools = tool_specs_for(runtime, session)
+    session.cs.participants["agent"].tools = tools
+    session.cs.cache["agent_scoped_tool_names"] = scoped_tool_names(runtime, session, tools)
+
+
+def scoped_tool_names(runtime, session: RuntimeSession | None, visible: dict[str, CallableSpec]) -> list[str]:
+    registry = active_tool_registry(runtime, session)
+    if not registry or getattr(registry, "visible_tool_names", None) is None:
+        return []
+    return sorted(set(getattr(registry, "tools", {})) - set(visible))
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -231,6 +231,8 @@ class _CallableAction(Action):
         name = payload.get("name")
         spec = self.cs.spec(self.actor_id, self.action_type, name)
         if not name or not spec:
+            if self.action_type == "call_tool" and name in set(self.cs.cache.get("agent_scoped_tool_names") or []):
+                raise self.error(self.missing_code, f"Tool not in agent scope: {name!r}.", name=name)
             raise self.error(self.missing_code, f"Unknown {self.action_type.removeprefix('call_')}: {name!r}.", name=name)
         return spec
 

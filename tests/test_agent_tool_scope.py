@@ -62,10 +62,15 @@ def test_blacklisted_dependencies_stay_callable_but_schema_hidden():
 def test_agent_cannot_directly_call_blacklisted_dependency():
     registry = scoped_registry(_registry(), load_scope("default", _config()))
     specs = {s["function"]["name"]: CallableSpec(s["function"]["name"]) for s in registry.get_all_schemas()}
-    cs = ConversationState([Participant("agent", "agent", tools=specs)], "agent", PHASE_AWAITING_INPUT)
+    cs = ConversationState(
+        [Participant("agent", "agent", tools=specs)],
+        "agent",
+        PHASE_AWAITING_INPUT,
+        {"agent_scoped_tool_names": ["lexical_search", "semantic_search"]},
+    )
 
     result = cs.enact("call_tool", {"name": "lexical_search", "args": {"query": "Buddhism"}}, "agent")
 
     assert not result.ok
     assert result.error.code == "unknown_tool"
-    assert result.message == "Unknown tool: 'lexical_search'."
+    assert result.message == "Tool not in agent scope: 'lexical_search'."
