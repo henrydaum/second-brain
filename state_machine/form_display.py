@@ -41,7 +41,7 @@ def _assist(step: FormStep, has_choices: bool) -> str:
         bits.append("Reply with a whole number.")
     elif step.type == "number":
         bits.append("Reply with a number.")
-    elif step.type == "array":
+    elif step.type == "array" and "one on each line" not in (step.prompt or ""):
         bits.append("Enter a list of items, one on each line, like so:\n\nitem 1\nitem 2")
     elif step.type == "object":
         bits.append('Send a JSON object, for example: {"key": "value"}.')

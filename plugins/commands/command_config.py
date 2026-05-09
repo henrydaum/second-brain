@@ -25,7 +25,7 @@ class ConfigCommand(BaseCommand):
         if args.get("setting_name"):
             steps.append(FormStep("action", f"What do you want to do with this setting?\n\n{_describe(context, args['setting_name'])}", True, enum=ACTIONS, enum_labels=["Edit setting"]))
         if args.get("action") == "edit":
-            steps.append(FormStep("value", "Enter the new value. JSON values are accepted for lists, objects, booleans, and numbers.", True))
+            steps.append(FormStep("value", _value_prompt(args.get("setting_name")), True, _value_type(args.get("setting_name"))))
         return steps
 
     def run(self, args, context):
@@ -37,7 +37,7 @@ class ConfigCommand(BaseCommand):
             return f"Unknown setting: {key}"
         if args.get("action") != "edit":
             return _describe(context, key)
-        value = _parse(args.get("value"))
+        value = _parse(args.get("value"), key)
         old = config.get(key)
         config[key] = value
         config_manager.save(config)
@@ -59,6 +59,29 @@ def _plugin_keys():
     return {entry[1] for entry in get_plugin_settings()}
 
 
+def _setting_data(key):
+    return next((entry for entry in [*SETTINGS_DATA, *get_plugin_settings()] if entry[1] == key), None)
+
+
+def _value_type(key):
+    entry = _setting_data(key) or (None, None, None, None, {})
+    default, info = entry[3], entry[4] if isinstance(entry[4], dict) else {}
+    type_ = info.get("type")
+    if type_ == "json_list":
+        return "array"
+    if type_ == "json_dict":
+        return "object"
+    if type_ in {"bool", "boolean"}:
+        return "boolean"
+    if type_ == "slider":
+        return "number" if info.get("is_float") else "integer"
+    return "array" if isinstance(default, list) else "object" if isinstance(default, dict) else "string"
+
+
+def _value_prompt(key):
+    return "Enter a list of items, one on each line, like so:\n\nitem 1\nitem 2" if _value_type(key) == "array" else "Enter the new value."
+
+
 def _describe(context, key):
     title, desc = _settings().get(key, (key, ""))
     return f"{title}\n{key} = {(context.config or {}).get(key)}\n{desc}"
@@ -68,7 +91,9 @@ def _list(context):
     return "Settings:\n" + "\n".join(f"  {k} = {(context.config or {}).get(k)}" for k in sorted(_settings()))
 
 
-def _parse(value):
+def _parse(value, key=None):
+    if key:
+        return FormStep("value", type=_value_type(key)).coerce(value)
     if isinstance(value, str):
         try:
             return json.loads(value)

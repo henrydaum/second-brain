@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 
 from plugins.commands.command_agent import AgentCommand
+from plugins.commands.command_config import ConfigCommand
 from plugins.commands.command_llm import LlmCommand
+from state_machine.form_display import form_step_display
 
 
 def test_agent_command_prompts_explain_each_step():
@@ -33,3 +35,25 @@ def test_llm_command_prompts_explain_add_and_edit_steps():
     assert "API key" in add_steps[4].prompt
     assert edit_steps[-2].prompt == "Choose which LLM setting to edit."
     assert edit_steps[-2].enum_labels == ["Endpoint", "API key", "Context size", "Service class"]
+
+
+def test_config_list_setting_uses_multiline_array_form():
+    context = SimpleNamespace(config={"autoload_services": []})
+    step = ConfigCommand().form({"setting_name": "autoload_services", "action": "edit"}, context)[-1]
+    display = form_step_display(step)
+
+    assert step.type == "array"
+    assert step.prompt == "Enter a list of items, one on each line, like so:\n\nitem 1\nitem 2"
+    assert display["assist"] == ""
+
+
+def test_config_list_setting_parses_one_item_per_line(monkeypatch):
+    saved = []
+    monkeypatch.setattr("plugins.commands.command_config.config_manager.save", lambda config: saved.append(dict(config)))
+
+    context = SimpleNamespace(config={"autoload_services": []})
+    result = ConfigCommand().run({"setting_name": "autoload_services", "action": "edit", "value": "llm\nparser"}, context)
+
+    assert context.config["autoload_services"] == ["llm", "parser"]
+    assert saved[-1]["autoload_services"] == ["llm", "parser"]
+    assert result == "Set autoload_services = ['llm', 'parser']"
