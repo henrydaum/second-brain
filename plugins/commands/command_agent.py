@@ -87,7 +87,7 @@ def _describe(context, name):
     if not p:
         return "Action"
     active = " (active)" if context.config.get("active_agent_profile") == name else ""
-    return f"{name}{active}\nLLM: {p.get('llm', 'default')}\nTool mode: {p.get('whitelist_or_blacklist_tools', 'blacklist')}\nTools: {', '.join(p.get('tools_list') or []) or '(none)'}"
+    return f"{name}{active}\nLLM: {p.get('llm', 'default')}\nTool mode: {p.get('whitelist_or_blacklist_tools', 'blacklist')}\nTool list: {', '.join(p.get('tools_list') or []) or '(none)'}"
 
 
 def _profile_label(context, name):
