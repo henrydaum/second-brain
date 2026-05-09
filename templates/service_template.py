@@ -14,11 +14,11 @@ Service authoring flow:
        from plugins.BaseService import BaseService
   4. Implement _load(), unload(), and your service methods.
   5. Add a build_services(config) factory function at the bottom.
-  6. Let the plugin watcher load it, or call test_plugin(plugin_path="sandbox_services/<name>Service.py").
+  6. Call test_plugin(plugin_path="sandbox_services/<name>Service.py").
   7. If testing fails, read the error, edit the same file, and retry.
-  8. Valid sandbox service files are loaded automatically on startup.
-  9. To update: edit the file; the watcher reloads it.
- 10. To remove live and durably: delete the sandbox file with edit_file.
+  8. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
+  9. To update: edit the file; plugin_watcher reloads it when enabled.
+ 10. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
  11. If the service needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
@@ -27,6 +27,7 @@ test_plugin validates:
   - Class inheriting BaseService
   - Presence of build_services() function
   - File naming conventions
+  - The pytest suite summary
 
 
 AUTO-DISCOVERY RULES

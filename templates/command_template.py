@@ -15,11 +15,11 @@ Command authoring flow:
        from plugins.BaseCommand import BaseCommand
        from state_machine.conversation import FormStep
   4. Fill in name, description, category, optional form(), and run().
-  5. Let the plugin watcher load it, or call test_plugin(plugin_path="sandbox_commands/command_<your_name>.py").
+  5. Call test_plugin(plugin_path="sandbox_commands/command_<your_name>.py").
   6. If testing fails, read the error, edit the same file, and retry.
-  7. Valid sandbox command files are loaded automatically on startup.
-  8. To update: edit the file; the watcher reloads it.
-  9. To remove live and durably: delete the sandbox file with edit_file.
+  7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
+  8. To update: edit the file; plugin_watcher reloads it when enabled.
+  9. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
 
 AUTO-DISCOVERY RULES
 --------------------

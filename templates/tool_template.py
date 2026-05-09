@@ -16,11 +16,11 @@ Tool authoring flow:
   3. The code MUST inherit from BaseTool and include:
        from plugins.BaseTool import BaseTool, ToolResult
   4. Fill in the class attributes and implement run().
-  5. Let the plugin watcher load it, or call test_plugin(plugin_path="sandbox_tools/tool_<your_name>.py").
+  5. Call test_plugin(plugin_path="sandbox_tools/tool_<your_name>.py").
   6. If testing fails, read the error, edit the same file, and retry.
-  7. Valid sandbox tool files are loaded automatically on startup.
-  8. To update: edit the file; the watcher reloads it.
-  9. To remove live and durably: delete the sandbox file with edit_file.
+  7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
+  8. To update: edit the file; plugin_watcher reloads it when enabled.
+  9. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
  10. If the tool needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
@@ -29,6 +29,7 @@ test_plugin validates:
   - Class inheriting BaseTool with a `name` attribute
   - No name collisions with baked-in tools
   - File naming conventions (must start with "tool_")
+  - The pytest suite summary
 
 
 AUTO-DISCOVERY RULES

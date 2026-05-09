@@ -16,11 +16,11 @@ Frontend authoring flow:
   3. The code MUST inherit from BaseFrontend and include:
        from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
   4. Fill in name, description, capabilities, lifecycle, session_key(), and render_* methods.
-  5. Let the plugin watcher load it, or call test_plugin(plugin_path="sandbox_frontends/frontend_<your_name>.py").
+  5. Call test_plugin(plugin_path="sandbox_frontends/frontend_<your_name>.py").
   6. If testing fails, read the error, edit the same file, and retry.
-  7. Valid sandbox frontend files are discovered automatically on startup.
-  8. To update: edit the file; the watcher reloads it.
-  9. To remove live and durably: delete the sandbox file with edit_file.
+  7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
+  8. To update: edit the file; plugin_watcher reloads it when enabled.
+  9. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
 
 AUTO-DISCOVERY RULES
 --------------------

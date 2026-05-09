@@ -93,7 +93,7 @@ def _identity(services: dict, registry) -> str:
         ("edit_file", "- For code or text changes, use read_file first; pass line_numbers=false when copying old_text for edit_file replace."),
         ("read_file", f"- A debug log for the current session is at {log_path} — read it with read_file if you need to investigate an error."),
         ("render_files", "- Use render_files when the user would benefit from seeing a file directly."),
-        ("test_plugin", "- If the current tools cannot reasonably complete a task, create or edit a plugin file, let the plugin watcher load it, and use test_plugin(plugin_path=...) for diagnostics."),
+        ("test_plugin", "- If the current tools cannot reasonably complete a task, create or edit a plugin file, let plugin_watcher load it when enabled, and use test_plugin(plugin_path=...) for diagnostics."),
         (None, "- Tool call limits are per message, not per session. If one tool reaches its limit, you may still use other tools."),
     ]
 
@@ -159,11 +159,11 @@ def _authoring_guidance() -> str:
         "1. Read the relevant template with read_file.\n"
         "2. Read a similar existing plugin for reference. Sandbox plugin paths are listed below.\n"
         "3. Write the file into the right plugin directory using the file-editing tools.\n"
-        "4. The plugin watcher auto-loads valid plugin files when they are added or changed.\n"
-        "5. Call test_plugin(plugin_path=...) when you need naming, import, contract, or pytest diagnostics.\n"
+        "4. If the plugin_watcher service is autoloaded, it loads valid plugin files when they are added or changed.\n"
+        "5. Call test_plugin(plugin_path=...) after edits for naming, import, contract, and pytest diagnostics.\n"
         "6. If testing or watcher logs show a failure, edit the same file and test again.\n"
-        "7. To update a plugin, edit the same file; the watcher reloads it.\n"
-        "8. To remove a plugin durably and from the live runtime, delete its plugin file; the watcher unloads it.\n"
+        "7. To update a plugin, edit the same file; plugin_watcher reloads it when enabled.\n"
+        "8. To remove a plugin durably and from the live runtime, delete its plugin file; plugin_watcher unloads it when enabled.\n"
         "9. If you need extra packages, install them with run_command.\n\n"
         "Naming:\n"
         "- Tools: tool_<name>.py    Tasks: task_<name>.py    Commands: command_<name>.py    Frontends: frontend_<name>.py    Services: <name>.py\n"
@@ -206,7 +206,7 @@ def _sandbox_files() -> str:
             sandbox_lines.append(f"  {py_file}")
 
     if not sandbox_lines:
-        return "## Sandbox plugins\nNone yet. Use the templates plus edit_file to create one; the plugin watcher loads valid plugin files automatically."
+        return "## Sandbox plugins\nNone yet. Use the templates plus edit_file to create one; test it with test_plugin. The plugin_watcher service loads valid plugin files automatically when enabled."
 
     lines = ["## Sandbox plugins (read these exact paths with read_file)"]
     lines.extend(sandbox_lines)

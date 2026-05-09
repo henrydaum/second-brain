@@ -20,7 +20,7 @@ The most important architectural shift is the conversation layer. Second Brain n
 - Schedule one-time and recurring subagents through Timekeeper cron jobs.
 - Push reminders, findings, daily briefs, and alerts into Telegram.
 - Use REPL and Telegram frontends out of the box.
-- Author and hot-load new tools, tasks, services, commands, and frontends.
+- Author, test, and live-load new tools, tasks, services, commands, and frontends.
 
 The result is a private AI layer for your computer: part knowledge engine, part personal operator, part automation substrate.
 
@@ -69,18 +69,18 @@ Everything user-extensible is a plugin family:
 | Commands | `plugins/commands/` | `sandbox_commands/` | User slash commands via `BaseCommand` |
 | Frontends | `plugins/frontends/` | `sandbox_frontends/` | User transports via `BaseFrontend` |
 
-Built-in plugins are source-controlled. Sandbox plugins live in the Second Brain data directory and can be created while the app is running. Valid sandbox plugins are also discovered on startup.
+Built-in plugins are source-controlled. Sandbox plugins live in the Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; when `plugin_watcher` is in `autoload_services`, adds, edits, and deletes are synced live.
 
 The live authoring loop is:
 
 1. Read the relevant template in `templates/`.
 2. Read a similar built-in plugin.
 3. Create or edit the plugin file with `edit_file`.
-4. Let the plugin watcher auto-load the file, or call `test_plugin(plugin_path=...)` for diagnostics.
+4. Let `plugin_watcher` auto-load the file when it is enabled, and call `test_plugin(plugin_path=...)` for diagnostics.
 5. If testing fails, fix the same file and call `test_plugin` again.
-6. To remove it durably and from the live runtime, delete the sandbox file.
+6. To remove it durably and from the live runtime, delete the sandbox file; `plugin_watcher` unloads it when enabled.
 
-That loop matters. Second Brain can inspect its own templates, write a focused extension, validate it, hot-load it, and use it immediately. A new command is not a special case. A new frontend is not a rewrite. They are plugins with contracts.
+That loop matters. Second Brain can inspect its own templates, write a focused extension, validate it, and use it immediately. A new command is not a special case. A new frontend is not a rewrite. They are plugins with contracts.
 
 ## File Indexing And Retrieval
 
@@ -157,7 +157,7 @@ Both are plugins under `plugins/frontends/`:
 
 Telegram is useful because the local runtime can reach you anywhere: approvals, proactive reminders, file delivery, scheduled-agent results, and mobile command menus all become part of the same conversation system.
 
-Custom frontends are first-class plugins. A Discord bot, HTTP bridge, desktop shell, or narrow operational UI can be built as a sandbox frontend and registered like any other extension.
+Custom frontends are first-class plugins. A Discord bot, HTTP bridge, desktop shell, or narrow operational UI can be built as a sandbox frontend, tested with `test_plugin`, and live-loaded by `plugin_watcher` when enabled.
 
 ## Setup
 
@@ -210,7 +210,7 @@ Minimal shape:
     "C:/Users/you/AppData/Local/Second Brain/attachment_cache"
   ],
   "enabled_frontends": ["repl", "telegram"],
-  "autoload_services": ["web_search_provider", "timekeeper", "llm", "parser"],
+  "autoload_services": ["web_search_provider", "timekeeper", "llm", "parser", "plugin_watcher"],
   "telegram_bot_token": "",
   "telegram_allowed_user_id": 0,
   "llm_profiles": {
@@ -391,7 +391,7 @@ Authoring rules:
 - Plugins can declare `config_settings`, which appear in config views and are stored in `plugin_config.json`.
 - Sandbox plugins must follow naming conventions: `tool_*.py`, `task_*.py`, `command_*.py`, `frontend_*.py`, and service files that do not start with `_`.
 
-For source-controlled additions, move stable sandbox plugins into the matching built-in plugin directory. For live experimentation, keep them in the data directory and let the plugin watcher load them.
+For source-controlled additions, move stable sandbox plugins into the matching built-in plugin directory. For live experimentation, keep them in the data directory, call `test_plugin`, and let `plugin_watcher` load them when it is enabled.
 
 ## Philosophy
 
