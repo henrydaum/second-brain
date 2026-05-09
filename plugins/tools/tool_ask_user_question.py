@@ -1,6 +1,8 @@
 """Ask the active user for typed input through the approval dialog flow."""
 
 from plugins.BaseTool import BaseTool, ToolResult
+from state_machine.conversation import FormStep
+from state_machine.form_display import form_step_display
 
 TYPES = {"string", "integer", "int", "number", "boolean", "array", "object"}
 
@@ -44,9 +46,11 @@ class AskUserQuestion(BaseTool):
         except (TypeError, ValueError):
             return ToolResult.failed("timeout must be an integer number of seconds.")
         title = (kwargs.get("title") or "Question for you").strip() or "Question for you"
+        display = form_step_display(FormStep("answer", question, kwargs.get("required", True), type_, kwargs.get("enum"), default=kwargs.get("default")))
+        prompt = "\n\n".join(part for part in [display["prompt"], display.get("assist")] if part)
         req = ask(
             title,
-            question,
+            prompt,
             type=type_,
             enum=kwargs.get("enum"),
             default=kwargs.get("default"),

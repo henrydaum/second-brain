@@ -862,6 +862,23 @@ def test_ask_user_question_fails_when_cancelled():
     assert "cancelled" in seen[0].error.lower()
 
 
+def test_ask_user_question_uses_form_display_type_hints():
+    requests = []
+    ctx = SimpleNamespace(
+        request_user_input=lambda title, prompt, **kw: requests.append((title, prompt, kw)) or SimpleNamespace(
+            id="req",
+            value={"key": "value"},
+            metadata={},
+            wait=lambda timeout=None: True,
+        )
+    )
+
+    result = AskUserQuestion().run(ctx, question="Send settings.", type="object")
+
+    assert result.success
+    assert 'Send a JSON object, for example: {"key": "value"}.' in requests[0][1]
+
+
 def test_enum_user_input_rejects_invalid_then_accepts_valid():
     runtime = ConversationRuntime()
     req = runtime.request_input("chat", "Pick", "Pick one", type="string", enum=["a", "b"])
