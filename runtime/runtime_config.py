@@ -79,8 +79,12 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
         cloned.orchestrator = getattr(registry, "orchestrator", None)
         cloned.runtime = getattr(registry, "runtime", None)
         cloned.tools.update(registry.tools)
+        if getattr(registry, "visible_tool_names", None) is not None:
+            cloned.visible_tool_names = set(registry.visible_tool_names)
         for tool in extras:
             cloned.tools[tool.name] = tool
+            if cloned.visible_tool_names is not None:
+                cloned.visible_tool_names.add(tool.name)
         registry = cloned
     return registry
 

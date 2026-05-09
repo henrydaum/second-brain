@@ -73,16 +73,17 @@ def scoped_registry(base_registry: ToolRegistry, scope: AgentScope, db=None) -> 
     new_registry.runtime = base_registry.runtime
 
     if not scope.has_tool_filter:
-        allowed_names = set(base_registry.tools.keys())
+        visible_names = set(base_registry.tools.keys())
     elif scope.tools_allow is not None:
-        allowed_names = set(scope.tools_allow)
+        visible_names = set(scope.tools_allow)
     else:
-        allowed_names = {n for n in base_registry.tools if n not in (scope.tools_deny or set())}
-    allowed_names = _expand_tool_dependencies(base_registry.tools, allowed_names)
+        visible_names = {n for n in base_registry.tools if n not in (scope.tools_deny or set())}
+    callable_names = _expand_tool_dependencies(base_registry.tools, visible_names)
 
     for name, tool in base_registry.tools.items():
-        if name in allowed_names:
+        if name in callable_names:
             new_registry.tools[name] = tool
+    new_registry.visible_tool_names = visible_names
     return new_registry
 
 

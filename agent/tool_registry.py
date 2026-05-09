@@ -39,6 +39,7 @@ class ToolRegistry:
         self.config = config
         self.services = services or {}
         self.tools: dict[str, BaseTool] = {}
+        self.visible_tool_names: set[str] | None = None
         self._lock = threading.Lock()
         self.orchestrator = None        # set after construction in main.pyw
         self.runtime = None             # ConversationRuntime, set by frontend bootstrap
@@ -149,15 +150,22 @@ class ToolRegistry:
     @property
     def max_tool_calls(self) -> int:
         """Return the agent's total tool-call budget for one message."""
-        return sum(t.max_calls for t in self.tools.values())
+        return sum(t.max_calls for t in self._visible_tools())
 
     def get_all_schemas(self) -> list[dict]:
-        """Export schemas for every registered tool."""
-        return [tool.to_schema() for tool in self.tools.values()]
+        """Export schemas for every agent-visible tool."""
+        return [tool.to_schema() for tool in self._visible_tools()]
 
     def get_schema(self, name: str) -> dict | None:
+        if self.visible_tool_names is not None and name not in self.visible_tool_names:
+            return None
         tool = self.tools.get(name)
         return tool.to_schema() if tool else None
 
     def list_tools(self) -> list[str]:
         return list(self.tools.keys())
+
+    def _visible_tools(self):
+        if self.visible_tool_names is None:
+            return self.tools.values()
+        return [tool for name, tool in self.tools.items() if name in self.visible_tool_names]
