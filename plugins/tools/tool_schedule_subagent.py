@@ -49,7 +49,7 @@ class ScheduleSubagent(BaseTool):
             return _list_jobs(tk)
         if not title:
             return ToolResult.failed("title is required.")
-        job_name = _job_name(title)
+        job_name = _find_job_name(tk, title) or _job_name(title)
         if action == "remove":
             return _remove_job(context, tk, title, job_name)
         attachments = _attachments_arg(kwargs.get("attachments")) if "attachments" in kwargs else None
@@ -90,7 +90,7 @@ def _add_job(context, tk, title: str, job_name: str, prompt: str, cron: str, one
         return ToolResult.failed("prompt is required.")
     if not cron:
         return ToolResult.failed("cron expression is required.")
-    if tk.get_job(job_name) is not None:
+    if _find_job_name(tk, title) is not None:
         return ToolResult.failed(f"A scheduled subagent named '{title}' already exists. Use edit or remove.")
     try:
         schedule = _schedule_def(tk, cron, one_time)
@@ -190,3 +190,16 @@ def _preview(text: str, limit: int = 700) -> str:
 
 def _job_name(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_") or "subagent"
+
+
+def _find_job_name(tk, title: str) -> str | None:
+    wanted = (title or "").strip()
+    for candidate in (wanted, _job_name(wanted)):
+        if candidate and tk.get_job(candidate) is not None:
+            return candidate
+    folded = wanted.casefold()
+    for name, job in tk.list_jobs().items():
+        payload_title = ((job.get("payload") or {}).get("title") or "").strip()
+        if payload_title == wanted or payload_title.casefold() == folded:
+            return name
+    return None

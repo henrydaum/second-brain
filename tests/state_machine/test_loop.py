@@ -661,6 +661,21 @@ def test_schedule_subagent_list_edit_and_remove():
     assert db.get_conversation(conv_id) is not None
 
 
+def test_schedule_subagent_resolves_literal_job_key_or_payload_title():
+    db = FakeConversationDB()
+    tk = FakeTimekeeper({"Tester": {"enabled": True, "channel": "subagent.spawn", "cron": "0 8 * * *", "one_time": False, "payload": {"title": "Tester", "prompt": "old", "attachments": []}}})
+    runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([])}, tool_registry=FakeToolRegistry())
+    ctx = SimpleNamespace(db=db, runtime=runtime, services={"timekeeper": tk}, config={}, approve_command=lambda *_: True)
+
+    edited = ScheduleSubagent().run(ctx, operation="edit", title="Tester", prompt="new")
+    assert edited.success
+    assert tk.jobs["Tester"]["payload"]["prompt"] == "new"
+
+    removed = ScheduleSubagent().run(ctx, operation="remove", title="Tester")
+    assert removed.success
+    assert "Tester" not in tk.jobs
+
+
 def test_schedule_subagent_edit_schedule_shapes():
     db = FakeConversationDB()
     tk = FakeTimekeeper({"brief": {"enabled": True, "channel": "subagent.spawn", "cron": "0 8 * * *", "one_time": False, "payload": {"title": "Brief", "prompt": "x", "attachments": []}}})
