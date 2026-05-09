@@ -671,115 +671,6 @@ def _build_llm_from_profile(model_name: str, profile: dict) -> BaseLLM:
 # =====================================================================
 
 
-def _migrate_legacy_llm_config(config: dict) -> bool:
-    """One-time migration of the old conflated ``llm_profiles`` shape into
-    the new split (LLM connection configs + agent profiles).
-
-    Old shape (per entry):
-        {llm_model_name, llm_endpoint, llm_api_key, llm_context_size,
-         llm_service_class, [prompt_suffix, whitelist_or_blacklist_tools,
-         tools_list]}
-
-    New shape:
-        llm_profiles[model_name] = {llm_endpoint, llm_api_key,
-                                    llm_context_size, llm_service_class}
-        default_llm_profile = "<model_name>"
-        agent_profiles[name]  = {llm, prompt_suffix,
-                                 whitelist_or_blacklist_tools, tools_list}
-        active_agent_profile  = "<name>"
-
-    Returns True if any migration ran. Idempotent — entries already in the
-    new shape are left alone.
-    """
-    profiles = config.get("llm_profiles", {})
-    if not isinstance(profiles, dict):
-        return False
-
-    legacy_entries: list[tuple[str, dict]] = [
-        (name, pconf) for name, pconf in profiles.items()
-        if isinstance(pconf, dict) and "llm_model_name" in pconf
-    ]
-
-    # Even older flat-keys form — pre-profile migration. Wrap into a single
-    # legacy entry first so the rest of the migration handles it uniformly.
-    if not profiles and config.get("llm_model_name"):
-        legacy_entries = [(
-            "default",
-            {
-                "llm_model_name": config.get("llm_model_name", ""),
-                "llm_endpoint": config.get("llm_endpoint", ""),
-                "llm_api_key": config.get("llm_api_key", "OPENAI_API_KEY"),
-                "llm_context_size": config.get("llm_context_size", 0),
-                "llm_service_class": "OpenAILLM",
-            },
-        )]
-
-    if not legacy_entries:
-        return False
-
-    new_llms: dict = {}
-    new_agents: dict = config.get("agent_profiles", {}) or {}
-    scope_keys = ("prompt_suffix", "whitelist_or_blacklist_tools", "tools_list")
-    old_active = config.get("active_llm_profile", "")
-    new_default_llm = ""
-    new_active_agent = ""
-
-    for name, pconf in legacy_entries:
-        model = pconf.get("llm_model_name") or name
-        new_llms[model] = {
-            "llm_endpoint": pconf.get("llm_endpoint", ""),
-            "llm_api_key": pconf.get("llm_api_key", ""),
-            "llm_context_size": pconf.get("llm_context_size", 0),
-            "llm_service_class": pconf.get("llm_service_class", "OpenAILLM"),
-        }
-        if name == old_active or not new_default_llm:
-            new_default_llm = model
-
-        # If the legacy profile carried scope, materialize an agent profile
-        # by the same name pointing at this model.
-        if any(pconf.get(k) for k in scope_keys):
-            new_agents[name] = {
-                "llm": model,
-                "prompt_suffix": pconf.get("prompt_suffix", "") or "",
-                "whitelist_or_blacklist_tools": pconf.get("whitelist_or_blacklist_tools", "blacklist"),
-                "tools_list": pconf.get("tools_list") or [],
-            }
-            if name == old_active:
-                new_active_agent = name
-
-    # Carry over any non-legacy entries verbatim (already in the new shape).
-    for name, pconf in profiles.items():
-        if isinstance(pconf, dict) and "llm_model_name" not in pconf and name not in new_llms:
-            new_llms[name] = pconf
-
-    # Always ensure a default agent profile exists.
-    if "default" not in new_agents:
-        new_agents["default"] = {
-            "llm": "default",
-            "prompt_suffix": "",
-            "whitelist_or_blacklist_tools": "blacklist",
-            "tools_list": [],
-        }
-
-    config["llm_profiles"] = new_llms
-    config["agent_profiles"] = new_agents
-    if new_default_llm:
-        config["default_llm_profile"] = new_default_llm
-    if not config.get("active_agent_profile"):
-        config["active_agent_profile"] = new_active_agent or "default"
-
-    # Drop superseded keys so they don't drift.
-    config.pop("active_llm_profile", None)
-    for k in ("llm_model_name", "llm_endpoint", "llm_api_key", "llm_context_size"):
-        config.pop(k, None)
-
-    logger.info(
-        f"Migrated legacy llm_profiles: {len(new_llms)} LLM(s), "
-        f"{len(new_agents)} agent profile(s), default LLM = {new_default_llm!r}"
-    )
-    return True
-
-
 class LLMRouter(BaseLLM):
     """Default-LLM proxy. Resolves and forwards to the LLM marked as
     ``default_llm_profile`` in config; falls back to the first registered
@@ -922,7 +813,6 @@ def build_services(config: dict) -> dict:
     """Register one service per LLM (keyed by model name) plus the ``llm``
     router that resolves to the default LLM.
     """
-    _migrate_legacy_llm_config(config)
 
     services: dict = {}
     profiles = config.get("llm_profiles", {}) or {}
