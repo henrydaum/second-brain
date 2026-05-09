@@ -296,7 +296,7 @@ Built-in tools include:
 | `register_plugin` | Validate and hot-load a sandbox plugin |
 | `render_files` | Send local files back through the frontend |
 | `run_command` | Run scoped terminal commands, with approval for broad actions |
-| `schedule_subagent` | Schedule one-time or recurring background agents |
+| `schedule_subagent` | List, add, edit, and remove scheduled background agents |
 | `semantic_search` | Search local files by embedding similarity |
 | `sql_query` | Query SQLite read-only |
 | `unregister_plugin` | Live-unload a sandbox plugin without deleting its file |

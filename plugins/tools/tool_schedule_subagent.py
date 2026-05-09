@@ -14,58 +14,132 @@ SCHEDULED_ONCE = "Scheduled (one-time)"
 class ScheduleSubagent(BaseTool):
     name = "schedule_subagent"
     description = (
-        "Schedule a background subagent job with Timekeeper. Use this for reminders, recurring "
-        "briefs, check-ins, and other proactive subagent jobs."
+        "List, add, edit, or remove Timekeeper-backed background subagent jobs. Use this for "
+        "reminders, recurring briefs, check-ins, and other proactive subagent jobs."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "title": {"type": "string", "description": "Short title for the scheduled conversation."},
-            "prompt": {"type": "string", "description": "What the background agent should do."},
-            "cron": {"type": "string", "description": "Cron expression for when the job should run."},
+            "operation": {"type": "string", "description": "Operation to perform.", "enum": ["list", "add", "edit", "remove"]},
+            "title": {"type": "string", "description": "Scheduled subagent title. Required for add, edit, and remove."},
+            "prompt": {"type": "string", "description": "What the background agent should do. Required for add; optional for edit."},
+            "cron": {"type": "string", "description": "Cron expression. Required for add; optional for edit."},
             "one_time": {"type": "boolean", "description": "If true, run once at the next cron match.", "default": False},
-            "attachments": {"type": "array", "description": "Optional file paths to attach to each run.", "items": {"type": "string"}, "default": []},
+            "attachments": {"type": "array", "description": "Optional file paths to attach to each run.", "items": {"type": "string"}},
         },
-        "required": ["title", "cron", "prompt"],
+        "required": ["operation"],
     }
     requires_services = []
     background_safe = False
 
     def run(self, context, **kwargs):
+        action = (kwargs.get("operation") or (kwargs.get("action") if kwargs.get("action") != "call" else "") or "").strip().lower()
         title = (kwargs.get("title") or "").strip()
         prompt = (kwargs.get("prompt") or "").strip()
         cron = (kwargs.get("cron") or "").strip()
         one_time = bool(kwargs.get("one_time"))
-        attachments = _attachments_arg(kwargs.get("attachments"))
         if "run_immediately" in kwargs:
             return ToolResult.failed("run_immediately is no longer supported; use a dedicated immediate-run tool instead.")
-        if not title:
-            return ToolResult.failed("title is required.")
-        if not prompt:
-            return ToolResult.failed("prompt is required.")
-        if not cron:
-            return ToolResult.failed("cron expression is required.")
-        if attachments is None:
-            return ToolResult.failed("attachments must be a string or list of strings.")
+        if action not in {"list", "add", "edit", "remove"}:
+            return ToolResult.failed("action must be one of: list, add, edit, remove.")
         tk = _timekeeper(context)
         if tk is None:
             return ToolResult.failed("Timekeeper service is not available.")
+        if action == "list":
+            return _list_jobs(tk)
+        if not title:
+            return ToolResult.failed("title is required.")
+        job_name = _job_name(title)
+        if action == "remove":
+            return _remove_job(context, tk, title, job_name)
+        attachments = _attachments_arg(kwargs.get("attachments")) if "attachments" in kwargs else None
+        if attachments is None and "attachments" in kwargs:
+            return ToolResult.failed("attachments must be a string or list of strings.")
+        if action == "edit":
+            return _edit_job(context, tk, title, job_name, kwargs, prompt, cron, attachments)
+        return _add_job(context, tk, title, job_name, prompt, cron, one_time, attachments or [])
+
+
+def _list_jobs(tk):
+    rows = []
+    for name, job in sorted(tk.list_jobs().items()):
+        if job.get("channel") != SPAWN_SUBAGENT:
+            continue
+        payload = job.get("payload") or {}
+        rows.append({
+            "title": (payload.get("title") or name).strip(),
+            "cron": job.get("cron"),
+            "run_at": job.get("run_at"),
+            "one_time": bool(job.get("one_time")),
+            "enabled": bool(job.get("enabled", True)),
+            "attachments": list(payload.get("attachments") or []),
+            "conversation_id": payload.get("conversation_id"),
+        })
+    if not rows:
+        return ToolResult(True, data={"jobs": []}, llm_summary="No scheduled subagent jobs.")
+    lines = [
+        f"- {r['title']}: {'once at ' + r['run_at'] if r['one_time'] else r['cron']} "
+        f"({'enabled' if r['enabled'] else 'disabled'})"
+        for r in rows
+    ]
+    return ToolResult(True, data={"jobs": rows}, llm_summary="Scheduled subagent jobs:\n" + "\n".join(lines))
+
+
+def _add_job(context, tk, title: str, job_name: str, prompt: str, cron: str, one_time: bool, attachments: list[str]):
+    if not prompt:
+        return ToolResult.failed("prompt is required.")
+    if not cron:
+        return ToolResult.failed("cron expression is required.")
+    if tk.get_job(job_name) is not None:
+        return ToolResult.failed(f"A scheduled subagent named '{title}' already exists. Use edit or remove.")
+    try:
+        schedule = _schedule_def(tk, cron, one_time)
+    except Exception as e:
+        return ToolResult.failed(str(e))
+    payload = {"title": title, "prompt": prompt, "attachments": attachments}
+    if not _approved(context, _approval_text("add", title, payload, schedule)):
+        return ToolResult(success=False, error="Schedule denied.", llm_summary="The user denied the scheduled subagent.")
+    tk.create_job(job_name, {**schedule, "channel": SPAWN_SUBAGENT, "payload": payload, "enabled": True})
+    return ToolResult(True, data={"title": title, "scheduled": True, "one_time": bool(one_time)}, llm_summary=f"Scheduled subagent '{title}'.")
+
+
+def _edit_job(context, tk, title: str, job_name: str, kwargs: dict, prompt: str, cron: str, attachments):
+    job = tk.get_job(job_name)
+    if job is None or job.get("channel") != SPAWN_SUBAGENT:
+        return ToolResult.failed(f"No scheduled subagent named '{title}'.")
+    if not any(k in kwargs for k in ("prompt", "cron", "one_time", "attachments")):
+        return ToolResult.failed("edit requires at least one of: prompt, cron, one_time, attachments.")
+    if "one_time" in kwargs and not cron and bool(kwargs.get("one_time")) != bool(job.get("one_time")):
+        return ToolResult.failed("cron is required when changing one_time.")
+    patch = {}
+    payload = dict(job.get("payload") or {})
+    if "prompt" in kwargs:
+        if not prompt:
+            return ToolResult.failed("prompt cannot be empty.")
+        payload["prompt"] = prompt
+    if attachments is not None:
+        payload["attachments"] = attachments
+    if "cron" in kwargs or "one_time" in kwargs:
         try:
-            schedule = _schedule_def(tk, cron, one_time)
+            schedule = _schedule_def(tk, cron or job.get("cron") or "", bool(kwargs.get("one_time", job.get("one_time"))))
         except Exception as e:
             return ToolResult.failed(str(e))
-        if not _approved(context, _approval_text(title, prompt, schedule)):
-            return ToolResult(success=False, error="Schedule denied.", llm_summary="The user denied the scheduled subagent.")
+        patch.update(schedule)
+    patch["payload"] = payload
+    if not _approved(context, _approval_text("edit", title, payload, {**job, **patch})):
+        return ToolResult(success=False, error="Schedule edit denied.", llm_summary="The user denied the scheduled subagent edit.")
+    tk.update_job(job_name, patch)
+    return ToolResult(True, data={"title": title, "edited": True}, llm_summary=f"Updated scheduled subagent '{title}'.")
 
-        job_name = _unique_job_name(tk, title)
-        tk.create_job(job_name, {**schedule, "channel": SPAWN_SUBAGENT, "payload": {"title": title, "prompt": prompt, "attachments": attachments}, "enabled": True})
 
-        summary = _summary(title, job_name)
-        return ToolResult(True, data={
-            "job_name": job_name,
-            "scheduled": True,
-            "one_time": bool(one_time),
-        }, llm_summary=summary)
+def _remove_job(context, tk, title: str, job_name: str):
+    job = tk.get_job(job_name)
+    if job is None or job.get("channel") != SPAWN_SUBAGENT:
+        return ToolResult.failed(f"No scheduled subagent named '{title}'.")
+    if not _approved(context, f"Remove scheduled subagent?\n\nTitle: {title}"):
+        return ToolResult(success=False, error="Schedule removal denied.", llm_summary="The user denied removing the scheduled subagent.")
+    tk.remove_job(job_name)
+    return ToolResult(True, data={"title": title, "removed": True}, llm_summary=f"Removed scheduled subagent '{title}'.")
 
 
 def _timekeeper(context):
@@ -76,9 +150,9 @@ def _timekeeper(context):
 def _schedule_def(tk, cron: str, one_time: bool) -> dict:
     if one_time:
         run_at = croniter(cron, datetime.now().astimezone()).get_next(datetime)
-        return {"run_at": run_at.isoformat(), "one_time": True}
+        return {"run_at": run_at.isoformat(), "cron": None, "one_time": True}
     tk.cron_to_text(cron)
-    return {"cron": cron, "one_time": False}
+    return {"cron": cron, "run_at": None, "one_time": False}
 
 
 def _attachments_arg(value):
@@ -98,14 +172,14 @@ def _approved(context, text: str) -> bool:
     return bool(approve and approve("schedule_subagent", text))
 
 
-def _approval_text(title: str, prompt: str, schedule: dict) -> str:
+def _approval_text(action: str, title: str, payload: dict, schedule: dict) -> str:
     mode = "one-time" if schedule.get("one_time") else "recurring"
     when = schedule.get("run_at") or schedule.get("cron")
     return (
-        f"Create {mode} subagent schedule?\n\n"
+        f"{action.title()} {mode} subagent schedule?\n\n"
         f"Title: {title}\n"
         f"When: {when}\n"
-        f"Prompt preview:\n{_preview(prompt)}"
+        f"Prompt preview:\n{_preview(payload.get('prompt') or '')}"
     )
 
 
@@ -114,15 +188,5 @@ def _preview(text: str, limit: int = 700) -> str:
     return text if len(text) <= limit else text[:limit - 3].rstrip() + "..."
 
 
-def _unique_job_name(tk, title: str) -> str:
-    base = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_") or "subagent"
-    name = base
-    i = 2
-    while tk.get_job(name) is not None:
-        name = f"{base}_{i}"
-        i += 1
-    return name
-
-
-def _summary(title: str, job_name: str) -> str:
-    return f"Scheduled subagent job '{job_name}' on {SPAWN_SUBAGENT}: {title}."
+def _job_name(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_") or "subagent"
