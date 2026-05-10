@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from events.event_bus import bus
+from events.event_channels import CHAT_MESSAGE_PUSHED
 from plugins.services.pluginWatcherService import PluginWatcherService
 
 
@@ -62,6 +64,30 @@ def test_plugin_watcher_add_or_edit_loads_plugin(monkeypatch):
         root_dir.rmdir()
 
 
+def test_plugin_watcher_emits_registered_and_edit_messages(monkeypatch):
+    messages = []
+    root_dir = Path(".codex_plugin_watcher")
+    path = root_dir / "tool_demo.py"
+    unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
+    try:
+        root_dir.mkdir(exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+        _patch_plugin_dir(monkeypatch, root_dir)
+        monkeypatch.setattr("plugins.services.pluginWatcherService.load_single_plugin", lambda *a, **k: ("demo", None))
+        monkeypatch.setattr("plugins.services.pluginWatcherService.PluginWatcherService._reconcile_plugin_config", lambda self: None)
+        service = PluginWatcherService({})
+
+        service.handle_create_or_modify(str(path))
+        service._known_mtimes[str(path.resolve())] = path.stat().st_mtime - 1
+        service.handle_create_or_modify(str(path))
+
+        assert messages == ["Registered plugin: demo", "Registered plugin edit: demo"]
+    finally:
+        unsub()
+        path.unlink(missing_ok=True)
+        root_dir.rmdir()
+
+
 def test_plugin_watcher_unchanged_mtime_is_ignored(monkeypatch):
     calls = []
     root_dir = Path(".codex_plugin_watcher")
@@ -84,14 +110,18 @@ def test_plugin_watcher_unchanged_mtime_is_ignored(monkeypatch):
 
 def test_plugin_watcher_delete_unloads_by_source(monkeypatch):
     calls = []
+    messages = []
     root_dir = Path(".codex_plugin_watcher")
     path = root_dir / "tool_demo.py"
+    unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
     try:
         root_dir.mkdir(exist_ok=True)
         path.write_text("x", encoding="utf-8")
         _patch_plugin_dir(monkeypatch, root_dir)
         service = PluginWatcherService({})
-        service.bind_runtime(tool_registry=_ToolRegistry())
+        registry = _ToolRegistry()
+        registry.tools["demo"] = type("DemoTool", (), {"_source_path": str(path.resolve())})()
+        service.bind_runtime(tool_registry=registry)
         service._known_mtimes[str(path.resolve())] = path.stat().st_mtime
         path.unlink()
         monkeypatch.setattr("plugins.services.pluginWatcherService.unload_plugin", lambda *a, **k: calls.append((a, k)))
@@ -101,7 +131,9 @@ def test_plugin_watcher_delete_unloads_by_source(monkeypatch):
 
         assert calls and calls[0][0][0] == "tool"
         assert calls[0][1]["source_path"] == str(path.resolve())
+        assert messages == ["Unregistered plugin: demo"]
     finally:
+        unsub()
         path.unlink(missing_ok=True)
         root_dir.rmdir()
 

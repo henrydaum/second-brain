@@ -5,6 +5,8 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from events.event_bus import bus
+from events.event_channels import CHAT_MESSAGE_PUSHED
 from plugins.BaseService import BaseService
 from plugins.helpers.plugin_paths import iter_plugin_dirs, plugin_info
 from plugins.plugin_discovery import get_plugin_settings, load_single_plugin, unload_plugin, wire_peer_services
@@ -85,7 +87,7 @@ class PluginWatcherService(BaseService):
             if old is not None and abs(mtime - old) < 0.1:
                 return
             self._known_mtimes[key] = mtime
-        self._load_plugin(path)
+        self._load_plugin(path, edited=old is not None)
 
     def handle_delete(self, raw_path: str):
         path = Path(raw_path).resolve()
@@ -95,7 +97,7 @@ class PluginWatcherService(BaseService):
         if known is not None or path.suffix == ".py":
             self._unload_plugin(path)
 
-    def _load_plugin(self, path: Path):
+    def _load_plugin(self, path: Path, edited: bool = False):
         info, err = plugin_info(path)
         if err:
             logger.warning(f"Plugin watcher skipped {path}: {err}")
@@ -119,6 +121,7 @@ class PluginWatcherService(BaseService):
         if info.plugin_type == "service":
             wire_peer_services(self.services)
         self._reconcile_plugin_config()
+        self._notify(f"Registered plugin{' edit' if edited else ''}: {name}")
         logger.info(f"Plugin watcher loaded {info.plugin_type}: {name}")
 
     def _unload_plugin(self, path: Path):
@@ -126,6 +129,7 @@ class PluginWatcherService(BaseService):
         if err:
             logger.warning(f"Plugin watcher could not infer deleted plugin {path}: {err}")
             return
+        names = self._names_registered_from(info.plugin_type, path)
         unload_plugin(
             info.plugin_type, "",
             tool_registry=self._runtime.get("tool_registry"),
@@ -136,7 +140,29 @@ class PluginWatcherService(BaseService):
             frontend_manager=self._runtime.get("frontend_manager"),
         )
         self._reconcile_plugin_config()
+        for name in names:
+            self._notify(f"Unregistered plugin: {name}")
         logger.info(f"Plugin watcher unloaded deleted {info.plugin_type}: {path.name}")
+
+    def _notify(self, message: str):
+        bus.emit(CHAT_MESSAGE_PUSHED, {"message": message, "kind": "plugin", "source": "plugin_watcher"})
+
+    def _names_registered_from(self, plugin_type: str, path: Path) -> list[str]:
+        source = str(path.resolve())
+        if plugin_type == "tool":
+            items = getattr(self._runtime.get("tool_registry"), "tools", {})
+        elif plugin_type == "task":
+            items = getattr(self._runtime.get("orchestrator"), "tasks", {})
+        elif plugin_type == "command":
+            registry = self._runtime.get("command_registry") or getattr(self._runtime.get("tool_registry"), "command_registry", None)
+            items = getattr(registry, "_commands", {})
+        elif plugin_type == "service":
+            items = self.services
+        elif plugin_type == "frontend":
+            items = {k: v.__class__ for k, v in getattr(self._runtime.get("frontend_manager"), "adapters", {}).items()}
+        else:
+            items = {}
+        return [name for name, item in items.items() if getattr(item, "_source_path", "") == source]
 
     def _reconcile_plugin_config(self):
         try:
