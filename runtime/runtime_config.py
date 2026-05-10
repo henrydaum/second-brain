@@ -206,6 +206,16 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             return ""
         return notify_block(session.notification_mode)
 
+    def _conversation_suffix() -> str:
+        row = runtime.db.get_conversation(session.conversation_id) if runtime.db and session.conversation_id else None
+        if not row:
+            return ""
+        return "\n\n## Current conversation\n" + "\n".join([
+            f"Number: {row.get('id')}",
+            f"Category: {(row.get('category') or '').strip() or 'Main'}",
+            f"Title: {(row.get('title') or '').strip() or 'New Conversation'}",
+        ])
+
     if session.profile_override:
         from agent.system_prompt import build_system_prompt
         profile = session.profile_override or session.active_agent_profile or "default"
@@ -224,6 +234,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             for value in extras.values():
                 if isinstance(value, str) and value:
                     text += "\n\n" + value
+            text += _conversation_suffix()
             text += _notify_suffix()
             return text
         return _session_prompt
@@ -236,6 +247,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         for value in (extras or {}).values():
             if isinstance(value, str) and value:
                 text += "\n\n" + value
+        text += _conversation_suffix()
         text += _notify_suffix()
         return text
     return _user_prompt

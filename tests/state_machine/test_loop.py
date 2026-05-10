@@ -36,6 +36,8 @@ from runtime.conversation_loop import ConversationLoop
 from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
 from state_machine.serialization import latest_state, save_state_marker
 from runtime.conversation_runtime import ConversationRuntime
+from runtime.runtime_config import session_system_prompt
+from runtime.session import RuntimeSession
 from events.event_channels import CHAT_MESSAGE_PUSHED, COMMAND_CALL_FINISHED, SESSION_CLOSED, SESSION_CREATED, SESSION_TURN_COMPLETED, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from events.event_bus import bus
 
@@ -188,6 +190,20 @@ def make_cs(commands: dict[str, CallableSpec] | None = None, tools: dict[str, Ca
         Participant("user", "user", commands=commands or {}),
         Participant("agent", "agent", tools=tools or {}),
     ])
+
+
+def test_session_system_prompt_includes_conversation_metadata():
+    db = FakeConversationDB()
+    cid = db.create_conversation("Build Runtime Prompt", category="Projects")
+    session = RuntimeSession("chat", make_cs(), conversation_id=cid)
+    runtime = SimpleNamespace(db=db, system_prompt=lambda: "base", active_session_key="chat")
+
+    prompt = session_system_prompt(runtime, session)()
+
+    assert "## Current conversation" in prompt
+    assert f"Number: {cid}" in prompt
+    assert "Category: Projects" in prompt
+    assert "Title: Build Runtime Prompt" in prompt
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -748,8 +764,9 @@ def test_next_turn_after_history_load_sends_loaded_history_to_llm():
     result = runtime.handle_action("chat", "send_text", "continue")
 
     assert result.messages[-1] == "next"
+    expected_prompt = f"\n\n## Current conversation\nNumber: {conv_id}\nCategory: Main\nTitle: Old chat"
     assert [(m["role"], m["content"]) for m in llm.seen[0][0]] == [
-        ("system", ""),
+        ("system", expected_prompt),
         ("user", "earlier"),
         ("assistant", "previous answer"),
         ("user", "continue"),
