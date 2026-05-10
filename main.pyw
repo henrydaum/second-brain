@@ -19,6 +19,7 @@ _LOG_DATEFMT = "%I:%M%p"
 logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT, datefmt=_LOG_DATEFMT)
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+(DATA_DIR / "memory.md").touch(exist_ok=True)
 LOG_FILE = DATA_DIR / "app.log"
 _file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
 _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))

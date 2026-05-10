@@ -43,7 +43,7 @@ def build_system_prompt(
         _services_status(services),
         _pipeline_status(db, orchestrator),
         _file_inventory(db) if _has_any(r, "read_file", "hybrid_search", "lexical_search", "semantic_search") else "",
-        _agent_memory() if _has_tool(r, "update_memory") else "",
+        _agent_memory(),
     ]
     prompt = "\n\n".join(s for s in sections if s)
 
@@ -98,9 +98,9 @@ def _identity(services: dict, registry) -> str:
     ]
 
     memory_block = ""
-    if _has_tool(registry, "update_memory"):
+    if _has_tool(registry, "edit_file"):
         memory_block = (
-            "- Call update_memory proactively and often. Triggers:\n"
+            "- Update memory.md with edit_file proactively and often. Triggers:\n"
             "  * The user shares a fact about themselves, their role, or how they like to work → save it.\n"
             "  * You learn something non-obvious about a tool (a quirk, a common failure mode, the right argument pattern, a gotcha) → save the lesson so future sessions don't repeat the mistake.\n"
             "  * A tool call fails and you figure out what would have worked → save the correction.\n"
@@ -301,13 +301,14 @@ def _file_inventory(db) -> str:
 
 
 def _agent_memory() -> str:
-    """memory.md is developed by the agent using tool_update_memory"""
+    """memory.md is durable agent-editable context."""
     from paths import DATA_DIR
     mem_path = DATA_DIR / "memory.md"
     header = (
         "## Memory (from memory.md)\n"
+        f"Path: {mem_path}\n"
         "Durable notes that persist across sessions. Read them as standing context.\n"
-        "Write to this file with update_memory whenever you learn something worth remembering:\n"
+        "Write to this file with edit_file whenever you learn something worth remembering:\n"
         "- Facts about the user (role, preferences, projects, how they work)\n"
         "- Tool lessons (quirks, failure modes, correct usage patterns you discovered the hard way)\n"
         "- Corrections from the user (behavior they want changed, don't repeat the mistake)\n"
@@ -318,7 +319,7 @@ def _agent_memory() -> str:
     if mem_path.exists():
         content = mem_path.read_text()
         return f"\n\n{header}\nCurrent contents:\n{content}"
-    return f"\n\n{header}\nCurrent contents: (empty — the file will be created on first update_memory call)"
+    return f"\n\n{header}\nCurrent contents: (empty)"
 
 
 # ── Scope trailer ────────────────────────────────────────────────────
