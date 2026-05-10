@@ -497,7 +497,7 @@ def test_spawn_subagent_drives_inactive_conversation():
     result = SpawnSubagent().run_event("run", {"conversation_id": conv_id, "prompt": "wake up"}, SimpleNamespace(db=db, runtime=runtime, services={}, config={}))
 
     assert result.success
-    assert runtime.sessions[f"spawn_subagent:{conv_id}"].conversation_id == conv_id
+    assert f"spawn_subagent:{conv_id}" not in runtime.sessions
     assert [(r["role"], r["content"]) for r in db.get_conversation_messages(conv_id) if r["role"] != "system"] == [
         ("user", "earlier"), ("user", "wake up"), ("assistant", "done")
     ]

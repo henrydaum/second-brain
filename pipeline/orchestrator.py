@@ -71,7 +71,7 @@ class Orchestrator:
 		self.tool_registry = None
 
 		# Re-check service-blocked tasks whenever a service finishes loading.
-		bus.subscribe(SERVICE_LOADED, lambda payload: self.clear_skip_cache())
+		self._service_loaded_unsub = bus.subscribe(SERVICE_LOADED, lambda payload: self.clear_skip_cache())
 
 	def clear_skip_cache(self, name: str = None):
 		"""Clear service-skip tracking so tasks are checked again.
@@ -544,6 +544,9 @@ class Orchestrator:
 
 	def stop(self):
 		self.running = False
+		if self._service_loaded_unsub:
+			self._service_loaded_unsub()
+			self._service_loaded_unsub = None
 		# Pause all tasks so queued futures flush back to PENDING (see _execute check)
 		self.paused.update(self.tasks.keys())
 		self.executor.shutdown(wait=False, cancel_futures=True)

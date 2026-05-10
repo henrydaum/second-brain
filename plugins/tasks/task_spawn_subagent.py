@@ -56,6 +56,8 @@ class SpawnSubagent(BaseTask):
             )
         except Exception as e:
             return TaskResult.failed(str(e))
+        finally:
+            runtime.close_session(session_key)
         if not out.ok:
             return TaskResult.failed((out.error or {}).get("message") or "\n".join(out.messages) or "spawn_subagent failed.")
         return TaskResult(success=True, data={"conversation_id": cid})
