@@ -282,6 +282,8 @@ def test_tool_call_path_records_assistant_then_tool_then_final_text():
     assert new_messages[1]["name"] == "echo"
     assert new_messages[1]["tool_call_id"] == "tc1"
     assert new_messages[2]["content"] == "done"
+    assert "result" not in next(e for e in cs.history if e["type"] == "call_tool")
+    assert "result" not in str(cs.to_dict())
     assert events == [("start", "echo", "tc1", {"q": "x"}), ("finish", "echo", "tc1", True, None)]
     assert cs.turn_priority == "user"
 

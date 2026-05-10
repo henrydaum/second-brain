@@ -135,12 +135,16 @@ class SQLQuery(BaseTool):
 
 def _sql_summary(sql: str, columns: list, rows: list, row_count: int, truncated: bool) -> str:
     """Format a SQL result as a readable summary for the LLM."""
+    def cell(v, limit=500):
+        text = str(v)
+        return text if len(text) <= limit else f"{text[:limit]}...[truncated {len(text) - limit} chars]"
+
     trunc_note = " (truncated)" if truncated else ""
     header = f"SQL: {sql}\n\nReturned {row_count} row(s){trunc_note}."
     if not rows:
         return header
-    col_str = " | ".join(str(c) for c in columns)
+    col_str = " | ".join(cell(c, 80) for c in columns)
     sep = " | ".join("-" * max(len(str(c)), 3) for c in columns)
-    row_lines = [" | ".join(str(v) for v in row) for row in rows]
+    row_lines = [" | ".join(cell(v) for v in row) for row in rows]
     table = "\n".join([col_str, sep] + row_lines)
     return f"{header}\n\n{table}"

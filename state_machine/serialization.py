@@ -22,6 +22,8 @@ def pack_state(state: dict[str, Any]) -> str:
 
 
 def unpack_state(content: str) -> dict[str, Any] | None:
+    if STATE_MARKER not in (content or ""):
+        return None
     try:
         data = json.loads(content or "")
     except (TypeError, json.JSONDecodeError):
@@ -34,6 +36,8 @@ def pack_compaction(summary: str, tail_count: int = 2) -> str:
 
 
 def unpack_compaction(content: str) -> dict[str, Any] | None:
+    if COMPACTION_MARKER not in (content or ""):
+        return None
     try:
         data = json.loads(content or "")
     except (TypeError, json.JSONDecodeError):
@@ -60,7 +64,7 @@ def messages_to_history(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     else:
         history = []
     for msg in rows:
-        if is_state_marker(msg) or is_compaction_marker(msg) or msg.get("role") == "system":
+        if msg.get("role") == "system":
             continue
         role, content = msg.get("role"), msg.get("content") or ""
         if role == "assistant":

@@ -259,7 +259,7 @@ class ConversationState:
             "turn_priority": self.turn_priority,
             "phase": self.phase,
             "cache": {**self.cache, "phases": [f.to_dict() if hasattr(f, "to_dict") else f for f in self.cache.get("phases", [])]},
-            "history": self.history,
+            "history": self.history[-100:],
             "participants": [{"id": p.id, "kind": p.kind, "name": p.name} for p in self.participants.values()],
             "pending_attachments": attachments_payload,
         }

@@ -309,7 +309,7 @@ class _CallableAction(Action):
         finally:
             self.cs.reset_phase()
         self._emit_command_finished(started, spec, True, None)
-        event = self.cs.event(self.action_type, self.actor_id, name=spec.name, args=args, result=value, previous_phase=old_phase)
+        event = self.cs.event(self.action_type, self.actor_id, name=spec.name, args=args, previous_phase=old_phase)
         return ActionResult(True, self.action_type, events=[event], data={"result": value, "call_id": started})
 
     def _emit_invocation_started(self, spec: CallableSpec, args: dict[str, Any]):
