@@ -88,6 +88,27 @@ def test_plugin_watcher_emits_registered_and_edit_messages(monkeypatch):
         root_dir.rmdir()
 
 
+def test_plugin_watcher_emits_registration_failed_message(monkeypatch):
+    messages = []
+    root_dir = Path(".codex_plugin_watcher")
+    path = root_dir / "tool_demo.py"
+    unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
+    try:
+        root_dir.mkdir(exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+        _patch_plugin_dir(monkeypatch, root_dir)
+        monkeypatch.setattr("plugins.services.pluginWatcherService.load_single_plugin", lambda *a, **k: (None, "boom"))
+        service = PluginWatcherService({})
+
+        service.handle_create_or_modify(str(path))
+
+        assert messages == ["Plugin registration failed: tool_demo.py"]
+    finally:
+        unsub()
+        path.unlink(missing_ok=True)
+        root_dir.rmdir()
+
+
 def test_plugin_watcher_unchanged_mtime_is_ignored(monkeypatch):
     calls = []
     root_dir = Path(".codex_plugin_watcher")

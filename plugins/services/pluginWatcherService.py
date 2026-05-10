@@ -101,6 +101,7 @@ class PluginWatcherService(BaseService):
         info, err = plugin_info(path)
         if err:
             logger.warning(f"Plugin watcher skipped {path}: {err}")
+            self._notify(f"Plugin registration failed: {path.name}")
             return
         logger.info(f"Plugin watcher loading {info.plugin_type}: {path.name}")
         try:
@@ -117,6 +118,7 @@ class PluginWatcherService(BaseService):
             name, error = None, str(e)
         if error:
             logger.warning(f"Plugin watcher failed to load {path.name}: {error}")
+            self._notify(f"Plugin registration failed: {name or path.name}")
             return
         if info.plugin_type == "service":
             wire_peer_services(self.services)
