@@ -22,7 +22,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable
 
-from state_machine.serialization import save_history_message
+from state_machine.serialization import save_compaction_marker, save_history_message
 from runtime.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("ConversationLoop")
@@ -93,6 +93,8 @@ class ConversationLoop:
         # provider transcript keeps its assistant-text-with-tool-calls shape.
         self._assistant_text_for_pending: str | None = None
         self._final_text: str | None = None
+        self._active_db = None
+        self._active_conversation_id = None
 
     @property
     def max_tool_calls(self) -> int:
@@ -130,6 +132,8 @@ class ConversationLoop:
         self._pending_tool_calls.clear()
         self._assistant_text_for_pending = None
         self._final_text = None
+        self._active_db = db
+        self._active_conversation_id = conversation_id
 
         new_messages: list[dict[str, Any]] = []
         attachments: list[str] = []
@@ -186,6 +190,8 @@ class ConversationLoop:
 
             return self._final_text, new_messages, attachments
         finally:
+            self._active_db = None
+            self._active_conversation_id = None
             self.running = False
 
     # ──────────────────────────────────────────────────────────────────────
@@ -438,13 +444,18 @@ class ConversationLoop:
         if len(history) <= 2 or self.runtime is None:
             return
         try:
-            transcript = "\n".join(f"{m.get('role', '').upper()}: {(m.get('content') or '')[:1000]}" for m in history[:-2])
+            transcript = "\n".join(f"{m.get('role', '').upper()}: {(m.get('content') or '')[:1000]}" for m in history)
             transcript = transcript[:20000]
             summary = self.runtime.request_compaction(self.session_key, transcript)
             if not summary:
                 logger.warning("Compaction returned no summary (timeout or empty). History will not shrink via summary.")
                 return
             old_count = len(history)
+            if self._active_db is not None and self._active_conversation_id is not None:
+                save_compaction_marker(self._active_db, self._active_conversation_id, summary)
+                session = getattr(self.runtime, "sessions", {}).get(self.session_key)
+                if session is not None:
+                    session.has_compaction_checkpoint = True
             tail = [self._shrink_for_tail(m) for m in history[-2:]]
             history[:] = [
                 {"role": "user", "content": f"[Conversation summary from earlier]\n{summary}"},

@@ -63,6 +63,7 @@ class RuntimeSession:
     extra_tool_instances: list = field(default_factory=list)
     system_prompt_extras: dict[str, Any] = field(default_factory=dict)
     notification_mode: str = DEFAULT_NOTIFICATION_MODE
+    has_compaction_checkpoint: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 

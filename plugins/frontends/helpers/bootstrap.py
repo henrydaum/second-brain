@@ -6,7 +6,6 @@ import threading
 from agent.system_prompt import build_system_prompt
 from config import config_manager
 from events.event_bus import bus
-from events.event_channels import UPDATE_TITLES
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.command_registry import CommandRegistry
 from plugins.plugin_discovery import discover_commands, discover_frontends, get_plugin_settings
@@ -115,7 +114,6 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
     if not frontends:
         return None, {}, []
 
-    _ensure_default_cron_jobs(services)
     runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir)
     classes = discover_frontends(root_dir, config)
     config_manager.reconcile_plugin_config(config, get_plugin_settings())
@@ -178,34 +176,6 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
         tool_registry.runtime = runtime
         tool_registry.command_registry = registry
     return runtime
-
-
-def _ensure_default_cron_jobs(services):
-    """Install built-in cron jobs that should exist on every install.
-
-    Idempotent: only creates a job if no job with that name exists yet, so
-    user-deleted defaults stay deleted and existing installs pick up new
-    defaults on next launch.
-    """
-    tk = (services or {}).get("timekeeper")
-    if tk is None or not getattr(tk, "loaded", False):
-        return
-    defaults = [
-        ("update_titles", {
-            "channel": UPDATE_TITLES,
-            "cron": "*/30 * * * *",
-            "enabled": True,
-            "payload": {},
-        }),
-    ]
-    for name, job_def in defaults:
-        try:
-            if tk.get_job(name) is not None:
-                continue
-            tk.create_job(name, job_def)
-            logger.info(f"Installed default cron job '{name}'.")
-        except Exception as e:
-            logger.warning(f"Failed to install default cron job '{name}': {e}")
 
 
 def _scope(profile, config):

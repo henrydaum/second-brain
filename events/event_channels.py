@@ -67,6 +67,11 @@ UPDATE_TITLES = "update_titles"
 titles whose message count has advanced beyond the last-checked threshold.
 Payload: empty (the task pulls candidates from the DB)."""
 
+DREAM_MEMORY = "dream_memory"
+"""Nightly trigger asking the memory dream task to distill recent human-facing
+conversations into DATA_DIR/memory.md.
+Payload: empty (the task pulls recent conversations from the DB)."""
+
 SPAWN_SUBAGENT = "subagent.spawn"
 """A scheduled or delegated inactive conversation should run one agent turn.
 Payload:

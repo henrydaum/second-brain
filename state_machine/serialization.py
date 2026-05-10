@@ -8,11 +8,13 @@ schema changes are needed and LLM history reconstruction can ignore it.
 """
 
 import json
+import time
 from typing import Any
 
 from state_machine.forms import history_tool_calls_from_content
 
 STATE_MARKER = "__second_brain_state_machine__"
+COMPACTION_MARKER = "__second_brain_compaction__"
 
 
 def pack_state(state: dict[str, Any]) -> str:
@@ -27,15 +29,38 @@ def unpack_state(content: str) -> dict[str, Any] | None:
     return data.get("state") if isinstance(data, dict) and data.get(STATE_MARKER) else None
 
 
+def pack_compaction(summary: str, tail_count: int = 2) -> str:
+    return json.dumps({COMPACTION_MARKER: True, "summary": summary, "tail_count": tail_count, "created_at": time.time()}, default=str)
+
+
+def unpack_compaction(content: str) -> dict[str, Any] | None:
+    try:
+        data = json.loads(content or "")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) and data.get(COMPACTION_MARKER) else None
+
+
 def is_state_marker(row: dict[str, Any]) -> bool:
     return row.get("role") == "system" and unpack_state(row.get("content") or "") is not None
 
 
+def is_compaction_marker(row: dict[str, Any]) -> bool:
+    return row.get("role") == "system" and unpack_compaction(row.get("content") or "") is not None
+
+
 def messages_to_history(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert DB rows to provider-compatible history, skipping SM markers."""
-    history: list[dict[str, Any]] = []
+    compact = latest_compaction(rows)
+    if compact:
+        idx, marker = compact
+        rows = rows[idx + 1:]
+        summary = (marker.get("summary") or "").strip()
+        history = ([{"role": "user", "content": f"[Conversation summary from earlier]\n{summary}"}, {"role": "assistant", "content": "Understood - I have the earlier context."}] if summary else [])
+    else:
+        history = []
     for msg in rows:
-        if is_state_marker(msg) or msg.get("role") == "system":
+        if is_state_marker(msg) or is_compaction_marker(msg) or msg.get("role") == "system":
             continue
         role, content = msg.get("role"), msg.get("content") or ""
         if role == "assistant":
@@ -79,9 +104,21 @@ def save_state_marker(db, conversation_id: int, state: dict[str, Any]) -> None:
     db.save_message(conversation_id, "system", pack_state(state))
 
 
+def save_compaction_marker(db, conversation_id: int, summary: str, tail_count: int = 2) -> None:
+    db.save_message(conversation_id, "system", pack_compaction(summary, tail_count))
+
+
 def latest_state(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     for row in reversed(rows):
         state = unpack_state(row.get("content") or "")
         if state is not None:
             return state
+    return None
+
+
+def latest_compaction(rows: list[dict[str, Any]]) -> tuple[int, dict[str, Any]] | None:
+    for i in range(len(rows) - 1, -1, -1):
+        marker = unpack_compaction(rows[i].get("content") or "")
+        if marker is not None:
+            return i, marker
     return None

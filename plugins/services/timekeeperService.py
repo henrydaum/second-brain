@@ -8,6 +8,7 @@ from cron_descriptor import ExpressionDescriptor
 from croniter import croniter
 
 import config.config_manager as config_manager
+from config.config_data import DEFAULT_SCHEDULED_JOBS
 from plugins.BaseService import BaseService
 from events.event_bus import bus
 
@@ -30,7 +31,7 @@ class TimekeeperService(BaseService):
             "Scheduled Jobs",
             "scheduled_jobs",
             "JSON object keyed by job name describing scheduled event emissions.",
-            {},
+            DEFAULT_SCHEDULED_JOBS,
             {"type": "text", "hidden": True},
         ),
     ]

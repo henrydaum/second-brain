@@ -15,6 +15,21 @@ Each entry: (title, variable_name, description, default, type_info)
 
 from paths import DATA_DIR, ATTACHMENT_CACHE
 
+DEFAULT_SCHEDULED_JOBS = {
+    "update_titles": {
+        "channel": "update_titles",
+        "cron": "*/30 * * * *",
+        "enabled": True,
+        "payload": {},
+    },
+    "dream_memory": {
+        "channel": "dream_memory",
+        "cron": "0 2 * * *",
+        "enabled": True,
+        "payload": {},
+    },
+}
+
 SETTINGS_DATA = [
     # --- Directories ---
     ("Sync Directories", "sync_directories",
@@ -85,6 +100,11 @@ SETTINGS_DATA = [
      "Seconds between re-checking files for changes.",
      300,
      {"type": "slider", "range": (30, 3600, 119), "is_float": False}),
+
+    ("Scheduled Jobs", "scheduled_jobs",
+     "JSON object keyed by job name describing scheduled event emissions.",
+     DEFAULT_SCHEDULED_JOBS,
+     {"type": "json_dict", "hidden": True}),
 
     # --- Agent Profiles ---
     # Each profile bundles an LLM reference + optional prompt/tool scope.

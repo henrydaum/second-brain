@@ -27,7 +27,7 @@ from events.event_channels import (
 )
 from state_machine.approval import StateMachineApprovalRequest
 from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
-from state_machine.serialization import latest_state, messages_to_history, save_history_message, save_state_marker
+from state_machine.serialization import latest_compaction, latest_state, messages_to_history, save_history_message, save_state_marker
 from runtime.runtime_config import new_state, refresh_specs
 from runtime.session import RuntimeSession, SessionConflict
 from runtime.notifications import (
@@ -161,6 +161,7 @@ def load_conversation(
         profile_override=saved_profile,
         system_prompt_extras={**dict(marker.get("system_prompt_extras") or {}), **dict(system_prompt_extras or {})},
         notification_mode=saved_mode,
+        has_compaction_checkpoint=latest_compaction(rows) is not None,
     )
     # Re-seed cs with session-aware specs.
     session.cs = new_state(runtime, marker, session=session)
@@ -262,7 +263,8 @@ def iterate_agent_turn(
         # atomic with respect to any concurrent action targeting the
         # same session_key.
         with session.lock:
-            runtime.db.replace_conversation_messages(session.conversation_id, list(session.history))
+            if not session.has_compaction_checkpoint:
+                runtime.db.replace_conversation_messages(session.conversation_id, list(session.history))
             persist_marker(runtime, session)
     final_text = "\n".join(m for m in out.messages if m).strip()
     event = {
