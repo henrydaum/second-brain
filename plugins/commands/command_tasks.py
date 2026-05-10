@@ -9,7 +9,7 @@ from state_machine.forms import schema_to_form_steps
 
 PATH_ACTIONS = ["pause", "unpause", "reset", "retry"]
 EVENT_ACTIONS = ["pause", "unpause", "trigger"]
-PIPELINE = "pipeline"
+PIPELINE = "Show pipeline"
 
 
 class TasksCommand(BaseCommand):
