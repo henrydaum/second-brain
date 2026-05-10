@@ -24,7 +24,7 @@ DEFAULT_SCHEDULED_JOBS = {
     },
     "dream_memory": {
         "channel": "dream_memory",
-        "cron": "0 2 * * *",
+        "cron": "0 4 * * *",
         "enabled": True,
         "payload": {},
     },

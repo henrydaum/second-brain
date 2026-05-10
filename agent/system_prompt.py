@@ -99,14 +99,10 @@ def _identity(services: dict, registry) -> str:
 
     memory_block = ""
     if _has_tool(registry, "edit_file"):
+        from paths import DATA_DIR
+        mem_path = DATA_DIR / "memory.md"
         memory_block = (
-            "- Update memory.md with edit_file proactively and often. Triggers:\n"
-            "  * The user shares a fact about themselves, their role, or how they like to work → save it.\n"
-            "  * You learn something non-obvious about a tool (a quirk, a common failure mode, the right argument pattern, a gotcha) → save the lesson so future sessions don't repeat the mistake.\n"
-            "  * A tool call fails and you figure out what would have worked → save the correction.\n"
-            "  * The user corrects your behavior or expresses a preference → save it as a standing instruction.\n"
-            "  * You discover a useful pattern (e.g. which table to query for X, which plugin handles Y) → save it.\n"
-            "  Be rigorous: err on the side of writing a note rather than skipping it. Memory is how you get smarter over time.\n"
+            f"To update your memory with important facts, write to {mem_path} using edit_file. This is what you should do if the user ever says to remember something.\n"
         )
 
     habits = "\n".join(line for tool, line in habit_bullets if tool is None or _has_tool(registry, tool))
@@ -158,14 +154,15 @@ def _authoring_guidance() -> str:
         "Workflow:\n"
         "1. Read the relevant template with read_file.\n"
         "2. Read a similar existing plugin for reference. Sandbox plugin paths are listed below.\n"
-        "3. Write the file into the right plugin directory using the file-editing tools.\n"
-        "4. If the plugin_watcher service is autoloaded, it loads valid plugin files when they are added or changed.\n"
-        "5. Call test_plugin(plugin_path=...) after edits for purpose-built plugin diagnostics: naming, import, contract, and suggestions.\n"
-        "6. Treat the pytest section as broad app regression context, not proof the plugin behavior is correct.\n"
-        "7. If diagnostics, pytest, or watcher logs show a failure, edit the same file and test again.\n"
-        "8. To update a plugin, edit the same file; plugin_watcher reloads it when enabled.\n"
-        "9. To remove a plugin durably and from the live runtime, delete its plugin file; plugin_watcher unloads it when enabled.\n"
-        "10. If you need extra packages, install them with run_command.\n\n"
+        "3. Ask the user clarifying questions about the plugin's intended behavior using the ask_user_question tool. If you are not sure about something, ask.\n"
+        "4. Write the file into the right plugin directory using the file-editing tools.\n"
+        "5. If the plugin_watcher service is autoloaded, it loads valid plugin files when they are added or changed.\n"
+        "6. Call test_plugin(plugin_path=...) after edits for purpose-built plugin diagnostics: naming, import, contract, and suggestions.\n"
+        "7. Treat the pytest section as broad app regression context, not proof the plugin behavior is correct.\n"
+        "8. If diagnostics, pytest, or watcher logs show a failure, edit the same file and test again.\n"
+        "9. To update a plugin, edit the same file; plugin_watcher reloads it when enabled.\n"
+        "10. To remove a plugin durably and from the live runtime, delete its plugin file; plugin_watcher unloads it when enabled.\n"
+        "11. If you need extra packages, install them with run_command.\n\n"
         "Naming:\n"
         "- Tools: tool_<name>.py    Tasks: task_<name>.py    Commands: command_<name>.py    Frontends: frontend_<name>.py    Services: <name>.py\n"
         "- Names must be unique across baked-in and sandbox.\n\n"
@@ -308,13 +305,7 @@ def _agent_memory() -> str:
         "## Memory (from memory.md)\n"
         f"Path: {mem_path}\n"
         "Durable notes that persist across sessions. Read them as standing context.\n"
-        "Write to this file with edit_file whenever you learn something worth remembering:\n"
-        "- Facts about the user (role, preferences, projects, how they work)\n"
-        "- Tool lessons (quirks, failure modes, correct usage patterns you discovered the hard way)\n"
-        "- Corrections from the user (behavior they want changed, don't repeat the mistake)\n"
-        "- System knowledge (which table has what, which plugin to use for X)\n"
-        "Be proactive. If you hesitate on whether a note is worth saving, save it. "
-        "Keep each entry short and specific — the file has a 1000-character cap, so rewrite and compact when needed.\n"
+        "Nightly, as long as dream_memory is enabled, the system reviews recent conversations and updates memory.md with new lessons, preferences, and facts to remember, while dropping stale or irrelevant items.\n"
     )
     if mem_path.exists():
         content = mem_path.read_text()
