@@ -22,12 +22,13 @@ Service authoring flow:
  11. If the service needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
-test_plugin validates:
+test_plugin diagnostics cover:
   - Correct import (from plugins.BaseService import BaseService)
   - Class inheriting BaseService
   - Presence of build_services() function
   - File naming conventions
-  - The pytest suite summary
+  - Suggestions for contract improvements
+  - The pytest suite summary as broad app regression context
 
 
 AUTO-DISCOVERY RULES

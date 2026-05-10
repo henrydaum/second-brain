@@ -21,12 +21,13 @@ Task authoring flow:
  10. If the task needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
-test_plugin validates:
+test_plugin diagnostics cover:
   - Correct import (from plugins.BaseTask import BaseTask, TaskResult)
   - Class inheriting BaseTask with a `name` attribute
   - No name collisions with baked-in tasks
   - File naming conventions (must start with "task_")
-  - The pytest suite summary
+  - Suggestions for contract improvements
+  - The pytest suite summary as broad app regression context
 
 
 AUTO-DISCOVERY RULES

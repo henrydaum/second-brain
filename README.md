@@ -76,11 +76,11 @@ The live authoring loop is:
 1. Read the relevant template in `templates/`.
 2. Read a similar built-in plugin.
 3. Create or edit the plugin file with `edit_file`.
-4. Let `plugin_watcher` auto-load the file when it is enabled, and call `test_plugin(plugin_path=...)` for diagnostics.
+4. Let `plugin_watcher` auto-load the file when it is enabled, and call `test_plugin(plugin_path=...)` for purpose-built diagnostics.
 5. If testing fails, fix the same file and call `test_plugin` again.
 6. To remove it durably and from the live runtime, delete the sandbox file; `plugin_watcher` unloads it when enabled.
 
-That loop matters. Second Brain can inspect its own templates, write a focused extension, validate it, and use it immediately. A new command is not a special case. A new frontend is not a rewrite. They are plugins with contracts.
+That loop matters. Second Brain can inspect its own templates, write a focused extension, diagnose it, and use it immediately. `test_plugin` gives the plugin-specific signal; its pytest section is broad regression context, not proof that the new plugin's behavior is complete. A new command is not a special case. A new frontend is not a rewrite. They are plugins with contracts.
 
 ## File Indexing And Retrieval
 
@@ -297,7 +297,7 @@ Built-in tools include:
 | `schedule_subagent` | List, add, edit, and remove scheduled background agents |
 | `semantic_search` | Search local files by embedding similarity |
 | `sql_query` | Query SQLite read-only |
-| `test_plugin` | Validate a plugin source file and run tests |
+| `test_plugin` | Diagnose a plugin source file and summarize broad regression tests |
 | `update_memory` | Update durable memory |
 | `web_search` | Search the public web |
 

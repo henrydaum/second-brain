@@ -24,12 +24,13 @@ Tool authoring flow:
  10. If the tool needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
-test_plugin validates:
+test_plugin diagnostics cover:
   - Correct import (from plugins.BaseTool import BaseTool, ToolResult)
   - Class inheriting BaseTool with a `name` attribute
   - No name collisions with baked-in tools
   - File naming conventions (must start with "tool_")
-  - The pytest suite summary
+  - Suggestions for contract improvements
+  - The pytest suite summary as broad app regression context
 
 
 AUTO-DISCOVERY RULES
