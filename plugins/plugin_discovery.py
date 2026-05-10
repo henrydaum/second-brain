@@ -49,6 +49,11 @@ def get_setting_service_map() -> dict[str, set[str]]:
     return {k: set(v) for k, v in _setting_to_services.items()}
 
 
+def get_plugin_setting_type(setting_key: str) -> str | None:
+    """Return the plugin type that first declared a setting key."""
+    return _plugin_setting_types.get(setting_key)
+
+
 def _collect_config_settings(source, service_names: list[str] | None = None,
                              plugin_type: str | None = None):
     """Extract config_settings from a plugin instance or module and accumulate.

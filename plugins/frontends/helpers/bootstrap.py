@@ -4,11 +4,12 @@ import logging
 import threading
 
 from agent.system_prompt import build_system_prompt
+from config import config_manager
 from events.event_bus import bus
 from events.event_channels import UPDATE_TITLES
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.command_registry import CommandRegistry
-from plugins.plugin_discovery import discover_commands, discover_frontends
+from plugins.plugin_discovery import discover_commands, discover_frontends, get_plugin_settings
 from runtime.context import build_context
 from runtime.agent_scope import load_scope, scoped_registry
 from runtime.conversation_runtime import ConversationRuntime
@@ -117,6 +118,7 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
     _ensure_default_cron_jobs(services)
     runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir)
     classes = discover_frontends(root_dir, config)
+    config_manager.reconcile_plugin_config(config, get_plugin_settings())
     manager = FrontendManager(runtime, runtime.command_registry, config)
 
     # Transport-specific constructor args: discovery returns the class, the

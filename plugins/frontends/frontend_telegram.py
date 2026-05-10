@@ -66,6 +66,10 @@ class TelegramFrontend(BaseFrontend):
     name = "telegram"
     description = "Telegram chat frontend backed by the conversation state machine."
     capabilities = FrontendCapabilities(True, True, True, True, True, True, True, True, 4096, _MAX_FILE_SIZE)
+    config_settings = [
+        ("Telegram Bot Token", "telegram_bot_token", "Bot token from @BotFather. Required for Telegram frontend.", "", {"type": "text"}),
+        ("Telegram Allowed User ID", "telegram_allowed_user_id", "Your Telegram user ID (integer). Only this user can interact with the bot. Send /start to @userinfobot to find yours.", 0, {"type": "text"}),
+    ]
 
     def __init__(self, shutdown_event: threading.Event | None = None, services: dict | None = None):
         super().__init__()

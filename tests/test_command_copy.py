@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from config.config_data import SETTINGS_DATA
+from plugins.commands import command_config
 from plugins.commands.command_agent import AgentCommand
 from plugins.commands.command_config import ConfigCommand
 from plugins.commands.command_llm import LlmCommand
@@ -57,3 +59,27 @@ def test_config_list_setting_parses_one_item_per_line(monkeypatch):
     assert context.config["autoload_services"] == ["llm", "parser"]
     assert saved[-1]["autoload_services"] == ["llm", "parser"]
     assert result == "Set autoload_services = ['llm', 'parser']"
+
+
+def test_config_frontend_plugin_setting_saves_with_restart_notice(monkeypatch):
+    setting = ("Telegram Allowed User ID", "telegram_allowed_user_id", "Only this user can interact with the bot.", 0, {"type": "text"})
+    saved_core, saved_plugin = [], []
+    monkeypatch.setattr(command_config, "get_plugin_settings", lambda: [setting])
+    monkeypatch.setattr(command_config, "get_plugin_setting_type", lambda key: "frontend" if key == "telegram_allowed_user_id" else None)
+    monkeypatch.setattr(command_config.config_manager, "save", lambda config: saved_core.append(dict(config)))
+    monkeypatch.setattr(command_config.config_manager, "load_plugin_config", lambda: {})
+    monkeypatch.setattr(command_config.config_manager, "save_plugin_config", lambda config: saved_plugin.append(dict(config)))
+
+    context = SimpleNamespace(config={"telegram_allowed_user_id": 0})
+    result = ConfigCommand().run({"setting_name": "telegram_allowed_user_id", "action": "edit", "value": "123"}, context)
+
+    assert context.config["telegram_allowed_user_id"] == "123"
+    assert saved_core[-1]["telegram_allowed_user_id"] == "123"
+    assert saved_plugin[-1] == {"telegram_allowed_user_id": "123"}
+    assert result == "Set telegram_allowed_user_id = 123. Restart required."
+
+
+def test_telegram_credentials_are_not_core_settings():
+    core_keys = {entry[1] for entry in SETTINGS_DATA}
+    assert "telegram_bot_token" not in core_keys
+    assert "telegram_allowed_user_id" not in core_keys

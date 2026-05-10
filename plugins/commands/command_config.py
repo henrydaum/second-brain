@@ -3,7 +3,7 @@ import json
 from config.config_data import SETTINGS_DATA
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
-from plugins.plugin_discovery import get_plugin_settings
+from plugins.plugin_discovery import get_plugin_setting_type, get_plugin_settings
 from state_machine.conversation import FormStep
 
 
@@ -48,6 +48,8 @@ class ConfigCommand(BaseCommand):
         runtime = getattr(context, "runtime", None)
         if runtime and value != old and hasattr(runtime, "refresh_session_specs"):
             runtime.refresh_session_specs()
+        if value != old and get_plugin_setting_type(key) == "frontend":
+            return f"Set {key} = {value}. Restart required."
         return f"Set {key} = {value}"
 
 
