@@ -18,6 +18,7 @@ from config.config_data import SETTINGS_DATA
 
 # Derive defaults from the single source of truth in config_data.py
 DEFAULTS = {name: default for (_, name, _, default, _) in SETTINGS_DATA}
+_LIST_KEYS = {name for _, name, _, default, info in SETTINGS_DATA if isinstance(default, list) or info.get("type") == "json_list"}
 
 _DEFAULT_CONFIG_PATH = str(DATA_DIR / "config.json")
 _DEFAULT_PLUGIN_CONFIG_PATH = str(DATA_DIR / "plugin_config.json")
@@ -40,6 +41,10 @@ def _normalize_frontends(value) -> list[str]:
     return normalized
 
 
+def _normalize_list(value) -> list:
+    return value if isinstance(value, list) else ([value] if value not in (None, "") else [])
+
+
 def load(path: str = None) -> dict:
     """Load config from JSON file. Creates default if missing."""
     if path is None:
@@ -59,6 +64,8 @@ def load(path: str = None) -> dict:
     # If new settings are added, this adds them to the existing config.json
     merged = dict(DEFAULTS)
     merged.update(user_config)
+    for key in _LIST_KEYS:
+        merged[key] = _normalize_list(merged.get(key, DEFAULTS[key]))
     merged["enabled_frontends"] = _normalize_frontends(
         merged.get("enabled_frontends", DEFAULTS["enabled_frontends"])
     )
@@ -66,7 +73,7 @@ def load(path: str = None) -> dict:
     # If the schema introduced new SETTINGS_DATA keys since the file was last
     # written, persist the merged defaults now so the on-disk file no longer
     # drifts behind the schema.
-    if set(merged.keys()) - set(user_config.keys()):
+    if set(merged.keys()) - set(user_config.keys()) or any(user_config.get(k) != merged.get(k) for k in _LIST_KEYS):
         save(merged, path)
 
     return merged

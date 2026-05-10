@@ -35,6 +35,10 @@ def test_array_form_values_accept_one_item_per_line():
     assert FormStep("tools_list", type="array").coerce("lexical_search\nsemantic_search") == ["lexical_search", "semantic_search"]
 
 
+def test_array_form_values_wrap_json_scalar():
+    assert FormStep("services", type="array").coerce('"web_search_provider"') == ["web_search_provider"]
+
+
 def test_boolean_display_uses_true_false_choices():
     display = form_step_display(FormStep("one_time", "Run once?", False, "boolean", default=False))
 

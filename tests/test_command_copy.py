@@ -1,5 +1,7 @@
 from types import SimpleNamespace
+import json
 
+from config import config_manager
 from config.config_data import SETTINGS_DATA
 from plugins.commands import command_config
 from plugins.commands.command_agent import AgentCommand
@@ -59,6 +61,16 @@ def test_config_list_setting_parses_one_item_per_line(monkeypatch):
     assert context.config["autoload_services"] == ["llm", "parser"]
     assert saved[-1]["autoload_services"] == ["llm", "parser"]
     assert result == "Set autoload_services = ['llm', 'parser']"
+
+
+def test_config_load_normalizes_string_autoload_services(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(dict(config_manager.DEFAULTS, autoload_services="web_search_provider")))
+
+    config = config_manager.load(str(path))
+
+    assert config["autoload_services"] == ["web_search_provider"]
+    assert json.loads(path.read_text())["autoload_services"] == ["web_search_provider"]
 
 
 def test_config_frontend_plugin_setting_saves_with_restart_notice(monkeypatch):

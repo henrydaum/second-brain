@@ -50,6 +50,8 @@ class FormStep:
                 value = json.loads(value)
             except json.JSONDecodeError:
                 value = [line.strip() for line in value.splitlines() if line.strip()]
+            if not isinstance(value, list):
+                value = [value]
         if self.type == "object" and isinstance(value, str):
             import json
             value = json.loads(value)
