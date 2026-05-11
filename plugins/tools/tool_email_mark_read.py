@@ -5,6 +5,7 @@ tool_email_mark_read — Mark a Gmail message as read or unread.
 import logging
 
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.tools.helpers.email_context import is_main_conversation
 
 logger = logging.getLogger("tool_email_mark_read")
 
@@ -53,13 +54,12 @@ class EmailMarkRead(BaseTool):
         if not message_id:
             return ToolResult.failed("message_id is required.")
 
-        # Subagent guard: only allow marking messages that involve at least
-        # one address in ai_email_addresses. Empty list = no access.
-        if context.is_subagent:
+        # Non-main conversations may only mark messages involving an allowed alias.
+        if not is_main_conversation(context):
             allowed = _allowed_addresses(context.config)
             if not allowed:
                 return ToolResult.failed(
-                    "Subagent context but ai_email_addresses is empty — no "
+                    "Non-main conversation but ai_email_addresses is empty — no "
                     "mail access. Configure it under Settings → Plugin Config."
                 )
             msg = gmail.get_message(message_id)
@@ -76,7 +76,7 @@ class EmailMarkRead(BaseTool):
                     f"involve any of {allowed}."
                 )
                 return ToolResult.failed(
-                    "Subagent context: this message does not involve any "
+                    "Non-main conversation: this message does not involve any "
                     "configured AI alias and cannot be modified."
                 )
 

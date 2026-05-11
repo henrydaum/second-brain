@@ -14,6 +14,7 @@ Common idioms:
 import logging
 
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.tools.helpers.email_context import is_main_conversation
 
 logger = logging.getLogger("tool_email_modify_labels")
 
@@ -138,13 +139,12 @@ class EmailModifyLabels(BaseTool):
         if not add_names and not remove_names:
             return ToolResult.failed("At least one of 'add' or 'remove' must be non-empty.")
 
-        # Subagent guard: only allow modifying messages that involve at least
-        # one address in ai_email_addresses. Empty list = no access.
-        if context.is_subagent:
+        # Non-main conversations may only modify messages involving an allowed alias.
+        if not is_main_conversation(context):
             allowed = _allowed_addresses(context.config)
             if not allowed:
                 return ToolResult.failed(
-                    "Subagent context but ai_email_addresses is empty — no "
+                    "Non-main conversation but ai_email_addresses is empty — no "
                     "mail access. Configure it under Settings → Plugin Config."
                 )
             msg = gmail.get_message(message_id)
@@ -161,7 +161,7 @@ class EmailModifyLabels(BaseTool):
                     f"involve any of {allowed}."
                 )
                 return ToolResult.failed(
-                    "Subagent context: this message does not involve any "
+                    "Non-main conversation: this message does not involve any "
                     "configured AI alias and cannot be modified."
                 )
 

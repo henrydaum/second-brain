@@ -20,6 +20,7 @@ Config:
 import logging
 
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.tools.helpers.email_context import is_main_conversation
 
 logger = logging.getLogger("tool_email_check")
 
@@ -103,24 +104,23 @@ class EmailCheck(BaseTool):
         query = (kwargs.get("query") or "").strip()
         allowed = _allowed_addresses(context.config)
 
-        # Subagent guard: subagents can only read mail involving an allowed
-        # address. Empty list = no access.
-        if context.is_subagent:
+        # Non-main conversations can only read mail involving an allowed alias.
+        if not is_main_conversation(context):
             if not allowed:
                 return ToolResult.failed(
-                    "Subagent context but ai_email_addresses is empty — no "
+                    "Non-main conversation but ai_email_addresses is empty — no "
                     "mail access. Configure it under Settings → Plugin Config "
                     "→ AI Agent Email Addresses."
                 )
             if scope == "inbox":
-                logger.warning("[EmailCheck] Subagent context: rewriting scope 'inbox' → 'ai_inbox'.")
+                logger.warning("[EmailCheck] Non-main conversation: rewriting scope 'inbox' → 'ai_inbox'.")
                 scope = "ai_inbox"
             elif scope == "custom":
                 if not query:
                     return ToolResult.failed("scope='custom' requires a 'query' argument.")
                 scope_clause = _alias_scope_clause(allowed, include_from=True)
                 query = f"({query}) AND ({scope_clause})"
-                logger.info(f"[EmailCheck] Subagent scope=custom rewritten: {query}")
+                logger.info(f"[EmailCheck] Non-main scope=custom rewritten: {query}")
 
         if scope == "inbox":
             summaries = gmail.fetch_inbox(max_results=limit)

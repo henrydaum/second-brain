@@ -24,6 +24,7 @@ import os
 import re
 
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.tools.helpers.email_context import is_main_conversation
 
 logger = logging.getLogger("tool_email_send")
 
@@ -133,17 +134,17 @@ class EmailSend(BaseTool):
         allowed = _allowed_addresses(context.config)
         requested_from = (kwargs.get("from_address") or "").strip()
 
-        # Subagent guard: force AI mode so a subagent can never send from the
-        # user's main address. Empty list = no send access.
-        if context.is_subagent:
+        # Non-main conversations are autonomous: force AI mode and require
+        # an allowed alias so they never send from the user's main address.
+        if not is_main_conversation(context):
             if not allowed:
                 return ToolResult.failed(
-                    "Subagent context but ai_email_addresses is empty — no "
+                    "Non-main conversation but ai_email_addresses is empty — no "
                     "send access. Configure at least one alias under Settings "
                     "→ Plugin Config → AI Agent Email Addresses."
                 )
             if not as_ai:
-                logger.warning("[EmailSend] Subagent context — forcing as_ai=True.")
+                logger.warning("[EmailSend] Non-main conversation — forcing as_ai=True.")
                 as_ai = True
 
         if as_ai and not requested_from and kwargs.get("message_id"):
