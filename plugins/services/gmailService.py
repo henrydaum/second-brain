@@ -278,7 +278,7 @@ class GmailService(BaseService):
             if not subject.startswith("Re: ") and not subject.startswith("Fwd: "):
                 subject = subject_prefix + subject
 
-            msg_id_header = f"<{message_id}>"
+            msg_id_header = original.get("message_id_header", "") or f"<{message_id}>"
             references = original.get("references", "")
 
             import base64
@@ -291,9 +291,9 @@ class GmailService(BaseService):
             msg["Subject"] = subject
             msg["From"] = from_address or "me"
             msg["Date"] = formatdate(localtime=True)
-            if references:
+            if msg_id_header:
                 msg["In-Reply-To"] = msg_id_header
-                msg["References"] = references + f" {msg_id_header}"
+                msg["References"] = f"{references} {msg_id_header}".strip()
             msg.attach(MIMEText(body, "plain"))
 
             _attach_files(msg, attachments)
@@ -353,35 +353,7 @@ class GmailService(BaseService):
 
     def _parse_message(self, msg: dict) -> dict:
         headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
-        body_plain, body_html = "", ""
-        payload = msg["payload"]
-
-        if "parts" in payload:
-            for part in payload["parts"]:
-                mime = part.get("mimeType", "")
-                data = part.get("body", {}).get("data")
-                if not data:
-                    for sub in part.get("parts", []):
-                        if sub.get("mimeType") == "text/plain":
-                            data = sub.get("body", {}).get("data")
-                            break
-                if data:
-                    import base64
-                    decoded = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-                    if mime == "text/plain":
-                        body_plain = decoded
-                    elif mime == "text/html":
-                        body_html = decoded
-        else:
-            data = payload.get("body", {}).get("data")
-            if data:
-                import base64
-                decoded = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-                mt = payload.get("mimeType", "")
-                if mt == "text/plain":
-                    body_plain = decoded
-                elif mt == "text/html":
-                    body_html = decoded
+        body_plain, body_html = self._body_parts(msg["payload"])
 
         return {
             "message_id": msg["id"],
@@ -395,8 +367,22 @@ class GmailService(BaseService):
             "received_at": int(msg.get("internalDate", 0)) / 1000.0,
             "is_read": "UNREAD" not in msg.get("labelIds", []),
             "labels": msg.get("labelIds", []),
+            "message_id_header": self._header(headers, "Message-ID"),
             "references": self._header(headers, "References"),
         }
+
+    def _body_parts(self, part: dict) -> tuple[str, str]:
+        import base64
+        plain = html = ""
+        data = part.get("body", {}).get("data")
+        if data:
+            decoded = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+            plain = decoded if part.get("mimeType") == "text/plain" else ""
+            html = decoded if part.get("mimeType") == "text/html" else ""
+        for child in part.get("parts", []):
+            child_plain, child_html = self._body_parts(child)
+            plain, html = plain or child_plain, html or child_html
+        return plain, html
 
 
 def _attach_files(msg, attachments):
