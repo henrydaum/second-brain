@@ -138,6 +138,12 @@ class Database:
 				updated_at  REAL
 			)
 		""")
+		# Migration: add last_title_check_message_count if missing
+		try:
+			self.conn.execute("ALTER TABLE conversations ADD COLUMN last_title_check_message_count INTEGER")
+			self.conn.commit()
+		except Exception:
+			pass
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS conversation_messages (
 				id              INTEGER PRIMARY KEY AUTOINCREMENT,
