@@ -4,7 +4,7 @@ import base64
 from email import message_from_bytes
 from types import SimpleNamespace
 
-from plugins.services.gmailService import GmailService
+from plugins.services.service_gmail import GmailService
 from plugins.tools.tool_email_check import EmailCheck
 
 

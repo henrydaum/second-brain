@@ -389,7 +389,7 @@ Authoring rules:
 - Commands are user-facing conversation actions and can define `FormStep` flows.
 - Frontends are transports; they submit runtime actions and render runtime output.
 - Plugins can declare `config_settings`, which appear in config views and are stored in `plugin_config.json`.
-- Sandbox plugins must follow naming conventions: `tool_*.py`, `task_*.py`, `command_*.py`, `frontend_*.py`, and service files that do not start with `_`.
+- Sandbox plugins must follow naming conventions: `tool_*.py`, `task_*.py`, `service_*.py`, `command_*.py`, and `frontend_*.py`.
 
 For source-controlled additions, move stable sandbox plugins into the matching built-in plugin directory. For live experimentation, keep them in the data directory, call `test_plugin`, and let `plugin_watcher` load them when it is enabled.
 

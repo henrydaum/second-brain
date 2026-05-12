@@ -382,7 +382,7 @@ class ConversationLoop:
 
     def _invoke(self, messages, tools, attachments=None, history=None):
         """Internal helper to handle invoke."""
-        from plugins.services.llmService import is_context_limit_error
+        from plugins.services.service_llm import is_context_limit_error
 
         bundle = attachments or None
         try:
@@ -405,7 +405,7 @@ class ConversationLoop:
         """Compact + retry. If retry still overflows, drop history down to
         a single emergency stub and retry once more. Only after THAT
         fails do we surface the unrecoverable error."""
-        from plugins.services.llmService import is_context_limit_error
+        from plugins.services.service_llm import is_context_limit_error
 
         self._compact(history)
         try:

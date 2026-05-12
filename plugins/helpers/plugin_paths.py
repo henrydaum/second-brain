@@ -18,7 +18,7 @@ class PluginPathInfo:
 PLUGIN_CONFIG = {
     "tool": (ROOT_DIR / "plugins" / "tools", SANDBOX_TOOLS, "tool_", ("plugins.tools.{stem}", "sandbox_tools_{stem}")),
     "task": (ROOT_DIR / "plugins" / "tasks", SANDBOX_TASKS, "task_", ("plugins.tasks.{stem}", "sandbox_tasks_{stem}")),
-    "service": (ROOT_DIR / "plugins" / "services", SANDBOX_SERVICES, None, ("plugins.services.{stem}", "sandbox_services_{stem}")),
+    "service": (ROOT_DIR / "plugins" / "services", SANDBOX_SERVICES, "service_", ("plugins.services.{stem}", "sandbox_services_{stem}")),
     "command": (ROOT_DIR / "plugins" / "commands", SANDBOX_COMMANDS, "command_", ("plugins.commands.{stem}", "sandbox_commands_{stem}")),
     "frontend": (ROOT_DIR / "plugins" / "frontends", SANDBOX_FRONTENDS, "frontend_", ("plugins.frontends.{stem}", "sandbox_frontends_{stem}")),
 }
@@ -60,8 +60,6 @@ def plugin_info(path: Path) -> tuple[PluginPathInfo | None, str | None]:
             continue
         if prefix and not name.startswith(prefix):
             return None, f"{plugin_type.title()} files must start with '{prefix}', got '{name}'."
-        if plugin_type == "service" and name.startswith("_"):
-            return None, f"Service files must not start with '_', got '{name}'."
         module_template = namespaces[0] if in_built else namespaces[1]
         return PluginPathInfo(plugin_type, path, in_built, module_template.format(stem=path.stem)), None
     inferred = _infer_type(name)
@@ -83,6 +81,4 @@ def _infer_type(file_name: str) -> str | None:
     for plugin_type, (_, _, prefix, _) in PLUGIN_CONFIG.items():
         if prefix and file_name.startswith(prefix):
             return plugin_type
-    if file_name.endswith(".py") and not file_name.startswith("_"):
-        return "service"
     return None

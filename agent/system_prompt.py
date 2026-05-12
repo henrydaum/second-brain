@@ -166,7 +166,7 @@ You can extend Second Brain by authoring tools, tasks, services, commands, and f
 Templates:
 - tools: templates/tool_template.py -> sandbox_tools/tool_<name>.py
 - tasks: templates/task_template.py -> sandbox_tasks/task_<name>.py
-- services: templates/service_template.py -> sandbox_services/<name>.py or <name>Service.py
+- services: templates/service_template.py -> sandbox_services/service_<name>.py
 - commands: templates/command_template.py -> sandbox_commands/command_<name>.py
 - frontends: templates/frontend_template.py -> sandbox_frontends/frontend_<name>.py
 

@@ -1,5 +1,5 @@
 """Audio parser. Transcribes via the ``whisper`` service when available
-(see plugins/services/whisperService.py). Returns None when the service
+(see plugins/services/service_whisper.py). Returns None when the service
 is not registered or transcription fails — the LLM-side fallback will
 then either route to a native-audio model or emit the pointer string."""
 

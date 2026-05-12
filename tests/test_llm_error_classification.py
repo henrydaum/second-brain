@@ -1,6 +1,6 @@
 """Regression tests for LLM error classification."""
 
-from plugins.services.llmService import is_context_limit_error
+from plugins.services.service_llm import is_context_limit_error
 
 
 def test_model_plan_error_is_not_context_limit():

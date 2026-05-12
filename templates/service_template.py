@@ -9,12 +9,12 @@ config they need, when they are loaded, and how callers should access them.
 
 Service authoring flow:
   1. Read this template, then read one similar built-in service for style.
-  2. Create sandbox_services/<name>Service.py or sandbox_services/<name>.py with edit_file.
+  2. Create sandbox_services/service_<your_name>.py with edit_file.
   3. The code MUST inherit from BaseService and include:
        from plugins.BaseService import BaseService
   4. Implement _load(), unload(), and your service methods.
   5. Add a build_services(config) factory function at the bottom.
-  6. Call test_plugin(plugin_path="sandbox_services/<name>Service.py").
+  6. Call test_plugin(plugin_path="sandbox_services/service_<your_name>.py").
   7. If testing fails, read the error, edit the same file, and retry.
   8. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
   9. To update: edit the file; plugin_watcher reloads it when enabled.
@@ -34,7 +34,7 @@ test_plugin diagnostics cover:
 AUTO-DISCOVERY RULES
 --------------------
 - File must be in plugins/services/ (baked-in) or the sandbox services dir
-- File must NOT start with "_"
+- File name must start with "service_"
 - Module must have a top-level build_services(config) -> dict function
 - The returned dict maps service names to service instances
 - Service names are how tasks/tools reference the service in requires_services

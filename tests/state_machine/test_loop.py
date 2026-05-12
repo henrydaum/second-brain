@@ -25,9 +25,9 @@ from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.commands.command_conversations import ConversationsCommand, NewCommand
 from plugins.commands.command_tools import ToolsCommand
-from plugins.services.llmService import LLMResponse
-from plugins.services import timekeeperService as timekeeper_module
-from plugins.services.timekeeperService import TimekeeperService
+from plugins.services.service_llm import LLMResponse
+from plugins.services import service_timekeeper as timekeeper_module
+from plugins.services.service_timekeeper import TimekeeperService
 from plugins.tools.tool_schedule_subagent import SCHEDULED, SCHEDULED_ONCE, ScheduleSubagent
 from plugins.tools.tool_ask_user_question import AskUserQuestion
 from plugins.tasks.task_spawn_subagent import SpawnSubagent

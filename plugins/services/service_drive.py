@@ -36,7 +36,7 @@ import logging
 from plugins.BaseService import BaseService
 from paths import DATA_DIR
 
-logger = logging.getLogger("driveService")
+logger = logging.getLogger("service_drive")
 
 class GoogleDriveService(BaseService):
     """Google drive service."""

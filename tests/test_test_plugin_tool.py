@@ -60,6 +60,48 @@ def test_test_plugin_validates_folder_mismatch(monkeypatch):
     assert not calls
 
 
+@pytest.mark.parametrize("file_name", ["demo.py", "demoService.py"])
+def test_test_plugin_rejects_old_service_file_names(monkeypatch, file_name):
+    """Verify service plugins must use service_ file names."""
+    calls = []
+    root_dir = Path(".codex_test_plugin_services")
+    try:
+        root_dir.mkdir(exist_ok=True)
+        _patch_plugin_dir(monkeypatch, "service", root_dir)
+        monkeypatch.setattr("plugins.tools.tool_test_plugin.load_single_plugin", lambda *a, **k: calls.append(a) or ("demo", None))
+
+        result = TestPlugin().run(_ctx(), plugin_path=str(root_dir / file_name))
+
+        assert not result.success
+        assert "Service files must start with 'service_'" in result.error
+        assert not calls
+    finally:
+        (root_dir / file_name).unlink(missing_ok=True)
+        root_dir.rmdir()
+
+
+def test_test_plugin_accepts_service_prefix(monkeypatch):
+    """Verify service_ files are valid service plugin paths."""
+    root_dir = Path(".codex_test_plugin_services")
+    path = root_dir / "service_demo.py"
+    try:
+        root_dir.mkdir(exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+        _patch_plugin_dir(monkeypatch, "service", root_dir)
+        monkeypatch.setattr("plugins.tools.tool_test_plugin.load_single_plugin", _load_fake_service)
+        monkeypatch.setattr("plugins.tools.tool_test_plugin.unload_plugin", lambda *a, **k: None)
+        monkeypatch.setattr("plugins.tools.tool_test_plugin.subprocess.run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="1 passed", stderr=""))
+
+        result = TestPlugin().run(_ctx(), plugin_path=str(path))
+
+        assert result.success
+        assert result.data["plugin_type"] == "service"
+        assert "Load check: ok: demo" in result.llm_summary
+    finally:
+        path.unlink(missing_ok=True)
+        root_dir.rmdir()
+
+
 def test_test_plugin_reports_load_and_pytest_success(monkeypatch):
     """Verify test plugin reports load and pytest success."""
     root_dir = Path(".codex_test_plugin_tools")
@@ -191,6 +233,19 @@ class _BadService(BaseService):
         pass
 
 
+class _GoodService(BaseService):
+    """Good service."""
+    model_name = "Demo"
+
+    def _load(self):
+        """Load good service."""
+        return True
+
+    def unload(self):
+        """Unload good service."""
+        pass
+
+
 class _BadCommand(BaseCommand):
     """Bad command."""
     name = "demo"
@@ -215,4 +270,12 @@ def _load_bad_tool(*args, **kwargs):
     tool = _BadTool()
     tool._source_path = str(args[1].resolve())
     kwargs["tool_registry"].register(tool)
+    return "demo", None
+
+
+def _load_fake_service(*args, **kwargs):
+    """Internal helper to load fake service."""
+    service = _GoodService()
+    service._source_path = str(args[1].resolve())
+    kwargs["services"]["demo"] = service
     return "demo", None

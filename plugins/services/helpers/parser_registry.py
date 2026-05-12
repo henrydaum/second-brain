@@ -9,7 +9,7 @@ The first modality registered for an extension becomes its default.
 
 The registry itself is pure state and helper functions. Lifecycle
 (populating the registry by importing parser modules) and the
-services-aware entry point live on ParserService in parserService.py.
+services-aware entry point live on ParserService in service_parser.py.
 """
 
 import logging
