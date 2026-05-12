@@ -277,7 +277,7 @@ def _conversation_metadata(meta: dict[str, Any] | None) -> str:
     if not meta:
         return ""
     lines = "\n".join(["## Current conversation", f"Number: {meta.get('id')}", f"Category: {(meta.get('category') or '').strip() or 'Main'}", f"Title: {(meta.get('title') or '').strip() or 'New Conversation'}"])
-    lines += "\nUse conversation IDs to query the 'conversations' and 'conversation_messages' tables in the database to see history. When a conversation gets too long, it will be compacted to save space. History prior to the compaction will still be available in the database, but won't be visible in the conversation context for new messages."""
+    lines += "\nUse conversation IDs to query the 'conversations' and 'conversation_messages' tables in the database to see history. When a conversation gets too long, it will be compacted to save space. History prior to the compaction will still be available in the database, but won't be visible in the conversation context for new messages."
     return lines
 
 
