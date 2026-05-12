@@ -42,7 +42,6 @@ def build_prompt_sections(
     semi = [
         _tool_catalog(r),
         _command_catalog(commands),
-        _retrieval_guidance(),
         _authoring_guidance() if _has_tool(r, "test_plugin") else _plugin_contracts(),
         _sandbox_files() if _has_tool(r, "test_plugin") else "",
         _attachments() if _has_tool(r, "sql_query") else "",
@@ -150,15 +149,6 @@ def _form_hint(form, commands=None) -> str:
     return " ".join(f"<{s.name}>" if getattr(s, "required", True) else f"[{s.name}]" for s in steps)
 
 
-def _retrieval_guidance() -> str:
-    return (
-        """## Retrieval guidance
-Start broad, then narrow your search. Begin with hybrid_search, then read the source file with read_file or query the underlying table with sql_query.
-
-The entire conversation history can be found within the SQL database, and retrieved using sql_query."""
-    )
-
-
 def _plugin_contracts() -> str:
     return (
         """## Plugin contracts
@@ -185,13 +175,16 @@ Workflow:
 2. Read the relevant template with read_file.
 3. Read a similar built-in or sandbox plugin when one exists.
 4. Write the file into the correct sandbox directory using the file-editing tools.
-5. If plugin_watcher is autoloaded, valid plugin files are loaded, reloaded, or unloaded as they change.
-6. Call test_plugin(plugin_path=...) after edits for naming, import, contract, and diagnostic feedback.
-7. Treat pytest output as broad regression context, not proof that the plugin's behavior is correct.
-8. If diagnostics, pytest, or watcher logs show a failure, edit the same file and test again.
-9. To remove a sandbox plugin durably and from the live runtime, delete its plugin file.
+5. Call test_plugin(plugin_path=...) after edits for naming, import, contract, and diagnostic feedback.
+6. Treat pytest output as broad regression context, not proof that the plugin's behavior is correct.
+7. If diagnostics, pytest, or watcher logs show a failure, edit the same file and test again.
 
-Names must be unique across built-in and sandbox plugins. Config settings use (title, variable_name, description, default, type_info), are stored in plugin_config.json, and are read with context.config.get(key)."""
+If plugin_watcher is loaded, valid plugin files are loaded, reloaded, or unloaded as they change. 
+To remove a sandbox plugin durably and from the live runtime, delete its plugin file.
+
+Names must be unique across built-in and sandbox plugins. Config settings use (title, variable_name, description, default, type_info), are stored in plugin_config.json, and are read with context.config.get(key).
+
+The context object is passed to every plugin and contains relevant runtime information and helper methods. Read its definition in runtime/context.py and ask if you have questions about how to use it effectively in your plugin code."""
     )
 
 
@@ -202,14 +195,14 @@ def _sandbox_files() -> str:
         if sd.exists():
             lines.extend(f"  {p}" for p in sorted(sd.glob("*.py")) if not p.name.startswith("_"))
     return "## Sandbox plugins\n" + ("\n".join(lines) if lines else """## Sandbox plugins
-None yet. When the user asks for a durable new capability, create a sandbox plugin from the relevant template, then test it with test_plugin. When plugin_watcher is enabled, valid plugin files load automatically.""")
+None yet. When new sandbox plugins are made, they will show up here.""")
 
 
 def _attachments() -> str:
     from paths import ATTACHMENT_CACHE
     return (
         f"""## Attachments
-Files sent through frontends are saved to the attachment cache and indexed by the normal task pipeline. If they can be parsed into text, they will be added to user messages directly, as well. You can write new attachment parsers for unsupported extensions by following the structure within attachments/parsers/.
+Files sent through frontends are saved to the attachment cache and indexed by the normal task pipeline. If they can be parsed into text, they will be added to user messages directly using a separate attachment parser system. You can extend this system by following the structure within attachments/parsers/.
 
 To find recent attachments with sql_query:
 SELECT path, file_name, mtime FROM files WHERE path LIKE '{ATTACHMENT_CACHE}%' ORDER BY mtime DESC LIMIT 10"""
@@ -221,7 +214,7 @@ def _database_tables(db) -> str:
         names = [row[0] for row in db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")["rows"]]
     except Exception:
         names = []
-    return "## Database tables (inspect with sql_query)\n" + (", ".join(names) if names else "No tables yet.")
+    return "## Database tables (inspect with sql_query, if available)\n" + (", ".join(names) if names else "No tables yet.")
 
 
 def _pipeline_status(db, orchestrator) -> str:
@@ -283,7 +276,9 @@ Current contents:
 def _conversation_metadata(meta: dict[str, Any] | None) -> str:
     if not meta:
         return ""
-    return "\n".join(["## Current conversation", f"Number: {meta.get('id')}", f"Category: {(meta.get('category') or '').strip() or 'Main'}", f"Title: {(meta.get('title') or '').strip() or 'New Conversation'}"])
+    lines = "\n".join(["## Current conversation", f"Number: {meta.get('id')}", f"Category: {(meta.get('category') or '').strip() or 'Main'}", f"Title: {(meta.get('title') or '').strip() or 'New Conversation'}"])
+    lines += "\nUse conversation IDs to query the 'conversations' and 'conversation_messages' tables in the database to see history. When a conversation gets too long, it will be compacted to save space. History prior to the compaction will still be available in the database, but won't be visible in the conversation context for new messages."""
+    return lines
 
 
 def _prompt_extras(extras: dict[str, Any] | None) -> str:
