@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Adapter-facing conversation runtime.
 
 This is the single dispatcher between a frontend transport (REPL, Telegram,
@@ -36,6 +34,8 @@ everything up, the ``handle_action`` entry point, the user-side dispatch
 loop, the agent-turn driver, and the plugin-facing API surface. Read
 top-to-bottom.
 """
+
+from __future__ import annotations
 
 import logging
 import threading
@@ -80,6 +80,7 @@ class ConversationRuntime:
         on_tool_result=None,
         on_notice=None,
     ):
+        """Initialize the conversation runtime."""
         self.db = db
         self.services = services or {}
         self.config = config or {}
@@ -116,6 +117,7 @@ class ConversationRuntime:
     # ──────────────────────────────────────────────────────────────────
 
     def handle_action(self, session_key: str, action_type: str, payload: dict | str | None = None, *, user_driven: bool = True) -> RuntimeResult:
+        """Route one frontend action through guards, dispatch, and optional agent follow-up."""
         session = self.get_session(session_key)
         if user_driven:
             self.active_session_key = session_key
@@ -192,6 +194,7 @@ class ConversationRuntime:
     # ──────────────────────────────────────────────────────────────────
 
     def _dispatch(self, session: RuntimeSession, action_type: str, payload: dict | str | None) -> RuntimeResult:
+        """Apply one user-side action and decide whether an agent turn should follow."""
         # Transport-level actions that never enter the state machine.
         if action_type == "load_history":
             return self.load_history(session.key, int((payload or {}).get("conversation_id")))
@@ -265,6 +268,7 @@ class ConversationRuntime:
     # ──────────────────────────────────────────────────────────────────
 
     def _drive_agent_turn(self, session: RuntimeSession, out: RuntimeResult) -> RuntimeResult:
+        """Run the agent loop for a session and surface its outputs back to the frontend."""
         _persist.ensure_conversation(session=session, runtime=self, title_text=_disp.latest_user_text(session))
         session.busy = True
         session.cancel_event.clear()
@@ -321,6 +325,7 @@ class ConversationRuntime:
     # ──────────────────────────────────────────────────────────────────
 
     def get_session(self, key: str) -> RuntimeSession:
+        """Return the live runtime session for a session key, creating it if needed."""
         return _persist.get_or_create_session(self, key)
 
     def open_session(
@@ -346,27 +351,35 @@ class ConversationRuntime:
         )
 
     def create_conversation(self, title: str = "New Conversation", *, kind: str = "user", category: str | None = None) -> int | None:
+        """Create a persisted conversation row and return its ID."""
         return _persist.create_conversation(self, title, kind=kind, category=category)
 
     def load_conversation(self, session_key: str, conversation_id: int, *, agent_profile: str | None = None, system_prompt_extras: dict[str, Any] | None = None) -> RuntimeSession:
+        """Load a persisted conversation into a runtime session."""
         return _persist.load_conversation(self, session_key, conversation_id, agent_profile=agent_profile, system_prompt_extras=system_prompt_extras)
 
     def load_history(self, session_key: str, conversation_id: int) -> RuntimeResult:
+        """Load saved transcript history for one conversation."""
         return _persist.load_history(self, session_key, conversation_id)
 
     def reset_conversation(self, session_key: str) -> RuntimeSession:
+        """Drop the in-memory conversation state for one session."""
         return _persist.reset_conversation(self, session_key)
 
     def new_conversation(self, session_key: str) -> RuntimeResult:
+        """Create and switch to a fresh user conversation for the session."""
         return _persist.new_conversation(self, session_key)
 
     def iterate_agent_turn(self, session_key: str, prompt: str, *, attachments=None, actor_id: str = "user") -> RuntimeResult:
+        """Inject input and immediately drive the agent turn outside a frontend transport."""
         return _persist.iterate_agent_turn(self, session_key, prompt, attachments=attachments, actor_id=actor_id)
 
     def inject_user_message(self, session_key: str, text: str, *, conversation_id: int | None = None, actor_id: str = "user") -> RuntimeResult:
+        """Append a message directly to a session before handing control to the agent loop."""
         return _persist.inject_user_message(self, session_key, text, conversation_id=conversation_id, actor_id=actor_id)
 
     def close_session(self, session_key: str) -> bool:
+        """Close one live session and persist its final marker state."""
         return _persist.close_session(self, session_key)
 
     def unload_conversation(self, session_key: str) -> bool:
@@ -456,6 +469,7 @@ class ConversationRuntime:
     # ──────────────────────────────────────────────────────────────────
 
     def request_compaction(self, session_key: str | None, transcript: str, timeout: float = 120.0) -> str | None:
+        """Ask the compaction task to summarize a transcript and wait for the result."""
         import uuid
         from events.event_channels import COMPACT_CHAT
         token = f"compact:{uuid.uuid4().hex}"
@@ -477,6 +491,7 @@ class ConversationRuntime:
                 self._compaction_pending.pop(token, None)
 
     def finish_compaction(self, token: str, summary: str | None, error: str | None = None) -> None:
+        """Resolve a waiting compaction request with either a summary or an error."""
         with self._compaction_lock:
             slot = self._compaction_pending.get(token)
         if slot is None:
@@ -487,6 +502,7 @@ class ConversationRuntime:
         slot["event"].set()
 
     def _persist_active_conversation(self, conv_id: int | None) -> None:
+        """Remember the active conversation ID in config for the next startup."""
         self._persisted_active_conv_id = conv_id
         if self.config is None:
             return
@@ -505,6 +521,7 @@ class ConversationRuntime:
     # ──────────────────────────────────────────────────────────────────
 
     def request_approval(self, session_key: str, title: str, body: str, pending_action: dict[str, Any]) -> StateMachineApprovalRequest:
+        """Suspend a session on a yes-or-no approval request."""
         return _approvals.request_approval(self, session_key, title, body, pending_action)
 
     def request_input(
@@ -519,6 +536,7 @@ class ConversationRuntime:
         required: bool = True,
         pending_action: dict[str, Any] | None = None,
     ) -> StateMachineApprovalRequest:
+        """Suspend a session on a typed-input request."""
         return _approvals.request_input(
             self, session_key, title, prompt,
             type=type, enum=enum, default=default,
@@ -526,6 +544,7 @@ class ConversationRuntime:
         )
 
     def answer_request(self, session_key: str, request_id: str, value) -> RuntimeResult:
+        """Resume a pending approval or input request with a provided answer."""
         return _approvals.answer_request(self, session_key, request_id, value)
 
     # ──────────────────────────────────────────────────────────────────
@@ -541,6 +560,7 @@ class ConversationRuntime:
     # ──────────────────────────────────────────────────────────────────
 
     def list_sessions(self) -> list[dict[str, Any]]:
+        """Return lightweight debug metadata for every live runtime session."""
         out = []
         for key, s in list(self.sessions.items()):
             out.append({
@@ -568,6 +588,7 @@ class ConversationRuntime:
         bus.emit(CHAT_MESSAGE_PUSHED, payload)
 
     def set_agent_profile(self, session_key: str, profile: str) -> bool:
+        """Switch the active agent profile for one live session."""
         session = self.sessions.get(session_key)
         if session is None:
             return False
@@ -581,6 +602,7 @@ class ConversationRuntime:
         return True
 
     def add_system_prompt_extra(self, session_key: str, key: str, value: str | None) -> bool:
+        """Attach or clear one named system-prompt overlay for a session."""
         session = self.sessions.get(session_key)
         if session is None:
             return False
@@ -594,9 +616,11 @@ class ConversationRuntime:
         return True
 
     def remove_system_prompt_extra(self, session_key: str, key: str) -> bool:
+        """Remove system prompt extra."""
         return self.add_system_prompt_extra(session_key, key, None)
 
     def add_session_tool(self, session_key: str, tool_instance) -> bool:
+        """Expose an extra tool instance to one live session."""
         session = self.sessions.get(session_key)
         if session is None:
             return False
@@ -608,6 +632,7 @@ class ConversationRuntime:
         return True
 
     def remove_session_tool(self, session_key: str, tool_name: str) -> bool:
+        """Remove session tool."""
         session = self.sessions.get(session_key)
         if session is None:
             return False
@@ -621,6 +646,7 @@ class ConversationRuntime:
         return False
 
     def cancel_session(self, session_key: str) -> RuntimeResult | None:
+        """Cancel the current in-flight action for a session, if it exists."""
         if session_key not in self.sessions:
             return None
         return self.handle_action(session_key, "cancel")

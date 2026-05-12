@@ -1,3 +1,5 @@
+"""Attachment parsing helpers for video inputs."""
+
 import logging
 from pathlib import Path
 from plugins.services.helpers.ParseResult import ParseResult

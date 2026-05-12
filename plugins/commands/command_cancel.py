@@ -1,12 +1,16 @@
+"""Slash command plugin for `/cancel`."""
+
 from plugins.BaseCommand import BaseCommand
 
 
 class CancelCommand(BaseCommand):
+    """Slash-command handler for `/cancel`."""
     name = "cancel"
     description = "Cancel the current interaction"
     category = "Conversation"
 
     def run(self, _args, context):
+        """Execute `/cancel` for the active session."""
         runtime = getattr(context, "runtime", None)
         session_key = getattr(context, "session_key", None)
         if runtime is None or not session_key:

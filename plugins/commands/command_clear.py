@@ -1,12 +1,16 @@
+"""Slash command plugin for `/clear`."""
+
 from plugins.BaseCommand import BaseCommand
 
 
 class ClearCommand(BaseCommand):
+    """Slash-command handler for `/clear`."""
     name = "clear"
     description = "Clear all messages in the current conversation"
     category = "Conversation"
 
     def run(self, _args, context):
+        """Execute `/clear` for the active session."""
         runtime = getattr(context, "runtime", None)
         session_key = getattr(context, "session_key", None)
         db = getattr(context, "db", None)

@@ -12,14 +12,17 @@ import json
 # Use these everywhere so wording stays consistent across frontends.
 
 def status_badge(loaded: bool) -> str:
+    """Handle status badge."""
     return "Loaded" if loaded else "Unloaded"
 
 
 def enabled_badge(enabled: bool) -> str:
+    """Handle enabled badge."""
     return "Enabled" if enabled else "Disabled"
 
 
 def paused_suffix(paused: bool) -> str:
+    """Handle paused suffix."""
     return "  (paused)" if paused else ""
 
 

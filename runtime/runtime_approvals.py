@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Programmatic approval / typed-input requests.
 
 A *request* is the runtime's way of pausing a conversation to ask the user
@@ -19,6 +17,9 @@ and reconcile when the answer comes back.
 The ``form`` rendering of the frame (the dict the frontend renders) lives
 in ``runtime_dispatch``.
 """
+
+from __future__ import annotations
+
 
 from typing import Any
 

@@ -1,3 +1,5 @@
+"""Frontend plugin for Telegram renderers."""
+
 from __future__ import annotations
 
 import html
@@ -31,6 +33,7 @@ _PHOTO_MAX_RATIO = 20
 
 @dataclass
 class SendAction:
+    """Send action."""
     method: str
     files: list[Path] = field(default_factory=list)
     group_type: str = ""
@@ -38,12 +41,14 @@ class SendAction:
 
 
 def file_bytes(path: Path) -> io.BytesIO:
+    """Handle file bytes."""
     buf = io.BytesIO(path.read_bytes())
     buf.name = path.name
     return buf
 
 
 def prepare_photo_bytes(path: Path) -> io.BytesIO:
+    """Handle prepare photo bytes."""
     size = path.stat().st_size
     img = Image.open(path)
     w, h = img.size
@@ -69,6 +74,7 @@ def prepare_photo_bytes(path: Path) -> io.BytesIO:
 
 
 def _google_link(path: Path) -> str | None:
+    """Internal helper to handle google link."""
     template = _GOOGLE_LINK_MAP.get(path.suffix.lower())
     if not template:
         return None
@@ -82,6 +88,7 @@ def _google_link(path: Path) -> str | None:
 
 
 def _classify(path: Path) -> str:
+    """Internal helper to handle classify."""
     ext = path.suffix.lower()
     if ext in _GOOGLE_LINK_MAP:
         return "google_link"
@@ -101,6 +108,7 @@ def _classify(path: Path) -> str:
 
 
 def prepare_media_actions(paths: list[str], max_file_size: int = 50 * 1024 * 1024) -> list[SendAction]:
+    """Handle prepare media actions."""
     photo_video, audio, documents, text_actions, skipped = [], [], [], [], []
     for path_str in paths:
         p = Path(path_str)
@@ -138,6 +146,7 @@ def prepare_media_actions(paths: list[str], max_file_size: int = 50 * 1024 * 102
 
 
 def _build_group_actions(files: list[Path], group_type: str) -> list[SendAction]:
+    """Internal helper to build group actions."""
     if not files:
         return []
     actions = []

@@ -17,17 +17,22 @@ _HELP_SECTIONS = ["Conversation", "System", "Services & Tools", "Tasks", "Config
 
 
 class CommandRegistry:
+    """Command registry."""
     def __init__(self, context_provider: Callable[[str | None], object] | None = None):
+        """Initialize the command registry."""
         self._commands: dict[str, BaseCommand] = {}
         self._context_provider = context_provider
 
     def register(self, entry: BaseCommand):
+        """Register command registry."""
         self._commands[entry.name] = entry
 
     def unregister(self, name: str):
+        """Unregister command registry."""
         self._commands.pop(name, None)
 
     def context(self, session_key: str | None = None):
+        """Handle context."""
         ctx = self._context_provider(session_key) if self._context_provider else None
         if ctx is not None:
             try:
@@ -37,10 +42,12 @@ class CommandRegistry:
         return ctx
 
     def get_completions(self, prefix: str) -> list[BaseCommand]:
+        """Get completions."""
         prefix = prefix.lower()
         return sorted([c for c in self._commands.values() if c.name.startswith(prefix)], key=lambda c: c.name)
 
     def dispatch_dict(self, name: str, args: dict | None = None, *, session_key: str | None = None, _emit: bool = True) -> str | None:
+        """Handle dispatch dict."""
         entry = self._commands.get(name)
         if entry is None:
             return f"Unknown command: '/{name}'."
@@ -59,6 +66,7 @@ class CommandRegistry:
         return out
 
     def parse_args(self, name: str, raw: str, *, session_key: str | None = None) -> dict:
+        """Parse args."""
         entry = self._commands.get(name)
         if not entry:
             return {}
@@ -66,12 +74,15 @@ class CommandRegistry:
         return parse_command_line(raw, lambda a, c: entry.form(a, c), ctx)
 
     def all_commands(self) -> list[BaseCommand]:
+        """Handle all commands."""
         return sorted(self._commands.values(), key=lambda cmd: cmd.name)
 
     def visible_commands(self) -> list[BaseCommand]:
+        """Handle visible commands."""
         return [cmd for cmd in self.all_commands() if not getattr(cmd, "hide_from_help", False)]
 
     def to_callable_specs(self) -> dict[str, CallableSpec]:
+        """Handle to callable specs."""
         specs = {}
         for entry in self.all_commands():
             specs[entry.name] = CallableSpec(
@@ -84,6 +95,7 @@ class CommandRegistry:
         return specs
 
     def help_text(self) -> str:
+        """Handle help text."""
         by_cat: dict[str, list[BaseCommand]] = {}
         for cmd in self.visible_commands():
             by_cat.setdefault(cmd.category or "Other", []).append(cmd)
@@ -99,6 +111,7 @@ class CommandRegistry:
 
 
 def parse_command_line(raw: str, form_factory: Callable[[dict, object], list[FormStep]] | list[FormStep], context=None) -> dict:
+    """Parse command line."""
     args, rest = {}, (raw or "").strip()
     while rest:
         steps = form_factory(args, context) if callable(form_factory) else form_factory
@@ -129,6 +142,7 @@ def parse_command_line(raw: str, form_factory: Callable[[dict, object], list[For
 
 
 def format_command_call(name: str, args: dict | None = None) -> str:
+    """Format command call."""
     parts = ["/" + str(name or "").strip().lstrip("/")]
     for value in (args or {}).values():
         if value is None:
@@ -139,6 +153,7 @@ def format_command_call(name: str, args: dict | None = None) -> str:
 
 
 def _peel(rest: str, *, last: bool, field_type: str) -> tuple[object, str]:
+    """Internal helper to handle peel."""
     rest = rest.strip()
     if not rest:
         return "", ""
@@ -154,6 +169,7 @@ def _peel(rest: str, *, last: bool, field_type: str) -> tuple[object, str]:
 
 
 def _arg_hint_from_form(form: list[FormStep]) -> str:
+    """Internal helper to handle arg hint from form."""
     out = []
     for step in form or []:
         name = step.name
@@ -162,6 +178,7 @@ def _arg_hint_from_form(form: list[FormStep]) -> str:
 
 
 def _emit_started(name: str, args: dict, session_key: str | None):
+    """Internal helper to emit started."""
     from events.event_bus import bus
     from events.event_channels import COMMAND_CALL_STARTED
     call_id = f"cmd:{name}:{uuid.uuid4().hex[:8]}"
@@ -170,6 +187,7 @@ def _emit_started(name: str, args: dict, session_key: str | None):
 
 
 def _emit_finished(name: str, call_id: str | None, session_key: str | None, *, ok: bool, error: str | None):
+    """Internal helper to emit finished."""
     if not call_id:
         return
     from events.event_bus import bus

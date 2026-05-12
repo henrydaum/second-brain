@@ -39,7 +39,9 @@ from paths import DATA_DIR
 logger = logging.getLogger("driveService")
 
 class GoogleDriveService(BaseService):
+    """Google drive service."""
     def __init__(self):
+        """Initialize the google drive service."""
         super().__init__()
         self.model_name = "google_drive"
         self.shared = False  # Each client is a separate instance (build() is cheap)
@@ -215,4 +217,5 @@ class GoogleDriveService(BaseService):
 
 
 def build_services(config: dict) -> dict:
+    """Build services."""
     return {"google_drive": GoogleDriveService()}

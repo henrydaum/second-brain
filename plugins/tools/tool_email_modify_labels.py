@@ -25,6 +25,7 @@ SYSTEM_LABELS = {
 
 
 def _allowed_addresses(config) -> list[str]:
+    """Internal helper to handle allowed addresses."""
     raw = config.get("ai_email_addresses") or []
     if not isinstance(raw, list):
         return []
@@ -72,6 +73,7 @@ def _resolve_labels(gmail, names: list[str]) -> tuple[list[str], list[str]]:
 
 
 class EmailModifyLabels(BaseTool):
+    """Email modify labels."""
     name = "email_modify_labels"
     description = (
         "Add or remove Gmail labels on a message. Pass `add` and/or `remove` as "
@@ -119,6 +121,7 @@ class EmailModifyLabels(BaseTool):
     background_safe = True
 
     def run(self, context, **kwargs) -> ToolResult:
+        """Run email modify labels."""
         gmail = context.services.get("gmail")
         if not gmail:
             return ToolResult.failed("Gmail service not available.")

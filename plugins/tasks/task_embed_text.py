@@ -18,6 +18,7 @@ logger = logging.getLogger("EmbedText")
 
 
 class EmbedText(BaseTask):
+	"""Embed text."""
 	name = "embed_text"
 	modalities = ["text"]
 	reads = ["text_chunks"]
@@ -38,6 +39,7 @@ class EmbedText(BaseTask):
 	timeout = 300
 
 	def run(self, paths, context):
+		"""Run embed text."""
 		embedder = context.services.get("text_embedder")
 		if not embedder or not embedder.loaded:
 			return [TaskResult.failed("text_embedder service not loaded") for _ in paths]

@@ -16,6 +16,7 @@ from typing import Optional
 @dataclass
 class SearchResult:
     # --- Universal (always set) ---
+    """Search result."""
     path: str               # file path
     score: float            # higher = better
     source: str             # provenance: "extracted", "ocr", "text_embedding", "image_embedding"
@@ -33,4 +34,5 @@ class SearchResult:
     # sheet_name: Optional[str] = None    # spreadsheet tab
 
     def to_dict(self) -> dict:
+        """Handle to dict."""
         return asdict(self)

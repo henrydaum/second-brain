@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Per-conversation runtime state.
 
 Two dataclasses live here, kept apart from the runtime so each can be read
@@ -12,6 +10,9 @@ on its own:
 - :class:`RuntimeResult` is the transport-neutral output the runtime hands
   back to a frontend after every action.
 """
+
+from __future__ import annotations
+
 
 import threading
 from dataclasses import dataclass, field
@@ -36,6 +37,7 @@ class RuntimeResult:
     data: dict[str, Any] = field(default_factory=dict)
 
     def add_action_result(self, result: ActionResult) -> "RuntimeResult":
+        """Handle add action result."""
         self.ok = self.ok and result.ok
         self.events.extend(result.events)
         if result.message:
@@ -68,6 +70,7 @@ class RuntimeSession:
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def to_marker(self) -> dict[str, Any]:
+        """Handle to marker."""
         state = self.cs.to_dict()
         state.update({
             "conversation_id": self.conversation_id,
@@ -89,6 +92,7 @@ class SessionConflict(RuntimeError):
     """
 
     def __init__(self, session_key: str, existing_id: int | None, requested_id: int | None):
+        """Initialize the session conflict."""
         super().__init__(
             f"Session '{session_key}' is already bound to conversation {existing_id}; "
             f"cannot rebind to {requested_id}."

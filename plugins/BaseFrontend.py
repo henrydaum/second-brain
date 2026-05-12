@@ -69,6 +69,7 @@ def _form_step_accepts(step, text: str) -> bool:
 
 
 def _approval_body(text: str, limit: int = 900) -> str:
+    """Internal helper to handle approval body."""
     text = (text or "").strip()
     return text if len(text) <= limit else f"{text[:limit].rstrip()}\n\n...preview trimmed for readability."
 
@@ -145,11 +146,13 @@ class BaseFrontend:
     config_settings: list = []
 
     def __init_subclass__(cls, **kwargs):
+        """Internal helper to handle init subclass."""
         super().__init_subclass__(**kwargs)
         if isinstance(cls.config_settings, list):
             cls.config_settings = list(cls.config_settings)
 
     def __init__(self):
+        """Initialize the base frontend."""
         self.runtime = None
         self.commands = None     # CommandRegistry, set in bind()
         self.config: dict = {}
@@ -164,12 +167,15 @@ class BaseFrontend:
     # ──────────────────────────────────────────────────────────────────────
 
     def start(self) -> None:
+        """Start base frontend."""
         raise NotImplementedError(f"Frontend '{self.name}' must implement start()")
 
     def stop(self) -> None:
+        """Stop base frontend."""
         raise NotImplementedError(f"Frontend '{self.name}' must implement stop()")
 
     def session_key(self, ctx) -> str:
+        """Handle session key."""
         raise NotImplementedError(f"Frontend '{self.name}' must implement session_key()")
 
     # ──────────────────────────────────────────────────────────────────────
@@ -178,9 +184,11 @@ class BaseFrontend:
     # ──────────────────────────────────────────────────────────────────────
 
     def render_messages(self, session_key: str, messages: list[str]) -> None:
+        """Render messages."""
         raise NotImplementedError
 
     def render_attachments(self, session_key: str, paths: list[str]) -> None:
+        """Render attachments."""
         raise NotImplementedError
 
     def render_form_field(self, session_key: str, form: dict) -> None:
@@ -207,9 +215,11 @@ class BaseFrontend:
         raise NotImplementedError
 
     def render_buttons(self, session_key: str, buttons: list[dict]) -> None:
+        """Render buttons."""
         raise NotImplementedError
 
     def render_error(self, session_key: str, error: dict) -> None:
+        """Render error."""
         raise NotImplementedError
 
     def render_typing(self, session_key: str, on: bool) -> None:
@@ -254,6 +264,7 @@ class BaseFrontend:
         self._bound = True
 
     def unbind(self) -> None:
+        """Unbind base frontend."""
         for unsub in self._unsubs:
             try:
                 unsub()
@@ -268,6 +279,7 @@ class BaseFrontend:
     # ──────────────────────────────────────────────────────────────────────
 
     def submit(self, session_key: str, action_type: str, payload=None):
+        """Submit base frontend."""
         if self.runtime is None:
             raise RuntimeError(
                 f"Frontend '{self.name}' is not bound — call bind(runtime, ...) first."
@@ -340,6 +352,7 @@ class BaseFrontend:
         return self.submit(session_key, ACTION_SEND_TEXT, text)
 
     def submit_attachment(self, session_key: str, path: str, extension: str | None = None):
+        """Submit attachment."""
         from pathlib import Path
         ext = extension or Path(path).suffix.lstrip(".")
         return self.submit(
@@ -349,6 +362,7 @@ class BaseFrontend:
         )
 
     def cancel(self, session_key: str):
+        """Cancel base frontend."""
         return self.submit(session_key, ACTION_CANCEL)
 
     # ──────────────────────────────────────────────────────────────────────
@@ -357,6 +371,7 @@ class BaseFrontend:
     # ──────────────────────────────────────────────────────────────────────
 
     def on_bus_approval_requested(self, req) -> None:
+        """Handle on bus approval requested."""
         target = ((getattr(req, "metadata", None) or {}).get("session_key"))
         live = self._live_session_keys()
         keys = [target] if target in live else live
@@ -370,6 +385,7 @@ class BaseFrontend:
                 logger.exception(f"render_approval_request failed for '{self.name}'")
 
     def resolve_approval(self, session_key: str, request_id: str, value, resolved_by: str | None = None) -> bool:
+        """Resolve approval."""
         with self._approval_lock:
             req = self._pending_approvals.get(session_key, {}).get(request_id)
             if req is None:
@@ -382,6 +398,7 @@ class BaseFrontend:
         return bool(result and result.ok)
 
     def resolve_next_approval(self, session_key: str, value, resolved_by: str | None = None) -> bool:
+        """Resolve next approval."""
         with self._approval_lock:
             order = self._pending_approval_order.setdefault(session_key, [])
             pending = self._pending_approvals.setdefault(session_key, {})
@@ -390,10 +407,12 @@ class BaseFrontend:
             return bool(order) and self.resolve_approval(session_key, order.pop(0), value, resolved_by)
 
     def has_pending_approval(self, session_key: str) -> bool:
+        """Return whether pending approval."""
         with self._approval_lock:
             return any(not getattr(req, "is_resolved", False) for req in self._pending_approvals.get(session_key, {}).values())
 
     def _clear_pending_approval(self, session_key: str, request_id: str | None = None) -> None:
+        """Internal helper to clear pending approval."""
         with self._approval_lock:
             if request_id is None:
                 self._pending_approvals.pop(session_key, None)
@@ -403,6 +422,7 @@ class BaseFrontend:
             self._pending_approval_order[session_key] = [item for item in self._pending_approval_order.get(session_key, []) if item != request_id]
 
     def on_bus_message_pushed(self, payload: dict) -> None:
+        """Handle on bus message pushed."""
         message = (payload or {}).get("message")
         if not message:
             return
@@ -419,24 +439,31 @@ class BaseFrontend:
                 logger.exception(f"render_messages (push) failed for '{self.name}'")
 
     def on_bus_tool_call_started(self, payload: dict) -> None:
+        """Handle on bus tool call started."""
         self._render_tool_status_event({**(payload or {}), "status": "started"})
 
     def on_bus_tool_call_finished(self, payload: dict) -> None:
+        """Handle on bus tool call finished."""
         self._render_tool_status_event({**(payload or {}), "status": "finished"})
 
     def on_bus_command_call_started(self, payload: dict) -> None:
+        """Handle on bus command call started."""
         self._render_tool_status_event({**(payload or {}), "status": "started", "kind": "command"})
 
     def on_bus_command_call_progressed(self, payload: dict) -> None:
+        """Handle on bus command call progressed."""
         self._render_tool_status_event({**(payload or {}), "status": "progressed", "kind": "command"})
 
     def on_bus_command_call_finished(self, payload: dict) -> None:
+        """Handle on bus command call finished."""
         self._render_tool_status_event({**(payload or {}), "status": "finished", "kind": "command"})
 
     def on_tools_changed(self, _payload) -> None:
+        """Handle on tools changed."""
         return
 
     def on_tasks_changed(self, _payload) -> None:
+        """Handle on tasks changed."""
         return
 
     # ──────────────────────────────────────────────────────────────────────
@@ -444,6 +471,7 @@ class BaseFrontend:
     # ──────────────────────────────────────────────────────────────────────
 
     def _render_result(self, session_key: str, result) -> None:
+        """Internal helper to render result."""
         if result is None:
             return
         if result.messages:
@@ -461,14 +489,17 @@ class BaseFrontend:
             self.render_approval_request(session_key, req)
 
     def _current_phase(self, session_key: str) -> str:
+        """Return current phase."""
         session = self.runtime.get_session(session_key)
         return session.cs.phase
 
     def _current_form_step(self, session_key: str):
+        """Return current form step."""
         frame = self.runtime.get_session(session_key).cs.frame
         return getattr(frame, "step", None) if frame else None
 
     def _current_approval_request(self, session_key: str):
+        """Return current approval request."""
         if self._current_phase(session_key) != PHASE_APPROVING_REQUEST:
             return None
         frame = self.runtime.get_session(session_key).cs.frame
@@ -496,6 +527,7 @@ class BaseFrontend:
         return list(self.runtime.sessions.keys())
 
     def _render_tool_status_event(self, payload: dict) -> None:
+        """Internal helper to render tool status event."""
         key = (payload or {}).get("session_key")
         if not key or key not in self._live_session_keys():
             return

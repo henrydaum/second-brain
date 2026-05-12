@@ -1,3 +1,5 @@
+"""Slash command plugin for `/config`."""
+
 import json
 
 from config.config_data import SETTINGS_DATA
@@ -8,6 +10,7 @@ from state_machine.conversation import FormStep
 
 
 def _hidden(info):
+    """Internal helper to handle hidden."""
     return isinstance(info, dict) and info.get("hidden") is True
 
 
@@ -16,11 +19,13 @@ ACTIONS = ["edit"]
 
 
 class ConfigCommand(BaseCommand):
+    """Slash-command handler for `/config`."""
     name = "config"
     description = "Select a config setting, then edit it"
     category = "Config & System"
 
     def form(self, args, context):
+        """Handle form."""
         steps = [FormStep("setting_name", "Select a setting to inspect or edit.", True, enum=sorted(_settings()), columns=2)]
         if args.get("setting_name"):
             steps.append(FormStep("action", f"What do you want to do with this setting?\n\n{_describe(context, args['setting_name'])}", True, enum=ACTIONS, enum_labels=["Edit setting"]))
@@ -29,6 +34,7 @@ class ConfigCommand(BaseCommand):
         return steps
 
     def run(self, args, context):
+        """Execute `/config` for the active session."""
         config = context.config if context.config is not None else {}
         key = args.get("setting_name")
         if not key:
@@ -54,18 +60,22 @@ class ConfigCommand(BaseCommand):
 
 
 def _settings():
+    """Internal helper to handle settings."""
     return CORE | {name: (title, desc) for title, name, desc, _, info in get_plugin_settings() if not _hidden(info)}
 
 
 def _plugin_keys():
+    """Internal helper to handle plugin keys."""
     return {entry[1] for entry in get_plugin_settings()}
 
 
 def _setting_data(key):
+    """Internal helper to handle setting data."""
     return next((entry for entry in [*SETTINGS_DATA, *get_plugin_settings()] if entry[1] == key), None)
 
 
 def _value_type(key):
+    """Internal helper to handle value type."""
     entry = _setting_data(key) or (None, None, None, None, {})
     default, info = entry[3], entry[4] if isinstance(entry[4], dict) else {}
     type_ = info.get("type")
@@ -81,19 +91,23 @@ def _value_type(key):
 
 
 def _value_prompt(key):
+    """Internal helper to handle value prompt."""
     return "Enter a list of items, one on each line, like so:\n\nitem 1\nitem 2" if _value_type(key) == "array" else "Enter the new value."
 
 
 def _describe(context, key):
+    """Internal helper to handle describe."""
     title, desc = _settings().get(key, (key, ""))
     return f"{title}\n{key} = {(context.config or {}).get(key)}\n{desc}"
 
 
 def _list(context):
+    """Internal helper to list config."""
     return "Settings:\n" + "\n".join(f"  {k} = {(context.config or {}).get(k)}" for k in sorted(_settings()))
 
 
 def _parse(value, key=None):
+    """Internal helper to parse config."""
     if key:
         return FormStep("value", type=_value_type(key)).coerce(value)
     if isinstance(value, str):

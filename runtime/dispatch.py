@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Per-action dispatch helpers.
 
 The runtime's ``_dispatch`` is the single labeled enact() site for the
@@ -12,6 +10,9 @@ factored out here as plain functions.
 Each helper does one thing and is named after the question it answers, so
 the dispatch loop reads top-to-bottom like a checklist.
 """
+
+from __future__ import annotations
+
 
 from typing import Any
 
@@ -32,6 +33,7 @@ from runtime.session import RuntimeResult, RuntimeSession
 # ──────────────────────────────────────────────────────────────────────
 
 def text_of(payload: dict | str | None) -> str:
+    """Extract plain text from an inbound frontend payload."""
     return payload if isinstance(payload, str) else str((payload or {}).get("text") or "")
 
 
@@ -47,6 +49,7 @@ def attachments_of(payload: dict | str | None):
 
 
 def actor_id_of(payload: dict | str | None) -> str | None:
+    """Extract an explicit actor ID from an inbound payload, when present."""
     return (payload or {}).get("actor_id") if isinstance(payload, dict) else None
 
 
@@ -68,6 +71,7 @@ def content_for_action(action_type: str, text: str, payload: Any) -> Any:
 # ──────────────────────────────────────────────────────────────────────
 
 def text_after_action(action_type: str, text: str, result: ActionResult) -> str:
+    """Recover the user-visible text that should be mirrored into history after an action."""
     if action_type != "send_attachment" or not result.ok:
         return text
     parsed = (result.data or {}).get("parsed")
@@ -79,6 +83,7 @@ def text_after_action(action_type: str, text: str, result: ActionResult) -> str:
 # ──────────────────────────────────────────────────────────────────────
 
 def emit_state_change(session: RuntimeSession, old_phase: str, old_priority: str) -> None:
+    """Broadcast phase and turn-priority changes caused by one user action."""
     if session.cs.phase != old_phase:
         bus.emit(SESSION_PHASE_CHANGED, {
             "session_key": session.key,
@@ -150,6 +155,7 @@ def decorate_form(session: RuntimeSession, out: RuntimeResult) -> None:
 
 
 def latest_user_text(session: RuntimeSession) -> str:
+    """Return the latest user-authored text stored in session history."""
     for msg in reversed(session.history):
         if msg.get("role") == "user":
             return msg.get("content") or ""

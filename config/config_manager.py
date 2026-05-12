@@ -1,3 +1,5 @@
+"""Configuration support for config manager."""
+
 import logging
 import json
 from pathlib import Path
@@ -42,6 +44,7 @@ def _normalize_frontends(value) -> list[str]:
 
 
 def _normalize_list(value) -> list:
+    """Internal helper to normalize list."""
     return value if isinstance(value, list) else ([value] if value not in (None, "") else [])
 
 

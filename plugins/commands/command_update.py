@@ -1,9 +1,12 @@
+"""Slash command plugin for `/update`."""
+
 import subprocess
 
 from plugins.BaseCommand import BaseCommand
 
 
 class UpdateCommand(BaseCommand):
+    """Slash-command handler for `/update`."""
     name = "update"
     description = "Pull latest changes from the Second Brain repo"
     category = "Config & System"
@@ -11,6 +14,7 @@ class UpdateCommand(BaseCommand):
     approval_actor_id = "user"
 
     def run(self, args, context):
+        """Execute `/update` for the active session."""
         try:
             result = subprocess.run(["git", "pull"], capture_output=True, text=True, timeout=60, cwd=context.root_dir)
         except Exception as e:

@@ -35,6 +35,7 @@ class ToolRegistry:
     """
 
     def __init__(self, db, config: dict, services: dict = None):
+        """Initialize the tool registry."""
         self.db = db
         self.config = config
         self.services = services or {}
@@ -124,6 +125,7 @@ class ToolRegistry:
             max_workers=1, thread_name_prefix=f"sb-tool-{tool_name}")
 
         def _run_with_flag():
+            """Internal helper to run with flag."""
             _exec_state.in_tool = True
             try:
                 return tool.run(context, **kwargs)
@@ -157,15 +159,18 @@ class ToolRegistry:
         return [tool.to_schema() for tool in self._visible_tools()]
 
     def get_schema(self, name: str) -> dict | None:
+        """Get schema."""
         if self.visible_tool_names is not None and name not in self.visible_tool_names:
             return None
         tool = self.tools.get(name)
         return tool.to_schema() if tool else None
 
     def list_tools(self) -> list[str]:
+        """List tools."""
         return list(self.tools.keys())
 
     def _visible_tools(self):
+        """Internal helper to handle visible tools."""
         if self.visible_tool_names is None:
             return self.tools.values()
         return [tool for name, tool in self.tools.items() if name in self.visible_tool_names]

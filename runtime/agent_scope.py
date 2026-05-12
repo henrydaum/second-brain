@@ -17,6 +17,7 @@ _CALL_TOOL_RE = re.compile(r'context\.call_tool\(\s*["\']([^"\']+)["\']')
 
 @dataclass
 class AgentScope:
+    """Agent scope."""
     profile_name: str
     prompt_suffix: str = ""
     tools_allow: set[str] | None = None
@@ -24,6 +25,7 @@ class AgentScope:
 
     @property
     def has_tool_filter(self) -> bool:
+        """Return whether tool filter."""
         return self.tools_allow is not None or bool(self.tools_deny)
 
 
@@ -42,6 +44,7 @@ def load_scope(profile_name: str, config: dict) -> AgentScope:
 
 
 def _scope_mode(profile_name: str, profile: dict) -> str:
+    """Internal helper to handle scope mode."""
     key = "whitelist_or_blacklist_tools"
     mode = profile.get(key, "blacklist")
     if mode not in ("whitelist", "blacklist"):
@@ -53,6 +56,7 @@ def _scope_mode(profile_name: str, profile: dict) -> str:
 
 
 def _scope_list(profile_name: str, profile: dict) -> list:
+    """Internal helper to handle scope list."""
     key = "tools_list"
     value = profile.get(key, [])
     if value in (None, ""):
@@ -99,6 +103,7 @@ def resolve_agent_llm(profile_name: str, config: dict, services: dict):
 
 
 def _expand_tool_dependencies(tools: dict, names: set[str]) -> set[str]:
+    """Internal helper to handle expand tool dependencies."""
     expanded, pending = set(names), list(names)
     while pending:
         tool = tools.get(pending.pop())

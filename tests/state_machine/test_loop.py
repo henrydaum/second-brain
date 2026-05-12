@@ -52,10 +52,12 @@ class FakeResponse(SimpleNamespace):
 
     @classmethod
     def text(cls, content: str) -> "FakeResponse":
+        """Handle text."""
         return cls(content=content, has_tool_calls=False, tool_calls=[], is_error=False, prompt_tokens=0)
 
     @classmethod
     def tool(cls, calls: list[dict]) -> "FakeResponse":
+        """Handle tool."""
         return cls(content=None, has_tool_calls=True, tool_calls=calls, is_error=False, prompt_tokens=0)
 
 
@@ -65,11 +67,13 @@ class FakeLLM:
     context_size = 0
 
     def __init__(self, responses: list[FakeResponse]):
+        """Initialize the fake LLM."""
         self.responses = list(responses)
         self.calls = 0
         self.seen = []
 
     def chat_with_tools(self, messages, tools, attachments=None):
+        """Handle chat with tools."""
         self.seen.append((messages, tools, attachments))
         if self.calls >= len(self.responses):
             raise AssertionError("FakeLLM ran out of scripted responses")
@@ -88,6 +92,7 @@ class FakeToolRegistry:
     """Minimal stand-in for the real tool registry."""
 
     def __init__(self, schemas: list[dict] | None = None, tool_results: dict | None = None):
+        """Initialize the fake tool registry."""
         self._schemas = schemas or []
         self._tool_results = tool_results or {}
         self.tools = {name: SimpleNamespace(max_calls=3) for name in self._tool_results}
@@ -95,45 +100,56 @@ class FakeToolRegistry:
         self.called: list[tuple[str, dict]] = []
 
     def get_all_schemas(self) -> list[dict]:
+        """Get all schemas."""
         return self._schemas
 
     def call(self, name: str, **kwargs):
+        """Call fake tool registry."""
         self.called.append((name, kwargs))
         return self._tool_results.get(name, FakeToolResult(success=True, data={"echo": kwargs}, llm_summary=f"ran {name}", attachment_paths=[]))
 
 
 class FakeConversationDB:
+    """Test double for fake conversation DB."""
     def __init__(self):
+        """Initialize the fake conversation DB."""
         self.conversations = {}
         self.messages = {}
         self.next_id = 1
         self.replaced_history = None
 
     def create_conversation(self, title="New conversation", kind="user", category=None):
+        """Create conversation."""
         cid = self.next_id; self.next_id += 1
         self.conversations[cid] = {"id": cid, "title": title, "kind": kind, "category": category}
         self.messages[cid] = []
         return cid
 
     def get_conversation(self, conversation_id):
+        """Get conversation."""
         return self.conversations.get(conversation_id)
 
     def save_message(self, conversation_id, role, content, tool_call_id=None, tool_name=None):
+        """Save message."""
         self.messages.setdefault(conversation_id, []).append({"role": role, "content": content, "tool_call_id": tool_call_id, "tool_name": tool_name})
 
     def replace_conversation_messages(self, conversation_id, history):
+        """Handle replace conversation messages."""
         self.replaced_history = list(history)
         self.messages[conversation_id] = []
         for msg in history:
             self.save_message(conversation_id, msg.get("role"), msg.get("content") or "", msg.get("tool_call_id"), msg.get("name"))
 
     def get_conversation_messages(self, conversation_id):
+        """Get conversation messages."""
         return list(self.messages.get(conversation_id, []))
 
     def get_system_stats(self):
+        """Get system stats."""
         return {"files": {}, "tasks": {}}
 
     def list_conversations_page(self, offset=0, limit=10, category=None):
+        """List conversations page."""
         rows = list(self.conversations.values())
         if category == "":
             rows = [r for r in rows if r.get("category") in (None, "")]
@@ -142,6 +158,7 @@ class FakeConversationDB:
         return rows[offset:offset + limit], len(rows) > offset + limit
 
     def list_conversation_categories(self):
+        """List conversation categories."""
         out = []
         for r in self.conversations.values():
             c = r.get("category")
@@ -151,41 +168,51 @@ class FakeConversationDB:
         return out
 
     def set_conversation_category(self, conversation_id, category):
+        """Set conversation category."""
         self.conversations[conversation_id]["category"] = category
 
 
 class FakeTimekeeper:
+    """Test double for fake timekeeper."""
     loaded = True
 
     def __init__(self, jobs=None):
+        """Initialize the fake timekeeper."""
         self.jobs = dict(jobs or {})
 
     def get_job(self, name):
+        """Get job."""
         return self.jobs.get(name)
 
     def list_jobs(self):
+        """List jobs."""
         return dict(self.jobs)
 
     def create_job(self, name, job_def):
+        """Create job."""
         if name in self.jobs:
             raise ValueError(f"Job '{name}' already exists.")
         self.jobs[name] = dict(job_def)
         return self.jobs[name]
 
     def update_job(self, name, patch):
+        """Update job."""
         self.jobs[name].update(patch)
         return self.jobs[name]
 
     def remove_job(self, name):
+        """Remove job."""
         return self.jobs.pop(name, None) is not None
 
     def cron_to_text(self, expr):
+        """Handle cron to text."""
         if expr == "bad cron":
             raise ValueError("Invalid cron expression")
         return expr
 
 
 def make_cs(commands: dict[str, CallableSpec] | None = None, tools: dict[str, CallableSpec] | None = None) -> ConversationState:
+    """Build cs."""
     return ConversationState([
         Participant("user", "user", commands=commands or {}),
         Participant("agent", "agent", tools=tools or {}),
@@ -193,6 +220,7 @@ def make_cs(commands: dict[str, CallableSpec] | None = None, tools: dict[str, Ca
 
 
 def test_session_system_prompt_includes_conversation_metadata():
+    """Verify session system prompt includes conversation metadata."""
     db = FakeConversationDB()
     cid = db.create_conversation("Build Runtime Prompt", category="Projects")
     session = RuntimeSession("chat", make_cs(), conversation_id=cid)
@@ -212,6 +240,7 @@ def test_session_system_prompt_includes_conversation_metadata():
 
 
 def test_chat_path_user_text_then_agent_reply():
+    """Verify chat path user text then agent reply."""
     cs = make_cs()
     # User sends text; SendText auto-hands priority to the agent.
     result = create_action(cs, "send_text", "hello", "user").enact()
@@ -241,6 +270,7 @@ def test_chat_path_user_text_then_agent_reply():
 
 
 def test_tool_call_path_records_assistant_then_tool_then_final_text():
+    """Verify tool call path records assistant then tool then final text."""
     events = []
     schema = {"function": {"name": "echo", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}}}
     registry = FakeToolRegistry(
@@ -248,6 +278,7 @@ def test_tool_call_path_records_assistant_then_tool_then_final_text():
         tool_results={"echo": FakeToolResult(success=True, data={"q": "x"}, llm_summary="echoed: x", attachment_paths=[])},
     )
     def tool_handler(_cs, _actor, args):
+        """Handle tool handler."""
         assert events == [("start", "echo", "tc1", {"q": "x"})]
         return registry.call("echo", **args)
 
@@ -289,6 +320,7 @@ def test_tool_call_path_records_assistant_then_tool_then_final_text():
 
 
 def test_tool_budget_blocks_before_second_execution():
+    """Verify tool budget blocks before second execution."""
     schema = {"function": {"name": "echo", "parameters": {"type": "object", "properties": {}, "required": []}}}
     registry = FakeToolRegistry([schema], {"echo": FakeToolResult(success=True, data={}, llm_summary="ok", attachment_paths=[])})
     registry.tools["echo"].max_calls = 1
@@ -308,6 +340,7 @@ def test_tool_budget_blocks_before_second_execution():
 
 
 def test_runtime_emits_session_scoped_tool_status_events():
+    """Verify runtime emits session scoped tool status events."""
     events = []
     schema = {"function": {"name": "echo", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}}}
     registry = FakeToolRegistry(
@@ -335,6 +368,7 @@ def test_runtime_emits_session_scoped_tool_status_events():
 
 
 def test_runtime_can_chat_without_tool_registry():
+    """Verify runtime can chat without tool registry."""
     llm = FakeLLM([FakeResponse.text("plain reply")])
     result = ConversationRuntime(services={"llm": llm}).handle_action("chat", "send_text", "hello")
 
@@ -343,6 +377,7 @@ def test_runtime_can_chat_without_tool_registry():
 
 
 def test_runtime_surfaces_llm_provider_error_to_chat():
+    """Verify runtime surfaces LLM provider error to chat."""
     err = "your current token plan not support model, MiniMax-M2.7 (2061)"
     llm = FakeLLM([LLMResponse(error=err, error_code="provider_error")])
 
@@ -354,6 +389,7 @@ def test_runtime_surfaces_llm_provider_error_to_chat():
 
 
 def test_runtime_attachment_bundle_reaches_llm():
+    """Verify runtime attachment bundle reaches LLM."""
     import tempfile, os
     fd, note_path = tempfile.mkstemp(suffix=".txt")
     try:
@@ -382,6 +418,7 @@ def test_runtime_attachment_bundle_reaches_llm():
 
 
 def test_iterate_agent_turn_loads_persists_and_emits_completion():
+    """Verify iterate agent turn loads persists and emits completion."""
     db = FakeConversationDB()
     conv_id = db.create_conversation("Cron", category="Scheduled")
     db.save_message(conv_id, "user", "earlier")
@@ -419,6 +456,7 @@ def test_iterate_agent_turn_loads_persists_and_emits_completion():
 
 
 def test_load_history_restores_saved_agent_profile_and_history():
+    """Verify load history restores saved agent profile and history."""
     db = FakeConversationDB()
     conv_id = db.create_conversation("Builder chat")
     db.save_message(conv_id, "user", "earlier")
@@ -449,6 +487,7 @@ def test_load_history_restores_saved_agent_profile_and_history():
 
 
 def test_set_conversation_notification_mode_updates_stored_marker():
+    """Verify set conversation notification mode updates stored marker."""
     db = FakeConversationDB()
     conv_id = db.create_conversation("Cron")
     save_state_marker(db, conv_id, {"active_agent_profile": "builder"})
@@ -460,6 +499,7 @@ def test_set_conversation_notification_mode_updates_stored_marker():
 
 
 def test_set_conversation_notification_mode_updates_live_session():
+    """Verify set conversation notification mode updates live session."""
     db = FakeConversationDB()
     conv_id = db.create_conversation("Cron")
     runtime = ConversationRuntime(db=db)
@@ -473,6 +513,7 @@ def test_set_conversation_notification_mode_updates_live_session():
 
 
 def test_notification_off_suppresses_background_final_answer_push():
+    """Verify notification off suppresses background final answer push."""
     db = FakeConversationDB()
     conv_id = db.create_conversation("Cron")
     save_state_marker(db, conv_id, {"notification_mode": "off"})
@@ -490,6 +531,7 @@ def test_notification_off_suppresses_background_final_answer_push():
 
 
 def test_spawn_subagent_drives_inactive_conversation():
+    """Verify spawn subagent drives inactive conversation."""
     db = FakeConversationDB()
     conv_id = db.create_conversation("Cron")
     db.save_message(conv_id, "user", "earlier")
@@ -504,6 +546,7 @@ def test_spawn_subagent_drives_inactive_conversation():
 
 
 def test_spawn_subagent_creates_missing_conversation():
+    """Verify spawn subagent creates missing conversation."""
     db = FakeConversationDB()
     runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([FakeResponse.text("done")])}, tool_registry=FakeToolRegistry())
 
@@ -517,6 +560,7 @@ def test_spawn_subagent_creates_missing_conversation():
 
 
 def test_spawn_subagent_repairs_deleted_conversation_and_updates_recurring_job():
+    """Verify spawn subagent repairs deleted conversation and updates recurring job."""
     db = FakeConversationDB()
     tk = FakeTimekeeper({"brief": {"payload": {"title": "Brief", "prompt": "wake up", "conversation_id": 999}}})
     runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([FakeResponse.text("done")])}, tool_registry=FakeToolRegistry())
@@ -530,6 +574,7 @@ def test_spawn_subagent_repairs_deleted_conversation_and_updates_recurring_job()
 
 
 def test_spawn_subagent_rejects_active_conversation():
+    """Verify spawn subagent rejects active conversation."""
     db = FakeConversationDB()
     conv_id = db.create_conversation("Main")
     runtime = ConversationRuntime(db=db)
@@ -548,6 +593,7 @@ def test_spawn_subagent_rejects_active_conversation():
 
 
 def test_spawn_subagent_rejects_busy_background_session():
+    """Verify spawn subagent rejects busy background session."""
     db = FakeConversationDB()
     conv_id = db.create_conversation("Cron")
     runtime = ConversationRuntime(db=db)
@@ -560,6 +606,7 @@ def test_spawn_subagent_rejects_busy_background_session():
 
 
 def test_spawn_subagent_parses_attachment_paths():
+    """Verify spawn subagent parses attachment paths."""
     db = FakeConversationDB()
     conv_id = db.create_conversation("Cron")
     path = Path(".codex_spawn_subagent_attachment.txt")
@@ -577,6 +624,7 @@ def test_spawn_subagent_parses_attachment_paths():
 
 
 def test_spawn_subagent_validates_payload_and_attachment():
+    """Verify spawn subagent validates payload and attachment."""
     db = FakeConversationDB()
     runtime = ConversationRuntime(db=db)
     task = SpawnSubagent()
@@ -588,6 +636,7 @@ def test_spawn_subagent_validates_payload_and_attachment():
 
 
 def test_schedule_subagent_recurring_cron_requires_approval_and_creates_job():
+    """Verify schedule subagent recurring cron requires approval and creates job."""
     db = FakeConversationDB()
     tk = FakeTimekeeper()
     runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([])}, tool_registry=FakeToolRegistry())
@@ -607,6 +656,7 @@ def test_schedule_subagent_recurring_cron_requires_approval_and_creates_job():
 
 
 def test_tools_command_user_initiated_schedule_creates_cron_without_second_approval():
+    """Verify tools command user initiated schedule creates cron without second approval."""
     db = FakeConversationDB()
     tk = FakeTimekeeper()
     runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([])}, tool_registry=FakeToolRegistry())
@@ -630,6 +680,7 @@ def test_tools_command_user_initiated_schedule_creates_cron_without_second_appro
 
 
 def test_schedule_subagent_one_time_cron_computes_run_at():
+    """Verify schedule subagent one time cron computes run at."""
     db = FakeConversationDB()
     tk = FakeTimekeeper()
     runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([])}, tool_registry=FakeToolRegistry())
@@ -646,6 +697,7 @@ def test_schedule_subagent_one_time_cron_computes_run_at():
 
 
 def test_schedule_subagent_stores_attachments_in_payload():
+    """Verify schedule subagent stores attachments in payload."""
     db = FakeConversationDB()
     tk = FakeTimekeeper()
     runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([])}, tool_registry=FakeToolRegistry())
@@ -658,6 +710,7 @@ def test_schedule_subagent_stores_attachments_in_payload():
 
 
 def test_schedule_subagent_list_edit_and_remove():
+    """Verify schedule subagent list edit and remove."""
     db = FakeConversationDB()
     conv_id = db.create_conversation("Morning Brief")
     tk = FakeTimekeeper({
@@ -682,6 +735,7 @@ def test_schedule_subagent_list_edit_and_remove():
 
 
 def test_schedule_subagent_resolves_literal_job_key_or_payload_title():
+    """Verify schedule subagent resolves literal job key or payload title."""
     db = FakeConversationDB()
     tk = FakeTimekeeper({"Tester": {"enabled": True, "channel": "subagent.spawn", "cron": "0 8 * * *", "one_time": False, "payload": {"title": "Tester", "prompt": "old", "attachments": []}}})
     runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([])}, tool_registry=FakeToolRegistry())
@@ -697,6 +751,7 @@ def test_schedule_subagent_resolves_literal_job_key_or_payload_title():
 
 
 def test_schedule_subagent_edit_schedule_shapes():
+    """Verify schedule subagent edit schedule shapes."""
     db = FakeConversationDB()
     tk = FakeTimekeeper({"brief": {"enabled": True, "channel": "subagent.spawn", "cron": "0 8 * * *", "one_time": False, "payload": {"title": "Brief", "prompt": "x", "attachments": []}}})
     runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([])}, tool_registry=FakeToolRegistry())
@@ -711,6 +766,7 @@ def test_schedule_subagent_edit_schedule_shapes():
 
 
 def test_timekeeper_one_time_jobs_auto_delete_after_emit(monkeypatch):
+    """Verify timekeeper one time jobs auto delete after emit."""
     saved = {}
     monkeypatch.setattr(timekeeper_module.config_manager, "load_plugin_config", lambda: {})
     monkeypatch.setattr(timekeeper_module.config_manager, "save_plugin_config", saved.update)
@@ -724,6 +780,7 @@ def test_timekeeper_one_time_jobs_auto_delete_after_emit(monkeypatch):
 
 
 def test_schedule_subagent_denied_approval_has_no_side_effects():
+    """Verify schedule subagent denied approval has no side effects."""
     db = FakeConversationDB()
     tk = FakeTimekeeper()
     runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([])}, tool_registry=FakeToolRegistry())
@@ -737,6 +794,7 @@ def test_schedule_subagent_denied_approval_has_no_side_effects():
 
 
 def test_schedule_subagent_validation_and_duplicate_title():
+    """Verify schedule subagent validation and duplicate title."""
     db = FakeConversationDB()
     tk = FakeTimekeeper({"morning_brief": {"enabled": True}})
     runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([])}, tool_registry=FakeToolRegistry())
@@ -755,6 +813,7 @@ def test_schedule_subagent_validation_and_duplicate_title():
 
 
 def test_next_turn_after_history_load_sends_loaded_history_to_llm():
+    """Verify next turn after history load sends loaded history to LLM."""
     db = FakeConversationDB()
     conv_id = db.create_conversation("Old chat")
     db.save_message(conv_id, "user", "earlier")
@@ -776,12 +835,15 @@ def test_next_turn_after_history_load_sends_loaded_history_to_llm():
 
 
 def test_agent_tool_approval_uses_state_machine_phase_and_resumes():
+    """Verify agent tool approval uses state machine phase and resumes."""
     class NeedsApproval(BaseTool):
+        """Needs approval."""
         name = "needs_approval"
         description = "Needs approval"
         parameters = {"type": "object", "properties": {}, "required": []}
 
         def run(self, context, **_kwargs):
+            """Run needs approval."""
             return ToolResult(data={"approved": context.approve_command("danger", "test approval")}, llm_summary="approved")
 
     registry = ToolRegistry(None, {"tool_timeout": 10})
@@ -810,6 +872,7 @@ def test_agent_tool_approval_uses_state_machine_phase_and_resumes():
 
 
 def test_stale_approval_request_id_does_not_answer_current_frame():
+    """Verify stale approval request ID does not answer current frame."""
     runtime = ConversationRuntime()
     req = runtime.request_input("chat", "Pick", "Pick one", type="string")
 
@@ -821,6 +884,7 @@ def test_stale_approval_request_id_does_not_answer_current_frame():
 
 
 def test_cancel_resolves_pending_user_input_without_value():
+    """Verify cancel resolves pending user input without value."""
     runtime = ConversationRuntime()
     req = runtime.request_input("chat", "Pick", "Pick one", type="string")
 
@@ -835,6 +899,7 @@ def test_cancel_resolves_pending_user_input_without_value():
 
 
 def test_cancel_resolves_pending_user_input_while_busy():
+    """Verify cancel resolves pending user input while busy."""
     runtime = ConversationRuntime()
     req = runtime.request_input("chat", "Pick", "Pick one", type="string")
     runtime.sessions["chat"].busy = True
@@ -848,9 +913,11 @@ def test_cancel_resolves_pending_user_input_while_busy():
 
 
 def test_ask_user_question_returns_typed_values():
+    """Verify ask user question returns typed values."""
     runtime = ConversationRuntime()
 
     def ask(type_, answer):
+        """Handle ask."""
         ctx = SimpleNamespace(
             request_user_input=lambda title, prompt, **kw: runtime.request_input("chat", title, prompt, **kw),
             runtime=runtime,
@@ -874,6 +941,7 @@ def test_ask_user_question_returns_typed_values():
 
 
 def test_ask_user_question_fails_when_cancelled():
+    """Verify ask user question fails when cancelled."""
     runtime = ConversationRuntime()
     ctx = SimpleNamespace(
         request_user_input=lambda title, prompt, **kw: runtime.request_input("chat", title, prompt, **kw),
@@ -895,6 +963,7 @@ def test_ask_user_question_fails_when_cancelled():
 
 
 def test_ask_user_question_uses_form_display_type_hints():
+    """Verify ask user question uses form display type hints."""
     requests = []
     ctx = SimpleNamespace(
         request_user_input=lambda title, prompt, **kw: requests.append((title, prompt, kw)) or SimpleNamespace(
@@ -912,6 +981,7 @@ def test_ask_user_question_uses_form_display_type_hints():
 
 
 def test_enum_user_input_rejects_invalid_then_accepts_valid():
+    """Verify enum user input rejects invalid then accepts valid."""
     runtime = ConversationRuntime()
     req = runtime.request_input("chat", "Pick", "Pick one", type="string", enum=["a", "b"])
 
@@ -924,6 +994,7 @@ def test_enum_user_input_rejects_invalid_then_accepts_valid():
 
 
 def test_inject_user_message_appends_without_driving_agent_turn():
+    """Verify inject user message appends without driving agent turn."""
     db = FakeConversationDB()
     conv_id = db.create_conversation("Inbox")
     runtime = ConversationRuntime(db=db, services={"llm": FakeLLM([FakeResponse.text("should not run")])})
@@ -938,6 +1009,7 @@ def test_inject_user_message_appends_without_driving_agent_turn():
 
 
 def test_new_conversation_action_uses_reset_lifecycle():
+    """Verify new conversation action uses reset lifecycle."""
     events = []
     unsubs = [
         bus.subscribe(SESSION_CLOSED, lambda payload: events.append((SESSION_CLOSED, payload))),
@@ -958,6 +1030,7 @@ def test_new_conversation_action_uses_reset_lifecycle():
 
 
 def test_new_command_starts_default_main_conversation():
+    """Verify new command starts default main conversation."""
     db = FakeConversationDB()
     runtime = ConversationRuntime(db=db)
     result = NewCommand().run({}, SimpleNamespace(db=db, runtime=runtime, session_key="chat"))
@@ -969,6 +1042,7 @@ def test_new_command_starts_default_main_conversation():
 
 
 def test_conversations_command_changes_category_after_selection():
+    """Verify conversations command changes category after selection."""
     db = FakeConversationDB()
     cid = db.create_conversation("Old", category=None)
     result = ConversationsCommand().run({"category": "Main", "conversation_id": str(cid), "action": "Change category", "target_category": "Projects"}, SimpleNamespace(db=db, runtime=ConversationRuntime(db=db), session_key="chat"))
@@ -978,6 +1052,7 @@ def test_conversations_command_changes_category_after_selection():
 
 
 def test_conversations_command_form_manages_existing_conversations_only():
+    """Verify conversations command form manages existing conversations only."""
     db = FakeConversationDB()
     cid = db.create_conversation("Old", category=None)
     cmd = ConversationsCommand()
@@ -990,6 +1065,7 @@ def test_conversations_command_form_manages_existing_conversations_only():
 
 
 def test_tool_budget_gets_one_final_model_summary():
+    """Verify tool budget gets one final model summary."""
     schema = {"function": {"name": "echo", "parameters": {"type": "object", "properties": {}, "required": []}}}
     registry = FakeToolRegistry([schema], {"echo": FakeToolResult(success=True, data={}, llm_summary="ok", attachment_paths=[])})
     cs = make_cs(tools={"echo": CallableSpec("echo", handler=lambda _cs, _actor, args: registry.call("echo", **args))})
@@ -1003,6 +1079,7 @@ def test_tool_budget_gets_one_final_model_summary():
 
 
 def test_busy_runtime_rejects_text_but_accepts_cancel_signal():
+    """Verify busy runtime rejects text but accepts cancel signal."""
     runtime = ConversationRuntime()
     session = runtime.get_session("chat-busy")
     session.busy = True
@@ -1021,9 +1098,11 @@ def test_busy_runtime_rejects_text_but_accepts_cancel_signal():
 
 
 def test_form_path_collects_args_then_runs_command():
+    """Verify form path collects args then runs command."""
     captured: dict = {}
 
     def handler(_cs, _actor, args):
+        """Handle handler."""
         captured.update(args)
         return f"ran with {args['name']}={args['count']}"
 
@@ -1056,6 +1135,7 @@ def test_form_path_collects_args_then_runs_command():
 
 
 def test_invalid_integer_form_input_keeps_same_field_active():
+    """Verify invalid integer form input keeps same field active."""
     cmd = CallableSpec("count", handler=lambda *_: "ok", form=[FormStep("n", required=True, type="integer")])
     cs = make_cs(commands={"count": cmd})
 
@@ -1068,6 +1148,7 @@ def test_invalid_integer_form_input_keeps_same_field_active():
 
 
 def test_new_command_supersedes_pending_form():
+    """Verify new command supersedes pending form."""
     events = []
     unsub = bus.subscribe(COMMAND_CALL_FINISHED, lambda payload: events.append(payload))
     cs = make_cs(commands={
@@ -1087,9 +1168,11 @@ def test_new_command_supersedes_pending_form():
 
 
 def test_tool_optional_args_do_not_start_forms():
+    """Verify tool optional args do not start forms."""
     captured: dict = {}
 
     def handler(_cs, _actor, args):
+        """Handle handler."""
         captured.update(args)
         return "read"
 
@@ -1114,6 +1197,7 @@ def test_tool_optional_args_do_not_start_forms():
 
 
 def test_optional_prompted_args_can_be_skipped():
+    """Verify optional prompted args can be skipped."""
     captured: dict = {}
 
     cmd = CallableSpec(
@@ -1140,6 +1224,7 @@ def test_optional_prompted_args_can_be_skipped():
 
 
 def test_tools_command_prompts_optional_schema_args_before_calling_tool():
+    """Verify tools command prompts optional schema args before calling tool."""
     registry = SimpleNamespace(tools={"schedule_subagent": ScheduleSubagent()})
     tools = ToolsCommand()
     cmd = CallableSpec(
@@ -1160,6 +1245,7 @@ def test_tools_command_prompts_optional_schema_args_before_calling_tool():
 
 
 def test_cancel_and_skip_confirm_when_no_handler_message():
+    """Verify cancel and skip confirm when no handler message."""
     cs = make_cs(commands={
         "need": CallableSpec("need", handler=lambda *_: None, form=[FormStep("x", required=True)]),
         "maybe": CallableSpec("maybe", handler=lambda *_: None, form=[FormStep("x", required=False, default="", prompt_when_missing=True)]),
@@ -1172,9 +1258,11 @@ def test_cancel_and_skip_confirm_when_no_handler_message():
 
 
 def test_dynamic_form_steps_follow_collected_args():
+    """Verify dynamic form steps follow collected args."""
     captured: dict = {}
 
     def form(args, _cs):
+        """Handle form."""
         steps = [FormStep("subcommand", required=True, enum=["list", "add"])]
         if args.get("subcommand") == "add":
             steps += [
@@ -1203,6 +1291,7 @@ def test_dynamic_form_steps_follow_collected_args():
 
 
 def test_back_form_revisits_static_step_and_uses_replacement_value():
+    """Verify back form revisits static step and uses replacement value."""
     captured = {}
     cs = make_cs(commands={"hello": CallableSpec("hello", handler=lambda _cs, _actor, args: captured.update(args) or "ok", form=[FormStep("name", required=True), FormStep("count", required=True, type="integer")])})
 
@@ -1216,7 +1305,9 @@ def test_back_form_revisits_static_step_and_uses_replacement_value():
 
 
 def test_back_form_follows_dynamic_form_factory():
+    """Verify back form follows dynamic form factory."""
     def form(args, _cs):
+        """Handle form."""
         return [FormStep("subcommand", required=True, enum=["list", "add"])] + ([FormStep("model", required=True), FormStep("endpoint", required=False, default="", prompt_when_missing=True)] if args.get("subcommand") == "add" else [])
 
     cs = make_cs(commands={"llm": CallableSpec("llm", handler=lambda *_: "ok", form_factory=form)})
@@ -1231,6 +1322,7 @@ def test_back_form_follows_dynamic_form_factory():
 
 
 def test_back_form_can_undo_skipped_optional_before_next_field():
+    """Verify back form can undo skipped optional before next field."""
     captured = {}
     cs = make_cs(commands={"setup": CallableSpec("setup", handler=lambda _cs, _actor, args: captured.update(args) or "ok", form=[FormStep("name", required=True), FormStep("note", required=False, default="", prompt_when_missing=True), FormStep("count", required=True, type="integer")])})
 
@@ -1246,6 +1338,7 @@ def test_back_form_can_undo_skipped_optional_before_next_field():
 
 
 def test_back_form_at_first_step_fails_without_mutating_prompt():
+    """Verify back form at first step fails without mutating prompt."""
     cs = make_cs(commands={"hello": CallableSpec("hello", handler=lambda *_: "ok", form=[FormStep("name", required=True)])})
 
     assert create_action(cs, "call_command", {"name": "hello", "args": {}}, "user").enact().ok
@@ -1257,6 +1350,7 @@ def test_back_form_at_first_step_fails_without_mutating_prompt():
 
 
 def test_back_form_does_not_remove_prefilled_command_args():
+    """Verify back form does not remove prefilled command args."""
     cs = make_cs(commands={"hello": CallableSpec("hello", handler=lambda *_: "ok", form=[FormStep("name", required=True), FormStep("count", required=True, type="integer")])})
 
     assert create_action(cs, "call_command", {"name": "hello", "args": {"name": "prefilled"}}, "user").enact().ok
@@ -1274,6 +1368,7 @@ def test_back_form_does_not_remove_prefilled_command_args():
 
 
 def test_legal_actions_in_phase_returns_registered_types():
+    """Verify legal actions in phase returns registered types."""
     from state_machine.action_map import legal_actions_in_phase
     base = legal_actions_in_phase("awaiting_input")
     assert "send_text" in base

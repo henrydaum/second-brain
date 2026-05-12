@@ -11,6 +11,7 @@ logger = logging.getLogger("tool_email_mark_read")
 
 
 def _allowed_addresses(config) -> list[str]:
+    """Internal helper to handle allowed addresses."""
     raw = config.get("ai_email_addresses") or []
     if not isinstance(raw, list):
         return []
@@ -18,6 +19,7 @@ def _allowed_addresses(config) -> list[str]:
 
 
 class EmailMarkRead(BaseTool):
+    """Email mark read."""
     name = "email_mark_read"
     description = (
         "Mark a Gmail message as read (default) or unread. "
@@ -43,6 +45,7 @@ class EmailMarkRead(BaseTool):
     background_safe = True
 
     def run(self, context, **kwargs) -> ToolResult:
+        """Run email mark read."""
         gmail = context.services.get("gmail")
         if not gmail:
             return ToolResult.failed("Gmail service not available.")

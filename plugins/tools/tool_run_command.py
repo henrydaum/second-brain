@@ -30,6 +30,7 @@ _OUTPUT_CHAR_CAP = 4000
 
 
 def _truncate_stream(label: str, text: str, cap: int = _OUTPUT_CHAR_CAP) -> tuple[str, bool]:
+    """Internal helper to handle truncate stream."""
     if len(text) <= cap:
         return text, False
     head = text[: cap // 2]
@@ -136,6 +137,7 @@ def _rewrite_for_current_python(command: str) -> str:
 
 
 def _resolve_cwd(raw: str | None) -> tuple[Path | None, str | None]:
+    """Internal helper to resolve cwd."""
     cwd = Path((raw or "").strip()) if raw else Path(ROOT_DIR)
     cwd = (cwd if cwd.is_absolute() else ROOT_DIR / cwd).resolve()
     return (cwd, None) if any(cwd == root or root in cwd.parents for root in _ALLOWED_ROOTS) else (None, f"cwd is outside the allowed roots: {cwd}")
@@ -192,6 +194,7 @@ def _classify(command: str) -> tuple[str, bool, str | None]:
 
 
 class RunCommand(BaseTool):
+    """Run command."""
     name = "run_command"
     description = (
         "Run terminal commands from the project root. Prefer read_file/edit_file and "
@@ -242,6 +245,7 @@ class RunCommand(BaseTool):
     background_safe = False
 
     def run(self, context, **kwargs) -> ToolResult:
+        """Execute `/tool_run_command` for the active session."""
         command = kwargs.get("command", "").strip()
         justification = kwargs.get("justification", "").strip()
         timeout = min(max(int(kwargs.get("timeout", 30)), 5), 600)

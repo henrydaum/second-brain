@@ -30,6 +30,7 @@ def build_system_prompt(
     profile_name: str = "default",
     extra_suffix: str = "",
 ) -> str:
+    """Build system prompt."""
     r = tool_registry  # short alias for gating checks
 
     sections = [
@@ -60,10 +61,12 @@ def build_system_prompt(
 # ── Tool gating helpers ──────────────────────────────────────────────
 
 def _has_tool(registry, name: str) -> bool:
+    """Return whether tool."""
     return bool(registry) and name in getattr(registry, "tools", {})
 
 
 def _has_any(registry, *names: str) -> bool:
+    """Return whether any."""
     return any(_has_tool(registry, n) for n in names)
 
 
@@ -71,6 +74,7 @@ def _has_any(registry, *names: str) -> bool:
 
 def _identity(services: dict, registry) -> str:
     # Resolve the active model name from the LLM router
+    """Internal helper to handle identity."""
     model_line = ""
     llm = services.get("llm")
     if llm:
@@ -133,11 +137,13 @@ def _identity(services: dict, registry) -> str:
 
 
 def _current_datetime() -> str:
+    """Return current datetime."""
     now = datetime.now()
     return f"Current date and time: {now.strftime('%A, %B %d, %Y %I:%M %p')}"
 
 
 def _authoring_guidance() -> str:
+    """Internal helper to handle authoring guidance."""
     return (
         "## Building plugins\n"
         "You can extend the system by authoring plugins (tools, tasks, services, commands, frontends).\n\n"
@@ -177,6 +183,7 @@ def _authoring_guidance() -> str:
 # ── Dynamic sections ─────────────────────────────────────────────────
 
 def _available_tools(tool_registry) -> str:
+    """Internal helper to handle available tools."""
     if not tool_registry:
         return ""
     tools = list(tool_registry.tools.values())
@@ -192,6 +199,7 @@ def _available_tools(tool_registry) -> str:
 
 
 def _sandbox_files() -> str:
+    """Internal helper to handle sandbox files."""
     from paths import SANDBOX_COMMANDS, SANDBOX_FRONTENDS, SANDBOX_SERVICES, SANDBOX_TASKS, SANDBOX_TOOLS
 
     sandbox_lines = []
@@ -212,6 +220,7 @@ def _sandbox_files() -> str:
 
 
 def _attachments() -> str:
+    """Internal helper to handle attachments."""
     from paths import ATTACHMENT_CACHE
     return (
         "## Attachments\n"
@@ -230,6 +239,7 @@ def _attachments() -> str:
 
 
 def _database_tables(db) -> str:
+    """Internal helper to handle database tables."""
     try:
         result = db.query(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
@@ -245,6 +255,7 @@ def _database_tables(db) -> str:
 
 
 def _pipeline_status(db, orchestrator) -> str:
+    """Internal helper to handle pipeline status."""
     lines = ["## Task pipeline"]
 
     # DAG
@@ -268,6 +279,7 @@ def _pipeline_status(db, orchestrator) -> str:
 
 
 def _services_status(services: dict) -> str:
+    """Internal helper to handle services status."""
     if not services:
         return ""
     parts = []
@@ -278,6 +290,7 @@ def _services_status(services: dict) -> str:
 
 
 def _file_inventory(db) -> str:
+    """Internal helper to handle file inventory."""
     file_stats = db.get_system_stats().get("files", {})
     total = sum(file_stats.values()) if file_stats else 0
 
@@ -316,6 +329,7 @@ def _agent_memory() -> str:
 # ── Scope trailer ────────────────────────────────────────────────────
 
 def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
+    """Internal helper to handle scope prompt note."""
     if profile_name == "default" or not scope:
         return ""
     limits = []

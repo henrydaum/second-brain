@@ -14,6 +14,7 @@ MAX_CHARS = 20_000
 
 
 class ReadFile(BaseTool):
+    """Read file."""
     name = "read_file"
     description = (
         "Read a text file by path. Use this when you need the exact contents of "
@@ -46,6 +47,7 @@ class ReadFile(BaseTool):
     max_calls = 10
 
     def run(self, context, **kwargs) -> ToolResult:
+        """Run read file."""
         raw_path = kwargs.get("path", "").strip()
         if not raw_path:
             return ToolResult.failed("No path provided.")

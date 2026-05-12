@@ -1,3 +1,5 @@
+"""State-machine support for errors."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -18,20 +20,24 @@ ERROR_APPROVAL_REQUIRED = "approval_required"
 
 @dataclass
 class ActionError(Exception):
+    """Action error."""
     code: str
     message: str
     details: dict[str, Any] = field(default_factory=dict)
     retry_phase: str | None = None
 
     def __str__(self) -> str:
+        """Internal helper to handle str."""
         return self.message
 
     def to_dict(self) -> dict[str, Any]:
+        """Handle to dict."""
         return {"code": self.code, "message": self.message, "details": self.details, "retry_phase": self.retry_phase}
 
 
 @dataclass
 class ActionResult:
+    """Action result."""
     ok: bool
     action: str
     message: str | None = None
@@ -41,14 +47,17 @@ class ActionResult:
 
     @classmethod
     def success(cls, action: str, message: str | None = None, **data: Any) -> "ActionResult":
+        """Handle success."""
         return cls(True, action, message, data)
 
     @classmethod
     def fail(cls, action: str, error: ActionError | str, code: str = ERROR_INVALID_ACTION, **details: Any) -> "ActionResult":
+        """Handle fail."""
         err = error if isinstance(error, ActionError) else ActionError(code, error, details)
         return cls(False, action, err.message, error=err)
 
     def to_dict(self) -> dict[str, Any]:
+        """Handle to dict."""
         return {
             "ok": self.ok,
             "action": self.action,

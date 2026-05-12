@@ -1,3 +1,5 @@
+"""Attachment parsing helpers for text-like files and PDFs."""
+
 import logging
 import re
 import time
@@ -31,6 +33,7 @@ DEFAULT_MAX_CHARS = 500_000  # ~125k tokens
 
 
 def _max_chars(config: dict) -> int:
+    """Return the configured character limit for text parsing."""
     return config.get("max_chars", DEFAULT_MAX_CHARS)
 
 
@@ -106,6 +109,7 @@ registry.register([
 # ===================================================================
 
 def parse_pdf_text(path: str, config: dict, services: dict = None) -> ParseResult:
+    """Parse PDF text."""
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -184,6 +188,7 @@ registry.register(".pdf", "text", parse_pdf_text)
 
 
 def parse_pdf_image(path: str, config: dict, services: dict = None) -> ParseResult:
+    """Parse PDF image."""
     try:
         import fitz
         from PIL import Image

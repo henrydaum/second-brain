@@ -1,11 +1,12 @@
-from __future__ import annotations
-
 """Persistence helpers for the parallel state-machine runtime.
 
 Normal chat history stays in the exact existing role/content/tool_call shape.
 State-machine metadata is stored as system JSON marker rows so no database
 schema changes are needed and LLM history reconstruction can ignore it.
 """
+
+from __future__ import annotations
+
 
 import json
 import time
@@ -18,10 +19,12 @@ COMPACTION_MARKER = "__second_brain_compaction__"
 
 
 def pack_state(state: dict[str, Any]) -> str:
+    """Handle pack state."""
     return json.dumps({STATE_MARKER: True, "state": state}, default=str)
 
 
 def unpack_state(content: str) -> dict[str, Any] | None:
+    """Handle unpack state."""
     if STATE_MARKER not in (content or ""):
         return None
     try:
@@ -32,10 +35,12 @@ def unpack_state(content: str) -> dict[str, Any] | None:
 
 
 def pack_compaction(summary: str, tail_count: int = 2) -> str:
+    """Handle pack compaction."""
     return json.dumps({COMPACTION_MARKER: True, "summary": summary, "tail_count": tail_count, "created_at": time.time()}, default=str)
 
 
 def unpack_compaction(content: str) -> dict[str, Any] | None:
+    """Handle unpack compaction."""
     if COMPACTION_MARKER not in (content or ""):
         return None
     try:
@@ -46,10 +51,12 @@ def unpack_compaction(content: str) -> dict[str, Any] | None:
 
 
 def is_state_marker(row: dict[str, Any]) -> bool:
+    """Return whether state marker."""
     return row.get("role") == "system" and unpack_state(row.get("content") or "") is not None
 
 
 def is_compaction_marker(row: dict[str, Any]) -> bool:
+    """Return whether compaction marker."""
     return row.get("role") == "system" and unpack_compaction(row.get("content") or "") is not None
 
 
@@ -105,14 +112,17 @@ def save_history_message(db, conversation_id: int, msg: dict[str, Any]) -> None:
 
 
 def save_state_marker(db, conversation_id: int, state: dict[str, Any]) -> None:
+    """Save state marker."""
     db.save_message(conversation_id, "system", pack_state(state))
 
 
 def save_compaction_marker(db, conversation_id: int, summary: str, tail_count: int = 2) -> None:
+    """Save compaction marker."""
     db.save_message(conversation_id, "system", pack_compaction(summary, tail_count))
 
 
 def latest_state(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Handle latest state."""
     for row in reversed(rows):
         state = unpack_state(row.get("content") or "")
         if state is not None:
@@ -121,6 +131,7 @@ def latest_state(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def latest_compaction(rows: list[dict[str, Any]]) -> tuple[int, dict[str, Any]] | None:
+    """Handle latest compaction."""
     for i in range(len(rows) - 1, -1, -1):
         marker = unpack_compaction(rows[i].get("content") or "")
         if marker is not None:

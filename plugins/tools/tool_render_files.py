@@ -6,6 +6,7 @@ from plugins.BaseTool import BaseTool, ToolResult
 
 
 class RenderFiles(BaseTool):
+    """Render files."""
     name = "render_files"
     description = (
         "Display one or more local files to the user in chat alongside an optional caption. "
@@ -38,6 +39,7 @@ class RenderFiles(BaseTool):
     max_calls = 5
 
     def run(self, context, **kwargs) -> ToolResult:
+        """Run render files."""
         paths = kwargs.get("paths", [])
         caption = (kwargs.get("caption") or "").strip()
         if not paths:

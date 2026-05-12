@@ -1,3 +1,5 @@
+"""Shared phase constants for the conversation state machine."""
+
 PHASE_AWAITING_INPUT = "awaiting_input"
 PHASE_FILLING_COMMAND_FORM = "filling_command_form"
 PHASE_FILLING_TOOL_FORM = "filling_tool_form"

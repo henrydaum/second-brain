@@ -1,3 +1,5 @@
+"""Regression tests for command copy."""
+
 from types import SimpleNamespace
 import json
 
@@ -11,6 +13,7 @@ from state_machine.form_display import form_step_display
 
 
 def test_agent_command_prompts_explain_each_step():
+    """Verify agent command prompts explain each step."""
     context = SimpleNamespace(
         config={"agent_profiles": {"default": {"llm": "default"}}, "llm_profiles": {"m": {}}},
         tool_registry=SimpleNamespace(tools={"search": object()}),
@@ -28,6 +31,7 @@ def test_agent_command_prompts_explain_each_step():
 
 
 def test_llm_command_prompts_explain_add_and_edit_steps():
+    """Verify LLM command prompts explain add and edit steps."""
     context = SimpleNamespace(config={"llm_profiles": {"m": {}}, "default_llm_profile": "m"}, services={})
 
     add_steps = LlmCommand().form({"model_name": "add"}, context)
@@ -42,6 +46,7 @@ def test_llm_command_prompts_explain_add_and_edit_steps():
 
 
 def test_config_list_setting_uses_multiline_array_form():
+    """Verify config list setting uses multiline array form."""
     context = SimpleNamespace(config={"autoload_services": []})
     step = ConfigCommand().form({"setting_name": "autoload_services", "action": "edit"}, context)[-1]
     display = form_step_display(step)
@@ -52,6 +57,7 @@ def test_config_list_setting_uses_multiline_array_form():
 
 
 def test_config_list_setting_parses_one_item_per_line(monkeypatch):
+    """Verify config list setting parses one item per line."""
     saved = []
     monkeypatch.setattr("plugins.commands.command_config.config_manager.save", lambda config: saved.append(dict(config)))
 
@@ -64,6 +70,7 @@ def test_config_list_setting_parses_one_item_per_line(monkeypatch):
 
 
 def test_config_load_normalizes_string_autoload_services(tmp_path):
+    """Verify config load normalizes string autoload services."""
     path = tmp_path / "config.json"
     path.write_text(json.dumps(dict(config_manager.DEFAULTS, autoload_services="web_search_provider")))
 
@@ -74,6 +81,7 @@ def test_config_load_normalizes_string_autoload_services(tmp_path):
 
 
 def test_config_frontend_plugin_setting_saves_with_restart_notice(monkeypatch):
+    """Verify config frontend plugin setting saves with restart notice."""
     setting = ("Telegram Allowed User ID", "telegram_allowed_user_id", "Only this user can interact with the bot.", 0, {"type": "text"})
     saved_core, saved_plugin = [], []
     monkeypatch.setattr(command_config, "get_plugin_settings", lambda: [setting])
@@ -92,6 +100,7 @@ def test_config_frontend_plugin_setting_saves_with_restart_notice(monkeypatch):
 
 
 def test_telegram_credentials_are_not_core_settings():
+    """Verify Telegram credentials are not core settings."""
     core_keys = {entry[1] for entry in SETTINGS_DATA}
     assert "telegram_bot_token" not in core_keys
     assert "telegram_allowed_user_id" not in core_keys

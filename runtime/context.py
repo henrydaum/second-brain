@@ -70,6 +70,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         context = build_context(self.db, self.config, self.services, call_tool=self.call)
     """
     def call_tool_with_session(name, **kwargs):
+        """Call tool with session."""
         if session_key and "_session_key" not in kwargs:
             kwargs["_session_key"] = session_key
         return call_tool(name, **kwargs)
@@ -78,9 +79,11 @@ def build_context(db, config: dict, services: dict, call_tool=None,
     request_user_input = None
     if runtime is not None and session_key:
         def request_user_input(title: str, prompt: str, **kwargs):
+            """Handle request user input."""
             return runtime.request_input(session_key, title, prompt, **kwargs)
 
         def approve_command(command: str, justification: str) -> bool:
+            """Approve command."""
             req = runtime.request_input(
                 session_key,
                 "Agent requests approval",

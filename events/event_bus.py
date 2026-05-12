@@ -28,7 +28,9 @@ logger = logging.getLogger("EventBus")
 
 
 class EventBus:
+    """Event bus."""
     def __init__(self):
+        """Initialize the event bus."""
         self._subs: dict[str, list[Callable]] = {}
         self._lock = threading.Lock()
 
@@ -38,12 +40,14 @@ class EventBus:
             self._subs.setdefault(channel, []).append(handler)
 
         def unsubscribe():
+            """Handle unsubscribe."""
             with self._lock:
                 if channel in self._subs and handler in self._subs[channel]:
                     self._subs[channel].remove(handler)
         return unsubscribe
 
     def has_subscribers(self, channel: str) -> bool:
+        """Return whether subscribers."""
         with self._lock:
             return bool(self._subs.get(channel))
 

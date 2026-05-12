@@ -1,3 +1,5 @@
+"""Slash command plugin for `/services`."""
+
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.formatters import format_services
 from state_machine.conversation import FormStep
@@ -7,11 +9,13 @@ ACTIONS = ["load", "unload"]
 
 
 class ServicesCommand(BaseCommand):
+    """Slash-command handler for `/services`."""
     name = "services"
     description = "Select a service, then load or unload it"
     category = "System"
 
     def form(self, args, context):
+        """Handle form."""
         services = context.services or {}
         steps = [FormStep("service_name", "Select a service to load or unload.", True, enum=sorted((context.services or {}).keys()), columns=2)]
         if args.get("service_name"):
@@ -19,6 +23,7 @@ class ServicesCommand(BaseCommand):
         return steps
 
     def run(self, args, context):
+        """Execute `/services` for the active session."""
         services = context.services or {}
         action, name = args.get("action"), args.get("service_name")
         if not name:
@@ -39,6 +44,7 @@ class ServicesCommand(BaseCommand):
 
 
 def _show(services):
+    """Internal helper to handle show."""
     return format_services([
         {"name": name, "loaded": getattr(svc, "loaded", False), "model_name": getattr(svc, "model_name", "")}
         for name, svc in sorted(services.items())
@@ -46,6 +52,7 @@ def _show(services):
 
 
 def _describe(services, name):
+    """Internal helper to handle describe."""
     svc = services.get(name)
     if svc is None:
         return "Action"
@@ -53,6 +60,7 @@ def _describe(services, name):
 
 
 def _clear_tasks(context):
+    """Internal helper to clear tasks."""
     orch = getattr(context, "orchestrator", None)
     if orch and hasattr(orch, "clear_skip_cache"):
         orch.clear_skip_cache()

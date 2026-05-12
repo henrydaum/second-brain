@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Per-session configuration: profile, scope, registry, system prompt, loop.
 
 The runtime owns one global agent profile + tool registry, but each session
@@ -13,6 +11,9 @@ These functions are thin: they read from ``runtime`` and ``session`` and
 return derived values. They never mutate persistence; they don't touch
 session locks. Keep it that way.
 """
+
+from __future__ import annotations
+
 
 import logging
 from pathlib import Path
@@ -38,12 +39,14 @@ logger = logging.getLogger("Runtime.config")
 # ──────────────────────────────────────────────────────────────────────
 
 def profile_for(runtime, session: RuntimeSession | None) -> str:
+    """Return the effective agent profile for a runtime session."""
     if session is not None and session.profile_override:
         return session.profile_override
     return runtime.config.get("active_agent_profile") or "default"
 
 
 def scope_for_profile(runtime, profile: str):
+    """Load the configured tool/prompt scope for one agent profile."""
     try:
         from runtime.agent_scope import load_scope
         scope = load_scope(profile, runtime.config)
@@ -53,6 +56,7 @@ def scope_for_profile(runtime, profile: str):
 
 
 def active_scope(runtime, session: RuntimeSession | None = None):
+    """Return the effective scope after session overrides are applied."""
     return scope_for_profile(runtime, profile_for(runtime, session))
 
 
@@ -90,6 +94,7 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
 
 
 def active_llm(runtime, session: RuntimeSession | None = None):
+    """Return the LLM service instance that should drive this session."""
     profile = profile_for(runtime, session)
     try:
         from runtime.agent_scope import resolve_agent_llm
@@ -107,6 +112,7 @@ def new_state(
     marker: dict[str, Any] | None = None,
     session: RuntimeSession | None = None,
 ) -> ConversationState:
+    """Build a fresh ConversationState from persisted markers and runtime wiring."""
     commands = dict(runtime.commands)
     tools = tool_specs_for(runtime, session)
     cache = dict((marker or {}).get("cache") or {})
@@ -171,6 +177,7 @@ def refresh_specs(runtime, session: RuntimeSession) -> None:
 
 
 def scoped_tool_names(runtime, session: RuntimeSession | None, visible: dict[str, CallableSpec]) -> list[str]:
+    """Return hidden-but-callable tool names that remain in the current scoped registry."""
     registry = active_tool_registry(runtime, session)
     if not registry or getattr(registry, "visible_tool_names", None) is None:
         return []
@@ -202,11 +209,13 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         # active conversation — otherwise notify is redundant with the
         # agent's regular output. Evaluated lazily inside the prompt
         # closure so it reflects the active session at turn time.
+        """Internal helper to append notification guidance for background conversations."""
         if session.key == getattr(runtime, "active_session_key", None):
             return ""
         return notify_block(session.notification_mode)
 
     def _conversation_suffix() -> str:
+        """Internal helper to label the current conversation inside the prompt when useful."""
         row = runtime.db.get_conversation(session.conversation_id) if runtime.db and session.conversation_id else None
         if not row:
             return ""
@@ -224,6 +233,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         extras = session.system_prompt_extras or {}
 
         def _session_prompt():
+            """Internal helper to handle session prompt."""
             text = build_system_prompt(
                 runtime.db,
                 getattr(runtime, "_orchestrator_ref", None) or runtime.services.get("orchestrator"),
@@ -243,6 +253,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
     extras = session.system_prompt_extras
 
     def _user_prompt():
+        """Internal helper to handle user prompt."""
         text = base() if callable(base) else (base or "")
         for value in (extras or {}).values():
             if isinstance(value, str) and value:
@@ -258,6 +269,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
 # ──────────────────────────────────────────────────────────────────────
 
 def build_loop(runtime, session_key: str | None = None) -> ConversationLoop:
+    """Build loop."""
     session = runtime.sessions.get(session_key) if session_key else None
     llm = active_llm(runtime, session)
     if llm is None and hasattr(runtime, "llm"):
@@ -275,6 +287,7 @@ def build_loop(runtime, session_key: str | None = None) -> ConversationLoop:
         raise RuntimeError("LLM service is not loaded.")
 
     def notice(text: str):
+        """Handle notice."""
         if runtime.on_notice:
             runtime.on_notice(text)
         if session_key:
@@ -297,7 +310,9 @@ def build_loop(runtime, session_key: str | None = None) -> ConversationLoop:
 
 
 def tool_callbacks(runtime, session_key: str | None):
+    """Handle tool callbacks."""
     def started(name, call_id="tc_unknown", args=None):
+        """Handle started."""
         if runtime.on_tool_start:
             runtime.on_tool_start(name)
         if runtime.emit_event:
@@ -307,6 +322,7 @@ def tool_callbacks(runtime, session_key: str | None):
             })
 
     def finished(name, call_id="tc_unknown", result=None, error=None):
+        """Handle finished."""
         tool_result = (getattr(result, "data", None) or {}).get("result") if result else None
         ok = bool(result and getattr(result, "ok", False) and getattr(tool_result, "success", True) and not error)
         err = error or getattr(getattr(result, "error", None), "message", None) or getattr(tool_result, "error", None)
@@ -326,6 +342,7 @@ def tool_callbacks(runtime, session_key: str | None):
 # ──────────────────────────────────────────────────────────────────────
 
 def command_specs_from_dicts(specs: dict[str, dict]) -> dict[str, CallableSpec]:
+    """Handle command specs from dicts."""
     out = {}
     for name, spec in specs.items():
         out[name] = CallableSpec(

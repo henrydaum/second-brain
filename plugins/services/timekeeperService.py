@@ -1,3 +1,5 @@
+"""Service plugin for timekeeper."""
+
 import json
 import logging
 import threading
@@ -16,14 +18,17 @@ logger = logging.getLogger("TimekeeperService")
 
 
 def _now_local() -> datetime:
+    """Internal helper to handle now local."""
     return datetime.now().astimezone()
 
 
 def _local_tz():
+    """Internal helper to handle local tz."""
     return _now_local().tzinfo
 
 
 class TimekeeperService(BaseService):
+    """Timekeeper service."""
     model_name = "Timekeeper"
     shared = True
     config_settings = [
@@ -37,6 +42,7 @@ class TimekeeperService(BaseService):
     ]
 
     def __init__(self, config: dict):
+        """Initialize the timekeeper service."""
         super().__init__()
         self._config = config
         self._lock = threading.RLock()
@@ -48,6 +54,7 @@ class TimekeeperService(BaseService):
         self._load_jobs_from_config()
 
     def _load(self) -> bool:
+        """Internal helper to load timekeeper service."""
         with self._lock:
             self._load_jobs_from_config()
             self._stop = threading.Event()
@@ -57,6 +64,7 @@ class TimekeeperService(BaseService):
         return True
 
     def unload(self):
+        """Handle unload."""
         stop = self._stop
         thread = self._thread
         if stop is not None:
@@ -69,15 +77,18 @@ class TimekeeperService(BaseService):
             self.loaded = False
 
     def list_jobs(self) -> dict[str, dict]:
+        """List jobs."""
         with self._lock:
             return {name: deepcopy(job) for name, job in self._jobs.items()}
 
     def get_job(self, name: str) -> dict | None:
+        """Get job."""
         with self._lock:
             job = self._jobs.get(name)
             return deepcopy(job) if job is not None else None
 
     def create_job(self, name: str, job_def: dict) -> dict:
+        """Create job."""
         with self._lock:
             if name in self._jobs:
                 raise ValueError(f"Job '{name}' already exists.")
@@ -88,6 +99,7 @@ class TimekeeperService(BaseService):
             return deepcopy(normalized)
 
     def update_job(self, name: str, patch: dict) -> dict:
+        """Update job."""
         with self._lock:
             current = self._jobs.get(name)
             if current is None:
@@ -101,6 +113,7 @@ class TimekeeperService(BaseService):
             return deepcopy(normalized)
 
     def remove_job(self, name: str) -> bool:
+        """Remove job."""
         with self._lock:
             removed = self._jobs.pop(name, None)
             self._next_fire_at.pop(name, None)
@@ -110,9 +123,11 @@ class TimekeeperService(BaseService):
             return True
 
     def enable_job(self, name: str, enabled: bool = True) -> dict:
+        """Handle enable job."""
         return self.update_job(name, {"enabled": bool(enabled)})
 
     def cron_to_text(self, expr: str) -> str:
+        """Handle cron to text."""
         try:
             return ExpressionDescriptor(expr).get_description()
         except Exception as e:
@@ -130,6 +145,7 @@ class TimekeeperService(BaseService):
             return self._compute_next_fire(job, from_time=_now_local())
 
     def describe_job(self, name: str) -> str:
+        """Handle describe job."""
         with self._lock:
             job = self._jobs.get(name)
             if job is None:
@@ -139,6 +155,7 @@ class TimekeeperService(BaseService):
             return self.cron_to_text(job["cron"])
 
     def _loop(self):
+        """Internal helper to handle loop."""
         while self._stop is not None and not self._stop.wait(self._poll_interval_s):
             try:
                 self._tick()
@@ -146,6 +163,7 @@ class TimekeeperService(BaseService):
                 logger.error(f"Timekeeper tick failed: {e}", exc_info=True)
 
     def _tick(self):
+        """Internal helper to handle tick."""
         now = _now_local()
         due: list[tuple[str, dict, datetime]] = []
 
@@ -164,6 +182,7 @@ class TimekeeperService(BaseService):
             self._emit_job(name, job, scheduled_for)
 
     def _emit_job(self, name: str, job: dict, scheduled_for: datetime):
+        """Internal helper to emit job."""
         emitted_at = _now_local()
         payload = deepcopy(job.get("payload", {}))
         payload["_timekeeper"] = {
@@ -190,6 +209,7 @@ class TimekeeperService(BaseService):
                 self._next_fire_at[name] = self._compute_next_fire(current, from_time=scheduled_for)
 
     def _load_jobs_from_config(self):
+        """Internal helper to load jobs from config."""
         raw = self._config.get("scheduled_jobs", {})
         if isinstance(raw, str):
             raw = raw.strip()
@@ -213,6 +233,7 @@ class TimekeeperService(BaseService):
         self._next_fire_at = next_fire
 
     def _normalize_job(self, name: str, job_def: dict) -> dict:
+        """Internal helper to normalize job."""
         job = {
             "enabled": bool(job_def.get("enabled", True)),
             "channel": (job_def.get("channel") or "").strip(),
@@ -255,6 +276,7 @@ class TimekeeperService(BaseService):
         return job
 
     def _compute_next_fire(self, job: dict, from_time: datetime) -> datetime | None:
+        """Internal helper to handle compute next fire."""
         if not job.get("enabled", True):
             return None
         if job["one_time"]:
@@ -263,6 +285,7 @@ class TimekeeperService(BaseService):
         return croniter(job["cron"], from_time).get_next(datetime)
 
     def _persist_jobs(self):
+        """Internal helper to persist jobs."""
         plugin_values = config_manager.load_plugin_config()
         plugin_values["scheduled_jobs"] = deepcopy(self._jobs)
         config_manager.save_plugin_config(plugin_values)
@@ -270,6 +293,7 @@ class TimekeeperService(BaseService):
 
     @staticmethod
     def _parse_datetime(value: str, job_name: str) -> datetime:
+        """Internal helper to parse datetime."""
         try:
             dt = datetime.fromisoformat(value)
         except ValueError as e:
@@ -282,4 +306,5 @@ class TimekeeperService(BaseService):
 
 
 def build_services(config: dict) -> dict:
+    """Build services."""
     return {"timekeeper": TimekeeperService(config)}

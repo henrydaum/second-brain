@@ -75,6 +75,7 @@ INDEX_FIELD_MAP = {
 
 
 class SemanticSearch(BaseTool):
+    """Semantic search."""
     name = "semantic_search"
     description = (
         "Search for files by meaning using vector similarity. Embeds your "
@@ -113,6 +114,7 @@ class SemanticSearch(BaseTool):
     requires_services = []  # Checked dynamically per stream
 
     def run(self, context, **kwargs):
+        """Run semantic search."""
         query = kwargs.get("query", "").strip()
         top_k = kwargs.get("top_k", 5)
         requested_streams = kwargs.get("streams", None)

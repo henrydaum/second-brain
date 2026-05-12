@@ -1,3 +1,5 @@
+"""Slash command plugin for `/agent`."""
+
 import json
 
 from config import config_manager
@@ -11,11 +13,13 @@ FIELD_LABELS = ["LLM", "Prompt suffix", "Tool mode", "Tool list"]
 
 
 class AgentCommand(BaseCommand):
+    """Slash-command handler for `/agent`."""
     name = "agent"
     description = "Select an agent profile, then switch, edit, or remove it"
     category = "System"
 
     def form(self, args, context):
+        """Handle form."""
         profiles = context.config.get("agent_profiles", {}) or {}
         names = [*sorted(profiles), "add"]
         steps = [FormStep("profile_name", "Select an agent profile, or add a new one.", True, enum=names, enum_labels=[_profile_label(context, n) for n in names])]
@@ -36,6 +40,7 @@ class AgentCommand(BaseCommand):
         return steps
 
     def run(self, args, context):
+        """Execute `/agent` for the active session."""
         profiles = context.config.setdefault("agent_profiles", {})
         name = args.get("profile_name")
         if name == "add":
@@ -73,16 +78,19 @@ class AgentCommand(BaseCommand):
 
 
 def _profile(args):
+    """Internal helper to handle profile."""
     return {f: _coerce(f, args.get(f)) for f in FIELDS}
 
 
 def _coerce(field, value):
+    """Internal helper to handle coerce."""
     if field == "tools_list":
         return value if isinstance(value, list) else json.loads(value or "[]")
     return "" if value is None else str(value)
 
 
 def _describe(context, name):
+    """Internal helper to handle describe."""
     p = (context.config.get("agent_profiles", {}) or {}).get(name)
     if not p:
         return "Action"
@@ -91,10 +99,12 @@ def _describe(context, name):
 
 
 def _profile_label(context, name):
+    """Internal helper to handle profile label."""
     return "Add profile" if name == "add" else f"{name} (active)" if context.config.get("active_agent_profile") == name else name
 
 
 def _value_prompt(field):
+    """Internal helper to handle value prompt."""
     return {
         "llm": "Enter the LLM profile name, or default.",
         "prompt_suffix": "Enter the extra system-prompt instructions for this agent.",
@@ -104,10 +114,12 @@ def _value_prompt(field):
 
 
 def _save(config):
+    """Internal helper to save agent."""
     config_manager.save(config)
 
 
 def _refresh(context):
+    """Internal helper to refresh agent."""
     runtime = getattr(context, "runtime", None)
     if runtime and hasattr(runtime, "refresh_session_specs"):
         runtime.refresh_session_specs()

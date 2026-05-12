@@ -45,6 +45,7 @@ def _looks_like_gibberish(text: str) -> bool:
 
 	def _is_wordlike(c: str) -> bool:
 		# Letters in any script (Latin, CJK, Cyrillic, Arabic, etc.) plus digits.
+		"""Return whether wordlike."""
 		return c.isalpha() or c.isdigit()
 
 	wordlike = sum(1 for c in non_space if _is_wordlike(c))
@@ -160,6 +161,7 @@ def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
 
 
 class ChunkText(BaseTask):
+	"""Chunk text."""
 	name = "chunk_text"
 	modalities = ["text"]
 	reads = ["extracted_text"]
@@ -185,6 +187,7 @@ class ChunkText(BaseTask):
 	timeout = 120
 
 	def run(self, paths, context):
+		"""Run chunk text."""
 		chunk_size = context.config.get("embed_chunk_size", 512)
 		overlap = context.config.get("embed_chunk_overlap", 50)
 		now = time.time()

@@ -13,6 +13,7 @@ _EXTENSIONS = [".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".oga", ".opus",
 
 
 def parse_audio(path: str, services: dict, config: dict) -> str | None:
+    """Parse audio."""
     whisper = (services or {}).get("whisper")
     if whisper is None:
         return None

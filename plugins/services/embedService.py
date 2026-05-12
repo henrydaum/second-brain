@@ -1,3 +1,5 @@
+"""Service plugin for embed."""
+
 import os
 from pathlib import Path
 import gc
@@ -44,6 +46,7 @@ class BaseEmbedder(BaseService):
     ]
 
     def __init__(self, model_name, chunk_size=512, use_cuda=True):
+        """Initialize the base embedder."""
         super().__init__()
         self.model_name = model_name
         self.shared = True  # Embedders are thread-safe (encode() is stateless)
@@ -73,7 +76,9 @@ class BaseEmbedder(BaseService):
 
 # --- SUBCLASS: SENTENCE TRANSFORMERS ---
 class SentenceTransformerEmbedder(BaseEmbedder):
+    """Sentence transformer embedder."""
     def __init__(self, model_name="BAAI/bge-small-en-v1.5", chunk_size=512, use_cuda=True):
+        """Initialize the sentence transformer embedder."""
         super().__init__(model_name, chunk_size=chunk_size, use_cuda=use_cuda)
         self.model = None
         self.device = None
@@ -177,6 +182,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         return True
 
     def unload(self):
+        """Handle unload."""
         if self.model:
             del self.model
             self.model = None
@@ -216,6 +222,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
 
 
 def build_services(config: dict) -> dict:
+    """Build services."""
     return {
         "text_embedder": SentenceTransformerEmbedder(
             model_name=config.get("embed_text_model_name", "BAAI/bge-small-en-v1.5"),

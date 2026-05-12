@@ -27,6 +27,7 @@ logger = logging.getLogger("IndexLexical")
 
 
 class IndexLexical(BaseTask):
+	"""Index lexical."""
 	name = "index_lexical"
 	modalities = []  # downstream task — triggered by upstream completion
 	reads = ["text_chunks", "ocr_text", "tabular_text", "audio_transcripts"]
@@ -75,6 +76,7 @@ class IndexLexical(BaseTask):
 	timeout = 120
 
 	def run(self, paths, context):
+		"""Run index lexical."""
 		now = time.time()
 		results = []
 

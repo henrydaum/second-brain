@@ -1,3 +1,5 @@
+"""State-machine support for approval."""
+
 from __future__ import annotations
 
 import threading
@@ -31,25 +33,31 @@ class StateMachineApprovalRequest:
 
     @property
     def approved(self) -> bool:
+        """Handle approved."""
         return bool(self.value)
 
     @approved.setter
     def approved(self, val: bool) -> None:
+        """Handle approved."""
         self.value = bool(val)
 
     @property
     def is_resolved(self) -> bool:
+        """Return whether resolved."""
         return self._event.is_set()
 
     def wait(self, timeout: float | None = None) -> bool:
+        """Handle wait."""
         return self._event.wait(timeout)
 
     def resolve(self, value: Any) -> None:
+        """Resolve state machine approval request."""
         if not self.is_resolved:
             self.value = value
             self._event.set()
 
     def to_event(self) -> dict[str, Any]:
+        """Handle to event."""
         return {
             "id": self.id,
             "title": self.title,

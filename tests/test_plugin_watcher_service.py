@@ -1,3 +1,5 @@
+"""Regression tests for plugin watcher service."""
+
 from pathlib import Path
 
 from events.event_bus import bus
@@ -6,15 +8,19 @@ from plugins.services.pluginWatcherService import PluginWatcherService
 
 
 class _ToolRegistry:
+    """Tool registry."""
     def __init__(self):
+        """Initialize the tool registry."""
         self.tools = {}
         self.unregistered = []
 
     def unregister(self, name):
+        """Unregister tool registry."""
         self.unregistered.append(name)
 
 
 def _patch_plugin_dir(monkeypatch, directory):
+    """Internal helper to handle patch plugin dir."""
     import plugins.helpers.plugin_paths as paths
     import plugins.services.pluginWatcherService as watcher_mod
 
@@ -26,6 +32,7 @@ def _patch_plugin_dir(monkeypatch, directory):
 
 
 def test_plugin_watcher_initial_scan_records_mtimes(monkeypatch):
+    """Verify plugin watcher initial scan records mtimes."""
     root_dir = Path(".codex_plugin_watcher")
     path = root_dir / "tool_demo.py"
     try:
@@ -43,6 +50,7 @@ def test_plugin_watcher_initial_scan_records_mtimes(monkeypatch):
 
 
 def test_plugin_watcher_add_or_edit_loads_plugin(monkeypatch):
+    """Verify plugin watcher add or edit loads plugin."""
     calls = []
     root_dir = Path(".codex_plugin_watcher")
     path = root_dir / "tool_demo.py"
@@ -65,6 +73,7 @@ def test_plugin_watcher_add_or_edit_loads_plugin(monkeypatch):
 
 
 def test_plugin_watcher_emits_registered_and_edit_messages(monkeypatch):
+    """Verify plugin watcher emits registered and edit messages."""
     messages = []
     root_dir = Path(".codex_plugin_watcher")
     path = root_dir / "tool_demo.py"
@@ -89,6 +98,7 @@ def test_plugin_watcher_emits_registered_and_edit_messages(monkeypatch):
 
 
 def test_plugin_watcher_emits_registration_failed_message(monkeypatch):
+    """Verify plugin watcher emits registration failed message."""
     messages = []
     root_dir = Path(".codex_plugin_watcher")
     path = root_dir / "tool_demo.py"
@@ -110,6 +120,7 @@ def test_plugin_watcher_emits_registration_failed_message(monkeypatch):
 
 
 def test_plugin_watcher_unchanged_mtime_is_ignored(monkeypatch):
+    """Verify plugin watcher unchanged mtime is ignored."""
     calls = []
     root_dir = Path(".codex_plugin_watcher")
     path = root_dir / "tool_demo.py"
@@ -130,6 +141,7 @@ def test_plugin_watcher_unchanged_mtime_is_ignored(monkeypatch):
 
 
 def test_plugin_watcher_delete_unloads_by_source(monkeypatch):
+    """Verify plugin watcher delete unloads by source."""
     calls = []
     messages = []
     root_dir = Path(".codex_plugin_watcher")
@@ -160,6 +172,7 @@ def test_plugin_watcher_delete_unloads_by_source(monkeypatch):
 
 
 def test_plugin_watcher_wrong_name_does_not_load(monkeypatch):
+    """Verify plugin watcher wrong name does not load."""
     calls = []
     root_dir = Path(".codex_plugin_watcher")
     path = root_dir / "demo.py"
@@ -179,6 +192,7 @@ def test_plugin_watcher_wrong_name_does_not_load(monkeypatch):
 
 
 def test_plugin_watcher_unload_cancels_pending_timers():
+    """Verify plugin watcher unload cancels pending timers."""
     service = PluginWatcherService({})
     handler = service._handler = _FakeHandler()
 
@@ -188,7 +202,9 @@ def test_plugin_watcher_unload_cancels_pending_timers():
 
 
 class _FakeHandler:
+    """Fake handler."""
     cancelled = False
 
     def cancel_pending(self):
+        """Cancel pending."""
         self.cancelled = True

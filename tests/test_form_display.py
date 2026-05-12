@@ -1,3 +1,5 @@
+"""Regression tests for form display."""
+
 from types import SimpleNamespace
 
 from plugins.frontends.frontend_repl import ReplFrontend
@@ -7,6 +9,7 @@ from state_machine.form_display import form_step_display
 
 
 def test_enum_display_uses_choices_without_raw_type_hint():
+    """Verify enum display uses choices without raw type hint."""
     display = form_step_display(FormStep("profile_name", "Select an agent profile.", True, enum=["default", "add"]))
 
     assert display["prompt"] == "Select an agent profile."
@@ -16,6 +19,7 @@ def test_enum_display_uses_choices_without_raw_type_hint():
 
 
 def test_optional_default_display_includes_skip_guidance():
+    """Verify optional default display includes skip guidance."""
     display = form_step_display(FormStep("endpoint", "Optional endpoint URL.", False, default=""))
 
     assert display["allow_skip"] is True
@@ -24,6 +28,7 @@ def test_optional_default_display_includes_skip_guidance():
 
 
 def test_json_display_gives_concrete_guidance():
+    """Verify JSON display gives concrete guidance."""
     display = form_step_display(FormStep("tools_list", "Optional tool names.", False, "array", default=[]))
 
     assert display["input_mode"] == "json"
@@ -32,14 +37,17 @@ def test_json_display_gives_concrete_guidance():
 
 
 def test_array_form_values_accept_one_item_per_line():
+    """Verify array form values accept one item per line."""
     assert FormStep("tools_list", type="array").coerce("lexical_search\nsemantic_search") == ["lexical_search", "semantic_search"]
 
 
 def test_array_form_values_wrap_json_scalar():
+    """Verify array form values wrap JSON scalar."""
     assert FormStep("services", type="array").coerce('"web_search_provider"') == ["web_search_provider"]
 
 
 def test_boolean_display_uses_true_false_choices():
+    """Verify boolean display uses true false choices."""
     display = form_step_display(FormStep("one_time", "Run once?", False, "boolean", default=False))
 
     assert display["choices"] == [{"value": True, "label": "True"}, {"value": False, "label": "False"}]
@@ -47,6 +55,7 @@ def test_boolean_display_uses_true_false_choices():
 
 
 def test_runtime_decorates_form_with_display_payload():
+    """Verify runtime decorates form with display payload."""
     cs = ConversationState([
         Participant("user", "user", commands={"agent": CallableSpec("agent", form=[FormStep("profile_name", "Select an agent profile.", True, enum=["default"])])}),
     ])
@@ -64,6 +73,7 @@ def test_runtime_decorates_form_with_display_payload():
 
 
 def test_runtime_decorates_form_with_back_available_after_input():
+    """Verify runtime decorates form with back available after input."""
     cs = ConversationState([
         Participant("user", "user", commands={"agent": CallableSpec("agent", form=[FormStep("profile_name", "Select an agent profile.", True), FormStep("action", "Choose.", True)])}),
     ])
@@ -81,6 +91,7 @@ def test_runtime_decorates_form_with_back_available_after_input():
 
 
 def test_telegram_form_prompt_omits_command_header_and_raw_type():
+    """Verify Telegram form prompt omits command header and raw type."""
     form = {
         "name": "agent",
         "field": FormStep("profile_name", "Select an agent profile.", True, enum=["default"]).to_dict(),
@@ -96,6 +107,7 @@ def test_telegram_form_prompt_omits_command_header_and_raw_type():
 
 
 def test_repl_form_rendering_uses_display_payload(capsys):
+    """Verify REPL form rendering uses display payload."""
     form = {
         "name": "agent",
         "field": FormStep("profile_name", "Select an agent profile.", True, enum=["default"]).to_dict(),
@@ -111,6 +123,7 @@ def test_repl_form_rendering_uses_display_payload(capsys):
 
 
 def test_repl_form_rendering_shows_back_hint_when_available(capsys):
+    """Verify REPL form rendering shows back hint when available."""
     step = FormStep("action", "Choose.", True, enum=["edit"])
     display = form_step_display(step)
     display["allow_back"] = True
@@ -122,6 +135,7 @@ def test_repl_form_rendering_shows_back_hint_when_available(capsys):
 
 
 def test_frontend_text_back_submits_back_form_action():
+    """Verify frontend text back submits back form action."""
     cs = ConversationState([
         Participant("user", "user", commands={"agent": CallableSpec("agent", form=[FormStep("profile_name", "Select an agent profile.", True), FormStep("action", "Choose.", True)])}),
     ])
@@ -138,6 +152,7 @@ def test_frontend_text_back_submits_back_form_action():
 
 
 def test_telegram_enum_markup_shows_back_button_when_available():
+    """Verify Telegram enum markup shows back button when available."""
     step = FormStep("action", "Choose.", True, enum=["edit"])
     display = form_step_display(step)
     display["allow_back"] = True
@@ -151,6 +166,7 @@ def test_telegram_enum_markup_shows_back_button_when_available():
 
 
 def test_telegram_approval_markup_keeps_boolean_clean_and_adds_typed_cancel():
+    """Verify Telegram approval markup keeps boolean clean and adds typed cancel."""
     tg = TelegramFrontend()
     tg._button = lambda label, _key, value, echo=None: (label, value)
     tg._markup = lambda rows: rows

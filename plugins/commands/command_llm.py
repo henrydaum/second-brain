@@ -1,3 +1,5 @@
+"""Slash command plugin for `/llm`."""
+
 import json
 
 from config import config_manager
@@ -12,11 +14,13 @@ FIELD_LABELS = ["Endpoint", "API key", "Context size", "Service class"]
 
 
 class LlmCommand(BaseCommand):
+    """Slash-command handler for `/llm`."""
     name = "llm"
     description = "Select an LLM profile, then edit, set default, or remove it"
     category = "System"
 
     def form(self, args, context):
+        """Handle form."""
         profiles = context.config.get("llm_profiles", {}) or {}
         names = [*sorted(profiles), "add"]
         steps = [FormStep("model_name", _default_prompt(context), True, enum=names, enum_labels=[_model_label(context, n) for n in names])]
@@ -35,6 +39,7 @@ class LlmCommand(BaseCommand):
         return steps
 
     def run(self, args, context):
+        """Execute `/llm` for the active session."""
         profiles = context.config.setdefault("llm_profiles", {})
         router = (context.services or {}).get("llm")
         name = args.get("model_name")
@@ -73,16 +78,19 @@ class LlmCommand(BaseCommand):
 
 
 def _profile(args):
+    """Internal helper to handle profile."""
     return {f: _coerce(f, args.get(f)) for f in FIELDS}
 
 
 def _coerce(field, value):
+    """Internal helper to handle coerce."""
     if field == "llm_context_size":
         return int(value or 0)
     return "" if value is None else str(value)
 
 
 def _describe(context, name):
+    """Internal helper to handle describe."""
     p = (context.config.get("llm_profiles", {}) or {}).get(name)
     if not p:
         return "Action"
@@ -92,15 +100,18 @@ def _describe(context, name):
 
 
 def _model_label(context, name):
+    """Internal helper to handle model label."""
     return "Add profile" if name == "add" else f"{name} (default)" if context.config.get("default_llm_profile") == name else name
 
 
 def _default_prompt(context):
+    """Return default prompt."""
     default = (context.config.get("default_llm_profile") or "").strip()
     return f"Select an LLM profile, or add a new one.\nDefault: {default or '(none)'}"
 
 
 def _value_prompt(field):
+    """Internal helper to handle value prompt."""
     return {
         "llm_endpoint": "Enter the endpoint URL, or leave it blank for the provider default.",
         "llm_api_key": "Enter the API key value or environment variable name.",
@@ -110,6 +121,7 @@ def _value_prompt(field):
 
 
 def _save(config):
+    """Internal helper to save LLM."""
     saved = config_manager.load_plugin_config()
     saved.update({k: config.get(k) for k in ("llm_profiles", "default_llm_profile")})
     config_manager.save_plugin_config(saved)

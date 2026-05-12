@@ -1,3 +1,5 @@
+"""Attachment parsing helpers for tabular inputs."""
+
 import logging
 from pathlib import Path
 from plugins.services.helpers.ParseResult import ParseResult
@@ -23,6 +25,7 @@ DEFAULT_MAX_ROWS = 100_000  # safety limit for huge files
 
 
 def _max_rows(config: dict) -> int:
+    """Return max rows."""
     return config.get("max_rows", DEFAULT_MAX_ROWS)
 
 
@@ -166,6 +169,7 @@ registry.register([".parquet", ".feather"], "tabular", parse_parquet)
 # ===================================================================
 
 def parse_sqlite(path: str, config: dict, services: dict = None) -> ParseResult:
+    """Parse sqlite."""
     try:
         import pandas as pd
         import sqlite3

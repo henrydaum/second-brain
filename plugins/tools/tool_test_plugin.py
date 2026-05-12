@@ -1,3 +1,5 @@
+"""Tool plugin for test plugin."""
+
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +12,7 @@ from plugins.plugin_discovery import load_single_plugin, unload_plugin
 
 
 class TestPlugin(BaseTool):
+    """Test plugin."""
     name = "test_plugin"
     description = (
         "Run purpose-built diagnostics for a plugin source file, then run the broad pytest "
@@ -28,6 +31,7 @@ class TestPlugin(BaseTool):
     background_safe = False
 
     def run(self, context, **kwargs) -> ToolResult:
+        """Run test plugin."""
         path, err = resolve_plugin_path((kwargs.get("plugin_path") or "").strip())
         if err:
             return ToolResult.failed(err)
@@ -61,6 +65,7 @@ class TestPlugin(BaseTool):
 
 
 def _try_load(plugin_type: str, path: Path, config: dict) -> tuple[str | None, str | None, list[dict]]:
+    """Internal helper to handle try load."""
     tool_registry = _ToolRegistry()
     orchestrator = _TaskRegistry()
     command_registry = _CommandRegistry()
@@ -90,10 +95,12 @@ def _try_load(plugin_type: str, path: Path, config: dict) -> tuple[str | None, s
 
 
 def _diag(level: str, check: str, message: str, suggestion: str = "") -> dict:
+    """Internal helper to handle diag."""
     return {"level": level, "check": check, "message": message, "suggestion": suggestion}
 
 
 def _format_diagnostics(items: list[dict]) -> list[str]:
+    """Internal helper to format diagnostics."""
     if not items:
         return ["- ok: Load diagnostics did not find additional issues."]
     lines = []
@@ -106,6 +113,7 @@ def _format_diagnostics(items: list[dict]) -> list[str]:
 
 
 def _diagnose(plugin_type: str, loaded_name: str | None, state) -> list[dict]:
+    """Internal helper to handle diagnose."""
     checks = []
     items = _loaded_items(plugin_type, loaded_name, state)
     if not items:
@@ -117,6 +125,7 @@ def _diagnose(plugin_type: str, loaded_name: str | None, state) -> list[dict]:
 
 
 def _loaded_items(plugin_type: str, loaded_name: str | None, state) -> list[tuple[str, object]]:
+    """Internal helper to handle loaded items."""
     if plugin_type == "tool":
         return list(state.tool_registry.tools.items())
     if plugin_type == "task":
@@ -131,6 +140,7 @@ def _loaded_items(plugin_type: str, loaded_name: str | None, state) -> list[tupl
 
 
 def _common_checks(name: str, obj) -> list[dict]:
+    """Internal helper to handle common checks."""
     checks = []
     if not isinstance(name, str) or not name.strip():
         checks.append(_diag("error", "name", "Plugin registered with an empty name.", "Set a stable non-empty name."))
@@ -143,6 +153,7 @@ def _common_checks(name: str, obj) -> list[dict]:
 
 
 def _diagnose_tool(tool) -> list[dict]:
+    """Internal helper to handle diagnose tool."""
     from plugins.BaseTool import BaseTool
     checks = []
     if not (tool.description or "").strip():
@@ -158,6 +169,7 @@ def _diagnose_tool(tool) -> list[dict]:
 
 
 def _diagnose_task(task) -> list[dict]:
+    """Internal helper to handle diagnose task."""
     from plugins.BaseTask import BaseTask
     checks = []
     trigger = getattr(task, "trigger", "path")
@@ -181,6 +193,7 @@ def _diagnose_task(task) -> list[dict]:
 
 
 def _diagnose_service(service) -> list[dict]:
+    """Internal helper to handle diagnose service."""
     from plugins.BaseService import BaseService
     checks = []
     if not isinstance(service, BaseService):
@@ -197,6 +210,7 @@ def _diagnose_service(service) -> list[dict]:
 
 
 def _diagnose_command(command) -> list[dict]:
+    """Internal helper to handle diagnose command."""
     from plugins.BaseCommand import BaseCommand
     from state_machine.conversation import FormStep
     checks = []
@@ -214,6 +228,7 @@ def _diagnose_command(command) -> list[dict]:
 
 
 def _diagnose_frontend(frontend) -> list[dict]:
+    """Internal helper to handle diagnose frontend."""
     from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
     checks = []
     if not (frontend.description or "").strip():
@@ -227,6 +242,7 @@ def _diagnose_frontend(frontend) -> list[dict]:
 
 
 def _run_pytest(config: dict) -> dict:
+    """Internal helper to run pytest."""
     timeout = int(config.get("plugin_test_timeout", 120))
     try:
         proc = subprocess.run(
@@ -244,49 +260,66 @@ def _run_pytest(config: dict) -> dict:
 
 
 def _tail(text: str, lines: int = 40) -> str:
+    """Internal helper to handle tail."""
     return "\n".join((text or "").splitlines()[-lines:])
 
 
 class _ToolRegistry:
+    """Tool registry."""
     def __init__(self):
+        """Initialize the tool registry."""
         self.tools = {}
 
     def register(self, tool):
+        """Register tool registry."""
         self.tools[tool.name] = tool
 
     def unregister(self, name):
+        """Unregister tool registry."""
         self.tools.pop(name, None)
 
 
 class _TaskRegistry:
+    """Task registry."""
     def __init__(self):
+        """Initialize the task registry."""
         self.tasks = {}
 
     def register_task(self, task):
+        """Register task."""
         self.tasks[task.name] = task
 
     def unregister_task(self, name):
+        """Unregister task."""
         self.tasks.pop(name, None)
 
 
 class _CommandRegistry:
+    """Command registry."""
     def __init__(self):
+        """Initialize the command registry."""
         self._commands = {}
 
     def register(self, command):
+        """Register command registry."""
         self._commands[command.name] = command
 
     def unregister(self, name):
+        """Unregister command registry."""
         self._commands.pop(name, None)
 
 
 class _FrontendManager:
+    """Frontend manager."""
     def __init__(self):
+        """Initialize the frontend manager."""
         self.adapters = {}
 
     def register(self, cls):
+        """Register frontend manager."""
         self.adapters[cls.name] = cls()
         return None
 
     def unregister(self, name):
+        """Unregister frontend manager."""
         self.adapters.pop(name, None)

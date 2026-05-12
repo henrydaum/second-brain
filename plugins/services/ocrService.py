@@ -1,3 +1,5 @@
+"""Service plugin for OCR."""
+
 import asyncio
 import os
 import tempfile
@@ -40,7 +42,9 @@ def _create_optimized_temp_file(original_path):
 
 
 class WindowsOCR(BaseService):
+    """Windows OCR."""
     def __init__(self):
+        """Initialize the windows OCR."""
         super().__init__()
         self.model_name = "winrt_windows_ocr"
         self.shared = True
@@ -55,6 +59,7 @@ class WindowsOCR(BaseService):
         return True
 
     def unload(self):
+        """Handle unload."""
         self.loaded = False
         logger.info("Windows OCR unloaded.")
 
@@ -130,22 +135,26 @@ class MacOCR(BaseService):
     """
 
     def __init__(self):
+        """Initialize the mac OCR."""
         super().__init__()
         self.model_name = "apple_vision_ocr"
         self.shared = True
 
     def _load(self):
         # Verify the frameworks import; the OCR model is OS-resident.
+        """Internal helper to load mac OCR."""
         import Vision  # noqa: F401
         import Quartz  # noqa: F401
         self.loaded = True
         return True
 
     def unload(self):
+        """Handle unload."""
         self.loaded = False
         logger.info("Mac OCR unloaded.")
 
     def process_image(self, image_path):
+        """Handle process image."""
         import time as _time
 
         if not self.loaded: return ""
@@ -172,6 +181,7 @@ class MacOCR(BaseService):
                     logger.debug(f"Temp cleanup failed: {e}")
 
     def _run_vision_ocr(self, image_path):
+        """Internal helper to run vision OCR."""
         import Vision
         import Quartz
         from Foundation import NSURL
@@ -204,6 +214,7 @@ class MacOCR(BaseService):
 
 
 def build_services(config: dict) -> dict:
+    """Build services."""
     import platform
     system = platform.system()
     if system == "Windows":

@@ -143,6 +143,7 @@ from typing import Any
 
 @dataclass
 class TaskResult:
+    """Task result."""
     success: bool = True
     error: str = ""
     data: list[dict] = field(default_factory=list)
@@ -151,11 +152,13 @@ class TaskResult:
 
     @staticmethod
     def failed(error: str) -> "TaskResult":
+        """Handle failed."""
         return TaskResult(success=False, error=error)
 
 
 class BaseTask:
     # --- Identity ---
+    """Base task."""
     name: str = ""
 
     # --- Trigger kind ---

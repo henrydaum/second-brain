@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Conversation persistence and lifecycle helpers.
 
 The runtime never reads the DB directly. Everything that creates a
@@ -13,6 +11,9 @@ The functions are arranged in lifecycle order:
 4. ``inject_user_message`` / ``iterate_agent_turn``: drive a turn.
 5. Marker helpers (``persist_marker``, etc.) used everywhere else.
 """
+
+from __future__ import annotations
+
 
 import logging
 import uuid
@@ -207,6 +208,7 @@ def load_history(runtime, session_key: str, conversation_id: int):
 
 
 def reset_conversation(runtime, session_key: str) -> RuntimeSession:
+    """Handle reset conversation."""
     with runtime._sessions_lock:
         existed = session_key in runtime.sessions
         session = RuntimeSession(session_key, new_state(runtime))
@@ -223,6 +225,7 @@ def reset_conversation(runtime, session_key: str) -> RuntimeSession:
 
 
 def new_conversation(runtime, session_key: str):
+    """Handle new conversation."""
     from runtime.session import RuntimeResult
 
     reset_conversation(runtime, session_key)
@@ -332,6 +335,7 @@ def inject_user_message(
 # ──────────────────────────────────────────────────────────────────────
 
 def close_session(runtime, session_key: str) -> bool:
+    """Close session."""
     with runtime._sessions_lock:
         existed = runtime.sessions.pop(session_key, None) is not None
     if existed:
@@ -381,11 +385,13 @@ def persist_marker(runtime, session: RuntimeSession) -> None:
 
 
 def conversation_title(runtime, conversation_id: int) -> str:
+    """Handle conversation title."""
     row = runtime.db.get_conversation(conversation_id) if runtime.db else None
     return ((row or {}).get("title") or "").strip() or "New Conversation"
 
 
 def ensure_conversation(runtime, session: RuntimeSession, title_text: str = "") -> None:
+    """Handle ensure conversation."""
     if session.conversation_id is None and runtime.db:
         session.conversation_id = runtime.db.create_conversation(
             (title_text or "New Conversation").replace("\n", " ")[:80] or "New Conversation",

@@ -1,3 +1,5 @@
+"""Task plugin for spawn subagent."""
+
 from pathlib import Path
 
 from attachments import parse_attachment
@@ -8,6 +10,7 @@ from state_machine.serialization import save_state_marker
 
 
 class SpawnSubagent(BaseTask):
+    """Spawn subagent."""
     name = "spawn_subagent"
     trigger = "event"
     trigger_channels = [SPAWN_SUBAGENT]
@@ -26,6 +29,7 @@ class SpawnSubagent(BaseTask):
     }
 
     def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
+        """Run event."""
         runtime, db = getattr(context, "runtime", None), getattr(context, "db", None)
         if runtime is None or db is None:
             return TaskResult.failed("ConversationRuntime and database are required.")
@@ -64,6 +68,7 @@ class SpawnSubagent(BaseTask):
 
 
 def _conversation_id(payload):
+    """Internal helper to handle conversation ID."""
     try:
         return int(payload.get("conversation_id"))
     except (TypeError, ValueError):
@@ -71,6 +76,7 @@ def _conversation_id(payload):
 
 
 def _create_conversation(db, payload):
+    """Internal helper to create conversation."""
     tk = payload.get("_timekeeper") or {}
     title = (payload.get("title") or "Scheduled subagent").strip()
     cid = db.create_conversation(title, kind="user", category="Scheduled (one-time)" if tk.get("one_time") else "Scheduled")
@@ -79,6 +85,7 @@ def _create_conversation(db, payload):
 
 
 def _remember_conversation(context, payload, cid):
+    """Internal helper to handle remember conversation."""
     job_name = (payload.get("_timekeeper") or {}).get("job_name")
     tk = (getattr(context, "services", None) or {}).get("timekeeper")
     if not job_name or tk is None or not hasattr(tk, "update_job"):
@@ -89,6 +96,7 @@ def _remember_conversation(context, payload, cid):
 
 
 def _attachments(paths, context):
+    """Internal helper to handle attachments."""
     if isinstance(paths, str):
         paths = [paths]
     out = []

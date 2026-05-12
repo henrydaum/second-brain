@@ -1,3 +1,5 @@
+"""Attachment support for attachment."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
@@ -6,6 +8,7 @@ from typing import Any, Iterable
 
 @dataclass
 class Attachment:
+    """Attachment."""
     path: str
     extension: str
     file_name: str
@@ -14,28 +17,35 @@ class Attachment:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Handle to dict."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Attachment":
+        """Handle from dict."""
         fields = cls.__dataclass_fields__
         return cls(**{k: data.get(k) for k in fields if k in data})
 
 
 @dataclass
 class AttachmentBundle:
+    """Attachment bundle."""
     items: list[Attachment] = field(default_factory=list)
 
     def __bool__(self) -> bool:
+        """Internal helper to handle bool."""
         return bool(self.items)
 
     def __iter__(self):
+        """Internal helper to handle iter."""
         return iter(self.items)
 
     def __len__(self) -> int:
+        """Internal helper to handle len."""
         return len(self.items)
 
     def append(self, attachment: Attachment) -> None:
+        """Handle append."""
         self.items.append(attachment)
 
     def for_llm(self, capabilities: dict[str, bool | None] | None) -> tuple[list[str], str]:
@@ -70,10 +80,12 @@ class AttachmentBundle:
         return native_paths, "\n\n".join(suffix_parts)
 
     def to_list(self) -> list[dict[str, Any]]:
+        """Handle to list."""
         return [a.to_dict() for a in self.items]
 
     @classmethod
     def from_iterable(cls, data: Iterable[Any] | None) -> "AttachmentBundle":
+        """Handle from iterable."""
         if not data:
             return cls()
         if isinstance(data, AttachmentBundle):

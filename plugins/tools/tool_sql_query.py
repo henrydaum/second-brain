@@ -68,6 +68,7 @@ def _schema_hint(db, error_msg: str) -> str:
 
 
 class SQLQuery(BaseTool):
+    """Sqlquery."""
     name = "sql_query"
     config_settings = [
         ("Max Query Rows", "max_query_rows",
@@ -103,6 +104,7 @@ class SQLQuery(BaseTool):
     max_calls = 6  # Failed queries are common, so allow a few extra calls.
 
     def run(self, context, **kwargs):
+        """Run sqlquery."""
         sql = kwargs.get("sql", "").strip()
         if not sql:
             return ToolResult.failed("No SQL provided.")
@@ -136,6 +138,7 @@ class SQLQuery(BaseTool):
 def _sql_summary(sql: str, columns: list, rows: list, row_count: int, truncated: bool) -> str:
     """Format a SQL result as a readable summary for the LLM."""
     def cell(v, limit=500):
+        """Handle cell."""
         text = str(v)
         return text if len(text) <= limit else f"{text[:limit]}...[truncated {len(text) - limit} chars]"
 

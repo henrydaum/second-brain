@@ -1,4 +1,7 @@
+"""Tool plugin for email context."""
+
 def is_main_conversation(context) -> bool:
+    """Return whether main conversation."""
     runtime, key = getattr(context, "runtime", None), getattr(context, "session_key", None)
     session = getattr(runtime, "sessions", {}).get(key) if runtime and key else None
     cid = getattr(session, "conversation_id", None)

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Concrete state-machine actions.
 
 Every action follows the Poker Monster contract (see PokerMonsterRefactor.py):
@@ -13,6 +11,8 @@ on the phase stack (`cs.cache["phases"]`) — equivalent to PokerMonster's
 `gs.cache` — and resolve when the original action is replayed with its
 collected inputs.
 """
+
+from __future__ import annotations
 
 from typing import Any, Tuple, Optional
 import logging
@@ -43,16 +43,19 @@ logger = logging.getLogger("actionClass")
 
 
 def _steps(spec: CallableSpec, args: dict[str, Any], cs=None) -> list[FormStep]:
+    """Build the current form steps for a callable spec."""
     if not spec.form_factory:
         return spec.form
     return spec.form_factory(args, cs)
 
 
 def _missing(spec: CallableSpec, args: dict[str, Any], cs=None) -> list[FormStep]:
+    """Return the required form steps that are still missing."""
     return [s for s in _steps(spec, args, cs) if s.name not in args and (s.required or s.prompt_when_missing)]
 
 
 def _emit_command_event(channel: str, cs, payload: dict[str, Any]) -> None:
+    """Emit a slash-command lifecycle event when the event bus is available."""
     try:
         from events.event_bus import bus
         bus.emit(channel, {"session_key": cs.cache.get("session_key"), **payload})
@@ -61,6 +64,7 @@ def _emit_command_event(channel: str, cs, payload: dict[str, Any]) -> None:
 
 
 def _emit_command_progress(cs, frame) -> None:
+    """Emit progress updates for an in-flight slash-command form."""
     call_id = (frame.data or {}).get("call_id")
     if frame.action_type == "call_command" and call_id:
         from events.event_channels import COMMAND_CALL_PROGRESSED
@@ -68,10 +72,12 @@ def _emit_command_progress(cs, frame) -> None:
 
 
 def _record_form_field(frame) -> None:
+    """Record the fields that have already been visited in a form."""
     frame.data.setdefault("form_history", []).append(frame.step.name)
 
 
 def _rewind_form(cs, frame):
+    """Move a form back one field and return the new active step."""
     history = frame.data.setdefault("form_history", [])
     if not history:
         return None
@@ -90,12 +96,14 @@ class Action(object):
     action_type = "action"
 
     def __init__(self, cs, actor_id: str | None = None, content: Any = None):
+        """Initialize the action."""
         self.cs = cs  # Conversation State
         self.actor_id = actor_id or cs.turn_priority
         self.content = content
         self.illegal_code = ERROR_INVALID_ACTION
 
     def is_legal(self) -> Tuple[bool, Optional[str]]:
+        """Return whether this action is legal for the current actor and turn."""
         if self.actor_id not in self.cs.participants:
             return False, f"Unknown participant: {self.actor_id}."
         if self.actor_id != self.cs.turn_priority:
@@ -104,12 +112,15 @@ class Action(object):
         return True, None
 
     def execute(self) -> ActionResult:
+        """Apply the action to the conversation state."""
         raise NotImplementedError("Subclass must implement execute()")
 
     def error(self, code: str, message: str, **details: Any) -> ActionError:
+        """Build an ActionError anchored to the current phase."""
         return ActionError(code, message, details, self.cs.phase)
 
     def enact(self) -> ActionResult:
+        """Run legality checks, execute the action, and normalize failures."""
         legal, reason = self.is_legal()
         if not legal:
             err = self.error(self.illegal_code, reason or self.illegal_code)
@@ -135,19 +146,24 @@ class Action(object):
         return result
 
 class InvalidAction(Action):
+    """Invalid action."""
     action_type = "invalid"
 
     def is_legal(self):
+        """Always reject this placeholder action."""
         return False, ERROR_INVALID_ACTION
     
     def execute(self):
+        """Raise the standardized invalid-action error."""
         raise self.error(ERROR_INVALID_ACTION, "That action is not legal in this phase.", phase=self.cs.phase)
 
 
 class SendText(Action):
+    """Send text."""
     action_type = "send_text"
 
     def execute(self):
+        """Append a text message event and hand turn priority to the other side when needed."""
         text = self.content if isinstance(self.content, str) else (self.content or {}).get("text", "")
         event = self.cs.event("message", self.actor_id, text=text)
         # Self-contained priority hand-off: when a user finishes their turn by
@@ -163,9 +179,11 @@ class SendText(Action):
 
 
 class EndTurn(Action):
+    """End turn."""
     action_type = "end_turn"
 
     def execute(self):
+        """Reset phase state and hand turn priority to the other participant."""
         old = self.cs.turn_priority
         self.cs.reset_phase()
         self.cs.switch_priority(old)
@@ -174,9 +192,11 @@ class EndTurn(Action):
 
 
 class Cancel(Action):
+    """Cancel."""
     action_type = "cancel"
 
     def execute(self):
+        """Pop the active frame, restore priority, and emit cancellation events."""
         frame = self.cs.pop_phase()
         if frame is not None and frame.phase == PHASE_APPROVING_REQUEST:
             data = frame.data or {}
@@ -216,6 +236,7 @@ class _CallableAction(Action):
     form_phase = PHASE_FILLING_COMMAND_FORM
 
     def payload(self) -> dict[str, Any]:
+        """Normalize command/tool input into a name-plus-args payload."""
         if isinstance(self.content, str):
             return {"name": self.content, "args": {}}
         payload = dict(self.content or {})
@@ -223,6 +244,7 @@ class _CallableAction(Action):
         return payload
 
     def is_legal(self):
+        """Return whether the current participant is allowed to call this callable."""
         legal, reason = super().is_legal()
         if not legal:
             return legal, reason
@@ -232,6 +254,7 @@ class _CallableAction(Action):
         return True, None
 
     def spec(self, payload: dict[str, Any]) -> CallableSpec:
+        """Resolve the callable spec for the requested command or tool."""
         name = payload.get("name")
         spec = self.cs.spec(self.actor_id, self.action_type, name)
         if not name or not spec:
@@ -241,6 +264,7 @@ class _CallableAction(Action):
         return spec
 
     def execute(self):
+        """Run the callable immediately or suspend into form/approval flow first."""
         payload, actor = self.payload(), self.actor_id
         spec = self.spec(payload)
         args = dict(payload.get("args") or {})
@@ -269,6 +293,7 @@ class _CallableAction(Action):
         return self._run(spec, args, call_id=resumed_call_id)
 
     def _validate(self, spec: CallableSpec, args: dict[str, Any]) -> None:
+        """Internal helper to validate collected args against the callable form."""
         if "arg" in args:
             return
         for step in _steps(spec, args, self.cs):
@@ -283,6 +308,7 @@ class _CallableAction(Action):
     def _approval(self, payload: dict[str, Any], spec: CallableSpec):
         # Approval temporarily gives priority to the approver; approving later
         # reconstructs this same callable payload with `_approved=True`.
+        """Internal helper to suspend a callable behind an approval frame."""
         approver = spec.approval_actor_id or self.cs.other_id(self.actor_id)
         self.cs.push_phase(PhaseFrame(PHASE_APPROVING_REQUEST, "answer_approval", approver, spec.name, {
             "type": "boolean",
@@ -296,6 +322,7 @@ class _CallableAction(Action):
         return ActionResult(True, self.action_type, "Approval required.", events=[event])
 
     def _run(self, spec: CallableSpec, args: dict[str, Any], *, call_id: str | None = None):
+        """Internal helper to invoke the callable and translate its result into events."""
         old_phase = self.cs.phase
         self.cs.phase = self.calling_phase
         started = call_id or self._emit_invocation_started(spec, args)
@@ -313,6 +340,7 @@ class _CallableAction(Action):
         return ActionResult(True, self.action_type, events=[event], data={"result": value, "call_id": started})
 
     def _emit_invocation_started(self, spec: CallableSpec, args: dict[str, Any]):
+        """Internal helper to announce the start of a slash-command invocation."""
         if self.action_type != "call_command":
             return None
         try:
@@ -326,6 +354,7 @@ class _CallableAction(Action):
             return None
 
     def _supersede_pending_form(self):
+        """Internal helper to cancel any older pending form before starting a new one."""
         frame = self.cs.peek_phase() if hasattr(self.cs, "peek_phase") else self.cs.frame
         if not frame or frame.phase not in {PHASE_FILLING_COMMAND_FORM, PHASE_FILLING_TOOL_FORM}:
             return
@@ -336,6 +365,7 @@ class _CallableAction(Action):
         self.cs.pop_phase()
 
     def _emit_command_finished(self, call_id, spec: CallableSpec, ok: bool, error: str | None):
+        """Internal helper to announce the final status of a slash-command invocation."""
         if not call_id or self.action_type != "call_command":
             return
         try:
@@ -347,6 +377,7 @@ class _CallableAction(Action):
 
 
 class CallCommand(_CallableAction):
+    """Call command."""
     action_type = "call_command"
     registry = "commands"
     missing_code = ERROR_UNKNOWN_COMMAND
@@ -355,6 +386,7 @@ class CallCommand(_CallableAction):
 
 
 class CallTool(_CallableAction):
+    """Call tool."""
     action_type = "call_tool"
     registry = "tools"
     missing_code = ERROR_UNKNOWN_TOOL
@@ -363,9 +395,11 @@ class CallTool(_CallableAction):
 
 
 class SubmitFormText(Action):
+    """Submit form text."""
     action_type = "submit_form_text"
 
     def execute(self):
+        """Record one piece of form input and either advance or resume the callable."""
         frame = self.cs.frame
         if not frame or not frame.step:
             raise self.error(ERROR_INVALID_ACTION, "No form is awaiting input.")
@@ -419,6 +453,7 @@ class AnswerApproval(Action):
     action_type = "answer_approval"
 
     def execute(self):
+        """Resolve the active approval frame and resume the pending callable when allowed."""
         frame = self.cs.frame
         if not frame or frame.phase != PHASE_APPROVING_REQUEST:
             raise self.error(ERROR_INVALID_ACTION, "No request is pending.")
@@ -490,6 +525,7 @@ class SkipForm(Action):
     action_type = "skip_form"
 
     def execute(self):
+        """Skip the current optional form field and continue the callable flow."""
         frame = self.cs.frame
         if not frame or not frame.step:
             raise self.error(ERROR_INVALID_ACTION, "No form is awaiting input.")
@@ -524,9 +560,11 @@ class SkipForm(Action):
 
 
 class BackForm(Action):
+    """Back form."""
     action_type = "back_form"
 
     def execute(self):
+        """Move the active form back one collected field."""
         frame = self.cs.frame
         if not frame or not frame.step:
             raise self.error(ERROR_INVALID_ACTION, "No form is awaiting input.")
@@ -538,9 +576,11 @@ class BackForm(Action):
 
 
 class SendAttachment(Action):
+    """Send attachment."""
     action_type = "send_attachment"
 
     def is_legal(self):
+        """Return whether the current actor may submit an attachment in this phase."""
         legal, reason = super().is_legal()
         if not legal:
             return legal, reason
@@ -550,6 +590,7 @@ class SendAttachment(Action):
         return True, None
 
     def execute(self):
+        """Queue an attachment for parsing and hand the turn to the agent."""
         content = dict(self.content or {})
         ext = self.cs.attachment_extension(content)
         if self.cs.allowed_attachment_extensions and ext not in self.cs.allowed_attachment_extensions:

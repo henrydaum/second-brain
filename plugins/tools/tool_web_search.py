@@ -1,3 +1,5 @@
+"""Tool plugin for web search."""
+
 from plugins.BaseTool import BaseTool, ToolResult
 
 import re
@@ -7,6 +9,7 @@ _URL_RE = re.compile(r"^(https?://|www\.)\S+$", re.IGNORECASE)
 
 
 class WebSearch(BaseTool):
+    """Web search."""
     name = "web_search"
     description = (
         "Search the public web for information that is not already available in the "
@@ -58,6 +61,7 @@ class WebSearch(BaseTool):
     max_calls = 5
 
     def _looks_question_like(self, query):
+        """Internal helper to handle looks question like."""
         q = query.lower().strip()
         starters = (
             "what", "why", "how", "when", "where", "who", "which", "compare", "explain", "summarize"
@@ -65,6 +69,7 @@ class WebSearch(BaseTool):
         return q.endswith("?") or q.startswith(starters) or len(query.split()) >= 8
 
     def _format_search_result(self, data, engine="brave", prefix=""):
+        """Internal helper to format search result."""
         results = data.get("results", [])
         query = data.get("query", "")
         label = "DuckDuckGo" if engine == "duckduckgo" else "search"
@@ -86,6 +91,7 @@ class WebSearch(BaseTool):
         )
 
     def _format_answers_result(self, data):
+        """Internal helper to format answers result."""
         query = data.get("query", "")
         answer = data.get("answer", "")
         sources = data.get("sources", [])
@@ -103,6 +109,7 @@ class WebSearch(BaseTool):
         )
 
     def run(self, context, **kwargs):
+        """Run web search."""
         query = (kwargs.get("query") or "").strip()
         if not query:
             return ToolResult.failed("Missing required parameter: query")

@@ -7,6 +7,7 @@ _DEFAULT_MAX = 8000
 
 
 def parse_pdf(path: str, services: dict, config: dict) -> str | None:
+    """Parse PDF."""
     parser = (services or {}).get("parser")
     if parser is None:
         return None

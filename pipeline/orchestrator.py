@@ -30,7 +30,9 @@ logger = logging.getLogger("Orchestrator")
 
 
 class Orchestrator:
+	"""Orchestrator."""
 	def __init__(self, db, config: dict, services: dict = None):
+		"""Initialize the orchestrator."""
 		self.db = db
 		self.config = config
 		self.services = services or {}
@@ -89,6 +91,7 @@ class Orchestrator:
 	# =================================================================
 
 	def register_task(self, task: BaseTask):
+		"""Register task."""
 		task.setup(self.config)
 
 		if task.output_schema:
@@ -255,6 +258,7 @@ class Orchestrator:
 	# =================================================================
 
 	def _services_ready(self, task: BaseTask) -> bool:
+		"""Internal helper to handle services ready."""
 		if not task.requires_services:
 			return True
 
@@ -284,6 +288,7 @@ class Orchestrator:
 	# =================================================================
 
 	def on_file_discovered(self, path: str, extension: str, modality: str):
+		"""Handle on file discovered."""
 		for task in self.tasks.values():
 			if getattr(task, "trigger", "path") != "path":
 				continue
@@ -294,6 +299,7 @@ class Orchestrator:
 					self._invalidate_downstream(task.name, [path])
 
 	def on_file_deleted(self, path: str):
+		"""Handle on file deleted."""
 		all_tables = []
 		for task in self.tasks.values():
 			all_tables.extend(task.writes)
@@ -331,6 +337,7 @@ class Orchestrator:
 	# =================================================================
 
 	def on_task_completed(self, path: str, task_name: str):
+		"""Handle on task completed."""
 		completed_task = self.tasks.get(task_name)
 		if not completed_task:
 			return
@@ -349,6 +356,7 @@ class Orchestrator:
 			)
 
 	def on_also_contains(self, path: str, modalities: list[str]):
+		"""Handle on also contains."""
 		for modality in modalities:
 			for task in self.tasks.values():
 				if getattr(task, "trigger", "path") != "path":
@@ -374,6 +382,7 @@ class Orchestrator:
 		logger.debug(f"Run enqueued: {run_id}")
 
 	def on_paths_discovered(self, child_paths: list[str]):
+		"""Handle on paths discovered."""
 		from plugins.services.helpers.parser_registry import get_modality, get_supported_extensions
 		supported = get_supported_extensions()
 
@@ -409,6 +418,7 @@ class Orchestrator:
 	# =================================================================
 
 	def start(self):
+		"""Start orchestrator."""
 		self.running = True
 
 		t0 = time.time()
@@ -518,6 +528,7 @@ class Orchestrator:
 		visited: set[str] = set()
 
 		def walk(task_name: str, prefix: str, is_last: bool):
+			"""Handle walk."""
 			task = path_tasks[task_name]
 			connector = "└── " if is_last else "├── "
 
@@ -543,6 +554,7 @@ class Orchestrator:
 		return "\n".join(lines)
 
 	def stop(self):
+		"""Stop orchestrator."""
 		self.running = False
 		if self._service_loaded_unsub:
 			self._service_loaded_unsub()
@@ -557,6 +569,7 @@ class Orchestrator:
 	def _dispatch_loop(self):
 		# Periodically sweep for stuck PROCESSING entries and reset them to
 		# PENDING so the pipeline can make forward progress again.
+		"""Internal helper to handle dispatch loop."""
 		stuck_check_interval = 60  # seconds between recovery sweeps
 		last_stuck_check = 0.0     # force an immediate first check
 
@@ -657,6 +670,7 @@ class Orchestrator:
 		return dispatched
 
 	def _execute_event_run_wrapper(self, task, run_id, payload_json, sem):
+		"""Internal helper to handle execute event run wrapper."""
 		try:
 			self._execute_event_run(task, run_id, payload_json)
 		finally:
@@ -748,6 +762,7 @@ class Orchestrator:
 					)
 
 	def _execute_wrapper(self, task, paths, sem):
+		"""Internal helper to handle execute wrapper."""
 		try:
 			self._execute(task, paths)
 		finally:
@@ -755,6 +770,7 @@ class Orchestrator:
 
 	def _execute(self, task: BaseTask, paths: list[str]):
 		# If the task was paused after dispatch, return the claim to PENDING.
+		"""Internal helper to handle execute."""
 		if task.name in self.paused:
 			self.db.unclaim_tasks(task.name, paths)
 			logger.info(f"Task '{task.name}' is paused — returned {len(paths)} path(s) to PENDING")
@@ -789,6 +805,7 @@ class Orchestrator:
 			self._invalidate_downstream(task.name, failed_paths)
 
 	def _process_result(self, task, path, result, failed_paths, duration_s=0.0):
+		"""Internal helper to handle process result."""
 		if result.success:
 			if not self._handle_success(task, path, result, duration_s):
 				failed_paths.append(path)

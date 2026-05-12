@@ -1,3 +1,5 @@
+"""Support code for plugin paths."""
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -6,6 +8,7 @@ from paths import ROOT_DIR, DATA_DIR, SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERV
 
 @dataclass(frozen=True)
 class PluginPathInfo:
+    """Plugin path info."""
     plugin_type: str
     path: Path
     built_in: bool
@@ -23,6 +26,7 @@ ALLOWED_ROOTS = tuple(p.resolve() for p in (ROOT_DIR, DATA_DIR))
 
 
 def resolve_plugin_path(raw: str) -> tuple[Path | None, str | None]:
+    """Resolve plugin path."""
     if not raw:
         return None, "plugin_path is required."
     p = Path(raw)
@@ -44,6 +48,7 @@ def resolve_plugin_path(raw: str) -> tuple[Path | None, str | None]:
 
 
 def plugin_info(path: Path) -> tuple[PluginPathInfo | None, str | None]:
+    """Handle plugin info."""
     path = path.resolve()
     name = path.name
     if path.suffix != ".py":
@@ -67,12 +72,14 @@ def plugin_info(path: Path) -> tuple[PluginPathInfo | None, str | None]:
 
 
 def iter_plugin_dirs():
+    """Handle iter plugin dirs."""
     for plugin_type, (built_dir, sandbox_dir, *_rest) in PLUGIN_CONFIG.items():
         yield plugin_type, built_dir
         yield plugin_type, sandbox_dir
 
 
 def _infer_type(file_name: str) -> str | None:
+    """Internal helper to handle infer type."""
     for plugin_type, (_, _, prefix, _) in PLUGIN_CONFIG.items():
         if prefix and file_name.startswith(prefix):
             return plugin_type

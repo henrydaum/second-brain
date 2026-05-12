@@ -1,3 +1,5 @@
+"""Slash command plugin for `/tasks`."""
+
 import json
 from uuid import uuid4
 
@@ -13,11 +15,13 @@ PIPELINE = "Show pipeline"
 
 
 class TasksCommand(BaseCommand):
+    """Slash-command handler for `/tasks`."""
     name = "tasks"
     description = "Pick a task — pause, unpause, reset, retry, or trigger"
     category = "System"
 
     def form(self, args, context):
+        """Handle form."""
         tasks = sorted(getattr(getattr(context, "orchestrator", None), "tasks", {}))
         steps = [FormStep("task_name", "Select a task to manage, or view the pipeline.", True, enum=[*tasks, PIPELINE], columns=2)]
         if args.get("task_name") == PIPELINE:
@@ -31,6 +35,7 @@ class TasksCommand(BaseCommand):
         return steps
 
     def run(self, args, context):
+        """Execute `/tasks` for the active session."""
         action, name = args.get("action"), args.get("task_name")
         if not name:
             return _show(context)
@@ -67,6 +72,7 @@ class TasksCommand(BaseCommand):
 
 
 def _show(context):
+    """Internal helper to handle show."""
     orch, db = getattr(context, "orchestrator", None), getattr(context, "db", None)
     counts = (db.get_system_stats().get("tasks", {}) if db else {}) | (db.get_run_stats() if db and hasattr(db, "get_run_stats") else {})
     return format_tasks([{
@@ -80,6 +86,7 @@ def _show(context):
 
 
 def _describe(context, task_name):
+    """Internal helper to handle describe."""
     orch = getattr(context, "orchestrator", None)
     if not orch or task_name not in getattr(orch, "tasks", {}):
         return "Action"
@@ -91,10 +98,12 @@ def _describe(context, task_name):
 
 
 def _task(context, name):
+    """Internal helper to handle task."""
     return (getattr(getattr(context, "orchestrator", None), "tasks", {}) or {}).get(name)
 
 
 def _trigger(context, task, args):
+    """Internal helper to handle trigger."""
     db = getattr(context, "db", None)
     if db is None or not hasattr(db, "create_run"):
         return "No database is available for task runs."
@@ -110,15 +119,18 @@ def _trigger(context, task, args):
 
 
 def _timekeeper(context):
+    """Internal helper to handle timekeeper."""
     tk = (getattr(context, "services", None) or {}).get("timekeeper")
     return tk if tk is not None and getattr(tk, "loaded", False) else None
 
 
 def _task_channels(task) -> list[str]:
+    """Internal helper to handle task channels."""
     return [c for c in (getattr(task, "trigger_channels", []) or []) if c]
 
 
 def _jobs_for_task(context, task) -> list[str]:
+    """Internal helper to handle jobs for task."""
     tk = _timekeeper(context)
     if tk is None:
         return []
@@ -127,6 +139,7 @@ def _jobs_for_task(context, task) -> list[str]:
 
 
 def _schedule_hint(context, task) -> str:
+    """Internal helper to handle schedule hint."""
     if getattr(task, "trigger", "path") != "event":
         return ""
     count = len(_jobs_for_task(context, task))

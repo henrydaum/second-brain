@@ -1,3 +1,5 @@
+"""Slash command plugin for `/schedule`."""
+
 import json
 
 from plugins.BaseCommand import BaseCommand
@@ -13,11 +15,13 @@ ACTION_LABELS = ["Edit it", "Delete it", "Enable it", "Disable it"]
 
 
 class ScheduleCommand(BaseCommand):
+    """Slash-command handler for `/schedule`."""
     name = "schedule"
     description = "Manage Timekeeper scheduled jobs"
     category = "Tasks"
 
     def form(self, args, context):
+        """Handle form."""
         tk = _timekeeper(context)
         jobs = sorted(tk.list_jobs()) if tk else []
         steps = [FormStep("job_name", _list_prompt(tk), True, enum=[*jobs, ADD], enum_labels=[*_job_labels(tk, jobs), "Schedule new job"], columns=1)]
@@ -41,6 +45,7 @@ class ScheduleCommand(BaseCommand):
         return steps
 
     def run(self, args, context):
+        """Execute `/schedule` for the active session."""
         tk = _timekeeper(context)
         if tk is None:
             return "Timekeeper service is not available."
@@ -67,25 +72,30 @@ class ScheduleCommand(BaseCommand):
 
 
 def _timekeeper(context):
+    """Internal helper to handle timekeeper."""
     tk = (getattr(context, "services", None) or {}).get("timekeeper")
     return tk if tk is not None and getattr(tk, "loaded", False) else None
 
 
 def _event_tasks(context) -> dict:
+    """Internal helper to handle event tasks."""
     tasks = getattr(getattr(context, "orchestrator", None), "tasks", {}) or {}
     return {name: task for name, task in tasks.items() if getattr(task, "trigger", "path") == "event" and _task_channels(task)}
 
 
 def _task_channels(task) -> list[str]:
+    """Internal helper to handle task channels."""
     return [c for c in (getattr(task, "trigger_channels", []) or []) if c]
 
 
 def _task_for_job(context, job):
+    """Internal helper to handle task for job."""
     channel = (job or {}).get("channel")
     return next((task for task in _event_tasks(context).values() if channel in _task_channels(task)), None)
 
 
 def _job_labels(tk, jobs: list[str]) -> list[str]:
+    """Internal helper to handle job labels."""
     if not tk:
         return []
     labels = []
@@ -96,12 +106,14 @@ def _job_labels(tk, jobs: list[str]) -> list[str]:
 
 
 def _list_prompt(tk) -> str:
+    """Internal helper to list prompt."""
     if tk is None:
         return "Timekeeper service is not available."
     return f"{format_scheduled_jobs(tk.list_jobs(), tk)}\n\nSelect a scheduled job, or add a new one."
 
 
 def _describe(context, name: str, job: dict) -> str:
+    """Internal helper to handle describe."""
     tk = _timekeeper(context)
     task = _task_for_job(context, job)
     next_fire = tk.get_next_fire_at(name) if tk else None
@@ -118,6 +130,7 @@ def _describe(context, name: str, job: dict) -> str:
 
 
 def _schedule_text(tk, job: dict) -> str:
+    """Internal helper to handle schedule text."""
     if job.get("one_time"):
         return f"once at {job.get('run_at') or '?'}"
     cron = job.get("cron") or ""
@@ -130,6 +143,7 @@ def _schedule_text(tk, job: dict) -> str:
 
 
 def _payload_steps(task, payload: dict) -> list[FormStep]:
+    """Internal helper to handle payload steps."""
     schema = getattr(task, "event_payload_schema", {}) or {}
     props = schema.get("properties") or {}
     if not props:
@@ -141,6 +155,7 @@ def _payload_steps(task, payload: dict) -> list[FormStep]:
 
 
 def _create(context, tk, args):
+    """Internal helper to create schedule."""
     task = _event_tasks(context).get(args.get("task_name"))
     if task is None:
         return "Choose an event-driven task to schedule."
@@ -156,6 +171,7 @@ def _create(context, tk, args):
 
 
 def _edit(context, tk, name: str, job: dict, args):
+    """Internal helper to handle edit."""
     patch = {"payload": _edited_payload(_task_for_job(context, job), job.get("payload") or {}, args)}
     patch["run_at" if job.get("one_time") else "cron"] = (args.get("run_at") if job.get("one_time") else args.get("cron")) or (job.get("run_at") if job.get("one_time") else job.get("cron"))
     try:
@@ -166,10 +182,12 @@ def _edit(context, tk, name: str, job: dict, args):
 
 
 def _schema_payload(task, args) -> dict:
+    """Internal helper to handle schema payload."""
     return {k: args[k] for k in ((getattr(task, "event_payload_schema", {}) or {}).get("properties") or {}) if k in args}
 
 
 def _edited_payload(task, current: dict, args) -> dict:
+    """Internal helper to handle edited payload."""
     if "payload" in args:
         return args["payload"] or {}
     out = dict(current or {})
@@ -180,4 +198,5 @@ def _edited_payload(task, current: dict, args) -> dict:
 
 
 def _truncate(text: str, limit: int) -> str:
+    """Internal helper to handle truncate."""
     return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."

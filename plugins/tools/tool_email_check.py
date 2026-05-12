@@ -26,6 +26,7 @@ logger = logging.getLogger("tool_email_check")
 
 
 def _allowed_addresses(config) -> list[str]:
+    """Internal helper to handle allowed addresses."""
     raw = config.get("ai_email_addresses") or []
     if not isinstance(raw, list):
         return []
@@ -33,11 +34,13 @@ def _allowed_addresses(config) -> list[str]:
 
 
 def _alias_scope_clause(allowed: list[str], include_from: bool = False) -> str:
+    """Internal helper to handle alias scope clause."""
     ops = ["to", "cc", "bcc", "deliveredto"] + (["from"] if include_from else [])
     return " OR ".join(f'{op}:"{a}"' for a in allowed for op in ops)
 
 
 class EmailCheck(BaseTool):
+    """Email check."""
     name = "email_check"
     description = (
         "Read mail from Gmail. Pick a scope (inbox, ai_sent, ai_inbox, "
@@ -91,6 +94,7 @@ class EmailCheck(BaseTool):
     background_safe = True
 
     def run(self, context, **kwargs) -> ToolResult:
+        """Run email check."""
         gmail = context.services.get("gmail")
         if not gmail:
             return ToolResult.failed("Gmail service not available.")

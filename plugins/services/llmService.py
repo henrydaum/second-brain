@@ -1,3 +1,5 @@
+"""Service plugin for LLM."""
+
 from pathlib import Path
 from dataclasses import dataclass, field
 import os
@@ -94,6 +96,7 @@ class LLMProviderError(RuntimeError):
     """Structured provider error surfaced from a model backend."""
 
     def __init__(self, message: str, code: str = "provider_error"):
+        """Initialize the llmprovider error."""
         super().__init__(message)
         self.code = code
 
@@ -114,14 +117,17 @@ class LLMResponse:
 
     @property
     def has_tool_calls(self) -> bool:
+        """Return whether tool calls."""
         return len(self.tool_calls) > 0
 
     @property
     def is_error(self) -> bool:
+        """Return whether error."""
         return bool(self.error)
 
     @property
     def is_context_limit_error(self) -> bool:
+        """Return whether context limit error."""
         if self.error_code == "context_limit":
             return True
         return is_context_limit_error(self.error or self.content)
@@ -141,6 +147,7 @@ class BaseLLM(BaseService):
     """
 
     def __init__(self):
+        """Initialize the base LLM."""
         super().__init__()
         self.shared = True  # LLM clients are typically thread-safe
         # Generalized capability dict so new modalities (image, audio,
@@ -154,12 +161,15 @@ class BaseLLM(BaseService):
         self.context_size = None  # Max context window in tokens (auto-detected or from config)
 
     def has_capability(self, modality: str) -> bool:
+        """Return whether capability."""
         return bool(self.capabilities.get(modality))
 
     def _load(self):
+        """Internal helper to load base LLM."""
         raise NotImplementedError
 
     def unload(self):
+        """Handle unload."""
         raise NotImplementedError
 
     def invoke(self, messages: list[dict], attachments=None, **kwargs) -> LLMResponse:
@@ -250,13 +260,16 @@ class BaseLLM(BaseService):
 # =====================================================================
 
 class LMStudioLLM(BaseLLM):
+    """Lmstudio LLM."""
     def __init__(self, model_name):
+        """Initialize the lmstudio LLM."""
         super().__init__()
         self.model_name = model_name
         self.model = None
         self.loaded = False
 
     def _load(self):
+        """Internal helper to load lmstudio LLM."""
         try:
             import lmstudio as lms
             self.model = lms.llm(self.model_name)
@@ -275,6 +288,7 @@ class LMStudioLLM(BaseLLM):
             return False
 
     def unload(self):
+        """Handle unload."""
         if self.model:
             self.model.unload()
         self.model = None
@@ -363,6 +377,7 @@ class LMStudioLLM(BaseLLM):
         return messages
 
     def _cleanup_temp_files(self, temp_files: list[str]):
+        """Internal helper to handle cleanup temp files."""
         for f_path in temp_files:
             try:
                 if os.path.exists(f_path):
@@ -371,6 +386,7 @@ class LMStudioLLM(BaseLLM):
                 logger.debug(f"Temp cleanup failed for {f_path}: {e}")
 
     def invoke(self, messages, attachments=None, **kwargs):
+        """Handle invoke."""
         if not self.loaded or not self.model:
             logger.error("Model not loaded. Call load() first.")
             return LLMResponse(
@@ -413,6 +429,7 @@ class LMStudioLLM(BaseLLM):
                 self._cleanup_temp_files(temp_files)
 
     def stream(self, messages, attachments=None, **kwargs):
+        """Handle stream."""
         if not self.loaded or not self.model:
             logger.error("Model not loaded. Call load() first.")
             return
@@ -461,7 +478,9 @@ class LMStudioLLM(BaseLLM):
 # =====================================================================
 
 class OpenAILLM(BaseLLM):
+    """Open aillm."""
     def __init__(self, model_name, api_key=None, base_url=None):
+        """Initialize the open aillm."""
         super().__init__()
         self.model_name = model_name
         self.api_key = api_key
@@ -477,6 +496,7 @@ class OpenAILLM(BaseLLM):
             self.capabilities["audio"] = True
 
     def _load(self):
+        """Internal helper to load open aillm."""
         try:
             import openai
 
@@ -494,6 +514,7 @@ class OpenAILLM(BaseLLM):
             return False
 
     def unload(self):
+        """Handle unload."""
         self.client = None
         self.loaded = False
         logger.info("OpenAI model unloaded.")
@@ -547,6 +568,7 @@ class OpenAILLM(BaseLLM):
         return messages
 
     def invoke(self, messages, attachments=None, **kwargs):
+        """Handle invoke."""
         if not self.loaded or not self.client:
             logger.error("Model not loaded. Call load() first.")
             return LLMResponse(
@@ -603,6 +625,7 @@ class OpenAILLM(BaseLLM):
             )
 
     def stream(self, messages, attachments=None, **kwargs):
+        """Handle stream."""
         if not self.loaded or not self.client:
             logger.error("Model not loaded. Call load() first.")
             return
@@ -681,6 +704,7 @@ class LLMRouter(BaseLLM):
     ]
 
     def __init__(self, config: dict, services: dict | None = None):
+        """Initialize the llmrouter."""
         super().__init__()
         self.config = config
         # ``services`` is the live service registry. Mutations made by
@@ -696,6 +720,7 @@ class LLMRouter(BaseLLM):
         return [name for name in profiles if name in self.services]
 
     def _resolve_default_name(self) -> str | None:
+        """Internal helper to resolve default name."""
         configured = self.config.get("default_llm_profile") or ""
         if configured and configured in self.services:
             return configured
@@ -709,6 +734,7 @@ class LLMRouter(BaseLLM):
 
     @property
     def active(self) -> BaseLLM | None:
+        """Return active."""
         name = self._resolve_default_name()
         return self.services.get(name) if name else None
 
@@ -719,12 +745,14 @@ class LLMRouter(BaseLLM):
         self.services[model_name] = _build_llm_from_profile(model_name, profile_config)
 
     def remove_llm(self, model_name: str) -> str:
+        """Remove LLM."""
         llm = self.services.pop(model_name, None)
         if llm and getattr(llm, "loaded", False):
             llm.unload()
         return f"LLM '{model_name}' removed."
 
     def list_llms(self) -> list[dict]:
+        """List llms."""
         profiles = self.config.get("llm_profiles", {}) or {}
         default_name = self.config.get("default_llm_profile") or ""
         result = []
@@ -756,6 +784,7 @@ class LLMRouter(BaseLLM):
     # --- BaseLLM interface (delegate to default) ---
 
     def _load(self):
+        """Internal helper to load llmrouter."""
         a = self.active
         if a is None:
             logger.warning("No LLMs configured.")
@@ -765,6 +794,7 @@ class LLMRouter(BaseLLM):
         return result
 
     def unload(self):
+        """Handle unload."""
         for model_name in self._llm_keys():
             svc = self.services.get(model_name)
             if getattr(svc, "loaded", False):
@@ -774,6 +804,7 @@ class LLMRouter(BaseLLM):
         logger.info("All LLMs unloaded.")
 
     def invoke(self, messages, attachments=None, **kwargs):
+        """Handle invoke."""
         a = self.active
         if not a or not a.loaded:
             return LLMResponse(
@@ -784,12 +815,14 @@ class LLMRouter(BaseLLM):
         return a.invoke(messages, attachments, **kwargs)
 
     def stream(self, messages, attachments=None, **kwargs):
+        """Handle stream."""
         a = self.active
         if not a or not a.loaded:
             return
         yield from a.stream(messages, attachments, **kwargs)
 
     def chat_with_tools(self, messages, tools=None, **kwargs):
+        """Handle chat with tools."""
         a = self.active
         if not a or not a.loaded:
             return LLMResponse(

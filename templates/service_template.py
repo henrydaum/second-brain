@@ -132,20 +132,24 @@ from abc import ABC, abstractmethod
 
 
 class BaseService(ABC):
+    """Base service."""
     model_name: str = ""    # human-readable name shown in frontends
     shared: bool = True     # True = one instance for all threads
     config_settings: list = []  # settings shown in the Settings UI
 
     def __init__(self):
+        """Initialize the base service."""
         self._loaded = False
         self.services = {}  # Every service gets the full registry for peer access, but use it wisely to avoid tight coupling.
 
     @property
     def loaded(self) -> bool:
+        """Handle loaded."""
         return self._loaded
 
     @loaded.setter
     def loaded(self, value: bool):
+        """Handle loaded."""
         self._loaded = value
 
     def load(self) -> bool:

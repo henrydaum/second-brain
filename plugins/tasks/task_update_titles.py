@@ -43,6 +43,7 @@ _USER_TEMPLATE = (
 
 
 class UpdateTitles(BaseTask):
+    """Update titles."""
     name = "update_titles"
     trigger = "event"
     trigger_channels = [UPDATE_TITLES]
@@ -59,6 +60,7 @@ class UpdateTitles(BaseTask):
     ]
 
     def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
+        """Run event."""
         db = getattr(context, "db", None)
         if db is None:
             return TaskResult.failed("No database available.")
@@ -97,6 +99,7 @@ class UpdateTitles(BaseTask):
         return TaskResult(success=True)
 
     def _process_conversation(self, db, llm, conversation_id, message_count: int) -> None:
+        """Internal helper to handle process conversation."""
         messages = db.get_conversation_messages(conversation_id) or []
         # Always advance the high-water mark — even if we skip or fail —
         # so an empty / un-titleable conversation does not replay.
@@ -123,6 +126,7 @@ class UpdateTitles(BaseTask):
 # ======================================================================
 
 def _transcript(messages: list[dict]) -> str:
+    """Internal helper to handle transcript."""
     lines = []
     for msg in messages[:12]:
         role = (msg.get("role") or "").upper()
@@ -146,6 +150,7 @@ def _transcript(messages: list[dict]) -> str:
 
 
 def _sanitize(text: str) -> str:
+    """Internal helper to handle sanitize."""
     title, _ = strip_model_tokens(text or "")
     title = title.strip()
     if not title:

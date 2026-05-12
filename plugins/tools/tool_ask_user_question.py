@@ -8,6 +8,7 @@ TYPES = {"string", "integer", "int", "number", "boolean", "array", "object"}
 
 
 class AskUserQuestion(BaseTool):
+    """Ask user question."""
     name = "ask_user_question"
     description = (
         "Ask the user a question and wait for a typed answer. Use this when the "
@@ -32,6 +33,7 @@ class AskUserQuestion(BaseTool):
     background_safe = False
 
     def run(self, context, **kwargs) -> ToolResult:
+        """Run ask user question."""
         ask = getattr(context, "request_user_input", None)
         if ask is None:
             return ToolResult.failed("User input is not available — no live session is configured.")

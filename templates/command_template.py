@@ -51,6 +51,7 @@ from state_machine.conversation import FormStep
 
 
 class BaseCommand:
+    """Base command."""
     name: str = ""
     description: str = ""
     category: str = "Other"
@@ -60,12 +61,15 @@ class BaseCommand:
     config_settings: list = []
 
     def form(self, args: dict, context) -> list[FormStep]:
+        """Handle form."""
         return []
 
     def arg_completions(self, context) -> list[str]:
+        """Handle arg completions."""
         return []
 
     def run(self, args: dict, context) -> str | None:
+        """Execute `/template` for the active session."""
         raise NotImplementedError
 
 

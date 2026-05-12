@@ -1,3 +1,5 @@
+"""Frontend plugin for bootstrap."""
+
 from __future__ import annotations
 
 import logging
@@ -17,20 +19,24 @@ logger = logging.getLogger("Frontends")
 
 
 class _HostCommand(BaseCommand):
+    """Host command."""
     category = "Conversation"
     require_approval = True
     approval_actor_id = "user"
 
     def __init__(self, name: str, description: str, callback):
+        """Initialize the host command."""
         self.name = name
         self.description = description
         self.callback = callback
 
     def run(self, _args, _context):
+        """Execute `/bootstrap` for the active session."""
         return self.callback() or None
 
 
 def _restart(scaffold):
+    """Internal helper to handle restart."""
     fn = getattr(scaffold, "restart", None)
     if fn is None:
         return "Restart is not supported in this frontend."
@@ -39,6 +45,7 @@ def _restart(scaffold):
 
 
 def _quit(shutdown_fn):
+    """Internal helper to handle quit."""
     threading.Timer(0.75, shutdown_fn).start()
     return "Shutting down."
 
@@ -54,6 +61,7 @@ class FrontendManager:
     """
 
     def __init__(self, runtime, command_registry, config: dict):
+        """Initialize the frontend manager."""
         self.runtime = runtime
         self.command_registry = command_registry
         self.config = config
@@ -62,17 +70,21 @@ class FrontendManager:
         self._factories: dict[str, callable] = {}
 
     def set_factory(self, name: str, factory) -> None:
+        """Set factory."""
         self._factories[name] = factory
 
     @property
     def adapters(self) -> dict:
+        """Handle adapters."""
         return self._adapters
 
     @property
     def threads(self) -> list:
+        """Handle threads."""
         return self._threads
 
     def register(self, cls) -> str | None:
+        """Register frontend manager."""
         name = getattr(cls, "name", "")
         if not name:
             return "Frontend class has no name"
@@ -96,6 +108,7 @@ class FrontendManager:
         return None
 
     def unregister(self, name: str) -> str | None:
+        """Unregister frontend manager."""
         adapter = self._adapters.pop(name, None)
         if adapter is None:
             return f"Frontend '{name}' is not running"
@@ -111,6 +124,7 @@ class FrontendManager:
 
 def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
                     tool_registry, services, config, root_dir):
+    """Start frontends."""
     if not frontends:
         return None, {}, []
 
@@ -138,6 +152,7 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
 
 
 def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir):
+    """Internal helper to handle conversation runtime."""
     ref = {}
     registry = CommandRegistry(
         lambda session_key=None: build_context(
@@ -151,6 +166,7 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
     registry.register(_HostCommand("restart", "Restart the app", lambda: _restart(scaffold)))
 
     def prompt():
+        """Handle prompt."""
         profile = config.get("active_agent_profile") or "default"
         scope = _scope(profile, config)
         registry_for_prompt = scoped_registry(tool_registry, scope, db=scaffold.db) if scope else tool_registry
@@ -179,6 +195,7 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
 
 
 def _scope(profile, config):
+    """Internal helper to handle scope."""
     try:
         scope = load_scope(profile, config)
     except ValueError as e:

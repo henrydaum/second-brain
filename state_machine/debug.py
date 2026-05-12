@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """PokerMonster-style state printer for the conversation state machine.
 
 Use this in REPL `--debug` mode or in tests to see exactly what the state
@@ -10,6 +8,9 @@ machine looks like at any moment. Mirrors PokerMonster's `display_info` /
     display_state(cs)
     display_actions(cs)
 """
+
+from __future__ import annotations
+
 
 from typing import TYPE_CHECKING
 
@@ -30,6 +31,7 @@ RESET = "\033[0m"
 
 
 def _color_for(actor_kind: str) -> str:
+    """Internal helper to handle color for."""
     return GREEN if actor_kind == "user" else RED
 
 

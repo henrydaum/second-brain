@@ -1,3 +1,5 @@
+"""State-machine support for form display."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -19,11 +21,13 @@ def form_step_display(step: FormStep) -> dict[str, Any]:
 
 
 def _prompt(step: FormStep) -> str:
+    """Internal helper to handle prompt."""
     prompt = (step.prompt or "").strip()
     return prompt or f"Enter {_humanize(step.name)}."
 
 
 def _choices(step: FormStep) -> list[dict[str, Any]]:
+    """Internal helper to handle choices."""
     if step.type in {"boolean", "bool"} and not step.enum:
         return [{"value": True, "label": "True"}, {"value": False, "label": "False"}]
     labels = step.enum_labels or []
@@ -34,6 +38,7 @@ def _choices(step: FormStep) -> list[dict[str, Any]]:
 
 
 def _assist(step: FormStep, has_choices: bool) -> str:
+    """Internal helper to handle assist."""
     bits: list[str] = []
     if has_choices:
         bits.append("Select an option.")
@@ -53,12 +58,14 @@ def _assist(step: FormStep, has_choices: bool) -> str:
 
 
 def _skip_text(step: FormStep) -> str:
+    """Internal helper to handle skip text."""
     if step.default not in (None, ""):
         return f"Send /skip to use the default: {step.default}."
     return "Send /skip to leave this blank."
 
 
 def _input_mode(step: FormStep) -> str:
+    """Internal helper to handle input mode."""
     if step.enum:
         return "choice"
     if step.type in {"integer", "int", "number"}:
@@ -71,4 +78,5 @@ def _input_mode(step: FormStep) -> str:
 
 
 def _humanize(name: str) -> str:
+    """Internal helper to handle humanize."""
     return str(name or "value").replace("_", " ")

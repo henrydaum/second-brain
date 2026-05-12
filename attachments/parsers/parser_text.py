@@ -17,6 +17,7 @@ _EXTENSIONS = [
 
 
 def parse_text(path: str, services: dict, config: dict) -> str | None:
+    """Parse text."""
     try:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except Exception:

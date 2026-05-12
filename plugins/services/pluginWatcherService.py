@@ -1,3 +1,5 @@
+"""Plugin watcher service for discovery, diagnostics, and hot reloads."""
+
 import logging
 import threading
 from pathlib import Path
@@ -15,10 +17,12 @@ logger = logging.getLogger("PluginWatcher")
 
 
 class PluginWatcherService(BaseService):
+    """Plugin watcher service."""
     model_name = "Plugin Watcher"
     shared = True
 
     def __init__(self, config: dict):
+        """Initialize the plugin watcher service."""
         super().__init__()
         self.config = config
         self.observer = None
@@ -28,6 +32,7 @@ class PluginWatcherService(BaseService):
         self._lock = threading.RLock()
 
     def bind_runtime(self, *, tool_registry=None, orchestrator=None, command_registry=None, frontend_manager=None):
+        """Bind runtime."""
         self._runtime.update({
             "tool_registry": tool_registry,
             "orchestrator": orchestrator,
@@ -36,6 +41,7 @@ class PluginWatcherService(BaseService):
         })
 
     def _load(self) -> bool:
+        """Internal helper to load plugin watcher service."""
         self.observer = Observer()
         handler = _PluginEventHandler(self)
         self._handler = handler
@@ -51,6 +57,7 @@ class PluginWatcherService(BaseService):
         return True
 
     def unload(self):
+        """Handle unload."""
         if self._handler:
             self._handler.cancel_pending()
         observer = self.observer
@@ -62,6 +69,7 @@ class PluginWatcherService(BaseService):
         self.loaded = False
 
     def _scan_existing(self):
+        """Internal helper to handle scan existing."""
         with self._lock:
             self._known_mtimes.clear()
             for _plugin_type, directory in iter_plugin_dirs():
@@ -74,6 +82,7 @@ class PluginWatcherService(BaseService):
                         pass
 
     def handle_create_or_modify(self, raw_path: str):
+        """Handle create or modify."""
         path = Path(raw_path).resolve()
         if not path.exists() or path.suffix != ".py":
             return
@@ -90,6 +99,7 @@ class PluginWatcherService(BaseService):
         self._load_plugin(path, edited=old is not None)
 
     def handle_delete(self, raw_path: str):
+        """Handle delete."""
         path = Path(raw_path).resolve()
         key = str(path)
         with self._lock:
@@ -98,6 +108,7 @@ class PluginWatcherService(BaseService):
             self._unload_plugin(path)
 
     def _load_plugin(self, path: Path, edited: bool = False):
+        """Internal helper to load plugin."""
         info, err = plugin_info(path)
         if err:
             logger.warning(f"Plugin watcher skipped {path}: {err}")
@@ -127,6 +138,7 @@ class PluginWatcherService(BaseService):
         logger.info(f"Plugin watcher loaded {info.plugin_type}: {name}")
 
     def _unload_plugin(self, path: Path):
+        """Internal helper to handle unload plugin."""
         info, err = plugin_info(path)
         if err:
             logger.warning(f"Plugin watcher could not infer deleted plugin {path}: {err}")
@@ -147,9 +159,11 @@ class PluginWatcherService(BaseService):
         logger.info(f"Plugin watcher unloaded deleted {info.plugin_type}: {path.name}")
 
     def _notify(self, message: str):
+        """Internal helper to handle notify."""
         bus.emit(CHAT_MESSAGE_PUSHED, {"message": message, "kind": "plugin", "source": "plugin_watcher"})
 
     def _names_registered_from(self, plugin_type: str, path: Path) -> list[str]:
+        """Internal helper to handle names registered from."""
         source = str(path.resolve())
         if plugin_type == "tool":
             items = getattr(self._runtime.get("tool_registry"), "tools", {})
@@ -167,6 +181,7 @@ class PluginWatcherService(BaseService):
         return [name for name, item in items.items() if getattr(item, "_source_path", "") == source]
 
     def _reconcile_plugin_config(self):
+        """Internal helper to handle reconcile plugin config."""
         try:
             import config.config_manager as cm
             cm.reconcile_plugin_config(self.config, get_plugin_settings())
@@ -175,13 +190,16 @@ class PluginWatcherService(BaseService):
 
 
 class _PluginEventHandler(FileSystemEventHandler):
+    """Plugin event handler."""
     def __init__(self, watcher: PluginWatcherService):
+        """Initialize the plugin event handler."""
         self.watcher = watcher
         self.pending: dict[str, threading.Timer] = {}
         self.lock = threading.Lock()
         self.debounce_interval = 1.0
 
     def _debounce(self, path: str):
+        """Internal helper to handle debounce."""
         with self.lock:
             timer = self.pending.pop(path, None)
             if timer:
@@ -192,33 +210,40 @@ class _PluginEventHandler(FileSystemEventHandler):
             timer.start()
 
     def cancel_pending(self):
+        """Cancel pending."""
         with self.lock:
             for timer in self.pending.values():
                 timer.cancel()
             self.pending.clear()
 
     def _fire(self, path: str):
+        """Internal helper to handle fire."""
         with self.lock:
             self.pending.pop(path, None)
         self.watcher.handle_create_or_modify(path)
 
     def on_created(self, event):
+        """Handle on created."""
         if not event.is_directory:
             self._debounce(event.src_path)
 
     def on_modified(self, event):
+        """Handle on modified."""
         if not event.is_directory:
             self._debounce(event.src_path)
 
     def on_moved(self, event):
+        """Handle on moved."""
         if not event.is_directory:
             self.watcher.handle_delete(event.src_path)
             self._debounce(event.dest_path)
 
     def on_deleted(self, event):
+        """Handle on deleted."""
         if not event.is_directory:
             self.watcher.handle_delete(event.src_path)
 
 
 def build_services(config: dict) -> dict:
+    """Build services."""
     return {"plugin_watcher": PluginWatcherService(config)}

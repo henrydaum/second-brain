@@ -1,3 +1,5 @@
+"""Tool plugin for schedule subagent."""
+
 import re
 from datetime import datetime
 
@@ -12,6 +14,7 @@ SCHEDULED_ONCE = "Scheduled (one-time)"
 
 
 class ScheduleSubagent(BaseTool):
+    """Schedule subagent."""
     name = "schedule_subagent"
     description = (
         "List, add, edit, or remove Timekeeper-backed background subagent jobs. Use this for "
@@ -33,6 +36,7 @@ class ScheduleSubagent(BaseTool):
     background_safe = False
 
     def run(self, context, **kwargs):
+        """Run schedule subagent."""
         action = (kwargs.get("operation") or (kwargs.get("action") if kwargs.get("action") != "call" else "") or "").strip().lower()
         title = (kwargs.get("title") or "").strip()
         prompt = (kwargs.get("prompt") or "").strip()
@@ -61,6 +65,7 @@ class ScheduleSubagent(BaseTool):
 
 
 def _list_jobs(tk):
+    """Internal helper to list jobs."""
     rows = []
     for name, job in sorted(tk.list_jobs().items()):
         if job.get("channel") != SPAWN_SUBAGENT:
@@ -86,6 +91,7 @@ def _list_jobs(tk):
 
 
 def _add_job(context, tk, title: str, job_name: str, prompt: str, cron: str, one_time: bool, attachments: list[str]):
+    """Internal helper to handle add job."""
     if not prompt:
         return ToolResult.failed("prompt is required.")
     if not cron:
@@ -104,6 +110,7 @@ def _add_job(context, tk, title: str, job_name: str, prompt: str, cron: str, one
 
 
 def _edit_job(context, tk, title: str, job_name: str, kwargs: dict, prompt: str, cron: str, attachments):
+    """Internal helper to handle edit job."""
     job = tk.get_job(job_name)
     if job is None or job.get("channel") != SPAWN_SUBAGENT:
         return ToolResult.failed(f"No scheduled subagent named '{title}'.")
@@ -133,6 +140,7 @@ def _edit_job(context, tk, title: str, job_name: str, kwargs: dict, prompt: str,
 
 
 def _remove_job(context, tk, title: str, job_name: str):
+    """Internal helper to remove job."""
     job = tk.get_job(job_name)
     if job is None or job.get("channel") != SPAWN_SUBAGENT:
         return ToolResult.failed(f"No scheduled subagent named '{title}'.")
@@ -143,11 +151,13 @@ def _remove_job(context, tk, title: str, job_name: str):
 
 
 def _timekeeper(context):
+    """Internal helper to handle timekeeper."""
     tk = (getattr(context, "services", None) or {}).get("timekeeper")
     return tk if tk is not None and getattr(tk, "loaded", False) else None
 
 
 def _schedule_def(tk, cron: str, one_time: bool) -> dict:
+    """Internal helper to handle schedule def."""
     if one_time:
         run_at = croniter(cron, datetime.now().astimezone()).get_next(datetime)
         return {"run_at": run_at.isoformat(), "cron": None, "one_time": True}
@@ -156,6 +166,7 @@ def _schedule_def(tk, cron: str, one_time: bool) -> dict:
 
 
 def _attachments_arg(value):
+    """Internal helper to handle attachments arg."""
     if value in (None, ""):
         return []
     if isinstance(value, str):
@@ -166,6 +177,7 @@ def _attachments_arg(value):
 
 
 def _approved(context, text: str) -> bool:
+    """Internal helper to handle approved."""
     if getattr(context, "user_initiated", False):
         return True
     approve = getattr(context, "approve_command", None)
@@ -173,6 +185,7 @@ def _approved(context, text: str) -> bool:
 
 
 def _approval_text(action: str, title: str, payload: dict, schedule: dict) -> str:
+    """Internal helper to handle approval text."""
     mode = "one-time" if schedule.get("one_time") else "recurring"
     when = schedule.get("run_at") or schedule.get("cron")
     return (
@@ -184,15 +197,18 @@ def _approval_text(action: str, title: str, payload: dict, schedule: dict) -> st
 
 
 def _preview(text: str, limit: int = 700) -> str:
+    """Internal helper to handle preview."""
     text = " ".join((text or "").split())
     return text if len(text) <= limit else text[:limit - 3].rstrip() + "..."
 
 
 def _job_name(title: str) -> str:
+    """Internal helper to handle job name."""
     return re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_") or "subagent"
 
 
 def _find_job_name(tk, title: str) -> str | None:
+    """Internal helper to find job name."""
     wanted = (title or "").strip()
     for candidate in (wanted, _job_name(wanted)):
         if candidate and tk.get_job(candidate) is not None:

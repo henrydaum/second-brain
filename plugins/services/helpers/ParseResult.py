@@ -1,3 +1,5 @@
+"""Shared parse result model used by attachment parsers."""
+
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional

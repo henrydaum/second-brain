@@ -18,6 +18,7 @@ MAX_ROWS = 50
 
 
 class TextualizeTabular(BaseTask):
+	"""Textualize tabular."""
 	name = "textualize_tabular"
 	modalities = ["tabular"]
 	reads = []
@@ -35,6 +36,7 @@ class TextualizeTabular(BaseTask):
 	timeout = 120
 
 	def run(self, paths, context):
+		"""Run textualize tabular."""
 		results = []
 		for path in paths:
 			try:

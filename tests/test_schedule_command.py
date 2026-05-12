@@ -1,3 +1,5 @@
+"""Regression tests for schedule command."""
+
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -6,6 +8,7 @@ from plugins.commands.command_tasks import TasksCommand
 
 
 class FakeTask:
+    """Test double for fake task."""
     name = "spawn_subagent"
     trigger = "event"
     trigger_channels = ["subagent.spawn"]
@@ -21,17 +24,22 @@ class FakeTask:
 
 
 class FakeDb:
+    """Test double for fake DB."""
     def get_system_stats(self):
+        """Get system stats."""
         return {"tasks": {"spawn_subagent": {"DONE": 3, "FAILED": 1}}}
 
     def get_run_stats(self):
+        """Get run stats."""
         return {}
 
 
 class FakeTimekeeper:
+    """Test double for fake timekeeper."""
     loaded = True
 
     def __init__(self):
+        """Initialize the fake timekeeper."""
         self.jobs = {
             "nightly_wisdom": {
                 "enabled": True,
@@ -44,38 +52,47 @@ class FakeTimekeeper:
         }
 
     def list_jobs(self):
+        """List jobs."""
         return {k: dict(v, payload=dict(v.get("payload") or {})) for k, v in self.jobs.items()}
 
     def get_job(self, name):
+        """Get job."""
         job = self.jobs.get(name)
         return dict(job, payload=dict(job.get("payload") or {})) if job else None
 
     def create_job(self, name, job_def):
+        """Create job."""
         if name in self.jobs:
             raise ValueError("exists")
         self.jobs[name] = {"enabled": True, "run_at": None, "one_time": False, **job_def, "payload": dict(job_def.get("payload") or {})}
         return self.get_job(name)
 
     def update_job(self, name, patch):
+        """Update job."""
         self.jobs[name].update(patch)
         if "payload" in patch:
             self.jobs[name]["payload"] = dict(patch["payload"])
         return self.get_job(name)
 
     def remove_job(self, name):
+        """Remove job."""
         return self.jobs.pop(name, None) is not None
 
     def enable_job(self, name, enabled=True):
+        """Handle enable job."""
         return self.update_job(name, {"enabled": bool(enabled)})
 
     def cron_to_text(self, _cron):
+        """Handle cron to text."""
         return "At 08:00 PM"
 
     def get_next_fire_at(self, name):
+        """Get next fire at."""
         return datetime(2026, 5, 8, 20, 0) if self.jobs.get(name, {}).get("enabled", True) else None
 
 
 def context():
+    """Handle context."""
     return SimpleNamespace(
         services={"timekeeper": FakeTimekeeper()},
         orchestrator=SimpleNamespace(tasks={"spawn_subagent": FakeTask()}, paused=set()),
@@ -84,6 +101,7 @@ def context():
 
 
 def test_tasks_event_actions_do_not_include_schedule_buttons():
+    """Verify tasks event actions do not include schedule buttons."""
     step = TasksCommand().form({"task_name": "spawn_subagent"}, context())[1]
 
     assert step.enum == ["pause", "unpause", "trigger"]
@@ -92,6 +110,7 @@ def test_tasks_event_actions_do_not_include_schedule_buttons():
 
 
 def test_tasks_event_prompt_uses_short_schedule_hint():
+    """Verify tasks event prompt uses short schedule hint."""
     prompt = TasksCommand().form({"task_name": "spawn_subagent"}, context())[1].prompt
 
     assert "Scheduled jobs: 1. Use /schedule to manage them." in prompt
@@ -100,6 +119,7 @@ def test_tasks_event_prompt_uses_short_schedule_hint():
 
 
 def test_schedule_form_lists_jobs_and_add():
+    """Verify schedule form lists jobs and add."""
     step = ScheduleCommand().form({}, context())[0]
 
     assert step.enum == ["nightly_wisdom", ADD]
@@ -107,6 +127,7 @@ def test_schedule_form_lists_jobs_and_add():
 
 
 def test_schedule_add_creates_event_task_job_with_schema_payload():
+    """Verify schedule add creates event task job with schema payload."""
     ctx = context()
     out = ScheduleCommand().run({"job_name": ADD, "task_name": "spawn_subagent", "new_job_name": "trash", "cron": "3 17 * * *", "prompt": "take out trash", "title": "Trash"}, ctx)
 
@@ -116,6 +137,7 @@ def test_schedule_add_creates_event_task_job_with_schema_payload():
 
 
 def test_schedule_job_actions_edit_delete_enable_disable():
+    """Verify schedule job actions edit delete enable disable."""
     ctx = context()
     cmd = ScheduleCommand()
 

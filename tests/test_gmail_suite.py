@@ -1,3 +1,5 @@
+"""Regression tests for Gmail suite."""
+
 import base64
 from email import message_from_bytes
 from types import SimpleNamespace
@@ -7,10 +9,12 @@ from plugins.tools.tool_email_check import EmailCheck
 
 
 def _b64(text):
+    """Internal helper to handle b64."""
     return base64.urlsafe_b64encode(text.encode()).decode()
 
 
 def test_gmail_parse_message_reads_nested_multipart_body():
+    """Verify Gmail parse message reads nested multipart body."""
     msg = {
         "id": "m1",
         "threadId": "t1",
@@ -41,6 +45,7 @@ def test_gmail_parse_message_reads_nested_multipart_body():
 
 
 def test_gmail_reply_uses_original_message_id_headers():
+    """Verify Gmail reply uses original message ID headers."""
     svc = GmailService()
     sent = {}
     svc.get_message = lambda _: {
@@ -63,6 +68,7 @@ def test_gmail_reply_uses_original_message_id_headers():
 
 
 def test_email_tools_use_main_conversation_instead_of_is_subagent():
+    """Verify email tools use main conversation instead of is subagent."""
     gmail = SimpleNamespace(
         loaded=True,
         fetch_inbox=lambda max_results: [],
@@ -82,27 +88,36 @@ def test_email_tools_use_main_conversation_instead_of_is_subagent():
 
 
 class _Client:
+    """Client."""
     def __init__(self, sent):
+        """Initialize the client."""
         self.sent = sent
 
     def users(self):
+        """Handle users."""
         return self
 
     def messages(self):
+        """Handle messages."""
         return self
 
     def send(self, userId, body):
+        """Send client."""
         self.sent["userId"] = userId
         self.sent["body"] = body
         return self
 
     def execute(self):
+        """Handle execute."""
         return {"id": "sent-1"}
 
 
 class _Db:
+    """DB."""
     def __init__(self, rows):
+        """Initialize the DB."""
         self.rows = rows
 
     def get_conversation(self, conversation_id):
+        """Get conversation."""
         return self.rows.get(conversation_id)

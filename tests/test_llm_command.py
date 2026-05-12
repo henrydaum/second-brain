@@ -1,9 +1,12 @@
+"""Regression tests for LLM command."""
+
 from types import SimpleNamespace
 
 from plugins.commands.command_llm import LlmCommand
 
 
 def test_llm_command_can_set_default(monkeypatch):
+    """Verify LLM command can set default."""
     saved = []
     monkeypatch.setattr("plugins.commands.command_llm._save", lambda config: saved.append(dict(config)))
     context = SimpleNamespace(config={"llm_profiles": {"a": {}, "b": {}}, "default_llm_profile": "a"}, services={})

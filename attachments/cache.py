@@ -25,6 +25,7 @@ _MAX_NAME_LEN = 120
 
 
 def _sanitize(name: str) -> str:
+    """Internal helper to handle sanitize."""
     name = _SAFE_NAME.sub("_", name).strip("_") or "attachment"
     if len(name) > _MAX_NAME_LEN:
         stem, _, ext = name.rpartition(".")
@@ -60,6 +61,7 @@ def save(filename_hint: str, data: bytes, size_cap_gb: float = 2.0) -> Path:
 
 
 def _evict_if_over_cap(cap_bytes: int) -> None:
+    """Internal helper to handle evict if over cap."""
     entries = [(p, p.stat()) for p in ATTACHMENT_CACHE.iterdir() if p.is_file()]
     total = sum(st.st_size for _, st in entries)
     if total <= cap_bytes:

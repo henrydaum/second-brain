@@ -30,11 +30,13 @@ _CHANGE_NOTIF = "Change notification mode"
 
 
 class ConversationsCommand(BaseCommand):
+    """Slash-command handler for `/conversations`."""
     name = "conversations"
     description = "Browse, switch, or manage conversations"
     category = "Conversation"
 
     def form(self, args, context):
+        """Handle form."""
         db = getattr(context, "db", None)
         if db is None:
             return []
@@ -49,6 +51,7 @@ class ConversationsCommand(BaseCommand):
         return steps + _existing_conversation_steps(args, context, picked)
 
     def run(self, args, context):
+        """Execute `/conversations` for the active session."""
         runtime = getattr(context, "runtime", None)
         db = getattr(context, "db", None)
         session_key = getattr(context, "session_key", None)
@@ -79,11 +82,13 @@ class ConversationsCommand(BaseCommand):
 
 
 class NewCommand(BaseCommand):
+    """Slash-command handler for `/conversations`."""
     name = "new"
     description = "Start a conversation with default settings"
     category = "Conversation"
 
     def run(self, args, context):
+        """Execute `/conversations` for the active session."""
         runtime = getattr(context, "runtime", None)
         db = getattr(context, "db", None)
         session_key = getattr(context, "session_key", None)
@@ -97,6 +102,7 @@ class NewCommand(BaseCommand):
 # ──────────────────────────────────────────────────────────────────────
 
 def _existing_conversation_steps(args, context, category):
+    """Internal helper to handle existing conversation steps."""
     db = getattr(context, "db", None)
     rows, _ = db.list_conversations_page(offset=0, limit=_LIMIT, category=_lookup_value(category))
     if not rows:
@@ -141,6 +147,7 @@ def _existing_categories(db) -> list[str]:
 
 
 def _category_choices(db) -> list[str]:
+    """Internal helper to handle category choices."""
     cats = _existing_categories(db)
     return cats if _MAIN in cats else [_MAIN] + cats
 
@@ -151,6 +158,7 @@ def _lookup_value(label: str) -> str:
 
 
 def _resolve_category(args) -> str:
+    """Internal helper to resolve category."""
     chosen = (args.get("target_category") or "").strip()
     return ((args.get("custom_category") or "").strip() if chosen == _NEW_CAT else chosen) or _MAIN
 
@@ -160,6 +168,7 @@ def _resolve_category(args) -> str:
 # ──────────────────────────────────────────────────────────────────────
 
 def _label_for(db, row: dict) -> str:
+    """Internal helper to handle label for."""
     title = (row.get("title") or "").strip() or "(untitled)"
     rel = _relative_time(row.get("updated_at"))
     return f"{title}  ({rel})" if rel else title
@@ -191,11 +200,13 @@ def _relative_time(timestamp) -> str:
 
 
 def _agent_for(db, conversation_id) -> str:
+    """Internal helper to handle agent for."""
     marker = latest_state(db.get_conversation_messages(conversation_id)) or {}
     return (marker.get("profile_override") or marker.get("active_agent_profile") or "").strip()
 
 
 def _notification_mode_for(db, conversation_id) -> str:
+    """Internal helper to handle notification mode for."""
     return notification_mode((latest_state(db.get_conversation_messages(conversation_id)) or {}).get("notification_mode"))
 
 
@@ -230,6 +241,7 @@ def _preview_for(db, conversation_id) -> str:
 
 
 def _truncate(text: str, limit: int) -> str:
+    """Internal helper to handle truncate."""
     text = text.replace("\n", " ").strip()
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
@@ -239,6 +251,7 @@ def _truncate(text: str, limit: int) -> str:
 # ──────────────────────────────────────────────────────────────────────
 
 def _create_and_switch(runtime, session_key) -> str:
+    """Internal helper to create and switch."""
     new_id = runtime.create_conversation(f"New conversation ({_MAIN})", kind="user", category=None)
     if new_id is None:
         return "Failed to create conversation."
@@ -250,6 +263,7 @@ def _create_and_switch(runtime, session_key) -> str:
 
 
 def _decode_id(value) -> int | None:
+    """Internal helper to handle decode ID."""
     if value in (None, "", "(none)"):
         return None
     if isinstance(value, int):

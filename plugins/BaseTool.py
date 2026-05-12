@@ -58,6 +58,7 @@ class ToolResult:
         llm_summary: str = "",
         attachment_paths: list[str] | None = None,
     ):
+        """Initialize the tool result."""
         self.success = success
         self.error = error
         self.data = data
@@ -66,6 +67,7 @@ class ToolResult:
 
     @staticmethod
     def _normalize_attachment_paths(*path_lists) -> list[str]:
+        """Internal helper to normalize attachment paths."""
         normalized = []
         seen = set()
         for paths in path_lists:
@@ -107,6 +109,7 @@ class ToolResult:
 
     @staticmethod
     def failed(error: str) -> "ToolResult":
+        """Handle failed."""
         return ToolResult(success=False, error=error)
 
 
@@ -154,6 +157,7 @@ class BaseTool:
     config_settings: list = []
 
     def __init_subclass__(cls, **kwargs):
+        """Internal helper to handle init subclass."""
         super().__init_subclass__(**kwargs)
         for attr in ("parameters", "requires_services", "config_settings"):
             value = getattr(cls, attr)
@@ -161,6 +165,7 @@ class BaseTool:
                 setattr(cls, attr, value.copy())
 
     def run(self, context, **kwargs) -> ToolResult:
+        """Execute the base tool tool."""
         raise NotImplementedError(f"Tool '{self.name}' must implement run()")
 
     def to_schema(self) -> dict:

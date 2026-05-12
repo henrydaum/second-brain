@@ -19,6 +19,7 @@ logger = logging.getLogger("EmbedImages")
 
 
 class EmbedImages(BaseTask):
+	"""Embed images."""
 	name = "embed_images"
 	modalities = ["image"]
 	reads = []
@@ -39,6 +40,7 @@ class EmbedImages(BaseTask):
 	timeout = 300
 
 	def run(self, paths, context):
+		"""Run embed images."""
 		embedder = context.services.get("image_embedder")
 		if not embedder or not embedder.loaded:
 			return [TaskResult.failed("image_embedder service not loaded") for _ in paths]

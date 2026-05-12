@@ -49,6 +49,7 @@ class BaseService(ABC):
     config_settings: list = []
 
     def __init_subclass__(cls, **kwargs):
+        """Internal helper to handle init subclass."""
         super().__init_subclass__(**kwargs)
         for attr in ("config_settings",):
             value = getattr(cls, attr)
@@ -56,15 +57,18 @@ class BaseService(ABC):
                 setattr(cls, attr, value.copy())
 
     def __init__(self):
+        """Initialize the base service."""
         self._loaded = False
         self.services = {}
 
     @property
     def loaded(self) -> bool:
+        """Handle loaded."""
         return self._loaded
 
     @loaded.setter
     def loaded(self, value: bool):
+        """Handle loaded."""
         self._loaded = value
 
     def load(self) -> bool:

@@ -61,6 +61,7 @@ Rules:
 
 
 class DreamMemory(BaseTask):
+    """Dream memory."""
     name = "dream_memory"
     trigger = "event"
     trigger_channels = [DREAM_MEMORY]
@@ -75,6 +76,7 @@ class DreamMemory(BaseTask):
     ]
 
     def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
+        """Run event."""
         db = getattr(context, "db", None)
         if db is None:
             return TaskResult.failed("No database available.")
@@ -116,6 +118,7 @@ class DreamMemory(BaseTask):
 
 
 def _ask_json(llm, prompt: str) -> tuple[dict[str, Any] | None, str]:
+    """Internal helper to handle ask JSON."""
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}]
     for kwargs in ({"response_format": {"type": "json_object"}}, {}, {}):
         response = llm.invoke(messages, **kwargs)
@@ -132,6 +135,7 @@ def _ask_json(llm, prompt: str) -> tuple[dict[str, Any] | None, str]:
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
+    """Internal helper to extract JSON."""
     text, _ = strip_model_tokens(text or "")
     text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.I | re.M).strip()
     start, end = text.find("{"), text.rfind("}")
@@ -145,12 +149,14 @@ def _extract_json(text: str) -> dict[str, Any] | None:
 
 
 def _recent_conversations(db, since: float) -> list[dict]:
+    """Internal helper to handle recent conversations."""
     rows = db.list_conversations(MAX_CONVERSATIONS * 2)
     out = [r for r in rows if (r.get("kind") or "user") == "user" and float(r.get("updated_at") or 0) > since]
     return out[:MAX_CONVERSATIONS]
 
 
 def _format_conversations(db, conversations: list[dict]) -> str:
+    """Internal helper to format conversations."""
     chunks = []
     for c in conversations:
         lines = [f"Conversation {c.get('id')}: {c.get('title') or 'Untitled'} | category={c.get('category') or 'Main'} | updated_at={c.get('updated_at')}"]
@@ -166,6 +172,7 @@ def _format_conversations(db, conversations: list[dict]) -> str:
 
 
 def _plain_content(content: str) -> str:
+    """Internal helper to handle plain content."""
     try:
         data = json.loads(content)
         if isinstance(data, dict) and "tool_calls" in data:
@@ -176,6 +183,7 @@ def _plain_content(content: str) -> str:
 
 
 def _normalize_memory(text: Any) -> str:
+    """Internal helper to normalize memory."""
     text = str(text or "").strip()
     if not text:
         return ""
@@ -186,12 +194,14 @@ def _normalize_memory(text: Any) -> str:
 
 
 def _string_list(value: Any) -> list[str]:
+    """Internal helper to handle string list."""
     if not isinstance(value, list):
         return []
     return [str(v).strip() for v in value if str(v).strip()][:20]
 
 
 def _read_state() -> dict:
+    """Internal helper to read state."""
     try:
         return json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except Exception:
@@ -199,11 +209,13 @@ def _read_state() -> dict:
 
 
 def _write_state(last_success_at: float) -> None:
+    """Internal helper to write state."""
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps({"last_success_at": last_success_at}, indent=2), encoding="utf-8")
 
 
 def _write_report(status: str, message: str, changes: list[str], skipped: list[str]) -> None:
+    """Internal helper to write report."""
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"# Memory Dream Report", "", f"- Status: {status}", f"- Time: {time.strftime('%Y-%m-%d %H:%M:%S')}", f"- Message: {message}", "", "## Changes"]
     lines.extend(f"- {x}" for x in (changes or ["None"]))

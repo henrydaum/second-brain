@@ -30,11 +30,13 @@ logger = logging.getLogger("GmailService")
 
 
 class GmailService(BaseService):
+    """Gmail service."""
     name = "gmail"
     model_name = "gmail"
     shared = False  # get_client() returns a fresh HTTP transport per call
 
     def __init__(self):
+        """Initialize the Gmail service."""
         super().__init__()
         self._creds = None
         self.service = None  # backward compat
@@ -42,6 +44,7 @@ class GmailService(BaseService):
         self._labels_cache: list[dict] | None = None
 
     def _load(self) -> bool:
+        """Internal helper to load Gmail service."""
         if not self._is_connected():
             logger.warning("[Gmail] No internet — cannot authenticate.")
             return False
@@ -109,6 +112,7 @@ class GmailService(BaseService):
             return None
 
     def unload(self):
+        """Handle unload."""
         self._creds = None
         self.service = None
         self._self_address = None
@@ -213,9 +217,11 @@ class GmailService(BaseService):
             return None
 
     def mark_read(self, message_id: str) -> bool:
+        """Handle mark read."""
         return self._modify_labels(message_id, add=[], remove=["UNREAD"])
 
     def mark_unread(self, message_id: str) -> bool:
+        """Handle mark unread."""
         return self._modify_labels(message_id, add=["UNREAD"], remove=[])
 
     # ── Sending ───────────────────────────────────────────────────────────────
@@ -313,6 +319,7 @@ class GmailService(BaseService):
 
     @staticmethod
     def _is_connected() -> bool:
+        """Return whether connected."""
         try:
             import requests
             requests.head("https://www.google.com", timeout=3)
@@ -321,6 +328,7 @@ class GmailService(BaseService):
             return False
 
     def _modify_labels(self, message_id: str, add: list, remove: list) -> bool:
+        """Internal helper to handle modify labels."""
         client = self.get_client()
         if not client:
             return False
@@ -336,9 +344,11 @@ class GmailService(BaseService):
 
     @staticmethod
     def _header(headers: dict, name: str) -> str:
+        """Internal helper to handle header."""
         return headers.get(name, "")
 
     def _summarize(self, msg: dict) -> dict:
+        """Internal helper to handle summarize."""
         headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
         return {
             "message_id": msg["id"],
@@ -352,6 +362,7 @@ class GmailService(BaseService):
         }
 
     def _parse_message(self, msg: dict) -> dict:
+        """Internal helper to parse message."""
         headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
         body_plain, body_html = self._body_parts(msg["payload"])
 
@@ -372,6 +383,7 @@ class GmailService(BaseService):
         }
 
     def _body_parts(self, part: dict) -> tuple[str, str]:
+        """Internal helper to handle body parts."""
         import base64
         plain = html = ""
         data = part.get("body", {}).get("data")
@@ -386,6 +398,7 @@ class GmailService(BaseService):
 
 
 def _attach_files(msg, attachments):
+    """Internal helper to handle attach files."""
     if not attachments:
         return
     import mimetypes
@@ -417,4 +430,5 @@ def _attach_files(msg, attachments):
 
 
 def build_services(config: dict) -> dict:
+    """Build services."""
     return {"gmail": GmailService()}

@@ -1,3 +1,5 @@
+"""Service plugin for web search."""
+
 import os
 import json
 import gzip
@@ -36,34 +38,42 @@ class WebSearchProvider(BaseService):
     DDG_URL = "https://html.duckduckgo.com/html/"
 
     def __init__(self, search_key="", answers_key=""):
+        """Initialize the web search provider."""
         super().__init__()
         self._search_key = search_key
         self._answers_key = answers_key
 
     def _load(self) -> bool:
+        """Internal helper to load web search provider."""
         self._loaded = True
         return True
 
     def unload(self):
+        """Handle unload."""
         self._loaded = False
 
     # ── Key access ──────────────────────────────────────────────────
 
     def get_search_key(self):
+        """Get search key."""
         return (self._search_key or os.getenv("BRAVE_SEARCH_API_KEY") or os.getenv("BRAVE_API_KEY") or "").strip()
 
     def get_answers_key(self):
+        """Get answers key."""
         return (self._answers_key or os.getenv("BRAVE_ANSWERS_API_KEY") or "").strip()
 
     def has_search_key(self):
+        """Return whether search key."""
         return bool(self.get_search_key())
 
     def has_answers_key(self):
+        """Return whether answers key."""
         return bool(self.get_answers_key())
 
     # ── HTTP helpers ────────────────────────────────────────────────
 
     def _clean_text(self, value, limit=None):
+        """Internal helper to handle clean text."""
         text = (value or "").replace("\n", " ").replace("\r", " ").strip()
         text = " ".join(text.split())
         if limit and len(text) > limit:
@@ -71,6 +81,7 @@ class WebSearchProvider(BaseService):
         return text
 
     def _headers(self, api_key, json_body=False):
+        """Internal helper to handle headers."""
         headers = {
             "Accept": "application/json",
             "Accept-Encoding": "gzip",
@@ -82,18 +93,21 @@ class WebSearchProvider(BaseService):
         return headers
 
     def _decode_raw(self, raw, headers):
+        """Internal helper to handle decode raw."""
         encoding = (headers.get("Content-Encoding") or "").lower().strip() if headers else ""
         if encoding == "gzip":
             raw = gzip.decompress(raw)
         return raw.decode("utf-8", errors="replace")
 
     def _read_json_response(self, request, timeout=30):
+        """Internal helper to read JSON response."""
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read()
             text = self._decode_raw(raw, response.headers)
             return json.loads(text)
 
     def _read_http_error_body(self, error):
+        """Internal helper to read http error body."""
         try:
             raw = error.read()
             headers = getattr(error, "headers", {})
@@ -188,6 +202,7 @@ class WebSearchProvider(BaseService):
         citations = []
 
         def harvest(obj):
+            """Handle harvest."""
             if isinstance(obj, dict):
                 maybe_url = obj.get("url")
                 maybe_title = obj.get("title") or obj.get("name") or obj.get("source") or ""
@@ -305,6 +320,7 @@ class WebSearchProvider(BaseService):
 
 
 def build_services(config: dict) -> dict:
+    """Build services."""
     return {
         "web_search_provider": WebSearchProvider(
             search_key=config.get("brave_search_api_key", ""),

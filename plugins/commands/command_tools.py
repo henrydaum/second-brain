@@ -1,3 +1,5 @@
+"""Slash command plugin for `/tools`."""
+
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.formatters import format_tool_result, format_tools
 from state_machine.conversation import FormStep
@@ -8,11 +10,13 @@ ACTIONS = ["call"]
 
 
 class ToolsCommand(BaseCommand):
+    """Slash-command handler for `/tools`."""
     name = "tools"
     description = "Select a tool, then call it"
     category = "System"
 
     def form(self, args, context):
+        """Handle form."""
         registry = getattr(context, "tool_registry", None)
         tools = getattr(registry, "tools", {}) or {}
         steps = [FormStep("tool_name", "Select a tool to inspect or call.", True, enum=sorted(tools), columns=2)]
@@ -24,6 +28,7 @@ class ToolsCommand(BaseCommand):
         return steps
 
     def run(self, args, context):
+        """Execute `/tools` for the active session."""
         registry = getattr(context, "tool_registry", None)
         if args.get("tool_name"):
             tool = (getattr(registry, "tools", {}) or {}).get(args["tool_name"]) if registry else None
@@ -43,6 +48,7 @@ class ToolsCommand(BaseCommand):
 
 
 def _describe(tool):
+    """Internal helper to handle describe."""
     schema = tool.to_schema()["function"]
     params = schema.get("parameters", {})
     required = set(params.get("required", []))

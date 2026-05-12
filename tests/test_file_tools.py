@@ -1,3 +1,5 @@
+"""Regression tests for file tools."""
+
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,10 +9,12 @@ from plugins.tools.tool_run_command import RunCommand
 
 
 def _ctx(approve=None):
+    """Internal helper to handle ctx."""
     return SimpleNamespace(approve_command=approve, services={}, config={})
 
 
 def test_edit_file_crud_and_read_modes():
+    """Verify edit file crud and read modes."""
     path = Path(".codex_file_tools_test.txt")
     tool = EditFile()
     ctx = _ctx(lambda *_: True)
@@ -28,6 +32,7 @@ def test_edit_file_crud_and_read_modes():
 
 
 def test_edit_file_requires_approval_and_keeps_dialog_concise():
+    """Verify edit file requires approval and keeps dialog concise."""
     path = Path(".codex_file_tools_test.txt")
     approvals = []
     try:
@@ -49,6 +54,7 @@ def test_edit_file_requires_approval_and_keeps_dialog_concise():
 
 
 def test_edit_file_data_dir_edit_has_no_root_warning(monkeypatch):
+    """Verify edit file data dir edit has no root warning."""
     import plugins.tools.tool_edit_file as edit_mod
 
     data_dir = Path(".codex_file_tools_data").resolve()
@@ -73,6 +79,7 @@ def test_edit_file_data_dir_edit_has_no_root_warning(monkeypatch):
 
 
 def test_edit_file_plugin_edit_reminds_to_test(monkeypatch):
+    """Verify edit file plugin edit reminds to test."""
     import plugins.tools.tool_edit_file as edit_mod
 
     plugin_dir = Path(".codex_file_tools_plugins").resolve()
@@ -97,6 +104,7 @@ def test_edit_file_plugin_edit_reminds_to_test(monkeypatch):
 
 
 def test_edit_file_non_plugin_edit_has_no_plugin_reminder(monkeypatch):
+    """Verify edit file non plugin edit has no plugin reminder."""
     import plugins.tools.tool_edit_file as edit_mod
 
     path = Path(".codex_file_tools_test.txt")
@@ -118,6 +126,7 @@ def test_edit_file_non_plugin_edit_has_no_plugin_reminder(monkeypatch):
 
 
 def test_run_command_allows_arbitrary_command_after_approval():
+    """Verify run command allows arbitrary command after approval."""
     approvals = []
     result = RunCommand().run(_ctx(lambda c, j: approvals.append((c, j)) or True), command="echo SB_OK", justification="smoke test")
 
@@ -127,6 +136,7 @@ def test_run_command_allows_arbitrary_command_after_approval():
 
 
 def test_run_command_denied_approval_does_not_run():
+    """Verify run command denied approval does not run."""
     result = RunCommand().run(_ctx(lambda *_: False), command="echo NOPE", justification="smoke test")
 
     assert not result.success

@@ -1,3 +1,5 @@
+"""Attachment support for registry."""
+
 from __future__ import annotations
 
 import logging
@@ -40,6 +42,7 @@ _DEFAULT_MODALITY: dict[str, str] = {
 
 
 def _normalize_ext(ext: str) -> str:
+    """Internal helper to normalize ext."""
     ext = ext.strip().lower()
     return ext if ext.startswith(".") else f".{ext}"
 
@@ -55,6 +58,7 @@ def register(extensions: str | list[str], modality: str, func: ParserFn) -> None
 
 
 def modality_for(extension: str) -> str:
+    """Handle modality for."""
     ext = _normalize_ext(extension)
     return _MODALITIES.get(ext) or _DEFAULT_MODALITY.get(ext) or "binary"
 

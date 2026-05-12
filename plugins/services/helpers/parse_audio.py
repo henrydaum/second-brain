@@ -1,3 +1,5 @@
+"""Attachment parsing helpers for audio inputs."""
+
 import logging
 import json
 import subprocess

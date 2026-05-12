@@ -1,3 +1,5 @@
+"""Attachment parsing helpers for image inputs."""
+
 import logging
 from pathlib import Path
 from PIL import Image

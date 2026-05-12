@@ -19,6 +19,7 @@ logger = logging.getLogger("LexicalSearch")
 
 
 class LexicalSearch(BaseTool):
+    """Lexical search."""
     name = "lexical_search"
     description = (
         "Search for files by keyword using BM25-ranked full-text search. "
@@ -61,6 +62,7 @@ class LexicalSearch(BaseTool):
     requires_services = []
 
     def run(self, context, **kwargs):
+        """Run lexical search."""
         query = kwargs.get("query", "").strip()
         top_k = kwargs.get("top_k", 5)
         sources = kwargs.get("sources", None)

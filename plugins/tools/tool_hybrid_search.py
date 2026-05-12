@@ -25,6 +25,7 @@ RRF_K = 60
 
 
 class HybridSearch(BaseTool):
+    """Hybrid search."""
     name = "hybrid_search"
     description = (
         "Search indexed files using both keyword and semantic retrieval, then "
@@ -61,6 +62,7 @@ class HybridSearch(BaseTool):
     requires_services = []
 
     def run(self, context, **kwargs):
+        """Run hybrid search."""
         query = kwargs.get("query", "").strip()
         max_results = kwargs.get("max_results", 5)
         folder = kwargs.get("folder", None)

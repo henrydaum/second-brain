@@ -32,10 +32,12 @@ _ADDR_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 
 
 def _extract_addrs(header: str) -> list[str]:
+    """Internal helper to extract addrs."""
     return [m.group(0).lower() for m in _ADDR_RE.finditer(header or "")]
 
 
 def _allowed_addresses(config) -> list[str]:
+    """Internal helper to handle allowed addresses."""
     raw = config.get("ai_email_addresses") or []
     if not isinstance(raw, list):
         return []
@@ -43,6 +45,7 @@ def _allowed_addresses(config) -> list[str]:
 
 
 class EmailSend(BaseTool):
+    """Email send."""
     name = "email_send"
     description = (
         "Send a new email or reply to an existing message thread via Gmail. "
@@ -121,6 +124,7 @@ class EmailSend(BaseTool):
     background_safe = True
 
     def run(self, context, **kwargs) -> ToolResult:
+        """Run email send."""
         gmail = context.services.get("gmail")
         if not gmail:
             return ToolResult.failed("Gmail service not available.")
@@ -298,6 +302,7 @@ class EmailSend(BaseTool):
 
 
 def _require_approval(context, action_summary: str, detail: str) -> ToolResult | None:
+    """Internal helper to handle require approval."""
     approve_fn = context.approve_command
     if approve_fn is None:
         return ToolResult.failed(

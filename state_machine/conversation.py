@@ -1,11 +1,12 @@
-from __future__ import annotations
-
 """Small, serializable conversation-state primitives.
 
 This file intentionally does not know about frontends, LLM providers, or the
 database. It is the Poker Monster-style core: participants take actions, the
 current phase decides what is legal, and multi-step flows live in `cache`.
 """
+
+from __future__ import annotations
+
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +37,7 @@ class FormStep:
     def coerce(self, value: Any) -> Any:
         # Form values arrive from text boxes, buttons, or future callbacks, so
         # normalize them before handlers see the collected args.
+        """Coerce raw frontend input into the field's declared type."""
         if value in (None, "") and not self.required:
             return self.default
         if self.type in {"integer", "int"}:
@@ -60,6 +62,7 @@ class FormStep:
         return value
 
     def validate(self, value: Any) -> tuple[bool, str | None]:
+        """Validate one raw field value, including type coercion."""
         if self.required and (value is None or value == ""):
             return False, f"{self.name} is required."
         try:
@@ -69,10 +72,12 @@ class FormStep:
         return self.validator(value) if self.validator else (True, None)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the form step into plain data for persistence or rendering."""
         return {"name": self.name, "prompt": self.prompt, "required": self.required, "type": self.type, "enum": self.enum, "enum_labels": self.enum_labels, "default": self.default, "prompt_when_missing": self.prompt_when_missing, "columns": self.columns}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "FormStep":
+        """Rebuild a FormStep from its serialized representation."""
         return cls(data["name"], data.get("prompt", ""), data.get("required", True), data.get("type", "string"), data.get("enum"), data.get("enum_labels"), data.get("default"), prompt_when_missing=data.get("prompt_when_missing", False), columns=data.get("columns"))
 
 
@@ -107,6 +112,7 @@ class Participant:
     can_attach: bool | None = None
 
     def allows(self, action: str) -> bool:
+        """Return whether this participant may perform a given action type."""
         defaults = {
             "call_command": self.kind == "user",
             "call_tool": self.kind == "agent",
@@ -135,9 +141,11 @@ class PhaseFrame:
 
     @property
     def step(self) -> FormStep | None:
+        """Return the current form step for this frame, if one exists."""
         return self.steps[self.step_index] if self.step_index < len(self.steps) else None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the phase frame for persistence."""
         return {
             "phase": self.phase,
             "action_type": self.action_type,
@@ -151,6 +159,7 @@ class PhaseFrame:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PhaseFrame":
+        """Rebuild a phase frame from persisted data."""
         return cls(data["phase"], data["action_type"], data["actor_id"], data.get("name"), data.get("data") or {}, [FormStep.from_dict(s) for s in data.get("steps", [])], data.get("step_index", 0), data.get("previous_phase", BASE_PHASE))
 
 
@@ -167,6 +176,7 @@ class ConversationState:
         attachment_parser: Callable[[dict[str, Any]], Any] | None = None,
         attachment_lifecycle: str = "per_turn",
     ):
+        """Initialize the conversation state."""
         self.participants = {p.id: p for p in participants}
         self.turn_order = list(self.participants)
         if not self.turn_order:
@@ -190,23 +200,28 @@ class ConversationState:
 
     @property
     def active(self) -> Participant:
+        """Return the participant whose turn currently has priority."""
         return self.participants[self.turn_priority]
 
     @property
     def frame(self) -> PhaseFrame | None:
+        """Return the top suspended phase frame, if any."""
         frames = self.cache.setdefault("phases", [])
         return frames[-1] if frames else None
 
     def other_id(self, actor_id: str | None = None) -> str:
+        """Return the next participant in turn order."""
         actor_id = actor_id or self.turn_priority
         if len(self.turn_order) == 1:
             return actor_id
         return self.turn_order[(self.turn_order.index(actor_id) + 1) % len(self.turn_order)]
 
     def switch_priority(self, actor_id: str | None = None) -> None:
+        """Switch priority."""
         self.turn_priority = self.other_id(actor_id)
 
     def set_priority(self, actor_id: str) -> None:
+        """Set priority."""
         if actor_id not in self.participants:
             raise KeyError(f"Unknown participant: {actor_id}")
         self.turn_priority = actor_id
@@ -214,40 +229,48 @@ class ConversationState:
     def push_phase(self, frame: PhaseFrame) -> None:
         # Push instead of overwrite so an approval/form can pause another
         # pending action and then resume it.
+        """Handle push phase."""
         frame.previous_phase = self.phase
         self.cache.setdefault("phases", []).append(frame)
         self.phase = frame.phase
 
     def pop_phase(self) -> PhaseFrame | None:
+        """Handle pop phase."""
         frame = self.cache.setdefault("phases", []).pop() if self.cache.setdefault("phases", []) else None
         self.phase = self.frame.phase if self.frame else BASE_PHASE
         return frame
 
     def reset_phase(self) -> None:
+        """Handle reset phase."""
         self.cache["phases"] = []
         self.phase = BASE_PHASE
 
     def event(self, type_: str, actor_id: str | None = None, **data: Any) -> dict[str, Any]:
+        """Handle event."""
         event = {"type": type_, "actor_id": actor_id or self.turn_priority, "phase": self.phase, **data}
         self.history.append(event)
         return event
 
     def enact(self, action_type: str, content: Any = None, actor_id: str | None = None):
+        """Handle enact."""
         from state_machine.action_map import create_action
 
         return create_action(self, action_type, content, actor_id).enact()
 
     def spec(self, actor_id: str, action_type: str, name: str) -> CallableSpec | None:
+        """Handle spec."""
         table = self.participants[actor_id].commands if action_type == "call_command" else self.participants[actor_id].tools
         return table.get(name)
 
     def attachment_extension(self, content: dict[str, Any]) -> str:
+        """Handle attachment extension."""
         return (content.get("extension") or Path(str(content.get("path", ""))).suffix).lower().lstrip(".")
 
     def to_dict(self) -> dict[str, Any]:
         # Only serialize pending attachments when the lifecycle says they
         # should outlive the current turn — otherwise they're per-turn
         # buffer state and replaying them after a restart is wrong.
+        """Handle to dict."""
         attachments_payload: list[dict[str, Any]] = []
         if self.attachment_lifecycle == "persistent":
             for a in self.pending_attachments:

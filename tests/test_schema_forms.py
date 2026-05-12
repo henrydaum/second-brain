@@ -1,7 +1,10 @@
+"""Regression tests for schema forms."""
+
 from state_machine.forms import schema_to_form_steps
 
 
 def test_schema_form_prompts_include_action_and_description():
+    """Verify schema form prompts include action and description."""
     steps = schema_to_form_steps({
         "type": "object",
         "properties": {

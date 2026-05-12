@@ -33,6 +33,7 @@ class ParserService(BaseService):
     def _load(self) -> bool:
         # Importing each parser module triggers its top-level register() calls,
         # which populate parser_registry._REGISTRY and _MODALITY_MAP.
+        """Internal helper to load parser service."""
         from plugins.services.helpers import (
             parse_video,
         )
@@ -44,6 +45,7 @@ class ParserService(BaseService):
         # resources to release. Leave the registrations in place so a
         # subsequent load() is idempotent (Python won't re-run module-level
         # register() calls on re-import).
+        """Handle unload."""
         self.loaded = False
 
     def parse(self, path: str, modality: str = None, config: dict = None):
@@ -52,4 +54,5 @@ class ParserService(BaseService):
 
 
 def build_services(config: dict) -> dict:
+    """Build services."""
     return {"parser": ParserService()}

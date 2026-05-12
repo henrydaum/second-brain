@@ -24,6 +24,7 @@ logger = logging.getLogger("ExtractContainer")
 
 
 class ExtractContainer(BaseTask):
+	"""Extract container."""
 	name = "extract_container"
 	modalities = ["container"]
 	reads = []
@@ -43,6 +44,7 @@ class ExtractContainer(BaseTask):
 	timeout = 300
 
 	def run(self, paths, context):
+		"""Run extract container."""
 		results = []
 		for path in paths:
 			try:

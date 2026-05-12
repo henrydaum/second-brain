@@ -1,3 +1,5 @@
+"""Attachment parsing helpers for container and archive inputs."""
+
 import logging
 import email
 import hashlib

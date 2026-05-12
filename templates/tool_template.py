@@ -178,6 +178,7 @@ from typing import Any
 
 @dataclass
 class ToolResult:
+    """Tool result."""
     success: bool = True
     error: str = ""
     data: Any = None
@@ -186,11 +187,13 @@ class ToolResult:
 
     @staticmethod
     def failed(error: str) -> "ToolResult":
+        """Handle failed."""
         return ToolResult(success=False, error=error)
 
 
 class BaseTool:
     # --- Identity ---
+    """Base tool."""
     name: str = ""
     description: str = ""               # doubles as the LLM tool description
     parameters: dict = {}               # JSON Schema for input arguments

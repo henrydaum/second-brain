@@ -16,6 +16,7 @@ logger = logging.getLogger("ExtractText")
 
 
 class ExtractText(BaseTask):
+	"""Extract text."""
 	name = "extract_text"
 	modalities = ["text"]
 	reads = []
@@ -34,6 +35,7 @@ class ExtractText(BaseTask):
 	timeout = 120
 
 	def run(self, paths, context):
+		"""Run extract text."""
 		results = []
 		for path in paths:
 			try:

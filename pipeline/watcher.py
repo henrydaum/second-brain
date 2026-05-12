@@ -1,3 +1,5 @@
+"""Pipeline support for watcher."""
+
 import logging
 import os
 import time
@@ -37,7 +39,9 @@ Hard problems solved here:
 
 
 class Watcher:
+	"""Watcher."""
 	def __init__(self, orchestrator, db, config: dict):
+		"""Initialize the watcher."""
 		self.orchestrator = orchestrator
 		self.db = db
 		self.config = config
@@ -67,6 +71,7 @@ class Watcher:
 	# =================================================================
 
 	def start(self):
+		"""Start watcher."""
 		valid_dirs = [d for d in self.watch_dirs if d and os.path.exists(d)]
 		if not valid_dirs:
 			logger.error("No valid sync directories found — watcher not starting. Use /configure sync_directories to add a folder.")
@@ -114,6 +119,7 @@ class Watcher:
 		logger.info("Rescan triggered.")
 
 	def stop(self):
+		"""Stop watcher."""
 		if self.observer.is_alive():
 			self.observer.stop()
 			self.observer.join()
@@ -296,6 +302,7 @@ class Watcher:
 		return p.suffix.lower() in self.supported_extensions
 
 	def _is_ignored(self, path: str) -> bool:
+		"""Return whether ignored."""
 		parts = Path(path).parts
 		if any(part in self.ignored_folders for part in parts):
 			return True
@@ -314,12 +321,14 @@ class DebouncedHandler(FileSystemEventHandler):
 	"""
 
 	def __init__(self, watcher: Watcher):
+		"""Initialize the debounced handler."""
 		self.watcher = watcher
 		self.debounce_interval = 1.0
 		self.pending: dict[str, threading.Timer] = {}
 		self.lock = threading.Lock()
 
 	def _debounce(self, path: str):
+		"""Internal helper to handle debounce."""
 		with self.lock:
 			if path in self.pending:
 				self.pending[path].cancel()
@@ -341,19 +350,23 @@ class DebouncedHandler(FileSystemEventHandler):
 	# --- Watchdog event callbacks ---
 
 	def on_created(self, event):
+		"""Handle on created."""
 		self._debounce(event.src_path)
 
 	def on_modified(self, event):
+		"""Handle on modified."""
 		if event.is_directory:
 			return
 		self._debounce(event.src_path)
 
 	def on_moved(self, event):
 		# Source is gone, destination is new
+		"""Handle on moved."""
 		self.watcher.handle_delete(event.src_path)
 		self._debounce(event.dest_path)
 
 	def on_deleted(self, event):
 		# No debounce — delete immediately
+		"""Handle on deleted."""
 		self.watcher.handle_delete(event.src_path)
 

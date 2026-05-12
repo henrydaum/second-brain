@@ -1,3 +1,5 @@
+"""State-machine support for action map."""
+
 from state_machine.action import (
     AnswerApproval,
     CallCommand,
@@ -47,6 +49,7 @@ ACTION_MAP = {
 
 
 def create_action(cs, action_type, content=None, actor_id=None):
+    """Create action."""
     return ACTION_MAP.get(cs.phase, {}).get(action_type, InvalidAction)(cs, actor_id, content)
 
 

@@ -1,3 +1,5 @@
+"""Pipeline support for database."""
+
 import logging
 import re
 import sqlite3
@@ -16,6 +18,7 @@ _DEFAULT_PRIORITY = 0
 
 
 def _priority_for(path: str) -> int:
+    """Internal helper to handle priority for."""
     norm = str(path).replace("\\", "/").rstrip("/")
     for root in _PRIORITY_ROOTS:
         root_n = root.replace("\\", "/").rstrip("/")
@@ -42,7 +45,9 @@ Dynamic output tables:
 
 
 class Database:
+	"""Database."""
 	def __init__(self, db_path: str):
+		"""Initialize the database."""
 		self.db_path = db_path
 		self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
 		self.conn.row_factory = sqlite3.Row  # dict-like access on rows
@@ -58,6 +63,7 @@ class Database:
 	def _setup(self):
 		# WAL mode allows concurrent readers while one writer holds the lock —
 		# critical for the dispatch loop reading while workers write results.
+		"""Internal helper to handle setup."""
 		self.conn.execute("PRAGMA journal_mode=WAL")
 		# Negative value = KB. -50000 ≈ 50 MB page cache (default is ~2 MB).
 		self.conn.execute("PRAGMA cache_size=-50000")
@@ -169,6 +175,7 @@ class Database:
 	# =================================================================
 
 	def upsert_file(self, path, file_name, extension, modality, mtime, source="watched"):
+		"""Handle upsert file."""
 		now = time.time()
 		with self.lock:
 			self.conn.execute("""
@@ -283,6 +290,7 @@ class Database:
 			return [row["path"] for row in rows]
 
 	def complete_task(self, path, task_name):
+		"""Handle complete task."""
 		with self.lock:
 			self.conn.execute("""
 				UPDATE task_queue
@@ -292,6 +300,7 @@ class Database:
 			self.conn.commit()
 
 	def fail_task(self, path, task_name, error=""):
+		"""Handle fail task."""
 		with self.lock:
 			self.conn.execute("""
 				UPDATE task_queue
@@ -340,6 +349,7 @@ class Database:
 			return cur.rowcount
 
 	def reset_failed_tasks(self, task_name=None):
+		"""Handle reset failed tasks."""
 		with self.lock:
 			if task_name:
 				self.conn.execute(
@@ -432,6 +442,7 @@ class Database:
 			return [(row["run_id"], row["payload_json"]) for row in rows]
 
 	def complete_run(self, run_id):
+		"""Handle complete run."""
 		with self.lock:
 			self.conn.execute("""
 				UPDATE task_runs
@@ -441,6 +452,7 @@ class Database:
 			self.conn.commit()
 
 	def fail_run(self, run_id, error=""):
+		"""Handle fail run."""
 		with self.lock:
 			self.conn.execute("""
 				UPDATE task_runs
@@ -685,6 +697,7 @@ class Database:
 			self.conn.commit()
 
 	def get_registered_tasks(self):
+		"""Get registered tasks."""
 		with self.lock:
 			cur = self.conn.execute("SELECT * FROM registered_tasks")
 			return [dict(row) for row in cur.fetchall()]
@@ -694,6 +707,7 @@ class Database:
 	# =================================================================
 
 	def get_system_stats(self):
+		"""Get system stats."""
 		with self.lock:
 			# File counts by modality
 			cur = self.conn.execute(
@@ -753,6 +767,7 @@ class Database:
 	# =================================================================
 
 	def create_conversation(self, title="New Conversation", kind="user", category=None) -> int:
+		"""Create conversation."""
 		now = time.time()
 		with self.lock:
 			cur = self.conn.execute(
@@ -763,6 +778,7 @@ class Database:
 
 	def save_message(self, conversation_id, role, content,
 					 tool_call_id=None, tool_name=None):
+		"""Save message."""
 		now = time.time()
 		with self.lock:
 			self.conn.execute("""
@@ -776,6 +792,7 @@ class Database:
 			self.conn.commit()
 
 	def update_conversation_title(self, conversation_id, title):
+		"""Update conversation title."""
 		with self.lock:
 			self.conn.execute(
 				"UPDATE conversations SET title = ? WHERE id = ?",
@@ -830,6 +847,7 @@ class Database:
 			self.conn.commit()
 
 	def get_conversation(self, conversation_id):
+		"""Get conversation."""
 		with self.lock:
 			cur = self.conn.execute(
 				"SELECT * FROM conversations WHERE id = ?",
@@ -838,6 +856,7 @@ class Database:
 			return dict(row) if row else None
 
 	def list_conversations(self, limit=50):
+		"""List conversations."""
 		with self.lock:
 			cur = self.conn.execute(
 				"SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?",
@@ -890,6 +909,7 @@ class Database:
 		return out
 
 	def list_user_conversations(self, limit=50):
+		"""List user conversations."""
 		with self.lock:
 			cur = self.conn.execute(
 				"""
@@ -902,6 +922,7 @@ class Database:
 			return [dict(row) for row in cur.fetchall()]
 
 	def get_conversation_messages(self, conversation_id):
+		"""Get conversation messages."""
 		with self.lock:
 			cur = self.conn.execute(
 				"SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY timestamp",
@@ -951,6 +972,7 @@ class Database:
 
 
 	def clear_conversation_messages(self, conversation_id):
+		"""Clear conversation messages."""
 		with self.lock:
 			self.conn.execute(
 				"DELETE FROM conversation_messages WHERE conversation_id = ?",
@@ -958,18 +980,21 @@ class Database:
 			self.conn.commit()
 
 	def delete_conversation(self, conversation_id):
+		"""Delete conversation."""
 		with self.lock:
 			self.conn.execute(
 				"DELETE FROM conversations WHERE id = ?", (conversation_id,))
 			self.conn.commit()
 
 	def delete_all_conversations(self):
+		"""Delete all conversations."""
 		with self.lock:
 			self.conn.execute("DELETE FROM conversation_messages")
 			self.conn.execute("DELETE FROM conversations")
 			self.conn.commit()
 
 	def conversation_message_count(self, conversation_id) -> int:
+		"""Handle conversation message count."""
 		with self.lock:
 			cur = self.conn.execute(
 				"SELECT COUNT(*) as cnt FROM conversation_messages WHERE conversation_id = ?",

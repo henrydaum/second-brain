@@ -21,6 +21,7 @@ logger = logging.getLogger("OCRImages")
 
 
 class OCRImages(BaseTask):
+    """Ocrimages."""
     name = "ocr_images"
     modalities = ["image"]
     reads = []
@@ -40,6 +41,7 @@ class OCRImages(BaseTask):
     timeout = 300
 
     def run(self, paths, context):
+        """Run ocrimages."""
         ocr = context.services.get("ocr")
         if ocr is None or not ocr.loaded:
             return [TaskResult.failed("OCR service not available") for _ in paths]

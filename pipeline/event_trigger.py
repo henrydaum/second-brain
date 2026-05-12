@@ -28,7 +28,9 @@ logger = logging.getLogger("EventTrigger")
 
 
 class EventTrigger:
+    """Event trigger."""
     def __init__(self, orchestrator, db, config: dict):
+        """Initialize the event trigger."""
         self.orchestrator = orchestrator
         self.db = db
         self.config = config
@@ -38,10 +40,12 @@ class EventTrigger:
         self.orchestrator.event_trigger = self
 
     def start(self):
+        """Start event trigger."""
         self._started = True
         self.refresh()
 
     def refresh(self):
+        """Refresh event trigger."""
         if not self._started:
             return
 
@@ -63,7 +67,9 @@ class EventTrigger:
                 logger.info(f"'{task.name}' subscribed to '{channel}'")
 
     def _make_handler(self, task, channel):
+        """Internal helper to build handler."""
         def handler(payload):
+            """Handle handler."""
             run_id = f"{task.name}:{uuid4().hex[:12]}"
             try:
                 self.db.create_run(
@@ -79,6 +85,7 @@ class EventTrigger:
         return handler
 
     def stop(self, clear_started: bool = True):
+        """Stop event trigger."""
         for unsub in self._unsubs:
             try:
                 unsub()

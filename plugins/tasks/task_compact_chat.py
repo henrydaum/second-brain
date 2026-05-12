@@ -1,3 +1,5 @@
+"""Task plugin for compact chat."""
+
 import logging
 
 from plugins.BaseTask import BaseTask, TaskResult
@@ -43,6 +45,7 @@ class CompactChat(BaseTask):
     )
 
     def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
+        """Run event."""
         token = (payload.get("request_token") or "").strip()
         transcript = payload.get("transcript") or ""
         session_key = payload.get("session_key")
@@ -88,12 +91,14 @@ class CompactChat(BaseTask):
 
     @staticmethod
     def _is_active_session(runtime, session_key: str | None) -> bool:
+        """Return whether active session."""
         if not session_key:
             return False
         return getattr(runtime, "active_session_key", None) == session_key
 
     @staticmethod
     def _llm_for_session(runtime, session_key: str | None):
+        """Internal helper to handle LLM for session."""
         if not session_key:
             return None
         try:
@@ -106,6 +111,7 @@ class CompactChat(BaseTask):
 
     @staticmethod
     def _finish(context, token: str, summary: str | None, error: str | None = None):
+        """Internal helper to finish compact chat."""
         runtime = getattr(context, "runtime", None)
         if runtime is None:
             return
@@ -116,6 +122,7 @@ class CompactChat(BaseTask):
 
     @staticmethod
     def _push(session_key: str | None, text: str):
+        """Internal helper to handle push."""
         payload = {"message": text, "source": "compact_chat", "kind": "note"}
         if session_key:
             payload["session_key"] = session_key

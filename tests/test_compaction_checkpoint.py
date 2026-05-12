@@ -1,15 +1,21 @@
+"""Regression tests for compaction checkpoint."""
+
 from state_machine.serialization import latest_state, messages_to_history, save_compaction_marker, save_state_marker
 
 
 class FakeDb:
+    """Test double for fake DB."""
     def __init__(self):
+        """Initialize the fake DB."""
         self.rows = []
 
     def save_message(self, conversation_id, role, content, tool_call_id=None, tool_name=None):
+        """Save message."""
         self.rows.append({"role": role, "content": content, "tool_call_id": tool_call_id, "tool_name": tool_name})
 
 
 def test_compaction_marker_preserves_db_rows_but_hides_pre_checkpoint_replay():
+    """Verify compaction marker preserves DB rows but hides pre checkpoint replay."""
     db = FakeDb()
     db.save_message(1, "user", "old user")
     db.save_message(1, "assistant", "old assistant")

@@ -1,3 +1,5 @@
+"""Telegram frontend plugin backed by the conversation runtime."""
+
 from __future__ import annotations
 
 import asyncio
@@ -26,6 +28,7 @@ _MAX_FILE_SIZE = 50 * 1024 * 1024
 
 
 def _md_to_tg_html(text: str) -> str:
+    """Convert lightweight markdown-ish output into Telegram-safe HTML."""
     parts, last = [], 0
     for m in re.finditer(r"```(\w*)\n(.*?)```", text or "", re.DOTALL):
         parts.append(_inline(text[last:m.start()]))
@@ -36,6 +39,7 @@ def _md_to_tg_html(text: str) -> str:
 
 
 def _inline(text: str) -> str:
+    """Render inline code spans while preserving the surrounding rich text."""
     out, last = [], 0
     for m in re.finditer(r"`([^`]+)`", text):
         out.append(_bold_italic(text[last:m.start()]))
@@ -45,12 +49,14 @@ def _inline(text: str) -> str:
 
 
 def _bold_italic(text: str) -> str:
+    """Translate simple bold and italic markers into Telegram HTML tags."""
     escaped = html.escape(text)
     escaped = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped)
     return re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", escaped)
 
 
 def _chunks(text: str, max_chars: int = 4096) -> list[str]:
+    """Split long output into Telegram-sized message chunks."""
     if len(text or "") <= max_chars:
         return [text] if text else []
     chunks, remaining = [], text
@@ -63,6 +69,7 @@ def _chunks(text: str, max_chars: int = 4096) -> list[str]:
 
 
 class TelegramFrontend(BaseFrontend):
+    """Frontend adapter for Telegram."""
     name = "telegram"
     description = "Telegram chat frontend backed by the conversation state machine."
     capabilities = FrontendCapabilities(True, True, True, True, True, True, True, True, 4096, _MAX_FILE_SIZE)
@@ -72,6 +79,7 @@ class TelegramFrontend(BaseFrontend):
     ]
 
     def __init__(self, shutdown_event: threading.Event | None = None, services: dict | None = None):
+        """Initialize the Telegram frontend."""
         super().__init__()
         self.shutdown_event = shutdown_event or threading.Event()
         self.services = services or {}
@@ -83,6 +91,7 @@ class TelegramFrontend(BaseFrontend):
         self._last_keyboard: dict[str, tuple[int, int]] = {}
 
     def session_key(self, ctx) -> str:
+        """Build the per-user, per-chat, per-thread session key for Telegram traffic."""
         user = getattr(getattr(ctx, "effective_user", None), "id", None) or getattr(ctx, "user_id", 0)
         chat = getattr(getattr(ctx, "effective_chat", None), "id", None) or getattr(ctx, "chat_id", user)
         thread = getattr(getattr(ctx, "effective_message", None), "message_thread_id", None) or 0
@@ -92,6 +101,7 @@ class TelegramFrontend(BaseFrontend):
         return key
 
     def start(self) -> None:
+        """Start the Telegram bot loop and bind it to the runtime."""
         token = str(self.config.get("telegram_bot_token", "")).strip()
         if not token:
             logger.info("telegram_bot_token not configured; Telegram frontend disabled.")
@@ -105,6 +115,7 @@ class TelegramFrontend(BaseFrontend):
             return
 
         async def handle_text(update: Update, _ctx):
+            """Handle one incoming Telegram text message."""
             if not self._check_user(update) or not update.message:
                 return
             key = self.session_key(update)
@@ -113,11 +124,13 @@ class TelegramFrontend(BaseFrontend):
                 await self._with_typing(update.message.chat, lambda: self.submit_text(key, text), ChatAction)
 
         async def handle_attachment(update: Update, _ctx):
+            """Handle one incoming Telegram attachment message."""
             if not self._check_user(update) or not update.message:
                 return
             await self._handle_attachment(update, ChatAction)
 
         async def handle_callback(update: Update, _ctx):
+            """Handle an inline-button callback from Telegram."""
             query = update.callback_query
             if not query:
                 return
@@ -145,6 +158,7 @@ class TelegramFrontend(BaseFrontend):
                     await self._run(lambda: self.submit_text(key, value))
 
         async def run():
+            """Own the Telegram app lifecycle inside the frontend thread."""
             self.loop = asyncio.get_running_loop()
             self.app = Application.builder().token(token).concurrent_updates(True).build()
             self.app.add_handler(MessageHandler(filters.COMMAND | (filters.TEXT & ~filters.COMMAND), handle_text))
@@ -184,10 +198,12 @@ class TelegramFrontend(BaseFrontend):
             loop.close()
 
     def stop(self) -> None:
+        """Stop Telegram frontend."""
         self.shutdown_event.set()
         self.unbind()
 
     def submit_text(self, session_key: str, text: str):
+        """Submit chat text or resolve a pending approval from Telegram."""
         if self._current_phase(session_key) != PHASE_APPROVING_REQUEST and self.has_pending_approval(session_key):
             req = self._next_approval(session_key)
             value = self._parse_approval(text) if getattr(req, "type", "boolean") == "boolean" else text
@@ -199,29 +215,36 @@ class TelegramFrontend(BaseFrontend):
             return super().submit_text(session_key, text)
 
     def render_messages(self, session_key: str, messages: list[str]) -> None:
+        """Send plain chat messages to Telegram."""
         self._clear_last_keyboard(session_key)
         for msg in messages:
             self._send_text(session_key, _md_to_tg_html(msg), use_html=True)
 
     def render_attachments(self, session_key: str, paths: list[str]) -> None:
+        """Send rendered attachments back to Telegram."""
         self._clear_last_keyboard(session_key)
         self._send(self._send_media(self._chat_id(session_key), paths))
 
     def render_form_field(self, session_key: str, form: dict) -> None:
+        """Prompt for one form field with Telegram-native buttons when available."""
         self._send_text(session_key, self._prompt(form), markup=self._enum_markup(session_key, form))
 
     def render_approval_request(self, session_key: str, req) -> None:
+        """Render a pending approval request with Telegram controls."""
         body = html.escape(f"{getattr(req, 'title', 'Approval requested')}\n\n{getattr(req, 'body', '')}".strip())
         self._send_text(session_key, body, markup=self._approval_markup(session_key, req))
 
     def render_buttons(self, session_key: str, buttons: list[dict]) -> None:
+        """Render an ad hoc button list as an inline keyboard."""
         self._send_text(session_key, "Choose:", markup=self._buttons_markup(session_key, buttons))
 
     def render_error(self, session_key: str, error: dict) -> None:
+        """Send an error message to Telegram."""
         self._clear_last_keyboard(session_key)
         self._send_text(session_key, html.escape(f"Error: {(error or {}).get('message') or error}"))
 
     def render_tool_status(self, session_key: str, payload: dict) -> None:
+        """Keep Telegram's single progress banner in sync with tool events."""
         chat_id = self._chat_id(session_key)
         if not chat_id:
             return
@@ -237,18 +260,22 @@ class TelegramFrontend(BaseFrontend):
             self._send(self._finish_tool_message(key, chat_id, name, text, bool(payload.get("ok")), payload.get("error")))
 
     def _live_session_keys(self) -> list[str]:
+        """Return Telegram sessions that can receive proactive pushes right now."""
         if self._chat_by_session:
             return list(self._chat_by_session)
         user_id = int(self.config.get("telegram_allowed_user_id", 0) or 0)
         return [self.session_key(type("Ctx", (), {"user_id": user_id, "chat_id": user_id})())] if user_id else []
 
     def _check_user(self, update) -> bool:
+        """Return whether the incoming update is from the allowed Telegram user."""
         allowed = int(self.config.get("telegram_allowed_user_id", 0) or 0)
         return not allowed or bool(update.effective_user and update.effective_user.id == allowed)
 
     async def _with_typing(self, chat, fn, ChatAction):
+        """Run blocking work while periodically showing Telegram typing state."""
         stop = asyncio.Event()
         async def pulse():
+            """Refresh the typing indicator until the wrapped work finishes."""
             while not stop.is_set():
                 try:
                     await chat.send_action(ChatAction.TYPING)
@@ -265,9 +292,11 @@ class TelegramFrontend(BaseFrontend):
             await task
 
     async def _run(self, fn):
+        """Run blocking work off the Telegram event loop."""
         return await asyncio.get_running_loop().run_in_executor(None, fn)
 
     async def _handle_attachment(self, update, ChatAction):
+        """Download one Telegram attachment, cache it locally, and submit it to the runtime."""
         msg, key = update.message, self.session_key(update)
         tg_file, file_name, size = None, "attachment", 0
         if msg.photo:
@@ -287,11 +316,13 @@ class TelegramFrontend(BaseFrontend):
         await self._with_typing(msg.chat, lambda: self.submit(key, ACTION_SEND_ATTACHMENT, {"path": str(cache_path), "extension": cache_path.suffix.lstrip("."), "caption": msg.caption or "", "file_name": file_name, "is_photo": bool(msg.photo)}), ChatAction)
 
     def _send_text(self, session_key: str, text: str, use_html: bool = True, markup=None) -> None:
+        """Queue a text send for the chat behind a session key."""
         chat_id = self._chat_id(session_key)
         if chat_id:
             self._send(self._send_text_async(chat_id, text, use_html, markup))
 
     async def _send_text_async(self, chat_id: int, text: str, use_html: bool, markup=None):
+        """Send one text payload to Telegram, chunking and clearing old keyboards as needed."""
         session_key = next((k for k, v in self._chat_by_session.items() if v == chat_id), None)
         if session_key and markup:
             await self._clear_last_keyboard_async(session_key)
@@ -307,10 +338,12 @@ class TelegramFrontend(BaseFrontend):
             markup = None
 
     async def _send_media(self, chat_id: int | None, paths: list[str]):
+        """Send a batch of files back to Telegram using the best available media method."""
         if not chat_id:
             return
         from telegram import InputMediaAudio, InputMediaDocument, InputMediaPhoto, InputMediaVideo
         async def one(p: Path, method: str):
+            """Send one file with the Telegram API method chosen for it."""
             if method == "photo":
                 await self.app.bot.send_photo(chat_id, photo=prepare_photo_bytes(p))
             elif method == "video":
@@ -336,10 +369,12 @@ class TelegramFrontend(BaseFrontend):
                 await self.app.bot.send_message(chat_id, f"Failed to send attachment: {e}")
 
     async def _send_tool_started(self, chat_id: int, key: str, name: str, text: str):
+        """Create the hourglass status message for a new tool or command call."""
         sent = await self.app.bot.send_message(chat_id, f"⋯ <code>{html.escape(text)}</code>", parse_mode="HTML", disable_notification=True)
         self._tool_messages[key] = (chat_id, sent.message_id, name, text)
 
     async def _progress_tool_message(self, chat_id: int, key: str, name: str, text: str):
+        """Update the existing tool-status banner without sending a new message."""
         entry = self._tool_messages.get(key)
         if not entry:
             return await self._send_tool_started(chat_id, key, name, text)
@@ -350,6 +385,7 @@ class TelegramFrontend(BaseFrontend):
             pass
 
     async def _finish_tool_message(self, key: str, chat_id: int, name: str, text: str, ok: bool, error: str | None):
+        """Finalize the tool-status banner with success or failure text."""
         entry = self._tool_messages.pop(key, None)
         display = entry[3] if entry else text
         text = f"{'✓' if ok else '✕'} <code>{html.escape(display)}</code>"
@@ -364,6 +400,7 @@ class TelegramFrontend(BaseFrontend):
         await self.app.bot.send_message(chat_id, text, parse_mode="HTML", disable_notification=True)
 
     def _send(self, coro) -> None:
+        """Schedule a coroutine onto the Telegram loop from sync code."""
         if self.loop is None or self.app is None:
             coro.close()
             return
@@ -376,6 +413,7 @@ class TelegramFrontend(BaseFrontend):
         asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout=30)
 
     def _chat_id(self, session_key: str) -> int | None:
+        """Recover or memoize the Telegram chat ID for a session key."""
         if session_key in self._chat_by_session:
             return self._chat_by_session[session_key]
         try:
@@ -386,6 +424,7 @@ class TelegramFrontend(BaseFrontend):
             return None
 
     def _prompt(self, form: dict) -> str:
+        """Build the visible Telegram prompt for a form field."""
         field = form.get("field") or {}
         display = form.get("display") or {}
         prompt = display.get("prompt") or field.get("prompt") or field.get("name") or "Input required"
@@ -396,6 +435,7 @@ class TelegramFrontend(BaseFrontend):
         return "\n".join(bits)
 
     def _enum_markup(self, key: str, form: dict):
+        """Build inline-keyboard choices for an enum-backed form field."""
         field = form.get("field") or {}
         display = form.get("display") or {}
         choices = display.get("choices") or [{"value": v, "label": str(v)} for v in (field.get("enum") or [])]
@@ -410,6 +450,7 @@ class TelegramFrontend(BaseFrontend):
         return self._markup(rows)
 
     def _approval_markup(self, key: str, req):
+        """Build inline-keyboard controls for an approval request."""
         request_id = getattr(req, "id", "pending")
         is_boolean = getattr(req, "type", "boolean") == "boolean"
         if getattr(req, "enum", None):
@@ -422,15 +463,18 @@ class TelegramFrontend(BaseFrontend):
         return self._markup([[self._button("✕ Cancel", key, "/cancel")]])
 
     def _buttons_markup(self, key: str, buttons: list[dict]):
+        """Build inline-keyboard markup for a generic button list."""
         return self._markup([[self._button(str(b.get("label") or b.get("text") or b.get("value") or "Option"), key, str(b.get("value") or b.get("text") or b.get("label") or ""))] for b in buttons])
 
     def _button(self, label: str, key: str, value: str, echo: str | None = None):
+        """Create one callback-backed Telegram button and remember its payload."""
         from telegram import InlineKeyboardButton
         token = "bf:" + uuid.uuid4().hex[:16]
         self._callbacks[token] = (key, value, echo)
         return InlineKeyboardButton(label[:64], callback_data=token)
 
     def _form_echo(self, form: dict, value) -> str | None:
+        """Reconstruct a slash-command preview line for a form choice, when useful."""
         if form.get("action_type") != "call_command" or not form.get("name"):
             return None
         parts = ["/" + str(form["name"])]
@@ -439,11 +483,13 @@ class TelegramFrontend(BaseFrontend):
         return " ".join(parts)
 
     def _next_approval(self, key: str):
+        """Return the next unresolved approval request for a session."""
         with self._approval_lock:
             return next(req for req in self._pending_approvals.get(key, {}).values() if not getattr(req, "is_resolved", False))
 
     @staticmethod
     def _parse_approval(text: str) -> bool | None:
+        """Parse a Telegram text reply into an approval decision."""
         value = (text or "").strip().lower()
         if value in {"n", "no", "deny", "denied", "false", "0"}:
             return False
@@ -453,13 +499,16 @@ class TelegramFrontend(BaseFrontend):
 
     @staticmethod
     def _markup(rows):
+        """Build an inline keyboard when there are rows to show."""
         from telegram import InlineKeyboardMarkup
         return InlineKeyboardMarkup(rows) if rows else None
 
     def _clear_last_keyboard(self, key: str) -> None:
+        """Clear the last inline keyboard shown for a session."""
         self._send(self._clear_last_keyboard_async(key))
 
     async def _clear_last_keyboard_async(self, key: str):
+        """Remove the last inline keyboard from Telegram, if it still exists."""
         entry = self._last_keyboard.pop(key, None)
         if not entry or self.app is None:
             return
@@ -470,6 +519,7 @@ class TelegramFrontend(BaseFrontend):
 
 
 def _quote(value) -> str:
+    """Quote a form value the same way a slash-command preview would."""
     import json
     if isinstance(value, (dict, list)):
         return json.dumps(value)

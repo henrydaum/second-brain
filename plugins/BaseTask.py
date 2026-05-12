@@ -81,6 +81,7 @@ class TaskResult:
 
 	@staticmethod
 	def failed(error: str) -> "TaskResult":
+		"""Handle failed."""
 		return TaskResult(success=False, error=error)
 
 
@@ -165,6 +166,7 @@ class BaseTask:
 	config_settings: list = []
 
 	def __init_subclass__(cls, **kwargs):
+		"""Internal helper to handle init subclass."""
 		super().__init_subclass__(**kwargs)
 		# Prevent subclasses from sharing mutable class attributes.
 		# Without .copy(), every subclass would mutate the same list object.

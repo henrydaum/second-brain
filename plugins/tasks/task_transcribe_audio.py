@@ -17,6 +17,7 @@ logger = logging.getLogger("TranscribeAudio")
 
 
 class TranscribeAudio(BaseTask):
+    """Transcribe audio."""
     name = "transcribe_audio"
     modalities = ["audio"]
     reads = []
@@ -36,6 +37,7 @@ class TranscribeAudio(BaseTask):
     timeout = 600
 
     def run(self, paths, context):
+        """Run transcribe audio."""
         whisper = context.services.get("whisper")
         if whisper is None or not whisper.loaded:
             return [TaskResult.failed("Whisper service not available") for _ in paths]

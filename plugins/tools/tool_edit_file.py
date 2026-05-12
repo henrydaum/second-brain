@@ -12,6 +12,7 @@ PLUGIN_EDIT_REMINDER = " You edited or created a plugin file. Use test_plugin(pl
 
 
 def _path(raw: str) -> tuple[Path | None, str | None]:
+    """Internal helper to handle path."""
     raw = (raw or "").strip()
     if not raw:
         return None, "path is required."
@@ -21,6 +22,7 @@ def _path(raw: str) -> tuple[Path | None, str | None]:
 
 
 class EditFile(BaseTool):
+    """Edit file."""
     name = "edit_file"
     description = (
         "Create, overwrite, exact-replace, append to, or delete a UTF-8 text file. "
@@ -46,6 +48,7 @@ class EditFile(BaseTool):
     background_safe = False
 
     def run(self, context, **kwargs) -> ToolResult:
+        """Run edit file."""
         op = (kwargs.get("operation") or "").strip().lower()
         justification = (kwargs.get("justification") or "").strip()
         p, err = _path(kwargs.get("path", ""))
@@ -55,6 +58,7 @@ class EditFile(BaseTool):
             return ToolResult.failed("A justification is required for every edit.")
 
         def approve(extra: str = "") -> ToolResult | None:
+            """Approve edit file."""
             if context.approve_command is None:
                 return ToolResult.failed("File editing is not available — no approval handler is configured.")
             try:
@@ -117,12 +121,14 @@ class EditFile(BaseTool):
 
 
 def _is_root_file(p: Path) -> bool:
+    """Return whether root file."""
     root = ROOT_DIR.resolve()
     data = DATA_DIR.resolve()
     return (p == root or root in p.parents) and not (p == data or data in p.parents)
 
 
 def _plugin_edit_reminder(p: Path) -> str:
+    """Internal helper to handle plugin edit reminder."""
     if p.suffix != ".py":
         return ""
     parent = p.parent.resolve()

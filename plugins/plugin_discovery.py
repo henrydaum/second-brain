@@ -114,6 +114,7 @@ def _purge_plugin_settings(plugin_types: set[str]):
 # ── Per-type configuration ───────────────────────────────────────────
 
 def _discovery_config(plugin_type: str) -> dict:
+    """Internal helper to handle discovery config."""
     built_dir, sandbox_dir, prefix, namespaces = PLUGIN_CONFIG[plugin_type]
     return {
         "baked_in_dir": built_dir,
@@ -435,6 +436,7 @@ def unload_plugin(plugin_type: str, plugin_name: str,
 
 
 def _names_by_source(items: dict, plugin_name: str, source_path: str | None) -> list[str]:
+    """Internal helper to handle names by source."""
     if source_path:
         source = _source_path(source_path)
         return [name for name, item in items.items() if _source_path(getattr(item, "_source_path", "")) == source]
@@ -460,6 +462,7 @@ def _unload_services_by_source(services: dict, source_path: str):
 
 
 def _unload_service_by_name(services: dict, plugin_name: str):
+    """Internal helper to handle unload service by name."""
     svc = services.pop(plugin_name, None)
     if svc and hasattr(svc, "unload") and getattr(svc, "loaded", False):
         try:
@@ -472,6 +475,7 @@ def _unload_service_by_name(services: dict, plugin_name: str):
 
 
 def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str | None]:
+    """Internal helper to load single tool."""
     from plugins.BaseTool import BaseTool
     info, err = plugin_info(file_path)
     if err:
@@ -496,6 +500,7 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
 
 
 def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None, str | None]:
+    """Internal helper to load single frontend."""
     from plugins.BaseFrontend import BaseFrontend
     info, err = plugin_info(file_path)
     if err:
@@ -523,6 +528,7 @@ def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None
 
 
 def _load_single_command(file_path: Path, command_registry) -> tuple[str | None, str | None]:
+    """Internal helper to load single command."""
     from plugins.BaseCommand import BaseCommand
     info, err = plugin_info(file_path)
     if err:
@@ -547,6 +553,7 @@ def _load_single_command(file_path: Path, command_registry) -> tuple[str | None,
 
 
 def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str | None, str | None]:
+    """Internal helper to load single task."""
     from plugins.BaseTask import BaseTask
     info, err = plugin_info(file_path)
     if err:
@@ -569,6 +576,7 @@ def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str 
 
 
 def _load_single_service(file_path: Path, services: dict, config: dict) -> tuple[str | None, str | None]:
+    """Internal helper to load single service."""
     info, err = plugin_info(file_path)
     if err:
         return None, err
@@ -613,6 +621,7 @@ def _load_single_service(file_path: Path, services: dict, config: dict) -> tuple
 
 
 def _source_path(path) -> str:
+    """Internal helper to handle source path."""
     return str(Path(path).resolve()) if path else ""
 
 

@@ -62,12 +62,14 @@ class FasterWhisperService(BaseService):
     shared = True  # transcribe() is stateless
 
     def __init__(self, model_name="base", device="cuda"):
+        """Initialize the faster Whisper service."""
         super().__init__()
         self.model_name = model_name
         self.device = device
         self.model = None
 
     def _load(self):
+        """Internal helper to load faster Whisper service."""
         from faster_whisper import WhisperModel
         import torch
 
@@ -88,6 +90,7 @@ class FasterWhisperService(BaseService):
         return True
 
     def unload(self):
+        """Handle unload."""
         if self.model:
             del self.model
             self.model = None
@@ -144,6 +147,7 @@ class FasterWhisperService(BaseService):
 
 
 def build_services(config: dict) -> dict:
+    """Build services."""
     return {
         "whisper": FasterWhisperService(
             model_name=config.get("whisper_model_name", "base"),

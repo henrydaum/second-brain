@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Drive one participant's turn through cs.enact() until end_turn.
 
 This file is the agent-side equivalent of PokerMonster's `run_game` inner
@@ -17,6 +15,9 @@ only the agent path is wired; a user-side `_next_action` would just block
 until input arrives.
 """
 
+from __future__ import annotations
+
+
 import json
 import logging
 from pathlib import Path
@@ -29,6 +30,7 @@ logger = logging.getLogger("ConversationLoop")
 
 
 def _clean(text: str | None) -> str:
+    """Internal helper to handle clean."""
     return strip_model_tokens(text or "")[0]
 
 
@@ -72,6 +74,7 @@ class ConversationLoop:
         runtime=None,
         session_key: str | None = None,
     ):
+        """Initialize the conversation loop."""
         self.llm = llm
         self.tool_registry = tool_registry
         self.config = config
@@ -98,6 +101,7 @@ class ConversationLoop:
 
     @property
     def max_tool_calls(self) -> int:
+        """Return max tool calls."""
         return (
             getattr(self.tool_registry, "max_tool_calls", 0)
             or sum(getattr(t, "max_calls", 1) for t in getattr(self.tool_registry, "tools", {}).values())
@@ -335,10 +339,12 @@ class ConversationLoop:
     # ──────────────────────────────────────────────────────────────────────
 
     def _messages(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Internal helper to handle messages."""
         prompt = self.system_prompt() if callable(self.system_prompt) else self.system_prompt
         return [{"role": "system", "content": prompt}, *[m for m in history if m.get("role") != "system"]]
 
     def _tool_budget_error(self, content: Any) -> str | None:
+        """Internal helper to handle tool budget error."""
         name = (content or {}).get("name") or "unknown"
         tool = (getattr(self.tool_registry, "tools", {}) or {}).get(name) if self.tool_registry else None
         if not tool:
@@ -350,6 +356,7 @@ class ConversationLoop:
         return None
 
     def _invoke(self, messages, tools, attachments=None, history=None):
+        """Internal helper to handle invoke."""
         from plugins.services.llmService import is_context_limit_error
 
         bundle = attachments or None
@@ -432,6 +439,7 @@ class ConversationLoop:
         # Proactive compaction: trigger before hitting the context limit when
         # the model's context_size is set. context_size == 0 disables proactive
         # compaction; reactive compaction in `_invoke` is the safety net.
+        """Internal helper to compact if needed."""
         ctx, tok = getattr(self.llm, "context_size", 0), getattr(response, "prompt_tokens", 0)
         if not ctx or not tok or tok / ctx < 0.80 or len(history) <= 2:
             return
@@ -478,6 +486,7 @@ class ConversationLoop:
         return {**msg, "content": _truncate_middle(content, self.MAX_TOOL_RESULT_CHARS)}
 
     def _over_budget_summary(self, cs, actor_id, history, new_messages, attachments, db, conversation_id) -> None:
+        """Internal helper to handle over budget summary."""
         try:
             nudge = {"role": "user", "content": "You've hit the tool-call limit. Summarize what you have and stop calling tools."}
             response = self._invoke(self._messages([*history, nudge]), None, None, history)
@@ -488,15 +497,18 @@ class ConversationLoop:
         self._absorb(cs.enact("send_text", text, actor_id), "send_text", text, history, new_messages, attachments, db, conversation_id)
 
     def _cancelled(self) -> bool:
+        """Internal helper to handle cancelled."""
         return self.cancelled or bool(self.cancel_event and self.cancel_event.is_set())
 
     def _record(self, msg, history, new_messages, db, conversation_id):
+        """Internal helper to handle record."""
         history.append(msg)
         new_messages.append(msg)
         if db is not None and conversation_id is not None:
             save_history_message(db, conversation_id, msg)
 
     def _tool_started(self, action_type: str, content: Any):
+        """Internal helper to handle tool started."""
         if action_type != "call_tool":
             return None
         name = (content or {}).get("name") or "unknown"
@@ -510,6 +522,7 @@ class ConversationLoop:
         return name, call_id
 
     def _tool_finished(self, started, result=None, error: str | None = None):
+        """Internal helper to handle tool finished."""
         if not started or not self.on_tool_result:
             return
         name, call_id = started
@@ -520,4 +533,5 @@ class ConversationLoop:
 
     @staticmethod
     def _is_image(path: str) -> bool:
+        """Return whether image."""
         return Path(path).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
