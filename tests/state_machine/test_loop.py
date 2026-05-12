@@ -20,6 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent.system_prompt import build_prompt_sections
 from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.commands.command_conversations import ConversationsCommand, NewCommand
@@ -219,19 +220,113 @@ def make_cs(commands: dict[str, CallableSpec] | None = None, tools: dict[str, Ca
     ])
 
 
+def sectioned_prompt():
+    """Build a tiny sectioned system prompt for ordering tests."""
+    return [
+        {"role": "system", "content": "[STATIC SYSTEM PROMPT]\nstatic"},
+        {"role": "system", "content": "[SEMI-STABLE TOOL/SCHEMA INFO]\nsemi"},
+        {"role": "system", "content": "[DYNAMIC RUNTIME CONTEXT]\ndynamic"},
+    ]
+
+
 def test_session_system_prompt_includes_conversation_metadata():
     """Verify session system prompt includes conversation metadata."""
     db = FakeConversationDB()
     cid = db.create_conversation("Build Runtime Prompt", category="Projects")
     session = RuntimeSession("chat", make_cs(), conversation_id=cid)
-    runtime = SimpleNamespace(db=db, system_prompt=lambda: "base", active_session_key="chat")
+    session.system_prompt_extras["pin"] = "Pinned runtime note."
+    runtime = SimpleNamespace(db=db, system_prompt=lambda: [
+        {"role": "system", "content": "[STATIC SYSTEM PROMPT]\nbase"},
+        {"role": "system", "content": "[SEMI-STABLE TOOL/SCHEMA INFO]\ntools"},
+        {"role": "system", "content": "[DYNAMIC RUNTIME CONTEXT]\nbase dynamic"},
+    ], active_session_key="chat")
 
     prompt = session_system_prompt(runtime, session)()
+    dynamic = prompt[-1]["content"]
 
-    assert "## Current conversation" in prompt
-    assert f"Number: {cid}" in prompt
-    assert "Category: Projects" in prompt
-    assert "Title: Build Runtime Prompt" in prompt
+    assert "## Current conversation" in dynamic
+    assert f"Number: {cid}" in dynamic
+    assert "Category: Projects" in dynamic
+    assert "Title: Build Runtime Prompt" in dynamic
+    assert "Pinned runtime note." in dynamic
+
+
+def test_build_prompt_sections_places_stable_and_volatile_content():
+    """Verify prompt builder separates cacheable and volatile prompt content."""
+    db = FakeConversationDB()
+    registry = FakeToolRegistry([{"function": {"name": "demo", "description": "Demo tool."}}])
+    sections = build_prompt_sections(
+        db, None, registry, {"llm": SimpleNamespace(loaded=True, model_name="gpt-test")},
+        commands={"new": CallableSpec("new", form=[FormStep("title", required=False)])},
+        config={"sync_directories": ["C:/sync"]},
+        conversation_metadata={"id": 7, "category": "Projects", "title": "Cache Work"},
+        prompt_extras={"warning": "Volatile warning."},
+    )
+
+    static, semi, dynamic = [m["content"] for m in sections]
+    assert static.startswith("[STATIC SYSTEM PROMPT]")
+    assert "Core Identity" in static
+    assert "Current date and time" not in static
+    assert "Memory (from memory.md)" not in static
+    assert semi.startswith("[SEMI-STABLE TOOL/SCHEMA INFO]")
+    assert "demo: Demo tool." in semi
+    assert "/new [title]" in semi
+    assert "Current conversation" not in semi
+    assert dynamic.startswith("[DYNAMIC RUNTIME CONTEXT]")
+    assert "Current date and time" in dynamic
+    assert "Current model: gpt-test." in dynamic
+    assert "C:/sync" in dynamic
+    assert "Title: Cache Work" in dynamic
+    assert "Volatile warning." in dynamic
+
+
+def test_loop_messages_put_dynamic_context_before_current_user_turn():
+    """Verify dynamic runtime context sits after prior history."""
+    loop = ConversationLoop(FakeLLM([]), FakeToolRegistry(), {}, sectioned_prompt)
+    history = [
+        {"role": "user", "content": "old"},
+        {"role": "assistant", "content": "old reply"},
+        {"role": "user", "content": "new"},
+    ]
+
+    messages = loop._messages(history)
+
+    assert [(m["role"], m["content"]) for m in messages] == [
+        ("system", "[STATIC SYSTEM PROMPT]\nstatic"),
+        ("system", "[SEMI-STABLE TOOL/SCHEMA INFO]\nsemi"),
+        ("user", "old"),
+        ("assistant", "old reply"),
+        ("system", "[DYNAMIC RUNTIME CONTEXT]\ndynamic"),
+        ("user", "new"),
+    ]
+
+
+def test_loop_messages_preserve_current_tool_turn_adjacency():
+    """Verify assistant/tool-call rows stay in the current turn tail."""
+    loop = ConversationLoop(FakeLLM([]), FakeToolRegistry(), {}, sectioned_prompt)
+    tool_call = {"id": "tc1", "function": {"name": "echo", "arguments": "{}"}}
+    history = [
+        {"role": "user", "content": "run"},
+        {"role": "assistant", "content": "", "tool_calls": [tool_call]},
+        {"role": "tool", "tool_call_id": "tc1", "name": "echo", "content": "{}"},
+    ]
+
+    messages = loop._messages(history)
+
+    assert [m["role"] for m in messages] == ["system", "system", "system", "user", "assistant", "tool"]
+    assert messages[3]["content"] == "run"
+    assert messages[4]["tool_calls"] == [tool_call]
+    assert messages[5]["tool_call_id"] == "tc1"
+
+
+def test_loop_messages_keep_legacy_string_prompt_compatibility():
+    """Verify old one-string system prompts still work."""
+    messages = ConversationLoop(FakeLLM([]), FakeToolRegistry(), {}, "legacy")._messages([
+        {"role": "system", "content": "stored marker"},
+        {"role": "user", "content": "hi"},
+    ])
+
+    assert messages == [{"role": "system", "content": "legacy"}, {"role": "user", "content": "hi"}]
 
 
 # ──────────────────────────────────────────────────────────────────────────

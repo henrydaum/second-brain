@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from agent.system_prompt import build_system_prompt
+from agent.system_prompt import build_prompt_sections
 from config import config_manager
 from events.event_bus import bus
 from plugins.BaseCommand import BaseCommand
@@ -170,7 +170,7 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
         profile = config.get("active_agent_profile") or "default"
         scope = _scope(profile, config)
         registry_for_prompt = scoped_registry(tool_registry, scope, db=scaffold.db) if scope else tool_registry
-        return build_system_prompt(scaffold.db, scaffold.orchestrator, registry_for_prompt, services, scope=scope, profile_name=profile)
+        return build_prompt_sections(scaffold.db, scaffold.orchestrator, registry_for_prompt, services, scope=scope, profile_name=profile, commands=registry, config=config)
 
     runtime = ConversationRuntime(
         db=scaffold.db,

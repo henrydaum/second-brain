@@ -191,13 +191,9 @@ def scoped_tool_names(runtime, session: RuntimeSession | None, visible: dict[str
 def session_system_prompt(runtime, session: RuntimeSession | None):
     """Return a system_prompt callable bound to this session.
 
-    Profile-overridden sessions go through ``build_system_prompt`` directly
-    so the scoped registry and profile name feed into the prompt. Plain
-    user sessions reuse the runtime's default system_prompt and append the
-    session's ``system_prompt_extras`` — letting any plugin pin contextual
-    snippets to the prompt without touching the bootstrap closure.
-    Background conversations with notifications on get a short suffix
-    explaining that the final answer will be replayed to the user.
+    The main bootstrap prompt can return sectioned system messages. Session
+    metadata and plugin overlays are appended to the dynamic section so the
+    static prefix remains cacheable.
     """
     if session is None:
         return runtime.system_prompt
@@ -214,54 +210,71 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             return ""
         return notify_block(session.notification_mode)
 
-    def _conversation_suffix() -> str:
-        """Internal helper to label the current conversation inside the prompt when useful."""
-        row = runtime.db.get_conversation(session.conversation_id) if runtime.db and session.conversation_id else None
-        if not row:
-            return ""
-        return "\n\n## Current conversation\n" + "\n".join([
-            f"Number: {row.get('id')}",
-            f"Category: {(row.get('category') or '').strip() or 'Main'}",
-            f"Title: {(row.get('title') or '').strip() or 'New Conversation'}",
-        ])
+    def _conversation_meta() -> dict[str, Any] | None:
+        """Return current conversation metadata for the dynamic prompt."""
+        return runtime.db.get_conversation(session.conversation_id) if runtime.db and session.conversation_id else None
+
+    def _append_dynamic(prompt, *parts: str):
+        """Append session-only text to the dynamic section when present."""
+        extra = "\n\n".join(p for p in parts if p)
+        if not extra:
+            return prompt
+        if isinstance(prompt, list):
+            out = [dict(m) for m in prompt]
+            target = next((m for m in reversed(out) if (m.get("content") or "").lstrip().startswith("[DYNAMIC RUNTIME CONTEXT]")), None)
+            if target is None:
+                target = out[-1] if out else {"role": "system", "content": "[DYNAMIC RUNTIME CONTEXT]"}
+                if not out:
+                    out.append(target)
+            target["content"] = (target.get("content") or "").rstrip() + "\n\n" + extra
+            return out
+        return (prompt or "") + "\n\n" + extra
 
     if session.profile_override:
-        from agent.system_prompt import build_system_prompt
+        from agent.system_prompt import build_prompt_sections
         profile = session.profile_override or session.active_agent_profile or "default"
         scope = scope_for_profile(runtime, profile)
-        registry = active_tool_registry(runtime, session)
-        extras = session.system_prompt_extras or {}
 
         def _session_prompt():
             """Internal helper to handle session prompt."""
-            text = build_system_prompt(
+            return build_prompt_sections(
                 runtime.db,
                 getattr(runtime, "_orchestrator_ref", None) or runtime.services.get("orchestrator"),
-                registry, runtime.services,
+                active_tool_registry(runtime, session), runtime.services,
                 scope=scope,
                 profile_name=profile,
+                commands=getattr(runtime, "command_registry", None) or runtime.commands,
+                config=runtime.config,
+                conversation_metadata=_conversation_meta(),
+                prompt_extras=session.system_prompt_extras,
+                notification_suffix=_notify_suffix(),
             )
-            for value in extras.values():
-                if isinstance(value, str) and value:
-                    text += "\n\n" + value
-            text += _conversation_suffix()
-            text += _notify_suffix()
-            return text
         return _session_prompt
 
     base = runtime.system_prompt
-    extras = session.system_prompt_extras
 
     def _user_prompt():
         """Internal helper to handle user prompt."""
         text = base() if callable(base) else (base or "")
-        for value in (extras or {}).values():
-            if isinstance(value, str) and value:
-                text += "\n\n" + value
-        text += _conversation_suffix()
-        text += _notify_suffix()
-        return text
+        return _append_dynamic(
+            text,
+            _conversation_extra(_conversation_meta()),
+            *(v for v in (session.system_prompt_extras or {}).values() if isinstance(v, str) and v),
+            _notify_suffix(),
+        )
     return _user_prompt
+
+
+def _conversation_extra(row: dict[str, Any] | None) -> str:
+    """Format current conversation metadata for legacy/base prompts."""
+    if not row:
+        return ""
+    return "\n".join([
+        "## Current conversation",
+        f"Number: {row.get('id')}",
+        f"Category: {(row.get('category') or '').strip() or 'Main'}",
+        f"Title: {(row.get('title') or '').strip() or 'New Conversation'}",
+    ])
 
 
 # ──────────────────────────────────────────────────────────────────────
