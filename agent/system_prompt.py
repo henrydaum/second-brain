@@ -184,7 +184,7 @@ To remove a sandbox plugin durably and from the live runtime, delete its plugin 
 
 Names must be unique across built-in and sandbox plugins. Config settings use (title, variable_name, description, default, type_info), are stored in plugin_config.json, and are read with context.config.get(key).
 
-The context object is passed to every plugin and contains relevant runtime information and helper methods. Read its definition in runtime/context.py and ask if you have questions about how to use it effectively in your plugin code."""
+The context object is passed to every plugin and contains relevant runtime information and helper methods. Read its definition in runtime/context.py if you have questions about how to use it effectively in your plugin code."""
     )
 
 
