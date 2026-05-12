@@ -152,44 +152,46 @@ def _form_hint(form, commands=None) -> str:
 
 def _retrieval_guidance() -> str:
     return (
-        "## Retrieval guidance\n"
-        "Use hybrid_search by default for broad local retrieval when available. Use lexical_search for exact names, strings, filenames, symbols, errors, stack traces, and quoted phrases. Use semantic_search for meaning-based questions and vague recollections. Use sql_query for structured facts, pipeline state, task status, conversation history, and file metadata. When results disagree, prefer exact reads, newer source files, and system-owned metadata over summaries or stale memories."
+        """## Retrieval guidance
+Start broad, then narrow your search. Begin with hybrid_search, then read the source file with read_file or query the underlying table with sql_query.
+
+The entire conversation history can be found within the SQL database, and retrieved using sql_query."""
     )
 
 
 def _plugin_contracts() -> str:
     return (
-        "## Plugin contracts\n"
-        "Plugin families: tools, tasks, services, commands, and frontends. Built-in plugins live under plugins/<family>; sandbox plugins live under the matching sandbox directory in DATA_DIR. Use templates as the source of truth, keep plugins focused, and test plugin changes with test_plugin when that tool is available."
+        """## Plugin contracts
+Second Brain has five plugin families: tools, tasks, services, commands, and frontends.
+
+Built-in plugins live under plugins/<family>. Sandbox plugins live in the matching DATA_DIR sandbox directory. Templates are the source of truth. To learn more about how they work, read the files directly."""
     )
 
 
 def _authoring_guidance() -> str:
     return (
-        "## Building plugins\n"
-        "You can extend the system by authoring plugins: tools, tasks, services, commands, and frontends.\n\n"
-        "Project layout:\n"
-        "- Built-in plugins live under plugins/tools, plugins/tasks, plugins/services, plugins/commands, plugins/frontends.\n"
-        "- Sandbox plugins live under the matching sandbox directory in DATA_DIR.\n"
-        "- Core app code lives under agent, pipeline, runtime, config, events.\n\n"
-        "Templates:\n"
-        "- tools: templates/tool_template.py -> sandbox_tools/tool_<name>.py\n"
-        "- tasks: templates/task_template.py -> sandbox_tasks/task_<name>.py\n"
-        "- services: templates/service_template.py -> sandbox_services/<name>Service.py or <name>.py\n"
-        "- commands: templates/command_template.py -> sandbox_commands/command_<name>.py\n"
-        "- frontends: templates/frontend_template.py -> sandbox_frontends/frontend_<name>.py\n\n"
-        "Workflow:\n"
-        "1. Read the relevant template with read_file.\n"
-        "2. Read a similar existing plugin for reference. Sandbox plugin paths are listed below.\n"
-        "3. Ask one focused question only when a missing decision materially changes the plugin.\n"
-        "4. Write the file into the right plugin directory using the file-editing tools.\n"
-        "5. If plugin_watcher is autoloaded, it loads valid plugin files when they are added or changed.\n"
-        "6. Call test_plugin(plugin_path=...) after edits for naming, import, contract, and suggestion diagnostics.\n"
-        "7. Treat pytest as broad regression context, not proof the plugin behavior is correct.\n"
-        "8. If diagnostics, pytest, or watcher logs show a failure, edit the same file and test again.\n"
-        "9. To remove a plugin durably and from the live runtime, delete its plugin file; plugin_watcher unloads it when enabled.\n\n"
-        "Naming: tools tool_<name>.py; tasks task_<name>.py; commands command_<name>.py; frontends frontend_<name>.py; services <name>.py. Names must be unique across built-in and sandbox plugins.\n"
-        "Config settings are tuples of (title, variable_name, description, default, type_info), stored in plugin_config.json and read with context.config.get(key)."
+        """## Building plugins
+You can extend Second Brain by authoring tools, tasks, services, commands, and frontends.
+
+Templates:
+- tools: templates/tool_template.py -> sandbox_tools/tool_<name>.py
+- tasks: templates/task_template.py -> sandbox_tasks/task_<name>.py
+- services: templates/service_template.py -> sandbox_services/<name>.py or <name>Service.py
+- commands: templates/command_template.py -> sandbox_commands/command_<name>.py
+- frontends: templates/frontend_template.py -> sandbox_frontends/frontend_<name>.py
+
+Workflow:
+1. Understand the user's intended behavior. Ask clarifying questions when a missing decision would materially change the design.
+2. Read the relevant template with read_file.
+3. Read a similar built-in or sandbox plugin when one exists.
+4. Write the file into the correct sandbox directory using the file-editing tools.
+5. If plugin_watcher is autoloaded, valid plugin files are loaded, reloaded, or unloaded as they change.
+6. Call test_plugin(plugin_path=...) after edits for naming, import, contract, and diagnostic feedback.
+7. Treat pytest output as broad regression context, not proof that the plugin's behavior is correct.
+8. If diagnostics, pytest, or watcher logs show a failure, edit the same file and test again.
+9. To remove a sandbox plugin durably and from the live runtime, delete its plugin file.
+
+Names must be unique across built-in and sandbox plugins. Config settings use (title, variable_name, description, default, type_info), are stored in plugin_config.json, and are read with context.config.get(key)."""
     )
 
 
@@ -199,16 +201,18 @@ def _sandbox_files() -> str:
     for sd in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS):
         if sd.exists():
             lines.extend(f"  {p}" for p in sorted(sd.glob("*.py")) if not p.name.startswith("_"))
-    return "## Sandbox plugins\n" + ("\n".join(lines) if lines else "None yet. Use templates plus edit_file to create one; test it with test_plugin. plugin_watcher loads valid plugin files automatically when enabled.")
+    return "## Sandbox plugins\n" + ("\n".join(lines) if lines else """## Sandbox plugins
+None yet. When the user asks for a durable new capability, create a sandbox plugin from the relevant template, then test it with test_plugin. When plugin_watcher is enabled, valid plugin files load automatically.""")
 
 
 def _attachments() -> str:
     from paths import ATTACHMENT_CACHE
     return (
-        "## Attachments\n"
-        f"Files sent through frontends are persisted to {ATTACHMENT_CACHE} and indexed by the normal task pipeline. To find recent attachments with sql_query: "
-        f"SELECT path, file_name, mtime FROM files WHERE path LIKE '{ATTACHMENT_CACHE}%' ORDER BY mtime DESC LIMIT 20. "
-        "For unsupported extensions, use read_file on the exact cache path or create a parser plugin."
+        f"""## Attachments
+Files sent through frontends are saved to the attachment cache and indexed by the normal task pipeline. If they can be parsed into text, they will be added to user messages directly, as well. You can write new attachment parsers for unsupported extensions by following the structure within attachments/parsers/.
+
+To find recent attachments with sql_query:
+SELECT path, file_name, mtime FROM files WHERE path LIKE '{ATTACHMENT_CACHE}%' ORDER BY mtime DESC LIMIT 10"""
     )
 
 
@@ -267,10 +271,12 @@ def _agent_memory() -> str:
     path = DATA_DIR / "memory.md"
     content = path.read_text() if path.exists() else "(empty)"
     return (
-        "## Memory (from memory.md)\n"
-        f"Path: {path}\n"
-        "Durable notes that persist across sessions. Read them as standing context. Nightly, dream_memory may rewrite memory.md with reusable lessons and preferences.\n"
-        f"Current contents:\n{content}"
+        f"""## Memory (from memory.md)
+Path: {path}
+Durable notes that persist across sessions. When the user asks you to remember something, write it down here. Nightly, dream_memory may rewrite memory.md with reusable lessons and preferences.
+
+Current contents:
+{content}"""
     )
 
 
@@ -291,5 +297,4 @@ def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
     return (
         "## Agent profile limits\n"
         f"You are running under the '{profile_name}' agent profile. Tool access is limited to the tools exposed in this prompt. "
-        "If something is unavailable or denied, work within that scope instead of assuming full system access."
     )
