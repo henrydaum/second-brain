@@ -41,8 +41,10 @@ def test_llm_command_prompts_explain_add_and_edit_steps():
     assert add_steps[0].enum_labels == ["m (default)", "Add profile"]
     assert "model name exactly" in add_steps[1].prompt
     assert "API key" in add_steps[4].prompt
+    assert "prompt cache routing key" in add_steps[6].prompt
+    assert add_steps[7].enum == ["", "in_memory", "24h"]
     assert edit_steps[-2].prompt == "Choose which LLM setting to edit."
-    assert edit_steps[-2].enum_labels == ["Endpoint", "API key", "Context size", "Service class"]
+    assert edit_steps[-2].enum_labels == ["Endpoint", "API key", "Context size", "Service class", "Cache key", "Cache retention"]
 
 
 def test_config_list_setting_uses_multiline_array_form():

@@ -9,8 +9,8 @@ from state_machine.conversation import FormStep
 
 ACTIONS = ["edit", "set_default", "remove"]
 ACTION_LABELS = ["Edit", "Set default", "Remove"]
-FIELDS = ["llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class"]
-FIELD_LABELS = ["Endpoint", "API key", "Context size", "Service class"]
+FIELDS = ["llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class", "prompt_cache_key", "prompt_cache_retention"]
+FIELD_LABELS = ["Endpoint", "API key", "Context size", "Service class", "Cache key", "Cache retention"]
 
 
 class LlmCommand(BaseCommand):
@@ -31,6 +31,8 @@ class LlmCommand(BaseCommand):
                 FormStep("llm_endpoint", "Optional OpenAI-compatible endpoint URL.", False, default="", prompt_when_missing=True),
                 FormStep("llm_api_key", "API key value, or the environment variable name that contains it.", False, default="OPENAI_API_KEY", prompt_when_missing=True),
                 FormStep("llm_context_size", "Optional context window size in tokens. Use 0 if unknown.", False, "integer", default=0, prompt_when_missing=True),
+                FormStep("prompt_cache_key", "Optional OpenAI prompt cache routing key for this shared prompt prefix.", False, default="", prompt_when_missing=True),
+                FormStep("prompt_cache_retention", "Optional OpenAI prompt cache retention policy.", False, default="", enum=["", "in_memory", "24h"], prompt_when_missing=True),
             ]
         if args.get("model_name"):
             steps.append(FormStep("action", f"What do you want to do with this LLM profile?\n\n{_describe(context, args['model_name'])}", True, enum=ACTIONS, enum_labels=ACTION_LABELS))
@@ -117,6 +119,8 @@ def _value_prompt(field):
         "llm_api_key": "Enter the API key value or environment variable name.",
         "llm_context_size": "Enter the context window size in tokens. Use 0 if unknown.",
         "llm_service_class": "Enter OpenAILLM or LMStudioLLM.",
+        "prompt_cache_key": "Enter a stable cache key for requests with the same prompt prefix, or leave blank.",
+        "prompt_cache_retention": "Enter in_memory, 24h, or leave blank for the provider default.",
     }.get(field, "Enter the new value.")
 
 

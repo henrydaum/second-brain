@@ -112,6 +112,7 @@ class LLMResponse:
     tool_calls: list[dict] = field(default_factory=list)
     # Each tool_call dict: {"id": str, "name": str, "arguments": str (JSON)}
     prompt_tokens: int | None = None   # tokens used by the prompt in this call
+    cached_prompt_tokens: int | None = None
     error: str | None = None
     error_code: str | None = None
 
@@ -477,14 +478,21 @@ class LMStudioLLM(BaseLLM):
 # Supports tool calling natively.
 # =====================================================================
 
+def _cached_prompt_tokens(usage) -> int | None:
+    details = getattr(usage, "prompt_tokens_details", None) if usage else None
+    return (details.get("cached_tokens") if isinstance(details, dict) else getattr(details, "cached_tokens", None)) if details else None
+
+
 class OpenAILLM(BaseLLM):
     """Open aillm."""
-    def __init__(self, model_name, api_key=None, base_url=None):
+    def __init__(self, model_name, api_key=None, base_url=None, prompt_cache_key=None, prompt_cache_retention=None):
         """Initialize the open aillm."""
         super().__init__()
         self.model_name = model_name
         self.api_key = api_key
         self.base_url = base_url
+        self.prompt_cache_key = prompt_cache_key
+        self.prompt_cache_retention = prompt_cache_retention
         self.client = None
         self.loaded = False
         # Best-effort capability inference from the model name. Users can
@@ -587,6 +595,7 @@ class OpenAILLM(BaseLLM):
                 f"tools={'yes' if has_tools else 'no'}, model={self.model_name}"
             )
             t0 = time.time()
+            kwargs = self._cache_kwargs(kwargs)
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
@@ -596,6 +605,9 @@ class OpenAILLM(BaseLLM):
             choice = response.choices[0]
             usage = getattr(response, "usage", None)
             prompt_tok = getattr(usage, "prompt_tokens", None) if usage else None
+            cached_tok = _cached_prompt_tokens(usage)
+            if cached_tok:
+                logger.debug(f"OpenAI prompt cache hit: {cached_tok}/{prompt_tok} prompt tokens")
 
             if choice.message.tool_calls:
                 return LLMResponse(
@@ -609,9 +621,10 @@ class OpenAILLM(BaseLLM):
                         for tc in choice.message.tool_calls
                     ],
                     prompt_tokens=prompt_tok,
+                    cached_prompt_tokens=cached_tok,
                 )
 
-            return LLMResponse(content=choice.message.content or "", prompt_tokens=prompt_tok)
+            return LLMResponse(content=choice.message.content or "", prompt_tokens=prompt_tok, cached_prompt_tokens=cached_tok)
 
         except Exception as e:
             message = extract_llm_error_text(e)
@@ -634,6 +647,7 @@ class OpenAILLM(BaseLLM):
             messages, native_paths = self._resolve_attachments(messages, attachments)
             messages = self._inject_images(messages, native_paths)
 
+            kwargs = self._cache_kwargs(kwargs)
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
@@ -652,6 +666,14 @@ class OpenAILLM(BaseLLM):
             kwargs["tools"] = tools
         return self.invoke(messages, **kwargs)
 
+    def _cache_kwargs(self, kwargs: dict) -> dict:
+        kwargs = dict(kwargs)
+        if self.prompt_cache_key:
+            kwargs.setdefault("prompt_cache_key", self.prompt_cache_key)
+        if self.prompt_cache_retention:
+            kwargs.setdefault("prompt_cache_retention", self.prompt_cache_retention)
+        return kwargs
+
 
 def _build_llm_from_profile(model_name: str, profile: dict) -> BaseLLM:
     """Instantiate an LLM from a profile config dict (does NOT load it).
@@ -667,7 +689,7 @@ def _build_llm_from_profile(model_name: str, profile: dict) -> BaseLLM:
     api_key = profile.get("llm_api_key", "")
     resolved_key = os.environ.get(api_key, api_key) if api_key else None
     base_url = profile.get("llm_endpoint", "") or None
-    llm = OpenAILLM(model_name, api_key=resolved_key, base_url=base_url)
+    llm = OpenAILLM(model_name, api_key=resolved_key, base_url=base_url, prompt_cache_key=profile.get("prompt_cache_key") or None, prompt_cache_retention=profile.get("prompt_cache_retention") or None)
     ctx = int(profile.get("llm_context_size", 0))
     if ctx > 0:
         llm.context_size = ctx
