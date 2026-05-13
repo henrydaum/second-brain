@@ -554,6 +554,12 @@ class LiteLLMLLM(BaseLLM):
         except Exception as e:
             message = extract_llm_error_text(e)
             logger.error(f"LiteLLM Invoke Error: {message}")
+            # Check for rate limit / auth errors by class name BEFORE the
+            # heuristic, because litellm rate-limit messages contain "tokens"
+            # + "limit" which would false-positive as context overflow.
+            exc_name = type(e).__name__
+            if exc_name in ("RateLimitError", "AuthenticationError", "NotFoundError"):
+                return LLMResponse(content=f"Error: {message}", error=message, error_code="provider_error")
             if is_context_limit_error(e):
                 raise LLMProviderError(message, code="context_limit") from e
             return LLMResponse(content=f"Error: {message}", error=message, error_code="provider_error")

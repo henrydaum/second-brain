@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from plugins.services.service_llm import LiteLLMLLM, LLMResponse, _build_llm_from_profile
+from plugins.services.service_llm import LiteLLMLLM, LLMResponse, LLMProviderError, _build_llm_from_profile
 
 
 def _make_response(content="Hello!", tool_calls=None, prompt_tokens=10, completion_tokens=5):
@@ -114,6 +114,70 @@ class TestLiteLLMLLM(unittest.TestCase):
         llm.loaded = True
         result = llm.invoke([{"role": "user", "content": "test"}])
         self.assertEqual(result.content, "")
+
+    @patch("litellm.completion")
+    def test_rate_limit_not_misclassified_as_context_limit(self, mock_completion):
+        import litellm as _litellm
+        mock_completion.side_effect = _litellm.RateLimitError(
+            message="Rate limit exceeded. Quota request exceeds the tokens limit.",
+            llm_provider="anthropic",
+            model="anthropic/claude-sonnet-4-6",
+        )
+        llm = LiteLLMLLM("anthropic/claude-sonnet-4-6")
+        llm.loaded = True
+        result = llm.invoke([{"role": "user", "content": "test"}])
+        self.assertTrue(result.is_error)
+        self.assertEqual(result.error_code, "provider_error")
+        self.assertNotEqual(result.error_code, "context_limit")
+
+    @patch("litellm.completion")
+    def test_context_limit_raises_provider_error(self, mock_completion):
+        import litellm as _litellm
+        mock_completion.side_effect = _litellm.ContextWindowExceededError(
+            message="This model's maximum context length is 8192 tokens",
+            llm_provider="openai",
+            model="openai/gpt-4o",
+        )
+        llm = LiteLLMLLM("openai/gpt-4o")
+        llm.loaded = True
+        with self.assertRaises(LLMProviderError) as ctx:
+            llm.invoke([{"role": "user", "content": "test"}])
+        self.assertEqual(ctx.exception.code, "context_limit")
+
+    @patch("litellm.completion", return_value=_make_response())
+    def test_response_format_passthrough(self, mock_completion):
+        llm = LiteLLMLLM("openai/gpt-4o")
+        llm.loaded = True
+        llm.invoke(
+            [{"role": "user", "content": "test"}],
+            response_format={"type": "json_object"},
+        )
+        kw = mock_completion.call_args.kwargs
+        self.assertEqual(kw["response_format"], {"type": "json_object"})
+
+    @patch("litellm.completion", return_value=_make_response())
+    def test_chat_with_tools_passes_attachments(self, mock_completion):
+        llm = LiteLLMLLM("openai/gpt-4o")
+        llm.loaded = True
+        result = llm.chat_with_tools(
+            [{"role": "user", "content": "test"}],
+            tools=None,
+            attachments=None,
+        )
+        self.assertEqual(result.content, "Hello!")
+
+    def test_stream_not_loaded_returns_nothing(self):
+        llm = LiteLLMLLM("openai/gpt-4o")
+        chunks = list(llm.stream([{"role": "user", "content": "test"}]))
+        self.assertEqual(chunks, [])
+
+    def test_image_capability_inferred(self):
+        llm = LiteLLMLLM("anthropic/claude-sonnet-4-6")
+        self.assertFalse(llm.has_capability("image"))
+        llm2 = LiteLLMLLM("openai/gpt-4o")
+        self.assertTrue(llm2.has_capability("image"))
+        llm3 = LiteLLMLLM("anthropic/claude-3-5-sonnet")
+        self.assertTrue(llm3.has_capability("image"))
 
 
 if __name__ == "__main__":
