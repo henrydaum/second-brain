@@ -160,6 +160,8 @@ class BaseLLM(BaseService):
             "video": None,
         }
         self.context_size = None  # Max context window in tokens (auto-detected or from config)
+        self.last_prompt_tokens = None
+        self.last_cached_prompt_tokens = None
 
     def has_capability(self, modality: str) -> bool:
         """Return whether capability."""
@@ -493,6 +495,7 @@ class OpenAILLM(BaseLLM):
         self.base_url = base_url
         self.prompt_cache_key = prompt_cache_key
         self.prompt_cache_retention = prompt_cache_retention
+        self.supports_prompt_cache_options = not base_url or "openai.com" in str(base_url).lower()
         self.client = None
         self.loaded = False
         # Best-effort capability inference from the model name. Users can
@@ -606,6 +609,7 @@ class OpenAILLM(BaseLLM):
             usage = getattr(response, "usage", None)
             prompt_tok = getattr(usage, "prompt_tokens", None) if usage else None
             cached_tok = _cached_prompt_tokens(usage)
+            self.last_prompt_tokens, self.last_cached_prompt_tokens = prompt_tok, cached_tok
             if cached_tok:
                 logger.debug(f"OpenAI prompt cache hit: {cached_tok}/{prompt_tok} prompt tokens")
 
@@ -668,6 +672,8 @@ class OpenAILLM(BaseLLM):
 
     def _cache_kwargs(self, kwargs: dict) -> dict:
         kwargs = dict(kwargs)
+        if not self.supports_prompt_cache_options:
+            return kwargs
         if self.prompt_cache_key:
             kwargs.setdefault("prompt_cache_key", self.prompt_cache_key)
         if self.prompt_cache_retention:

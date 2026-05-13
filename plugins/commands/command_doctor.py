@@ -39,6 +39,9 @@ class DoctorCommand(BaseCommand):
             "Schedules:",
             *_schedule_lines(services.get("timekeeper")),
             "",
+            "LLM:",
+            *_llm_lines(services.get("llm")),
+            "",
             "Recent log warnings/errors:",
             *_log_lines(DATA_DIR / "app.log"),
         ]
@@ -84,6 +87,19 @@ def _schedule_lines(tk):
         return ["  No scheduled jobs."]
     disabled = [name for name, job in jobs.items() if not job.get("enabled", True)]
     return [f"  {len(jobs)} job(s), {len(disabled)} disabled"] + [f"  disabled: {name}" for name in disabled[:5]]
+
+
+def _llm_lines(llm):
+    """Return LLM/cache findings."""
+    active = getattr(llm, "active", None) or llm
+    if not active:
+        return ["  LLM is not configured."]
+    cached, total = getattr(active, "last_cached_prompt_tokens", None), getattr(active, "last_prompt_tokens", None)
+    lines = [f"  Model: {getattr(active, 'model_name', 'unknown')} ({'loaded' if getattr(active, 'loaded', False) else 'unloaded'})"]
+    if total is None:
+        return lines + ["  Prompt cache: no usage data yet."]
+    pct = round((cached or 0) * 100 / total) if total else 0
+    return lines + [f"  Prompt cache: {cached or 0}/{total} input tokens cached on last call ({pct}%)."]
 
 
 def _log_lines(path, limit=8):

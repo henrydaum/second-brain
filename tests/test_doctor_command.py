@@ -37,7 +37,7 @@ def test_doctor_reports_runtime_findings_and_recent_log_errors(tmp_path, monkeyp
     )
     context = SimpleNamespace(
         config={"sync_directories": [str(tmp_path / "missing")], "autoload_services": ["llm", "ghost"], "enabled_frontends": ["repl"]},
-        services={"llm": SimpleNamespace(loaded=False), "timekeeper": FakeTimekeeper()},
+        services={"llm": SimpleNamespace(active=SimpleNamespace(model_name="gpt-5", loaded=True, last_prompt_tokens=1500, last_cached_prompt_tokens=1024)), "timekeeper": FakeTimekeeper()},
         orchestrator=SimpleNamespace(tasks={"extract_text": object(), "spawn_subagent": object()}, paused={"extract_text"}),
         tool_registry=SimpleNamespace(tools={"read_file": object()}),
         db=FakeDb(),
@@ -51,5 +51,6 @@ def test_doctor_reports_runtime_findings_and_recent_log_errors(tmp_path, monkeyp
     assert "extract_text: 2 pending, 0 running, 1 failed" in out
     assert "spawn_subagent: 0 pending, 1 running, 0 failed" in out
     assert "2 job(s), 1 disabled" in out
+    assert "Prompt cache: 1024/1500 input tokens cached on last call (68%)." in out
     assert "Plugin registration failed: demo" in out
     assert "Auto-load failed for 'llm': boom" in out
