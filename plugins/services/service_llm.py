@@ -471,6 +471,166 @@ class LMStudioLLM(BaseLLM):
 
 
 # =====================================================================
+# LITELLM (Unified AI gateway — 100+ providers)
+#
+# Routes through litellm.completion() which normalizes all providers
+# (OpenAI, Anthropic, Google, AWS Bedrock, Azure, Groq, Mistral, etc.)
+# into a single OpenAI-compatible interface.
+# =====================================================================
+
+
+class LiteLLMLLM(BaseLLM):
+    """LLM backed by the LiteLLM SDK, routing to any of 100+ providers."""
+
+    def __init__(self, model_name, api_key=None, base_url=None):
+        super().__init__()
+        self.model_name = model_name
+        self.api_key = api_key
+        self.base_url = base_url
+        self.loaded = False
+        m = (model_name or "").lower()
+        if any(s in m for s in ("gpt-4o", "gpt-4.1", "gpt-5", "claude-3", "claude-4", "gemini")):
+            self.capabilities["image"] = True
+
+    def _load(self):
+        try:
+            import litellm
+            self.loaded = True
+            return True
+        except ImportError:
+            logger.error("litellm is not installed. Install with: pip install 'litellm>=1.60,<1.85'")
+            return False
+
+    def unload(self):
+        self.loaded = False
+        logger.info("LiteLLM model unloaded.")
+
+    def invoke(self, messages, attachments=None, **kwargs):
+        if not self.loaded:
+            return LLMResponse(content="Error: model not loaded", error="model not loaded", error_code="not_loaded")
+
+        try:
+            import litellm
+
+            messages, native_paths = self._resolve_attachments(messages, attachments)
+            messages = self._inject_images(messages, native_paths)
+
+            has_tools = "tools" in kwargs and kwargs["tools"]
+            logger.debug(f"LiteLLM invoke: {len(messages)} messages, tools={'yes' if has_tools else 'no'}, model={self.model_name}")
+
+            completion_kwargs = {
+                "model": self.model_name,
+                "messages": messages,
+                "drop_params": True,
+                **kwargs,
+            }
+            if self.api_key:
+                completion_kwargs["api_key"] = self.api_key
+            if self.base_url:
+                completion_kwargs["api_base"] = self.base_url
+
+            t0 = time.time()
+            response = litellm.completion(**completion_kwargs)
+            logger.debug(f"LiteLLM responded in {time.time() - t0:.2f}s")
+
+            choice = response.choices[0]
+            usage = getattr(response, "usage", None)
+            prompt_tok = getattr(usage, "prompt_tokens", None) if usage else None
+            cached_tok = _cached_prompt_tokens(usage)
+
+            if choice.message.tool_calls:
+                return LLMResponse(
+                    content=choice.message.content or "",
+                    tool_calls=[
+                        {"id": tc.id, "name": tc.function.name, "arguments": tc.function.arguments}
+                        for tc in choice.message.tool_calls
+                    ],
+                    prompt_tokens=prompt_tok,
+                    cached_prompt_tokens=cached_tok,
+                )
+
+            return LLMResponse(content=choice.message.content or "", prompt_tokens=prompt_tok, cached_prompt_tokens=cached_tok)
+
+        except Exception as e:
+            message = extract_llm_error_text(e)
+            logger.error(f"LiteLLM Invoke Error: {message}")
+            if is_context_limit_error(e):
+                raise LLMProviderError(message, code="context_limit") from e
+            return LLMResponse(content=f"Error: {message}", error=message, error_code="provider_error")
+
+    def stream(self, messages, attachments=None, **kwargs):
+        if not self.loaded:
+            return
+
+        try:
+            import litellm
+
+            messages, native_paths = self._resolve_attachments(messages, attachments)
+            messages = self._inject_images(messages, native_paths)
+
+            completion_kwargs = {
+                "model": self.model_name,
+                "messages": messages,
+                "stream": True,
+                "drop_params": True,
+                **kwargs,
+            }
+            if self.api_key:
+                completion_kwargs["api_key"] = self.api_key
+            if self.base_url:
+                completion_kwargs["api_base"] = self.base_url
+
+            response = litellm.completion(**completion_kwargs)
+            for chunk in response:
+                delta = chunk.choices[0].delta
+                if hasattr(delta, "content") and delta.content:
+                    yield delta.content
+        except Exception as e:
+            logger.error(f"LiteLLM Stream Error: {e}")
+
+    def chat_with_tools(self, messages, tools=None, **kwargs):
+        if tools:
+            kwargs["tools"] = tools
+        return self.invoke(messages, **kwargs)
+
+    def _inject_images(self, messages: list[dict], image_paths: list[str]) -> list[dict]:
+        """Inject base64 images into the last user message (reuses OpenAILLM pattern)."""
+        import base64
+
+        if not image_paths:
+            return messages
+
+        image_blocks = []
+        valid_names = []
+        for path in image_paths:
+            if not os.path.exists(path):
+                continue
+            image_bytes = self.get_image_bytes(path)
+            if not image_bytes:
+                continue
+            try:
+                b64 = base64.b64encode(image_bytes).decode("utf-8")
+                image_blocks.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+                valid_names.append(Path(path).name)
+            except Exception as e:
+                logger.error(f"Failed to encode image {path}: {e}")
+
+        if not image_blocks:
+            return messages
+
+        messages = [msg.copy() for msg in messages]
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i]["role"] == "user":
+                original_content = messages[i]["content"]
+                img_ref = "\n".join(f"<Image {j+1}: {n}>" for j, n in enumerate(valid_names))
+                text = f"{original_content}\n\nThe following images are provided:\n{img_ref}"
+                messages[i]["content"] = [{"type": "text", "text": text}, *image_blocks]
+                break
+
+        return messages
+
+
+# =====================================================================
 # OPENAI-COMPATIBLE (OpenAI, LM Studio via endpoint, Ollama, vLLM, etc.)
 #
 # Uses the OpenAI Python SDK. Lightweight — no model lifecycle management.
@@ -685,6 +845,16 @@ def _build_llm_from_profile(model_name: str, profile: dict) -> BaseLLM:
 
     if cls_name == "LMStudioLLM":
         return LMStudioLLM(model_name)
+
+    if cls_name == "LiteLLMLLM":
+        api_key = profile.get("llm_api_key", "")
+        resolved_key = os.environ.get(api_key, api_key) if api_key else None
+        base_url = profile.get("llm_endpoint", "") or None
+        llm = LiteLLMLLM(model_name, api_key=resolved_key, base_url=base_url)
+        ctx = int(profile.get("llm_context_size", 0))
+        if ctx > 0:
+            llm.context_size = ctx
+        return llm
 
     api_key = profile.get("llm_api_key", "")
     resolved_key = os.environ.get(api_key, api_key) if api_key else None
