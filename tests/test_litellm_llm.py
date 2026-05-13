@@ -1,9 +1,9 @@
-"""Tests for LiteLLMLLM service plugin."""
+"""Tests for LiteLLM service plugin."""
 
 import unittest
 from unittest.mock import MagicMock, patch
 
-from plugins.services.service_llm import LiteLLMLLM, LLMResponse, LLMProviderError, _build_llm_from_profile
+from plugins.services.service_llm import LiteLLM, LLMResponse, LLMProviderError, _build_llm_from_profile
 
 
 def _make_response(content="Hello!", tool_calls=None, prompt_tokens=10, completion_tokens=5):
@@ -20,10 +20,10 @@ def _make_response(content="Hello!", tool_calls=None, prompt_tokens=10, completi
     return resp
 
 
-class TestLiteLLMLLM(unittest.TestCase):
+class TestLiteLLM(unittest.TestCase):
     @patch("litellm.completion", return_value=_make_response())
     def test_invoke_dispatches_to_litellm(self, mock_completion):
-        llm = LiteLLMLLM("anthropic/claude-sonnet-4-6")
+        llm = LiteLLM("anthropic/claude-sonnet-4-6")
         llm.loaded = True
         result = llm.invoke([{"role": "user", "content": "Hi"}])
         mock_completion.assert_called_once()
@@ -35,7 +35,7 @@ class TestLiteLLMLLM(unittest.TestCase):
 
     @patch("litellm.completion", return_value=_make_response())
     def test_invoke_forwards_api_key(self, mock_completion):
-        llm = LiteLLMLLM("openai/gpt-4o", api_key="sk-test")
+        llm = LiteLLM("openai/gpt-4o", api_key="sk-test")
         llm.loaded = True
         llm.invoke([{"role": "user", "content": "test"}])
         kw = mock_completion.call_args.kwargs
@@ -43,7 +43,7 @@ class TestLiteLLMLLM(unittest.TestCase):
 
     @patch("litellm.completion", return_value=_make_response())
     def test_invoke_forwards_base_url(self, mock_completion):
-        llm = LiteLLMLLM("openai/gpt-4o", base_url="http://localhost:4000")
+        llm = LiteLLM("openai/gpt-4o", base_url="http://localhost:4000")
         llm.loaded = True
         llm.invoke([{"role": "user", "content": "test"}])
         kw = mock_completion.call_args.kwargs
@@ -51,7 +51,7 @@ class TestLiteLLMLLM(unittest.TestCase):
 
     @patch("litellm.completion", return_value=_make_response())
     def test_invoke_returns_prompt_tokens(self, mock_completion):
-        llm = LiteLLMLLM("openai/gpt-4o")
+        llm = LiteLLM("openai/gpt-4o")
         llm.loaded = True
         result = llm.invoke([{"role": "user", "content": "test"}])
         self.assertEqual(result.prompt_tokens, 10)
@@ -63,7 +63,7 @@ class TestLiteLLMLLM(unittest.TestCase):
         tc.function.name = "get_weather"
         tc.function.arguments = '{"city": "London"}'
         mock_completion.return_value = _make_response(content="", tool_calls=[tc])
-        llm = LiteLLMLLM("openai/gpt-4o")
+        llm = LiteLLM("openai/gpt-4o")
         llm.loaded = True
         result = llm.invoke([{"role": "user", "content": "weather?"}], tools=[{"type": "function"}])
         self.assertTrue(result.has_tool_calls)
@@ -79,7 +79,7 @@ class TestLiteLLMLLM(unittest.TestCase):
         chunk2.choices[0].delta.content = " world"
         mock_completion.return_value = iter([chunk1, chunk2])
 
-        llm = LiteLLMLLM("openai/gpt-4o")
+        llm = LiteLLM("openai/gpt-4o")
         llm.loaded = True
         chunks = list(llm.stream([{"role": "user", "content": "test"}]))
         self.assertEqual(chunks, ["Hello", " world"])
@@ -87,21 +87,21 @@ class TestLiteLLMLLM(unittest.TestCase):
         self.assertTrue(kw["stream"])
 
     def test_invoke_not_loaded_returns_error(self):
-        llm = LiteLLMLLM("openai/gpt-4o")
+        llm = LiteLLM("openai/gpt-4o")
         result = llm.invoke([{"role": "user", "content": "test"}])
         self.assertTrue(result.is_error)
         self.assertEqual(result.error_code, "not_loaded")
 
     def test_build_llm_from_profile_litellm(self):
-        profile = {"llm_service_class": "LiteLLMLLM", "llm_api_key": "sk-test", "llm_context_size": 128000}
+        profile = {"llm_service_class": "LiteLLM", "llm_api_key": "sk-test", "llm_context_size": 128000}
         llm = _build_llm_from_profile("anthropic/claude-sonnet-4-6", profile)
-        self.assertIsInstance(llm, LiteLLMLLM)
+        self.assertIsInstance(llm, LiteLLM)
         self.assertEqual(llm.model_name, "anthropic/claude-sonnet-4-6")
         self.assertEqual(llm.context_size, 128000)
 
     @patch("litellm.completion", return_value=_make_response())
     def test_chat_with_tools_delegates_to_invoke(self, mock_completion):
-        llm = LiteLLMLLM("openai/gpt-4o")
+        llm = LiteLLM("openai/gpt-4o")
         llm.loaded = True
         tools = [{"type": "function", "function": {"name": "test"}}]
         llm.chat_with_tools([{"role": "user", "content": "test"}], tools=tools)
@@ -110,7 +110,7 @@ class TestLiteLLMLLM(unittest.TestCase):
 
     @patch("litellm.completion", return_value=_make_response(content=None))
     def test_null_content_returns_empty(self, mock_completion):
-        llm = LiteLLMLLM("openai/gpt-4o")
+        llm = LiteLLM("openai/gpt-4o")
         llm.loaded = True
         result = llm.invoke([{"role": "user", "content": "test"}])
         self.assertEqual(result.content, "")
@@ -123,7 +123,7 @@ class TestLiteLLMLLM(unittest.TestCase):
             llm_provider="anthropic",
             model="anthropic/claude-sonnet-4-6",
         )
-        llm = LiteLLMLLM("anthropic/claude-sonnet-4-6")
+        llm = LiteLLM("anthropic/claude-sonnet-4-6")
         llm.loaded = True
         result = llm.invoke([{"role": "user", "content": "test"}])
         self.assertTrue(result.is_error)
@@ -138,7 +138,7 @@ class TestLiteLLMLLM(unittest.TestCase):
             llm_provider="openai",
             model="openai/gpt-4o",
         )
-        llm = LiteLLMLLM("openai/gpt-4o")
+        llm = LiteLLM("openai/gpt-4o")
         llm.loaded = True
         with self.assertRaises(LLMProviderError) as ctx:
             llm.invoke([{"role": "user", "content": "test"}])
@@ -146,7 +146,7 @@ class TestLiteLLMLLM(unittest.TestCase):
 
     @patch("litellm.completion", return_value=_make_response())
     def test_response_format_passthrough(self, mock_completion):
-        llm = LiteLLMLLM("openai/gpt-4o")
+        llm = LiteLLM("openai/gpt-4o")
         llm.loaded = True
         llm.invoke(
             [{"role": "user", "content": "test"}],
@@ -157,7 +157,7 @@ class TestLiteLLMLLM(unittest.TestCase):
 
     @patch("litellm.completion", return_value=_make_response())
     def test_chat_with_tools_passes_attachments(self, mock_completion):
-        llm = LiteLLMLLM("openai/gpt-4o")
+        llm = LiteLLM("openai/gpt-4o")
         llm.loaded = True
         result = llm.chat_with_tools(
             [{"role": "user", "content": "test"}],
@@ -167,16 +167,16 @@ class TestLiteLLMLLM(unittest.TestCase):
         self.assertEqual(result.content, "Hello!")
 
     def test_stream_not_loaded_returns_nothing(self):
-        llm = LiteLLMLLM("openai/gpt-4o")
+        llm = LiteLLM("openai/gpt-4o")
         chunks = list(llm.stream([{"role": "user", "content": "test"}]))
         self.assertEqual(chunks, [])
 
     def test_image_capability_inferred(self):
-        llm = LiteLLMLLM("anthropic/claude-sonnet-4-6")
+        llm = LiteLLM("anthropic/claude-sonnet-4-6")
         self.assertFalse(llm.has_capability("image"))
-        llm2 = LiteLLMLLM("openai/gpt-4o")
+        llm2 = LiteLLM("openai/gpt-4o")
         self.assertTrue(llm2.has_capability("image"))
-        llm3 = LiteLLMLLM("anthropic/claude-3-5-sonnet")
+        llm3 = LiteLLM("anthropic/claude-3-5-sonnet")
         self.assertTrue(llm3.has_capability("image"))
 
 

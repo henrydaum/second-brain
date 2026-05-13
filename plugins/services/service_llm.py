@@ -479,7 +479,7 @@ class LMStudioLLM(BaseLLM):
 # =====================================================================
 
 
-class LiteLLMLLM(BaseLLM):
+class LiteLLM(BaseLLM):
     """LLM backed by the LiteLLM SDK, routing to any of 100+ providers."""
 
     def __init__(self, model_name, api_key=None, base_url=None):
@@ -852,11 +852,11 @@ def _build_llm_from_profile(model_name: str, profile: dict) -> BaseLLM:
     if cls_name == "LMStudioLLM":
         return LMStudioLLM(model_name)
 
-    if cls_name == "LiteLLMLLM":
+    if cls_name == "LiteLLM":
         api_key = profile.get("llm_api_key", "")
         resolved_key = os.environ.get(api_key, api_key) if api_key else None
         base_url = profile.get("llm_endpoint", "") or None
-        llm = LiteLLMLLM(model_name, api_key=resolved_key, base_url=base_url)
+        llm = LiteLLM(model_name, api_key=resolved_key, base_url=base_url)
         ctx = int(profile.get("llm_context_size", 0))
         if ctx > 0:
             llm.context_size = ctx
