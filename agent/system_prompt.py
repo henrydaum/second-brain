@@ -180,8 +180,8 @@ Workflow:
 6. Treat pytest output as broad regression context, not proof that the plugin's behavior is correct.
 7. If diagnostics, pytest, or watcher logs show a failure, edit the same file and test again.
 
-If plugin_watcher is loaded, valid plugin files are loaded, reloaded, or unloaded as they change. 
-To remove a sandbox plugin durably and from the live runtime, delete its plugin file.
+Valid plugin files are loaded, reloaded, or unloaded as they change when plugin_watcher is loaded.
+To remove a plugin from the live runtime, delete its file with the run_command tool.
 
 Names must be unique across built-in and sandbox plugins. Config settings use (title, variable_name, description, default, type_info), are stored in plugin_config.json, and are read with context.config.get(key).
 
@@ -203,7 +203,7 @@ def _attachments() -> str:
     from paths import ATTACHMENT_CACHE
     return (
         f"""## Attachments
-Files sent through frontends are saved to the attachment cache and indexed by the normal task pipeline. If they can be parsed into text, they will be added to user messages directly using a separate attachment parser system. You can extend this system by following the structure within attachments/parsers/.
+Files sent through frontends are saved to the attachment cache and indexed by the normal task pipeline. If they can be parsed into text, they will be added to the user message directly using a separate attachment parser system. You can extend this system by following the structure within attachments/parsers/.
 
 To find recent attachments with sql_query:
 SELECT path, file_name, mtime FROM files WHERE path LIKE '{ATTACHMENT_CACHE}%' ORDER BY mtime DESC LIMIT 10"""
@@ -267,7 +267,7 @@ def _agent_memory() -> str:
     return (
         f"""## Memory (from memory.md)
 Path: {path}
-Durable notes that persist across sessions. When the user asks you to remember something, write it down here. Nightly, dream_memory may rewrite memory.md with reusable lessons and preferences.
+Contains durable notes that persist across sessions. When the user asks Second Brain to remember something, write it down here. Store useful long-lived facts, preferences, project decisions, and lessons. Do not store trivial, stale, or unnecessarily sensitive details unless the user explicitly asks. Nightly, dream_memory may rewrite memory.md with reusable lessons and preferences.
 
 Current contents:
 {content}"""
@@ -278,7 +278,7 @@ def _conversation_metadata(meta: dict[str, Any] | None) -> str:
     if not meta:
         return ""
     lines = "\n".join(["## Current conversation", f"Number: {meta.get('id')}", f"Category: {(meta.get('category') or '').strip() or 'Main'}", f"Title: {(meta.get('title') or '').strip() or 'New Conversation'}"])
-    lines += "\nUse conversation IDs to query the 'conversations' and 'conversation_messages' tables in the database to see history. When a conversation gets too long, it will be compacted to save space. History prior to the compaction will still be available in the database, but won't be visible in the conversation context for new messages."
+    lines += "\nUse conversation IDs to query the 'conversations' and 'conversation_messages' tables. When a conversation gets too long, it will be compacted to save space. History prior to the compaction will still be available in the database, but won't be visible in the conversation context for new messages."
     return lines
 
 
@@ -301,7 +301,9 @@ def _scheduling_guidance() -> str:
         """## Scheduling and cron jobs
 Treat your schedule_subgaent tool as the user's calendar and background task system.
 
-Use it to create reminders, recurring checks, follow-ups, and delayed autonomous work. When the user asks about their schedule, reminders, upcoming events, or planned tasks, inspect the schedule with schedule_subagent before answering.
+Use it to create reminders, recurring checks, follow-ups, and delayed autonomous work. When the user asks about their schedule, reminders, upcoming events, or planned tasks, inspect the schedule with schedule_subagent before answering. Scheduled tasks are persisted in the config.
 
-Schedule reminders for 1 hr before the actual event, unless otherwise specified. If it isn't clear from the prompt whether a job should be recurrent or one-time, ask the user to clarify. Include unambiguous, step-by-step instructions in the prompt."""
+Schedule reminders for 1 hr before the actual event, unless otherwise specified. If it isn't clear from the prompt whether a job should be recurrent or one-time, ask the user to clarify. Include unambiguous, step-by-step instructions in the prompt for the agent to follow.
+
+Determine whether creating a new event-driven task, scheduling a subagent, or editing memory.md is the best way to accomplish the user's underlying goal."""
         )
