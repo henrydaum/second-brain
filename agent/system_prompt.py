@@ -46,6 +46,7 @@ def build_prompt_sections(
         _sandbox_files() if _has_tool(r, "test_plugin") else "",
         _attachments() if _has_tool(r, "sql_query") else "",
         _database_tables(db) if _has_tool(r, "sql_query") else "",
+        _scheduling_guidance() if _has_tool(r, "schedule_subagent") else "",
     ]
     dynamic = [
         _current_datetime(),
@@ -290,6 +291,17 @@ def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
     if profile_name == "default" or not scope or not scope.has_tool_filter:
         return ""
     return (
-        "## Agent profile limits\n"
-        f"You are running under the '{profile_name}' agent profile. Tool access is limited to the tools exposed in this prompt. "
+        f"""## Agent profile limits
+You are running under the '{profile_name}' agent profile. Tool access is limited to the tools exposed in this prompt. """
     )
+
+
+def _scheduling_guidance() -> str:
+    return (
+        """## Scheduling and cron jobs
+Treat your schedule_subgaent tool as the user's calendar and background task system.
+
+Use it to create reminders, recurring checks, follow-ups, and delayed autonomous work. When the user asks about their schedule, reminders, upcoming events, or planned tasks, inspect the schedule with schedule_subagent before answering.
+
+Schedule reminders for 1 hr before the actual event, unless otherwise specified. If it isn't clear from the prompt whether a job should be recurrent or one-time, ask the user to clarify. Include unambiguous, step-by-step instructions in the prompt."""
+        )
