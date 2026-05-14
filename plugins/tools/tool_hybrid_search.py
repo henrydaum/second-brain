@@ -29,9 +29,7 @@ class HybridSearch(BaseTool):
     name = "hybrid_search"
     description = (
         "Search indexed files using both keyword and semantic retrieval, then "
-        "fuse the results for better ranking. This is the best default tool when "
-        "you are trying to find relevant local files or excerpts. Optional folder "
-        "and modality filters can narrow the search."
+        "fuse the results for better ranking. Prefer this over lexical_search or semantic_search alone when retrieving local files or excerpts. Optional folder and modality filters can narrow the search."
     )
     parameters = {
         "type": "object",

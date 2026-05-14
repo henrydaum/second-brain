@@ -82,7 +82,7 @@ class SemanticSearch(BaseTool):
         "query and compares it against stored embeddings (text, image, and "
         "any future modalities). Returns the most semantically similar results.\n\n"
         "Each embedding stream (text, image) is searched independently with "
-        "its own model. Results are tagged by stream for downstream fusion."
+        "its own model."
     )
     parameters = {
         "type": "object",

@@ -12,9 +12,7 @@ class AskUserQuestion(BaseTool):
     name = "ask_user_question"
     description = (
         "Ask the user a question and wait for a typed answer. Use this when the "
-        "agent needs user input before continuing. Supports strings, integers, "
-        "numbers, booleans, arrays, objects, and enum choices. Cancel or timeout "
-        "returns a failed result."
+        "agent needs user input before continuing. Cancel or timeout returns a failed result."
     )
     parameters = {
         "type": "object",

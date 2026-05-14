@@ -9,16 +9,7 @@ class RenderFiles(BaseTool):
     """Render files."""
     name = "render_files"
     description = (
-        "Display one or more local files to the user in chat alongside an optional caption. "
-        "Call this whenever the user asks to see, show, open, view, or look at a file — "
-        "and call it proactively when surfacing files you found for them.\n\n"
-        "When to use:\n"
-        "- Images, audio, video: ALWAYS render rather than describe. A summary is not a substitute for the file itself.\n"
-        "- Documents the user asked you to find or open (PDFs, docs, spreadsheets, etc.).\n"
-        "- Files referenced in your reply that the user will likely want to inspect directly.\n"
-        "- Use in addition to read_file when the user benefits from seeing the file, not just its contents.\n\n"
-        "Skip when: the user only wants a one-line answer, or the file's contents are already fully covered "
-        "by your text reply (e.g. you read three lines from a config and quoted them)."
+        "Display one or more local files to the user in chat alongside an optional caption. Always use this for images, audio, and video — a description is not a substitute. Use it for documents the user asked to find or open, and for files referenced in your reply that the user will likely want to inspect. Skip it when your text reply fully covers the content (e.g. you quoted the three relevant lines)."
     )
     parameters = {
         "type": "object",

@@ -76,12 +76,7 @@ class EmailModifyLabels(BaseTool):
     """Email modify labels."""
     name = "email_modify_labels"
     description = (
-        "Add or remove Gmail labels on a message. Pass `add` and/or `remove` as "
-        "lists of label names. To archive a message, use remove=['INBOX']. To "
-        "star, use add=['STARRED']. System labels (INBOX, UNREAD, SPAM, TRASH, "
-        "IMPORTANT, STARRED, SENT, DRAFT) pass through by name. Custom labels "
-        "are resolved by name; unknown custom labels fail (labels are not "
-        "auto-created — create them in the Gmail UI first)."
+        """Add or remove Gmail labels on a message. Pass add and/or remove as lists of label names. System labels (INBOX, UNREAD, SPAM, TRASH, IMPORTANT, STARRED, SENT, DRAFT) pass through by name. Custom labels are resolved by name — unknown custom labels fail and are not auto-created. To archive: remove=["INBOX"]. To star: add=["STARRED"]."""
     )
     config_settings = [
         (
