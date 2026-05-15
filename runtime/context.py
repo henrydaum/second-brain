@@ -97,6 +97,8 @@ def build_context(db, config: dict, services: dict, call_tool=None,
                 if ctx is not None:
                     ctx.approval_denial_reason = PLAN_MODE_PERMISSION_DENIED
                 return False
+            if getattr(session, "full_permissions_this_turn", False):
+                return True
             if current_tool_name and current_tool_name in (config.get("skip_permissions") or []):
                 return True
             req = runtime.request_input(

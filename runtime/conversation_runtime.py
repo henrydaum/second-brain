@@ -297,6 +297,7 @@ class ConversationRuntime:
             if session.cs.turn_priority != "user":
                 session.cs.set_priority("user")
             session.cancel_event.clear()
+            session.full_permissions_this_turn = False
 
         if reply:
             out.messages.append(reply)

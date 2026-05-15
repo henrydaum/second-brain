@@ -43,7 +43,7 @@ from state_machine.serialization import latest_state, save_state_marker
 from runtime.conversation_runtime import ConversationRuntime
 from runtime.context import PLAN_MODE_PERMISSION_DENIED
 from runtime.runtime_config import session_system_prompt
-from runtime.session import RuntimeSession
+from runtime.session import RuntimeResult, RuntimeSession
 from events.event_channels import CHAT_MESSAGE_PUSHED, COMMAND_CALL_FINISHED, SESSION_CLOSED, SESSION_CREATED, SESSION_TURN_COMPLETED, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from events.event_bus import bus
 
@@ -1098,11 +1098,131 @@ def test_propose_plan_approval_turns_plan_mode_off():
     deadline = time.time() + 5
     while time.time() < deadline and runtime.sessions["chat"].cs.phase != PHASE_APPROVING_REQUEST:
         time.sleep(0.01)
-    assert runtime.handle_action("chat", "answer_approval", {"value": True}).ok
+    assert runtime.handle_action("chat", "answer_approval", {"value": "approve"}).ok
     worker.join(timeout=5)
 
     assert seen and seen[0].success
     assert runtime.sessions["chat"].plan_mode is False
+    assert runtime.sessions["chat"].full_permissions_this_turn is False
+
+
+def test_propose_plan_full_permissions_sets_one_turn_flag():
+    """Verify full-permission plan approval sets the transient turn flag."""
+    runtime = ConversationRuntime()
+    runtime.get_session("chat").plan_mode = True
+    ctx = SimpleNamespace(
+        request_user_input=lambda title, prompt, **kw: runtime.request_input("chat", title, prompt, **kw),
+        runtime=runtime,
+        session_key="chat",
+    )
+    seen = []
+    worker = threading.Thread(target=lambda: seen.append(ProposePlan().run(ctx, title="Do it", plan="- Step")), daemon=True)
+
+    worker.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and runtime.sessions["chat"].cs.phase != PHASE_APPROVING_REQUEST:
+        time.sleep(0.01)
+    assert runtime.handle_action("chat", "answer_approval", {"value": "approve_full_permissions"}).ok
+    worker.join(timeout=5)
+
+    assert seen and seen[0].success
+    assert runtime.sessions["chat"].plan_mode is False
+    assert runtime.sessions["chat"].full_permissions_this_turn is True
+    assert seen[0].data["full_permissions_this_turn"] is True
+
+
+def test_propose_plan_denial_keeps_plan_mode_active():
+    """Verify denied plan keeps plan mode active."""
+    runtime = ConversationRuntime()
+    runtime.get_session("chat").plan_mode = True
+    ctx = SimpleNamespace(
+        request_user_input=lambda title, prompt, **kw: runtime.request_input("chat", title, prompt, **kw),
+        runtime=runtime,
+        session_key="chat",
+    )
+    seen = []
+    worker = threading.Thread(target=lambda: seen.append(ProposePlan().run(ctx, title="Do it", plan="- Step")), daemon=True)
+
+    worker.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and runtime.sessions["chat"].cs.phase != PHASE_APPROVING_REQUEST:
+        time.sleep(0.01)
+    assert runtime.handle_action("chat", "answer_approval", {"value": "deny"}).ok
+    worker.join(timeout=5)
+
+    assert seen and not seen[0].success
+    assert runtime.sessions["chat"].plan_mode is True
+    assert runtime.sessions["chat"].full_permissions_this_turn is False
+
+
+def test_full_permissions_this_turn_auto_approves_permission_dialogs():
+    """Verify one-turn full permissions auto-approves approval dialogs."""
+    class NeedsApproval(BaseTool):
+        """Needs approval."""
+        name = "needs_approval"
+        description = "Needs approval"
+        parameters = {"type": "object", "properties": {}, "required": []}
+
+        def run(self, context, **_kwargs):
+            """Run needs approval."""
+            return ToolResult(data={"approved": context.approve_command("danger", "test approval")}, llm_summary="approved")
+
+    registry = ToolRegistry(None, {"tool_timeout": 10, "skip_permissions": []})
+    registry.register(NeedsApproval())
+    runtime = ConversationRuntime(config=registry.config, tool_registry=registry)
+    registry.runtime = runtime
+    session = runtime.get_session("chat")
+    session.full_permissions_this_turn = True
+    runtime.active_session_key = "chat"
+
+    result = registry.call("needs_approval", _session_key="chat")
+
+    assert result.success
+    assert result.data["approved"] is True
+    assert runtime._approval_requests == {}
+
+
+def test_plan_mode_overrides_full_permissions_this_turn():
+    """Verify plan mode still rejects dialogs even with the transient flag set."""
+    registry = ToolRegistry(None, {"tool_timeout": 10})
+    registry.register(RunCommand())
+    runtime = ConversationRuntime(config=registry.config, tool_registry=registry)
+    registry.runtime = runtime
+    session = runtime.get_session("chat")
+    session.plan_mode = True
+    session.full_permissions_this_turn = True
+    runtime.active_session_key = "chat"
+
+    result = registry.call("run_command", command="git pull", justification="update repo", _session_key="chat")
+
+    assert not result.success
+    assert result.error == PLAN_MODE_PERMISSION_DENIED
+
+
+def test_full_permissions_flag_clears_after_agent_turn_success():
+    """Verify one-turn full permissions clear after a successful drive."""
+    runtime = ConversationRuntime(services={"llm": FakeLLM([FakeResponse.text("done")])}, tool_registry=FakeToolRegistry())
+    session = runtime.get_session("chat")
+    session.cs.set_priority("agent")
+    session.full_permissions_this_turn = True
+
+    out = runtime._drive_agent_turn(session, RuntimeResult())
+
+    assert out.ok
+    assert session.full_permissions_this_turn is False
+
+
+def test_full_permissions_flag_clears_after_agent_turn_failure():
+    """Verify one-turn full permissions clear after a failed drive."""
+    runtime = ConversationRuntime(services={"llm": FakeLLM([])}, tool_registry=FakeToolRegistry())
+    session = runtime.get_session("chat")
+    session.cs.set_priority("agent")
+    session.full_permissions_this_turn = True
+
+    out = runtime._drive_agent_turn(session, RuntimeResult())
+
+    assert not out.ok
+    assert session.full_permissions_this_turn is False
 
 
 def test_tools_command_toggles_skip_permissions(monkeypatch):
