@@ -88,7 +88,16 @@ def save(config: dict, path: str = None):
         path = _DEFAULT_CONFIG_PATH
     # Strip _root and plugin keys from persisted core config
     plugin_keys = _get_plugin_keys()
-    to_save = {k: v for k, v in config.items()
+    existing = {}
+    p = Path(path)
+    if p.exists():
+        try:
+            with open(p, "r") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = {}
+    merged = {**DEFAULTS, **existing, **(config or {})}
+    to_save = {k: v for k, v in merged.items()
                 if k != "_root" and k not in plugin_keys}
     with open(path, "w") as f:
         json.dump(to_save, f, indent=4)

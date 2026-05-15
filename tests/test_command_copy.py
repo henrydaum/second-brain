@@ -82,6 +82,19 @@ def test_config_load_normalizes_string_autoload_services(tmp_path):
     assert json.loads(path.read_text())["autoload_services"] == ["web_search_provider"]
 
 
+def test_config_save_partial_update_preserves_existing_values(tmp_path):
+    """Verify partial config saves do not clobber existing config."""
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"enabled_frontends": ["repl"], "tool_timeout": 123}))
+
+    config_manager.save({"last_active_conversation_id": 9}, str(path))
+    saved = json.loads(path.read_text())
+
+    assert saved["enabled_frontends"] == ["repl"]
+    assert saved["tool_timeout"] == 123
+    assert saved["last_active_conversation_id"] == 9
+
+
 def test_config_frontend_plugin_setting_saves_with_restart_notice(monkeypatch):
     """Verify config frontend plugin setting saves with restart notice."""
     setting = ("Telegram Allowed User ID", "telegram_allowed_user_id", "Only this user can interact with the bot.", 0, {"type": "text"})
