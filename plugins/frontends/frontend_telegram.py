@@ -210,7 +210,7 @@ class TelegramFrontend(BaseFrontend):
             if value is None:
                 return self.render_error(session_key, {"message": "Approval needs yes or no."})
             if self.resolve_approval(session_key, req.id, value, self.name):
-                self.render_messages(session_key, ["Approval recorded."])
+                self.render_messages(session_key, ["Received."])
         else:
             return super().submit_text(session_key, text)
 
