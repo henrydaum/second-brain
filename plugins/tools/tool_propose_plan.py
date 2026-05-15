@@ -41,7 +41,7 @@ class ProposePlan(BaseTool):
             return ToolResult.failed("Plan approval timed out.")
         choice = req.value
         if req.metadata.get("cancelled") or choice == "deny":
-            return ToolResult.failed("Plan denied. Plan mode remains active.")
+            return ToolResult.failed("Plan denied. Stop and ask the user what they would like to do differently. Plan mode is still active.")
         runtime = getattr(context, "runtime", None)
         session_key = getattr(context, "session_key", None)
         if runtime is not None and session_key:

@@ -160,14 +160,12 @@ Built-in plugins live under plugins/<family>. Sandbox plugins live in the matchi
 
 
 def _authoring_guidance() -> str:
-    from paths import DATA_DIR
+    from paths import DATA_DIR, ROOT_DIR
     return (
         f"""## Building plugins
 You can extend Second Brain by authoring tools, tasks, services, commands, and frontends.
 
-Read the matching template in templates/, then write the plugin into {DATA_DIR}/sandbox_<family>/ with the required prefix, e.g. tool_foo.py in {DATA_DIR}/sandbox_tools/.
-
-Do not create sandbox plugins in the project root. The sandbox_* folders are under {DATA_DIR}.
+Read the matching template in templates/, then write the plugin into {DATA_DIR}/sandbox_<family>/ with the required prefix, e.g. tool_foo.py in {DATA_DIR}/sandbox_tools/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
 
 Workflow:
 1. Understand the user's intended behavior. Ask clarifying questions when a missing decision would materially change the design.
