@@ -237,6 +237,9 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
 
         def _session_prompt():
             """Internal helper to handle session prompt."""
+            prompt_extras = dict(session.system_prompt_extras or {})
+            if session.plan_mode:
+                prompt_extras["plan_mode"] = _plan_mode_extra()
             return build_prompt_sections(
                 runtime.db,
                 getattr(runtime, "_orchestrator_ref", None) or runtime.services.get("orchestrator"),
@@ -246,7 +249,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
                 commands=getattr(runtime, "command_registry", None) or runtime.commands,
                 config=runtime.config,
                 conversation_metadata=_conversation_meta(),
-                prompt_extras=session.system_prompt_extras,
+                prompt_extras=prompt_extras,
                 notification_suffix=_notify_suffix(),
             )
         return _session_prompt
@@ -259,10 +262,21 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         return _append_dynamic(
             text,
             _conversation_extra(_conversation_meta()),
+            _plan_mode_extra() if session.plan_mode else "",
             *(v for v in (session.system_prompt_extras or {}).values() if isinstance(v, str) and v),
             _notify_suffix(),
         )
     return _user_prompt
+
+
+def _plan_mode_extra() -> str:
+    """Return plan-mode instructions for the current session."""
+    return (
+        "## Plan mode\n"
+        "Plan mode is active. Permission dialogs are automatically rejected in plan mode. "
+        "Inspect, read, search, and ask the user questions as needed, but do not try to modify state. "
+        "When ready, call propose_plan with a concise plan for the user to approve."
+    )
 
 
 def _conversation_extra(row: dict[str, Any] | None) -> str:

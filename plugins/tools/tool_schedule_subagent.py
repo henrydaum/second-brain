@@ -104,7 +104,7 @@ def _add_job(context, tk, title: str, job_name: str, prompt: str, cron: str, one
         return ToolResult.failed(str(e))
     payload = {"title": title, "prompt": prompt, "attachments": attachments}
     if not _approved(context, _approval_text("add", title, payload, schedule)):
-        return ToolResult(success=False, error="Schedule denied.", llm_summary="The user denied the scheduled subagent.")
+        return _denial(context, "Schedule denied.")
     tk.create_job(job_name, {**schedule, "channel": SPAWN_SUBAGENT, "payload": payload, "enabled": True})
     return ToolResult(True, data={"title": title, "scheduled": True, "one_time": bool(one_time)}, llm_summary=f"Scheduled subagent '{title}'.")
 
@@ -134,7 +134,7 @@ def _edit_job(context, tk, title: str, job_name: str, kwargs: dict, prompt: str,
         patch.update(schedule)
     patch["payload"] = payload
     if not _approved(context, _approval_text("edit", title, payload, {**job, **patch})):
-        return ToolResult(success=False, error="Schedule edit denied.", llm_summary="The user denied the scheduled subagent edit.")
+        return _denial(context, "Schedule edit denied.")
     tk.update_job(job_name, patch)
     return ToolResult(True, data={"title": title, "edited": True}, llm_summary=f"Updated scheduled subagent '{title}'.")
 
@@ -145,7 +145,7 @@ def _remove_job(context, tk, title: str, job_name: str):
     if job is None or job.get("channel") != SPAWN_SUBAGENT:
         return ToolResult.failed(f"No scheduled subagent named '{title}'.")
     if not _approved(context, f"Remove scheduled subagent?\n\nTitle: {title}"):
-        return ToolResult(success=False, error="Schedule removal denied.", llm_summary="The user denied removing the scheduled subagent.")
+        return _denial(context, "Schedule removal denied.")
     tk.remove_job(job_name)
     return ToolResult(True, data={"title": title, "removed": True}, llm_summary=f"Removed scheduled subagent '{title}'.")
 
@@ -182,6 +182,11 @@ def _approved(context, text: str) -> bool:
         return True
     approve = getattr(context, "approve_command", None)
     return bool(approve and approve("schedule_subagent", text))
+
+
+def _denial(context, fallback: str) -> ToolResult:
+    """Return the active approval-denial reason when available."""
+    return ToolResult(success=False, error=getattr(context, "approval_denial_reason", "") or fallback)
 
 
 def _approval_text(action: str, title: str, payload: dict, schedule: dict) -> str:

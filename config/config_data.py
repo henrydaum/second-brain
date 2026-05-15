@@ -96,6 +96,11 @@ SETTINGS_DATA = [
      600,
      {"type": "slider", "range": (30, 1800, 59), "is_float": False}),
 
+    ("Skip Permissions", "skip_permissions",
+     "Tool names whose permission dialogs are automatically approved when plan mode is off.",
+     [],
+     {"type": "json_list"}),
+
     ("Reprocess Interval", "reprocess_interval",
      "Seconds between re-checking files for changes.",
      300,

@@ -570,10 +570,20 @@ class ConversationRuntime:
                 "turn_priority": s.cs.turn_priority,
                 "conversation_id": s.conversation_id,
                 "busy": s.busy,
+                "plan_mode": s.plan_mode,
                 "system_prompt_extras": list(s.system_prompt_extras.keys()),
                 "session_tools": [t.name for t in s.extra_tool_instances],
             })
         return out
+
+    def set_plan_mode(self, session_key: str, enabled: bool) -> bool:
+        """Enable or disable plan mode for one live session."""
+        session = self.sessions.get(session_key)
+        if session is None:
+            return False
+        session.plan_mode = bool(enabled)
+        _persist.persist_marker(self, session)
+        return True
 
     def push_message(self, session_key: str, text: str, *, title: str | None = None,
                      source: str | None = None, source_id: str | None = None) -> None:

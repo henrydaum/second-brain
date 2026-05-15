@@ -23,6 +23,7 @@ import pytest
 from agent.system_prompt import build_prompt_sections
 from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.commands.command_plan import PlanCommand
 from plugins.commands.command_conversations import ConversationsCommand, NewCommand
 from plugins.commands.command_tools import ToolsCommand
 from plugins.services.service_llm import LLMResponse
@@ -30,6 +31,9 @@ from plugins.services import service_timekeeper as timekeeper_module
 from plugins.services.service_timekeeper import TimekeeperService
 from plugins.tools.tool_schedule_subagent import SCHEDULED, SCHEDULED_ONCE, ScheduleSubagent
 from plugins.tools.tool_ask_user_question import AskUserQuestion
+from plugins.tools.tool_edit_file import EditFile
+from plugins.tools.tool_propose_plan import ProposePlan
+from plugins.tools.tool_run_command import RunCommand
 from plugins.tasks.task_spawn_subagent import SpawnSubagent
 from state_machine.action_map import create_action
 from state_machine.conversation import CallableSpec, ConversationState, FormStep, Participant
@@ -37,6 +41,7 @@ from runtime.conversation_loop import ConversationLoop
 from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
 from state_machine.serialization import latest_state, save_state_marker
 from runtime.conversation_runtime import ConversationRuntime
+from runtime.context import PLAN_MODE_PERMISSION_DENIED
 from runtime.runtime_config import session_system_prompt
 from runtime.session import RuntimeSession
 from events.event_channels import CHAT_MESSAGE_PUSHED, COMMAND_CALL_FINISHED, SESSION_CLOSED, SESSION_CREATED, SESSION_TURN_COMPLETED, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
@@ -964,6 +969,156 @@ def test_agent_tool_approval_uses_state_machine_phase_and_resumes():
 
     assert seen and seen[0].messages[-1] == "done"
     assert runtime.sessions["chat"].cs.phase == "awaiting_input"
+
+
+def test_plan_command_toggles_and_persists_plan_mode():
+    """Verify /plan toggles and persists plan mode."""
+    db = FakeConversationDB()
+    runtime = ConversationRuntime(db=db)
+    session = runtime.open_session("chat", title="Plan test")
+    ctx = SimpleNamespace(runtime=runtime, session_key="chat")
+
+    assert PlanCommand().run({}, ctx) == "Plan mode on."
+    assert session.plan_mode is True
+    assert latest_state(db.get_conversation_messages(session.conversation_id))["plan_mode"] is True
+
+    restored = ConversationRuntime(db=db).load_conversation("chat", session.conversation_id)
+    assert restored.plan_mode is True
+    assert PlanCommand().run({}, SimpleNamespace(runtime=runtime, session_key="chat")) == "Plan mode off."
+
+
+def test_session_prompt_includes_plan_mode_guidance_only_when_active():
+    """Verify plan-mode prompt guidance is session-scoped."""
+    session = RuntimeSession("chat", make_cs())
+    runtime = SimpleNamespace(db=None, system_prompt=sectioned_prompt, active_session_key="chat")
+
+    assert "Plan mode is active" not in session_system_prompt(runtime, session)()[-1]["content"]
+    session.plan_mode = True
+
+    dynamic = session_system_prompt(runtime, session)()[-1]["content"]
+    assert "Plan mode is active" in dynamic
+    assert "propose_plan" in dynamic
+
+
+def test_plan_mode_rejects_permission_dialogs_without_request(monkeypatch):
+    """Verify plan mode denies approval-gated tools before a dialog appears."""
+    monkeypatch.setattr("plugins.tools.tool_run_command.subprocess.run", lambda *a, **k: pytest.fail("should not run"))
+    registry = ToolRegistry(None, {"tool_timeout": 10, "skip_permissions": ["run_command"]})
+    registry.register(RunCommand())
+    runtime = ConversationRuntime(config=registry.config, tool_registry=registry)
+    registry.runtime = runtime
+    runtime.get_session("chat").plan_mode = True
+    runtime.active_session_key = "chat"
+
+    result = registry.call("run_command", command="git pull", justification="update repo", _session_key="chat")
+
+    assert not result.success
+    assert result.error == PLAN_MODE_PERMISSION_DENIED
+    assert runtime._approval_requests == {}
+
+
+def test_skip_permissions_auto_approves_outside_plan_mode():
+    """Verify skip_permissions auto-approves approval dialogs."""
+    path = Path(".codex_skip_permissions_test.txt")
+    registry = ToolRegistry(None, {"tool_timeout": 10, "skip_permissions": ["edit_file"]})
+    registry.register(EditFile())
+    runtime = ConversationRuntime(config=registry.config, tool_registry=registry)
+    registry.runtime = runtime
+    runtime.get_session("chat")
+    runtime.active_session_key = "chat"
+    try:
+        result = registry.call(
+            "edit_file",
+            operation="create",
+            path=str(path),
+            content="ok",
+            justification="test skip permissions",
+            _session_key="chat",
+        )
+        assert result.success
+        assert path.read_text(encoding="utf-8") == "ok"
+        assert runtime._approval_requests == {}
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_plan_mode_overrides_skip_permissions_for_plan_unsafe_tools():
+    """Verify plan mode beats skip_permissions."""
+    path = Path(".codex_skip_permissions_test.txt")
+    registry = ToolRegistry(None, {"tool_timeout": 10, "skip_permissions": ["edit_file"]})
+    registry.register(EditFile())
+    runtime = ConversationRuntime(config=registry.config, tool_registry=registry)
+    registry.runtime = runtime
+    runtime.get_session("chat").plan_mode = True
+    runtime.active_session_key = "chat"
+
+    result = registry.call(
+        "edit_file",
+        operation="create",
+        path=str(path),
+        content="nope",
+        justification="test plan override",
+        _session_key="chat",
+    )
+
+    assert not result.success
+    assert result.error == PLAN_MODE_PERMISSION_DENIED
+    assert not path.exists()
+
+
+def test_read_only_run_command_still_works_in_plan_mode(monkeypatch):
+    """Verify read-only run_command calls are allowed in plan mode."""
+    monkeypatch.setattr("plugins.tools.tool_run_command.subprocess.run", lambda *a, **k: SimpleNamespace(stdout="Python 3.x\n", stderr="", returncode=0))
+    registry = ToolRegistry(None, {"tool_timeout": 10})
+    registry.register(RunCommand())
+    runtime = ConversationRuntime(config=registry.config, tool_registry=registry)
+    registry.runtime = runtime
+    runtime.get_session("chat").plan_mode = True
+    runtime.active_session_key = "chat"
+
+    result = registry.call("run_command", command="python --version", justification="check python", _session_key="chat")
+
+    assert result.success
+    assert "Python 3.x" in result.llm_summary
+
+
+def test_propose_plan_approval_turns_plan_mode_off():
+    """Verify approved propose_plan exits plan mode."""
+    runtime = ConversationRuntime()
+    runtime.get_session("chat").plan_mode = True
+    ctx = SimpleNamespace(
+        request_user_input=lambda title, prompt, **kw: runtime.request_input("chat", title, prompt, **kw),
+        runtime=runtime,
+        session_key="chat",
+    )
+    seen = []
+    worker = threading.Thread(target=lambda: seen.append(ProposePlan().run(ctx, title="Do it", plan="- Step")), daemon=True)
+
+    worker.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and runtime.sessions["chat"].cs.phase != PHASE_APPROVING_REQUEST:
+        time.sleep(0.01)
+    assert runtime.handle_action("chat", "answer_approval", {"value": True}).ok
+    worker.join(timeout=5)
+
+    assert seen and seen[0].success
+    assert runtime.sessions["chat"].plan_mode is False
+
+
+def test_tools_command_toggles_skip_permissions(monkeypatch):
+    """Verify /tools can add and remove skip_permissions entries."""
+    saved = []
+    monkeypatch.setattr("plugins.commands.command_tools.config_manager.save", lambda config: saved.append(dict(config)))
+    context = SimpleNamespace(config={"skip_permissions": []}, tool_registry=SimpleNamespace(tools={"edit_file": object()}), session_key="chat")
+    cmd = ToolsCommand()
+
+    assert cmd.run({"tool_name": "edit_file", "action": "enable_skip_permissions"}, context) == "Skip permissions enabled for edit_file."
+    assert context.config["skip_permissions"] == ["edit_file"]
+    assert saved[-1]["skip_permissions"] == ["edit_file"]
+
+    assert cmd.run({"tool_name": "edit_file", "action": "disable_skip_permissions"}, context) == "Skip permissions disabled for edit_file."
+    assert context.config["skip_permissions"] == []
+    assert saved[-1]["skip_permissions"] == []
 
 
 def test_stale_approval_request_id_does_not_answer_current_frame():

@@ -11,7 +11,7 @@ import logging
 import threading
 import time
 
-from runtime.context import build_context
+from runtime.context import PLAN_MODE_PERMISSION_DENIED, build_context
 from plugins.BaseTool import BaseTool, ToolResult
 from events.event_bus import bus
 from events.event_channels import TOOLS_CHANGED
@@ -75,6 +75,12 @@ class ToolRegistry:
         if tool is None:
             return ToolResult.failed(f"Unknown tool: {tool_name}")
 
+        if (session_key is not None
+                and self.runtime is not None
+                and getattr(getattr(self.runtime, "sessions", {}).get(session_key), "plan_mode", False)
+                and not getattr(tool, "plan_mode_safe", True)):
+            return ToolResult.failed(PLAN_MODE_PERMISSION_DENIED)
+
         # Background-safety gate: tools marked background_safe=False are
         # interactive (they need a human watching). Refuse if the call is
         # coming from a session that isn't the currently active one.
@@ -104,7 +110,8 @@ class ToolRegistry:
                                 orchestrator=self.orchestrator,
                                 runtime=self.runtime,
                                 session_key=session_key,
-                                user_initiated=user_initiated)
+                                user_initiated=user_initiated,
+                                current_tool_name=tool_name)
 
         t0 = time.time()
 

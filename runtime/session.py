@@ -64,6 +64,7 @@ class RuntimeSession:
     profile_override: str | None = None
     extra_tool_instances: list = field(default_factory=list)
     system_prompt_extras: dict[str, Any] = field(default_factory=dict)
+    plan_mode: bool = False
     notification_mode: str = DEFAULT_NOTIFICATION_MODE
     has_compaction_checkpoint: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
@@ -78,6 +79,7 @@ class RuntimeSession:
             "profile_override": self.profile_override,
             "notification_mode": self.notification_mode,
             "system_prompt_extras": self.system_prompt_extras,
+            "plan_mode": self.plan_mode,
             "busy": self.busy,
         })
         return state

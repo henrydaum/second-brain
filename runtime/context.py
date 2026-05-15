@@ -11,6 +11,8 @@ shortcut on the context.
 from dataclasses import dataclass, field
 from typing import Any
 
+PLAN_MODE_PERMISSION_DENIED = "Permission dialogs automatically rejected in plan mode."
+
 
 @dataclass
 class SecondBrainContext:
@@ -47,6 +49,8 @@ class SecondBrainContext:
     command_registry: Any = None # Slash-command registry for command plugins.
     session_key: str | None = None # Frontend conversation/session key, when available.
     user_initiated: bool = False # Explicit user command, not an autonomous agent call.
+    current_tool_name: str | None = None
+    approval_denial_reason: str = ""
 
 
 def build_context(db, config: dict, services: dict, call_tool=None,
@@ -54,7 +58,8 @@ def build_context(db, config: dict, services: dict, call_tool=None,
                    runtime=None,
                    root_dir=None, command_registry=None,
                    session_key: str | None = None,
-                   user_initiated: bool = False) -> SecondBrainContext:
+                   user_initiated: bool = False,
+                   current_tool_name: str | None = None) -> SecondBrainContext:
     """
     Build a fully wired runtime context.
 
@@ -77,6 +82,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
 
     approve_command = None
     request_user_input = None
+    ctx = None
     if runtime is not None and session_key:
         def request_user_input(title: str, prompt: str, **kwargs):
             """Handle request user input."""
@@ -84,6 +90,15 @@ def build_context(db, config: dict, services: dict, call_tool=None,
 
         def approve_command(command: str, justification: str) -> bool:
             """Approve command."""
+            if ctx is not None:
+                ctx.approval_denial_reason = ""
+            session = getattr(runtime, "sessions", {}).get(session_key)
+            if getattr(session, "plan_mode", False):
+                if ctx is not None:
+                    ctx.approval_denial_reason = PLAN_MODE_PERMISSION_DENIED
+                return False
+            if current_tool_name and current_tool_name in (config.get("skip_permissions") or []):
+                return True
             req = runtime.request_input(
                 session_key,
                 "Agent requests approval",
@@ -98,7 +113,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
                 return False
             return req.approved
 
-    return SecondBrainContext(
+    ctx = SecondBrainContext(
         db=db,
         config=config,
         services=services,
@@ -112,4 +127,6 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         command_registry=command_registry,
         session_key=session_key,
         user_initiated=user_initiated,
+        current_tool_name=current_tool_name,
     )
+    return ctx

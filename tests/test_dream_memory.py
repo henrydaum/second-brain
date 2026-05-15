@@ -82,4 +82,4 @@ def test_dream_memory_invalid_json_preserves_memory(monkeypatch, tmp_path):
 def test_default_scheduled_jobs_include_titles_and_dream_memory():
     """Verify default scheduled jobs include titles and dream memory."""
     assert DEFAULT_SCHEDULED_JOBS["update_titles"]["cron"] == "*/30 * * * *"
-    assert DEFAULT_SCHEDULED_JOBS["dream_memory"]["cron"] == "0 2 * * *"
+    assert DEFAULT_SCHEDULED_JOBS["dream_memory"]["cron"] == "0 4 * * *"

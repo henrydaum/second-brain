@@ -46,6 +46,7 @@ class EditFile(BaseTool):
     requires_services = []
     max_calls = 20
     background_safe = False
+    plan_mode_safe = False
 
     def run(self, context, **kwargs) -> ToolResult:
         """Run edit file."""
@@ -66,7 +67,12 @@ class EditFile(BaseTool):
                 ok = context.approve_command(f"edit_file {op} {p}", f"{justification}{warning}\n\npath: {p}{extra}".strip())
             except Exception as e:
                 return ToolResult.failed(f"Approval dialog error: {e}")
-            return None if ok else ToolResult.failed("Edit denied by user. STOP — do not retry this edit. Ask the user what they would like you to do instead.")
+            if ok:
+                return None
+            return ToolResult.failed(
+                getattr(context, "approval_denial_reason", "")
+                or "Edit denied by user. STOP — do not retry this edit. Ask the user what they would like you to do instead."
+            )
 
         try:
             if op == "delete":

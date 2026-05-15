@@ -122,6 +122,7 @@ class EmailSend(BaseTool):
     requires_services = ["gmail"]
     max_calls = 10
     background_safe = True
+    plan_mode_safe = False
 
     def run(self, context, **kwargs) -> ToolResult:
         """Run email send."""
@@ -315,7 +316,8 @@ def _require_approval(context, action_summary: str, detail: str) -> ToolResult |
         return ToolResult.failed(f"Approval dialog error: {e}")
     if not approved:
         return ToolResult.failed(
-            "Email send denied by user. STOP — do not retry. "
+            getattr(context, "approval_denial_reason", "")
+            or "Email send denied by user. STOP — do not retry. "
             "Ask the user what they would like to do instead."
         )
     return None

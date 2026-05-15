@@ -114,6 +114,7 @@ class EmailModifyLabels(BaseTool):
     requires_services = ["gmail"]
     max_calls = 10
     background_safe = True
+    plan_mode_safe = False
 
     def run(self, context, **kwargs) -> ToolResult:
         """Run email modify labels."""

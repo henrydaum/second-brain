@@ -283,7 +283,8 @@ class RunCommand(BaseTool):
 
             if not approved:
                 return ToolResult.failed(
-                    "Command denied by user. STOP — do not retry this command. "
+                    getattr(context, "approval_denial_reason", "")
+                    or "Command denied by user. STOP — do not retry this command. "
                     "Ask the user what they would like you to do instead.")
 
         # ── Execute ──────────────────────────────────────────────
