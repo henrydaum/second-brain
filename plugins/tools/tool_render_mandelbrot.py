@@ -23,6 +23,10 @@ PRESETS = {
     "deep_fire": (-0.748, 0.102, 0.012),
 }
 PALETTES = {"aurora", "inferno", "electric", "nebula", "gold"}
+try:
+    import numpy as np
+except Exception:
+    np = None
 
 
 class RenderMandelbrot(BaseTool):
@@ -84,6 +88,10 @@ class RenderMandelbrot(BaseTool):
 def _render(path: Path, w: int, h: int, max_iter: int, cx: float, cy: float, scale: float, palette: str, seed: int) -> None:
     from PIL import Image
 
+    fast = _render_np(w, h, max_iter, cx, cy, scale, palette, seed)
+    if fast is not None:
+        fast.save(path, "PNG", optimize=True)
+        return
     rnd = random.Random(seed)
     shift, contrast, glow = rnd.random(), rnd.uniform(0.82, 1.28), rnd.uniform(0.85, 1.18)
     img = Image.new("RGB", (w, h))
@@ -105,6 +113,37 @@ def _render(path: Path, w: int, h: int, max_iter: int, cx: float, cy: float, sca
             smooth = i + 1 - math.log(math.log(mag, 2), 2)
             px[x, y] = _color((smooth / max_iter * contrast + shift) % 1.0, palette, glow)
     img.save(path, "PNG", optimize=True)
+
+
+def _render_np(w: int, h: int, max_iter: int, cx: float, cy: float, scale: float, palette: str, seed: int):
+    if np is None:
+        return None
+    from PIL import Image
+
+    rnd = random.Random(seed)
+    x = np.linspace(cx - scale / 2, cx + scale / 2, w, dtype=np.float32)
+    y = np.linspace(cy - scale * h / w / 2, cy + scale * h / w / 2, h, dtype=np.float32)
+    c = x[None, :] + 1j * y[:, None]
+    z = np.zeros(c.shape, dtype=np.complex64)
+    count = np.zeros(c.shape, dtype=np.float32)
+    live = np.ones(c.shape, dtype=bool)
+    with np.errstate(over="ignore", invalid="ignore"):
+        for i in range(1, max_iter + 1):
+            z[live] = z[live] * z[live] + c[live]
+            escaped = live & (np.abs(z) > 4)
+            count[escaped] = i
+            live[escaped] = False
+            if not live.any():
+                break
+    t = (count / max_iter * rnd.uniform(0.82, 1.28) + rnd.random()) % 1
+    arr = np.zeros((*count.shape, 3), dtype=np.uint8)
+    base = {"inferno": .08, "electric": .56, "nebula": .74, "gold": .12, "aurora": .42}.get(palette, .42) * 6.283
+    v = np.clip(.12 + .9 * t, 0, 1) * rnd.uniform(.85, 1.18)
+    arr[..., 0] = (255 * v * (.5 + .5 * np.sin(base + t * 6.0))).clip(0, 255).astype("uint8")
+    arr[..., 1] = (255 * v * (.5 + .5 * np.sin(base + 2.1 + t * 7.2))).clip(0, 255).astype("uint8")
+    arr[..., 2] = (255 * v * (.5 + .5 * np.sin(base + 4.2 + t * 5.1))).clip(0, 255).astype("uint8")
+    arr[count == 0] = (3, 4, 9)
+    return Image.fromarray(arr, "RGB")
 
 
 def _color(t: float, palette: str, glow: float = 1.0) -> tuple[int, int, int]:

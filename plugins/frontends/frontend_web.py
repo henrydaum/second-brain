@@ -18,7 +18,7 @@ logger = logging.getLogger("WebFrontend")
 WEB_ROOT = Path(__file__).with_name("web")
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 WEB_PROFILE = "web_demo"
-WEB_TOOLS = ["render_mandelbrot", "render_files", "save_fractal_art", "find_similar_images"]
+WEB_TOOLS = ["render_mandelbrot", "render_julia", "render_burning_ship", "render_tricorn", "render_phoenix", "render_newton_fractal", "render_barnsley_fern", "render_sierpinski", "render_mandelbulb", "render_formula_fractal", "render_strange_attractor", "render_flow_field", "render_cellular_automata", "render_reaction_diffusion", "render_lenia_like", "render_pixel_mosaic", "render_files", "save_fractal_art", "find_similar_images"]
 
 
 class WebFrontend(BaseFrontend):
@@ -95,6 +95,7 @@ class WebFrontend(BaseFrontend):
             "prompt_suffix": (
                 "You are running the public Second Brain web demo. Keep replies concise, visual, and safe. "
                 "Do not tell users to use slash commands. Use render_mandelbrot for fractal requests, then rely on the image attachment to update the large showcase pane. "
+                "Choose freely from the visual tools: Mandelbrot, Julia, Burning Ship, Tricorn, Phoenix, Newton, Barnsley fern, Sierpinski, Mandelbulb, safe custom formula fractals, strange attractors, flow fields, cellular automata, reaction-diffusion, Lenia-like automata, and pixel mosaics. "
                 "After rendering, ask whether they want to share it. If yes, ask for an optional title and name, then call save_fractal_art. Use find_similar_images when they want to see related shared art."
             ),
             "whitelist_or_blacklist_tools": "whitelist",

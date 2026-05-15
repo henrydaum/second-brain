@@ -5,12 +5,13 @@ const input = document.querySelector("#chatInput");
 const showcase = document.querySelector(".showcase");
 const heroImage = document.querySelector("#heroImage");
 const downloadImage = document.querySelector("#downloadImage");
+const bottom = () => requestAnimationFrame(() => messages.scrollTop = messages.scrollHeight);
 const add = (role, text) => {
   const el = document.createElement("article");
   el.className = role;
   el.textContent = text;
   messages.appendChild(el);
-  messages.scrollTop = messages.scrollHeight;
+  bottom();
 };
 async function post(url, body = {}) {
   const res = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({session_id:sid, ...body})});
@@ -31,7 +32,7 @@ function approval(ev) {
   }
   el.appendChild(actions);
   messages.appendChild(el);
-  messages.scrollTop = messages.scrollHeight;
+  bottom();
 }
 function render(events) {
   for (const ev of events || []) {
@@ -50,6 +51,7 @@ function render(events) {
     }
     else if (ev.type === "attachment") add("assistant", `Attachment: ${ev.name}`);
   }
+  bottom();
 }
 form.addEventListener("submit", async e => {
   e.preventDefault();
@@ -61,6 +63,7 @@ form.addEventListener("submit", async e => {
   thinking.className = "status";
   thinking.textContent = "Thinking...";
   messages.appendChild(thinking);
+  bottom();
   try { const result = await post("/api/chat", {message:text}); thinking.remove(); render(result.events); }
   catch (err) { add("error", err.message); }
 });

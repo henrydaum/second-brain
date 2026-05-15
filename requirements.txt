@@ -1,5 +1,6 @@
 # Pi demo core
 openai
+numpy
 Pillow
 requests
 watchdog
