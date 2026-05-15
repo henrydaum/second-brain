@@ -46,7 +46,6 @@ def build_prompt_sections(
         _sandbox_files() if _has_tool(r, "test_plugin") else "",
         _attachments() if _has_tool(r, "sql_query") else "",
         _database_tables(db) if _has_tool(r, "sql_query") else "",
-        _scheduling_guidance() if _has_tool(r, "schedule_subagent") else "",
     ]
     dynamic = [
         _current_datetime(),
@@ -55,7 +54,7 @@ def build_prompt_sections(
         _services_status(services),
         _pipeline_status(db, orchestrator),
         _sync_dirs(config),
-        _file_inventory(db) if _has_any(r, "read_file", "hybrid_search", "lexical_search", "semantic_search") else "",
+        _file_inventory(db) if _has_any(r, "read_file", "hybrid_search", "lexical_search") else "",
         _agent_memory(),
         _conversation_metadata(conversation_metadata),
         _prompt_extras(prompt_extras),
@@ -292,14 +291,3 @@ You are running under the '{profile_name}' agent profile. Tool access is limited
     )
 
 
-def _scheduling_guidance() -> str:
-    return (
-        """## Scheduling and cron jobs
-Treat your schedule_subgaent tool as the user's calendar and background task system.
-
-Use it to create reminders, recurring checks, follow-ups, and delayed autonomous work. When the user asks about their schedule, reminders, upcoming events, or planned tasks, inspect the schedule with schedule_subagent before answering. Scheduled tasks are persisted in the config.
-
-Schedule reminders for 1 hr before the actual event, unless otherwise specified. If it isn't clear from the prompt whether a job should be recurrent or one-time, ask the user to clarify. Include unambiguous, step-by-step instructions in the prompt for the agent to follow.
-
-Determine whether creating a new event-driven task, scheduling a subagent, or editing memory.md is the best way to accomplish the user's underlying goal."""
-        )

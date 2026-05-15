@@ -93,8 +93,7 @@ def _describe(context, task_name):
     db = getattr(context, "db", None)
     counts = (db.get_system_stats().get("tasks", {}) if db else {}) | (db.get_run_stats() if db and hasattr(db, "get_run_stats") else {})
     c = {"PENDING": 0, "PROCESSING": 0, "DONE": 0, "FAILED": 0} | counts.get(task_name, {})
-    hint = _schedule_hint(context, orch.tasks[task_name])
-    return f"{task_name}\nPending: {c['PENDING']}      Running: {c['PROCESSING']}      Done: {c['DONE']}      Failed: {c['FAILED']}" + (f"\n\n{hint}" if hint else "")
+    return f"{task_name}\nPending: {c['PENDING']}      Running: {c['PROCESSING']}      Done: {c['DONE']}      Failed: {c['FAILED']}"
 
 
 def _task(context, name):
@@ -118,29 +117,3 @@ def _trigger(context, task, args):
     return f"Triggered task: {name} ({run_id})"
 
 
-def _timekeeper(context):
-    """Internal helper to handle timekeeper."""
-    tk = (getattr(context, "services", None) or {}).get("timekeeper")
-    return tk if tk is not None and getattr(tk, "loaded", False) else None
-
-
-def _task_channels(task) -> list[str]:
-    """Internal helper to handle task channels."""
-    return [c for c in (getattr(task, "trigger_channels", []) or []) if c]
-
-
-def _jobs_for_task(context, task) -> list[str]:
-    """Internal helper to handle jobs for task."""
-    tk = _timekeeper(context)
-    if tk is None:
-        return []
-    channels = set(_task_channels(task))
-    return sorted(name for name, job in tk.list_jobs().items() if (job.get("channel") or "") in channels)
-
-
-def _schedule_hint(context, task) -> str:
-    """Internal helper to handle schedule hint."""
-    if getattr(task, "trigger", "path") != "event":
-        return ""
-    count = len(_jobs_for_task(context, task))
-    return f"Scheduled jobs: {count}. Use /schedule to manage them." if count else ""

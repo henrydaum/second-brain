@@ -9,7 +9,7 @@ from plugins.BaseCommand import BaseCommand
 class DoctorCommand(BaseCommand):
     """Slash-command handler for `/doctor`."""
     name = "doctor"
-    description = "Summarize runtime health, queues, schedules, and recent log errors"
+    description = "Summarize runtime health, queues, and recent log errors"
     category = "System"
 
     def run(self, _args, context):
@@ -37,9 +37,6 @@ class DoctorCommand(BaseCommand):
             "",
             "Queues:",
             *_task_lines({**(stats.get("tasks") or {}), **run_stats}),
-            "",
-            "Schedules:",
-            *_schedule_lines(services.get("timekeeper")),
             "",
             "LLM:",
             *_llm_lines(services.get("llm")),
@@ -91,17 +88,6 @@ def _task_lines(counts):
         if c["PENDING"] or c["PROCESSING"] or c["FAILED"]:
             lines.append(f"  {name}: {c['PENDING']} pending, {c['PROCESSING']} running, {c['FAILED']} failed")
     return lines or ["  No pending, running, or failed work."]
-
-
-def _schedule_lines(tk):
-    """Return schedule findings."""
-    if not tk or not getattr(tk, "loaded", False) or not hasattr(tk, "list_jobs"):
-        return ["  Timekeeper is not loaded."]
-    jobs = tk.list_jobs()
-    if not jobs:
-        return ["  No scheduled jobs."]
-    disabled = [name for name, job in jobs.items() if not job.get("enabled", True)]
-    return [f"  {len(jobs)} job(s), {len(disabled)} disabled"] + [f"  disabled: {name}" for name in disabled[:5]]
 
 
 def _llm_lines(llm):

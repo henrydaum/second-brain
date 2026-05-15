@@ -1,50 +1,5 @@
-# LLM / AI services
+# Pi demo core
 openai
-lmstudio
-
-# Embeddings
-sentence-transformers
-numpy
-
-# Speech transcription
-faster-whisper
-torch
-
-# Image processing
 Pillow
-pillow-heif
-
-# Document parsing
-PyMuPDF
-python-docx
-python-pptx
-pandas
-
-# Archive parsing
-py7zr
-rarfile
-
-# HTTP
 requests
-
-# Scheduling
-croniter
-cron-descriptor
-
-# Telegram bot
-python-telegram-bot
-
-# Google Drive
-google-auth
-google-auth-oauthlib
-google-api-python-client
-
-# Windows OCR (Windows only)
-winsdk; sys_platform == "win32"
-
-# Mac OCR (macOS only) — Apple Vision via pyobjc
-pyobjc-framework-Vision; sys_platform == "darwin"
-pyobjc-framework-Quartz; sys_platform == "darwin"
-
-# Syncing
 watchdog

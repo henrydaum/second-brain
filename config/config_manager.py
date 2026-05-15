@@ -24,7 +24,7 @@ _LIST_KEYS = {name for _, name, _, default, info in SETTINGS_DATA if isinstance(
 
 _DEFAULT_CONFIG_PATH = str(DATA_DIR / "config.json")
 _DEFAULT_PLUGIN_CONFIG_PATH = str(DATA_DIR / "plugin_config.json")
-_SUPPORTED_FRONTENDS = ("repl", "telegram")
+_SUPPORTED_FRONTENDS = ("repl",)
 
 
 def _normalize_frontends(value) -> list[str]:

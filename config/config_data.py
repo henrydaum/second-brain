@@ -15,20 +15,7 @@ Each entry: (title, variable_name, description, default, type_info)
 
 from paths import DATA_DIR, ATTACHMENT_CACHE
 
-DEFAULT_SCHEDULED_JOBS = {
-    "update_titles": {
-        "channel": "update_titles",
-        "cron": "*/30 * * * *",
-        "enabled": True,
-        "payload": {},
-    },
-    "dream_memory": {
-        "channel": "dream_memory",
-        "cron": "0 4 * * *",
-        "enabled": True,
-        "payload": {},
-    },
-}
+DEFAULT_SCHEDULED_JOBS = {}
 
 SETTINGS_DATA = [
     # --- Directories ---
@@ -65,20 +52,20 @@ SETTINGS_DATA = [
 
     # --- Services ---
     ("Auto-load Services", "autoload_services",
-     "Service names to load automatically on startup (e.g. [\"google_drive\"]).",
-     ["web_search_provider", "timekeeper", "llm", "parser", "plugin_watcher"],
+     "Service names to load automatically on startup.",
+     ["web_search_provider", "llm", "parser"],
      {"type": "json_list"}),
 
     # --- Frontends ---
     ("Enabled Frontends", "enabled_frontends",
-     "Frontend modules to start on launch. Options: repl, telegram. Requires app restart.",
-     ["repl", "telegram"],
+     "Frontend modules to start on launch. Requires app restart.",
+     ["repl"],
      {"type": "json_list"}),
 
     # --- Processing ---
     ("Max Workers", "max_workers",
      "Maximum parallel worker threads for task processing. Takes effect on save.",
-     4,
+     2,
      {"type": "slider", "range": (1, 16, 15), "is_float": False}),
 
     ("Poll Interval", "poll_interval",
@@ -93,7 +80,7 @@ SETTINGS_DATA = [
 
     ("Tool Timeout", "tool_timeout",
      "Seconds before an agent tool call is forcibly abandoned and reported to the LLM as a timeout error.",
-     600,
+     120,
      {"type": "slider", "range": (30, 1800, 59), "is_float": False}),
 
     ("Skip Permissions", "skip_permissions",

@@ -5,7 +5,7 @@ from state_machine.conversation import FormStep
 
 
 ACTIONS = ["enable", "disable"]
-SUPPORTED = ["repl", "telegram"]
+SUPPORTED = ["repl"]
 
 
 class FrontendsCommand(BaseCommand):

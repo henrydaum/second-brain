@@ -136,8 +136,6 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
     # Transport-specific constructor args: discovery returns the class, the
     # bootstrap supplies what each frontend needs to talk to the host.
     manager.set_factory("repl", lambda cls: cls(shutdown_fn, shutdown_event))
-    manager.set_factory("telegram", lambda cls: cls(shutdown_event, services))
-
     for name in sorted(frontends):
         cls = classes.get(name)
         if cls is None:
