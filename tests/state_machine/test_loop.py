@@ -42,7 +42,7 @@ from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
 from state_machine.serialization import latest_state, save_state_marker
 from runtime.conversation_runtime import ConversationRuntime
 from runtime.context import PLAN_MODE_PERMISSION_DENIED
-from runtime.runtime_config import session_system_prompt
+from runtime.runtime_config import active_tool_registry, session_system_prompt
 from runtime.session import RuntimeResult, RuntimeSession
 from events.event_channels import CHAT_MESSAGE_PUSHED, COMMAND_CALL_FINISHED, SESSION_CLOSED, SESSION_CREATED, SESSION_TURN_COMPLETED, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from events.event_bus import bus
@@ -999,6 +999,18 @@ def test_session_prompt_includes_plan_mode_guidance_only_when_active():
     assert "Plan mode is active" in dynamic
     assert "propose_plan" in dynamic
     assert "approve and auto-approve permission dialogs for this turn" in dynamic
+
+
+def test_propose_plan_visible_only_in_plan_mode():
+    """Verify propose_plan is injected only while plan mode is active."""
+    registry = ToolRegistry(None, {"tool_timeout": 10})
+    runtime = ConversationRuntime(config=registry.config, tool_registry=registry)
+    session = runtime.get_session("chat")
+
+    assert "propose_plan" not in [s["function"]["name"] for s in active_tool_registry(runtime, session).get_all_schemas()]
+    session.plan_mode = True
+
+    assert "propose_plan" in [s["function"]["name"] for s in active_tool_registry(runtime, session).get_all_schemas()]
 
 
 def test_plan_mode_rejects_permission_dialogs_without_request(monkeypatch):
