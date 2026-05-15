@@ -27,18 +27,20 @@ class RenderStrangeAttractor(_Base):
     parameters = {**_Base.parameters, "properties": {**_Base.parameters["properties"], "preset": {"type": "string", "enum": ["clifford", "dejong", "hopalong"]}}}
     def run(self, context, **kw):
         w,h,d,p,s = self.args(kw); preset = _pick(kw.get("preset"), {"clifford","dejong","hopalong"}, "clifford"); r=random.Random(s); n=d*4200
-        img=Image.new("RGB",(w,h),(2,3,8)); px=img.load(); x=y=0.; pts=[]
-        a,b,c,e = [r.uniform(-2.4,2.4) for _ in range(4)]
+        density=np.zeros((h,w),np.float32); x=y=0.; pts=[]
+        a,b,c,e = {"clifford": (-1.4,1.6,1.0,.7), "dejong": (1.4,-2.3,2.4,-2.1), "hopalong": (.91,1.17,.83,0)}[preset]
+        a,b,c,e = a+r.uniform(-.08,.08), b+r.uniform(-.08,.08), c+r.uniform(-.08,.08), e+r.uniform(-.08,.08)
         for i in range(n):
             if preset=="dejong": x,y = math.sin(a*y)-math.cos(b*x), math.sin(c*x)-math.cos(e*y)
             elif preset=="hopalong": x,y = y - math.copysign(math.sqrt(abs(b*x-c)), x), a-x
             else: x,y = math.sin(a*y)+c*math.cos(a*x), math.sin(b*x)+e*math.cos(b*y)
             if i>200: pts.append((x,y))
         xs,ys=zip(*pts); mnx,mxx,mny,mxy=min(xs),max(xs),min(ys),max(ys)
-        for i,(x,y) in enumerate(pts):
+        for x,y in pts:
             X=int((x-mnx)/(mxx-mnx or 1)*(w-1)); Y=int((y-mny)/(mxy-mny or 1)*(h-1))
-            if 0<=X<w and 0<=Y<h: px[X,Y]=_color(i/len(pts),p,s,1.25)
-        return _save("strange_attractor", img.filter(ImageFilter.SMOOTH_MORE), {"preset": preset, "seed": s, "palette": p}, context)
+            if 0<=X<w and 0<=Y<h: density[Y,X]+=1
+        img=_rgb(np.log1p(density),p,s,density>0).filter(ImageFilter.SMOOTH_MORE)
+        return _save("strange_attractor", img, {"preset": preset, "seed": s, "palette": p}, context)
 
 
 class RenderFlowField(_Base):

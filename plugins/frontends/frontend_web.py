@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import hashlib
+import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,6 +21,7 @@ WEB_ROOT = Path(__file__).with_name("web")
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 WEB_PROFILE = "web_demo"
 WEB_TOOLS = ["render_mandelbrot", "render_julia", "render_burning_ship", "render_tricorn", "render_phoenix", "render_newton_fractal", "render_barnsley_fern", "render_sierpinski", "render_mandelbulb", "render_formula_fractal", "render_strange_attractor", "render_flow_field", "render_cellular_automata", "render_reaction_diffusion", "render_lenia_like", "render_pixel_mosaic", "render_files", "save_fractal_art", "find_similar_images"]
+USAGE_PATH = DATA_DIR / "web_usage.json"
 
 
 class WebFrontend(BaseFrontend):
@@ -30,6 +33,10 @@ class WebFrontend(BaseFrontend):
     config_settings = [
         ("Web Host", "web_host", "Host interface for the demo web server.", "127.0.0.1", {"type": "text"}),
         ("Web Port", "web_port", "Port for the demo web server.", 8765, {"type": "integer"}),
+        ("Web Global 5h Turns", "web_global_5h_turn_limit", "Public web chat-turn budget per 5 hours.", 600, {"type": "integer"}),
+        ("Web Global Weekly Turns", "web_global_week_turn_limit", "Public web chat-turn budget per 7 days.", 6000, {"type": "integer"}),
+        ("Web Session 5h Turns", "web_session_5h_turn_limit", "Per-browser chat-turn budget per 5 hours.", 40, {"type": "integer"}),
+        ("Web Session Weekly Turns", "web_session_week_turn_limit", "Per-browser chat-turn budget per 7 days.", 160, {"type": "integer"}),
     ]
 
     def __init__(self):
@@ -37,6 +44,7 @@ class WebFrontend(BaseFrontend):
         self._server = None
         self._outbox: dict[str, list[dict]] = {}
         self._lock = threading.RLock()
+        self._usage_lock = threading.RLock()
 
     def session_key(self, ctx=None) -> str:
         return f"web:{ctx or 'demo'}"
@@ -53,7 +61,7 @@ class WebFrontend(BaseFrontend):
             self._server.shutdown()
         self.unbind()
 
-    def chat(self, session_id: str, message: str) -> list[dict]:
+    def chat(self, session_id: str, message: str, ip: str = "") -> list[dict]:
         key = self.session_key(session_id)
         text = (message or "").strip()
         if text.startswith("/"):
@@ -61,6 +69,9 @@ class WebFrontend(BaseFrontend):
         self._ensure_conversation(key)
         if self.has_pending_approval(key):
             return [{"type": "error", "content": "Use the approval buttons to answer this permission request."}]
+        ok, error = self._record_usage(session_id, ip)
+        if not ok:
+            return [{"type": "error", "content": error}]
         self.submit_text(key, text)
         return self._drain(key)
 
@@ -152,6 +163,31 @@ class WebFrontend(BaseFrontend):
     def _live_session_keys(self) -> list[str]:
         return [k for k in getattr(self.runtime, "sessions", {}) if k.startswith("web:")]
 
+    def _record_usage(self, session_id: str, ip: str) -> tuple[bool, str]:
+        now = time.time()
+        five_h, week = now - 5 * 3600, now - 7 * 24 * 3600
+        sid = hashlib.sha256(f"{ip}|{session_id}".encode()).hexdigest()[:24]
+        with self._usage_lock:
+            data = _read_usage()
+            data["global"] = [t for t in data.get("global", []) if t >= week]
+            sessions = data.setdefault("sessions", {})
+            sessions[sid] = [t for t in sessions.get(sid, []) if t >= week]
+            g5 = sum(t >= five_h for t in data["global"])
+            s5 = sum(t >= five_h for t in sessions[sid])
+            limits = (
+                (g5, _int(self.config.get("web_global_5h_turn_limit"), 600), "The public demo is busy right now. Try again a little later."),
+                (len(data["global"]), _int(self.config.get("web_global_week_turn_limit"), 6000), "The public demo hit its weekly budget. Try again later."),
+                (s5, _int(self.config.get("web_session_5h_turn_limit"), 40), "This browser has hit its 5-hour demo limit. Try again later."),
+                (len(sessions[sid]), _int(self.config.get("web_session_week_turn_limit"), 160), "This browser has hit its weekly demo limit."),
+            )
+            for used, limit, msg in limits:
+                if limit > 0 and used >= limit:
+                    data["sessions"] = {k: v for k, v in sessions.items() if v}
+                    _write_usage(data)
+                    return False, msg
+            data["global"].append(now); sessions[sid].append(now); _write_usage(data)
+        return True, ""
+
 
 class _Server(ThreadingHTTPServer):
     def __init__(self, addr, handler, frontend):
@@ -177,7 +213,7 @@ class _Handler(BaseHTTPRequestHandler):
         sid = str(body.get("session_id") or "demo")[:80]
         try:
             if self.path == "/api/chat":
-                events = self.server.frontend.chat(sid, str(body.get("message") or ""))
+                events = self.server.frontend.chat(sid, str(body.get("message") or ""), self.client_address[0])
                 return self._json({"ok": True, "events": events})
             if self.path == "/api/new":
                 return self._json({"ok": True, "events": self.server.frontend.new_chat(sid)})
@@ -235,3 +271,22 @@ def _is_public_image(path: Path) -> bool:
         return target.is_file() and target.suffix.lower() in IMAGE_EXTS and (target == root or root in target.parents)
     except Exception:
         return False
+
+
+def _read_usage() -> dict:
+    try:
+        return json.loads(USAGE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {"global": [], "sessions": {}}
+
+
+def _write_usage(data: dict) -> None:
+    USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    USAGE_PATH.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _int(value, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
