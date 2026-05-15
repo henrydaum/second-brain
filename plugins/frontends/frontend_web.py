@@ -8,12 +8,16 @@ import mimetypes
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
+from paths import DATA_DIR
 
 logger = logging.getLogger("WebFrontend")
 WEB_ROOT = Path(__file__).with_name("web")
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+WEB_PROFILE = "web_demo"
+WEB_TOOLS = ["render_mandelbrot", "render_files"]
 
 
 class WebFrontend(BaseFrontend):
@@ -50,8 +54,11 @@ class WebFrontend(BaseFrontend):
 
     def chat(self, session_id: str, message: str) -> list[dict]:
         key = self.session_key(session_id)
+        text = (message or "").strip()
+        if text.startswith("/"):
+            return self.new_chat(session_id) if text == "/new" else [{"type": "error", "content": "Slash commands are disabled on the public demo. Use the chat or the New button."}]
         self._ensure_conversation(key)
-        self.submit_text(key, message)
+        self.submit_text(key, text)
         return self._drain(key)
 
     def new_chat(self, session_id: str) -> list[dict]:
@@ -61,12 +68,34 @@ class WebFrontend(BaseFrontend):
         return self._drain(key) or [{"type": "message", "role": "assistant", "content": "New demo conversation ready."}]
 
     def _ensure_conversation(self, key: str) -> None:
+        self._ensure_web_profile()
         session = self.runtime.get_session(key)
         if session.conversation_id is not None:
+            self._apply_web_scope(key)
             return
         cid = self.runtime.create_conversation("Web demo conversation", kind="user", category="Demo")
         if cid:
             self.runtime.load_conversation(key, cid, agent_profile="default")
+            self._apply_web_scope(key)
+
+    def _ensure_web_profile(self) -> None:
+        profiles = self.config.setdefault("agent_profiles", {})
+        profiles.setdefault(WEB_PROFILE, {
+            "llm": "default",
+            "prompt_suffix": (
+                "You are running the public Second Brain web demo. Keep replies concise, visual, and safe. "
+                "Do not tell users to use slash commands. Use render_mandelbrot for fractal requests, then rely on the image attachment to update the large showcase pane."
+            ),
+            "whitelist_or_blacklist_tools": "whitelist",
+            "tools_list": WEB_TOOLS,
+        })
+
+    def _apply_web_scope(self, key: str) -> None:
+        session = self.runtime.sessions.get(key)
+        if session:
+            session.profile_override = WEB_PROFILE
+            session.active_agent_profile = WEB_PROFILE
+        self.runtime.add_system_prompt_extra(key, "web_demo", "Website safety: browser users cannot run slash commands or edit runtime configuration. The visible demo tools are for generating and displaying fractal images.")
 
     def _push(self, session_key: str, item: dict) -> None:
         with self._lock:
@@ -83,7 +112,9 @@ class WebFrontend(BaseFrontend):
 
     def render_attachments(self, session_key: str, paths: list[str]) -> None:
         for path in paths:
-            self._push(session_key, {"type": "attachment", "path": path, "name": Path(path).name})
+            p = Path(path)
+            if _is_public_image(p):
+                self._push(session_key, {"type": "hero_image", "url": f"/files?path={quote(str(p.resolve()), safe='')}", "name": p.name})
 
     def render_form_field(self, session_key: str, form: dict) -> None:
         self._push(session_key, {"type": "form", "form": form})
@@ -120,6 +151,8 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/health":
             return self._json({"ok": True})
+        if path == "/files":
+            return self._local_file(parse_qs(urlparse(self.path).query).get("path", [""])[0])
         rel = "index.html" if path in {"", "/"} else path.lstrip("/")
         return self._file(WEB_ROOT / rel)
 
@@ -163,5 +196,24 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _local_file(self, raw_path: str):
+        path = Path(unquote(raw_path))
+        if not _is_public_image(path):
+            return self.send_error(404)
+        raw = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mimetypes.guess_type(str(path))[0] or "image/png")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def log_message(self, fmt, *args):
         logger.debug(fmt, *args)
+
+
+def _is_public_image(path: Path) -> bool:
+    try:
+        target, root = path.resolve(), DATA_DIR.resolve()
+        return target.is_file() and target.suffix.lower() in IMAGE_EXTS and (target == root or root in target.parents)
+    except Exception:
+        return False

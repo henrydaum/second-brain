@@ -23,7 +23,10 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .composer input:focus { border-color: var(--cyan); }
 .composer button { height: 44px; min-width: 82px; background: linear-gradient(135deg, var(--hot), #7d5cff); border: 0; font-weight: 800; }
 .showcase { position: relative; overflow: hidden; display: grid; align-items: end; min-height: 100vh; }
-#fractal { position: absolute; inset: 0; width: 100%; height: 100%; filter: saturate(1.2) contrast(1.08); }
+#fractal, #heroImage { position: absolute; inset: 0; width: 100%; height: 100%; filter: saturate(1.2) contrast(1.08); }
+#heroImage { display: none; object-fit: cover; }
+.showcase.has-image #fractal { display: none; }
+.showcase.has-image #heroImage { display: block; }
 .copy { position: relative; padding: 48px; max-width: 760px; text-shadow: 0 2px 24px #000; }
 .copy p:not(.eyebrow) { color: #d8dfef; max-width: 580px; margin-top: 16px; font-size: 18px; }
 .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }

@@ -2,6 +2,8 @@ const sid = localStorage.sbDemoSession || (localStorage.sbDemoSession = crypto.r
 const messages = document.querySelector("#messages");
 const form = document.querySelector("#chatForm");
 const input = document.querySelector("#chatInput");
+const showcase = document.querySelector(".showcase");
+const heroImage = document.querySelector("#heroImage");
 const add = (role, text) => {
   const el = document.createElement("article");
   el.className = role;
@@ -20,6 +22,12 @@ function render(events) {
     else if (ev.type === "error") add("error", ev.content);
     else if (ev.type === "form") add("assistant", `${ev.form?.display?.prompt || "Input required"}\n${(ev.form?.display?.choices || []).map(c => c.label || c.value).join(" / ")}`);
     else if (ev.type === "approval") add("assistant", `${ev.title}\n${ev.body}\nReply yes or no.`);
+    else if (ev.type === "hero_image") {
+      heroImage.src = ev.url;
+      heroImage.alt = ev.name || "Generated fractal";
+      showcase.classList.add("has-image");
+      add("status", `Showcase updated: ${ev.name}`);
+    }
     else if (ev.type === "attachment") add("assistant", `Attachment: ${ev.name}`);
   }
 }
@@ -29,8 +37,11 @@ form.addEventListener("submit", async e => {
   if (!text) return;
   input.value = "";
   add("user", text);
-  add("status", "Thinking...");
-  try { render((await post("/api/chat", {message:text})).events); }
+  const thinking = document.createElement("article");
+  thinking.className = "status";
+  thinking.textContent = "Thinking...";
+  messages.appendChild(thinking);
+  try { const result = await post("/api/chat", {message:text}); thinking.remove(); render(result.events); }
   catch (err) { add("error", err.message); }
 });
 document.querySelector("#newChat").addEventListener("click", async () => {

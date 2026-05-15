@@ -4,12 +4,14 @@ from pathlib import Path
 
 from plugins.BaseTool import BaseTool, ToolResult
 
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+
 
 class RenderFiles(BaseTool):
     """Render files."""
     name = "render_files"
     description = (
-        "Display one or more local files to the user in chat alongside an optional caption. Always use this for images, audio, and video — a description is not a substitute. Use it for documents the user asked to find or open, and for files referenced in your reply that the user will likely want to inspect. Skip it when your text reply fully covers the content (e.g. you quoted the three relevant lines)."
+        "Display exactly one local image in the web demo's large showcase pane. Use this only for image files you already created or found. It will not render documents, audio, video, or arbitrary files."
     )
     parameters = {
         "type": "object",
@@ -17,7 +19,7 @@ class RenderFiles(BaseTool):
             "paths": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "List of file paths to display. Maximum 10 per call.",
+                "description": "Image path to display. Only the first valid image is used.",
             },
             "caption": {
                 "type": "string",
@@ -39,25 +41,20 @@ class RenderFiles(BaseTool):
         valid = []
         missing = []
         for p in paths:
-            if Path(p).exists():
-                valid.append(str(Path(p)))
+            path = Path(p)
+            if path.exists() and path.suffix.lower() in IMAGE_EXTS:
+                valid.append(str(path))
             else:
                 missing.append(p)
 
         if not valid:
             return ToolResult.failed(
-                f"None of the provided paths exist: {missing}. "
-                f"If you guessed the paths, try hybrid_search first to find real ones."
+                f"No renderable image path was provided. Missing or non-image paths: {missing}."
             )
 
-        truncated_extra = max(0, len(valid) - 10)
-        if truncated_extra:
-            valid = valid[:10]
-
-        names = ", ".join(Path(p).name for p in valid)
+        valid = valid[:1]
+        names = Path(valid[0]).name
         notes = []
-        if truncated_extra:
-            notes.append(f"Skipped {truncated_extra} extra path(s) — 10-file limit per call.")
         if missing:
             notes.append(f"Missing: {missing}")
 
@@ -69,12 +66,12 @@ class RenderFiles(BaseTool):
             if notes:
                 summary += "\n\n(" + " ".join(notes) + ")"
         else:
-            summary = f"Rendered {len(valid)} file(s) to the user: {names}."
+            summary = f"Displayed image in the showcase pane: {names}."
             if notes:
                 summary += " " + " ".join(notes)
 
         return ToolResult(
-            data={"caption": caption} if caption else None,
+            data={"caption": caption, "display": "hero_image", "path": valid[0]},
             llm_summary=summary,
             attachment_paths=valid,
         )
