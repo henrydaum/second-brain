@@ -5,11 +5,13 @@ from __future__ import annotations
 import colorsys
 import json
 import math
+import random
 import time
 from pathlib import Path
 
 from paths import DATA_DIR
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.tools.helpers.fractal_gallery import mark_original, set_current
 
 
 PRESETS = {
@@ -41,6 +43,7 @@ class RenderMandelbrot(BaseTool):
             "height": {"type": "integer", "minimum": 480, "maximum": 1200, "description": "Image height."},
             "detail": {"type": "integer", "minimum": 80, "maximum": 450, "description": "Iteration limit. Higher is slower and more detailed."},
             "magnification": {"type": "number", "minimum": 0.5, "maximum": 8.0, "description": "Zoom multiplier applied to the preset."},
+            "seed": {"type": "integer", "description": "Optional color seed. Leave blank for a unique random render."},
             "center_x": {"type": "number", "minimum": -2.0, "maximum": 1.0, "description": "Optional custom real center."},
             "center_y": {"type": "number", "minimum": -1.5, "maximum": 1.5, "description": "Optional custom imaginary center."},
             "scale": {"type": "number", "minimum": 0.0005, "maximum": 3.2, "description": "Optional custom complex-plane width."},
@@ -56,6 +59,7 @@ class RenderMandelbrot(BaseTool):
         height = _clamp_int(kwargs.get("height"), 900, 480, 1200)
         detail = _clamp_int(kwargs.get("detail"), 220, 80, 450)
         magnification = _clamp_float(kwargs.get("magnification"), 1.0, 0.5, 8.0)
+        seed = _clamp_int(kwargs.get("seed"), random.randint(1, 2_147_483_647), 1, 2_147_483_647)
         cx, cy, scale = PRESETS[preset]
         cx = _clamp_float(kwargs.get("center_x"), cx, -2.0, 1.0)
         cy = _clamp_float(kwargs.get("center_y"), cy, -1.5, 1.5)
@@ -64,20 +68,24 @@ class RenderMandelbrot(BaseTool):
         out_dir = DATA_DIR / "fractals" / "mandelbrot"
         out_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        path = out_dir / f"mandelbrot-{preset}-{palette}-{stamp}.png"
-        _render(path, width, height, detail, cx, cy, scale, palette)
-        meta = {"preset": preset, "palette": palette, "width": width, "height": height, "detail": detail, "center_x": cx, "center_y": cy, "scale": scale, "path": str(path)}
+        path = out_dir / f"mandelbrot-{preset}-{palette}-{seed}-{stamp}.png"
+        _render(path, width, height, detail, cx, cy, scale, palette, seed)
+        meta = {"preset": preset, "palette": palette, "seed": seed, "width": width, "height": height, "detail": detail, "center_x": cx, "center_y": cy, "scale": scale, "path": str(path)}
         path.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        mark_original(path, meta)
+        set_current(getattr(context, "session_key", None), path, True, meta)
         return ToolResult(
             data=meta,
-            llm_summary=f"Rendered a {palette} Mandelbrot image at preset '{preset}' and displayed it in the showcase pane: {path}",
+            llm_summary=f"Rendered a unique {palette} Mandelbrot image with seed {seed}: {path}. Ask whether they want to share it; if yes, ask for an optional title and name, then call save_fractal_art.",
             attachment_paths=[str(path)],
         )
 
 
-def _render(path: Path, w: int, h: int, max_iter: int, cx: float, cy: float, scale: float, palette: str) -> None:
+def _render(path: Path, w: int, h: int, max_iter: int, cx: float, cy: float, scale: float, palette: str, seed: int) -> None:
     from PIL import Image
 
+    rnd = random.Random(seed)
+    shift, contrast, glow = rnd.random(), rnd.uniform(0.82, 1.28), rnd.uniform(0.85, 1.18)
     img = Image.new("RGB", (w, h))
     px = img.load()
     aspect = h / w
@@ -95,11 +103,11 @@ def _render(path: Path, w: int, h: int, max_iter: int, cx: float, cy: float, sca
                 continue
             mag = max(zr * zr + zi * zi, 1.000001)
             smooth = i + 1 - math.log(math.log(mag, 2), 2)
-            px[x, y] = _color(smooth / max_iter, palette)
+            px[x, y] = _color((smooth / max_iter * contrast + shift) % 1.0, palette, glow)
     img.save(path, "PNG", optimize=True)
 
 
-def _color(t: float, palette: str) -> tuple[int, int, int]:
+def _color(t: float, palette: str, glow: float = 1.0) -> tuple[int, int, int]:
     t = max(0.0, min(1.0, t))
     if palette == "inferno":
         h, s, v = 0.03 + 0.12 * t, 0.95, 0.18 + 0.82 * t
@@ -111,7 +119,7 @@ def _color(t: float, palette: str) -> tuple[int, int, int]:
         h, s, v = 0.10 + 0.05 * math.sin(t * 8), 0.82, 0.12 + 0.88 * t
     else:
         h, s, v = 0.44 + 0.35 * t, 0.82, 0.15 + 0.85 * t
-    return tuple(round(c * 255) for c in colorsys.hsv_to_rgb(h % 1.0, s, v))
+    return tuple(round(min(1.0, c * glow) * 255) for c in colorsys.hsv_to_rgb(h % 1.0, s, v))
 
 
 def _choice(value, allowed, default):

@@ -4,6 +4,7 @@ const form = document.querySelector("#chatForm");
 const input = document.querySelector("#chatInput");
 const showcase = document.querySelector(".showcase");
 const heroImage = document.querySelector("#heroImage");
+const downloadImage = document.querySelector("#downloadImage");
 const add = (role, text) => {
   const el = document.createElement("article");
   el.className = role;
@@ -15,16 +16,35 @@ async function post(url, body = {}) {
   const res = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({session_id:sid, ...body})});
   return res.json();
 }
+async function poll() { try { render((await fetch(`/api/events?session_id=${encodeURIComponent(sid)}`).then(r => r.json())).events); } catch {} }
+function approval(ev) {
+  const el = document.createElement("article");
+  el.className = "assistant";
+  el.textContent = `${ev.title}\n${ev.body}`;
+  const actions = document.createElement("div");
+  actions.className = "approval-actions";
+  for (const [label, value, cls] of [["Approve", true, "approve"], ["Deny", false, "deny"]]) {
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = cls; btn.textContent = label;
+    btn.onclick = async () => { actions.querySelectorAll("button").forEach(b => b.disabled = true); render((await post("/api/approval", {value})).events); };
+    actions.appendChild(btn);
+  }
+  el.appendChild(actions);
+  messages.appendChild(el);
+  messages.scrollTop = messages.scrollHeight;
+}
 function render(events) {
   for (const ev of events || []) {
     if (ev.type === "message") add("assistant", ev.content);
     else if (ev.type === "status") add("status", ev.content);
     else if (ev.type === "error") add("error", ev.content);
     else if (ev.type === "form") add("assistant", `${ev.form?.display?.prompt || "Input required"}\n${(ev.form?.display?.choices || []).map(c => c.label || c.value).join(" / ")}`);
-    else if (ev.type === "approval") add("assistant", `${ev.title}\n${ev.body}\nReply yes or no.`);
+    else if (ev.type === "approval") approval(ev);
     else if (ev.type === "hero_image") {
       heroImage.src = ev.url;
       heroImage.alt = ev.name || "Generated fractal";
+      downloadImage.href = ev.url;
+      downloadImage.download = ev.name || "fractal.png";
       showcase.classList.add("has-image");
       add("status", `Showcase updated: ${ev.name}`);
     }
@@ -48,6 +68,7 @@ document.querySelector("#newChat").addEventListener("click", async () => {
   messages.innerHTML = "";
   render((await post("/api/new")).events);
 });
+setInterval(poll, 1200);
 
 const canvas = document.querySelector("#fractal");
 const ctx = canvas.getContext("2d");

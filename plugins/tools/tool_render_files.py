@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.tools.helpers.fractal_gallery import is_image, read_json, set_current
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
@@ -42,7 +43,7 @@ class RenderFiles(BaseTool):
         missing = []
         for p in paths:
             path = Path(p)
-            if path.exists() and path.suffix.lower() in IMAGE_EXTS:
+            if is_image(path):
                 valid.append(str(path))
             else:
                 missing.append(p)
@@ -54,6 +55,7 @@ class RenderFiles(BaseTool):
 
         valid = valid[:1]
         names = Path(valid[0]).name
+        set_current(getattr(context, "session_key", None), valid[0], bool(read_json(Path(valid[0]).with_suffix(".json")).get("original")))
         notes = []
         if missing:
             notes.append(f"Missing: {missing}")

@@ -11,13 +11,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
+from plugins.tools.helpers.fractal_gallery import read_json, set_current
 from paths import DATA_DIR
 
 logger = logging.getLogger("WebFrontend")
 WEB_ROOT = Path(__file__).with_name("web")
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 WEB_PROFILE = "web_demo"
-WEB_TOOLS = ["render_mandelbrot", "render_files"]
+WEB_TOOLS = ["render_mandelbrot", "render_files", "save_fractal_art", "find_similar_images"]
 
 
 class WebFrontend(BaseFrontend):
@@ -58,7 +59,15 @@ class WebFrontend(BaseFrontend):
         if text.startswith("/"):
             return self.new_chat(session_id) if text == "/new" else [{"type": "error", "content": "Slash commands are disabled on the public demo. Use the chat or the New button."}]
         self._ensure_conversation(key)
+        if self.has_pending_approval(key):
+            return [{"type": "error", "content": "Use the approval buttons to answer this permission request."}]
         self.submit_text(key, text)
+        return self._drain(key)
+
+    def approve(self, session_id: str, value: bool) -> list[dict]:
+        key = self.session_key(session_id)
+        self._ensure_conversation(key)
+        self.submit_text(key, "yes" if value else "no")
         return self._drain(key)
 
     def new_chat(self, session_id: str) -> list[dict]:
@@ -80,11 +89,13 @@ class WebFrontend(BaseFrontend):
 
     def _ensure_web_profile(self) -> None:
         profiles = self.config.setdefault("agent_profiles", {})
-        profiles.setdefault(WEB_PROFILE, {
+        profile = profiles.setdefault(WEB_PROFILE, {})
+        profile.update({
             "llm": "default",
             "prompt_suffix": (
                 "You are running the public Second Brain web demo. Keep replies concise, visual, and safe. "
-                "Do not tell users to use slash commands. Use render_mandelbrot for fractal requests, then rely on the image attachment to update the large showcase pane."
+                "Do not tell users to use slash commands. Use render_mandelbrot for fractal requests, then rely on the image attachment to update the large showcase pane. "
+                "After rendering, ask whether they want to share it. If yes, ask for an optional title and name, then call save_fractal_art. Use find_similar_images when they want to see related shared art."
             ),
             "whitelist_or_blacklist_tools": "whitelist",
             "tools_list": WEB_TOOLS,
@@ -95,7 +106,7 @@ class WebFrontend(BaseFrontend):
         if session:
             session.profile_override = WEB_PROFILE
             session.active_agent_profile = WEB_PROFILE
-        self.runtime.add_system_prompt_extra(key, "web_demo", "Website safety: browser users cannot run slash commands or edit runtime configuration. The visible demo tools are for generating and displaying fractal images.")
+        self.runtime.add_system_prompt_extra(key, "web_demo", "Website safety: browser users cannot run slash commands or edit runtime configuration. The visible demo tools are for generating, sharing, and comparing fractal images. Never save/share art without calling save_fractal_art and letting the permission dialog confirm it.")
 
     def _push(self, session_key: str, item: dict) -> None:
         with self._lock:
@@ -114,6 +125,7 @@ class WebFrontend(BaseFrontend):
         for path in paths:
             p = Path(path)
             if _is_public_image(p):
+                set_current(session_key, p, bool(read_json(p.with_suffix(".json")).get("original")))
                 self._push(session_key, {"type": "hero_image", "url": f"/files?path={quote(str(p.resolve()), safe='')}", "name": p.name})
 
     def render_form_field(self, session_key: str, form: dict) -> None:
@@ -151,6 +163,9 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/health":
             return self._json({"ok": True})
+        if path == "/api/events":
+            sid = str(parse_qs(urlparse(self.path).query).get("session_id", ["demo"])[0])[:80]
+            return self._json({"ok": True, "events": self.server.frontend._drain(self.server.frontend.session_key(sid))})
         if path == "/files":
             return self._local_file(parse_qs(urlparse(self.path).query).get("path", [""])[0])
         rel = "index.html" if path in {"", "/"} else path.lstrip("/")
@@ -165,6 +180,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "events": events})
             if self.path == "/api/new":
                 return self._json({"ok": True, "events": self.server.frontend.new_chat(sid)})
+            if self.path == "/api/approval":
+                return self._json({"ok": True, "events": self.server.frontend.approve(sid, bool(body.get("value")))})
         except Exception as e:
             logger.exception("Web request failed")
             return self._json({"ok": False, "events": [{"type": "error", "content": str(e)}]}, 500)
