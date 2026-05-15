@@ -124,7 +124,7 @@ def main():
 	scaffold = Scaffold(orchestrator, database, services, config, tool_registry)
 
 	# --- 6b. Determine which frontends to start ---
-	frontends = set(config.get("enabled_frontends", ["repl"]))
+	frontends = set(config.get("enabled_frontends", ["web"]))
 	logger.info(f"Enabled frontends: {sorted(frontends)}")
 
 	# --- 7. Start orchestrator ---

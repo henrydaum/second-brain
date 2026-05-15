@@ -7,6 +7,7 @@ database.db*
 .VSCodeCounter
 .claude
 .codex_smoke/
+.codex_demo_data/
 .codex_pytest_tmp/
 .DS_Store
 .git

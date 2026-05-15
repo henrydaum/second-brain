@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Second Brain Demo</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="chat">
+      <header>
+        <div>
+          <p class="eyebrow">Local AI runtime</p>
+          <h1>Second Brain</h1>
+        </div>
+        <button id="newChat" title="Start a new conversation">New</button>
+      </header>
+      <div id="messages" class="messages">
+        <article class="assistant">Ask about the demo files, search local notes, or make the agent use a tool.</article>
+      </div>
+      <form id="chatForm" class="composer">
+        <input id="chatInput" autocomplete="off" placeholder="Ask Second Brain..." />
+        <button>Send</button>
+      </form>
+    </section>
+    <section class="showcase">
+      <canvas id="fractal" width="900" height="700"></canvas>
+      <div class="copy">
+        <p class="eyebrow">Coming next</p>
+        <h2>Fractal tools with memory</h2>
+        <p>Generate, zoom, save, and optionally share fractal art through the same tool system that powers file lookup and web search.</p>
+        <div class="chips"><span>Tool calls</span><span>Local files</span><span>Share gallery</span></div>
+      </div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

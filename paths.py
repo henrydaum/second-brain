@@ -13,14 +13,18 @@ from pathlib import Path
 # Project root (where main.pyw lives)
 ROOT_DIR = Path(__file__).parent
 
-# Mutable user data: database, model cache, config, credentials
+# Mutable demo data: database, config, credentials. Override for deployments.
+_APP_DATA_NAME = os.getenv("SECOND_BRAIN_APP_DATA", "Second Brain Demo")
+_DATA_OVERRIDE = os.getenv("SECOND_BRAIN_DATA_DIR")
 _system = platform.system()
-if _system == "Windows":
-    DATA_DIR = Path(os.getenv("LOCALAPPDATA", "")) / "Second Brain"
+if _DATA_OVERRIDE:
+    DATA_DIR = Path(_DATA_OVERRIDE)
+elif _system == "Windows":
+    DATA_DIR = Path(os.getenv("LOCALAPPDATA", "")) / _APP_DATA_NAME
 elif _system == "Darwin":
-    DATA_DIR = Path.home() / "Library" / "Application Support" / "Second Brain"
+    DATA_DIR = Path.home() / "Library" / "Application Support" / _APP_DATA_NAME
 else:
-    DATA_DIR = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "Second Brain"
+    DATA_DIR = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / _APP_DATA_NAME
 
 # Sandbox directories for agent-created plugins
 SANDBOX_TOOLS    = DATA_DIR / "sandbox_tools"
