@@ -165,11 +165,9 @@ def _authoring_guidance() -> str:
         f"""## Building plugins
 You can extend Second Brain by authoring tools, tasks, services, commands, and frontends.
 
-Use the matching template in templates/, then write the plugin into the matching DATA_DIR sandbox folder:
-- <plugin_type_singular>_<name>.py -> {DATA_DIR}/sandbox_<plugin_type_plural>/
-For example, {DATA_DIR}/sandbox_tools/tool_my_tool.py
+Read the matching template in templates/, then write the plugin into {DATA_DIR}/sandbox_<family>/ with the required prefix, e.g. tool_foo.py in {DATA_DIR}/sandbox_tools/.
 
-Do not create sandbox plugins in the project root. The sandbox_* folders are under DATA_DIR.
+Do not create sandbox plugins in the project root. The sandbox_* folders are under {DATA_DIR}.
 
 Workflow:
 1. Understand the user's intended behavior. Ask clarifying questions when a missing decision would materially change the design.
