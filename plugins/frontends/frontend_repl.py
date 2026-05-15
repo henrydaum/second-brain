@@ -91,7 +91,7 @@ class ReplFrontend(BaseFrontend):
         """Render messages."""
         for msg in messages:
             if msg:
-                print(f"\n{msg}")
+                print(f"{msg}\n")
 
     def render_attachments(self, _session_key: str, paths: list[str]) -> None:
         """Render attachments."""

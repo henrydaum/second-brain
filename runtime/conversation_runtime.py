@@ -132,6 +132,9 @@ class ConversationRuntime:
                                  messages=["Session is mid-form — handoff deferred."],
                                  error={"code": "busy", "message": "form in progress"})
 
+        if action_type == "cancel" and not session.busy and session.cs.phase == BASE_PHASE:
+            return RuntimeResult(messages=["Nothing to cancel."])
+
         # Busy guard: if the session is mid-turn, only ``cancel`` and the
         # specific ``answer_approval`` for an active approval frame may
         # proceed. Everything else is told to wait or cancel first.

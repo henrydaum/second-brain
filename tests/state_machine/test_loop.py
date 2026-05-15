@@ -23,6 +23,7 @@ import pytest
 from agent.system_prompt import build_prompt_sections
 from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.commands.command_cancel import CancelCommand
 from plugins.commands.command_plan import PlanCommand
 from plugins.commands.command_conversations import ConversationsCommand, NewCommand
 from plugins.commands.command_tools import ToolsCommand
@@ -1117,6 +1118,18 @@ def test_propose_plan_approval_turns_plan_mode_off():
     assert seen and seen[0].success
     assert runtime.sessions["chat"].plan_mode is False
     assert runtime.sessions["chat"].full_permissions_this_turn is False
+
+
+def test_cancel_when_nothing_pending_returns_clear_message():
+    """Verify /cancel is a clean no-op when nothing is cancellable."""
+    runtime = ConversationRuntime()
+    runtime.get_session("chat")
+
+    result = runtime.handle_action("chat", "cancel")
+
+    assert result.ok
+    assert result.messages == ["Nothing to cancel."]
+    assert CancelCommand().run({}, SimpleNamespace(runtime=runtime, session_key="chat")) == "Nothing to cancel."
 
 
 def test_propose_plan_full_permissions_sets_one_turn_flag():
