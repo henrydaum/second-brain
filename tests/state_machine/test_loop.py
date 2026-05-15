@@ -45,7 +45,7 @@ from runtime.conversation_runtime import ConversationRuntime
 from runtime.context import PLAN_MODE_PERMISSION_DENIED
 from runtime.runtime_config import active_tool_registry, session_system_prompt
 from runtime.session import RuntimeResult, RuntimeSession
-from events.event_channels import CHAT_MESSAGE_PUSHED, COMMAND_CALL_FINISHED, SESSION_CLOSED, SESSION_CREATED, SESSION_TURN_COMPLETED, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
+from events.event_channels import CHAT_MESSAGE_PUSHED, COMMAND_CALL_FINISHED, PLAN_MODE_CHANGED, SESSION_CLOSED, SESSION_CREATED, SESSION_TURN_COMPLETED, TOOL_CALL_FINISHED, TOOL_CALL_STARTED
 from events.event_bus import bus
 
 
@@ -978,14 +978,21 @@ def test_plan_command_toggles_and_persists_plan_mode():
     runtime = ConversationRuntime(db=db)
     session = runtime.open_session("chat", title="Plan test")
     ctx = SimpleNamespace(runtime=runtime, session_key="chat")
+    events = []
+    unsub = bus.subscribe(PLAN_MODE_CHANGED, events.append)
 
-    assert PlanCommand().run({}, ctx) == "Plan mode on."
-    assert session.plan_mode is True
-    assert latest_state(db.get_conversation_messages(session.conversation_id))["plan_mode"] is True
+    try:
+        assert PlanCommand().run({}, ctx) is None
+        assert session.plan_mode is True
+        assert events[-1]["message"] == "Plan mode on."
+        assert latest_state(db.get_conversation_messages(session.conversation_id))["plan_mode"] is True
 
-    restored = ConversationRuntime(db=db).load_conversation("chat", session.conversation_id)
-    assert restored.plan_mode is True
-    assert PlanCommand().run({}, SimpleNamespace(runtime=runtime, session_key="chat")) == "Plan mode off."
+        restored = ConversationRuntime(db=db).load_conversation("chat", session.conversation_id)
+        assert restored.plan_mode is True
+        assert PlanCommand().run({}, SimpleNamespace(runtime=runtime, session_key="chat")) is None
+        assert events[-1]["message"] == "Plan mode off."
+    finally:
+        unsub()
 
 
 def test_session_prompt_includes_plan_mode_guidance_only_when_active():
@@ -1106,18 +1113,24 @@ def test_propose_plan_approval_turns_plan_mode_off():
         session_key="chat",
     )
     seen = []
+    events = []
+    unsub = bus.subscribe(PLAN_MODE_CHANGED, events.append)
     worker = threading.Thread(target=lambda: seen.append(ProposePlan().run(ctx, title="Do it", plan="- Step")), daemon=True)
 
-    worker.start()
-    deadline = time.time() + 5
-    while time.time() < deadline and runtime.sessions["chat"].cs.phase != PHASE_APPROVING_REQUEST:
-        time.sleep(0.01)
-    assert runtime.handle_action("chat", "answer_approval", {"value": "approve"}).ok
-    worker.join(timeout=5)
+    try:
+        worker.start()
+        deadline = time.time() + 5
+        while time.time() < deadline and runtime.sessions["chat"].cs.phase != PHASE_APPROVING_REQUEST:
+            time.sleep(0.01)
+        assert runtime.handle_action("chat", "answer_approval", {"value": "approve"}).ok
+        worker.join(timeout=5)
+    finally:
+        unsub()
 
     assert seen and seen[0].success
     assert runtime.sessions["chat"].plan_mode is False
     assert runtime.sessions["chat"].full_permissions_this_turn is False
+    assert events[-1]["message"] == "Plan approved. Plan mode is off."
 
 
 def test_cancel_when_nothing_pending_returns_clear_message():

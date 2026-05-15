@@ -46,8 +46,9 @@ class ProposePlan(BaseTool):
         runtime = getattr(context, "runtime", None)
         session_key = getattr(context, "session_key", None)
         if runtime is not None and session_key:
-            runtime.set_plan_mode(session_key, False)
             session = runtime.sessions.get(session_key)
+            message = "Plan approved. Plan mode is off, and permission dialogs are auto-approved for this turn." if choice == "approve_full_permissions" and getattr(session, "busy", False) else "Plan approved. Plan mode is off."
+            runtime.set_plan_mode(session_key, False, message=message)
             if session is not None and choice == "approve_full_permissions" and session.busy:
                 session.full_permissions_this_turn = True
         if choice == "approve_full_permissions":

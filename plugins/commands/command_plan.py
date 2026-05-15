@@ -18,4 +18,4 @@ class PlanCommand(BaseCommand):
         session = runtime.sessions.get(session_key)
         enabled = not bool(getattr(session, "plan_mode", False))
         runtime.set_plan_mode(session_key, enabled)
-        return f"Plan mode {'on' if enabled else 'off'}."
+        return None

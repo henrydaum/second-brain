@@ -44,6 +44,7 @@ from typing import Any, Callable
 from events.event_bus import bus
 from events.event_channels import (
     CHAT_MESSAGE_PUSHED,
+    PLAN_MODE_CHANGED,
     SESSION_AGENT_PROFILE_CHANGED,
     SESSION_CLOSED,
     SYSTEM_PROMPT_EXTRA_CHANGED,
@@ -580,13 +581,16 @@ class ConversationRuntime:
             })
         return out
 
-    def set_plan_mode(self, session_key: str, enabled: bool) -> bool:
+    def set_plan_mode(self, session_key: str, enabled: bool, message: str | None = None) -> bool:
         """Enable or disable plan mode for one live session."""
         session = self.sessions.get(session_key)
         if session is None:
             return False
+        old = bool(session.plan_mode)
         session.plan_mode = bool(enabled)
         _persist.persist_marker(self, session)
+        if old != session.plan_mode:
+            bus.emit(PLAN_MODE_CHANGED, {"session_key": session_key, "enabled": session.plan_mode, "message": message or f"Plan mode {'on' if enabled else 'off'}."})
         return True
 
     def push_message(self, session_key: str, text: str, *, title: str | None = None,

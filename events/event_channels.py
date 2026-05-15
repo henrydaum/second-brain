@@ -208,6 +208,13 @@ Payload:
     key:         str
     value:       str | None  (None on removal)"""
 
+PLAN_MODE_CHANGED = "plan_mode_changed"
+"""Plan mode was enabled or disabled for a session.
+Payload:
+    session_key: str
+    enabled:     bool
+    message:     str"""
+
 
 # ── Reserved (not yet emitted) ─────────────────────────────────────
 # Documented here so future work has an obvious home instead of inventing
