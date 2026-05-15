@@ -998,6 +998,7 @@ def test_session_prompt_includes_plan_mode_guidance_only_when_active():
     dynamic = session_system_prompt(runtime, session)()[-1]["content"]
     assert "Plan mode is active" in dynamic
     assert "propose_plan" in dynamic
+    assert "approve and auto-approve permission dialogs for this turn" in dynamic
 
 
 def test_plan_mode_rejects_permission_dialogs_without_request(monkeypatch):
@@ -1109,7 +1110,9 @@ def test_propose_plan_approval_turns_plan_mode_off():
 def test_propose_plan_full_permissions_sets_one_turn_flag():
     """Verify full-permission plan approval sets the transient turn flag."""
     runtime = ConversationRuntime()
-    runtime.get_session("chat").plan_mode = True
+    session = runtime.get_session("chat")
+    session.plan_mode = True
+    session.busy = True
     ctx = SimpleNamespace(
         request_user_input=lambda title, prompt, **kw: runtime.request_input("chat", title, prompt, **kw),
         runtime=runtime,
@@ -1129,6 +1132,31 @@ def test_propose_plan_full_permissions_sets_one_turn_flag():
     assert runtime.sessions["chat"].plan_mode is False
     assert runtime.sessions["chat"].full_permissions_this_turn is True
     assert seen[0].data["full_permissions_this_turn"] is True
+
+
+def test_propose_plan_full_permissions_does_not_linger_outside_agent_turn():
+    """Verify manual plan approval does not leave full permissions armed."""
+    runtime = ConversationRuntime()
+    runtime.get_session("chat").plan_mode = True
+    ctx = SimpleNamespace(
+        request_user_input=lambda title, prompt, **kw: runtime.request_input("chat", title, prompt, **kw),
+        runtime=runtime,
+        session_key="chat",
+    )
+    seen = []
+    worker = threading.Thread(target=lambda: seen.append(ProposePlan().run(ctx, title="Do it", plan="- Step")), daemon=True)
+
+    worker.start()
+    deadline = time.time() + 5
+    while time.time() < deadline and runtime.sessions["chat"].cs.phase != PHASE_APPROVING_REQUEST:
+        time.sleep(0.01)
+    assert runtime.handle_action("chat", "answer_approval", {"value": "approve_full_permissions"}).ok
+    worker.join(timeout=5)
+
+    assert seen and seen[0].success
+    assert runtime.sessions["chat"].plan_mode is False
+    assert runtime.sessions["chat"].full_permissions_this_turn is False
+    assert seen[0].data["full_permissions_this_turn"] is False
 
 
 def test_propose_plan_denial_keeps_plan_mode_active():

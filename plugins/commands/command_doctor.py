@@ -20,6 +20,7 @@ class DoctorCommand(BaseCommand):
         run_stats = db.get_run_stats() if db and hasattr(db, "get_run_stats") else {}
         tasks = getattr(orch, "tasks", {}) or {}
         checks = _checks(config, services)
+        plan_lines = _plan_lines(context)
         lines = [
             "Doctor:",
             "",
@@ -29,6 +30,7 @@ class DoctorCommand(BaseCommand):
             f"  Tasks: {len(tasks)} registered, {len(getattr(orch, 'paused', set()) if orch else set())} paused",
             f"  Tools: {len(getattr(registry, 'tools', {}) or {})}",
             f"  Files indexed: {sum((stats.get('files') or {}).values())}",
+            *plan_lines,
             "",
             "Findings:",
             *[f"  {_label(k)} {msg}" for k, msg in checks],
@@ -64,6 +66,19 @@ def _checks(config, services):
     out += [("warn", f"autoload service not loaded: {name}") for name in unloaded]
     out.append(("ok" if frontends else "warn", f"enabled_frontends: {', '.join(frontends) if frontends else '(none)'}"))
     return out
+
+
+def _plan_lines(context):
+    """Return plan-mode status lines for the active session."""
+    runtime = getattr(context, "runtime", None)
+    session_key = getattr(context, "session_key", None)
+    session = (getattr(runtime, "sessions", {}) or {}).get(session_key) if runtime and session_key else None
+    if session is None:
+        return ["  Plan mode: no active session"]
+    parts = ["on" if getattr(session, "plan_mode", False) else "off"]
+    if getattr(session, "full_permissions_this_turn", False):
+        parts.append("full permissions this turn")
+    return [f"  Plan mode: {', '.join(parts)}"]
 
 
 def _task_lines(counts):

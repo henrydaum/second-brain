@@ -275,7 +275,8 @@ def _plan_mode_extra() -> str:
         "## Plan mode\n"
         "Plan mode is active. Permission dialogs are automatically rejected in plan mode. "
         "Inspect, read, search, and ask the user questions as needed, but do not try to modify state. "
-        "When ready, call propose_plan with a concise plan for the user to approve."
+        "When ready, call propose_plan with a concise plan for the user to approve. "
+        "The user can approve normally, approve and auto-approve permission dialogs for this turn, or deny the plan."
     )
 
 

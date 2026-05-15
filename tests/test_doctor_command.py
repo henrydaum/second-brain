@@ -41,6 +41,8 @@ def test_doctor_reports_runtime_findings_and_recent_log_errors(tmp_path, monkeyp
         orchestrator=SimpleNamespace(tasks={"extract_text": object(), "spawn_subagent": object()}, paused={"extract_text"}),
         tool_registry=SimpleNamespace(tools={"read_file": object()}),
         db=FakeDb(),
+        runtime=SimpleNamespace(sessions={"chat": SimpleNamespace(plan_mode=True, full_permissions_this_turn=True)}),
+        session_key="chat",
     )
 
     out = DoctorCommand().run({}, context)
@@ -49,6 +51,7 @@ def test_doctor_reports_runtime_findings_and_recent_log_errors(tmp_path, monkeyp
     assert "autoload service not discovered: ghost" in out
     assert "autoload service not loaded: llm" in out
     assert "extract_text: 2 pending, 0 running, 1 failed" in out
+    assert "Plan mode: on, full permissions this turn" in out
     assert "spawn_subagent: 0 pending, 1 running, 0 failed" in out
     assert "2 job(s), 1 disabled" in out
     assert "Prompt cache: 1024/1500 input tokens cached on last call (68%)." in out
