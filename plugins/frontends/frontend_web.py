@@ -140,6 +140,9 @@ class WebFrontend(BaseFrontend):
                 "  'softer'                -> compose_atmosphere(style='soft_haze') or compose_palette(scheme='pastel_sorbet', intensity='subtle')\n"
                 "  'mondrian feel'         -> compose_form(type='primary_grid') + compose_palette(scheme='mondrian_primary')\n"
                 "  'rothko-ish meditation' -> compose_form(type='soft_horizontal_bands') + compose_palette(scheme='rothko_warm') + compose_atmosphere(style='soft_haze')\n"
+                "  'something with fractals' / 'mandelbrot' -> compose_form(type='mandelbrot_zoom') over a soft background; add bloom atmosphere for glow\n"
+                "  'julia set' / 'organic alien' -> compose_form(type='julia_set') — each seed gives a wildly different shape\n"
+                "  'stained glass'         -> compose_form(type='newton_rings') or 'voronoi_shards'\n"
                 "  'too busy'              -> clear_layer('texture') or clear_layer('accent')\n"
                 "  'start over'            -> reset_canvas\n"
                 "Make a decision and move — don't ask the user to pick between layer names.\n\n"
@@ -377,7 +380,13 @@ def _is_gallery_image(path: Path) -> bool:
 
 
 def _file_url(path: Path) -> str:
-    return f"/files?path={quote(str(path.resolve()), safe='')}"
+    # mtime cache-buster: the composite path is stable across recompositions,
+    # so without this the browser keeps serving the old image.
+    try:
+        v = int(path.stat().st_mtime)
+    except Exception:
+        v = 0
+    return f"/files?path={quote(str(path.resolve()), safe='')}&v={v}"
 
 
 def _image_event(path: Path, state: dict | None = None) -> dict:

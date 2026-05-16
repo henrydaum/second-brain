@@ -66,15 +66,28 @@ function render(events) {
 }
 function setCanvas(c) {
   if (!c?.url) {
-    showcase.classList.remove("has-image"); heroImage.removeAttribute("src"); downloadImage.href = "#";
+    showcase.classList.remove("has-image"); heroImage.classList.remove("fading"); heroImage.removeAttribute("src"); downloadImage.href = "#";
     stats.textContent = "Type anything. The system will turn it into a procedural base, color harmony, DeepDream texture, and final polish.";
     history.innerHTML = "<span>Fresh canvas</span>"; return;
   }
-  heroImage.src = c.url; heroImage.alt = c.name || "Generated canvas"; downloadImage.href = c.url; downloadImage.download = c.name || "canvas.png"; showcase.classList.add("has-image");
   const s = c.stats || {}, g = (s.guidance || []).join(", ");
   stats.textContent = s.brightness == null ? "Canvas updated." : `Beauty ${s.beauty_score ?? "?"} · brightness ${s.brightness} · contrast ${s.contrast} · detail ${s.detail}${g ? ` · ${g}` : ""}`;
   history.innerHTML = (c.history || []).slice(-5).map(x => `<span>${x.op || "image"}</span>`).join("") || "<span>Canvas</span>";
-  loadGallery();
+  const newUrl = c.url, newName = c.name || "canvas.png";
+  const apply = () => { heroImage.src = newUrl; heroImage.alt = newName; downloadImage.href = newUrl; downloadImage.download = newName; showcase.classList.add("has-image"); };
+  if (!showcase.classList.contains("has-image")) { apply(); loadGallery(); return; }
+  // Preload the new image, then crossfade out → swap → crossfade in.
+  const pre = new Image();
+  pre.onload = () => {
+    heroImage.classList.add("fading");
+    setTimeout(() => {
+      apply();
+      requestAnimationFrame(() => requestAnimationFrame(() => heroImage.classList.remove("fading")));
+      loadGallery();
+    }, 280);
+  };
+  pre.onerror = () => { apply(); loadGallery(); };
+  pre.src = newUrl;
 }
 async function loadCanvas() { const r = await get("/api/canvas"); setCanvas(r.canvas); }
 async function loadGallery() {

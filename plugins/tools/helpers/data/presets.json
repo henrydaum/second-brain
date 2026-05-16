@@ -38,7 +38,10 @@
     "architectural_arches": "Series of arches suggesting an arcade.",
     "branching_tree": "Recursive branching lines — dendritic, tree-like.",
     "voronoi_shards": "Stained-glass cells with thin borders.",
-    "silhouette_horizon": "Solid silhouette below a noisy horizon line."
+    "silhouette_horizon": "Solid silhouette below a noisy horizon line.",
+    "mandelbrot_zoom": "Mandelbrot fractal zoomed into a random famous region — endless variety, dense filaments, ethereal alpha falloff around the set.",
+    "julia_set": "Julia set with a random c parameter — wildly different organic shapes each seed, semi-transparent boundaries.",
+    "newton_rings": "Newton fractal on z^3-1 — stained-glass cells in three colors with ring structures near the boundaries."
   },
   "texture_styles": {
     "cross_hatch": "Crossing diagonal lines suggesting drawing.",
