@@ -27,15 +27,30 @@
     <section class="showcase">
       <canvas id="fractal" width="900" height="700"></canvas>
       <img id="heroImage" alt="">
-      <a id="downloadImage" class="download" href="#" download title="Download current image">Download</a>
+      <div class="canvas-actions">
+        <a id="downloadImage" href="#" download title="Download current image">Download</a>
+        <button id="shareImage" type="button">Share</button>
+      </div>
+      <div id="sharePanel" class="share-panel" hidden>
+        <input id="shareTitle" placeholder="Title">
+        <input id="shareArtist" placeholder="Your name">
+        <button id="shareConfirm" type="button">Share</button>
+      </div>
       <div class="copy">
-        <p class="eyebrow">Coming next</p>
-        <h2>Fractal tools with memory</h2>
-        <p>Generate, zoom, save, and optionally share fractal art through the same tool system that powers file lookup and web search.</p>
-        <div class="chips"><span>Tool calls</span><span>Local files</span><span>Share gallery</span></div>
+        <p class="eyebrow">Generative canvas</p>
+        <h2>Make something impossible-looking.</h2>
+        <p id="canvasStats">Generate a base image, then ask for bloom, glitch, kaleidoscope, feedback, displacement, or sharper detail.</p>
+        <div id="history" class="chips"><span>Fresh canvas</span></div>
       </div>
     </section>
   </main>
+  <section class="gallery-section">
+    <div class="gallery-head">
+      <p class="eyebrow">Shared gallery</p>
+      <h2>Remix the nearest signals.</h2>
+    </div>
+    <div id="gallery" class="gallery"></div>
+  </section>
   <script src="/app.js"></script>
 </body>
 </html>

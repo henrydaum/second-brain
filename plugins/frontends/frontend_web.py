@@ -10,17 +10,19 @@ import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from config import config_manager
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
-from plugins.tools.helpers.fractal_gallery import read_json, set_current
+from plugins.tools.helpers.fractal_gallery import GALLERY_DIR, canvas, gallery_rows, read_json, reset_canvas, set_current, share_current, similar_rows
 from paths import DATA_DIR
 
 logger = logging.getLogger("WebFrontend")
 WEB_ROOT = Path(__file__).with_name("web")
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 WEB_PROFILE = "web_demo"
-WEB_TOOLS = ["render_mandelbrot", "render_julia", "render_burning_ship", "render_tricorn", "render_phoenix", "render_newton_fractal", "render_barnsley_fern", "render_sierpinski", "render_mandelbulb", "render_formula_fractal", "render_strange_attractor", "render_flow_field", "render_cellular_automata", "render_reaction_diffusion", "render_lenia_like", "render_pixel_mosaic", "render_files", "save_fractal_art", "find_similar_images"]
+WEB_TOOLS = ["render_mandelbrot", "render_julia", "render_burning_ship", "render_tricorn", "render_phoenix", "render_newton_fractal", "render_barnsley_fern", "render_sierpinski", "render_mandelbulb", "render_formula_fractal", "render_strange_attractor", "render_flow_field", "render_cellular_automata", "render_reaction_diffusion", "render_lenia_like", "render_pixel_mosaic", "apply_color_grade", "apply_bloom", "apply_kaleidoscope", "apply_mirror", "apply_feedback", "apply_glitch", "apply_displacement", "apply_sharpen"]
 USAGE_PATH = DATA_DIR / "web_usage.json"
 
 
@@ -84,8 +86,9 @@ class WebFrontend(BaseFrontend):
     def new_chat(self, session_id: str) -> list[dict]:
         key = self.session_key(session_id)
         self.runtime.close_session(key)
+        reset_canvas(key)
         self._ensure_conversation(key)
-        return self._drain(key) or [{"type": "message", "role": "assistant", "content": "New demo conversation ready."}]
+        return [{"type": "canvas_reset"}, *(self._drain(key) or [{"type": "message", "role": "assistant", "content": "New image ready."}])]
 
     def _ensure_conversation(self, key: str) -> None:
         self._ensure_web_profile()
@@ -105,9 +108,10 @@ class WebFrontend(BaseFrontend):
             "llm": "default",
             "prompt_suffix": (
                 "You are running the public Second Brain web demo. Keep replies concise, visual, and safe. "
-                "Do not tell users to use slash commands. Use render_mandelbrot for fractal requests, then rely on the image attachment to update the large showcase pane. "
-                "Choose freely from the visual tools: Mandelbrot, Julia, Burning Ship, Tricorn, Phoenix, Newton, Barnsley fern, Sierpinski, Mandelbulb, safe custom formula fractals, strange attractors, flow fields, cellular automata, reaction-diffusion, Lenia-like automata, and pixel mosaics. "
-                "After rendering, ask whether they want to share it. If yes, ask for an optional title and name, then call save_fractal_art. Use find_similar_images when they want to see related shared art."
+                "Do not tell users to use slash commands. Each conversation is one evolving canvas. "
+                "First create a strong base image with the fractal/generative tools, then improve it with canvas transforms: color grade, bloom, kaleidoscope, mirror, feedback, glitch, displacement, and sharpen. "
+                "Use tool-returned visual stats to self-correct; if mostly_dark is true or detail is low, apply brighter color/bloom/contrast or generate a better base. "
+                "Sharing, gallery, download, and remix are handled by website buttons, not tools."
             ),
             "whitelist_or_blacklist_tools": "whitelist",
             "tools_list": WEB_TOOLS,
@@ -118,7 +122,7 @@ class WebFrontend(BaseFrontend):
         if session:
             session.profile_override = WEB_PROFILE
             session.active_agent_profile = WEB_PROFILE
-        self.runtime.add_system_prompt_extra(key, "web_demo", "Website safety: browser users cannot run slash commands or edit runtime configuration. The visible demo tools are for generating, sharing, and comparing fractal images. Never save/share art without calling save_fractal_art and letting the permission dialog confirm it.")
+        self.runtime.add_system_prompt_extra(key, "web_demo", "Website safety: browser users cannot run slash commands or edit runtime configuration. The visible demo tools only generate and transform the current canvas. Never claim you can see the image; rely on returned visual stats. Do not call sharing tools.")
 
     def _push(self, session_key: str, item: dict) -> None:
         with self._lock:
@@ -137,8 +141,9 @@ class WebFrontend(BaseFrontend):
         for path in paths:
             p = Path(path)
             if _is_public_image(p):
-                set_current(session_key, p, bool(read_json(p.with_suffix(".json")).get("original")))
-                self._push(session_key, {"type": "hero_image", "url": f"/files?path={quote(str(p.resolve()), safe='')}", "name": p.name})
+                meta = read_json(p.with_suffix(".json"))
+                set_current(session_key, p, bool(meta.get("original")), meta)
+                self._push(session_key, _image_event(p, canvas(session_key)))
 
     def render_form_field(self, session_key: str, form: dict) -> None:
         self._push(session_key, {"type": "form", "form": form})
@@ -188,6 +193,41 @@ class WebFrontend(BaseFrontend):
             data["global"].append(now); sessions[sid].append(now); _write_usage(data)
         return True, ""
 
+    def canvas_payload(self, session_id: str) -> dict:
+        return _canvas_payload(canvas(self.session_key(session_id)))
+
+    def share(self, session_id: str, title: str, artist: str) -> list[dict]:
+        dest, meta = share_current(self.session_key(session_id), title, artist)
+        self._sync_gallery_file(dest)
+        return [{"type": "shared", "item": _gallery_url(meta)}, {"type": "message", "role": "assistant", "content": f'Shared "{meta["title"]}" by {meta["artist"]}.'}]
+
+    def gallery(self, session_id: str, limit: int = 24) -> list[dict]:
+        item = canvas(self.session_key(session_id))
+        ctx = SimpleNamespace(services=getattr(self.runtime, "services", {}), db=getattr(self.runtime, "db", None))
+        rows = similar_rows(item["path"], ctx, limit) if item else gallery_rows()[:limit]
+        return [_gallery_url(r) for r in rows]
+
+    def remix(self, session_id: str, path: str) -> list[dict]:
+        p = Path(unquote(path)).resolve()
+        if not _is_gallery_image(p):
+            raise ValueError("That gallery image is not available to remix.")
+        key = self.session_key(session_id)
+        reset_canvas(key); set_current(key, p, False, {"kind": "remix", **read_json(p.with_suffix(".json"))})
+        return [_image_event(p, canvas(key)), {"type": "message", "role": "assistant", "content": "Remix loaded. Tell me how to mutate it."}]
+
+    def _sync_gallery_file(self, path: Path) -> None:
+        dirs = [str(p) for p in (self.config.get("sync_directories") or [])]
+        if str(GALLERY_DIR) not in dirs:
+            self.config["sync_directories"] = dirs + [str(GALLERY_DIR)]
+            config_manager.save(self.config)
+        db = getattr(self.runtime, "db", None)
+        if db:
+            from plugins.services.helpers.parser_registry import get_modality
+            db.upsert_file(str(path), path.name, path.suffix.lower(), get_modality(path.suffix.lower()), path.stat().st_mtime)
+            orch = getattr(self.runtime, "_orchestrator_ref", None) or getattr(self.runtime, "services", {}).get("orchestrator")
+            if orch:
+                orch.on_file_discovered(str(path), path.suffix.lower(), get_modality(path.suffix.lower()))
+
 
 class _Server(ThreadingHTTPServer):
     def __init__(self, addr, handler, frontend):
@@ -203,6 +243,12 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/events":
             sid = str(parse_qs(urlparse(self.path).query).get("session_id", ["demo"])[0])[:80]
             return self._json({"ok": True, "events": self.server.frontend._drain(self.server.frontend.session_key(sid))})
+        if path == "/api/canvas":
+            sid = str(parse_qs(urlparse(self.path).query).get("session_id", ["demo"])[0])[:80]
+            return self._json({"ok": True, "canvas": self.server.frontend.canvas_payload(sid)})
+        if path == "/api/gallery":
+            qs = parse_qs(urlparse(self.path).query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
+            return self._json({"ok": True, "items": self.server.frontend.gallery(sid)})
         if path == "/files":
             return self._local_file(parse_qs(urlparse(self.path).query).get("path", [""])[0])
         rel = "index.html" if path in {"", "/"} else path.lstrip("/")
@@ -219,6 +265,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "events": self.server.frontend.new_chat(sid)})
             if self.path == "/api/approval":
                 return self._json({"ok": True, "events": self.server.frontend.approve(sid, bool(body.get("value")))})
+            if self.path == "/api/share":
+                return self._json({"ok": True, "events": self.server.frontend.share(sid, str(body.get("title") or "untitled"), str(body.get("artist") or "anonymous"))})
+            if self.path == "/api/remix":
+                return self._json({"ok": True, "events": self.server.frontend.remix(sid, str(body.get("path") or ""))})
         except Exception as e:
             logger.exception("Web request failed")
             return self._json({"ok": False, "events": [{"type": "error", "content": str(e)}]}, 500)
@@ -271,6 +321,33 @@ def _is_public_image(path: Path) -> bool:
         return target.is_file() and target.suffix.lower() in IMAGE_EXTS and (target == root or root in target.parents)
     except Exception:
         return False
+
+
+def _is_gallery_image(path: Path) -> bool:
+    try:
+        target, root = path.resolve(), GALLERY_DIR.resolve()
+        return target.is_file() and target.suffix.lower() in IMAGE_EXTS and root in target.parents
+    except Exception:
+        return False
+
+
+def _file_url(path: Path) -> str:
+    return f"/files?path={quote(str(path.resolve()), safe='')}"
+
+
+def _image_event(path: Path, state: dict | None = None) -> dict:
+    return {"type": "hero_image", "url": _file_url(path), "name": path.name, "canvas": _canvas_payload(state)}
+
+
+def _canvas_payload(state: dict | None) -> dict:
+    if not state:
+        return {}
+    p = Path(state["path"])
+    return {**state, "url": _file_url(p), "name": p.name}
+
+
+def _gallery_url(row: dict) -> dict:
+    return {**row, "url": _file_url(Path(row["path"]))}
 
 
 def _read_usage() -> dict:

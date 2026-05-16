@@ -9,7 +9,7 @@ from PIL import Image, ImageFilter
 
 from paths import DATA_DIR
 from plugins.BaseTool import BaseTool, ToolResult
-from plugins.tools.helpers.fractal_gallery import mark_original, set_current
+from plugins.tools.helpers.fractal_gallery import image_stats, mark_original, set_current
 
 PALETTES = {"plasma", "laser", "sunset", "ice", "toxic", "royal"}
 try:
@@ -51,10 +51,11 @@ def _save(kind, img, meta, ctx):
     out = DATA_DIR / "fractals" / kind; out.mkdir(parents=True, exist_ok=True)
     path = out / f"{kind}-{meta['seed']}-{time.strftime('%Y%m%d-%H%M%S')}.png"
     img.save(path, "PNG", optimize=True)
-    meta = {**meta, "kind": kind, "path": str(path)}
+    meta = {**meta, "kind": kind, "path": str(path), "stats": image_stats(path)}
     path.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     mark_original(path, meta); set_current(getattr(ctx, "session_key", None), path, True, meta)
-    return ToolResult(data=meta, llm_summary=f"Rendered {kind.replace('_',' ')} seed {meta['seed']}: {path}. Ask whether they want to share it.", attachment_paths=[str(path)])
+    s = meta["stats"]
+    return ToolResult(data=meta, llm_summary=f"Rendered {kind.replace('_',' ')} seed {meta['seed']}: brightness {s['brightness']}, contrast {s['contrast']}, detail {s['detail']}, mostly_dark={s['mostly_dark']}. Sharing is handled by the website button.", attachment_paths=[str(path)])
 
 
 def _escape(w, h, detail, seed, pal, fn, cx=0, cy=0, scale=3.0):
@@ -117,7 +118,7 @@ def _ifs(w, h, seed, pal, rules, n=220000):
 
 
 class _Base(BaseTool):
-    requires_services = []; max_calls = 2
+    auto_register = False; requires_services = []; max_calls = 2
     parameters = {"type": "object", "properties": {
         "width": {"type": "integer", "minimum": 512, "maximum": 1400},
         "height": {"type": "integer", "minimum": 512, "maximum": 1100},
@@ -125,6 +126,8 @@ class _Base(BaseTool):
         "palette": {"type": "string", "enum": list(PALETTES)},
         "seed": {"type": "integer", "description": "Optional random seed."},
     }}
+    def __init_subclass__(cls, **kw):
+        super().__init_subclass__(**kw); cls.auto_register = bool(getattr(cls, "name", ""))
 
     def args(self, kw):
         return (_clamp(kw.get("width"), 1100, 512, 1400, int), _clamp(kw.get("height"), 850, 512, 1100, int), _clamp(kw.get("detail"), 220, 80, 500, int), _pick(kw.get("palette"), PALETTES, "plasma"), _clamp(kw.get("seed"), random.randint(1, 2_147_483_647), 1, 2_147_483_647, int))

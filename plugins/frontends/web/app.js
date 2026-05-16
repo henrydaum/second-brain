@@ -5,6 +5,13 @@ const input = document.querySelector("#chatInput");
 const showcase = document.querySelector(".showcase");
 const heroImage = document.querySelector("#heroImage");
 const downloadImage = document.querySelector("#downloadImage");
+const shareBtn = document.querySelector("#shareImage");
+const sharePanel = document.querySelector("#sharePanel");
+const shareTitle = document.querySelector("#shareTitle");
+const shareArtist = document.querySelector("#shareArtist");
+const gallery = document.querySelector("#gallery");
+const stats = document.querySelector("#canvasStats");
+const history = document.querySelector("#history");
 const bottom = () => requestAnimationFrame(() => messages.scrollTop = messages.scrollHeight);
 const add = (role, text) => {
   const el = document.createElement("article");
@@ -18,6 +25,7 @@ async function post(url, body = {}) {
   return res.json();
 }
 async function poll() { try { render((await fetch(`/api/events?session_id=${encodeURIComponent(sid)}`).then(r => r.json())).events); } catch {} }
+async function get(url) { return fetch(`${url}${url.includes("?") ? "&" : "?"}session_id=${encodeURIComponent(sid)}`).then(r => r.json()); }
 function approval(ev) {
   const el = document.createElement("article");
   el.className = "assistant";
@@ -42,17 +50,32 @@ function render(events) {
     else if (ev.type === "form") add("assistant", `${ev.form?.display?.prompt || "Input required"}\n${(ev.form?.display?.choices || []).map(c => c.label || c.value).join(" / ")}`);
     else if (ev.type === "approval") approval(ev);
     else if (ev.type === "hero_image") {
-      heroImage.src = ev.url;
-      heroImage.alt = ev.name || "Generated fractal";
-      downloadImage.href = ev.url;
-      downloadImage.download = ev.name || "fractal.png";
-      showcase.classList.add("has-image");
+      setCanvas(ev.canvas || {url: ev.url, name: ev.name});
       add("status", `Showcase updated: ${ev.name}`);
     }
+    else if (ev.type === "canvas_reset") setCanvas(null);
+    else if (ev.type === "shared") { sharePanel.hidden = true; loadGallery(); }
     else if (ev.type === "attachment") add("assistant", `Attachment: ${ev.name}`);
   }
   bottom();
 }
+function setCanvas(c) {
+  if (!c?.url) {
+    showcase.classList.remove("has-image"); heroImage.removeAttribute("src"); downloadImage.href = "#";
+    stats.textContent = "Generate a base image, then ask for bloom, glitch, kaleidoscope, feedback, displacement, or sharper detail.";
+    history.innerHTML = "<span>Fresh canvas</span>"; return;
+  }
+  heroImage.src = c.url; heroImage.alt = c.name || "Generated canvas"; downloadImage.href = c.url; downloadImage.download = c.name || "canvas.png"; showcase.classList.add("has-image");
+  const s = c.stats || {}; stats.textContent = s.brightness == null ? "Canvas updated." : `Brightness ${s.brightness} · contrast ${s.contrast} · detail ${s.detail}${s.mostly_dark ? " · needs light" : ""}`;
+  history.innerHTML = (c.history || []).slice(-5).map(x => `<span>${x.op || "image"}</span>`).join("") || "<span>Canvas</span>";
+  loadGallery();
+}
+async function loadCanvas() { const r = await get("/api/canvas"); setCanvas(r.canvas); }
+async function loadGallery() {
+  const r = await get("/api/gallery");
+  gallery.innerHTML = (r.items || []).map(x => `<article class="gallery-card"><img src="${x.url}" alt=""><div><strong>${esc(x.title)}</strong><small>${esc(x.artist)}${x.score ? ` · ${(x.score*100).toFixed(0)}% similar` : ""}</small><button data-path="${esc(x.path)}">Remix</button></div></article>`).join("") || "<article class='assistant'>No shared canvases yet.</article>";
+}
+function esc(x) { return String(x ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 form.addEventListener("submit", async e => {
   e.preventDefault();
   const text = input.value.trim();
@@ -70,8 +93,13 @@ form.addEventListener("submit", async e => {
 document.querySelector("#newChat").addEventListener("click", async () => {
   messages.innerHTML = "";
   render((await post("/api/new")).events);
+  loadGallery();
 });
+shareBtn.addEventListener("click", () => { sharePanel.hidden = !sharePanel.hidden; shareTitle.value ||= "untitled"; shareArtist.value ||= "anonymous"; });
+document.querySelector("#shareConfirm").addEventListener("click", async () => render((await post("/api/share", {title:shareTitle.value, artist:shareArtist.value})).events));
+gallery.addEventListener("click", async e => { if (e.target.matches("button[data-path]")) { render((await post("/api/remix", {path:e.target.dataset.path})).events); scrollTo({top:0, behavior:"smooth"}); } });
 setInterval(poll, 1200);
+loadCanvas(); loadGallery();
 
 const canvas = document.querySelector("#fractal");
 const ctx = canvas.getContext("2d");

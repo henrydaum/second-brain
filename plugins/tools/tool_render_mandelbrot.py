@@ -11,7 +11,7 @@ from pathlib import Path
 
 from paths import DATA_DIR
 from plugins.BaseTool import BaseTool, ToolResult
-from plugins.tools.helpers.fractal_gallery import mark_original, set_current
+from plugins.tools.helpers.fractal_gallery import image_stats, mark_original, set_current
 
 
 PRESETS = {
@@ -74,13 +74,13 @@ class RenderMandelbrot(BaseTool):
         stamp = time.strftime("%Y%m%d-%H%M%S")
         path = out_dir / f"mandelbrot-{preset}-{palette}-{seed}-{stamp}.png"
         _render(path, width, height, detail, cx, cy, scale, palette, seed)
-        meta = {"preset": preset, "palette": palette, "seed": seed, "width": width, "height": height, "detail": detail, "center_x": cx, "center_y": cy, "scale": scale, "path": str(path)}
+        meta = {"preset": preset, "palette": palette, "seed": seed, "width": width, "height": height, "detail": detail, "center_x": cx, "center_y": cy, "scale": scale, "path": str(path), "stats": image_stats(path)}
         path.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         mark_original(path, meta)
         set_current(getattr(context, "session_key", None), path, True, meta)
         return ToolResult(
             data=meta,
-            llm_summary=f"Rendered a unique {palette} Mandelbrot image with seed {seed}: {path}. Ask whether they want to share it; if yes, ask for an optional title and name, then call save_fractal_art.",
+            llm_summary=f"Rendered a unique {palette} Mandelbrot seed {seed}: brightness {meta['stats']['brightness']}, contrast {meta['stats']['contrast']}, detail {meta['stats']['detail']}, mostly_dark={meta['stats']['mostly_dark']}. Sharing is handled by the website button.",
             attachment_paths=[str(path)],
         )
 
