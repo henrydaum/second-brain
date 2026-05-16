@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.helpers import skill_store
+
+logger = logging.getLogger("SkillTools")
 
 
 class UpdateSkill(BaseTool):
@@ -20,6 +23,7 @@ class UpdateSkill(BaseTool):
             _notify(context, skill.path)
             return ToolResult(data=skill.to_dict(), llm_summary=f"Updated skill '{skill.slug}'.")
         except Exception as e:
+            logger.exception("update_skill failed: slug=%r owner=%r", kwargs.get("slug"), _owner(context))
             return ToolResult.failed(str(e))
 
 

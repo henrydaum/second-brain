@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.helpers import skill_store
+
+logger = logging.getLogger("SkillTools")
 
 
 class CreateSkill(BaseTool):
@@ -27,6 +30,7 @@ class CreateSkill(BaseTool):
             _notify(context, skill.path)
             return ToolResult(data=skill.to_dict(), llm_summary=f"Created {skill.kind} skill '{skill.slug}'. Now call execute_skill with this slug.")
         except Exception as e:
+            logger.exception("create_skill failed: name=%r kind=%r owner=%r", kwargs.get("name"), kwargs.get("kind"), _owner(context))
             return ToolResult.failed(str(e))
 
 

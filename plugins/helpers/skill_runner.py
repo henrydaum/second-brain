@@ -111,6 +111,7 @@ def run_skill(
         err = (stderr or b"").decode("utf-8", errors="replace").strip()
         out = (stdout or b"").decode("utf-8", errors="replace").strip()
         msg = err.splitlines()[-1] if err else out or "unknown error"
+        logger.error("Skill '%s' failed (rc=%s).\nSTDERR:\n%s\nSTDOUT:\n%s", skill.slug, proc.returncode, err or "(empty)", out or "(empty)")
         raise SkillRunError(f"skill '{skill.slug}' failed: {msg}")
     if not output_image_path.is_file():
         raise SkillRunError(f"skill '{skill.slug}' did not commit an image")

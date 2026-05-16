@@ -123,7 +123,7 @@ class WebFrontend(BaseFrontend):
                 "You are running the public Second Brain web demo. You make generative art collaboratively with the user. "
                 "Keep replies short, warm, and conversational — like an artist talking through their work. Never use slash commands.\n\n"
                 "The canvas is one square image with a selected color-theory palette and size. For any request to draw, render, stylize, or transform the canvas: first call search_skills; if a strong match exists, execute_skill; otherwise create_skill with Python code, then execute_skill. Creation skills start a new image. Transform skills receive canvas.image and modify it.\n\n"
-                "Skill code defines run(canvas, **params), uses allowed imports only (math, random, colorsys, numpy, PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps, PIL.ImageEnhance), and must call canvas.commit(image). Use canvas.palette.primary, secondary, tertiary, accent, and background for colors. Use canvas.size, width, height, and seed for deterministic geometry. Do not hard-code hex colors unless the user explicitly asks.\n\n"
+                "Skill code defines run(canvas, **params), uses allowed imports only (math, random, colorsys, numpy, PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps, PIL.ImageEnhance), and must call canvas.commit(image). Create a blank image with canvas.new(color=canvas.palette.background) or canvas.create_image(). Use canvas.palette.primary, secondary, tertiary, accent, and background for colors; slots work as '#RRGGBB' strings and RGB sequences. Use canvas.size, width, height, and seed for deterministic geometry. Do not hard-code hex colors unless the user explicitly asks.\n\n"
                 "You cannot see the canvas directly. After executing a skill, explain the intended move briefly and ask for feedback when useful. "
                 "Sharing, downloading, gallery, and remix are handled by the website buttons — not by tools."
             ),
@@ -185,7 +185,12 @@ class WebFrontend(BaseFrontend):
 
     def render_tool_status(self, session_key: str, payload: dict) -> None:
         name = payload.get("tool_name") or payload.get("command_name") or "tool"
-        self._push(session_key, {"type": "status", "content": f"{name}: {payload.get('status', 'running')}"})
+        status = payload.get("status", "running")
+        error = payload.get("error")
+        if status == "finished" and payload.get("ok") is False and error:
+            self._push(session_key, {"type": "error", "content": f"{name} failed: {error}"})
+        else:
+            self._push(session_key, {"type": "status", "content": f"{name}: {status}"})
 
     def _live_session_keys(self) -> list[str]:
         return [k for k in getattr(self.runtime, "sessions", {}) if k.startswith("web:")]

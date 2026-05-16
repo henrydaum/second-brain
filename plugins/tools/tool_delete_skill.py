@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.helpers import skill_store
+
+logger = logging.getLogger("SkillTools")
 
 
 class DeleteSkill(BaseTool):
@@ -23,4 +27,5 @@ class DeleteSkill(BaseTool):
                 context.db.remove_file(skill.path)
             return ToolResult(data={"deleted": deleted}, llm_summary=f"Deleted skill '{slug}'." if deleted else f"No skill named '{slug}' exists.")
         except Exception as e:
+            logger.exception("delete_skill failed: slug=%r", slug)
             return ToolResult.failed(str(e))

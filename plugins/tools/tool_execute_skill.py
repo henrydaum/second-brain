@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 import time
+import logging
 from pathlib import Path
 
 from PIL import Image
@@ -13,6 +14,8 @@ from plugins.helpers.palettes import get_palette
 from plugins.helpers.skill_runner import SkillRunError, make_chain_entry, run_skill
 from plugins.helpers.skill_store import read_skill
 from plugins.tools.helpers import layered_canvas as lc
+
+logger = logging.getLogger("SkillTools")
 
 
 class ExecuteSkill(BaseTool):
@@ -39,4 +42,5 @@ class ExecuteSkill(BaseTool):
             final = lc.canvas(session_key)["path"]
             return ToolResult(data={"canvas": lc.canvas(session_key), "chain": new_state.get("last_chain")}, llm_summary=f"Executed {skill.kind} skill '{slug}' on the canvas.", attachment_paths=[final])
         except (SkillRunError, Exception) as e:
+            logger.exception("execute_skill failed: slug=%s session=%s params=%s", slug, session_key, params)
             return ToolResult.failed(str(e))

@@ -189,7 +189,7 @@ def _skill_workflow() -> str:
     return """## Canvas skill workflow
 For canvas requests, call search_skills first. If a strong matching skill exists, call execute_skill. If not, call create_skill with Python code defining run(canvas, **params), then execute_skill with the returned slug.
 
-Skill kinds: creation starts a new image; transform requires the current canvas and uses canvas.image. Skill code must call canvas.commit(image). Use canvas.palette.primary, secondary, tertiary, accent, and background instead of hard-coded colors; use canvas.size/canvas.width/canvas.height and canvas.seed for deterministic output. Allowed imports: math, random, colorsys, numpy, PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps, PIL.ImageEnhance."""
+Skill kinds: creation starts a new image; transform requires the current canvas and uses canvas.image. Skill code must call canvas.commit(image). Create a blank image with canvas.new(color=canvas.palette.background) or canvas.create_image(). Use canvas.palette.primary, secondary, tertiary, accent, and background instead of hard-coded colors; palette slots behave as "#RRGGBB" strings and as RGB sequences. Use canvas.size/canvas.width/canvas.height and canvas.seed for deterministic output. Allowed imports: math, random, colorsys, numpy, PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps, PIL.ImageEnhance."""
 
 
 def _sandbox_files() -> str:
