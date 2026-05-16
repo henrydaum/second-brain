@@ -57,6 +57,9 @@ class FormStep:
         if self.type == "object" and isinstance(value, str):
             import json
             value = json.loads(value)
+        if self.enum and value not in self.enum and self.enum_labels:
+            label_map = {str(label).strip().lower(): self.enum[i] for i, label in enumerate(self.enum_labels[:len(self.enum)])}
+            value = label_map.get(str(value).strip().lower(), value)
         if self.enum and value not in self.enum:
             raise ValueError(f"{self.name} must be one of: {', '.join(map(str, self.enum))}.")
         return value
