@@ -62,7 +62,7 @@ function render(events) {
 function setCanvas(c) {
   if (!c?.url) {
     showcase.classList.remove("has-image"); heroImage.removeAttribute("src"); downloadImage.href = "#";
-    stats.textContent = "Generate a base image, then ask for bloom, glitch, kaleidoscope, feedback, displacement, or sharper detail.";
+    stats.textContent = "Type anything. The system will turn it into a procedural base, color harmony, DeepDream texture, and final polish.";
     history.innerHTML = "<span>Fresh canvas</span>"; return;
   }
   heroImage.src = c.url; heroImage.alt = c.name || "Generated canvas"; downloadImage.href = c.url; downloadImage.download = c.name || "canvas.png"; showcase.classList.add("has-image");

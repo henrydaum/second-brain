@@ -22,7 +22,7 @@ logger = logging.getLogger("WebFrontend")
 WEB_ROOT = Path(__file__).with_name("web")
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 WEB_PROFILE = "web_demo"
-WEB_TOOLS = ["render_mandelbrot", "render_julia", "render_burning_ship", "render_tricorn", "render_phoenix", "render_newton_fractal", "render_barnsley_fern", "render_sierpinski", "render_mandelbulb", "render_formula_fractal", "render_strange_attractor", "render_flow_field", "render_cellular_automata", "render_reaction_diffusion", "render_lenia_like", "render_pixel_mosaic", "apply_color_grade", "apply_bloom", "apply_kaleidoscope", "apply_mirror", "apply_feedback", "apply_glitch", "apply_displacement", "apply_sharpen"]
+WEB_TOOLS = ["generate_dream", "refine_dream", "render_mandelbrot", "render_julia", "render_burning_ship", "render_tricorn", "render_phoenix", "render_newton_fractal", "render_barnsley_fern", "render_sierpinski", "render_mandelbulb", "render_formula_fractal", "render_strange_attractor", "render_flow_field", "render_cellular_automata", "render_reaction_diffusion", "render_lenia_like", "render_pixel_mosaic", "apply_color_grade", "apply_bloom", "apply_kaleidoscope", "apply_mirror", "apply_feedback", "apply_glitch", "apply_displacement", "apply_sharpen"]
 USAGE_PATH = DATA_DIR / "web_usage.json"
 
 
@@ -108,8 +108,10 @@ class WebFrontend(BaseFrontend):
             "llm": "default",
             "prompt_suffix": (
                 "You are running the public Second Brain web demo. Keep replies concise, visual, and safe. "
-                "Do not tell users to use slash commands. Each conversation is one evolving canvas. "
-                "First create a strong base image with the fractal/generative tools, then improve it with canvas transforms: color grade, bloom, kaleidoscope, mirror, feedback, glitch, displacement, and sharpen. "
+                "Do not tell users to use slash commands. Each conversation is one evolving dream canvas. "
+                "For any first visual request, call generate_dream with the user's exact text, even if it is gibberish. "
+                "For follow-ups, call refine_dream so the image recomposes from its recipe instead of stacking destructive effects. "
+                "Use lower-level fractal and transform tools only as fallback/internal options when generate_dream or refine_dream cannot satisfy the request. "
                 "Use tool-returned visual stats to self-correct; prefer high beauty_score and follow guidance like needs_light, needs_contrast, low_detail, or muted_palette. "
                 "Sharing, gallery, download, and remix are handled by website buttons, not tools."
             ),
@@ -122,7 +124,7 @@ class WebFrontend(BaseFrontend):
         if session:
             session.profile_override = WEB_PROFILE
             session.active_agent_profile = WEB_PROFILE
-        self.runtime.add_system_prompt_extra(key, "web_demo", "Website safety: browser users cannot run slash commands or edit runtime configuration. The visible demo tools only generate and transform the current canvas. Never claim you can see the image; rely on returned visual stats. Do not call sharing tools.")
+        self.runtime.add_system_prompt_extra(key, "web_demo", "Website safety: browser users cannot run slash commands or edit runtime configuration. Prefer generate_dream first and refine_dream for changes. Never claim you can see the image; rely on returned visual stats. Do not call sharing tools.")
 
     def _push(self, session_key: str, item: dict) -> None:
         with self._lock:

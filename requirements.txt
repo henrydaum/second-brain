@@ -4,3 +4,5 @@ numpy
 Pillow
 requests
 watchdog
+torch
+torchvision
