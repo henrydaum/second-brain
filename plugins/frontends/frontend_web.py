@@ -22,7 +22,17 @@ logger = logging.getLogger("WebFrontend")
 WEB_ROOT = Path(__file__).with_name("web")
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 WEB_PROFILE = "web_demo"
-WEB_TOOLS = ["generate_dream", "refine_dream", "render_mandelbrot", "render_julia", "render_burning_ship", "render_tricorn", "render_phoenix", "render_newton_fractal", "render_barnsley_fern", "render_sierpinski", "render_mandelbulb", "render_formula_fractal", "render_strange_attractor", "render_flow_field", "render_cellular_automata", "render_reaction_diffusion", "render_lenia_like", "render_pixel_mosaic", "apply_color_grade", "apply_bloom", "apply_kaleidoscope", "apply_mirror", "apply_feedback", "apply_glitch", "apply_displacement", "apply_sharpen"]
+WEB_TOOLS = [
+    "compose_background",
+    "compose_form",
+    "compose_texture",
+    "compose_accent",
+    "compose_palette",
+    "compose_atmosphere",
+    "clear_layer",
+    "reset_canvas",
+    "request_user_feedback",
+]
 USAGE_PATH = DATA_DIR / "web_usage.json"
 
 
@@ -107,13 +117,38 @@ class WebFrontend(BaseFrontend):
         profile.update({
             "llm": "default",
             "prompt_suffix": (
-                "You are running the public Second Brain web demo. Keep replies concise, visual, and safe. "
-                "Do not tell users to use slash commands. Each conversation is one evolving dream canvas. "
-                "For any first visual request, call generate_dream with the user's exact text, even if it is gibberish. "
-                "For follow-ups, call refine_dream so the image recomposes from its recipe instead of stacking destructive effects. "
-                "Use lower-level fractal and transform tools only as fallback/internal options when generate_dream or refine_dream cannot satisfy the request. "
-                "Use tool-returned visual stats to self-correct; prefer high beauty_score and follow guidance like needs_light, needs_contrast, low_detail, or muted_palette. "
-                "Sharing, gallery, download, and remix are handled by website buttons, not tools."
+                "You are running the public Second Brain web demo. You make generative art collaboratively with the user. "
+                "Keep replies short, warm, and conversational — like an artist talking through their work. Never use slash commands.\n\n"
+                "THE CANVAS MODEL — IMPORTANT.\n"
+                "The canvas is a stack of six named layers, composited bottom to top:\n"
+                "  1. background  — base wash, gradient, noise, sky\n"
+                "  2. form        — the dominant shapes (the 'subject')\n"
+                "  3. texture     — surface detail laid over the form\n"
+                "  4. accent      — sparse focal marks (sparks, drips, stars)\n"
+                "  5. palette     — color-theory pass that harmonizes the colors\n"
+                "  6. atmosphere  — final lighting pass (glow, vignette, grain, noir)\n"
+                "Each compose_* tool owns ONE slot. Calling it again REPLACES that slot, never stacks. "
+                "This means the canvas cannot get muddy or 'deep fried' — you can iterate freely.\n\n"
+                "BUILDING A PIECE.\n"
+                "Start with compose_background, then compose_form. Add texture and/or accent only if the piece needs more. "
+                "Almost always finish with compose_palette and compose_atmosphere — they're what make it feel intentional. "
+                "Use seeds for variety: each user should get a unique piece, so let seed be random (omit it) unless reproducing.\n\n"
+                "TRANSLATING THE USER.\n"
+                "The user talks in plain language. Translate their intent into specific layer moves. Examples:\n"
+                "  'make it brighter'      -> compose_atmosphere(style='bloom') OR compose_palette(scheme='pastel_sorbet') OR clear_layer('atmosphere') if a dark one is set\n"
+                "  'more chaotic'          -> compose_form with density='dense', or compose_accent(style='sparks', count='many')\n"
+                "  'softer'                -> compose_atmosphere(style='soft_haze') or compose_palette(scheme='pastel_sorbet', intensity='subtle')\n"
+                "  'mondrian feel'         -> compose_form(type='primary_grid') + compose_palette(scheme='mondrian_primary')\n"
+                "  'rothko-ish meditation' -> compose_form(type='soft_horizontal_bands') + compose_palette(scheme='rothko_warm') + compose_atmosphere(style='soft_haze')\n"
+                "  'too busy'              -> clear_layer('texture') or clear_layer('accent')\n"
+                "  'start over'            -> reset_canvas\n"
+                "Make a decision and move — don't ask the user to pick between layer names.\n\n"
+                "YOU CANNOT SEE THE CANVAS.\n"
+                "After every compose tool, you get a CLIP-derived description (color, mood, composition, style, subject) and the current layer manifest. "
+                "Trust that signal. But the user is the only true judge. Call request_user_feedback every 1-2 compose calls with a concrete question and a suggestion the user can react to. "
+                "Examples: 'I went with bold horizontal bands in warm reds — does the warmth feel right, or want me to push it cooler?' "
+                "Don't claim you can see the image. Speak from the CLIP descriptors and user feedback.\n\n"
+                "Sharing, downloading, gallery, and remix are handled by the website buttons — not by tools."
             ),
             "whitelist_or_blacklist_tools": "whitelist",
             "tools_list": WEB_TOOLS,
@@ -124,7 +159,7 @@ class WebFrontend(BaseFrontend):
         if session:
             session.profile_override = WEB_PROFILE
             session.active_agent_profile = WEB_PROFILE
-        self.runtime.add_system_prompt_extra(key, "web_demo", "Website safety: browser users cannot run slash commands or edit runtime configuration. Prefer generate_dream first and refine_dream for changes. Never claim you can see the image; rely on returned visual stats. Do not call sharing tools.")
+        self.runtime.add_system_prompt_extra(key, "web_demo", "Website safety: browser users cannot run slash commands or edit runtime configuration. Compose the canvas layer by layer; never claim you can see the image — rely on the CLIP descriptors returned by every compose tool and on user feedback. Do not call sharing or gallery tools.")
 
     def _push(self, session_key: str, item: dict) -> None:
         with self._lock:
@@ -140,12 +175,20 @@ class WebFrontend(BaseFrontend):
                 self._push(session_key, {"type": "message", "role": "assistant", "content": msg})
 
     def render_attachments(self, session_key: str, paths: list[str]) -> None:
+        state = canvas(session_key)
+        current_composite = Path(state["path"]).resolve() if state else None
         for path in paths:
             p = Path(path)
-            if _is_public_image(p):
-                meta = read_json(p.with_suffix(".json"))
-                set_current(session_key, p, bool(meta.get("original")), meta)
-                self._push(session_key, _image_event(p, canvas(session_key)))
+            if not _is_public_image(p):
+                continue
+            # Compose tools already updated canvas state and wrote the composite;
+            # don't re-call set_current on our own composite (that would wipe layers).
+            if current_composite and p.resolve() == current_composite:
+                self._push(session_key, _image_event(p, state))
+                continue
+            meta = read_json(p.with_suffix(".json"))
+            set_current(session_key, p, bool(meta.get("original")), meta)
+            self._push(session_key, _image_event(p, canvas(session_key)))
 
     def render_form_field(self, session_key: str, form: dict) -> None:
         self._push(session_key, {"type": "form", "form": form})

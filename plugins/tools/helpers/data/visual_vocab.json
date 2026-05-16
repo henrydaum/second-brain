@@ -1,0 +1,31 @@
+{
+  "color": [
+    "warm", "cool", "muted", "vivid", "monochrome", "earthy", "pastel",
+    "high-contrast", "low-contrast", "golden", "silvery", "indigo",
+    "crimson", "ochre", "verdant", "midnight"
+  ],
+  "mood": [
+    "serene", "ominous", "playful", "austere", "dreamy", "melancholic",
+    "joyful", "tense", "contemplative", "chaotic", "elegant", "raw",
+    "ceremonial", "industrial", "intimate"
+  ],
+  "composition": [
+    "centered", "asymmetric", "grid-like", "scattered", "horizontal bands",
+    "radial", "dense", "sparse", "minimal", "layered", "vertical", "diagonal",
+    "framed", "off-balance", "rhythmic"
+  ],
+  "style": [
+    "color field", "soft horizontal bands", "geometric grid", "drip marks",
+    "organic blobs", "architectural arches", "branching shapes",
+    "voronoi shards", "silhouette horizon", "radial burst", "woodblock print",
+    "ink wash", "collage", "fresco", "stained glass", "abstract expressionism"
+  ],
+  "subject": [
+    "landscape", "figure", "still life", "abstract", "portrait",
+    "interior", "cityscape", "seascape", "botanical", "celestial", "ritual"
+  ],
+  "texture": [
+    "smooth", "gritty", "soft", "sharp", "papery", "glossy", "weathered",
+    "woven", "hatched", "speckled"
+  ]
+}

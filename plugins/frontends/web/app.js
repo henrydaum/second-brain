@@ -12,7 +12,12 @@ const shareArtist = document.querySelector("#shareArtist");
 const gallery = document.querySelector("#gallery");
 const stats = document.querySelector("#canvasStats");
 const history = document.querySelector("#history");
-const bottom = () => requestAnimationFrame(() => messages.scrollTop = messages.scrollHeight);
+const NEAR_BOTTOM_PX = 80;
+const atBottom = () => messages.scrollHeight - messages.scrollTop - messages.clientHeight < NEAR_BOTTOM_PX;
+const bottom = (force = false) => {
+  const stick = force || atBottom();
+  if (stick) requestAnimationFrame(() => messages.scrollTop = messages.scrollHeight);
+};
 const add = (role, text) => {
   const el = document.createElement("article");
   el.className = role;
@@ -87,7 +92,7 @@ form.addEventListener("submit", async e => {
   thinking.className = "status";
   thinking.textContent = "Thinking...";
   messages.appendChild(thinking);
-  bottom();
+  bottom(true);
   try { const result = await post("/api/chat", {message:text}); thinking.remove(); render(result.events); }
   catch (err) { add("error", err.message); }
 });
