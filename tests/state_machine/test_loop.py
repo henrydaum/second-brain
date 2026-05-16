@@ -1583,6 +1583,19 @@ def test_invalid_integer_form_input_keeps_same_field_active():
     assert cs.frame.step.name == "n"
 
 
+def test_enum_form_input_accepts_display_label():
+    """Verify friendly enum labels submit their backing values."""
+    captured = {}
+    cmd = CallableSpec("service", handler=lambda _cs, _actor, args: captured.update(args) or "ok", form=[FormStep("action", required=True, enum=["load", "unload"], enum_labels=["Load it", "Unload it"])])
+    cs = make_cs(commands={"service": cmd})
+
+    assert create_action(cs, "call_command", {"name": "service"}, "user").enact().ok
+    result = create_action(cs, "submit_form_text", "Load it", "user").enact()
+
+    assert result.ok
+    assert captured == {"action": "load"}
+
+
 def test_new_command_supersedes_pending_form():
     """Verify new command supersedes pending form."""
     events = []
