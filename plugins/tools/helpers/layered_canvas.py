@@ -1,4 +1,10 @@
-"""Layered canvas state: 4 image slots + palette/atmosphere passes + composite cache."""
+"""Single-image canvas state.
+
+A canvas per session holds: the current image path, a centralized palette id,
+a square size, a structured replay chain (skills run in order), and a
+short history list for the UI. Skills inherit `palette` and `size` from
+this state at execution time.
+"""
 
 from __future__ import annotations
 
@@ -11,15 +17,14 @@ from pathlib import Path
 from typing import Any
 
 from paths import DATA_DIR
+from plugins.helpers.palettes import DEFAULT_PALETTE_ID, palette_exists
 
 CANVAS_ROOT = DATA_DIR / "canvas"
 STATE_PATH = CANVAS_ROOT / "state.json"
-LAYERS_DIR = CANVAS_ROOT / "layers"
 COMPOSITE_DIR = CANVAS_ROOT / "composites"
-DEFAULT_SIZE = (960, 720)
-IMAGE_SLOTS = ("background", "form", "texture", "accent")
-PASS_SLOTS = ("palette", "atmosphere")
-ALL_SLOTS = IMAGE_SLOTS + PASS_SLOTS
+DEFAULT_SIZE = 768
+MIN_SIZE = 256
+MAX_SIZE = 1536
 
 _state_lock = threading.RLock()
 
@@ -42,29 +47,18 @@ def _write_state(data: dict) -> None:
 
 def _blank_entry() -> dict:
     return {
-        "size": list(DEFAULT_SIZE),
-        "layers": {slot: None for slot in IMAGE_SLOTS},
-        "palette": None,
-        "atmosphere": None,
-        "composite_path": None,
+        "size": DEFAULT_SIZE,
+        "palette_id": DEFAULT_PALETTE_ID,
+        "image_path": None,
+        "last_chain": [],
         "history": [],
     }
 
 
-def _ensure_dirs(session_key: str) -> tuple[Path, Path]:
-    slug = _slug(session_key)
-    layer_dir = LAYERS_DIR / slug
-    composite_dir = COMPOSITE_DIR / slug
-    layer_dir.mkdir(parents=True, exist_ok=True)
+def _ensure_dir(session_key: str) -> Path:
+    composite_dir = COMPOSITE_DIR / _slug(session_key)
     composite_dir.mkdir(parents=True, exist_ok=True)
-    return layer_dir, composite_dir
-
-
-def get_state(session_key: str) -> dict:
-    """Return a deep-copyable snapshot of the canvas state for this session."""
-    with _state_lock:
-        store = _read_state()
-        return store.get(session_key) or _blank_entry()
+    return composite_dir
 
 
 def _push_history(entry: dict, op: str) -> None:
@@ -73,172 +67,150 @@ def _push_history(entry: dict, op: str) -> None:
     entry["history"] = hist
 
 
-def layer_path(session_key: str, slot: str) -> Path:
-    """Stable path for a given image slot in this session."""
-    layer_dir, _ = _ensure_dirs(session_key)
-    return layer_dir / f"{slot}.png"
-
-
-def composite_path(session_key: str) -> Path:
-    """Stable path for the composited canvas image."""
-    _, composite_dir = _ensure_dirs(session_key)
-    return composite_dir / "current.png"
-
-
-def set_image_layer(session_key: str, slot: str, tool: str, params: dict, image_path: str | Path) -> dict:
-    """Record that ``slot`` was rendered to ``image_path`` and stamp it into the state."""
-    assert slot in IMAGE_SLOTS, f"unknown image slot: {slot}"
+def get_state(session_key: str) -> dict:
+    """Return a snapshot of the canvas state for this session."""
     with _state_lock:
         store = _read_state()
         entry = store.get(session_key) or _blank_entry()
-        entry["layers"][slot] = {
-            "path": str(Path(image_path).resolve()),
-            "tool": tool,
-            "params": dict(params or {}),
-            "updated_at": time.time(),
-        }
-        _push_history(entry, tool)
+        # Backfill any missing keys (forward-compat after schema bumps).
+        merged = {**_blank_entry(), **entry}
+        return merged
+
+
+def image_path(session_key: str) -> Path:
+    """Stable path for the current composite image."""
+    return _ensure_dir(session_key) / "current.png"
+
+
+def commit_image(session_key: str, pil_image, op: str, chain_entry: dict | None = None) -> dict:
+    """Save a PIL image as the new composite. If chain_entry is given, update the replay chain.
+
+    chain_entry is a dict like {slug, params, kind, seed}. For 'creation' kind the chain is
+    reset and replaced with [entry]; for 'transform' the entry is appended. For non-skill
+    operations (e.g. user wipes), pass chain_entry=None to leave the chain untouched.
+    """
+    dest = image_path(session_key)
+    pil_image.save(dest, format="PNG")
+    with _state_lock:
+        store = _read_state()
+        entry = store.get(session_key) or _blank_entry()
+        entry = {**_blank_entry(), **entry}
+        entry["image_path"] = str(dest.resolve())
+        if chain_entry is not None:
+            kind = chain_entry.get("kind")
+            if kind == "creation":
+                entry["last_chain"] = [dict(chain_entry)]
+            elif kind == "transform":
+                # Don't append a transform if there's no base.
+                if entry["last_chain"]:
+                    entry["last_chain"] = list(entry["last_chain"]) + [dict(chain_entry)]
+                else:
+                    entry["last_chain"] = [dict(chain_entry)]
+        _push_history(entry, op)
         store[session_key] = entry
         _write_state(store)
         return entry
 
 
-def set_pass(session_key: str, name: str, tool: str, params: dict) -> dict:
-    """Record a palette or atmosphere pass (not an image, just parameters)."""
-    assert name in PASS_SLOTS, f"unknown pass: {name}"
+def set_palette(session_key: str, palette_id: str) -> dict:
+    """Update the selected palette id. Returns the new state. Caller is responsible
+    for triggering a replay if appropriate."""
+    if not palette_exists(palette_id):
+        raise ValueError(f"unknown palette: {palette_id}")
     with _state_lock:
         store = _read_state()
         entry = store.get(session_key) or _blank_entry()
-        entry[name] = {"tool": tool, "params": dict(params or {}), "updated_at": time.time()}
-        _push_history(entry, tool)
+        entry = {**_blank_entry(), **entry}
+        entry["palette_id"] = palette_id
         store[session_key] = entry
         _write_state(store)
         return entry
 
 
-def clear_slot(session_key: str, slot: str) -> dict:
-    """Remove a slot's contribution to the canvas."""
-    if slot not in ALL_SLOTS:
-        raise ValueError(f"unknown layer: {slot}")
+def replace_state(session_key: str, entry: dict) -> None:
+    with _state_lock:
+        store = _read_state()
+        store[session_key] = {**_blank_entry(), **(entry or {})}
+        _write_state(store)
+
+
+def set_size(session_key: str, size: int) -> dict:
+    """Update the centralized square resolution. Clamped to [MIN_SIZE, MAX_SIZE]."""
+    size = max(MIN_SIZE, min(MAX_SIZE, int(size)))
     with _state_lock:
         store = _read_state()
         entry = store.get(session_key) or _blank_entry()
-        if slot in IMAGE_SLOTS:
-            entry["layers"][slot] = None
-            p = layer_path(session_key, slot)
-            if p.exists():
-                try: p.unlink()
-                except Exception: pass
-        else:
-            entry[slot] = None
-        _push_history(entry, f"clear:{slot}")
+        entry = {**_blank_entry(), **entry}
+        entry["size"] = size
         store[session_key] = entry
         _write_state(store)
         return entry
 
 
-def record_composite(session_key: str, path: Path, stats: dict | None = None) -> dict:
-    """Record the latest composite path + visual stats."""
+def clear_chain(session_key: str) -> None:
+    """Drop the replay chain without touching the image (used after a manual override)."""
     with _state_lock:
         store = _read_state()
-        entry = store.get(session_key) or _blank_entry()
-        entry["composite_path"] = str(Path(path).resolve())
-        if stats is not None:
-            entry["stats"] = stats
+        entry = store.get(session_key)
+        if not entry:
+            return
+        entry["last_chain"] = []
         store[session_key] = entry
         _write_state(store)
-        return entry
 
 
 def reset(session_key: str) -> None:
-    """Wipe canvas state and on-disk layers/composite for a session."""
+    """Wipe canvas state and on-disk image for a session."""
     with _state_lock:
         store = _read_state()
         store.pop(session_key, None)
         _write_state(store)
-        slug = _slug(session_key)
-        for d in (LAYERS_DIR / slug, COMPOSITE_DIR / slug):
-            if d.exists():
-                shutil.rmtree(d, ignore_errors=True)
+        d = COMPOSITE_DIR / _slug(session_key)
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def reset_canvas(session_key: str) -> None:
-    """Compat alias used by the web frontend."""
+    """Compat alias."""
     reset(session_key)
 
 
 def canvas(session_key: str) -> dict | None:
-    """Frontend-facing canvas snapshot (the shape /api/canvas expects)."""
+    """Frontend-facing canvas snapshot. Returns None when the canvas has no image yet."""
     entry = get_state(session_key)
-    cp = entry.get("composite_path")
-    if not cp or not Path(cp).is_file():
-        return None
-    layers_summary = {
-        slot: (entry["layers"][slot] or {}).get("params", {}).get("style") or (entry["layers"][slot] or {}).get("params", {}).get("type") or ("set" if entry["layers"][slot] else None)
-        for slot in IMAGE_SLOTS
-    }
+    ip = entry.get("image_path")
+    if not ip or not Path(ip).is_file():
+        # Still return palette/size so the UI can show the active palette ring.
+        return {
+            "path": None,
+            "palette_id": entry.get("palette_id") or DEFAULT_PALETTE_ID,
+            "size": entry.get("size") or DEFAULT_SIZE,
+            "history": entry.get("history") or [],
+            "chain": entry.get("last_chain") or [],
+        }
     return {
-        "path": cp,
-        "original": True,
-        "kind": "composite",
-        "stats": entry.get("stats") or {},
-        "layers": layers_summary,
-        "palette": (entry.get("palette") or {}).get("params"),
-        "atmosphere": (entry.get("atmosphere") or {}).get("params"),
+        "path": ip,
+        "palette_id": entry.get("palette_id") or DEFAULT_PALETTE_ID,
+        "size": entry.get("size") or DEFAULT_SIZE,
         "history": entry.get("history") or [],
+        "chain": entry.get("last_chain") or [],
     }
 
 
 def current(session_key: str) -> dict | None:
-    """Compat alias used by the web frontend for the gallery-share path check."""
+    """Compat helper used by share/remix flows."""
     state = canvas(session_key)
-    if not state:
+    if not state or not state.get("path"):
         return None
     return {"path": state["path"], "original": True, "kind": "composite"}
 
 
 def set_current(session_key: str, path: Any, original: bool = False, meta: dict | None = None) -> None:
-    """Compat shim for the remix flow: load an external image as the background slot."""
+    """Compat shim: load an external image as the current canvas (e.g. from remix)."""
+    from PIL import Image
     p = Path(path)
     if not p.is_file():
         return
     reset(session_key)
-    # Copy the source into our background slot path so future recomposes own it.
-    dest = layer_path(session_key, "background")
-    shutil.copy2(p, dest)
-    meta = dict(meta or {})
-    meta.setdefault("source", str(p.resolve()))
-    set_image_layer(session_key, "background", meta.get("kind") or "remix", {"style": "remix", **meta}, dest)
-
-
-def filled_slots(session_key: str) -> dict[str, str | None]:
-    """Return a compact map of which slots are filled and with what."""
-    entry = get_state(session_key)
-    out: dict[str, str | None] = {}
-    for slot in IMAGE_SLOTS:
-        data = entry["layers"].get(slot)
-        if not data:
-            out[slot] = None
-        else:
-            params = data.get("params") or {}
-            out[slot] = params.get("style") or params.get("type") or data.get("tool") or "set"
-    for name in PASS_SLOTS:
-        data = entry.get(name)
-        if not data:
-            out[name] = None
-        else:
-            params = data.get("params") or {}
-            out[name] = params.get("scheme") or params.get("style") or "set"
-    return out
-
-
-def layers_summary_text(session_key: str) -> str:
-    """One-line text summary of the current layer stack, for the LLM."""
-    f = filled_slots(session_key)
-    parts = []
-    for slot in IMAGE_SLOTS:
-        parts.append(f"{slot}={f[slot] or 'empty'}")
-    pass_parts = []
-    for name in PASS_SLOTS:
-        pass_parts.append(f"{name}={f[name] or 'empty'}")
-    return "Layers: " + ", ".join(parts) + " | " + ", ".join(pass_parts)
+    img = Image.open(p).convert("RGBA")
+    commit_image(session_key, img, op=(meta or {}).get("kind") or "load", chain_entry=None)

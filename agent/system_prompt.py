@@ -46,6 +46,7 @@ def build_prompt_sections(
         _sandbox_files() if _has_tool(r, "test_plugin") else "",
         _attachments() if _has_tool(r, "sql_query") else "",
         _database_tables(db) if _has_tool(r, "sql_query") else "",
+        _skill_workflow() if _has_tool(r, "execute_skill") else "",
     ]
     dynamic = [
         _current_datetime(),
@@ -182,6 +183,13 @@ Names must be unique across built-in and sandbox plugins. Config settings use (t
 
 The context object is passed to every plugin and contains relevant runtime information and helper methods. Read its definition in runtime/context.py if you have questions about how to use it effectively in your plugin code."""
     )
+
+
+def _skill_workflow() -> str:
+    return """## Canvas skill workflow
+For canvas requests, call search_skills first. If a strong matching skill exists, call execute_skill. If not, call create_skill with Python code defining run(canvas, **params), then execute_skill with the returned slug.
+
+Skill kinds: creation starts a new image; transform requires the current canvas and uses canvas.image. Skill code must call canvas.commit(image). Use canvas.palette.primary, secondary, tertiary, accent, and background instead of hard-coded colors; use canvas.size/canvas.width/canvas.height and canvas.seed for deterministic output. Allowed imports: math, random, colorsys, numpy, PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps, PIL.ImageEnhance."""
 
 
 def _sandbox_files() -> str:

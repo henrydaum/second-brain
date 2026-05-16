@@ -38,10 +38,9 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .share-panel { position: absolute; right: 22px; top: 72px; z-index: 3; display: grid; gap: 8px; width: min(280px, calc(100% - 44px)); padding: 12px; border: 1px solid rgba(255,255,255,.24); background: rgba(5,7,12,.86); backdrop-filter: blur(16px); }
 .share-panel[hidden] { display: none; }
 .share-panel input { height: 38px; min-width: 0; border: 1px solid var(--line); background: #10141e; color: var(--text); padding: 0 10px; }
-.copy { position: relative; padding: 48px; max-width: 760px; text-shadow: 0 2px 24px #000; }
-.copy p:not(.eyebrow) { color: #d8dfef; max-width: 580px; margin-top: 16px; font-size: 18px; }
-.chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
-.chips span { border: 1px solid rgba(255,255,255,.24); background: rgba(0,0,0,.32); padding: 8px 10px; }
+.palette-strip { position: absolute; right: 22px; bottom: 22px; z-index: 2; display: flex; gap: 10px; padding: 10px; border: 1px solid rgba(255,255,255,.18); background: rgba(5,7,12,.52); backdrop-filter: blur(14px); }
+.palette-strip button { width: 32px; height: 32px; border-radius: 50%; border: 2px solid rgba(255,255,255,.28); background: var(--swatch); cursor: pointer; padding: 0; }
+.palette-strip button:hover, .palette-strip button.active { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(61,242,255,.18); }
 .gallery-section { min-height: 70vh; padding: 48px; background: #0c1016; border-top: 1px solid var(--line); }
 .gallery-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
@@ -56,7 +55,7 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
   .shell { grid-template-columns: 1fr; }
   .chat { height: 58vh; position: relative; }
   .showcase { min-height: 420px; }
-  .copy, .gallery-section { padding: 28px; }
+  .gallery-section { padding: 28px; }
   .gallery-head { display: block; }
   h2 { font-size: 34px; }
 }

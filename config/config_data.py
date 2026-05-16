@@ -13,7 +13,7 @@ Each entry: (title, variable_name, description, default, type_info)
                    {"type": "slider", "range": (min, max, divisions), "is_float": bool}
 """
 
-from paths import DATA_DIR, ATTACHMENT_CACHE
+from paths import DATA_DIR, ATTACHMENT_CACHE, SKILLS_DIR
 
 DEFAULT_SCHEDULED_JOBS = {}
 
@@ -21,7 +21,7 @@ SETTINGS_DATA = [
     # --- Directories ---
     ("Sync Directories", "sync_directories",
      "Folders to monitor for new and changed files. Sub-folders are included.",
-     [str(ATTACHMENT_CACHE)],
+     [str(ATTACHMENT_CACHE), str(SKILLS_DIR)],
      {"type": "json_list"}),
 
     ("Database Path", "db_path",
@@ -53,7 +53,7 @@ SETTINGS_DATA = [
     # --- Services ---
     ("Auto-load Services", "autoload_services",
      "Service names to load automatically on startup.",
-     ["web_search_provider", "llm", "parser"],
+     ["web_search_provider", "llm", "parser", "text_embedder"],
      {"type": "json_list"}),
 
     # --- Frontends ---

@@ -10,9 +10,9 @@ const sharePanel = document.querySelector("#sharePanel");
 const shareTitle = document.querySelector("#shareTitle");
 const shareArtist = document.querySelector("#shareArtist");
 const gallery = document.querySelector("#gallery");
-const stats = document.querySelector("#canvasStats");
-const history = document.querySelector("#history");
+const paletteStrip = document.querySelector("#paletteStrip");
 const NEAR_BOTTOM_PX = 80;
+let currentPalette = "";
 const atBottom = () => messages.scrollHeight - messages.scrollTop - messages.clientHeight < NEAR_BOTTOM_PX;
 const bottom = (force = false) => {
   const stick = force || atBottom();
@@ -65,14 +65,11 @@ function render(events) {
   bottom();
 }
 function setCanvas(c) {
+  currentPalette = c?.palette_id || currentPalette; syncPalette(currentPalette);
   if (!c?.url) {
     showcase.classList.remove("has-image"); heroImage.classList.remove("fading"); heroImage.removeAttribute("src"); downloadImage.href = "#";
-    stats.textContent = "Type anything. The system will turn it into a procedural base, color harmony, DeepDream texture, and final polish.";
-    history.innerHTML = "<span>Fresh canvas</span>"; return;
+    return;
   }
-  const s = c.stats || {}, g = (s.guidance || []).join(", ");
-  stats.textContent = s.brightness == null ? "Canvas updated." : `Beauty ${s.beauty_score ?? "?"} · brightness ${s.brightness} · contrast ${s.contrast} · detail ${s.detail}${g ? ` · ${g}` : ""}`;
-  history.innerHTML = (c.history || []).slice(-5).map(x => `<span>${x.op || "image"}</span>`).join("") || "<span>Canvas</span>";
   const newUrl = c.url, newName = c.name || "canvas.png";
   const apply = () => { heroImage.src = newUrl; heroImage.alt = newName; downloadImage.href = newUrl; downloadImage.download = newName; showcase.classList.add("has-image"); };
   if (!showcase.classList.contains("has-image")) { apply(); loadGallery(); return; }
@@ -93,6 +90,14 @@ async function loadCanvas() { const r = await get("/api/canvas"); setCanvas(r.ca
 async function loadGallery() {
   const r = await get("/api/gallery");
   gallery.innerHTML = (r.items || []).map(x => `<article class="gallery-card"><img src="${x.url}" alt=""><div><strong>${esc(x.title)}</strong><small>${esc(x.artist)}${x.score ? ` · ${(x.score*100).toFixed(0)}% similar` : ""}</small><button data-path="${esc(x.path)}">Remix</button></div></article>`).join("") || "<article class='assistant'>No shared canvases yet.</article>";
+}
+async function loadPalettes() {
+  const r = await get("/api/palettes");
+  paletteStrip.innerHTML = (r.palettes || []).map(p => `<button type="button" title="${esc(p.name)}" data-palette="${esc(p.id)}" style="--swatch:conic-gradient(${Object.values(p.colors).join(",")})"></button>`).join("");
+  syncPalette(currentPalette);
+}
+function syncPalette(id) {
+  paletteStrip.querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.palette === id));
 }
 function esc(x) { return String(x ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 form.addEventListener("submit", async e => {
@@ -117,8 +122,9 @@ document.querySelector("#newChat").addEventListener("click", async () => {
 shareBtn.addEventListener("click", () => { sharePanel.hidden = !sharePanel.hidden; shareTitle.value ||= "untitled"; shareArtist.value ||= "anonymous"; });
 document.querySelector("#shareConfirm").addEventListener("click", async () => render((await post("/api/share", {title:shareTitle.value, artist:shareArtist.value})).events));
 gallery.addEventListener("click", async e => { if (e.target.matches("button[data-path]")) { render((await post("/api/remix", {path:e.target.dataset.path})).events); scrollTo({top:0, behavior:"smooth"}); } });
+paletteStrip.addEventListener("click", async e => { if (e.target.matches("button[data-palette]")) render((await post("/api/palette", {palette_id:e.target.dataset.palette})).events); });
 setInterval(poll, 1200);
-loadCanvas(); loadGallery();
+loadPalettes(); loadCanvas(); loadGallery();
 
 const canvas = document.querySelector("#fractal");
 const ctx = canvas.getContext("2d");

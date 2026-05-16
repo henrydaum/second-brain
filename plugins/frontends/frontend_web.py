@@ -13,9 +13,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from PIL import Image
+
 from config import config_manager
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
-from plugins.tools.helpers.fractal_gallery import GALLERY_DIR, canvas, gallery_rows, read_json, reset_canvas, set_current, share_current, similar_rows
+from plugins.helpers.palettes import get_palette, list_palettes
+from plugins.helpers.skill_runner import replay_chain
+from plugins.helpers.skill_store import read_skill
+from plugins.tools.helpers import layered_canvas as lc
+from plugins.helpers.gallery import GALLERY_DIR, canvas, gallery_rows, read_json, reset_canvas, set_current, share_current, similar_rows
 from paths import DATA_DIR
 
 logger = logging.getLogger("WebFrontend")
@@ -23,14 +29,11 @@ WEB_ROOT = Path(__file__).with_name("web")
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 WEB_PROFILE = "web_demo"
 WEB_TOOLS = [
-    "compose_background",
-    "compose_form",
-    "compose_texture",
-    "compose_accent",
-    "compose_palette",
-    "compose_atmosphere",
-    "clear_layer",
-    "reset_canvas",
+    "search_skills",
+    "create_skill",
+    "update_skill",
+    "delete_skill",
+    "execute_skill",
     "request_user_feedback",
 ]
 USAGE_PATH = DATA_DIR / "web_usage.json"
@@ -119,38 +122,9 @@ class WebFrontend(BaseFrontend):
             "prompt_suffix": (
                 "You are running the public Second Brain web demo. You make generative art collaboratively with the user. "
                 "Keep replies short, warm, and conversational — like an artist talking through their work. Never use slash commands.\n\n"
-                "THE CANVAS MODEL — IMPORTANT.\n"
-                "The canvas is a stack of six named layers, composited bottom to top:\n"
-                "  1. background  — base wash, gradient, noise, sky\n"
-                "  2. form        — the dominant shapes (the 'subject')\n"
-                "  3. texture     — surface detail laid over the form\n"
-                "  4. accent      — sparse focal marks (sparks, drips, stars)\n"
-                "  5. palette     — color-theory pass that harmonizes the colors\n"
-                "  6. atmosphere  — final lighting pass (glow, vignette, grain, noir)\n"
-                "Each compose_* tool owns ONE slot. Calling it again REPLACES that slot, never stacks. "
-                "This means the canvas cannot get muddy or 'deep fried' — you can iterate freely.\n\n"
-                "BUILDING A PIECE.\n"
-                "Start with compose_background, then compose_form. Add texture and/or accent only if the piece needs more. "
-                "Almost always finish with compose_palette and compose_atmosphere — they're what make it feel intentional. "
-                "Use seeds for variety: each user should get a unique piece, so let seed be random (omit it) unless reproducing.\n\n"
-                "TRANSLATING THE USER.\n"
-                "The user talks in plain language. Translate their intent into specific layer moves. Examples:\n"
-                "  'make it brighter'      -> compose_atmosphere(style='bloom') OR compose_palette(scheme='pastel_sorbet') OR clear_layer('atmosphere') if a dark one is set\n"
-                "  'more chaotic'          -> compose_form with density='dense', or compose_accent(style='sparks', count='many')\n"
-                "  'softer'                -> compose_atmosphere(style='soft_haze') or compose_palette(scheme='pastel_sorbet', intensity='subtle')\n"
-                "  'mondrian feel'         -> compose_form(type='primary_grid') + compose_palette(scheme='mondrian_primary')\n"
-                "  'rothko-ish meditation' -> compose_form(type='soft_horizontal_bands') + compose_palette(scheme='rothko_warm') + compose_atmosphere(style='soft_haze')\n"
-                "  'something with fractals' / 'mandelbrot' -> compose_form(type='mandelbrot_zoom') over a soft background; add bloom atmosphere for glow\n"
-                "  'julia set' / 'organic alien' -> compose_form(type='julia_set') — each seed gives a wildly different shape\n"
-                "  'stained glass'         -> compose_form(type='newton_rings') or 'voronoi_shards'\n"
-                "  'too busy'              -> clear_layer('texture') or clear_layer('accent')\n"
-                "  'start over'            -> reset_canvas\n"
-                "Make a decision and move — don't ask the user to pick between layer names.\n\n"
-                "YOU CANNOT SEE THE CANVAS.\n"
-                "After every compose tool, you get a CLIP-derived description (color, mood, composition, style, subject) and the current layer manifest. "
-                "Trust that signal. But the user is the only true judge. Call request_user_feedback every 1-2 compose calls with a concrete question and a suggestion the user can react to. "
-                "Examples: 'I went with bold horizontal bands in warm reds — does the warmth feel right, or want me to push it cooler?' "
-                "Don't claim you can see the image. Speak from the CLIP descriptors and user feedback.\n\n"
+                "The canvas is one square image with a selected color-theory palette and size. For any request to draw, render, stylize, or transform the canvas: first call search_skills; if a strong match exists, execute_skill; otherwise create_skill with Python code, then execute_skill. Creation skills start a new image. Transform skills receive canvas.image and modify it.\n\n"
+                "Skill code defines run(canvas, **params), uses allowed imports only (math, random, colorsys, numpy, PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps, PIL.ImageEnhance), and must call canvas.commit(image). Use canvas.palette.primary, secondary, tertiary, accent, and background for colors. Use canvas.size, width, height, and seed for deterministic geometry. Do not hard-code hex colors unless the user explicitly asks.\n\n"
+                "You cannot see the canvas directly. After executing a skill, explain the intended move briefly and ask for feedback when useful. "
                 "Sharing, downloading, gallery, and remix are handled by the website buttons — not by tools."
             ),
             "whitelist_or_blacklist_tools": "whitelist",
@@ -162,7 +136,7 @@ class WebFrontend(BaseFrontend):
         if session:
             session.profile_override = WEB_PROFILE
             session.active_agent_profile = WEB_PROFILE
-        self.runtime.add_system_prompt_extra(key, "web_demo", "Website safety: browser users cannot run slash commands or edit runtime configuration. Compose the canvas layer by layer; never claim you can see the image — rely on the CLIP descriptors returned by every compose tool and on user feedback. Do not call sharing or gallery tools.")
+        self.runtime.add_system_prompt_extra(key, "web_demo", "Website safety: browser users cannot run slash commands or edit runtime configuration. Use the skill workflow for canvas work: search_skills, then execute_skill or create_skill plus execute_skill. Do not call sharing or gallery tools.")
 
     def _push(self, session_key: str, item: dict) -> None:
         with self._lock:
@@ -179,7 +153,7 @@ class WebFrontend(BaseFrontend):
 
     def render_attachments(self, session_key: str, paths: list[str]) -> None:
         state = canvas(session_key)
-        current_composite = Path(state["path"]).resolve() if state else None
+        current_composite = Path(state["path"]).resolve() if state and state.get("path") else None
         for path in paths:
             p = Path(path)
             if not _is_public_image(p):
@@ -244,6 +218,28 @@ class WebFrontend(BaseFrontend):
     def canvas_payload(self, session_id: str) -> dict:
         return _canvas_payload(canvas(self.session_key(session_id)))
 
+    def palettes_payload(self) -> list[dict]:
+        return [p.to_dict() for p in list_palettes()]
+
+    def set_palette(self, session_id: str, palette_id: str) -> list[dict]:
+        key = self.session_key(session_id)
+        before = lc.get_state(key)
+        if palette_id == before.get("palette_id"):
+            return [{"type": "hero_image", "canvas": _canvas_payload(canvas(key))}] if before.get("image_path") else []
+        try:
+            state = lc.set_palette(key, palette_id)
+            chain = state.get("last_chain") or []
+            if chain:
+                out = lc.image_path(key).with_name("_palette_replay.png")
+                replay_chain(chain, palette=get_palette(palette_id), size=int(state.get("size") or lc.DEFAULT_SIZE), output_image_path=out, workdir=out.parent, skill_loader=read_skill)
+                with Image.open(out) as img:
+                    lc.commit_image(key, img.convert("RGBA"), f"palette:{palette_id}", None)
+            c = canvas(key)
+            return [{"type": "hero_image", "url": _file_url(Path(c["path"])), "name": Path(c["path"]).name, "canvas": _canvas_payload(c)}] if c and c.get("path") else []
+        except Exception as e:
+            lc.replace_state(key, before)
+            return [{"type": "error", "content": f"Palette replay failed: {e}"}]
+
     def share(self, session_id: str, title: str, artist: str) -> list[dict]:
         dest, meta = share_current(self.session_key(session_id), title, artist)
         self._sync_gallery_file(dest)
@@ -252,7 +248,7 @@ class WebFrontend(BaseFrontend):
     def gallery(self, session_id: str, limit: int = 24) -> list[dict]:
         item = canvas(self.session_key(session_id))
         ctx = SimpleNamespace(services=getattr(self.runtime, "services", {}), db=getattr(self.runtime, "db", None))
-        rows = similar_rows(item["path"], ctx, limit) if item else gallery_rows()[:limit]
+        rows = similar_rows(item["path"], ctx, limit) if item and item.get("path") else gallery_rows()[:limit]
         return [_gallery_url(r) for r in rows]
 
     def remix(self, session_id: str, path: str) -> list[dict]:
@@ -294,6 +290,8 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/canvas":
             sid = str(parse_qs(urlparse(self.path).query).get("session_id", ["demo"])[0])[:80]
             return self._json({"ok": True, "canvas": self.server.frontend.canvas_payload(sid)})
+        if path == "/api/palettes":
+            return self._json({"ok": True, "palettes": self.server.frontend.palettes_payload()})
         if path == "/api/gallery":
             qs = parse_qs(urlparse(self.path).query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
             return self._json({"ok": True, "items": self.server.frontend.gallery(sid)})
@@ -317,6 +315,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "events": self.server.frontend.share(sid, str(body.get("title") or "untitled"), str(body.get("artist") or "anonymous"))})
             if self.path == "/api/remix":
                 return self._json({"ok": True, "events": self.server.frontend.remix(sid, str(body.get("path") or ""))})
+            if self.path == "/api/palette":
+                return self._json({"ok": True, "events": self.server.frontend.set_palette(sid, str(body.get("palette_id") or ""))})
         except Exception as e:
             logger.exception("Web request failed")
             return self._json({"ok": False, "events": [{"type": "error", "content": str(e)}]}, 500)
@@ -396,6 +396,8 @@ def _image_event(path: Path, state: dict | None = None) -> dict:
 def _canvas_payload(state: dict | None) -> dict:
     if not state:
         return {}
+    if not state.get("path"):
+        return {k: v for k, v in state.items() if k != "path"}
     p = Path(state["path"])
     return {**state, "url": _file_url(p), "name": p.name}
 

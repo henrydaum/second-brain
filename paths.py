@@ -38,6 +38,10 @@ SANDBOX_FRONTENDS = DATA_DIR / "sandbox_frontends"
 ATTACHMENT_CACHE = DATA_DIR / "attachment_cache"
 ATTACHMENT_CACHE.mkdir(parents=True, exist_ok=True)
 
+# Skills: agent-authored canvas code. Each file is one skill.
+SKILLS_DIR = DATA_DIR / "skills"
+SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def open_file(path):
     """Open a file or folder with the system's default handler."""
