@@ -66,7 +66,8 @@ function setCanvas(c) {
     history.innerHTML = "<span>Fresh canvas</span>"; return;
   }
   heroImage.src = c.url; heroImage.alt = c.name || "Generated canvas"; downloadImage.href = c.url; downloadImage.download = c.name || "canvas.png"; showcase.classList.add("has-image");
-  const s = c.stats || {}; stats.textContent = s.brightness == null ? "Canvas updated." : `Brightness ${s.brightness} · contrast ${s.contrast} · detail ${s.detail}${s.mostly_dark ? " · needs light" : ""}`;
+  const s = c.stats || {}, g = (s.guidance || []).join(", ");
+  stats.textContent = s.brightness == null ? "Canvas updated." : `Beauty ${s.beauty_score ?? "?"} · brightness ${s.brightness} · contrast ${s.contrast} · detail ${s.detail}${g ? ` · ${g}` : ""}`;
   history.innerHTML = (c.history || []).slice(-5).map(x => `<span>${x.op || "image"}</span>`).join("") || "<span>Canvas</span>";
   loadGallery();
 }

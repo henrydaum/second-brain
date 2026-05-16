@@ -9,8 +9,11 @@ import random
 import time
 from pathlib import Path
 
+from PIL import Image
+
 from paths import DATA_DIR
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.tools.helpers.color_theory import beautify_image, palette_color
 from plugins.tools.helpers.fractal_gallery import image_stats, mark_original, set_current
 
 
@@ -74,13 +77,14 @@ class RenderMandelbrot(BaseTool):
         stamp = time.strftime("%Y%m%d-%H%M%S")
         path = out_dir / f"mandelbrot-{preset}-{palette}-{seed}-{stamp}.png"
         _render(path, width, height, detail, cx, cy, scale, palette, seed)
+        beautify_image(Image.open(path), seed, palette, "mandelbrot").save(path, "PNG", optimize=True)
         meta = {"preset": preset, "palette": palette, "seed": seed, "width": width, "height": height, "detail": detail, "center_x": cx, "center_y": cy, "scale": scale, "path": str(path), "stats": image_stats(path)}
         path.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         mark_original(path, meta)
         set_current(getattr(context, "session_key", None), path, True, meta)
         return ToolResult(
             data=meta,
-            llm_summary=f"Rendered a unique {palette} Mandelbrot seed {seed}: brightness {meta['stats']['brightness']}, contrast {meta['stats']['contrast']}, detail {meta['stats']['detail']}, mostly_dark={meta['stats']['mostly_dark']}. Sharing is handled by the website button.",
+            llm_summary=f"Rendered a unique {palette} Mandelbrot seed {seed}: beauty {meta['stats']['beauty_score']}, brightness {meta['stats']['brightness']}, contrast {meta['stats']['contrast']}, detail {meta['stats']['detail']}, guidance={meta['stats']['guidance']}. Sharing is handled by the website button.",
             attachment_paths=[str(path)],
         )
 
@@ -147,18 +151,7 @@ def _render_np(w: int, h: int, max_iter: int, cx: float, cy: float, scale: float
 
 
 def _color(t: float, palette: str, glow: float = 1.0) -> tuple[int, int, int]:
-    t = max(0.0, min(1.0, t))
-    if palette == "inferno":
-        h, s, v = 0.03 + 0.12 * t, 0.95, 0.18 + 0.82 * t
-    elif palette == "electric":
-        h, s, v = 0.55 + 0.28 * math.sin(t * 5.2), 0.9, 0.2 + 0.8 * t
-    elif palette == "nebula":
-        h, s, v = 0.72 + 0.22 * t, 0.78, 0.16 + 0.84 * t
-    elif palette == "gold":
-        h, s, v = 0.10 + 0.05 * math.sin(t * 8), 0.82, 0.12 + 0.88 * t
-    else:
-        h, s, v = 0.44 + 0.35 * t, 0.82, 0.15 + 0.85 * t
-    return tuple(round(min(1.0, c * glow) * 255) for c in colorsys.hsv_to_rgb(h % 1.0, s, v))
+    return palette_color(t, palette, 1, glow)
 
 
 def _choice(value, allowed, default):

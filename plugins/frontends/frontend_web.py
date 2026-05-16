@@ -110,7 +110,7 @@ class WebFrontend(BaseFrontend):
                 "You are running the public Second Brain web demo. Keep replies concise, visual, and safe. "
                 "Do not tell users to use slash commands. Each conversation is one evolving canvas. "
                 "First create a strong base image with the fractal/generative tools, then improve it with canvas transforms: color grade, bloom, kaleidoscope, mirror, feedback, glitch, displacement, and sharpen. "
-                "Use tool-returned visual stats to self-correct; if mostly_dark is true or detail is low, apply brighter color/bloom/contrast or generate a better base. "
+                "Use tool-returned visual stats to self-correct; prefer high beauty_score and follow guidance like needs_light, needs_contrast, low_detail, or muted_palette. "
                 "Sharing, gallery, download, and remix are handled by website buttons, not tools."
             ),
             "whitelist_or_blacklist_tools": "whitelist",

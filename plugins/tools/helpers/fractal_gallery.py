@@ -10,9 +10,10 @@ import shutil
 import time
 from pathlib import Path
 
-from PIL import Image, ImageFilter, ImageStat
+from PIL import Image
 
 from paths import DATA_DIR
+from plugins.tools.helpers.color_theory import visual_stats
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 STATE_PATH = DATA_DIR / "fractals" / "current_images.json"
@@ -97,16 +98,7 @@ def share_current(session_key, title="untitled", artist="anonymous"):
 
 
 def image_stats(path):
-    img = Image.open(path).convert("RGB"); img.thumbnail((180, 180))
-    stat, edge = ImageStat.Stat(img), ImageStat.Stat(img.filter(ImageFilter.FIND_EDGES))
-    means, stds = stat.mean, stat.stddev
-    return {
-        "brightness": round(sum(means) / 765, 3),
-        "contrast": round(sum(stds) / 382.5, 3),
-        "detail": round(sum(edge.mean) / 765, 3),
-        "dominant_rgb": [round(x) for x in means],
-        "mostly_dark": sum(means) / 3 < 20,
-    }
+    return visual_stats(Image.open(path))
 
 
 def gallery_rows():

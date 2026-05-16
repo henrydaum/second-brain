@@ -9,6 +9,7 @@ from PIL import Image, ImageFilter
 
 from paths import DATA_DIR
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.tools.helpers.color_theory import beautify_image, palette_color
 from plugins.tools.helpers.fractal_gallery import image_stats, mark_original, set_current
 
 PALETTES = {"plasma", "laser", "sunset", "ice", "toxic", "royal"}
@@ -27,11 +28,7 @@ def _pick(v, xs, d): return v if v in xs else d
 
 
 def _color(t, pal, seed=1, v=1):
-    r = random.Random(seed); t = (t + r.random()) % 1
-    base = {"plasma": .78, "laser": .52, "sunset": .02, "ice": .55, "toxic": .25, "royal": .68}.get(pal, .78)
-    h = (base + .35 * math.sin(t * 5.8 + r.random() * 6) + .28 * t) % 1
-    s = .65 + .35 * ((math.sin(t * 9 + seed) + 1) / 2)
-    return tuple(round(255 * x * v) for x in colorsys.hsv_to_rgb(h, s, min(1, .15 + .9 * t)))
+    return palette_color(t, pal, seed, v)
 
 
 def _np_colors(t, pal, seed, mask=None):
@@ -50,12 +47,13 @@ def _np_colors(t, pal, seed, mask=None):
 def _save(kind, img, meta, ctx):
     out = DATA_DIR / "fractals" / kind; out.mkdir(parents=True, exist_ok=True)
     path = out / f"{kind}-{meta['seed']}-{time.strftime('%Y%m%d-%H%M%S')}.png"
+    img = beautify_image(img, meta["seed"], meta.get("palette", "plasma"), kind)
     img.save(path, "PNG", optimize=True)
     meta = {**meta, "kind": kind, "path": str(path), "stats": image_stats(path)}
     path.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     mark_original(path, meta); set_current(getattr(ctx, "session_key", None), path, True, meta)
     s = meta["stats"]
-    return ToolResult(data=meta, llm_summary=f"Rendered {kind.replace('_',' ')} seed {meta['seed']}: brightness {s['brightness']}, contrast {s['contrast']}, detail {s['detail']}, mostly_dark={s['mostly_dark']}. Sharing is handled by the website button.", attachment_paths=[str(path)])
+    return ToolResult(data=meta, llm_summary=f"Rendered {kind.replace('_',' ')} seed {meta['seed']}: beauty {s['beauty_score']}, brightness {s['brightness']}, contrast {s['contrast']}, detail {s['detail']}, guidance={s['guidance']}. Sharing is handled by the website button.", attachment_paths=[str(path)])
 
 
 def _escape(w, h, detail, seed, pal, fn, cx=0, cy=0, scale=3.0):

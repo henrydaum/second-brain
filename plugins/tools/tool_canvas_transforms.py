@@ -9,6 +9,7 @@ from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps
 
 from paths import DATA_DIR
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.tools.helpers.color_theory import beautify_image
 from plugins.tools.helpers.fractal_gallery import current, image_stats, mark_original, set_current
 
 try:
@@ -25,12 +26,13 @@ def _num(v, d, lo, hi):
 def _save(ctx, op, img, meta):
     out = DATA_DIR / "fractals" / "canvas_ops"; out.mkdir(parents=True, exist_ok=True)
     path = out / f"{op}-{meta['seed']}-{time.strftime('%Y%m%d-%H%M%S')}.png"
+    img = beautify_image(img, meta["seed"], meta.get("mood") or meta.get("palette", "plasma"), op)
     img.convert("RGB").save(path, "PNG", optimize=True)
     meta = {**meta, "kind": op, "path": str(path), "stats": image_stats(path)}
     path.with_suffix(".json").write_text(json.dumps({**meta, "original": True}, indent=2), encoding="utf-8")
     mark_original(path, meta); set_current(getattr(ctx, "session_key", None), path, True, meta)
     s = meta["stats"]
-    return ToolResult(data=meta, llm_summary=f"Applied {op}: brightness {s['brightness']}, contrast {s['contrast']}, detail {s['detail']}, mostly_dark={s['mostly_dark']}.", attachment_paths=[str(path)])
+    return ToolResult(data=meta, llm_summary=f"Applied {op}: beauty {s['beauty_score']}, brightness {s['brightness']}, contrast {s['contrast']}, detail {s['detail']}, guidance={s['guidance']}.", attachment_paths=[str(path)])
 
 
 class _CanvasTool(BaseTool):
