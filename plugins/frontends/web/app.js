@@ -84,6 +84,15 @@ function approval(ev) {
 }
 function renderToolStatus(ev) {
   const id = ev.call_id || `${ev.name}:${Date.now()}`;
+  // Loader tracking — render-class tool statuses keep the loader alive.
+  if (ev.status === "started") loaderToolStart(id);
+  else if (ev.status === "finished") loaderToolEnd(id);
+  if (ev.progress && typeof ev.progress.total === "number") {
+    setProgress(ev.progress.done | 0, ev.progress.total | 0);
+  }
+  // "progressed" events without a chat counterpart shouldn't render a chat line —
+  // they're for the canvas arc only.
+  if (ev.status === "progressed" && !toolStatusEls.has(id)) { bottom(); return; }
   let el = toolStatusEls.get(id);
   if (!el) {
     el = document.createElement("article");
@@ -106,15 +115,16 @@ function render(events) {
     if (ev.type === "message") add("assistant", ev.content, true);
     else if (ev.type === "status") add("status", ev.content);
     else if (ev.type === "tool_status") renderToolStatus(ev);
-    else if (ev.type === "error") add("error", ev.content);
+    else if (ev.type === "error") { add("error", ev.content); loaderForceStop(); }
     else if (ev.type === "form") add("assistant", `${ev.form?.display?.prompt || "Input required"}\n${(ev.form?.display?.choices || []).map(c => c.label || c.value).join(" / ")}`);
     else if (ev.type === "approval") approval(ev);
     else if (ev.type === "paywall") openPaywall(ev);
     else if (ev.type === "account") setAccount(ev.account);
     else if (ev.type === "hero_image") {
       setCanvas(ev.canvas || {url: ev.url, name: ev.name});
+      loaderForceStop();
     }
-    else if (ev.type === "canvas_reset") setCanvas(null);
+    else if (ev.type === "canvas_reset") { setCanvas(null); loaderForceStop(); }
     else if (ev.type === "shared") { sharePanel.hidden = true; loadGallery(1); }
     else if (ev.type === "attachment") add("assistant", `Attachment: ${ev.name}`);
   }
@@ -532,11 +542,171 @@ function debounceControl(key, fn, ms = 160) {
 async function postControl(body) {
   if (controlsPanel.classList.contains("loading")) return;
   controlsPanel.classList.add("loading");
+  loaderTicketStart();
   try { render((await post("/api/skill_control", body)).events); }
   catch (err) { add("error", err.message); }
-  finally { controlsPanel.classList.remove("loading"); }
+  finally { controlsPanel.classList.remove("loading"); loaderTicketEnd(); }
 }
 function esc(x) { return String(x ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+// ----- Canvas loader: particle field + chain-progress arc -----
+const loadCanvas = document.querySelector("#loadCanvas");
+const progressArc = document.querySelector("#progressArc");
+const progressFill = progressArc.querySelector(".fill");
+let userTickets = 0;
+const activeRenderTools = new Set();
+let loaderRaf = 0;
+let loaderSafetyTimer = 0;
+let loaderStopGrace = 0;
+let particleCtx = null;
+let particles = [];
+let pW = 0, pH = 0, pT = 0;
+let accentRgb = [165, 175, 195];
+let accent2Rgb = [195, 175, 195];
+
+function loaderShouldShow() { return userTickets > 0 || activeRenderTools.size > 0; }
+function loaderSync() {
+  if (loaderShouldShow()) {
+    if (loaderStopGrace) { clearTimeout(loaderStopGrace); loaderStopGrace = 0; }
+    if (!showcase.classList.contains("loading")) loaderStartNow();
+  } else if (showcase.classList.contains("loading") && !loaderStopGrace) {
+    // Short grace period — the next polling tick might bring a tool_status.
+    loaderStopGrace = setTimeout(loaderForceStop, 1500);
+  }
+}
+function loaderStartNow() {
+  showcase.classList.add("loading");
+  particleInit();
+  loaderRaf = requestAnimationFrame(particleStep);
+  clearTimeout(loaderSafetyTimer);
+  loaderSafetyTimer = setTimeout(loaderForceStop, 45000);
+}
+function loaderForceStop() {
+  userTickets = 0; activeRenderTools.clear();
+  showcase.classList.remove("loading");
+  if (loaderRaf) { cancelAnimationFrame(loaderRaf); loaderRaf = 0; }
+  clearTimeout(loaderSafetyTimer); loaderSafetyTimer = 0;
+  if (loaderStopGrace) { clearTimeout(loaderStopGrace); loaderStopGrace = 0; }
+  setProgress(0, 0);
+}
+function loaderTicketStart() { userTickets++; loaderSync(); }
+function loaderTicketEnd() { if (userTickets > 0) userTickets--; loaderSync(); }
+function loaderToolStart(id) { activeRenderTools.add(id); loaderSync(); }
+function loaderToolEnd(id) { activeRenderTools.delete(id); loaderSync(); }
+async function withLoader(fn) {
+  loaderTicketStart();
+  try { return await fn(); }
+  finally { loaderTicketEnd(); }
+}
+function setProgress(done, total) {
+  if (total <= 1 || done <= 0) {
+    progressArc.classList.remove("visible");
+    progressFill.style.strokeDashoffset = "1";
+    return;
+  }
+  progressArc.classList.add("visible");
+  progressFill.style.strokeDashoffset = String(Math.max(0, 1 - (done / total)));
+}
+
+// Read current accent CSS vars, then desaturate + soften so the field stays low-key.
+function refreshAccentRgb() {
+  const root = document.documentElement;
+  const a = (getComputedStyle(root).getPropertyValue("--accent").trim()) || "#3df2ff";
+  const a2 = (getComputedStyle(root).getPropertyValue("--accent-2").trim()) || "#ff4d8d";
+  accentRgb = softenRgb(parseColor(a));
+  accent2Rgb = softenRgb(parseColor(a2));
+}
+function parseColor(s) {
+  s = s.trim();
+  if (s.startsWith("#")) {
+    let h = s.slice(1);
+    if (h.length === 3) h = h.split("").map(c => c+c).join("");
+    const n = parseInt(h, 16);
+    return [(n>>16)&255, (n>>8)&255, n&255];
+  }
+  const m = s.match(/rgba?\(([^)]+)\)/);
+  if (m) {
+    const p = m[1].split(",").map(x => parseFloat(x));
+    return [p[0]|0, p[1]|0, p[2]|0];
+  }
+  return [180, 180, 180];
+}
+// Pull toward gray (desaturate) and toward a soft mid-tone (lower contrast).
+function softenRgb([r,g,b]) {
+  const gray = 0.299*r + 0.587*g + 0.114*b;
+  const SAT = 0.38;    // 0 = full gray, 1 = full color
+  const LIFT = 0.55;   // 0 = original, 1 = pure 180-gray
+  const dr = gray + (r - gray) * SAT;
+  const dg = gray + (g - gray) * SAT;
+  const db = gray + (b - gray) * SAT;
+  return [
+    Math.round(dr * (1 - LIFT) + 180 * LIFT),
+    Math.round(dg * (1 - LIFT) + 180 * LIFT),
+    Math.round(db * (1 - LIFT) + 180 * LIFT),
+  ];
+}
+
+// Small value-noise grid for vector-field flow.
+const NSIZE = 64;
+let nGrid = null;
+function noiseInit() {
+  nGrid = new Float32Array(NSIZE * NSIZE);
+  for (let i = 0; i < nGrid.length; i++) nGrid[i] = Math.random();
+}
+function noise2(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi, yf = y - yi;
+  const wx0 = ((xi % NSIZE) + NSIZE) % NSIZE;
+  const wx1 = (wx0 + 1) % NSIZE;
+  const wy0 = ((yi % NSIZE) + NSIZE) % NSIZE;
+  const wy1 = (wy0 + 1) % NSIZE;
+  const u = xf*xf*(3-2*xf), v = yf*yf*(3-2*yf);
+  const n00 = nGrid[wy0*NSIZE + wx0], n10 = nGrid[wy0*NSIZE + wx1];
+  const n01 = nGrid[wy1*NSIZE + wx0], n11 = nGrid[wy1*NSIZE + wx1];
+  return (n00*(1-u) + n10*u) * (1-v) + (n01*(1-u) + n11*u) * v;
+}
+
+const PARTICLE_COUNT = 360;
+function particleInit() {
+  refreshAccentRgb();
+  if (!nGrid) noiseInit();
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  pW = loadCanvas.width = Math.max(2, Math.floor(loadCanvas.clientWidth * dpr));
+  pH = loadCanvas.height = Math.max(2, Math.floor(loadCanvas.clientHeight * dpr));
+  particleCtx = loadCanvas.getContext("2d");
+  particleCtx.fillStyle = "rgba(8,9,13,1)";
+  particleCtx.fillRect(0, 0, pW, pH);
+  particles = [];
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    particles.push({ x: Math.random()*pW, y: Math.random()*pH, mix: Math.random() });
+  }
+  pT = 0;
+}
+let accentRefreshTick = 0;
+function particleStep() {
+  if (!particleCtx) return;
+  pT += 0.0028;
+  accentRefreshTick = (accentRefreshTick + 1) % 36;
+  if (accentRefreshTick === 0) refreshAccentRgb();
+  // Soft trail fade — low alpha keeps the field low-key.
+  particleCtx.fillStyle = "rgba(8,9,13,.075)";
+  particleCtx.fillRect(0, 0, pW, pH);
+  for (const p of particles) {
+    const n = noise2(p.x/120, p.y/120 + pT*3.5);
+    const angle = n * Math.PI * 4;
+    const speed = 0.4 + n * 0.55;
+    p.x += Math.cos(angle) * speed;
+    p.y += Math.sin(angle) * speed;
+    if (p.x < 0) p.x += pW; else if (p.x >= pW) p.x -= pW;
+    if (p.y < 0) p.y += pH; else if (p.y >= pH) p.y -= pH;
+    const r = accentRgb[0]*(1-p.mix) + accent2Rgb[0]*p.mix;
+    const g = accentRgb[1]*(1-p.mix) + accent2Rgb[1]*p.mix;
+    const b = accentRgb[2]*(1-p.mix) + accent2Rgb[2]*p.mix;
+    particleCtx.fillStyle = `rgba(${r|0},${g|0},${b|0},.42)`;
+    particleCtx.fillRect(p.x, p.y, 1.3, 1.3);
+  }
+  loaderRaf = requestAnimationFrame(particleStep);
+}
 
 // ----- Chat + actions -----
 form.addEventListener("submit", async e => {
@@ -550,8 +720,10 @@ form.addEventListener("submit", async e => {
   thinking.textContent = "Thinking...";
   messages.appendChild(thinking);
   bottom(true);
+  loaderTicketStart();
   try { const result = await post("/api/chat", {message:text}); thinking.remove(); render(result.events); }
   catch (err) { add("error", err.message); }
+  finally { loaderTicketEnd(); }
 });
 document.querySelector("#newChat").addEventListener("click", async () => {
   messages.innerHTML = "";
@@ -577,13 +749,21 @@ regenerateBtn.addEventListener("click", async () => {
   if (regenerateBtn.disabled) return;
   regenerateBtn.disabled = true;
   regenerateBtn.classList.add("loading");
+  loaderTicketStart();
   try { render((await post("/api/regenerate")).events); }
   catch (err) { add("error", err.message); }
-  finally { regenerateBtn.disabled = false; regenerateBtn.classList.remove("loading"); }
+  finally { regenerateBtn.disabled = false; regenerateBtn.classList.remove("loading"); loaderTicketEnd(); }
 });
 shareBtn.addEventListener("click", () => { sharePanel.hidden = !sharePanel.hidden; shareTitle.value ||= "untitled"; shareArtist.value ||= "anonymous"; });
 document.querySelector("#shareConfirm").addEventListener("click", async () => render((await post("/api/share", {title:shareTitle.value, artist:shareArtist.value})).events));
-gallery.addEventListener("click", async e => { if (e.target.matches("button[data-path]")) { render((await post("/api/remix", {path:e.target.dataset.path})).events); scrollTo({top:0, behavior:"smooth"}); } });
+gallery.addEventListener("click", async e => {
+  if (!e.target.matches("button[data-path]")) return;
+  scrollTo({top:0, behavior:"smooth"});
+  loaderTicketStart();
+  try { render((await post("/api/remix", {path:e.target.dataset.path})).events); }
+  catch (err) { add("error", err.message); }
+  finally { loaderTicketEnd(); }
+});
 layersStack.addEventListener("click", async e => {
   const x = e.target.closest(".layer-x");
   if (!x) return;

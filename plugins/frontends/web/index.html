@@ -36,6 +36,11 @@
         </div>
       </div>
       <img id="heroImage" alt="">
+      <canvas id="loadCanvas"></canvas>
+      <svg id="progressArc" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <circle class="track" cx="50" cy="50" r="49.2"></circle>
+        <circle class="fill" cx="50" cy="50" r="49.2" pathLength="1"></circle>
+      </svg>
       <div id="layersStack" class="layers-stack" hidden></div>
       <div class="canvas-actions">
         <a id="downloadImage" href="#" download title="Download current image">Download</a>

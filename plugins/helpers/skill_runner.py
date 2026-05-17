@@ -176,6 +176,7 @@ def replay_chain(
     workdir: Path,
     timeout_s: float = DEFAULT_TIMEOUT_S,
     skill_loader,
+    on_step=None,
 ) -> dict:
     """Replay a chain of (creation, *transforms) into output_image_path.
 
@@ -207,4 +208,7 @@ def replay_chain(
             timeout_s=timeout_s,
         )
         current_input = step_out
+        if on_step is not None:
+            try: on_step(idx + 1, len(chain))
+            except Exception: pass
     return {"steps": len(chain), "output_image_path": str(final)}

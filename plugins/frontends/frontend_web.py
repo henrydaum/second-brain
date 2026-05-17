@@ -213,15 +213,33 @@ class WebFrontend(BaseFrontend):
             self._push(session_key, {"type": "error", "content": text})
 
     def render_tool_status(self, session_key: str, payload: dict) -> None:
-        name = payload.get("tool_name") or payload.get("command_name") or "tool"
-        self._push(session_key, {
+        name = payload.get("tool_name") or payload.get("command_name") or payload.get("name") or "tool"
+        evt = {
             "type": "tool_status",
             "call_id": payload.get("call_id"),
             "name": name,
             "status": payload.get("status", "running"),
             "ok": payload.get("ok"),
             "error": payload.get("error"),
-        })
+        }
+        if payload.get("progress") is not None:
+            evt["progress"] = payload["progress"]
+        self._push(session_key, evt)
+
+    def _chain_progress_cb(self, key: str):
+        """Build an on_step callback that emits tool_status progressed events.
+        Only emits when the chain has >1 step, so single-skill renders stay quiet."""
+        call_id = uuid.uuid4().hex
+        def cb(done: int, total: int) -> None:
+            if total <= 1:
+                return
+            self.render_tool_status(key, {
+                "name": "render",
+                "status": "finished" if done >= total else "progressed",
+                "call_id": call_id,
+                "progress": {"done": done, "total": total},
+            })
+        return cb
 
     def _live_session_keys(self) -> list[str]:
         return [k for k in getattr(self.runtime, "sessions", {}) if k.startswith("web:")]
@@ -642,6 +660,7 @@ class WebFrontend(BaseFrontend):
                 output_image_path=out,
                 workdir=out.parent,
                 skill_loader=read_skill,
+                on_step=self._chain_progress_cb(key),
             )
             with Image.open(out) as img:
                 lc.commit_image(key, img.convert("RGBA"), f"control:{step.get('slug')}.{name}", None)
@@ -726,6 +745,7 @@ class WebFrontend(BaseFrontend):
                         output_image_path=out,
                         workdir=out.parent,
                         skill_loader=read_skill,
+                        on_step=self._chain_progress_cb(key),
                     )
                     with Image.open(out) as img:
                         lc.commit_image(key, img.convert("RGBA"), "remix", None)
@@ -773,6 +793,7 @@ class WebFrontend(BaseFrontend):
                 output_image_path=out,
                 workdir=out.parent,
                 skill_loader=read_skill,
+                on_step=self._chain_progress_cb(key),
             )
             with Image.open(out) as img:
                 # commit_image with chain_entry=None preserves the chain; we
