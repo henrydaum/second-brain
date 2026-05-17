@@ -20,7 +20,7 @@ class DeleteSkill(BaseTool):
         slug = str(kwargs.get("slug") or "")
         try:
             skill = skill_store.read_skill(slug)
-            deleted = skill_store.delete_skill(slug, owner=str(getattr(context, "session_key", "") or "local").split(":", 1)[0])
+            deleted = skill_store.delete_skill(slug, owner=str(getattr(context, "session_key", "") or "local"))
             if deleted and skill and context.orchestrator:
                 context.orchestrator.on_file_deleted(skill.path)
             if deleted and skill and context.db:

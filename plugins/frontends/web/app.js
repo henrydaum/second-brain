@@ -1,4 +1,8 @@
 const sid = localStorage.sbDemoSession || (localStorage.sbDemoSession = crypto.randomUUID());
+// Mirror sid into a cookie so /files img requests carry the identity
+// (image <img src=...> requests can't easily set query params, but they
+// send cookies automatically). Tomorrow's real auth replaces this.
+document.cookie = `sb_sid=${encodeURIComponent(sid)}; path=/; SameSite=Strict; max-age=31536000`;
 const messages = document.querySelector("#messages");
 const form = document.querySelector("#chatForm");
 const input = document.querySelector("#chatInput");

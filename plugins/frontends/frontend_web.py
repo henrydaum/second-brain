@@ -28,6 +28,8 @@ from paths import DATA_DIR
 
 logger = logging.getLogger("WebFrontend")
 WEB_ROOT = Path(__file__).with_name("web")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+FAVICON_PATH = PROJECT_ROOT / "icon.ico"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 WEB_PROFILE = "web_demo"
 WEB_TOOLS = [
@@ -40,7 +42,6 @@ WEB_TOOLS = [
     "read_skill_guide",
     "request_user_feedback",
 ]
-USAGE_PATH = DATA_DIR / "web_usage.json"
 
 
 class WebFrontend(BaseFrontend):
@@ -206,29 +207,46 @@ class WebFrontend(BaseFrontend):
     def _live_session_keys(self) -> list[str]:
         return [k for k in getattr(self.runtime, "sessions", {}) if k.startswith("web:")]
 
+    def _user_id(self, session_id: str, ip: str) -> str:
+        """Stable anonymous user id. Real auth tomorrow will swap the source
+        (verified email / token) but the column name stays."""
+        return hashlib.sha256(f"{ip}|{session_id}".encode()).hexdigest()[:24]
+
     def _record_usage(self, session_id: str, ip: str) -> tuple[bool, str]:
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            # Fail-open: if the db isn't wired, don't block users.
+            return True, ""
         now = time.time()
         five_h, week = now - 5 * 3600, now - 7 * 24 * 3600
-        sid = hashlib.sha256(f"{ip}|{session_id}".encode()).hexdigest()[:24]
-        with self._usage_lock:
-            data = _read_usage()
-            data["global"] = [t for t in data.get("global", []) if t >= week]
-            sessions = data.setdefault("sessions", {})
-            sessions[sid] = [t for t in sessions.get(sid, []) if t >= week]
-            g5 = sum(t >= five_h for t in data["global"])
-            s5 = sum(t >= five_h for t in sessions[sid])
+        uid = self._user_id(session_id, ip)
+        ip_hash = hashlib.sha256(ip.encode()).hexdigest()[:16] if ip else ""
+        with self._usage_lock, db.lock:
+            db.conn.execute(
+                "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET last_seen = excluded.last_seen, "
+                "  session_id = COALESCE(web_users.session_id, excluded.session_id)",
+                (uid, session_id, ip_hash, now, now),
+            )
+            # Prune old events opportunistically (every write). Cheap with the ts index.
+            db.conn.execute("DELETE FROM web_usage_events WHERE ts < ?", (week,))
+            g5 = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE ts >= ?", (five_h,)).fetchone()["n"]
+            gw = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE ts >= ?", (week,)).fetchone()["n"]
+            s5 = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, five_h)).fetchone()["n"]
+            sw = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, week)).fetchone()["n"]
             limits = (
                 (g5, _int(self.config.get("web_global_5h_turn_limit"), 600), "The public demo is busy right now. Try again a little later."),
-                (len(data["global"]), _int(self.config.get("web_global_week_turn_limit"), 6000), "The public demo hit its weekly budget. Try again later."),
-                (s5, _int(self.config.get("web_session_5h_turn_limit"), 40), "This browser has hit its 5-hour demo limit. Try again later."),
-                (len(sessions[sid]), _int(self.config.get("web_session_week_turn_limit"), 160), "This browser has hit its weekly demo limit."),
+                (gw, _int(self.config.get("web_global_week_turn_limit"), 6000), "The public demo hit its weekly budget. Try again later."),
+                (s5, _int(self.config.get("web_session_5h_turn_limit"), 40), "You've hit your 5-hour demo limit. Try again later."),
+                (sw, _int(self.config.get("web_session_week_turn_limit"), 160), "You've hit your weekly demo limit."),
             )
             for used, limit, msg in limits:
                 if limit > 0 and used >= limit:
-                    data["sessions"] = {k: v for k, v in sessions.items() if v}
-                    _write_usage(data)
+                    db.conn.commit()
                     return False, msg
-            data["global"].append(now); sessions[sid].append(now); _write_usage(data)
+            db.conn.execute("INSERT INTO web_usage_events (user_id, ts) VALUES (?, ?)", (uid, now))
+            db.conn.commit()
         return True, ""
 
     def canvas_payload(self, session_id: str) -> dict:
@@ -364,7 +382,12 @@ class _Handler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
             return self._json({"ok": True, "items": self.server.frontend.gallery(sid)})
         if path == "/files":
-            return self._local_file(parse_qs(urlparse(self.path).query).get("path", [""])[0])
+            qs = parse_qs(urlparse(self.path).query)
+            # Prefer query param; fall back to the session cookie set by app.js.
+            sid = str(qs.get("session_id", [self._cookie_sid()])[0])[:80]
+            return self._local_file(qs.get("path", [""])[0], sid)
+        if path == "/favicon.ico":
+            return self._raw_file(FAVICON_PATH, "image/x-icon")
         rel = "index.html" if path in {"", "/"} else path.lstrip("/")
         return self._file(WEB_ROOT / rel)
 
@@ -420,9 +443,28 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _local_file(self, raw_path: str):
+    def _cookie_sid(self) -> str:
+        raw = self.headers.get("Cookie") or ""
+        for part in raw.split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "sb_sid":
+                return v[:80]
+        return ""
+
+    def _raw_file(self, path: Path, content_type: str):
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            return self.send_error(404)
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _local_file(self, raw_path: str, session_id: str = ""):
         path = Path(unquote(raw_path))
-        if not _is_public_image(path):
+        if not _is_user_accessible_image(path, self.server.frontend.session_key(session_id) if session_id else ""):
             return self.send_error(404)
         raw = path.read_bytes()
         self.send_response(200)
@@ -447,6 +489,23 @@ def _is_gallery_image(path: Path) -> bool:
     try:
         target, root = path.resolve(), GALLERY_DIR.resolve()
         return target.is_file() and target.suffix.lower() in IMAGE_EXTS and root in target.parents
+    except Exception:
+        return False
+
+
+def _is_user_accessible_image(path: Path, session_key: str) -> bool:
+    """Either the shared gallery (public) or the requester's own canvas dir."""
+    try:
+        target = path.resolve()
+        if not (target.is_file() and target.suffix.lower() in IMAGE_EXTS):
+            return False
+        if _is_gallery_image(target):
+            return True
+        if session_key:
+            own = lc.image_path(session_key).parent.resolve()
+            if own in target.parents or target.parent == own:
+                return True
+        return False
     except Exception:
         return False
 
@@ -476,18 +535,6 @@ def _canvas_payload(state: dict | None) -> dict:
 
 def _gallery_url(row: dict) -> dict:
     return {**row, "url": _file_url(Path(row["path"]))}
-
-
-def _read_usage() -> dict:
-    try:
-        return json.loads(USAGE_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {"global": [], "sessions": {}}
-
-
-def _write_usage(data: dict) -> None:
-    USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    USAGE_PATH.write_text(json.dumps(data), encoding="utf-8")
 
 
 def _int(value, default: int) -> int:

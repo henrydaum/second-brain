@@ -168,6 +168,30 @@ class Database:
 		# Enable foreign key enforcement (needed for ON DELETE CASCADE)
 		self.conn.execute("PRAGMA foreign_keys = ON")
 
+		# Web users — anonymous now (user_id = sha256(ip|session_id)[:24]),
+		# upgradeable to real auth later. `credits` and `tier` are pre-wired
+		# for the monetization work.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS web_users (
+				user_id     TEXT PRIMARY KEY,
+				session_id  TEXT,
+				ip_hash     TEXT,
+				created_at  REAL,
+				last_seen   REAL,
+				tier        TEXT DEFAULT 'free',
+				credits     INTEGER DEFAULT 0
+			)
+		""")
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS web_usage_events (
+				id       INTEGER PRIMARY KEY,
+				user_id  TEXT NOT NULL,
+				ts       REAL NOT NULL
+			)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_usage_user_ts ON web_usage_events(user_id, ts)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_usage_ts ON web_usage_events(ts)")
+
 		# Skill scoring — implicit signals (share/download/remix) attributed
 		# across chain steps. `generations` is a denominator-only counter.
 		self.conn.execute("""

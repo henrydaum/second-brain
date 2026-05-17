@@ -35,7 +35,9 @@ class CreateSkill(BaseTool):
 
 
 def _owner(context) -> str:
-    return str(getattr(context, "session_key", "") or "local").split(":", 1)[0]
+    # Full session_key so each user owns their own skills (e.g. 'web:{uuid}',
+    # 'telegram:{chat_id}'). Two browsers can no longer overwrite each other.
+    return str(getattr(context, "session_key", "") or "local")
 
 
 def _notify(context, path: str) -> None:

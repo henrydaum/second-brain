@@ -28,7 +28,7 @@ class UpdateSkill(BaseTool):
 
 
 def _owner(context) -> str:
-    return str(getattr(context, "session_key", "") or "local").split(":", 1)[0]
+    return str(getattr(context, "session_key", "") or "local")
 
 
 def _notify(context, path: str) -> None:
