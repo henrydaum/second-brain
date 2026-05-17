@@ -77,7 +77,7 @@ function renderToolStatus(ev) {
   }
   const finished = ev.status === "finished";
   const failed = finished && (ev.ok === false || !!ev.error);
-  const glyph = failed ? "✕" : finished ? "✓" : "⋯";
+  const glyph = failed ? "✕" : finished ? "✓" : "";
   el.classList.toggle("running", !finished);
   el.classList.toggle("done", finished && !failed);
   el.classList.toggle("failed", failed);
