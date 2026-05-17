@@ -23,7 +23,7 @@ from plugins.tools.helpers.layered_canvas import (  # noqa: F401
 )
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
-GALLERY_DIR = DATA_DIR / "shared_fractals"
+GALLERY_DIR = DATA_DIR / "shared_gallery"
 
 
 def clean_text(value, default):

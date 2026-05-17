@@ -1,5 +1,5 @@
 SKILL_NAME = "Mandelbrot Explorer"
-SKILL_DESCRIPTION = "A guided tour of the Mandelbrot set's most famous landmarks. Pick a spot -- Seahorse Valley, Elephant Valley, the Mini Mandelbrot satellite, deep spiral galaxies -- and the view, zoom, and iteration depth are all dialed in for you. Pair with any palette to taste. Optimized for M1: complex64 working set, cardioid + period-2 bulb early-exit, and live-buffer compaction every 3 iterations."
+SKILL_DESCRIPTION = "A guided tour of the Mandelbrot set's most famous landmarks. Pick a spot -- Seahorse Valley, Elephant Valley, dendritic lightning patterns, deep spiral galaxies -- and the view, zoom, and iteration depth are all dialed in for you. Pair with any palette to taste. Optimized for M1: complex64 working set, cardioid + period-2 bulb early-exit, and live-buffer compaction every 3 iterations."
 SKILL_KIND = "creation"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1730000000.0
@@ -10,7 +10,7 @@ SKILL_CONTROLS = [
          {"value": "seahorse",      "label": "Seahorse Valley"},
          {"value": "elephant",      "label": "Elephant Valley"},
          {"value": "triple_spiral", "label": "Triple Spiral"},
-         {"value": "mini",          "label": "Mini Mandelbrot"},
+         {"value": "lightning",          "label": "Lightning"},
          {"value": "spiral_galaxy", "label": "Spiral Galaxy"},
      ],
      "default": "full"},
@@ -27,7 +27,7 @@ _SPOTS = {
     "seahorse":      (-0.7453,   0.1127,    9.0, 400),  # west "valley" between cardioid and period-2 bulb
     "elephant":      ( 0.2825,   0.01,      8.0, 400),  # east valley off the cardioid
     "triple_spiral": (-0.088,    0.654,     8.0, 400),  # upper antenna, triple-armed spiral
-    "mini":          (-1.7548,   0.0,      10.0, 350),  # period-3 mini-Mandelbrot satellite on the negative real axis
+    "lightning":          (0,   1,       45, 250),  # Mandelbrot edge shows lighting-like dendritic patterns
     "spiral_galaxy": (-0.74543,  0.11301,  12.0, 600),  # deep seahorse: galactic spirals
 }
 
