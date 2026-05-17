@@ -42,6 +42,7 @@ WEB_TOOLS = [
     "update_skill",
     "delete_skill",
     "execute_skill",
+    "manage_layers",
     "read_skill",
     "read_skill_guide"
 ]

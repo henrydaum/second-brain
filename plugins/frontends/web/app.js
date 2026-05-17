@@ -105,7 +105,6 @@ function render(events) {
     else if (ev.type === "account") setAccount(ev.account);
     else if (ev.type === "hero_image") {
       setCanvas(ev.canvas || {url: ev.url, name: ev.name});
-      add("status", `Showcase updated: ${ev.name}`);
     }
     else if (ev.type === "canvas_reset") setCanvas(null);
     else if (ev.type === "shared") { sharePanel.hidden = true; loadGallery(); }
@@ -278,7 +277,7 @@ function renderControlsPanel(panels) {
 function renderLayersStack(layers) {
   if (!layers.length) { layersStack.hidden = true; layersStack.innerHTML = ""; return; }
   layersStack.hidden = false;
-  layersStack.innerHTML = layers.map(l => `<div class="layer-chip" title="${esc(l.skill_name)}"><button type="button" class="layer-face" data-chain="${l.chain_index}">${l.chain_index + 1}</button><button type="button" class="layer-x" data-chain="${l.chain_index}" aria-label="Delete layer ${l.chain_index + 1}">×</button></div>`).join("");
+  layersStack.innerHTML = layers.map(l => `<div class="layer-chip" title="${esc(l.skill_name)}"><span class="layer-face">${esc(l.skill_name)}</span><button type="button" class="layer-x" data-chain="${l.chain_index}" aria-label="Delete ${esc(l.skill_name)}">×</button></div>`).join("");
 }
 function renderPanel(panel) {
   const widgets = (panel.schema || []).map(spec => renderWidget(panel, spec)).join("");
@@ -432,15 +431,6 @@ layersStack.addEventListener("click", async e => {
   if (Number.isNaN(chain)) return;
   try { render((await post("/api/layer_delete", {chain_index: chain})).events); }
   catch (err) { add("error", err.message); }
-});
-layersStack.addEventListener("keydown", e => {
-  if (e.key !== "Delete" && e.key !== "Backspace") return;
-  const face = e.target.closest(".layer-face");
-  if (!face) return;
-  e.preventDefault();
-  const chain = +face.dataset.chain;
-  if (Number.isNaN(chain)) return;
-  post("/api/layer_delete", {chain_index: chain}).then(r => render(r.events)).catch(err => add("error", err.message));
 });
 setInterval(poll, 1200);
 loadPalettes(); loadCanvas(); loadGallery(); refreshAccount();

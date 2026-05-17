@@ -157,6 +157,44 @@ def set_skill_control(session_key: str, chain_index: int, name: str, value) -> d
         return entry
 
 
+def delete_chain_entry(session_key: str, chain_index: int) -> dict:
+    """Remove one entry from the chain. Returns the new state. Caller replays/commits."""
+    with _state_lock:
+        store = _read_state()
+        entry = store.get(session_key) or _blank_entry()
+        entry = {**_blank_entry(), **entry}
+        chain = list(entry.get("last_chain") or [])
+        if not (0 <= chain_index < len(chain)):
+            raise ValueError(f"chain_index {chain_index} out of range (len={len(chain)})")
+        del chain[chain_index]
+        entry["last_chain"] = chain
+        store[session_key] = entry
+        _write_state(store)
+        return entry
+
+
+def move_chain_entry(session_key: str, from_index: int, to_index: int) -> dict:
+    """Reorder one entry in the chain. Index 0 must remain a creation; raises otherwise."""
+    with _state_lock:
+        store = _read_state()
+        entry = store.get(session_key) or _blank_entry()
+        entry = {**_blank_entry(), **entry}
+        chain = list(entry.get("last_chain") or [])
+        n = len(chain)
+        if not (0 <= from_index < n):
+            raise ValueError(f"from_index {from_index} out of range (len={n})")
+        if not (0 <= to_index < n):
+            raise ValueError(f"to_index {to_index} out of range (len={n})")
+        step = chain.pop(from_index)
+        chain.insert(to_index, step)
+        if chain and chain[0].get("kind") != "creation":
+            raise ValueError("layer 0 must be a creation; reorder rejected")
+        entry["last_chain"] = chain
+        store[session_key] = entry
+        _write_state(store)
+        return entry
+
+
 def randomize_seed(session_key: str, chain_index: int, new_seed: int) -> dict:
     """Replace the seed on one chain entry."""
     with _state_lock:
