@@ -6,6 +6,7 @@ import json
 import logging
 import mimetypes
 import hashlib
+import random
 import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,6 +18,7 @@ from PIL import Image
 
 from config import config_manager
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
+from plugins.helpers import skill_scoring
 from plugins.helpers.palettes import get_palette, list_palettes
 from plugins.helpers.skill_runner import replay_chain
 from plugins.helpers.skill_store import read_skill
@@ -34,6 +36,7 @@ WEB_TOOLS = [
     "update_skill",
     "delete_skill",
     "execute_skill",
+    "read_skill",
     "read_skill_guide",
     "request_user_feedback",
 ]
@@ -124,7 +127,7 @@ class WebFrontend(BaseFrontend):
                 "You are running the public Second Brain web demo. You make generative art collaboratively with the user. "
                 "Keep replies short, warm, and conversational — like an artist talking through their work. Never use slash commands.\n\n"
                 "The canvas is one square image with a selected color-theory palette and size. For any request to draw, render, stylize, or transform the canvas: first call search_skills; if a strong match exists, execute_skill; otherwise create_skill with Python code, then execute_skill. Creation skills start a new image. Transform skills receive canvas.image and modify it.\n\n"
-                "Before authoring a new skill, call read_skill_guide ONCE per session for the canonical template, API reference, and method catalog. Then search_skills for adjacent references — the built-in library contains high-quality skills you can clone-and-adjust instead of writing from scratch.\n\n"
+                "Before authoring a new skill, call read_skill_guide ONCE per session for the canonical template, API reference, and method catalog. Then search_skills for adjacent references — the built-in library contains high-quality skills you can clone-and-adjust instead of writing from scratch. To clone-and-adjust an existing skill, call read_skill(slug) to see its source, then create_skill with your modifications.\n\n"
                 "For natural subjects (suns, flowers, mountains, trees, landscapes, waves), prefer established generative methods — Vogel spirals for petals/seeds, flow fields for organic curves, Voronoi for cell structures, L-systems for branching, sediment bands for landscapes — over freehand drawing. Freehand draws of natural subjects look amateurish; method-based draws look designed.\n\n"
                 "Skill code defines run(canvas, **params), uses allowed imports only (math, random, colorsys, numpy, PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps, PIL.ImageEnhance), and must call canvas.commit(image). Create a blank image with canvas.new(color=canvas.palette.background) or canvas.create_image(). Use canvas.palette.primary, secondary, tertiary, accent, and background for colors; slots work as '#RRGGBB' strings and RGB sequences. Use canvas.size, width, height, and seed for deterministic geometry. An art_kit namespace is pre-injected (no import needed) with palette_color(t), vogel_spiral, fbm, rule_of_thirds, radial_falloff, smoothstep, lerp, oklch_to_rgb, and more — see read_skill_guide for the full list.\n\n"
                 "Always integrate the palette: pull every color from canvas.palette slots or art_kit.palette_color(t); never hardcode hex unless the user explicitly asks. Reserve palette.accent for ≤10% of pixels. Let palette.background set the mood.\n\n"
@@ -254,14 +257,19 @@ class WebFrontend(BaseFrontend):
             return [{"type": "error", "content": f"Palette replay failed: {e}"}]
 
     def share(self, session_id: str, title: str, artist: str) -> list[dict]:
-        dest, meta = share_current(self.session_key(session_id), title, artist)
+        key = self.session_key(session_id)
+        snapshot = canvas(key) or {}
+        chain = list(snapshot.get("chain") or [])
+        dest, meta = share_current(key, title, artist)
         self._sync_gallery_file(dest)
+        skill_scoring.record_event(getattr(self.runtime, "db", None), "share", chain, str(dest.resolve()))
         return [{"type": "shared", "item": _gallery_url(meta)}, {"type": "message", "role": "assistant", "content": f'Shared "{meta["title"]}" by {meta["artist"]}.'}]
 
     def gallery(self, session_id: str, limit: int = 24) -> list[dict]:
         item = canvas(self.session_key(session_id))
         ctx = SimpleNamespace(services=getattr(self.runtime, "services", {}), db=getattr(self.runtime, "db", None))
-        rows = similar_rows(item["path"], ctx, limit) if item and item.get("path") else gallery_rows()[:limit]
+        db = getattr(self.runtime, "db", None)
+        rows = similar_rows(item["path"], ctx, limit) if item and item.get("path") else gallery_rows(db)[:limit]
         return [_gallery_url(r) for r in rows]
 
     def remix(self, session_id: str, path: str) -> list[dict]:
@@ -269,8 +277,55 @@ class WebFrontend(BaseFrontend):
         if not _is_gallery_image(p):
             raise ValueError("That gallery image is not available to remix.")
         key = self.session_key(session_id)
-        reset_canvas(key); set_current(key, p, False, {"kind": "remix", **read_json(p.with_suffix(".json"))})
+        meta = read_json(p.with_suffix(".json"))
+        reset_canvas(key); set_current(key, p, False, {"kind": "remix", **meta})
+        # Attribute the remix to the source image's chain (stored in its sidecar).
+        source_chain = list(meta.get("chain") or [])
+        skill_scoring.record_event(getattr(self.runtime, "db", None), "remix", source_chain, str(p))
         return [_image_event(p, canvas(key)), {"type": "message", "role": "assistant", "content": "Remix loaded. Tell me how to mutate it."}]
+
+    def download(self, session_id: str) -> list[dict]:
+        """Fire-and-forget signal: user clicked Download for the current canvas."""
+        key = self.session_key(session_id)
+        snapshot = canvas(key) or {}
+        chain = list(snapshot.get("chain") or [])
+        if not chain:
+            return []
+        skill_scoring.record_event(getattr(self.runtime, "db", None), "download", chain, snapshot.get("path"))
+        return []
+
+    def regenerate(self, session_id: str) -> list[dict]:
+        """Re-run the current chain with a fresh seed on every step."""
+        key = self.session_key(session_id)
+        state = lc.get_state(key)
+        chain = list(state.get("last_chain") or [])
+        if not chain:
+            return [{"type": "error", "content": "Nothing to regenerate yet — make something first."}]
+        # Reseed every step so the whole composition shifts, not just one layer.
+        reseeded = [{**step, "seed": random.randint(1, 2_147_483_647)} for step in chain]
+        out = lc.image_path(key).with_name("_regenerate.png")
+        try:
+            replay_chain(
+                reseeded,
+                palette=get_palette(state.get("palette_id")),
+                size=int(state.get("size") or lc.DEFAULT_SIZE),
+                output_image_path=out,
+                workdir=out.parent,
+                skill_loader=read_skill,
+            )
+            with Image.open(out) as img:
+                # commit_image with chain_entry=None preserves the chain; we
+                # update it ourselves so seeds reflect the new render.
+                lc.commit_image(key, img.convert("RGBA"), "regenerate", None)
+            # Persist the reseeded chain so subsequent palette swaps re-render
+            # against the same composition.
+            new_state = lc.get_state(key)
+            new_state["last_chain"] = reseeded
+            lc.replace_state(key, new_state)
+            c = canvas(key)
+            return [{"type": "hero_image", "url": _file_url(Path(c["path"])), "name": Path(c["path"]).name, "canvas": _canvas_payload(c)}] if c and c.get("path") else []
+        except Exception as e:
+            return [{"type": "error", "content": f"Regenerate failed: {e}"}]
 
     def _sync_gallery_file(self, path: Path) -> None:
         dirs = [str(p) for p in (self.config.get("sync_directories") or [])]
@@ -330,6 +385,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "events": self.server.frontend.remix(sid, str(body.get("path") or ""))})
             if self.path == "/api/palette":
                 return self._json({"ok": True, "events": self.server.frontend.set_palette(sid, str(body.get("palette_id") or ""))})
+            if self.path == "/api/download":
+                return self._json({"ok": True, "events": self.server.frontend.download(sid)})
+            if self.path == "/api/regenerate":
+                return self._json({"ok": True, "events": self.server.frontend.regenerate(sid)})
         except Exception as e:
             logger.exception("Web request failed")
             return self._json({"ok": False, "events": [{"type": "error", "content": str(e)}]}, 500)

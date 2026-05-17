@@ -5,6 +5,7 @@ const input = document.querySelector("#chatInput");
 const showcase = document.querySelector(".showcase");
 const heroImage = document.querySelector("#heroImage");
 const downloadImage = document.querySelector("#downloadImage");
+const regenerateBtn = document.querySelector("#regenerateImage");
 const shareBtn = document.querySelector("#shareImage");
 const sharePanel = document.querySelector("#sharePanel");
 const shareTitle = document.querySelector("#shareTitle");
@@ -158,6 +159,20 @@ document.querySelector("#newChat").addEventListener("click", async () => {
   toolStatusEls.clear();
   render((await post("/api/new")).events);
   loadGallery();
+});
+downloadImage.addEventListener("click", () => {
+  // Fire-and-forget telemetry — the actual download is the plain <a download>.
+  if (downloadImage.getAttribute("href") && downloadImage.getAttribute("href") !== "#") {
+    post("/api/download").catch(() => {});
+  }
+});
+regenerateBtn.addEventListener("click", async () => {
+  if (regenerateBtn.disabled) return;
+  regenerateBtn.disabled = true;
+  regenerateBtn.classList.add("loading");
+  try { render((await post("/api/regenerate")).events); }
+  catch (err) { add("error", err.message); }
+  finally { regenerateBtn.disabled = false; regenerateBtn.classList.remove("loading"); }
 });
 shareBtn.addEventListener("click", () => { sharePanel.hidden = !sharePanel.hidden; shareTitle.value ||= "untitled"; shareArtist.value ||= "anonymous"; });
 document.querySelector("#shareConfirm").addEventListener("click", async () => render((await post("/api/share", {title:shareTitle.value, artist:shareArtist.value})).events));

@@ -11,6 +11,7 @@ from PIL import Image
 
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.helpers.palettes import get_palette
+from plugins.helpers import skill_scoring
 from plugins.helpers.skill_runner import SkillRunError, make_chain_entry, run_skill
 from plugins.helpers.skill_store import read_skill
 from plugins.tools.helpers import layered_canvas as lc
@@ -40,6 +41,8 @@ class ExecuteSkill(BaseTool):
                 entry = {**make_chain_entry(skill, params, seed), "palette_id": state.get("palette_id")}
                 new_state = lc.commit_image(session_key, img.convert("RGBA"), f"skill:{slug}", entry)
             final = lc.canvas(session_key)["path"]
+            # Log a per-skill generation row (denominator for share-rate stats).
+            skill_scoring.record_event(getattr(context, "db", None), "generate", [entry], final)
             return ToolResult(data={"canvas": lc.canvas(session_key), "chain": new_state.get("last_chain")}, llm_summary=f"Executed {skill.kind} skill '{slug}' on the canvas.", attachment_paths=[final])
         except (SkillRunError, Exception) as e:
             logger.exception("execute_skill failed: slug=%s session=%s params=%s", slug, session_key, params)

@@ -168,6 +168,32 @@ class Database:
 		# Enable foreign key enforcement (needed for ON DELETE CASCADE)
 		self.conn.execute("PRAGMA foreign_keys = ON")
 
+		# Skill scoring — implicit signals (share/download/remix) attributed
+		# across chain steps. `generations` is a denominator-only counter.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS skill_events (
+				id              INTEGER PRIMARY KEY,
+				ts              REAL NOT NULL,
+				kind            TEXT NOT NULL,
+				slug            TEXT NOT NULL,
+				image_path      TEXT,
+				chain_position  TEXT,
+				weight          REAL NOT NULL
+			)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_events_slug ON skill_events(slug)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_events_kind ON skill_events(kind)")
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS skill_scores (
+				slug         TEXT PRIMARY KEY,
+				shares       REAL DEFAULT 0,
+				downloads    REAL DEFAULT 0,
+				remixes      REAL DEFAULT 0,
+				generations  INTEGER DEFAULT 0,
+				updated_at   REAL
+			)
+		""")
+
 		self.conn.commit()
 
 	# =================================================================

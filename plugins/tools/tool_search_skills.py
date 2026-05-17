@@ -6,7 +6,7 @@ from array import array
 from math import sqrt
 
 from plugins.BaseTool import BaseTool, ToolResult
-from plugins.helpers import skill_store
+from plugins.helpers import skill_scoring, skill_store
 
 
 class SearchSkills(BaseTool):
@@ -27,6 +27,12 @@ class SearchSkills(BaseTool):
             prev = merged.get(row["slug"])
             if prev is None or row["score"] > prev["score"]:
                 merged[row["slug"]] = row
+        # Boost by implicit signals — multiplier is 1.0 for zero-score skills,
+        # so the cold start is unchanged.
+        stats = skill_scoring.get_scores(getattr(context, "db", None), merged.keys())
+        for slug, row in merged.items():
+            row["cosine"] = row["score"]
+            row["score"] = row["score"] * skill_scoring.search_multiplier(stats.get(slug, {}))
         rows = sorted(merged.values(), key=lambda r: r["score"], reverse=True)[:top_k]
         return ToolResult(data=rows, llm_summary=("No matching skills found." if not rows else "Matching skills:\n" + "\n".join(f"- {r['slug']} ({r['kind']}, score {r['score']:.2f}): {r['description']}" for r in rows)))
 

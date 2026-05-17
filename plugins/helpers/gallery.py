@@ -52,13 +52,14 @@ def mark_original(path, meta):
     write_json(sidecar, data)
 
 
-def save_share(src, title="untitled", artist="anonymous"):
+def save_share(src, title="untitled", artist="anonymous", chain=None):
     GALLERY_DIR.mkdir(parents=True, exist_ok=True)
     title, artist = clean_text(title, "untitled"), clean_text(artist, "anonymous")
     dest = GALLERY_DIR / f"{clean_text(title, 'untitled').replace(' ', '_')}-{Path(src).stem[-15:]}.png"
     shutil.copy2(src, dest)
     meta = {"title": title, "artist": artist, "source_path": str(Path(src).resolve()),
-            "path": str(dest.resolve()), "created_at": time.time()}
+            "path": str(dest.resolve()), "created_at": time.time(),
+            "chain": list(chain or [])}
     write_json(dest.with_suffix(".json"), meta)
     return dest, meta
 
@@ -67,28 +68,44 @@ def share_current(session_key, title="untitled", artist="anonymous"):
     item = current(session_key)
     if not item:
         raise ValueError("No canvas to share yet — make something first.")
-    return save_share(item["path"], title, artist)
+    # Pull the live replay chain so remixes can attribute scoring back to the
+    # skills that produced this image.
+    from plugins.tools.helpers.layered_canvas import canvas as _canvas
+    snapshot = _canvas(session_key) or {}
+    chain = snapshot.get("chain") or []
+    return save_share(item["path"], title, artist, chain=chain)
 
 
 def image_stats(path):
     return visual_stats(Image.open(path))
 
 
-def gallery_rows():
+def gallery_rows(db=None):
     rows = []
     if not GALLERY_DIR.exists():
         return rows
+    remix_counts: dict[str, int] = {}
+    if db is not None:
+        try:
+            from plugins.helpers import skill_scoring
+            remix_counts = skill_scoring.remix_counts_by_path(db)
+        except Exception:
+            remix_counts = {}
     for p in GALLERY_DIR.glob("*.png"):
         if is_image(p):
             m = read_json(p.with_suffix(".json"))
+            path_str = str(p.resolve())
             rows.append({
-                "path": str(p.resolve()),
+                "path": path_str,
                 "title": m.get("title") or "untitled",
                 "artist": m.get("artist") or "anonymous",
                 "created_at": m.get("created_at") or p.stat().st_mtime,
+                "remixes": int(remix_counts.get(path_str, 0)),
                 "score": 0.0,
             })
-    return sorted(rows, key=lambda r: r["created_at"], reverse=True)
+    # Most-remixed first, then most-recent. Cold-start (no remixes yet) falls
+    # back to recency for everything.
+    return sorted(rows, key=lambda r: (r["remixes"], r["created_at"]), reverse=True)
 
 
 def similar_rows(target, context=None, limit=24):
