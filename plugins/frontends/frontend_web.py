@@ -7,12 +7,16 @@ import logging
 import mimetypes
 import hashlib
 import random
+import secrets
 import time
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, unquote, urlparse
+
+from plugins.helpers import stripe_client, web_auth
 
 from PIL import Image
 
@@ -57,6 +61,14 @@ class WebFrontend(BaseFrontend):
         ("Web Global Weekly Turns", "web_global_week_turn_limit", "Public web chat-turn budget per 7 days.", 6000, {"type": "integer"}),
         ("Web Session 5h Turns", "web_session_5h_turn_limit", "Per-browser chat-turn budget per 5 hours.", 40, {"type": "integer"}),
         ("Web Session Weekly Turns", "web_session_week_turn_limit", "Per-browser chat-turn budget per 7 days.", 160, {"type": "integer"}),
+        ("Web IP 5h Turns", "web_ip_5h_turn_limit", "Per-IP chat-turn budget per 5 hours (cookie-clearing backstop).", 60, {"type": "integer"}),
+        ("App Base URL", "app_base_url", "Public origin of the web demo, used in Stripe redirects and magic links.", "http://127.0.0.1:8765", {"type": "text"}),
+        ("Price (cents)", "web_price_cents", "Stripe checkout price in cents.", 299, {"type": "integer"}),
+        ("Credit Pack Size", "web_credit_pack_size", "Messages granted per purchase.", 2000, {"type": "integer"}),
+        ("Stripe Secret Key", "stripe_secret_key", "Stripe API secret key (sk_test_... or sk_live_...).", "", {"type": "text"}),
+        ("Stripe Webhook Secret", "stripe_webhook_secret", "Stripe webhook signing secret (whsec_...).", "", {"type": "text"}),
+        ("Stripe Price ID", "stripe_price_id", "Stripe Price ID for the credit pack.", "", {"type": "text"}),
+        ("Magic-link From", "web_email_from", "Send-as address for magic-link emails (must be a Gmail send-as alias or 'me').", "me", {"type": "text"}),
     ]
 
     def __init__(self):
@@ -81,7 +93,7 @@ class WebFrontend(BaseFrontend):
             self._server.shutdown()
         self.unbind()
 
-    def chat(self, session_id: str, message: str, ip: str = "") -> list[dict]:
+    def chat(self, session_id: str, message: str, ip: str = "", account_id: str = "") -> list[dict]:
         key = self.session_key(session_id)
         text = (message or "").strip()
         if text.startswith("/"):
@@ -89,11 +101,18 @@ class WebFrontend(BaseFrontend):
         self._ensure_conversation(key)
         if self.has_pending_approval(key):
             return [{"type": "error", "content": "Use the approval buttons to answer this permission request."}]
-        ok, error = self._record_usage(session_id, ip)
+        ok, error, paywall = self._record_usage(session_id, ip, account_id)
         if not ok:
+            if paywall:
+                return [{"type": "paywall", **paywall, "message": error}]
             return [{"type": "error", "content": error}]
         self.submit_text(key, text)
-        return self._drain(key)
+        events = self._drain(key)
+        # Append fresh account snapshot so the client can keep the chip updated.
+        snap = self._account_snapshot(session_id, ip, account_id)
+        if snap:
+            events.append({"type": "account", "account": snap})
+        return events
 
     def approve(self, session_id: str, value: bool) -> list[dict]:
         key = self.session_key(session_id)
@@ -207,47 +226,352 @@ class WebFrontend(BaseFrontend):
     def _live_session_keys(self) -> list[str]:
         return [k for k in getattr(self.runtime, "sessions", {}) if k.startswith("web:")]
 
-    def _user_id(self, session_id: str, ip: str) -> str:
-        """Stable anonymous user id. Real auth tomorrow will swap the source
-        (verified email / token) but the column name stays."""
+    def _anon_user_id(self, session_id: str, ip: str) -> str:
+        """Anonymous fallback id. Stable across a browser session (no cookie clear)."""
         return hashlib.sha256(f"{ip}|{session_id}".encode()).hexdigest()[:24]
 
-    def _record_usage(self, session_id: str, ip: str) -> tuple[bool, str]:
+    def _ip_hash(self, ip: str) -> str:
+        return hashlib.sha256(ip.encode()).hexdigest()[:16] if ip else ""
+
+    def _resolve_account(self, db, account_id: str) -> dict | None:
+        """Return the web_users row keyed by account_id, or None."""
+        if not account_id or db is None:
+            return None
+        with db.lock:
+            row = db.conn.execute(
+                "SELECT user_id, email, account_id, tier, credits FROM web_users WHERE account_id = ?",
+                (account_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def _record_usage(self, session_id: str, ip: str, account_id: str = "") -> tuple[bool, str, dict | None]:
+        """Returns (allowed, error_msg, paywall_payload_or_None).
+        paywall_payload is set only when the user has hit a personal cap and an
+        offer should be shown (vs. global demo cap → plain error)."""
         db = getattr(self.runtime, "db", None)
         if db is None:
-            # Fail-open: if the db isn't wired, don't block users.
-            return True, ""
+            return True, "", None
         now = time.time()
         five_h, week = now - 5 * 3600, now - 7 * 24 * 3600
-        uid = self._user_id(session_id, ip)
-        ip_hash = hashlib.sha256(ip.encode()).hexdigest()[:16] if ip else ""
+        ip_hash = self._ip_hash(ip)
+
         with self._usage_lock, db.lock:
-            db.conn.execute(
-                "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen) "
-                "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(user_id) DO UPDATE SET last_seen = excluded.last_seen, "
-                "  session_id = COALESCE(web_users.session_id, excluded.session_id)",
-                (uid, session_id, ip_hash, now, now),
-            )
-            # Prune old events opportunistically (every write). Cheap with the ts index.
+            account = None
+            if account_id:
+                row = db.conn.execute(
+                    "SELECT user_id, email, tier, credits FROM web_users WHERE account_id = ?",
+                    (account_id,),
+                ).fetchone()
+                if row:
+                    account = dict(row)
+            uid = account["user_id"] if account else self._anon_user_id(session_id, ip)
+            if not account:
+                db.conn.execute(
+                    "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen) "
+                    "VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(user_id) DO UPDATE SET last_seen = excluded.last_seen, "
+                    "  session_id = COALESCE(web_users.session_id, excluded.session_id)",
+                    (uid, session_id, ip_hash, now, now),
+                )
+            else:
+                db.conn.execute("UPDATE web_users SET last_seen = ?, ip_hash = COALESCE(ip_hash, ?) WHERE user_id = ?", (now, ip_hash, uid))
+
+            # Tier shortcuts: unlimited never blocks; paid consumes credits.
+            tier = (account or {}).get("tier") or "free"
+            if tier == "unlimited":
+                db.conn.execute("INSERT INTO web_usage_events (user_id, ts) VALUES (?, ?)", (uid, now))
+                db.conn.commit()
+                return True, "", None
+            if tier == "paid":
+                credits = int((account or {}).get("credits") or 0)
+                if credits > 0:
+                    db.conn.execute("UPDATE web_users SET credits = credits - 1 WHERE user_id = ?", (uid,))
+                    db.conn.execute("INSERT INTO web_usage_events (user_id, ts) VALUES (?, ?)", (uid, now))
+                    db.conn.commit()
+                    return True, "", None
+                # Out of credits → paywall again
+                db.conn.commit()
+                return False, "You're out of messages. Buy another pack to continue.", self._paywall_payload()
+
+            # Free tier: rolling windows + IP backstop.
             db.conn.execute("DELETE FROM web_usage_events WHERE ts < ?", (week,))
             g5 = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE ts >= ?", (five_h,)).fetchone()["n"]
             gw = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE ts >= ?", (week,)).fetchone()["n"]
             s5 = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, five_h)).fetchone()["n"]
             sw = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, week)).fetchone()["n"]
-            limits = (
+            ip5 = 0
+            if ip_hash:
+                ip5 = db.conn.execute(
+                    "SELECT COUNT(*) AS n FROM web_usage_events e "
+                    "JOIN web_users u ON u.user_id = e.user_id "
+                    "WHERE u.ip_hash = ? AND e.ts >= ?",
+                    (ip_hash, five_h),
+                ).fetchone()["n"]
+
+            global_caps = (
                 (g5, _int(self.config.get("web_global_5h_turn_limit"), 600), "The public demo is busy right now. Try again a little later."),
                 (gw, _int(self.config.get("web_global_week_turn_limit"), 6000), "The public demo hit its weekly budget. Try again later."),
-                (s5, _int(self.config.get("web_session_5h_turn_limit"), 40), "You've hit your 5-hour demo limit. Try again later."),
-                (sw, _int(self.config.get("web_session_week_turn_limit"), 160), "You've hit your weekly demo limit."),
             )
-            for used, limit, msg in limits:
+            for used, limit, msg in global_caps:
                 if limit > 0 and used >= limit:
                     db.conn.commit()
-                    return False, msg
+                    return False, msg, None  # global cap → plain error, no paywall
+
+            personal_caps = (
+                (s5, _int(self.config.get("web_session_5h_turn_limit"), 40), "You've hit your 5-hour demo limit."),
+                (sw, _int(self.config.get("web_session_week_turn_limit"), 160), "You've hit your weekly demo limit."),
+                (ip5, _int(self.config.get("web_ip_5h_turn_limit"), 60), "This network has hit its 5-hour demo limit."),
+            )
+            for used, limit, msg in personal_caps:
+                if limit > 0 and used >= limit:
+                    db.conn.commit()
+                    return False, msg, self._paywall_payload()
+
             db.conn.execute("INSERT INTO web_usage_events (user_id, ts) VALUES (?, ?)", (uid, now))
             db.conn.commit()
-        return True, ""
+        return True, "", None
+
+    def _paywall_payload(self) -> dict:
+        return {
+            "price_cents": _int(self.config.get("web_price_cents"), 299),
+            "credits": _int(self.config.get("web_credit_pack_size"), 2000),
+        }
+
+    # ----- account / billing / auth -----
+
+    def _account_snapshot(self, session_id: str, ip: str, account_id: str) -> dict:
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return {"signed_in": False}
+        if account_id:
+            with db.lock:
+                row = db.conn.execute(
+                    "SELECT email, tier, credits FROM web_users WHERE account_id = ?",
+                    (account_id,),
+                ).fetchone()
+            if row:
+                return {"signed_in": True, "email": row["email"], "tier": row["tier"], "credits": int(row["credits"] or 0)}
+        return {"signed_in": False}
+
+    def account_info(self, session_id: str, ip: str, account_id: str) -> dict:
+        return self._account_snapshot(session_id, ip, account_id)
+
+    def _base_url(self) -> str:
+        return str(self.config.get("app_base_url") or "http://127.0.0.1:8765").rstrip("/")
+
+    def create_checkout(self, session_id: str, account_id: str, ip: str) -> dict:
+        """Mint a Stripe Checkout Session and return its URL."""
+        base = self._base_url()
+        claim_token = secrets.token_urlsafe(24)
+        # Stash the claim token so /auth/claim can exchange it after Stripe redirects back.
+        # Reuse web_auth_tokens but with a synthetic "pending-checkout" email.
+        db = getattr(self.runtime, "db", None)
+        if db is not None:
+            with db.lock:
+                db.conn.execute(
+                    "INSERT INTO web_auth_tokens (token, email, created_at, used_at) VALUES (?, ?, ?, NULL)",
+                    (claim_token, "__pending_checkout__", time.time()),
+                )
+                db.conn.commit()
+        email_hint = None
+        snap = self._account_snapshot(session_id, ip, account_id)
+        if snap.get("email"):
+            email_hint = snap["email"]
+        meta = {
+            "session_id": session_id,
+            "account_id": account_id or "",
+            "claim_token": claim_token,
+            "anon_user_id": self._anon_user_id(session_id, ip),
+            "ip_hash": self._ip_hash(ip),
+        }
+        result = stripe_client.create_checkout_session(
+            secret_key=str(self.config.get("stripe_secret_key") or ""),
+            price_id=str(self.config.get("stripe_price_id") or ""),
+            success_url=f"{base}/?checkout=success&claim={claim_token}",
+            cancel_url=f"{base}/?checkout=cancel",
+            email_hint=email_hint,
+            metadata=meta,
+        )
+        return result
+
+    def handle_stripe_webhook(self, payload: bytes, sig_header: str) -> dict:
+        secret_key = str(self.config.get("stripe_secret_key") or "")
+        webhook_secret = str(self.config.get("stripe_webhook_secret") or "")
+        event = stripe_client.verify_webhook(secret_key, webhook_secret, payload, sig_header)
+        event_id = event.get("id")
+        etype = event.get("type")
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return {"ok": True, "ignored": "no_db"}
+        if etype != "checkout.session.completed":
+            return {"ok": True, "ignored": etype}
+        data = (event.get("data") or {}).get("object") or {}
+        meta = data.get("metadata") or {}
+        email = web_auth.normalize_email(data.get("customer_email") or (data.get("customer_details") or {}).get("email") or "")
+        amount_cents = int(data.get("amount_total") or 0)
+        credits_pack = _int(self.config.get("web_credit_pack_size"), 2000)
+        if not email:
+            logger.warning("[stripe] checkout.session.completed missing email; event=%s", event_id)
+            return {"ok": True, "ignored": "no_email"}
+
+        with db.lock:
+            # Idempotency: if we already processed this event, bail.
+            try:
+                db.conn.execute(
+                    "INSERT INTO web_payments (stripe_event_id, email, amount_cents, credits_granted, ts) VALUES (?, ?, ?, ?, ?)",
+                    (event_id, email, amount_cents, credits_pack, time.time()),
+                )
+            except Exception:
+                db.conn.rollback()
+                return {"ok": True, "duplicate": True}
+
+            row = db.conn.execute("SELECT user_id, account_id, tier, credits FROM web_users WHERE email = ?", (email,)).fetchone()
+            if row:
+                aid = row["account_id"] or str(uuid.uuid4())
+                new_tier = "unlimited" if (row["tier"] == "unlimited") else "paid"
+                db.conn.execute(
+                    "UPDATE web_users SET account_id = ?, tier = ?, credits = COALESCE(credits, 0) + ? WHERE user_id = ?",
+                    (aid, new_tier, credits_pack, row["user_id"]),
+                )
+            else:
+                # Promote the buyer's anonymous row (from metadata) into an account,
+                # or create a fresh one if we can't find theirs.
+                anon_uid = meta.get("anon_user_id") or ""
+                aid = str(uuid.uuid4())
+                upgraded = False
+                if anon_uid:
+                    cur = db.conn.execute(
+                        "UPDATE web_users SET email = ?, account_id = ?, tier = 'paid', credits = COALESCE(credits, 0) + ? "
+                        "WHERE user_id = ? AND email IS NULL",
+                        (email, aid, credits_pack, anon_uid),
+                    )
+                    upgraded = (cur.rowcount or 0) > 0
+                if not upgraded:
+                    new_uid = str(uuid.uuid4())
+                    db.conn.execute(
+                        "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen, tier, credits, email, account_id) "
+                        "VALUES (?, ?, ?, ?, ?, 'paid', ?, ?, ?)",
+                        (new_uid, meta.get("session_id") or "", meta.get("ip_hash") or "", time.time(), time.time(), credits_pack, email, aid),
+                    )
+
+            # Bind the claim_token to this email so /auth/claim can pick it up.
+            claim_token = meta.get("claim_token") or ""
+            if claim_token:
+                db.conn.execute("UPDATE web_auth_tokens SET email = ? WHERE token = ? AND used_at IS NULL", (email, claim_token))
+            db.conn.commit()
+
+        # Fire-and-forget magic-link email so the user can return on any device.
+        try:
+            link_token = web_auth.mint_token(db, email)
+            link = f"{self._base_url()}/auth/verify?token={link_token}"
+            gmail = getattr(self.runtime, "services", {}).get("gmail")
+            if gmail:
+                web_auth.send_magic_link(gmail, email, link, from_address=str(self.config.get("web_email_from") or "me"))
+            else:
+                logger.warning("[stripe] No gmail service; magic link for %s: %s", email, link)
+        except Exception:
+            logger.exception("[stripe] failed to send post-purchase magic link")
+
+        return {"ok": True}
+
+    def claim_checkout(self, claim_token: str) -> str | None:
+        """Exchange a post-checkout claim token for the buyer's account_id.
+        Returns account_id or None."""
+        db = getattr(self.runtime, "db", None)
+        if db is None or not claim_token:
+            return None
+        with db.lock:
+            row = db.conn.execute(
+                "SELECT email, used_at, created_at FROM web_auth_tokens WHERE token = ?",
+                (claim_token,),
+            ).fetchone()
+            if not row or row["used_at"] is not None:
+                return None
+            email = row["email"]
+            if not email or email == "__pending_checkout__":
+                # Webhook hasn't been processed yet.
+                return None
+            db.conn.execute("UPDATE web_auth_tokens SET used_at = ? WHERE token = ?", (time.time(), claim_token))
+            acct = db.conn.execute("SELECT account_id FROM web_users WHERE email = ?", (email,)).fetchone()
+            db.conn.commit()
+            return acct["account_id"] if acct else None
+
+    def request_magic_link(self, email: str) -> dict:
+        email = web_auth.normalize_email(email)
+        if not web_auth.is_email(email):
+            return {"ok": False, "error": "Please enter a valid email address."}
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return {"ok": False, "error": "Server not ready."}
+        token = web_auth.mint_token(db, email)
+        link = f"{self._base_url()}/auth/verify?token={token}"
+        gmail = getattr(self.runtime, "services", {}).get("gmail")
+        if gmail is None:
+            logger.warning("[auth] No gmail service; magic link for %s: %s", email, link)
+            return {"ok": True, "delivered": False}
+        sent = web_auth.send_magic_link(gmail, email, link, from_address=str(self.config.get("web_email_from") or "me"))
+        return {"ok": True, "delivered": bool(sent)}
+
+    def verify_magic_link(self, token: str) -> str | None:
+        """Returns account_id on success, or None.
+        If the email doesn't yet have an account row, create one (free tier)."""
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return None
+        email = web_auth.verify_token(db, token)
+        if not email or email == "__pending_checkout__":
+            return None
+        with db.lock:
+            row = db.conn.execute("SELECT user_id, account_id FROM web_users WHERE email = ?", (email,)).fetchone()
+            if row and row["account_id"]:
+                return row["account_id"]
+            aid = str(uuid.uuid4())
+            if row:
+                db.conn.execute("UPDATE web_users SET account_id = ? WHERE user_id = ?", (aid, row["user_id"]))
+            else:
+                new_uid = str(uuid.uuid4())
+                db.conn.execute(
+                    "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen, tier, credits, email, account_id) "
+                    "VALUES (?, '', '', ?, ?, 'free', 0, ?, ?)",
+                    (new_uid, time.time(), time.time(), email, aid),
+                )
+            db.conn.commit()
+            return aid
+
+    def redeem_promo(self, code: str, account_id: str) -> dict:
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return {"ok": False, "error": "Server not ready."}
+        code = (code or "").strip()
+        if not code:
+            return {"ok": False, "error": "Enter a code."}
+        if not account_id:
+            return {"ok": False, "error": "Sign in first to redeem a promo code.", "need_auth": True}
+        with db.lock:
+            row = db.conn.execute("SELECT code, kind, credits, max_uses, uses FROM web_promo_codes WHERE code = ?", (code,)).fetchone()
+            if not row:
+                return {"ok": False, "error": "Code not found."}
+            if (row["uses"] or 0) >= (row["max_uses"] or 1):
+                return {"ok": False, "error": "This code has already been used."}
+            user = db.conn.execute("SELECT user_id, tier, credits FROM web_users WHERE account_id = ?", (account_id,)).fetchone()
+            if not user:
+                return {"ok": False, "error": "Account not found."}
+            if row["kind"] == "unlimited":
+                db.conn.execute("UPDATE web_users SET tier = 'unlimited' WHERE user_id = ?", (user["user_id"],))
+                granted = "unlimited"
+            elif row["kind"] == "credits":
+                amt = int(row["credits"] or 0)
+                new_tier = "paid" if user["tier"] != "unlimited" else "unlimited"
+                db.conn.execute(
+                    "UPDATE web_users SET credits = COALESCE(credits, 0) + ?, tier = ? WHERE user_id = ?",
+                    (amt, new_tier, user["user_id"]),
+                )
+                granted = f"{amt} credits"
+            else:
+                return {"ok": False, "error": "Unknown code kind."}
+            db.conn.execute("UPDATE web_promo_codes SET uses = uses + 1 WHERE code = ?", (code,))
+            db.conn.commit()
+        return {"ok": True, "granted": granted}
 
     def canvas_payload(self, session_id: str) -> dict:
         return _canvas_payload(canvas(self.session_key(session_id)))
@@ -367,37 +691,80 @@ class _Server(ThreadingHTTPServer):
 
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/api/health":
             return self._json({"ok": True})
         if path == "/api/events":
-            sid = str(parse_qs(urlparse(self.path).query).get("session_id", ["demo"])[0])[:80]
+            sid = str(parse_qs(parsed.query).get("session_id", ["demo"])[0])[:80]
             return self._json({"ok": True, "events": self.server.frontend._drain(self.server.frontend.session_key(sid))})
         if path == "/api/canvas":
-            sid = str(parse_qs(urlparse(self.path).query).get("session_id", ["demo"])[0])[:80]
+            sid = str(parse_qs(parsed.query).get("session_id", ["demo"])[0])[:80]
             return self._json({"ok": True, "canvas": self.server.frontend.canvas_payload(sid)})
         if path == "/api/palettes":
             return self._json({"ok": True, "palettes": self.server.frontend.palettes_payload()})
         if path == "/api/gallery":
-            qs = parse_qs(urlparse(self.path).query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
+            qs = parse_qs(parsed.query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
             return self._json({"ok": True, "items": self.server.frontend.gallery(sid)})
+        if path == "/api/account":
+            qs = parse_qs(parsed.query)
+            sid = str(qs.get("session_id", ["demo"])[0])[:80]
+            return self._json({"ok": True, "account": self.server.frontend.account_info(sid, self.client_address[0], self._cookie_uid())})
         if path == "/files":
-            qs = parse_qs(urlparse(self.path).query)
-            # Prefer query param; fall back to the session cookie set by app.js.
+            qs = parse_qs(parsed.query)
             sid = str(qs.get("session_id", [self._cookie_sid()])[0])[:80]
             return self._local_file(qs.get("path", [""])[0], sid)
+        if path == "/auth/verify":
+            qs = parse_qs(parsed.query)
+            token = str(qs.get("token", [""])[0])
+            account_id = self.server.frontend.verify_magic_link(token)
+            if account_id:
+                return self._redirect_with_uid("/account", account_id)
+            return self._html("<!doctype html><meta charset=utf-8><title>Sign in</title><style>body{font-family:system-ui;max-width:480px;margin:80px auto;padding:0 24px;color:#222}</style><h1>Link expired</h1><p>That sign-in link is invalid or already used. Request a new one from the home page.</p><p><a href=\"/\">Back home</a></p>", 400)
+        if path == "/auth/claim":
+            qs = parse_qs(parsed.query)
+            token = str(qs.get("token", [""])[0])
+            account_id = self.server.frontend.claim_checkout(token)
+            if account_id:
+                return self._redirect_with_uid("/account?welcome=1", account_id)
+            return self._redirect("/?checkout=pending")
+        if path == "/auth/logout":
+            return self._redirect_clear_uid("/")
         if path == "/favicon.ico":
             return self._raw_file(FAVICON_PATH, "image/x-icon")
         rel = "index.html" if path in {"", "/"} else path.lstrip("/")
+        if rel == "account":
+            rel = "account.html"
         return self._file(WEB_ROOT / rel)
 
     def do_POST(self):
+        # Stripe webhook receives raw JSON we must NOT decode before signature check.
+        if self.path == "/stripe/webhook":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length)
+            sig = self.headers.get("Stripe-Signature") or ""
+            try:
+                result = self.server.frontend.handle_stripe_webhook(raw, sig)
+                return self._json(result)
+            except Exception as e:
+                logger.exception("Stripe webhook failed")
+                return self._json({"ok": False, "error": str(e)}, 400)
         body = self._body()
         sid = str(body.get("session_id") or "demo")[:80]
         try:
             if self.path == "/api/chat":
-                events = self.server.frontend.chat(sid, str(body.get("message") or ""), self.client_address[0])
+                events = self.server.frontend.chat(sid, str(body.get("message") or ""), self.client_address[0], self._cookie_uid())
                 return self._json({"ok": True, "events": events})
+            if self.path == "/api/checkout":
+                try:
+                    result = self.server.frontend.create_checkout(sid, self._cookie_uid(), self.client_address[0])
+                    return self._json({"ok": True, **result})
+                except RuntimeError as e:
+                    return self._json({"ok": False, "error": str(e)}, 400)
+            if self.path == "/api/auth/request":
+                return self._json(self.server.frontend.request_magic_link(str(body.get("email") or "")))
+            if self.path == "/api/promo/redeem":
+                return self._json(self.server.frontend.redeem_promo(str(body.get("code") or ""), self._cookie_uid()))
             if self.path == "/api/new":
                 return self._json({"ok": True, "events": self.server.frontend.new_chat(sid)})
             if self.path == "/api/approval":
@@ -444,12 +811,42 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def _cookie_sid(self) -> str:
+        return self._cookie("sb_sid")[:80]
+
+    def _cookie_uid(self) -> str:
+        return self._cookie("sb_uid")[:80]
+
+    def _cookie(self, name: str) -> str:
         raw = self.headers.get("Cookie") or ""
         for part in raw.split(";"):
             k, _, v = part.strip().partition("=")
-            if k == "sb_sid":
-                return v[:80]
+            if k == name:
+                return unquote(v)
         return ""
+
+    def _redirect(self, location: str, *, extra_headers: list[tuple[str, str]] = ()):
+        self.send_response(303)
+        self.send_header("Location", location)
+        for k, v in extra_headers:
+            self.send_header(k, v)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _redirect_with_uid(self, location: str, account_id: str):
+        cookie = f"sb_uid={quote(account_id)}; Path=/; SameSite=Lax; Max-Age=31536000; HttpOnly"
+        self._redirect(location, extra_headers=[("Set-Cookie", cookie)])
+
+    def _redirect_clear_uid(self, location: str):
+        cookie = "sb_uid=; Path=/; SameSite=Lax; Max-Age=0; HttpOnly"
+        self._redirect(location, extra_headers=[("Set-Cookie", cookie)])
+
+    def _html(self, body: str, status: int = 200):
+        raw = body.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
 
     def _raw_file(self, path: Path, content_type: str):
         try:

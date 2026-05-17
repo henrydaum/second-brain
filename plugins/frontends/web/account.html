@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Account · Second Brain</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="account-page">
+    <p class="eyebrow">Second Brain</p>
+    <h1>Your account</h1>
+    <div id="welcome" class="modal-status ok" hidden>Payment confirmed. Your credits are ready.</div>
+
+    <div id="signedOut" class="account-card" hidden>
+      <p class="modal-lead">You're not signed in.</p>
+      <p class="modal-sub">Enter your email to receive a one-tap sign-in link.</p>
+      <form id="signinForm">
+        <input id="signinEmail" type="email" required placeholder="you@example.com">
+        <button type="submit" class="primary-btn">Send link</button>
+      </form>
+      <p id="signinStatus" class="modal-status" hidden></p>
+    </div>
+
+    <div id="signedIn" class="account-card" hidden>
+      <div class="account-row"><span>Email</span><span id="rowEmail">—</span></div>
+      <div class="account-row"><span>Plan</span><span id="rowTier">—</span></div>
+      <div class="account-row"><span>Messages remaining</span><span id="rowCredits">—</span></div>
+      <div class="account-actions">
+        <button id="buyMore" type="button" class="primary-btn">Buy 2,000 more · $2.99</button>
+        <a href="/">Back to demo</a>
+        <a href="/auth/logout">Sign out</a>
+      </div>
+    </div>
+
+    <div class="account-card" id="promoCard" hidden>
+      <p class="modal-lead">Have a promo code?</p>
+      <form id="promoForm">
+        <input id="promoCode" type="text" required placeholder="Promo code">
+        <button type="submit" class="primary-btn">Redeem</button>
+      </form>
+      <p id="promoStatus" class="modal-status" hidden></p>
+    </div>
+  </main>
+
+  <script>
+  const sid = localStorage.sbDemoSession || (localStorage.sbDemoSession = crypto.randomUUID());
+  async function post(url, body = {}) {
+    const res = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({session_id:sid, ...body})});
+    return res.json();
+  }
+  const $ = (s) => document.querySelector(s);
+  if (new URLSearchParams(location.search).get("welcome") === "1") $("#welcome").hidden = false;
+
+  async function load() {
+    const r = await fetch(`/api/account?session_id=${encodeURIComponent(sid)}`).then(r => r.json());
+    const a = r.account || {};
+    if (a.signed_in) {
+      $("#signedIn").hidden = false;
+      $("#promoCard").hidden = false;
+      $("#rowEmail").textContent = a.email || "—";
+      const plan = a.tier === "unlimited" ? "Unlimited" : a.tier === "paid" ? "Paid" : "Free";
+      $("#rowTier").textContent = plan;
+      $("#rowCredits").textContent = a.tier === "unlimited" ? "Unlimited" : (a.credits || 0).toLocaleString();
+    } else {
+      $("#signedOut").hidden = false;
+    }
+  }
+  load();
+
+  $("#signinForm")?.addEventListener("submit", async e => {
+    e.preventDefault();
+    const btn = e.target.querySelector("button");
+    btn.disabled = true;
+    const r = await post("/api/auth/request", {email: $("#signinEmail").value});
+    const status = $("#signinStatus");
+    status.hidden = false;
+    status.className = "modal-status " + (r.ok ? "ok" : "err");
+    status.textContent = r.ok
+      ? (r.delivered ? "Check your inbox for the sign-in link." : "Link generated — see server logs.")
+      : (r.error || "Could not send link.");
+    btn.disabled = false;
+  });
+
+  $("#buyMore")?.addEventListener("click", async () => {
+    const btn = $("#buyMore");
+    btn.disabled = true;
+    btn.textContent = "Opening Stripe…";
+    const r = await post("/api/checkout");
+    if (r.ok && r.url) { window.location = r.url; return; }
+    btn.disabled = false;
+    btn.textContent = "Buy 2,000 more · $2.99";
+    alert(r.error || "Could not start checkout.");
+  });
+
+  $("#promoForm")?.addEventListener("submit", async e => {
+    e.preventDefault();
+    const btn = e.target.querySelector("button");
+    btn.disabled = true;
+    const r = await post("/api/promo/redeem", {code: $("#promoCode").value});
+    const status = $("#promoStatus");
+    status.hidden = false;
+    status.className = "modal-status " + (r.ok ? "ok" : "err");
+    status.textContent = r.ok ? `Redeemed — granted ${r.granted}.` : (r.error || "Could not redeem.");
+    btn.disabled = false;
+    if (r.ok) setTimeout(load, 600);
+  });
+  </script>
+</body>
+</html>

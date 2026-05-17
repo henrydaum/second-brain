@@ -98,6 +98,8 @@ function render(events) {
     else if (ev.type === "error") add("error", ev.content);
     else if (ev.type === "form") add("assistant", `${ev.form?.display?.prompt || "Input required"}\n${(ev.form?.display?.choices || []).map(c => c.label || c.value).join(" / ")}`);
     else if (ev.type === "approval") approval(ev);
+    else if (ev.type === "paywall") openPaywall(ev);
+    else if (ev.type === "account") setAccount(ev.account);
     else if (ev.type === "hero_image") {
       setCanvas(ev.canvas || {url: ev.url, name: ev.name});
       add("status", `Showcase updated: ${ev.name}`);
@@ -108,6 +110,121 @@ function render(events) {
   }
   bottom();
 }
+
+// ----- account + paywall + auth -----
+const accountChip = document.querySelector("#accountChip");
+const signInBtn = document.querySelector("#signInBtn");
+const accountLink = document.querySelector("#accountLink");
+const logoutLink = document.querySelector("#logoutLink");
+const paywallModal = document.querySelector("#paywallModal");
+const signinModal = document.querySelector("#signinModal");
+const promoModal = document.querySelector("#promoModal");
+const buyBtn = document.querySelector("#buyBtn");
+const signinForm = document.querySelector("#signinForm");
+const signinEmail = document.querySelector("#signinEmail");
+const signinStatus = document.querySelector("#signinStatus");
+const promoForm = document.querySelector("#promoForm");
+const promoCode = document.querySelector("#promoCode");
+const promoStatus = document.querySelector("#promoStatus");
+
+function openModal(el) { el.hidden = false; }
+function closeModal(el) { el.hidden = true; }
+document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", () => closeModal(document.getElementById(b.dataset.close))));
+[paywallModal, signinModal, promoModal].forEach(m => m.addEventListener("click", e => { if (e.target === m) closeModal(m); }));
+
+function setAccount(acc) {
+  if (acc?.signed_in) {
+    const credits = acc.tier === "unlimited" ? "∞ messages" : `${(acc.credits || 0).toLocaleString()} left`;
+    accountChip.textContent = `${acc.email} · ${credits}`;
+    accountChip.hidden = false;
+    signInBtn.hidden = true;
+    accountLink.hidden = false;
+    logoutLink.hidden = false;
+  } else {
+    accountChip.hidden = true;
+    signInBtn.hidden = false;
+    accountLink.hidden = true;
+    logoutLink.hidden = true;
+  }
+}
+async function refreshAccount() {
+  try { const r = await get("/api/account"); setAccount(r.account); } catch {}
+}
+function openPaywall(ev) {
+  const card = paywallModal.querySelector(".modal-card");
+  const lead = card.querySelector(".modal-lead");
+  if (ev?.price_cents && ev?.credits) {
+    lead.innerHTML = `Keep going for <strong>$${(ev.price_cents/100).toFixed(2)}</strong> — get <strong>${ev.credits.toLocaleString()} messages</strong>.`;
+  }
+  openModal(paywallModal);
+}
+buyBtn.addEventListener("click", async () => {
+  buyBtn.disabled = true;
+  buyBtn.textContent = "Opening Stripe…";
+  try {
+    const r = await post("/api/checkout");
+    if (r.ok && r.url) { window.location = r.url; return; }
+    buyBtn.textContent = "Buy $2.99";
+    buyBtn.disabled = false;
+    add("error", r.error || "Could not start checkout.");
+  } catch (e) {
+    buyBtn.textContent = "Buy $2.99";
+    buyBtn.disabled = false;
+    add("error", e.message);
+  }
+});
+signInBtn.addEventListener("click", () => openModal(signinModal));
+document.querySelector("#signInFromPaywall").addEventListener("click", () => { closeModal(paywallModal); openModal(signinModal); });
+document.querySelector("#promoLink").addEventListener("click", () => { closeModal(paywallModal); openModal(promoModal); });
+signinForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  signinStatus.hidden = true;
+  const btn = signinForm.querySelector("button");
+  btn.disabled = true;
+  try {
+    const r = await post("/api/auth/request", {email: signinEmail.value});
+    signinStatus.hidden = false;
+    signinStatus.className = "modal-status " + (r.ok ? "ok" : "err");
+    signinStatus.textContent = r.ok
+      ? (r.delivered ? "Check your inbox for the sign-in link." : "Link generated — see server logs (email not configured).")
+      : (r.error || "Could not send link.");
+  } catch (err) {
+    signinStatus.hidden = false; signinStatus.className = "modal-status err"; signinStatus.textContent = err.message;
+  } finally { btn.disabled = false; }
+});
+promoForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  promoStatus.hidden = true;
+  const btn = promoForm.querySelector("button");
+  btn.disabled = true;
+  try {
+    const r = await post("/api/promo/redeem", {code: promoCode.value});
+    promoStatus.hidden = false;
+    promoStatus.className = "modal-status " + (r.ok ? "ok" : "err");
+    promoStatus.textContent = r.ok
+      ? `Redeemed — granted ${r.granted}.`
+      : (r.error || "Could not redeem code.");
+    if (r.ok) { refreshAccount(); setTimeout(() => closeModal(promoModal), 1200); }
+    if (!r.ok && r.need_auth) { closeModal(promoModal); openModal(signinModal); }
+  } catch (err) {
+    promoStatus.hidden = false; promoStatus.className = "modal-status err"; promoStatus.textContent = err.message;
+  } finally { btn.disabled = false; }
+});
+
+// Surface checkout return-state from query string.
+(() => {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("checkout") === "success") {
+    add("status", "Payment confirmed. Welcome back.");
+    history.replaceState({}, "", "/");
+  } else if (params.get("checkout") === "cancel") {
+    add("status", "Checkout canceled.");
+    history.replaceState({}, "", "/");
+  } else if (params.get("checkout") === "pending") {
+    add("status", "Payment is processing — your credits will appear shortly.");
+    history.replaceState({}, "", "/");
+  }
+})();
 function setCanvas(c) {
   currentPalette = c?.palette_id || currentPalette; syncPalette(currentPalette);
   if (!c?.url) {
@@ -199,7 +316,7 @@ paletteStrip.addEventListener("click", async e => {
   }
 });
 setInterval(poll, 1200);
-loadPalettes(); loadCanvas(); loadGallery();
+loadPalettes(); loadCanvas(); loadGallery(); refreshAccount();
 
 const canvas = document.querySelector("#fractal");
 const ctx = canvas.getContext("2d");

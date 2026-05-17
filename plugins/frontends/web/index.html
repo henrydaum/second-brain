@@ -41,6 +41,12 @@
       <div id="paletteStrip" class="palette-strip"></div>
     </section>
   </main>
+  <div id="accountBar" class="account-bar">
+    <span id="accountChip" class="account-chip" hidden></span>
+    <button id="signInBtn" type="button" class="link-btn">Sign in</button>
+    <a id="accountLink" class="link-btn" href="/account" hidden>Account</a>
+    <a id="logoutLink" class="link-btn" href="/auth/logout" hidden>Sign out</a>
+  </div>
   <section class="gallery-section">
     <div class="gallery-head">
       <p class="eyebrow">Shared Archive</p>
@@ -48,6 +54,47 @@
     </div>
     <div id="gallery" class="gallery"></div>
   </section>
+
+  <div id="paywallModal" class="modal" hidden>
+    <div class="modal-card">
+      <h2>Out of messages</h2>
+      <p class="modal-lead">Keep going for <strong>$2.99</strong> — get <strong>2,000 messages</strong>.</p>
+      <p class="modal-sub">One-time payment. We'll send a sign-in link to your email so you can come back anytime.</p>
+      <button id="buyBtn" type="button" class="primary-btn">Buy $2.99</button>
+      <div class="modal-secondary">
+        <button id="promoLink" type="button" class="link-btn">I have a promo code</button>
+        <button id="signInFromPaywall" type="button" class="link-btn">Already paid? Sign in</button>
+      </div>
+      <button class="close-btn" type="button" data-close="paywallModal" aria-label="Close">×</button>
+    </div>
+  </div>
+
+  <div id="signinModal" class="modal" hidden>
+    <div class="modal-card">
+      <h2>Sign in</h2>
+      <p class="modal-lead">Enter your email. We'll send a one-tap sign-in link.</p>
+      <form id="signinForm">
+        <input id="signinEmail" type="email" required placeholder="you@example.com">
+        <button type="submit" class="primary-btn">Send link</button>
+      </form>
+      <p id="signinStatus" class="modal-status" hidden></p>
+      <button class="close-btn" type="button" data-close="signinModal" aria-label="Close">×</button>
+    </div>
+  </div>
+
+  <div id="promoModal" class="modal" hidden>
+    <div class="modal-card">
+      <h2>Redeem promo code</h2>
+      <p class="modal-lead">You'll need to be signed in to redeem a code.</p>
+      <form id="promoForm">
+        <input id="promoCode" type="text" required placeholder="Promo code">
+        <button type="submit" class="primary-btn">Redeem</button>
+      </form>
+      <p id="promoStatus" class="modal-status" hidden></p>
+      <button class="close-btn" type="button" data-close="promoModal" aria-label="Close">×</button>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>

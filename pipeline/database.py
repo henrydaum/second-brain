@@ -192,6 +192,52 @@ class Database:
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_usage_user_ts ON web_usage_events(user_id, ts)")
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_usage_ts ON web_usage_events(ts)")
 
+		# Monetization: account columns on web_users, plus auth tokens,
+		# promo codes, and payments. ALTERs are guarded — sqlite raises if the
+		# column already exists, so we swallow that specific error.
+		for col, decl in (("email", "TEXT"), ("account_id", "TEXT")):
+			try:
+				self.conn.execute(f"ALTER TABLE web_users ADD COLUMN {col} {decl}")
+			except sqlite3.OperationalError as e:
+				if "duplicate column" not in str(e).lower():
+					raise
+		self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_web_users_email ON web_users(email) WHERE email IS NOT NULL")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_users_account ON web_users(account_id)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_users_ip ON web_users(ip_hash)")
+
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS web_auth_tokens (
+				token       TEXT PRIMARY KEY,
+				email       TEXT NOT NULL,
+				created_at  REAL NOT NULL,
+				used_at     REAL
+			)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_auth_tokens_email ON web_auth_tokens(email)")
+
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS web_promo_codes (
+				code         TEXT PRIMARY KEY,
+				kind         TEXT NOT NULL,
+				credits      INTEGER,
+				max_uses     INTEGER DEFAULT 1,
+				uses         INTEGER DEFAULT 0,
+				created_at   REAL NOT NULL,
+				note         TEXT
+			)
+		""")
+
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS web_payments (
+				id              INTEGER PRIMARY KEY,
+				stripe_event_id TEXT UNIQUE,
+				email           TEXT,
+				amount_cents    INTEGER,
+				credits_granted INTEGER,
+				ts              REAL
+			)
+		""")
+
 		# Skill scoring — implicit signals (share/download/remix) attributed
 		# across chain steps. `generations` is a denominator-only counter.
 		self.conn.execute("""

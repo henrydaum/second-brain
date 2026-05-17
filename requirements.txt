@@ -6,3 +6,4 @@ requests
 watchdog
 torch
 torchvision
+stripe

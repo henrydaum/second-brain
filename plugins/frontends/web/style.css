@@ -68,6 +68,47 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .gallery-card small { color: var(--muted); }
 .gallery-card button { height: 34px; border: 1px solid var(--line); background: #171f2d; color: var(--text); cursor: pointer; }
 .gallery-card button:hover { border-color: var(--hot); }
+/* Account bar */
+.account-bar { display: flex; align-items: center; gap: 14px; padding: 14px 32px; background: #0b0d13; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.account-chip { color: var(--text); font-size: 13px; padding: 6px 10px; background: #141823; border: 1px solid var(--line); }
+.link-btn { background: transparent; color: var(--cyan); border: 0; padding: 4px 0; cursor: pointer; font-size: 14px; text-decoration: none; }
+.link-btn:hover { color: var(--text); text-decoration: underline; }
+
+/* Modals */
+.modal { position: fixed; inset: 0; background: rgba(4,5,9,.78); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 24px; backdrop-filter: blur(6px); }
+.modal[hidden] { display: none; }
+.modal-card { background: var(--panel); border: 1px solid var(--line); padding: 32px 28px 26px; width: 100%; max-width: 420px; position: relative; box-shadow: 0 24px 60px rgba(0,0,0,.5); }
+.modal-card h2 { font-size: 22px; margin-bottom: 10px; letter-spacing: 0; }
+.modal-lead { color: var(--text); font-size: 15px; margin-bottom: 6px; }
+.modal-lead strong { color: var(--cyan); font-weight: 700; }
+.modal-sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
+.modal-card form { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.modal-card input { height: 40px; padding: 0 12px; background: #0b0d13; border: 1px solid var(--line); color: var(--text); }
+.modal-card input:focus { outline: none; border-color: var(--cyan); }
+.primary-btn { height: 44px; background: var(--cyan); color: #08090d; border: 0; cursor: pointer; font-weight: 700; letter-spacing: .02em; }
+.primary-btn:hover:not(:disabled) { background: #76f6ff; }
+.primary-btn:disabled { background: #2c3342; color: var(--muted); cursor: default; }
+.modal-secondary { display: flex; gap: 18px; margin-top: 16px; justify-content: center; }
+.modal-status { font-size: 13px; margin-top: 12px; padding: 8px 10px; border: 1px solid var(--line); }
+.modal-status.ok { color: var(--green); border-color: #2d4a2d; }
+.modal-status.err { color: #ffb5c8; border-color: #7f3150; }
+.close-btn { position: absolute; top: 8px; right: 12px; background: transparent; border: 0; color: var(--muted); font-size: 22px; cursor: pointer; line-height: 1; }
+.close-btn:hover { color: var(--text); }
+
+/* Account page */
+.account-page { max-width: 560px; margin: 80px auto; padding: 0 24px; }
+.account-page h1 { font-size: 32px; margin-bottom: 8px; }
+.account-page .eyebrow { margin-bottom: 24px; }
+.account-card { background: var(--panel); border: 1px solid var(--line); padding: 24px; margin-bottom: 16px; }
+.account-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.account-row:last-child { border-bottom: 0; }
+.account-row span:first-child { color: var(--muted); }
+.account-row span:last-child { color: var(--text); font-weight: 600; }
+.account-actions { display: flex; gap: 12px; margin-top: 20px; }
+.account-actions a, .account-actions button { flex: 1; height: 44px; display: flex; align-items: center; justify-content: center; text-decoration: none; border: 1px solid var(--line); background: #141823; color: var(--text); cursor: pointer; }
+.account-actions a:hover, .account-actions button:hover { border-color: var(--cyan); }
+.account-actions .primary-btn { border: 0; }
+
 @media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
   .chat { height: 58vh; position: relative; }
