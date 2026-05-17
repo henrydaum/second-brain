@@ -1,30 +1,47 @@
 SKILL_NAME = "Julia Explorer"
-SKILL_DESCRIPTION = "Filled Julia set z -> z^2 + c with continuous escape-time smoothing and palette grading. The jx and jy sliders tune the constant c -- each tiny nudge yields a completely different fractal (dendrites, dragons, rabbits, dust). View stays centered at the origin. Optimized for M1: complex64 working set, |z0| pre-escape filter, and live-buffer compaction every 3 iterations. Iteration depth auto-scales with zoom so deep zooms keep their detail. Params: jx (-1.5..1.5, default -0.7), jy (-1.5..1.5, default 0.27015), zoom_exp (-1..18, default 0.0 -> 1x)."
+SKILL_DESCRIPTION = "A guided tour of the most beloved filled Julia sets. Pick a constant -- the spindly Dendrite, the Douady Rabbit, the curling Dragon, the Siegel Disk, the cantor-dust airplane -- and the right framing and iteration depth come along for free. Pair with any palette. Optimized for M1: complex64 working set, |z0| pre-escape filter, and live-buffer compaction every 3 iterations."
 SKILL_KIND = "creation"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1730000000.0
 SKILL_CONTROLS = [
-    {"type": "slider", "name": "jx", "label": "c.real (jx)",
-     "min": -1.5, "max": 1.5, "step": 0.005, "default": -0.7},
-    {"type": "slider", "name": "jy", "label": "c.imag (jy)",
-     "min": -1.5, "max": 1.5, "step": 0.005, "default": 0.27015},
-    {"type": "slider", "name": "zoom_exp", "label": "Zoom",
-     "min": -1.0, "max": 18.0, "step": 0.25, "default": 0.0},
+    {"type": "enum", "name": "spot", "label": "Spot",
+     "options": [
+         {"value": "dendrite", "label": "Dendrite"},
+         {"value": "rabbit",   "label": "Douady Rabbit"},
+         {"value": "san_marco","label": "San Marco"},
+         {"value": "siegel",   "label": "Siegel Disk"},
+         {"value": "dragon",   "label": "Dragon"},
+         {"value": "spiral",   "label": "Spiral"},
+         {"value": "airplane", "label": "Airplane"},
+         {"value": "dust",     "label": "Cantor Dust"},
+     ],
+     "default": "dragon"},
     {"type": "palette", "name": "palette", "label": "Palette"},
 ]
 
 import numpy as np
 from PIL import Image
 
+# Curated Julia constants. Each entry: (jx, jy, zoom_exp, detail).
+# These c values are the canonical, named landmarks of Julia-set theory --
+# each gives a visually distinct filled set centered on the origin.
+_SPOTS = {
+    "dendrite":  ( 0.0,     1.0,     0.0, 250),   # c = i; thin tree-like fractal
+    "rabbit":    (-0.123,   0.745,   0.0, 250),   # the Douady rabbit
+    "san_marco": (-0.75,    0.0,     0.0, 250),   # symmetric basin shaped like the cathedral
+    "siegel":    (-0.391,  -0.587,   0.0, 280),   # quasi-circle Siegel disk
+    "dragon":    (-0.8,     0.156,   0.0, 250),   # curling dragon-like arms
+    "spiral":    (-0.7269,  0.1889,  0.0, 300),   # tight twin-spiral
+    "airplane":  (-1.755,   0.0,     0.0, 250),   # real-axis cantor-like airplane
+    "dust":      ( 0.45,    0.1428,  0.0, 220),   # totally disconnected dust
+}
 
-def run(canvas, jx=-0.7, jy=0.27015, zoom_exp=0.0, **_):
+
+def run(canvas, spot="dragon", **_):
+    jx, jy, zoom_exp, detail = _SPOTS.get(str(spot), _SPOTS["dragon"])
     s = int(canvas.size)
-    zoom_exp = float(zoom_exp)
     zoom = float(2.0 ** zoom_exp)
-
-    # Iteration depth scales with zoom so the deep-zoom edges keep resolving
-    # without the user having to tune a separate knob.
-    n_iter = int(art_kit.clamp(120 + 30 * max(0.0, zoom_exp), 120, 700))
+    n_iter = int(detail)
 
     use_f64 = zoom_exp > 10.0
     cplx = np.complex128 if use_f64 else np.complex64
@@ -40,8 +57,6 @@ def run(canvas, jx=-0.7, jy=0.27015, zoom_exp=0.0, **_):
     im = np.linspace(-half, half, s, dtype=real)
     R, I = np.meshgrid(re, im)
 
-    # Any pixel past the escape radius escapes on the next step, so we can
-    # finalize them at iter 0 without iterating.
     er2 = max(abs(c_scalar), 2.0) ** 2
     initial_abs2 = (R * R + I * I).ravel()
     escapes_now = initial_abs2 > er2
@@ -58,8 +73,6 @@ def run(canvas, jx=-0.7, jy=0.27015, zoom_exp=0.0, **_):
     live_idx = np.flatnonzero(~escapes_now)
     Z_live = (R + 1j * I).ravel()[live_idx].astype(cplx)
 
-    # Small bailout (16) keeps |z|^2 inside float32 range across the 3-iter
-    # compaction window while remaining valid for the log-log smoothing.
     bailout2 = float(16 * 16) if not use_f64 else float(1 << 16)
     if bailout2 < er2:
         bailout2 = er2
@@ -87,7 +100,7 @@ def run(canvas, jx=-0.7, jy=0.27015, zoom_exp=0.0, **_):
     t = np.zeros_like(out_flat)
     if valid.any():
         v = out_flat[valid]
-        v = v - float(v.min())  # pre-escape pixels can produce small negatives
+        v = v - float(v.min())
         v = np.log(v + 1.0)
         vmax = float(v.max())
         if vmax > 1e-9:

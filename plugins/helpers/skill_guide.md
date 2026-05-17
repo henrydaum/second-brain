@@ -205,7 +205,7 @@ one knob the user wants to turn:
 | `slider` | `name, label, min, max, step, default` (numeric)                | Sets one numeric run param. |
 | `enum`   | `name, label, options:[{value,label}], default`                 | Sets one param to a discrete value. |
 | `bool`   | `name, label, default`                                          | Sets one boolean run param. |
-| `pan`    | `name, label, x_param, y_param, step, x_default, y_default`, optional `step_scale_param` | Two-axis arrow pad; updates both params together. If `step_scale_param` names another slider param, each click moves `step / 2^value` — pair with a log-style zoom slider to get constant-fractional panning regardless of zoom. |
+| `pan`    | `name, label, x_param, y_param, step, x_default, y_default`     | Two-axis arrow pad; updates both params together. |
 | `button` | `name, label, param, action:"randomize"`                        | One-shot action; the only action today is `randomize` (rolls a new value for `param`, usually `seed`). |
 | `palette`| no extras                                                       | Lets the user swap the canvas palette for this entry. Doesn't count toward the cap. |
 

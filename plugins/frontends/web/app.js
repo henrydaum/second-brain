@@ -305,8 +305,7 @@ function renderWidget(panel, spec) {
     const xp = spec.x_param, yp = spec.y_param;
     const xv = v[xp] ?? spec.x_default ?? 0;
     const yv = v[yp] ?? spec.y_default ?? 0;
-    const ssp = spec.step_scale_param ? ` data-step-scale-param="${esc(spec.step_scale_param)}"` : "";
-    return `<div class="ctl-row"><span>${esc(spec.label)}</span><div class="ctl-pan" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-step="${spec.step}"${ssp} data-x="${xv}" data-y="${yv}"><button type="button" class="ctl-pan-up" data-dir="up">↑</button><button type="button" class="ctl-pan-left" data-dir="left">←</button><span class="ctl-pan-c">${fmtNum(xv)}, ${fmtNum(yv)}</span><button type="button" class="ctl-pan-right" data-dir="right">→</button><button type="button" class="ctl-pan-down" data-dir="down">↓</button></div></div>`;
+    return `<div class="ctl-row"><span>${esc(spec.label)}</span><div class="ctl-pan" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-step="${spec.step}" data-x="${xv}" data-y="${yv}"><button type="button" class="ctl-pan-up" data-dir="up">↑</button><button type="button" class="ctl-pan-left" data-dir="left">←</button><span class="ctl-pan-c">${fmtNum(xv)}, ${fmtNum(yv)}</span><button type="button" class="ctl-pan-right" data-dir="right">→</button><button type="button" class="ctl-pan-down" data-dir="down">↓</button></div></div>`;
   }
   if (spec.type === "button") {
     return `<div class="ctl-row"><span>${esc(spec.label)}</span><button type="button" class="ctl-btn" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-kind="button">${esc(spec.label)}</button></div>`;
@@ -409,16 +408,7 @@ controlsPanel.addEventListener("click", e => {
   const pan = target.closest(".ctl-pan");
   const arrow = target.closest("button[data-dir]");
   if (pan && arrow) {
-    let step = +pan.dataset.step || 0.1;
-    // Optional zoom-relative scaling: divide step by 2^value of another
-    // slider in the same panel. Lets one click move a constant fraction
-    // of the view regardless of zoom level.
-    const ssp = pan.dataset.stepScaleParam;
-    if (ssp) {
-      const panel = pan.closest(".ctl-panel");
-      const slider = panel && panel.querySelector(`input[data-kind="slider"][data-name="${ssp}"]`);
-      if (slider) step = step / Math.pow(2, +slider.value || 0);
-    }
+    const step = +pan.dataset.step || 0.1;
     let x = +pan.dataset.x || 0, y = +pan.dataset.y || 0;
     if (arrow.dataset.dir === "left") x -= step;
     else if (arrow.dataset.dir === "right") x += step;

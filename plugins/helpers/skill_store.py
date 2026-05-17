@@ -196,16 +196,6 @@ def validate_controls(controls, run_param_names: set[str]) -> list[dict]:
             yd = _coerce_number(c.get("y_default", 0.0), field="y_default")
             c["x_default"], c["y_default"] = xd, yd
             c["default"] = {xp: xd, yp: yd}
-            # Optional: name another slider param whose value scales the
-            # effective per-click step as step / 2^value. Makes panning feel
-            # constant-fractional when paired with a log-scaled zoom.
-            ssp = c.get("step_scale_param")
-            if ssp is not None:
-                if not isinstance(ssp, str) or ssp not in valid_params:
-                    raise SkillValidationError(
-                        f"pan '{c['name']}' step_scale_param must name a run() param"
-                    )
-                c["step_scale_param"] = ssp
         elif ctype == "button":
             action = c.get("action") or "randomize"
             if action not in _BUTTON_ACTIONS:

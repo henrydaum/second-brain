@@ -1,36 +1,48 @@
 SKILL_NAME = "Mandelbrot Explorer"
-SKILL_DESCRIPTION = "Interactive Mandelbrot set, palette-graded via continuous escape-time smoothing. Pan scales with zoom -- one click always moves the view by the same fraction of what you're looking at. Optimized for M1: complex64 working set, cardioid + period-2 bulb early-exit, and live-buffer compaction every 3 iterations. Params: cx (-2..1, default -0.5), cy (-1.5..1.5, default 0.0), zoom_exp (-1..18, default 0.0 -> 1x), detail (30..800 iterations, default 220)."
+SKILL_DESCRIPTION = "A guided tour of the Mandelbrot set's most famous landmarks. Pick a spot -- Seahorse Valley, Elephant Valley, the Mini Mandelbrot satellite, deep spiral galaxies -- and the view, zoom, and iteration depth are all dialed in for you. Pair with any palette to taste. Optimized for M1: complex64 working set, cardioid + period-2 bulb early-exit, and live-buffer compaction every 3 iterations."
 SKILL_KIND = "creation"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1730000000.0
 SKILL_CONTROLS = [
-    {"type": "pan", "name": "center", "label": "Pan",
-     "x_param": "cx", "y_param": "cy", "step": 0.3,
-     "x_default": -0.5, "y_default": 0.0,
-     "step_scale_param": "zoom_exp"},
-    {"type": "slider", "name": "zoom_exp", "label": "Zoom",
-     "min": -1.0, "max": 18.0, "step": 0.25, "default": 0.0},
-    {"type": "slider", "name": "detail", "label": "Detail",
-     "min": 30, "max": 800, "step": 10, "default": 220},
+    {"type": "enum", "name": "spot", "label": "Spot",
+     "options": [
+         {"value": "full",          "label": "Full Set"},
+         {"value": "seahorse",      "label": "Seahorse Valley"},
+         {"value": "elephant",      "label": "Elephant Valley"},
+         {"value": "triple_spiral", "label": "Triple Spiral"},
+         {"value": "mini",          "label": "Mini Mandelbrot"},
+         {"value": "spiral_galaxy", "label": "Spiral Galaxy"},
+     ],
+     "default": "full"},
     {"type": "palette", "name": "palette", "label": "Palette"},
 ]
 
 import numpy as np
 from PIL import Image
 
+# Curated sightseeing presets: (cx, cy, zoom_exp, detail). Each is the
+# canonical framing of a well-documented feature of the set.
+_SPOTS = {
+    "full":          (-0.5,      0.0,       0.0, 200),  # the whole set
+    "seahorse":      (-0.7453,   0.1127,    9.0, 400),  # west "valley" between cardioid and period-2 bulb
+    "elephant":      ( 0.2825,   0.01,      8.0, 400),  # east valley off the cardioid
+    "triple_spiral": (-0.088,    0.654,     8.0, 400),  # upper antenna, triple-armed spiral
+    "mini":          (-1.7548,   0.0,      10.0, 350),  # period-3 mini-Mandelbrot satellite on the negative real axis
+    "spiral_galaxy": (-0.74543,  0.11301,  12.0, 600),  # deep seahorse: galactic spirals
+}
 
-def run(canvas, cx=-0.5, cy=0.0, zoom_exp=0.0, detail=220, **_):
+
+def run(canvas, spot="full", **_):
+    cx, cy, zoom_exp, detail = _SPOTS.get(str(spot), _SPOTS["full"])
     s = int(canvas.size)
-    zoom_exp = float(zoom_exp)
     zoom = float(2.0 ** zoom_exp)
-    n_iter = int(art_kit.clamp(detail, 30, 800))
+    n_iter = int(detail)
 
-    # Past ~zoom_exp 10 float32 can't resolve a pixel, so step up to float64.
+    # Past zoom_exp 10 float32 can't resolve a pixel, so step up to float64.
     use_f64 = zoom_exp > 10.0
     cplx = np.complex128 if use_f64 else np.complex64
     real = np.float64 if use_f64 else np.float32
 
-    # 3-unit-wide window at zoom_exp=0 frames the canonical set.
     view = 3.0 / zoom
     half = view * 0.5
     re = np.linspace(cx - half, cx + half, s, dtype=real)
@@ -38,7 +50,7 @@ def run(canvas, cx=-0.5, cy=0.0, zoom_exp=0.0, detail=220, **_):
     R, I = np.meshgrid(re, im)
 
     # Cardioid + period-2 bulb tests skip the largest interior regions
-    # before any iteration -- this is what makes shallow renders feel instant.
+    # before any iteration. This is what makes the "full" preset instant.
     q = (R - 0.25) ** 2 + I * I
     in_cardioid = q * (q + (R - 0.25)) <= 0.25 * I * I
     in_bulb = (R + 1.0) ** 2 + I * I <= 0.0625
@@ -52,8 +64,8 @@ def run(canvas, cx=-0.5, cy=0.0, zoom_exp=0.0, detail=220, **_):
     C_live = (R + 1j * I).ravel()[live_idx].astype(cplx)
     Z_live = np.zeros_like(C_live)
 
-    # Smaller bailout (16) keeps |z|^2 well inside float32 range even with
-    # compact-every-3, while staying large enough for stable log-log smoothing.
+    # Bailout 16 (vs 256) keeps |z|^2 inside float32 across the 3-iter
+    # compaction window. The log-log smoothing is still well-defined.
     bailout2 = float(16 * 16) if not use_f64 else float(1 << 16)
     inv_log2 = 1.0 / np.log(2.0)
     compact_every = 3
@@ -75,11 +87,8 @@ def run(canvas, cx=-0.5, cy=0.0, zoom_exp=0.0, detail=220, **_):
                     if live_idx.size == 0:
                         break
 
-    # Anything still alive after n_iter is interior.
     inside_flat[live_idx] = True
 
-    # Perceptual log remap keeps the gradient vivid at deep zooms where raw
-    # escape counts cluster near the iteration cap.
     valid = ~inside_flat
     t = np.zeros_like(out_flat)
     if valid.any():
