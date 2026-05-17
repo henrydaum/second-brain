@@ -196,6 +196,16 @@ def validate_controls(controls, run_param_names: set[str]) -> list[dict]:
             yd = _coerce_number(c.get("y_default", 0.0), field="y_default")
             c["x_default"], c["y_default"] = xd, yd
             c["default"] = {xp: xd, yp: yd}
+            # Optional: name another slider param whose value scales the
+            # effective per-click step as step / 2^value. Makes panning feel
+            # constant-fractional when paired with a log-scaled zoom.
+            ssp = c.get("step_scale_param")
+            if ssp is not None:
+                if not isinstance(ssp, str) or ssp not in valid_params:
+                    raise SkillValidationError(
+                        f"pan '{c['name']}' step_scale_param must name a run() param"
+                    )
+                c["step_scale_param"] = ssp
         elif ctype == "button":
             action = c.get("action") or "randomize"
             if action not in _BUTTON_ACTIONS:
@@ -353,7 +363,14 @@ def _load_skill_from_path(path: Path) -> Skill | None:
     code_body = _strip_metadata(source)
     slug = path.name.rsplit(".skill.py", 1)[0]
     raw_controls = meta.get("SKILL_CONTROLS")
-    controls = list(raw_controls) if isinstance(raw_controls, list) else []
+    raw_list = list(raw_controls) if isinstance(raw_controls, list) else []
+    # Normalize on load so hand-written skills get the same defaulting as
+    # ones created via create_skill -- notably, palette controls without an
+    # explicit name get name="palette" so schema lookups work.
+    try:
+        controls = validate_controls(raw_list, _run_param_names(code_body))
+    except SkillValidationError:
+        controls = raw_list
     return Skill(
         slug=slug,
         path=str(path.resolve()),
