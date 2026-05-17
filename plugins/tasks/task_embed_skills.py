@@ -7,7 +7,7 @@ from pathlib import Path
 
 from plugins.BaseTask import BaseTask, TaskResult
 from plugins.helpers.skill_store import metadata_from_source
-from paths import SKILLS_DIR
+from paths import SKILLS_DIR, BUILT_IN_SKILLS_DIR
 
 
 class EmbedSkills(BaseTask):
@@ -38,7 +38,9 @@ class EmbedSkills(BaseTask):
         skills = []
         for raw in paths:
             p = Path(raw)
-            if SKILLS_DIR.resolve() not in p.resolve().parents or not p.name.endswith(".skill.py"):
+            parents = set(p.resolve().parents)
+            in_dir = SKILLS_DIR.resolve() in parents or BUILT_IN_SKILLS_DIR.resolve() in parents
+            if not in_dir or not p.name.endswith(".skill.py"):
                 skills.append(None); continue
             try:
                 src = p.read_text(encoding="utf-8")

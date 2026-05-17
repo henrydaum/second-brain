@@ -17,7 +17,17 @@ class SearchSkills(BaseTool):
 
     def run(self, context, **kwargs) -> ToolResult:
         query, kind, top_k = str(kwargs.get("query") or ""), kwargs.get("kind"), int(kwargs.get("top_k") or 5)
-        rows = _db_search(context, query, top_k, kind) or skill_store.search_skills(query, top_k=top_k, kind=kind, text_embedder=context.services.get("text_embedder"))
+        # Merge DB results (indexed by the embed_skills task) with in-memory
+        # results (covers built-in skills before the indexer has run). Dedupe by
+        # slug, keep the higher score.
+        merged: dict[str, dict] = {}
+        for row in _db_search(context, query, top_k, kind):
+            merged[row["slug"]] = row
+        for row in skill_store.search_skills(query, top_k=top_k, kind=kind, text_embedder=context.services.get("text_embedder")):
+            prev = merged.get(row["slug"])
+            if prev is None or row["score"] > prev["score"]:
+                merged[row["slug"]] = row
+        rows = sorted(merged.values(), key=lambda r: r["score"], reverse=True)[:top_k]
         return ToolResult(data=rows, llm_summary=("No matching skills found." if not rows else "Matching skills:\n" + "\n".join(f"- {r['slug']} ({r['kind']}, score {r['score']:.2f}): {r['description']}" for r in rows)))
 
 

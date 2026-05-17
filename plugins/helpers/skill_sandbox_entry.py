@@ -14,6 +14,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from plugins.helpers.skill_store import validate_skill_code
+from plugins.helpers.art_kit import build_namespace as _build_art_kit
 
 ALLOWED = {"math", "random", "colorsys", "numpy", "PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFilter", "PIL.ImageOps", "PIL.ImageEnhance", "PIL.ImageChops", "PIL.ImageColor"}
 
@@ -90,7 +91,8 @@ def main():
     canvas = Canvas(job)
     safe = {k: getattr(_builtins, k) for k in ("abs", "all", "any", "bool", "dict", "enumerate", "Exception", "filter", "float", "int", "len", "list", "map", "max", "min", "pow", "range", "round", "set", "sorted", "str", "sum", "tuple", "ValueError", "zip")}
     safe.update({"__import__": _import, "print": lambda *a, **k: None})
-    ns = {"__builtins__": safe, "__name__": "__skill__"}
+    art_kit = _build_art_kit(canvas.palette)
+    ns = {"__builtins__": safe, "__name__": "__skill__", "art_kit": art_kit}
     exec(job["code"], ns, ns)
     result = ns["run"](canvas, **(job.get("params") or {}))
     if canvas._committed is None and isinstance(result, Image.Image):

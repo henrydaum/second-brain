@@ -21,7 +21,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Iterable
 
-from paths import SKILLS_DIR
+from paths import SKILLS_DIR, BUILT_IN_SKILLS_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +130,32 @@ def slugify(name: str) -> str:
 
 
 def _path_for(slug: str) -> Path:
+    """Writable path for a slug. Writes always go to the sandbox dir; the
+    built-in directory is read-only from the store's perspective."""
     return SKILLS_DIR / f"{slug}.skill.py"
+
+
+def _is_built_in(path: Path) -> bool:
+    try:
+        return BUILT_IN_SKILLS_DIR.resolve() in Path(path).resolve().parents
+    except Exception:
+        return False
+
+
+def _iter_skill_paths() -> Iterable[Path]:
+    """Yield every skill file from both the sandbox and built-in dirs.
+
+    Sandbox files come first so collision-dedupe (by slug) keeps the user/agent
+    override when one exists.
+    """
+    seen: set[str] = set()
+    for root in (SKILLS_DIR, BUILT_IN_SKILLS_DIR):
+        for path in root.glob("*.skill.py"):
+            slug = path.name.rsplit(".skill.py", 1)[0]
+            if slug in seen:
+                continue
+            seen.add(slug)
+            yield path
 
 
 def _format_skill_file(skill: Skill) -> str:
@@ -232,7 +257,7 @@ def _ensure_embeddings(text_embedder) -> None:
     """Reconcile the in-memory embedding cache against on-disk skills."""
     with _emb_lock:
         existing_slugs = set()
-        for path in SKILLS_DIR.glob("*.skill.py"):
+        for path in _iter_skill_paths():
             skill = _load_skill_from_path(path)
             if skill is None:
                 continue
@@ -272,7 +297,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 def list_skills() -> list[Skill]:
     out: list[Skill] = []
-    for path in SKILLS_DIR.glob("*.skill.py"):
+    for path in _iter_skill_paths():
         skill = _load_skill_from_path(path)
         if skill is not None:
             out.append(skill)
@@ -281,10 +306,13 @@ def list_skills() -> list[Skill]:
 
 
 def read_skill(slug: str) -> Skill | None:
-    path = _path_for(slug)
-    if not path.is_file():
-        return None
-    return _load_skill_from_path(path)
+    sandbox = _path_for(slug)
+    if sandbox.is_file():
+        return _load_skill_from_path(sandbox)
+    built_in = BUILT_IN_SKILLS_DIR / f"{slug}.skill.py"
+    if built_in.is_file():
+        return _load_skill_from_path(built_in)
+    return None
 
 
 def write_skill(
@@ -320,6 +348,11 @@ def update_skill(
     existing = read_skill(slug)
     if existing is None:
         raise FileNotFoundError(f"no skill named '{slug}'")
+    if _is_built_in(existing.path):
+        raise PermissionError(
+            f"'{slug}' is a built-in skill and is read-only. Create a new skill "
+            f"(e.g. '{slug}_v2') to fork it."
+        )
     if existing.owner and existing.owner != owner:
         raise PermissionError(f"only owner '{existing.owner}' can update this skill")
     new_name = name if name is not None else existing.name
@@ -344,6 +377,8 @@ def delete_skill(slug: str, *, owner: str) -> bool:
     existing = read_skill(slug)
     if existing is None:
         return False
+    if _is_built_in(existing.path):
+        raise PermissionError(f"'{slug}' is a built-in skill and cannot be deleted.")
     if existing.owner and existing.owner != owner:
         raise PermissionError(f"only owner '{existing.owner}' can delete this skill")
     try:

@@ -42,6 +42,11 @@ ATTACHMENT_CACHE.mkdir(parents=True, exist_ok=True)
 SKILLS_DIR = DATA_DIR / "skills"
 SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
+# Baked-in skill library shipped with the repo. Sandbox slugs in SKILLS_DIR
+# override built-ins on collision so users/agent can fork-and-edit freely.
+BUILT_IN_SKILLS_DIR = ROOT_DIR / "skills"
+BUILT_IN_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 def open_file(path):
     """Open a file or folder with the system's default handler."""
