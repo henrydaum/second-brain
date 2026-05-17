@@ -550,7 +550,7 @@ async function postControl(body) {
 function esc(x) { return String(x ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
 // ----- Canvas loader: particle field + chain-progress arc -----
-const loadCanvas = document.querySelector("#loadCanvas");
+const loaderCanvasEl = document.querySelector("#loadCanvas");
 const progressArc = document.querySelector("#progressArc");
 const progressFill = progressArc.querySelector(".fill");
 let userTickets = 0;
@@ -671,9 +671,9 @@ function particleInit() {
   refreshAccentRgb();
   if (!nGrid) noiseInit();
   const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-  pW = loadCanvas.width = Math.max(2, Math.floor(loadCanvas.clientWidth * dpr));
-  pH = loadCanvas.height = Math.max(2, Math.floor(loadCanvas.clientHeight * dpr));
-  particleCtx = loadCanvas.getContext("2d");
+  pW = loaderCanvasEl.width = Math.max(2, Math.floor(loaderCanvasEl.clientWidth * dpr));
+  pH = loaderCanvasEl.height = Math.max(2, Math.floor(loaderCanvasEl.clientHeight * dpr));
+  particleCtx = loaderCanvasEl.getContext("2d");
   particleCtx.fillStyle = "rgba(8,9,13,1)";
   particleCtx.fillRect(0, 0, pW, pH);
   particles = [];
