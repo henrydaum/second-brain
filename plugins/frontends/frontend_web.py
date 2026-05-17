@@ -43,8 +43,7 @@ WEB_TOOLS = [
     "delete_skill",
     "execute_skill",
     "read_skill",
-    "read_skill_guide",
-    "request_user_feedback",
+    "read_skill_guide"
 ]
 
 
@@ -651,6 +650,38 @@ class WebFrontend(BaseFrontend):
             lc.replace_state(key, before)
             return [{"type": "error", "content": f"Control replay failed: {e}"}]
 
+    def delete_layer(self, session_id: str, chain_index: int) -> list[dict]:
+        """Remove one entry from the chain and re-render. Deleting index 0 clears the canvas."""
+        key = self.session_key(session_id)
+        before = lc.get_state(key)
+        chain = list(before.get("last_chain") or [])
+        if not (0 <= chain_index < len(chain)):
+            return [{"type": "error", "content": "That layer no longer exists."}]
+        if chain_index == 0:
+            lc.reset(key)
+            return [{"type": "canvas_reset"}]
+        trimmed = chain[:chain_index] + chain[chain_index + 1:]
+        out = lc.image_path(key).with_name("_layer_delete.png")
+        try:
+            replay_chain(
+                trimmed,
+                palette=get_palette(before.get("palette_id")),
+                size=int(before.get("size") or lc.DEFAULT_SIZE),
+                output_image_path=out,
+                workdir=out.parent,
+                skill_loader=read_skill,
+            )
+            with Image.open(out) as img:
+                lc.commit_image(key, img.convert("RGBA"), f"layer_delete:{chain_index}", None)
+            new_state = lc.get_state(key)
+            new_state["last_chain"] = trimmed
+            lc.replace_state(key, new_state)
+            c = canvas(key)
+            return [{"type": "hero_image", "url": _file_url(Path(c["path"])), "name": Path(c["path"]).name, "canvas": _canvas_payload_full(key, c)}] if c and c.get("path") else []
+        except Exception as e:
+            lc.replace_state(key, before)
+            return [{"type": "error", "content": f"Delete layer failed: {e}"}]
+
     def share(self, session_id: str, title: str, artist: str) -> list[dict]:
         key = self.session_key(session_id)
         snapshot = canvas(key) or {}
@@ -673,11 +704,41 @@ class WebFrontend(BaseFrontend):
             raise ValueError("That gallery image is not available to remix.")
         key = self.session_key(session_id)
         meta = read_json(p.with_suffix(".json"))
-        reset_canvas(key); set_current(key, p, False, {"kind": "remix", **meta})
-        # Attribute the remix to the source image's chain (stored in its sidecar).
+        reset_canvas(key)
         source_chain = list(meta.get("chain") or [])
+        chain_restored = False
+        restore_note = ""
+        if source_chain:
+            missing = [s.get("slug") for s in source_chain if not read_skill(s.get("slug") or "")]
+            if not missing:
+                try:
+                    state = lc.get_state(key)
+                    out = lc.image_path(key)
+                    replay_chain(
+                        source_chain,
+                        palette=get_palette(state.get("palette_id")),
+                        size=int(state.get("size") or lc.DEFAULT_SIZE),
+                        output_image_path=out,
+                        workdir=out.parent,
+                        skill_loader=read_skill,
+                    )
+                    with Image.open(out) as img:
+                        lc.commit_image(key, img.convert("RGBA"), "remix", None)
+                    new_state = lc.get_state(key)
+                    new_state["last_chain"] = source_chain
+                    lc.replace_state(key, new_state)
+                    chain_restored = True
+                except Exception as e:
+                    logger.exception("remix chain replay failed: %s", e)
+                    restore_note = " (couldn't rebuild layers — opening as a flat image)"
+            else:
+                restore_note = " (couldn't rebuild layers — opening as a flat image)"
+        if not chain_restored:
+            set_current(key, p, False, {"kind": "remix", **meta})
         skill_scoring.record_event(getattr(self.runtime, "db", None), "remix", source_chain, str(p))
-        return [_image_event(p, canvas(key)), {"type": "message", "role": "assistant", "content": "Remix loaded. Tell me how to mutate it."}]
+        c = canvas(key)
+        img_path = Path(c["path"]) if c and c.get("path") else p
+        return [_image_event(img_path, _canvas_payload_full(key, c)), {"type": "message", "role": "assistant", "content": f"Remix loaded.{restore_note} Tell me how to mutate it."}]
 
     def download(self, session_id: str) -> list[dict]:
         """Fire-and-forget signal: user clicked Download for the current canvas."""
@@ -840,6 +901,8 @@ class _Handler(BaseHTTPRequestHandler):
                     body.get("value"),
                     str(body.get("action") or ""),
                 )})
+            if self.path == "/api/layer_delete":
+                return self._json({"ok": True, "events": self.server.frontend.delete_layer(sid, int(body.get("chain_index") or 0))})
         except Exception as e:
             logger.exception("Web request failed")
             return self._json({"ok": False, "events": [{"type": "error", "content": str(e)}]}, 500)
@@ -998,8 +1061,12 @@ def _canvas_payload_full(session_key: str, state: dict | None) -> dict:
         return base
     chain = state.get("chain") or state.get("last_chain") or []
     panels = []
+    layers = []
     for idx, step in enumerate(chain):
         skill = read_skill(step.get("slug") or "")
+        slug = step.get("slug") or ""
+        name = skill.name if skill else slug
+        layers.append({"chain_index": idx, "slug": slug, "skill_name": name, "kind": step.get("kind") or (skill.kind if skill else "")})
         if not skill or not skill.controls:
             continue
         panels.append({
@@ -1011,6 +1078,7 @@ def _canvas_payload_full(session_key: str, state: dict | None) -> dict:
             "seed": int(step.get("seed") or 0),
         })
     base["controls_panels"] = panels
+    base["layers"] = layers
     return base
 
 

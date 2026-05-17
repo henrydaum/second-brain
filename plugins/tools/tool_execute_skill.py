@@ -33,6 +33,8 @@ class ExecuteSkill(BaseTool):
         state = lc.get_state(session_key)
         if skill.kind == "transform" and not state.get("image_path"):
             return ToolResult.failed("Transform skills require a current canvas image.")
+        if skill.kind == "transform" and len(state.get("last_chain") or []) >= lc.MAX_CHAIN_LENGTH:
+            return ToolResult.failed(f"Chain is at the {lc.MAX_CHAIN_LENGTH}-layer cap — ask the user to delete a layer before adding another.")
         seed = int(params.get("seed") or random.randint(1, 2_147_483_647))
         # Seed user-facing controls from the skill's declared defaults; the agent's
         # initial params win over any default that collides.

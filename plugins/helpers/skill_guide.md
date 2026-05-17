@@ -168,7 +168,9 @@ A single creation rarely produces a finished image. The high-quality pattern is:
 3. **One of `bloom_glow`, `vignette`, `film_grain`, or `sharpen`** — adds
    atmosphere or finishes detail.
 
-Keep transform chains ≤3 deep so palette re-render stays snappy.
+Keep transform chains ≤3 deep so palette re-render stays snappy. The runtime
+enforces a hard cap of 4 total chain entries (1 creation + 3 transforms); past
+that, `execute_skill` errors and the user must delete a layer first.
 
 ---
 

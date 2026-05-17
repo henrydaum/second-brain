@@ -16,6 +16,7 @@ const shareTitle = document.querySelector("#shareTitle");
 const shareArtist = document.querySelector("#shareArtist");
 const gallery = document.querySelector("#gallery");
 const controlsPanel = document.querySelector("#controlsPanel");
+const layersStack = document.querySelector("#layersStack");
 const NEAR_BOTTOM_PX = 80;
 let palettesCache = [];
 let currentControlsPanels = [];
@@ -229,6 +230,7 @@ promoForm.addEventListener("submit", async e => {
 })();
 function setCanvas(c) {
   renderControlsPanel(c?.controls_panels || []);
+  renderLayersStack(c?.layers || []);
   if (!c?.url) {
     showcase.classList.remove("has-image"); heroImage.classList.remove("fading"); heroImage.removeAttribute("src"); downloadImage.href = "#";
     return;
@@ -272,6 +274,11 @@ function renderControlsPanel(panels) {
   }
   controlsPanel.hidden = false;
   controlsPanel.innerHTML = currentControlsPanels.map(renderPanel).join("");
+}
+function renderLayersStack(layers) {
+  if (!layers.length) { layersStack.hidden = true; layersStack.innerHTML = ""; return; }
+  layersStack.hidden = false;
+  layersStack.innerHTML = layers.map(l => `<div class="layer-chip" title="${esc(l.skill_name)}"><button type="button" class="layer-face" data-chain="${l.chain_index}">${l.chain_index + 1}</button><button type="button" class="layer-x" data-chain="${l.chain_index}" aria-label="Delete layer ${l.chain_index + 1}">×</button></div>`).join("");
 }
 function renderPanel(panel) {
   const widgets = (panel.schema || []).map(spec => renderWidget(panel, spec)).join("");
@@ -417,6 +424,23 @@ controlsPanel.addEventListener("click", e => {
   if (target.matches(".ctl-btn")) {
     postControl({chain_index: +target.dataset.chain, name: target.dataset.name, value: null});
   }
+});
+layersStack.addEventListener("click", async e => {
+  const x = e.target.closest(".layer-x");
+  if (!x) return;
+  const chain = +x.dataset.chain;
+  if (Number.isNaN(chain)) return;
+  try { render((await post("/api/layer_delete", {chain_index: chain})).events); }
+  catch (err) { add("error", err.message); }
+});
+layersStack.addEventListener("keydown", e => {
+  if (e.key !== "Delete" && e.key !== "Backspace") return;
+  const face = e.target.closest(".layer-face");
+  if (!face) return;
+  e.preventDefault();
+  const chain = +face.dataset.chain;
+  if (Number.isNaN(chain)) return;
+  post("/api/layer_delete", {chain_index: chain}).then(r => render(r.events)).catch(err => add("error", err.message));
 });
 setInterval(poll, 1200);
 loadPalettes(); loadCanvas(); loadGallery(); refreshAccount();

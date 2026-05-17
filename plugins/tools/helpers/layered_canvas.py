@@ -25,6 +25,7 @@ COMPOSITE_DIR = CANVAS_ROOT / "composites"
 DEFAULT_SIZE = 768
 MIN_SIZE = 256
 MAX_SIZE = 1536
+MAX_CHAIN_LENGTH = 4
 
 _state_lock = threading.RLock()
 

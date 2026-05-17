@@ -45,6 +45,14 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .showcase.has-image #heroImage.fading { opacity: 0; filter: saturate(1.4) contrast(1.15) blur(6px); }
 .showcase.has-image #fractal { display: none; }
 .showcase.has-image #heroImage { display: block; }
+.layers-stack { position: absolute; left: 22px; top: 22px; z-index: 3; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+.layers-stack[hidden] { display: none; }
+.layer-chip { position: relative; pointer-events: auto; }
+.layer-face { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 28px; border: 1px solid rgba(255,255,255,.32); background: rgba(5,7,12,.7); color: var(--text); font-weight: 800; font-size: 13px; cursor: pointer; transform: skewX(-18deg); backdrop-filter: blur(8px); transition: background 160ms ease, border-color 160ms ease; padding: 0; }
+.layer-face:hover, .layer-face:focus-visible { background: rgba(20,26,38,.92); border-color: rgba(255,255,255,.55); outline: none; }
+.layer-x { position: absolute; right: -8px; top: -6px; width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(255,255,255,.45); background: rgba(20,8,8,.92); color: #fff; font-size: 12px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity 140ms ease; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.layer-chip:hover .layer-x, .layer-chip:focus-within .layer-x, .layer-x:focus-visible { opacity: 1; }
+.layer-x:hover { background: #b22; }
 .canvas-actions { display: none; position: absolute; right: 22px; top: 22px; z-index: 2; gap: 8px; }
 .showcase.has-image .canvas-actions { display: flex; }
 .canvas-actions a, .canvas-actions button { font-weight: 800; }
