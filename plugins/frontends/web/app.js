@@ -13,18 +13,37 @@ const gallery = document.querySelector("#gallery");
 const paletteStrip = document.querySelector("#paletteStrip");
 const NEAR_BOTTOM_PX = 80;
 let currentPalette = "";
+const toolStatusEls = new Map();
 const atBottom = () => messages.scrollHeight - messages.scrollTop - messages.clientHeight < NEAR_BOTTOM_PX;
 const bottom = (force = false) => {
   const stick = force || atBottom();
   if (stick) requestAnimationFrame(() => messages.scrollTop = messages.scrollHeight);
 };
-const add = (role, text) => {
+const add = (role, text, useMd = false) => {
   const el = document.createElement("article");
   el.className = role;
-  el.textContent = text;
+  if (useMd) el.innerHTML = mdToHtml(text);
+  else el.textContent = text;
   messages.appendChild(el);
   bottom();
+  return el;
 };
+function mdToHtml(src) {
+  let s = String(src ?? "").replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
+  s = s.replace(/```([\s\S]*?)```/g, (_, c) => `<pre><code>${c.replace(/^\n/, "")}</code></pre>`);
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__([^_\n]+)__/g, '<strong>$1</strong>');
+  s = s.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?;:]|$)/g, '$1<em>$2</em>');
+  s = s.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?;:]|$)/g, '$1<em>$2</em>');
+  s = s.replace(/^(#{1,3})\s+(.+)$/gm, (_, h, t) => `<h${h.length + 2}>${t}</h${h.length + 2}>`);
+  s = s.replace(/(?:^|\n)((?:- .+(?:\n|$))+)/g, m => {
+    const items = m.trim().split(/\n/).map(l => `<li>${l.replace(/^- /, "")}</li>`).join("");
+    return `\n<ul>${items}</ul>`;
+  });
+  return s;
+}
 async function post(url, body = {}) {
   const res = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({session_id:sid, ...body})});
   return res.json();
@@ -47,10 +66,30 @@ function approval(ev) {
   messages.appendChild(el);
   bottom();
 }
+function renderToolStatus(ev) {
+  const id = ev.call_id || `${ev.name}:${Date.now()}`;
+  let el = toolStatusEls.get(id);
+  if (!el) {
+    el = document.createElement("article");
+    el.className = "status tool-status running";
+    messages.appendChild(el);
+    toolStatusEls.set(id, el);
+  }
+  const finished = ev.status === "finished";
+  const failed = finished && (ev.ok === false || !!ev.error);
+  const glyph = failed ? "✕" : finished ? "✓" : "⋯";
+  el.classList.toggle("running", !finished);
+  el.classList.toggle("done", finished && !failed);
+  el.classList.toggle("failed", failed);
+  el.textContent = `${glyph} ${ev.name}${failed && ev.error ? ` — ${ev.error}` : ""}`;
+  if (finished) toolStatusEls.delete(id);
+  bottom();
+}
 function render(events) {
   for (const ev of events || []) {
-    if (ev.type === "message") add("assistant", ev.content);
+    if (ev.type === "message") add("assistant", ev.content, true);
     else if (ev.type === "status") add("status", ev.content);
+    else if (ev.type === "tool_status") renderToolStatus(ev);
     else if (ev.type === "error") add("error", ev.content);
     else if (ev.type === "form") add("assistant", `${ev.form?.display?.prompt || "Input required"}\n${(ev.form?.display?.choices || []).map(c => c.label || c.value).join(" / ")}`);
     else if (ev.type === "approval") approval(ev);
@@ -116,13 +155,30 @@ form.addEventListener("submit", async e => {
 });
 document.querySelector("#newChat").addEventListener("click", async () => {
   messages.innerHTML = "";
+  toolStatusEls.clear();
   render((await post("/api/new")).events);
   loadGallery();
 });
 shareBtn.addEventListener("click", () => { sharePanel.hidden = !sharePanel.hidden; shareTitle.value ||= "untitled"; shareArtist.value ||= "anonymous"; });
 document.querySelector("#shareConfirm").addEventListener("click", async () => render((await post("/api/share", {title:shareTitle.value, artist:shareArtist.value})).events));
 gallery.addEventListener("click", async e => { if (e.target.matches("button[data-path]")) { render((await post("/api/remix", {path:e.target.dataset.path})).events); scrollTo({top:0, behavior:"smooth"}); } });
-paletteStrip.addEventListener("click", async e => { if (e.target.matches("button[data-palette]")) render((await post("/api/palette", {palette_id:e.target.dataset.palette})).events); });
+paletteStrip.addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-palette]");
+  if (!btn || paletteStrip.classList.contains("loading")) return;
+  const buttons = paletteStrip.querySelectorAll("button");
+  paletteStrip.classList.add("loading");
+  buttons.forEach(b => b.disabled = true);
+  btn.classList.add("loading");
+  try {
+    render((await post("/api/palette", {palette_id:btn.dataset.palette})).events);
+  } catch (err) {
+    add("error", err.message);
+  } finally {
+    paletteStrip.classList.remove("loading");
+    buttons.forEach(b => b.disabled = false);
+    btn.classList.remove("loading");
+  }
+});
 setInterval(poll, 1200);
 loadPalettes(); loadCanvas(); loadGallery();
 

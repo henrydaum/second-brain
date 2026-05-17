@@ -185,12 +185,14 @@ class WebFrontend(BaseFrontend):
 
     def render_tool_status(self, session_key: str, payload: dict) -> None:
         name = payload.get("tool_name") or payload.get("command_name") or "tool"
-        status = payload.get("status", "running")
-        error = payload.get("error")
-        if status == "finished" and payload.get("ok") is False and error:
-            self._push(session_key, {"type": "error", "content": f"{name} failed: {error}"})
-        else:
-            self._push(session_key, {"type": "status", "content": f"{name}: {status}"})
+        self._push(session_key, {
+            "type": "tool_status",
+            "call_id": payload.get("call_id"),
+            "name": name,
+            "status": payload.get("status", "running"),
+            "ok": payload.get("ok"),
+            "error": payload.get("error"),
+        })
 
     def _live_session_keys(self) -> list[str]:
         return [k for k in getattr(self.runtime, "sessions", {}) if k.startswith("web:")]
