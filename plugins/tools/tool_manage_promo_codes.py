@@ -34,7 +34,7 @@ class ManagePromoCodes(BaseTool):
             },
             "credits": {"type": "integer", "description": "Credits to grant (for create_credits)."},
             "note": {"type": "string", "description": "Human-readable note attached to the code."},
-            "code": {"type": "string", "description": "Code to delete (for op=delete)."},
+            "code": {"type": "string", "description": "On create: custom code to use (leave blank for random). On delete: the code to remove."},
         },
         "required": ["op"],
     }
@@ -47,9 +47,12 @@ class ManagePromoCodes(BaseTool):
         if db is None:
             return ToolResult.failed("Database not available.")
         note = (kwargs.get("note") or "").strip()
+        custom_code = (kwargs.get("code") or "").strip()
 
         if op == "create_unlimited":
-            code = _mint_code()
+            code = custom_code or _mint_code()
+            if _code_exists(db, code):
+                return ToolResult.failed(f"Code '{code}' already exists.")
             with db.lock:
                 db.conn.execute(
                     "INSERT INTO web_promo_codes (code, kind, credits, max_uses, uses, created_at, note) "
@@ -63,7 +66,9 @@ class ManagePromoCodes(BaseTool):
             amt = int(kwargs.get("credits") or 0)
             if amt <= 0:
                 return ToolResult.failed("credits must be a positive integer.")
-            code = _mint_code()
+            code = custom_code or _mint_code()
+            if _code_exists(db, code):
+                return ToolResult.failed(f"Code '{code}' already exists.")
             with db.lock:
                 db.conn.execute(
                     "INSERT INTO web_promo_codes (code, kind, credits, max_uses, uses, created_at, note) "
@@ -96,3 +101,9 @@ class ManagePromoCodes(BaseTool):
 
 def _mint_code() -> str:
     return secrets.token_urlsafe(9)
+
+
+def _code_exists(db, code: str) -> bool:
+    with db.lock:
+        row = db.conn.execute("SELECT 1 FROM web_promo_codes WHERE code = ?", (code,)).fetchone()
+    return row is not None

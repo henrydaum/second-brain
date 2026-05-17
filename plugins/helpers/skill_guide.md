@@ -172,7 +172,50 @@ Keep transform chains ≤3 deep so palette re-render stays snappy.
 
 ---
 
-## 8. Common pitfalls
+## 8. Declaring user-facing controls (optional but encouraged)
+
+A skill may expose up to **3 non-palette controls** plus an optional palette
+control to the user. These render as widgets on the canvas — sliders, toggles,
+arrow pads, etc. — and re-run the skill chain whenever the user adjusts one.
+Used well, controls turn near-miss completions into successes without another
+agent turn.
+
+Pass `controls` to `create_skill`. Every control name (except `palette`) must
+correspond to a keyword parameter of your `run(canvas, ...)` function — or be
+`seed` (which lives on the chain entry).
+
+```python
+controls = [
+    {"type": "slider", "name": "zoom", "label": "Zoom",
+     "min": 0.1, "max": 20.0, "step": 0.1, "default": 1.0},
+    {"type": "pan", "name": "center", "label": "Pan",
+     "x_param": "cx", "y_param": "cy", "step": 0.1,
+     "x_default": -0.5, "y_default": 0.0},
+    {"type": "palette"},
+]
+```
+
+Control types — keep things general-purpose; one widget should map cleanly to
+one knob the user wants to turn:
+
+| type     | Schema                                                          | Notes |
+|----------|-----------------------------------------------------------------|-------|
+| `slider` | `name, label, min, max, step, default` (numeric)                | Sets one numeric run param. |
+| `enum`   | `name, label, options:[{value,label}], default`                 | Sets one param to a discrete value. |
+| `bool`   | `name, label, default`                                          | Sets one boolean run param. |
+| `pan`    | `name, label, x_param, y_param, step, x_default, y_default`     | Two-axis arrow pad; updates both params together. |
+| `button` | `name, label, param, action:"randomize"`                        | One-shot action; the only action today is `randomize` (rolls a new value for `param`, usually `seed`). |
+| `palette`| no extras                                                       | Lets the user swap the canvas palette for this entry. Doesn't count toward the cap. |
+
+**Pick controls that generalize.** A `zoom` slider works for fractals, tilings,
+spirals — anything where a scale matters. A `density` slider works for fields
+of dots, lines, or strokes. Reach for these abstract dials before you reach
+for skill-specific ones.
+
+Prefer to include a `palette` control on creation skills — it lets users
+explore color choices freely instead of being locked into whatever palette the
+agent picked.
+## 9. Common pitfalls
 
 - Forgetting `canvas.commit(image)` → the runtime errors. Always commit.
 - Calling `canvas.image` in a creation skill → raises ValueError. Use

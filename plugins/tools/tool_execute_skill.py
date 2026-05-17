@@ -12,7 +12,7 @@ from PIL import Image
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.helpers.palettes import get_palette
 from plugins.helpers import skill_scoring
-from plugins.helpers.skill_runner import SkillRunError, make_chain_entry, run_skill
+from plugins.helpers.skill_runner import SkillRunError, default_controls, make_chain_entry, resolve_entry, run_skill
 from plugins.helpers.skill_store import read_skill
 from plugins.tools.helpers import layered_canvas as lc
 
@@ -34,11 +34,18 @@ class ExecuteSkill(BaseTool):
         if skill.kind == "transform" and not state.get("image_path"):
             return ToolResult.failed("Transform skills require a current canvas image.")
         seed = int(params.get("seed") or random.randint(1, 2_147_483_647))
+        # Seed user-facing controls from the skill's declared defaults; the agent's
+        # initial params win over any default that collides.
+        controls = default_controls(skill)
+        if any(c.get("type") == "palette" for c in (skill.controls or [])):
+            controls["palette"] = state.get("palette_id")
+        controls.update({k: v for k, v in params.items() if k in controls})
+        entry = make_chain_entry(skill, params, seed, controls=controls)
+        merged_params, step_palette = resolve_entry(entry, fallback_palette=get_palette(state.get("palette_id")))
         tmp = lc.image_path(session_key).with_name(f"_skill_{slug}_{int(time.time()*1000)}.png")
         try:
-            run_skill(skill, params=params, palette=get_palette(state.get("palette_id")), size=int(state.get("size") or lc.DEFAULT_SIZE), seed=seed, input_image_path=Path(state["image_path"]) if state.get("image_path") else None, output_image_path=tmp)
+            run_skill(skill, params=merged_params, palette=step_palette, size=int(state.get("size") or lc.DEFAULT_SIZE), seed=seed, input_image_path=Path(state["image_path"]) if state.get("image_path") else None, output_image_path=tmp)
             with Image.open(tmp) as img:
-                entry = {**make_chain_entry(skill, params, seed), "palette_id": state.get("palette_id")}
                 new_state = lc.commit_image(session_key, img.convert("RGBA"), f"skill:{slug}", entry)
             final = lc.canvas(session_key)["path"]
             # Log a per-skill generation row (denominator for share-rate stats).

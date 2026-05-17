@@ -15,11 +15,11 @@ class UpdateSkill(BaseTool):
     name = "update_skill"
     description = "Update a canvas skill you own. Everyone can execute skills, but only the owner can edit them."
     max_calls = 3
-    parameters = {"type": "object", "properties": {"slug": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "code": {"type": "string"}}, "required": ["slug"]}
+    parameters = {"type": "object", "properties": {"slug": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "code": {"type": "string"}, "controls": {"type": "array", "items": {"type": "object"}, "description": "Replace the skill's controls list (same shape as create_skill). Omit to leave unchanged."}}, "required": ["slug"]}
 
     def run(self, context, **kwargs) -> ToolResult:
         try:
-            skill = skill_store.update_skill(str(kwargs.get("slug") or ""), owner=_owner(context), name=kwargs.get("name"), description=kwargs.get("description"), code=kwargs.get("code"), text_embedder=context.services.get("text_embedder"))
+            skill = skill_store.update_skill(str(kwargs.get("slug") or ""), owner=_owner(context), name=kwargs.get("name"), description=kwargs.get("description"), code=kwargs.get("code"), controls=kwargs.get("controls"), text_embedder=context.services.get("text_embedder"))
             _notify(context, skill.path)
             return ToolResult(data=skill.to_dict(), llm_summary=f"Updated skill '{skill.slug}'.")
         except Exception as e:

@@ -13,9 +13,24 @@ logger = logging.getLogger("SkillTools")
 
 class CreateSkill(BaseTool):
     name = "create_skill"
-    description = "Create a Python canvas skill. Code must define run(canvas, **params), use canvas.palette slots, and call canvas.commit(image)."
+    description = "Create a Python canvas skill. Code must define run(canvas, **params), use canvas.palette slots, and call canvas.commit(image). Optionally declare up to 3 user-facing controls (slider/enum/bool/pan/button) plus an optional palette control via the 'controls' arg — these appear in the UI and let the user fine-tune the result without another agent turn."
     max_calls = 4
-    parameters = {"type": "object", "properties": {"name": {"type": "string"}, "description": {"type": "string"}, "kind": {"type": "string", "enum": ["creation", "transform"]}, "code": {"type": "string"}}, "required": ["name", "description", "kind", "code"]}
+    parameters = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+            "kind": {"type": "string", "enum": ["creation", "transform"]},
+            "code": {"type": "string"},
+            "controls": {
+                "type": "array",
+                "default": [],
+                "description": "Optional user-facing controls. Each item is {type, name, label, ...type-specific fields}. Types: slider {min,max,step,default}; enum {options:[{value,label}],default}; bool {default}; pan {x_param,y_param,step,x_default,y_default}; button {param,action:'randomize'}; palette (no extras). Max 3 non-palette + 1 palette. Names must match run() params (except 'palette' and 'seed').",
+                "items": {"type": "object"},
+            },
+        },
+        "required": ["name", "description", "kind", "code"],
+    }
 
     def run(self, context, **kwargs) -> ToolResult:
         try:
@@ -25,6 +40,7 @@ class CreateSkill(BaseTool):
                 kind=str(kwargs.get("kind") or "creation"),
                 owner=_owner(context),
                 code=str(kwargs.get("code") or ""),
+                controls=list(kwargs.get("controls") or []),
                 text_embedder=context.services.get("text_embedder"),
             )
             _notify(context, skill.path)

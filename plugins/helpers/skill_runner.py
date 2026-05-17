@@ -20,7 +20,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from plugins.helpers.palettes import Palette, get_palette
+from plugins.helpers.palettes import Palette, get_palette, palette_exists
 from plugins.helpers.skill_store import Skill, assert_valid
 
 logger = logging.getLogger("SkillRunner")
@@ -124,8 +124,47 @@ def run_skill(
     }
 
 
-def make_chain_entry(skill: Skill, params: dict, seed: int) -> dict:
-    return {"slug": skill.slug, "kind": skill.kind, "params": dict(params or {}), "seed": int(seed)}
+def make_chain_entry(skill: Skill, params: dict, seed: int, controls: dict | None = None) -> dict:
+    return {
+        "slug": skill.slug,
+        "kind": skill.kind,
+        "params": dict(params or {}),
+        "controls": dict(controls or {}),
+        "seed": int(seed),
+    }
+
+
+def default_controls(skill: Skill) -> dict:
+    """Build the initial control-value dict from a skill's declared schema."""
+    values: dict = {}
+    for c in (skill.controls or []):
+        ctype = c.get("type")
+        if ctype == "pan":
+            values[c["x_param"]] = c.get("x_default", 0.0)
+            values[c["y_param"]] = c.get("y_default", 0.0)
+        elif ctype == "button":
+            # Buttons trigger actions; no default value lives in the entry.
+            continue
+        elif ctype == "palette":
+            # Filled in by the caller (seeded from canvas state).
+            continue
+        else:
+            if "default" in c:
+                values[c["name"]] = c["default"]
+    return values
+
+
+def resolve_entry(entry: dict, *, fallback_palette: Palette) -> tuple[dict, Palette]:
+    """Merge an entry's controls onto its params and resolve its palette."""
+    params = dict(entry.get("params") or {})
+    controls = dict(entry.get("controls") or {})
+    palette = fallback_palette
+    palette_id = controls.pop("palette", None) or params.pop("palette", None)
+    if isinstance(palette_id, str) and palette_exists(palette_id):
+        palette = get_palette(palette_id)
+    # Pan controls live under their x_param/y_param names already; same for sliders/enums/bools.
+    params.update(controls)
+    return params, palette
 
 
 def replay_chain(
@@ -156,10 +195,11 @@ def replay_chain(
         if skill is None:
             raise SkillRunError(f"chain references missing skill '{slug}'")
         step_out = final if idx == len(chain) - 1 else (workdir / f"_replay_{idx}.png")
+        merged_params, step_palette = resolve_entry(entry, fallback_palette=palette)
         run_skill(
             skill,
-            params=entry.get("params") or {},
-            palette=palette,
+            params=merged_params,
+            palette=step_palette,
             size=size,
             seed=int(entry.get("seed") or 0),
             input_image_path=current_input,

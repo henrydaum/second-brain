@@ -3,6 +3,11 @@ SKILL_DESCRIPTION = "N-fold rotationally symmetric ornament built from concentri
 SKILL_KIND = "creation"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1730000000.0
+SKILL_CONTROLS = [
+    {"type": "slider", "name": "symmetry", "label": "Symmetry", "min": 3, "max": 16, "step": 1, "default": 8},
+    {"type": "slider", "name": "layers", "label": "Layers", "min": 2, "max": 12, "step": 1, "default": 6},
+    {"type": "palette"},
+]
 
 import math, random
 from PIL import Image, ImageDraw

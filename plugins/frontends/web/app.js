@@ -15,9 +15,11 @@ const sharePanel = document.querySelector("#sharePanel");
 const shareTitle = document.querySelector("#shareTitle");
 const shareArtist = document.querySelector("#shareArtist");
 const gallery = document.querySelector("#gallery");
-const paletteStrip = document.querySelector("#paletteStrip");
+const controlsPanel = document.querySelector("#controlsPanel");
 const NEAR_BOTTOM_PX = 80;
-let currentPalette = "";
+let palettesCache = [];
+let currentControlsPanels = [];
+const controlDebounce = new Map();
 const toolStatusEls = new Map();
 const atBottom = () => messages.scrollHeight - messages.scrollTop - messages.clientHeight < NEAR_BOTTOM_PX;
 const bottom = (force = false) => {
@@ -226,7 +228,7 @@ promoForm.addEventListener("submit", async e => {
   }
 })();
 function setCanvas(c) {
-  currentPalette = c?.palette_id || currentPalette; syncPalette(currentPalette);
+  renderControlsPanel(c?.controls_panels || []);
   if (!c?.url) {
     showcase.classList.remove("has-image"); heroImage.classList.remove("fading"); heroImage.removeAttribute("src"); downloadImage.href = "#";
     return;
@@ -254,11 +256,76 @@ async function loadGallery() {
 }
 async function loadPalettes() {
   const r = await get("/api/palettes");
-  paletteStrip.innerHTML = (r.palettes || []).map(p => `<button type="button" title="${esc(p.name)}" data-palette="${esc(p.id)}" style="--swatch:conic-gradient(${Object.values(p.colors).join(",")})"></button>`).join("");
-  syncPalette(currentPalette);
+  palettesCache = r.palettes || [];
+  renderControlsPanel(currentControlsPanels);
 }
-function syncPalette(id) {
-  paletteStrip.querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.palette === id));
+function paletteSwatchHtml(p, activeId) {
+  const cls = p.id === activeId ? "swatch active" : "swatch";
+  return `<button type="button" class="${cls}" title="${esc(p.name)}" data-palette="${esc(p.id)}" style="--swatch:conic-gradient(${Object.values(p.colors).join(",")})"></button>`;
+}
+function renderControlsPanel(panels) {
+  currentControlsPanels = panels || [];
+  if (!currentControlsPanels.length) {
+    controlsPanel.hidden = true;
+    controlsPanel.innerHTML = "";
+    return;
+  }
+  controlsPanel.hidden = false;
+  controlsPanel.innerHTML = currentControlsPanels.map(renderPanel).join("");
+}
+function renderPanel(panel) {
+  const widgets = (panel.schema || []).map(spec => renderWidget(panel, spec)).join("");
+  return `<section class="ctl-panel" data-chain="${panel.chain_index}"><header class="ctl-head">${esc(panel.skill_name)}</header>${widgets}</section>`;
+}
+function renderWidget(panel, spec) {
+  const v = panel.values || {};
+  const id = `c${panel.chain_index}-${spec.name}`;
+  if (spec.type === "slider") {
+    const cur = v[spec.name] ?? spec.default;
+    return `<label class="ctl-row" for="${id}"><span>${esc(spec.label)}</span><input id="${id}" type="range" min="${spec.min}" max="${spec.max}" step="${spec.step}" value="${cur}" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-kind="slider"><span class="ctl-val">${fmtNum(cur)}</span></label>`;
+  }
+  if (spec.type === "bool") {
+    const on = !!(v[spec.name] ?? spec.default);
+    return `<label class="ctl-row"><span>${esc(spec.label)}</span><input type="checkbox" ${on?"checked":""} data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-kind="bool"></label>`;
+  }
+  if (spec.type === "enum") {
+    const cur = v[spec.name] ?? spec.default;
+    const opts = (spec.options || []).map(o =>
+      `<button type="button" class="${JSON.stringify(o.value)===JSON.stringify(cur)?"ctl-seg active":"ctl-seg"}" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-kind="enum" data-value='${esc(JSON.stringify(o.value))}'>${esc(o.label)}</button>`
+    ).join("");
+    return `<div class="ctl-row"><span>${esc(spec.label)}</span><div class="ctl-segs">${opts}</div></div>`;
+  }
+  if (spec.type === "pan") {
+    const xp = spec.x_param, yp = spec.y_param;
+    const xv = v[xp] ?? spec.x_default ?? 0;
+    const yv = v[yp] ?? spec.y_default ?? 0;
+    return `<div class="ctl-row"><span>${esc(spec.label)}</span><div class="ctl-pan" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-step="${spec.step}" data-x="${xv}" data-y="${yv}"><button type="button" class="ctl-pan-up" data-dir="up">↑</button><button type="button" class="ctl-pan-left" data-dir="left">←</button><span class="ctl-pan-c">${fmtNum(xv)}, ${fmtNum(yv)}</span><button type="button" class="ctl-pan-right" data-dir="right">→</button><button type="button" class="ctl-pan-down" data-dir="down">↓</button></div></div>`;
+  }
+  if (spec.type === "button") {
+    return `<div class="ctl-row"><span>${esc(spec.label)}</span><button type="button" class="ctl-btn" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-kind="button">${esc(spec.label)}</button></div>`;
+  }
+  if (spec.type === "palette") {
+    const cur = v.palette || "";
+    const swatches = palettesCache.map(p => paletteSwatchHtml(p, cur)).join("");
+    return `<div class="ctl-row ctl-palette" data-chain="${panel.chain_index}" data-name="palette"><span>${esc(spec.label || "Palette")}</span><div class="ctl-palette-strip">${swatches}</div></div>`;
+  }
+  return "";
+}
+function fmtNum(v) {
+  if (typeof v !== "number") return String(v);
+  const abs = Math.abs(v);
+  return abs >= 100 ? v.toFixed(0) : abs >= 10 ? v.toFixed(1) : v.toFixed(2);
+}
+function debounceControl(key, fn, ms = 160) {
+  clearTimeout(controlDebounce.get(key));
+  controlDebounce.set(key, setTimeout(fn, ms));
+}
+async function postControl(body) {
+  if (controlsPanel.classList.contains("loading")) return;
+  controlsPanel.classList.add("loading");
+  try { render((await post("/api/skill_control", body)).events); }
+  catch (err) { add("error", err.message); }
+  finally { controlsPanel.classList.remove("loading"); }
 }
 function esc(x) { return String(x ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 form.addEventListener("submit", async e => {
@@ -298,21 +365,57 @@ regenerateBtn.addEventListener("click", async () => {
 shareBtn.addEventListener("click", () => { sharePanel.hidden = !sharePanel.hidden; shareTitle.value ||= "untitled"; shareArtist.value ||= "anonymous"; });
 document.querySelector("#shareConfirm").addEventListener("click", async () => render((await post("/api/share", {title:shareTitle.value, artist:shareArtist.value})).events));
 gallery.addEventListener("click", async e => { if (e.target.matches("button[data-path]")) { render((await post("/api/remix", {path:e.target.dataset.path})).events); scrollTo({top:0, behavior:"smooth"}); } });
-paletteStrip.addEventListener("click", async e => {
-  const btn = e.target.closest("button[data-palette]");
-  if (!btn || paletteStrip.classList.contains("loading")) return;
-  const buttons = paletteStrip.querySelectorAll("button");
-  paletteStrip.classList.add("loading");
-  buttons.forEach(b => b.disabled = true);
-  btn.classList.add("loading");
-  try {
-    render((await post("/api/palette", {palette_id:btn.dataset.palette})).events);
-  } catch (err) {
-    add("error", err.message);
-  } finally {
-    paletteStrip.classList.remove("loading");
-    buttons.forEach(b => b.disabled = false);
-    btn.classList.remove("loading");
+controlsPanel.addEventListener("input", e => {
+  const el = e.target;
+  const chain = +el.dataset.chain;
+  if (Number.isNaN(chain)) return;
+  if (el.dataset.kind === "slider") {
+    const valEl = el.parentElement.querySelector(".ctl-val");
+    if (valEl) valEl.textContent = fmtNum(+el.value);
+    debounceControl(`${chain}.${el.dataset.name}`, () => postControl({chain_index: chain, name: el.dataset.name, value: +el.value}));
+  }
+});
+controlsPanel.addEventListener("change", e => {
+  const el = e.target;
+  const chain = +el.dataset.chain;
+  if (Number.isNaN(chain)) return;
+  if (el.dataset.kind === "bool") {
+    postControl({chain_index: chain, name: el.dataset.name, value: el.checked});
+  }
+});
+controlsPanel.addEventListener("click", e => {
+  const target = e.target;
+  // Palette swatch.
+  const sw = target.closest("button[data-palette]");
+  if (sw) {
+    const row = sw.closest(".ctl-palette");
+    const chain = +row.dataset.chain;
+    postControl({chain_index: chain, name: "palette", value: sw.dataset.palette});
+    return;
+  }
+  // Enum segment.
+  if (target.matches(".ctl-seg")) {
+    postControl({chain_index: +target.dataset.chain, name: target.dataset.name, value: JSON.parse(target.dataset.value)});
+    return;
+  }
+  // Pan arrow.
+  const pan = target.closest(".ctl-pan");
+  const arrow = target.closest("button[data-dir]");
+  if (pan && arrow) {
+    const step = +pan.dataset.step || 0.1;
+    let x = +pan.dataset.x || 0, y = +pan.dataset.y || 0;
+    if (arrow.dataset.dir === "left") x -= step;
+    else if (arrow.dataset.dir === "right") x += step;
+    else if (arrow.dataset.dir === "up") y -= step;
+    else if (arrow.dataset.dir === "down") y += step;
+    pan.dataset.x = x; pan.dataset.y = y;
+    const c = pan.querySelector(".ctl-pan-c"); if (c) c.textContent = `${fmtNum(x)}, ${fmtNum(y)}`;
+    postControl({chain_index: +pan.dataset.chain, name: pan.dataset.name, value: {x, y}});
+    return;
+  }
+  // Button (action) widget.
+  if (target.matches(".ctl-btn")) {
+    postControl({chain_index: +target.dataset.chain, name: target.dataset.name, value: null});
   }
 });
 setInterval(poll, 1200);

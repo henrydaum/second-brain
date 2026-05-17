@@ -51,13 +51,33 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .share-panel { position: absolute; right: 22px; top: 72px; z-index: 3; display: grid; gap: 8px; width: min(280px, calc(100% - 44px)); padding: 12px; border: 1px solid rgba(255,255,255,.24); background: rgba(5,7,12,.86); backdrop-filter: blur(16px); }
 .share-panel[hidden] { display: none; }
 .share-panel input { height: 38px; min-width: 0; border: 1px solid var(--line); background: #10141e; color: var(--text); padding: 0 10px; }
-.palette-strip { position: absolute; right: 22px; bottom: 22px; z-index: 2; display: flex; gap: 10px; padding: 10px; border: 1px solid rgba(255,255,255,.18); background: rgba(5,7,12,.52); backdrop-filter: blur(14px); }
-.palette-strip button { width: 32px; height: 32px; border-radius: 50%; border: 2px solid rgba(255,255,255,.28); background: var(--swatch); cursor: pointer; padding: 0; }
-.palette-strip button:hover, .palette-strip button.active { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(61,242,255,.18); }
-.palette-strip.loading { cursor: wait; }
-.palette-strip.loading button { opacity: .45; cursor: wait; }
-.palette-strip button.loading { opacity: 1; border-color: var(--cyan); animation: paletteThrob 900ms ease-in-out infinite; }
-@keyframes paletteThrob { 0%,100% { box-shadow: 0 0 0 3px rgba(61,242,255,.25); } 50% { box-shadow: 0 0 0 7px rgba(61,242,255,.08); } }
+.controls-panel { position: absolute; right: 22px; bottom: 22px; z-index: 2; display: flex; flex-direction: column; gap: 8px; max-width: min(340px, calc(100% - 44px)); max-height: 70vh; overflow-y: auto; }
+.controls-panel[hidden] { display: none; }
+.controls-panel.loading { cursor: wait; opacity: .8; pointer-events: none; }
+.ctl-panel { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid rgba(255,255,255,.18); background: rgba(5,7,12,.62); backdrop-filter: blur(14px); }
+.ctl-head { font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--cyan); }
+.ctl-row { display: grid; grid-template-columns: 86px 1fr auto; align-items: center; gap: 8px; font-size: 12px; color: var(--text); }
+.ctl-row > span:first-child { color: var(--muted); }
+.ctl-row input[type=range] { width: 100%; accent-color: var(--cyan); }
+.ctl-row input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--cyan); justify-self: start; }
+.ctl-val { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted); min-width: 36px; text-align: right; }
+.ctl-segs { display: flex; flex-wrap: wrap; gap: 4px; }
+.ctl-seg { padding: 4px 8px; background: #11151d; color: var(--text); border: 1px solid var(--line); cursor: pointer; font-size: 11px; }
+.ctl-seg.active, .ctl-seg:hover { border-color: var(--cyan); color: var(--cyan); }
+.ctl-pan { display: grid; grid-template-columns: repeat(3, 24px); grid-template-rows: repeat(3, 24px); gap: 2px; }
+.ctl-pan button { background: #11151d; color: var(--text); border: 1px solid var(--line); cursor: pointer; padding: 0; font-size: 12px; }
+.ctl-pan button:hover { border-color: var(--cyan); color: var(--cyan); }
+.ctl-pan-up { grid-column: 2; grid-row: 1; }
+.ctl-pan-left { grid-column: 1; grid-row: 2; }
+.ctl-pan-c { grid-column: 2; grid-row: 2; display: flex; align-items: center; justify-content: center; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; color: var(--muted); }
+.ctl-pan-right { grid-column: 3; grid-row: 2; }
+.ctl-pan-down { grid-column: 2; grid-row: 3; }
+.ctl-btn { padding: 5px 10px; background: #11151d; color: var(--text); border: 1px solid var(--line); cursor: pointer; font-size: 11px; }
+.ctl-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+.ctl-palette { grid-template-columns: 86px 1fr; }
+.ctl-palette-strip { display: flex; flex-wrap: wrap; gap: 6px; }
+.ctl-palette-strip .swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255,255,255,.28); background: var(--swatch); cursor: pointer; padding: 0; }
+.ctl-palette-strip .swatch:hover, .ctl-palette-strip .swatch.active { border-color: var(--cyan); box-shadow: 0 0 0 2px rgba(61,242,255,.18); }
 .gallery-section { min-height: 70vh; padding: 48px; background: #0c1016; border-top: 1px solid var(--line); }
 .gallery-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }

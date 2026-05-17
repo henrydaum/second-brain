@@ -101,12 +101,137 @@ def assert_valid(source: str) -> None:
         raise SkillValidationError("; ".join(errors))
 
 
+def _run_param_names(source: str) -> set[str]:
+    """Extract the keyword parameter names from the skill's `def run(canvas, ...)`."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "run":
+            args = node.args
+            all_args = list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
+            names = {a.arg for a in all_args}
+            names.discard("canvas")
+            return names
+    return set()
+
+
+def _coerce_number(value, *, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SkillValidationError(f"control field '{field}' must be a number, got {type(value).__name__}")
+    return float(value)
+
+
+def validate_controls(controls, run_param_names: set[str]) -> list[dict]:
+    """Validate and normalize a list of SKILL_CONTROLS entries.
+
+    Returns the normalized list. Raises SkillValidationError on any problem.
+    The 'palette' and 'seed' names are always considered valid param targets —
+    'palette' is resolved by the runner, 'seed' lives on the chain entry.
+    """
+    if controls in (None, []):
+        return []
+    if not isinstance(controls, list):
+        raise SkillValidationError("SKILL_CONTROLS must be a list")
+    valid_params = set(run_param_names) | {"palette", "seed"}
+    seen_names: set[str] = set()
+    non_palette = 0
+    out: list[dict] = []
+    for i, raw in enumerate(controls):
+        if not isinstance(raw, dict):
+            raise SkillValidationError(f"control #{i} must be a dict")
+        c = dict(raw)
+        ctype = c.get("type")
+        if ctype not in _CONTROL_TYPES:
+            raise SkillValidationError(f"control #{i} has invalid type {ctype!r}; allowed: {sorted(_CONTROL_TYPES)}")
+
+        if ctype == "palette":
+            c.setdefault("name", "palette")
+            c.setdefault("label", "Palette")
+        else:
+            non_palette += 1
+            name = c.get("name")
+            if not isinstance(name, str) or not name:
+                raise SkillValidationError(f"control #{i} ({ctype}) missing 'name'")
+            if ctype != "pan" and name not in valid_params:
+                raise SkillValidationError(
+                    f"control '{name}' is not a parameter of run(); add it to the run signature"
+                )
+            c.setdefault("label", name.replace("_", " ").title())
+
+        if c["name"] in seen_names:
+            raise SkillValidationError(f"duplicate control name '{c['name']}'")
+        seen_names.add(c["name"])
+
+        if ctype == "slider":
+            lo = _coerce_number(c.get("min"), field="min")
+            hi = _coerce_number(c.get("max"), field="max")
+            if hi <= lo:
+                raise SkillValidationError(f"slider '{c['name']}' needs max > min")
+            c["min"], c["max"] = lo, hi
+            c["step"] = _coerce_number(c.get("step", (hi - lo) / 100.0), field="step")
+            c["default"] = _coerce_number(c.get("default", lo), field="default")
+        elif ctype == "bool":
+            c["default"] = bool(c.get("default", False))
+        elif ctype == "enum":
+            options = c.get("options")
+            if not isinstance(options, list) or not options:
+                raise SkillValidationError(f"enum '{c['name']}' needs a non-empty 'options' list")
+            norm_opts = []
+            for j, opt in enumerate(options):
+                if not isinstance(opt, dict) or "value" not in opt:
+                    raise SkillValidationError(f"enum '{c['name']}' option #{j} must be a dict with 'value'")
+                norm_opts.append({"value": opt["value"], "label": str(opt.get("label", opt["value"]))})
+            c["options"] = norm_opts
+            c.setdefault("default", norm_opts[0]["value"])
+        elif ctype == "pan":
+            xp, yp = c.get("x_param"), c.get("y_param")
+            if not (isinstance(xp, str) and isinstance(yp, str)):
+                raise SkillValidationError(f"pan '{c['name']}' needs string x_param and y_param")
+            if xp not in valid_params or yp not in valid_params:
+                raise SkillValidationError(f"pan '{c['name']}' references unknown run() params")
+            c["step"] = _coerce_number(c.get("step", 0.1), field="step")
+            xd = _coerce_number(c.get("x_default", 0.0), field="x_default")
+            yd = _coerce_number(c.get("y_default", 0.0), field="y_default")
+            c["x_default"], c["y_default"] = xd, yd
+            c["default"] = {xp: xd, yp: yd}
+        elif ctype == "button":
+            action = c.get("action") or "randomize"
+            if action not in _BUTTON_ACTIONS:
+                raise SkillValidationError(f"button '{c['name']}' has unknown action {action!r}")
+            param = c.get("param") or "seed"
+            if param not in valid_params:
+                raise SkillValidationError(f"button '{c['name']}' targets unknown param {param!r}")
+            c["action"] = action
+            c["param"] = param
+        # palette has no type-specific fields.
+        out.append(c)
+
+    if non_palette > MAX_NON_PALETTE_CONTROLS:
+        raise SkillValidationError(
+            f"a skill may declare at most {MAX_NON_PALETTE_CONTROLS} non-palette controls (got {non_palette})"
+        )
+    return out
+
+
+def extract_run_params(source: str) -> set[str]:
+    """Public alias for the AST-based run() parameter extractor."""
+    return _run_param_names(source)
+
+
 # ---------------------------------------------------------------------------
 # Skill files: metadata extraction, naming.
 # ---------------------------------------------------------------------------
 
 _SLUG_RE = re.compile(r"[^a-z0-9_]+")
 _KINDS = ("creation", "transform")
+
+# Caps and types for user-facing skill controls. Palette doesn't count toward
+# the cap because it's a universal, well-understood control.
+MAX_NON_PALETTE_CONTROLS = 3
+_CONTROL_TYPES = {"slider", "enum", "bool", "pan", "button", "palette"}
+_BUTTON_ACTIONS = {"randomize"}
 
 
 @dataclass
@@ -119,6 +244,11 @@ class Skill:
     owner: str
     code: str
     created_at: float
+    controls: list = None  # list[dict] — user-facing controls; empty when none declared
+
+    def __post_init__(self):
+        if self.controls is None:
+            self.controls = []
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -159,12 +289,17 @@ def _iter_skill_paths() -> Iterable[Path]:
 
 
 def _format_skill_file(skill: Skill) -> str:
+    controls_line = ""
+    if skill.controls:
+        # repr() on lists of dicts of primitives round-trips through ast.literal_eval.
+        controls_line = f'SKILL_CONTROLS = {skill.controls!r}\n'
     return (
         f'SKILL_NAME = {json.dumps(skill.name)}\n'
         f'SKILL_DESCRIPTION = {json.dumps(skill.description)}\n'
         f'SKILL_KIND = {json.dumps(skill.kind)}\n'
         f'SKILL_OWNER = {json.dumps(skill.owner)}\n'
         f'SKILL_CREATED_AT = {skill.created_at!r}\n'
+        f'{controls_line}'
         f'\n'
         f'{skill.code.rstrip()}\n'
     )
@@ -177,7 +312,7 @@ def _extract_metadata(source: str) -> dict:
     for node in tree.body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             name = node.targets[0].id
-            if name in ("SKILL_NAME", "SKILL_DESCRIPTION", "SKILL_KIND", "SKILL_OWNER", "SKILL_CREATED_AT"):
+            if name in ("SKILL_NAME", "SKILL_DESCRIPTION", "SKILL_KIND", "SKILL_OWNER", "SKILL_CREATED_AT", "SKILL_CONTROLS"):
                 try:
                     out[name] = ast.literal_eval(node.value)
                 except Exception:
@@ -217,6 +352,8 @@ def _load_skill_from_path(path: Path) -> Skill | None:
         return None
     code_body = _strip_metadata(source)
     slug = path.name.rsplit(".skill.py", 1)[0]
+    raw_controls = meta.get("SKILL_CONTROLS")
+    controls = list(raw_controls) if isinstance(raw_controls, list) else []
     return Skill(
         slug=slug,
         path=str(path.resolve()),
@@ -226,6 +363,7 @@ def _load_skill_from_path(path: Path) -> Skill | None:
         owner=str(meta.get("SKILL_OWNER") or ""),
         code=code_body,
         created_at=float(meta.get("SKILL_CREATED_AT") or path.stat().st_mtime),
+        controls=controls,
     )
 
 
@@ -317,11 +455,13 @@ def read_skill(slug: str) -> Skill | None:
 
 def write_skill(
     *, name: str, description: str, kind: str, owner: str, code: str,
+    controls: list | None = None,
     text_embedder=None,
 ) -> Skill:
     if kind not in _KINDS:
         raise ValueError(f"kind must be one of {_KINDS}, got {kind!r}")
     assert_valid(code)
+    normalized_controls = validate_controls(controls, _run_param_names(code))
     slug = slugify(name)
     if not slug:
         raise ValueError("name produced an empty slug")
@@ -333,6 +473,7 @@ def write_skill(
         name=name.strip(), description=description.strip(),
         kind=kind, owner=owner or "",
         code=code, created_at=time.time(),
+        controls=normalized_controls,
     )
     SKILLS_DIR.mkdir(parents=True, exist_ok=True)
     path.write_text(_format_skill_file(skill), encoding="utf-8")
@@ -343,7 +484,8 @@ def write_skill(
 
 def update_skill(
     slug: str, *, owner: str, name: str | None = None, description: str | None = None,
-    code: str | None = None, text_embedder=None,
+    code: str | None = None, controls: list | None = None,
+    text_embedder=None,
 ) -> Skill:
     existing = read_skill(slug)
     if existing is None:
@@ -360,11 +502,16 @@ def update_skill(
     new_code = code if code is not None else existing.code
     if code is not None:
         assert_valid(new_code)
+    if controls is not None:
+        new_controls = validate_controls(controls, _run_param_names(new_code))
+    else:
+        new_controls = list(existing.controls or [])
     updated = Skill(
         slug=existing.slug, path=existing.path,
         name=new_name.strip(), description=new_desc.strip(),
         kind=existing.kind, owner=existing.owner,
         code=new_code, created_at=existing.created_at,
+        controls=new_controls,
     )
     Path(existing.path).write_text(_format_skill_file(updated), encoding="utf-8")
     if text_embedder is not None:

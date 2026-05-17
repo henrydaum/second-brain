@@ -190,11 +190,11 @@ class WebFrontend(BaseFrontend):
             # Compose tools already updated canvas state and wrote the composite;
             # don't re-call set_current on our own composite (that would wipe layers).
             if current_composite and p.resolve() == current_composite:
-                self._push(session_key, _image_event(p, state))
+                self._push(session_key, _image_event(p, _canvas_payload_full(session_key, state)))
                 continue
             meta = read_json(p.with_suffix(".json"))
             set_current(session_key, p, bool(meta.get("original")), meta)
-            self._push(session_key, _image_event(p, canvas(session_key)))
+            self._push(session_key, _image_event(p, _canvas_payload_full(session_key, canvas(session_key))))
 
     def render_form_field(self, session_key: str, form: dict) -> None:
         self._push(session_key, {"type": "form", "form": form})
@@ -574,7 +574,8 @@ class WebFrontend(BaseFrontend):
         return {"ok": True, "granted": granted}
 
     def canvas_payload(self, session_id: str) -> dict:
-        return _canvas_payload(canvas(self.session_key(session_id)))
+        key = self.session_key(session_id)
+        return _canvas_payload_full(key, canvas(key))
 
     def palettes_payload(self) -> list[dict]:
         return [p.to_dict() for p in list_palettes()]
@@ -583,7 +584,7 @@ class WebFrontend(BaseFrontend):
         key = self.session_key(session_id)
         before = lc.get_state(key)
         if palette_id == before.get("palette_id"):
-            return [{"type": "hero_image", "canvas": _canvas_payload(canvas(key))}] if before.get("image_path") else []
+            return [{"type": "hero_image", "canvas": _canvas_payload_full(key, canvas(key))}] if before.get("image_path") else []
         try:
             state = lc.set_palette(key, palette_id)
             chain = state.get("last_chain") or []
@@ -593,10 +594,62 @@ class WebFrontend(BaseFrontend):
                 with Image.open(out) as img:
                     lc.commit_image(key, img.convert("RGBA"), f"palette:{palette_id}", None)
             c = canvas(key)
-            return [{"type": "hero_image", "url": _file_url(Path(c["path"])), "name": Path(c["path"]).name, "canvas": _canvas_payload(c)}] if c and c.get("path") else []
+            return [{"type": "hero_image", "url": _file_url(Path(c["path"])), "name": Path(c["path"]).name, "canvas": _canvas_payload_full(key, c)}] if c and c.get("path") else []
         except Exception as e:
             lc.replace_state(key, before)
             return [{"type": "error", "content": f"Palette replay failed: {e}"}]
+
+    def set_skill_control(self, session_id: str, chain_index: int, name: str, value, action: str = "") -> list[dict]:
+        """Update one control on a chain entry, then replay the chain."""
+        key = self.session_key(session_id)
+        before = lc.get_state(key)
+        chain = list(before.get("last_chain") or [])
+        if not (0 <= chain_index < len(chain)):
+            return [{"type": "error", "content": "That control no longer exists."}]
+        step = chain[chain_index]
+        skill = read_skill(step.get("slug") or "")
+        if not skill:
+            return [{"type": "error", "content": "Skill for that control was deleted."}]
+        schema = {c.get("name"): c for c in (skill.controls or [])}
+        spec = schema.get(name)
+        if not spec:
+            return [{"type": "error", "content": f"Unknown control '{name}'."}]
+        try:
+            if spec.get("type") == "button":
+                act = action or spec.get("action") or "randomize"
+                if act == "randomize":
+                    param = spec.get("param") or "seed"
+                    new_val = random.randint(1, 2_147_483_647)
+                    if param == "seed":
+                        state = lc.randomize_seed(key, chain_index, new_val)
+                    else:
+                        state = lc.set_skill_control(key, chain_index, param, new_val)
+                else:
+                    return [{"type": "error", "content": f"Unknown button action '{act}'."}]
+            elif spec.get("type") == "pan":
+                v = value or {}
+                xv = float(v.get("x", spec.get("x_default", 0.0)))
+                yv = float(v.get("y", spec.get("y_default", 0.0)))
+                lc.set_skill_control(key, chain_index, spec["x_param"], xv)
+                state = lc.set_skill_control(key, chain_index, spec["y_param"], yv)
+            else:
+                state = lc.set_skill_control(key, chain_index, name, _coerce_control_value(spec, value))
+            out = lc.image_path(key).with_name("_control_replay.png")
+            replay_chain(
+                state.get("last_chain") or [],
+                palette=get_palette(state.get("palette_id")),
+                size=int(state.get("size") or lc.DEFAULT_SIZE),
+                output_image_path=out,
+                workdir=out.parent,
+                skill_loader=read_skill,
+            )
+            with Image.open(out) as img:
+                lc.commit_image(key, img.convert("RGBA"), f"control:{step.get('slug')}.{name}", None)
+            c = canvas(key)
+            return [{"type": "hero_image", "url": _file_url(Path(c["path"])), "name": Path(c["path"]).name, "canvas": _canvas_payload_full(key, c)}] if c and c.get("path") else []
+        except Exception as e:
+            lc.replace_state(key, before)
+            return [{"type": "error", "content": f"Control replay failed: {e}"}]
 
     def share(self, session_id: str, title: str, artist: str) -> list[dict]:
         key = self.session_key(session_id)
@@ -665,7 +718,7 @@ class WebFrontend(BaseFrontend):
             new_state["last_chain"] = reseeded
             lc.replace_state(key, new_state)
             c = canvas(key)
-            return [{"type": "hero_image", "url": _file_url(Path(c["path"])), "name": Path(c["path"]).name, "canvas": _canvas_payload(c)}] if c and c.get("path") else []
+            return [{"type": "hero_image", "url": _file_url(Path(c["path"])), "name": Path(c["path"]).name, "canvas": _canvas_payload_full(key, c)}] if c and c.get("path") else []
         except Exception as e:
             return [{"type": "error", "content": f"Regenerate failed: {e}"}]
 
@@ -779,6 +832,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "events": self.server.frontend.download(sid)})
             if self.path == "/api/regenerate":
                 return self._json({"ok": True, "events": self.server.frontend.regenerate(sid)})
+            if self.path == "/api/skill_control":
+                return self._json({"ok": True, "events": self.server.frontend.set_skill_control(
+                    sid,
+                    int(body.get("chain_index") or 0),
+                    str(body.get("name") or ""),
+                    body.get("value"),
+                    str(body.get("action") or ""),
+                )})
         except Exception as e:
             logger.exception("Web request failed")
             return self._json({"ok": False, "events": [{"type": "error", "content": str(e)}]}, 500)
@@ -917,8 +978,8 @@ def _file_url(path: Path) -> str:
     return f"/files?path={quote(str(path.resolve()), safe='')}&v={v}"
 
 
-def _image_event(path: Path, state: dict | None = None) -> dict:
-    return {"type": "hero_image", "url": _file_url(path), "name": path.name, "canvas": _canvas_payload(state)}
+def _image_event(path: Path, canvas_payload: dict) -> dict:
+    return {"type": "hero_image", "url": _file_url(path), "name": path.name, "canvas": canvas_payload}
 
 
 def _canvas_payload(state: dict | None) -> dict:
@@ -928,6 +989,50 @@ def _canvas_payload(state: dict | None) -> dict:
         return {k: v for k, v in state.items() if k != "path"}
     p = Path(state["path"])
     return {**state, "url": _file_url(p), "name": p.name}
+
+
+def _canvas_payload_full(session_key: str, state: dict | None) -> dict:
+    """Canvas payload plus per-entry control schemas for the website panel."""
+    base = _canvas_payload(state)
+    if not state:
+        return base
+    chain = state.get("chain") or state.get("last_chain") or []
+    panels = []
+    for idx, step in enumerate(chain):
+        skill = read_skill(step.get("slug") or "")
+        if not skill or not skill.controls:
+            continue
+        panels.append({
+            "chain_index": idx,
+            "slug": skill.slug,
+            "skill_name": skill.name,
+            "schema": skill.controls,
+            "values": dict(step.get("controls") or {}),
+            "seed": int(step.get("seed") or 0),
+        })
+    base["controls_panels"] = panels
+    return base
+
+
+def _coerce_control_value(spec: dict, value):
+    """Coerce an incoming control value to match its declared type."""
+    t = spec.get("type")
+    if t == "slider":
+        v = float(value)
+        lo, hi = float(spec.get("min", v)), float(spec.get("max", v))
+        return max(lo, min(hi, v))
+    if t == "bool":
+        return bool(value)
+    if t == "enum":
+        allowed = [opt.get("value") for opt in (spec.get("options") or [])]
+        if value not in allowed:
+            raise ValueError(f"enum value {value!r} not in allowed options")
+        return value
+    if t == "palette":
+        return str(value)
+    # pan controls deliver values via their underlying numeric param names; this
+    # path only fires when the frontend sends {name: x_param, value: number}.
+    return value
 
 
 def _gallery_url(row: dict) -> dict:

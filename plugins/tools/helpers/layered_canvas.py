@@ -113,8 +113,8 @@ def commit_image(session_key: str, pil_image, op: str, chain_entry: dict | None 
 
 
 def set_palette(session_key: str, palette_id: str) -> dict:
-    """Update the selected palette id. Returns the new state. Caller is responsible
-    for triggering a replay if appropriate."""
+    """Update the session-default palette id and propagate it onto every chain
+    entry that declared a palette control. Returns the new state."""
     if not palette_exists(palette_id):
         raise ValueError(f"unknown palette: {palette_id}")
     with _state_lock:
@@ -122,6 +122,53 @@ def set_palette(session_key: str, palette_id: str) -> dict:
         entry = store.get(session_key) or _blank_entry()
         entry = {**_blank_entry(), **entry}
         entry["palette_id"] = palette_id
+        chain = list(entry.get("last_chain") or [])
+        for step in chain:
+            if "palette" in (step.get("controls") or {}):
+                step["controls"]["palette"] = palette_id
+        entry["last_chain"] = chain
+        store[session_key] = entry
+        _write_state(store)
+        return entry
+
+
+def set_skill_control(session_key: str, chain_index: int, name: str, value) -> dict:
+    """Update one control value on a chain entry. Returns the new state.
+    Caller is responsible for replaying the chain afterward."""
+    with _state_lock:
+        store = _read_state()
+        entry = store.get(session_key) or _blank_entry()
+        entry = {**_blank_entry(), **entry}
+        chain = list(entry.get("last_chain") or [])
+        if not (0 <= chain_index < len(chain)):
+            raise ValueError(f"chain_index {chain_index} out of range (len={len(chain)})")
+        step = dict(chain[chain_index])
+        controls = dict(step.get("controls") or {})
+        controls[name] = value
+        step["controls"] = controls
+        chain[chain_index] = step
+        entry["last_chain"] = chain
+        # Mirror palette selection onto the session default so future skills inherit.
+        if name == "palette" and isinstance(value, str) and palette_exists(value):
+            entry["palette_id"] = value
+        store[session_key] = entry
+        _write_state(store)
+        return entry
+
+
+def randomize_seed(session_key: str, chain_index: int, new_seed: int) -> dict:
+    """Replace the seed on one chain entry."""
+    with _state_lock:
+        store = _read_state()
+        entry = store.get(session_key) or _blank_entry()
+        entry = {**_blank_entry(), **entry}
+        chain = list(entry.get("last_chain") or [])
+        if not (0 <= chain_index < len(chain)):
+            raise ValueError(f"chain_index {chain_index} out of range (len={len(chain)})")
+        step = dict(chain[chain_index])
+        step["seed"] = int(new_seed)
+        chain[chain_index] = step
+        entry["last_chain"] = chain
         store[session_key] = entry
         _write_state(store)
         return entry
