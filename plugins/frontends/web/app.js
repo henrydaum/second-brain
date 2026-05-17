@@ -15,13 +15,21 @@ const sharePanel = document.querySelector("#sharePanel");
 const shareTitle = document.querySelector("#shareTitle");
 const shareArtist = document.querySelector("#shareArtist");
 const gallery = document.querySelector("#gallery");
+const paginator = document.querySelector("#paginator");
 const controlsPanel = document.querySelector("#controlsPanel");
+const controlsDrawer = document.querySelector("#controlsDrawer");
+const controlsToggle = document.querySelector("#controlsToggle");
+const controlsCountEl = document.querySelector("#controlsCount");
 const layersStack = document.querySelector("#layersStack");
+const emptyState = document.querySelector("#emptyState");
 const NEAR_BOTTOM_PX = 80;
+const GALLERY_PAGE = 18;
 let palettesCache = [];
 let currentControlsPanels = [];
+let galleryPage = 1;
 const controlDebounce = new Map();
 const toolStatusEls = new Map();
+const collapsedSkills = new Set(JSON.parse(localStorage.sbCollapsedSkills || "[]"));
 const atBottom = () => messages.scrollHeight - messages.scrollTop - messages.clientHeight < NEAR_BOTTOM_PX;
 const bottom = (force = false) => {
   const stick = force || atBottom();
@@ -107,7 +115,7 @@ function render(events) {
       setCanvas(ev.canvas || {url: ev.url, name: ev.name});
     }
     else if (ev.type === "canvas_reset") setCanvas(null);
-    else if (ev.type === "shared") { sharePanel.hidden = true; loadGallery(); }
+    else if (ev.type === "shared") { sharePanel.hidden = true; loadGallery(1); }
     else if (ev.type === "attachment") add("assistant", `Attachment: ${ev.name}`);
   }
   bottom();
@@ -227,34 +235,154 @@ promoForm.addEventListener("submit", async e => {
     history.replaceState({}, "", "/");
   }
 })();
+
+// ----- Canvas + theming -----
 function setCanvas(c) {
   renderControlsPanel(c?.controls_panels || []);
   renderLayersStack(c?.layers || []);
   if (!c?.url) {
-    showcase.classList.remove("has-image"); heroImage.classList.remove("fading"); heroImage.removeAttribute("src"); downloadImage.href = "#";
+    showcase.classList.remove("has-image");
+    heroImage.classList.remove("fading");
+    heroImage.removeAttribute("src");
+    downloadImage.href = "#";
+    resetAccents();
     return;
   }
   const newUrl = c.url, newName = c.name || "canvas.png";
-  const apply = () => { heroImage.src = newUrl; heroImage.alt = newName; downloadImage.href = newUrl; downloadImage.download = newName; showcase.classList.add("has-image"); };
-  if (!showcase.classList.contains("has-image")) { apply(); loadGallery(); return; }
+  const apply = () => {
+    heroImage.src = newUrl; heroImage.alt = newName;
+    downloadImage.href = newUrl; downloadImage.download = newName;
+    showcase.classList.add("has-image");
+  };
+  if (!showcase.classList.contains("has-image")) { apply(); heroImage.addEventListener("load", () => applyAccents(heroImage), {once: true}); loadGallery(1); return; }
   // Preload the new image, then crossfade out → swap → crossfade in.
   const pre = new Image();
+  pre.crossOrigin = "anonymous";
   pre.onload = () => {
     heroImage.classList.add("fading");
     setTimeout(() => {
       apply();
+      heroImage.addEventListener("load", () => applyAccents(heroImage), {once: true});
       requestAnimationFrame(() => requestAnimationFrame(() => heroImage.classList.remove("fading")));
-      loadGallery();
+      loadGallery(galleryPage);
     }, 280);
   };
-  pre.onerror = () => { apply(); loadGallery(); };
+  pre.onerror = () => { apply(); loadGallery(galleryPage); };
   pre.src = newUrl;
 }
-async function loadCanvas() { const r = await get("/api/canvas"); setCanvas(r.canvas); }
-async function loadGallery() {
-  const r = await get("/api/gallery");
-  gallery.innerHTML = (r.items || []).map(x => `<article class="gallery-card"><img src="${x.url}" alt=""><div><strong>${esc(x.title)}</strong><small>${esc(x.artist)}${x.score ? ` · ${(x.score*100).toFixed(0)}% similar` : ""}</small><button data-path="${esc(x.path)}">Remix</button></div></article>`).join("") || "<article class='assistant'>No shared canvases yet.</article>";
+
+// ----- Dynamic accent extraction -----
+const DEFAULT_ACCENT = "#3df2ff";
+const DEFAULT_ACCENT_2 = "#ff4d8d";
+function applyAccents(imgEl) {
+  try {
+    const c = document.createElement("canvas");
+    c.width = 32; c.height = 32;
+    const ctx = c.getContext("2d");
+    ctx.drawImage(imgEl, 0, 0, 32, 32);
+    const data = ctx.getImageData(0, 0, 32, 32).data;
+    const bins = new Map(); // hue bucket (12°) → {weight, h, s, l}
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i], g = data[i+1], b = data[i+2];
+      const [h, s, l] = rgbToHsl(r, g, b);
+      if (s < 0.28 || l < 0.25 || l > 0.78) continue;
+      const bucket = Math.floor(h / 12);
+      const w = s * (1 - Math.abs(l - 0.55) * 1.4);
+      const cur = bins.get(bucket) || {weight: 0, h: 0, s: 0, l: 0, count: 0};
+      cur.weight += w; cur.h += h * w; cur.s += s * w; cur.l += l * w; cur.count += 1;
+      bins.set(bucket, cur);
+    }
+    if (!bins.size) { resetAccents(); return; }
+    const sorted = [...bins.values()].sort((a, b) => b.weight - a.weight);
+    const a1 = avgBin(sorted[0]);
+    // Find a second bin > 60° away on the hue wheel
+    const a2 = avgBin(sorted.find(b => Math.min(Math.abs(b.h/b.weight - a1.h), 360 - Math.abs(b.h/b.weight - a1.h)) > 60) || sorted[1] || sorted[0]);
+    const accent = hslToHex(a1.h, Math.min(1, a1.s * 1.15), Math.min(0.7, Math.max(0.5, a1.l)));
+    const accent2 = hslToHex(a2.h, Math.min(1, a2.s * 1.15), Math.min(0.7, Math.max(0.5, a2.l)));
+    document.documentElement.style.setProperty("--accent", accent);
+    document.documentElement.style.setProperty("--accent-2", accent2);
+    document.documentElement.style.setProperty("--accent-glow", hexWithAlpha(accent, 0.22));
+    document.documentElement.style.setProperty("--accent-2-glow", hexWithAlpha(accent2, 0.32));
+  } catch (e) {
+    // Likely a canvas taint (cross-origin) — silently fall back to defaults.
+    resetAccents();
+  }
 }
+function avgBin(b) { return {h: b.h / b.weight, s: b.s / b.weight, l: b.l / b.weight}; }
+function resetAccents() {
+  document.documentElement.style.removeProperty("--accent");
+  document.documentElement.style.removeProperty("--accent-2");
+  document.documentElement.style.removeProperty("--accent-glow");
+  document.documentElement.style.removeProperty("--accent-2-glow");
+}
+function rgbToHsl(r, g, b) {
+  r/=255; g/=255; b/=255;
+  const max = Math.max(r,g,b), min = Math.min(r,g,b);
+  let h = 0, s = 0; const l = (max+min)/2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d/(2-max-min) : d/(max+min);
+    switch (max) { case r: h = (g-b)/d + (g<b?6:0); break; case g: h = (b-r)/d + 2; break; case b: h = (r-g)/d + 4; break; }
+    h *= 60;
+  }
+  return [h, s, l];
+}
+function hslToHex(h, s, l) {
+  const c = (1 - Math.abs(2*l - 1)) * s;
+  const x = c * (1 - Math.abs(((h/60) % 2) - 1));
+  const m = l - c/2;
+  let r=0,g=0,b=0;
+  if (h < 60) [r,g,b] = [c,x,0];
+  else if (h < 120) [r,g,b] = [x,c,0];
+  else if (h < 180) [r,g,b] = [0,c,x];
+  else if (h < 240) [r,g,b] = [0,x,c];
+  else if (h < 300) [r,g,b] = [x,0,c];
+  else [r,g,b] = [c,0,x];
+  const to = v => Math.round((v+m)*255).toString(16).padStart(2,"0");
+  return `#${to(r)}${to(g)}${to(b)}`;
+}
+function hexWithAlpha(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
+
+async function loadCanvas() { const r = await get("/api/canvas"); setCanvas(r.canvas); }
+
+// ----- Gallery + pagination -----
+async function loadGallery(page = 1) {
+  galleryPage = Math.max(1, page);
+  const offset = (galleryPage - 1) * GALLERY_PAGE;
+  const r = await get(`/api/gallery?limit=${GALLERY_PAGE}&offset=${offset}`);
+  const items = Array.isArray(r.items) ? r.items : (Array.isArray(r) ? r : []);
+  const total = typeof r.total === "number" ? r.total : items.length + offset;
+  gallery.innerHTML = items.map(x => `<article class="gallery-card"><img src="${x.url}" alt=""><div><strong>${esc(x.title)}</strong><small>${esc(x.artist)}${x.score ? ` · ${(x.score*100).toFixed(0)}% similar` : ""}</small><button data-path="${esc(x.path)}">Remix</button></div></article>`).join("") || "<article class='assistant'>No shared canvases yet.</article>";
+  renderPaginator(total);
+}
+function renderPaginator(total) {
+  const pages = Math.max(1, Math.ceil(total / GALLERY_PAGE));
+  if (pages <= 1) { paginator.hidden = true; paginator.innerHTML = ""; return; }
+  paginator.hidden = false;
+  const cur = galleryPage;
+  const btns = [];
+  btns.push(`<button type="button" data-page="${cur-1}" ${cur===1?"disabled":""}>‹</button>`);
+  // Window of pages around current; always show 1 and last.
+  const set = new Set([1, pages, cur-1, cur, cur+1]);
+  for (let p = 1; p <= pages; p++) {
+    if (set.has(p)) btns.push(`<button type="button" data-page="${p}" class="${p===cur?"active":""}">${p}</button>`);
+    else if (p === 2 || p === pages-1) btns.push(`<button type="button" disabled>…</button>`);
+  }
+  btns.push(`<button type="button" data-page="${cur+1}" ${cur===pages?"disabled":""}>›</button>`);
+  paginator.innerHTML = btns.join("");
+}
+paginator.addEventListener("click", e => {
+  const b = e.target.closest("button[data-page]");
+  if (!b || b.disabled) return;
+  const p = +b.dataset.page;
+  if (!Number.isFinite(p)) return;
+  loadGallery(p);
+  document.querySelector(".gallery-section").scrollIntoView({behavior: "smooth", block: "start"});
+});
+
 async function loadPalettes() {
   const r = await get("/api/palettes");
   palettesCache = r.palettes || [];
@@ -264,24 +392,99 @@ function paletteSwatchHtml(p, activeId) {
   const cls = p.id === activeId ? "swatch active" : "swatch";
   return `<button type="button" class="${cls}" title="${esc(p.name)}" data-palette="${esc(p.id)}" style="--swatch:conic-gradient(${Object.values(p.colors).join(",")})"></button>`;
 }
+
+// ----- Controls drawer -----
 function renderControlsPanel(panels) {
   currentControlsPanels = panels || [];
-  if (!currentControlsPanels.length) {
-    controlsPanel.hidden = true;
+  const n = currentControlsPanels.length;
+  controlsCountEl.textContent = String(n);
+  if (!n) {
+    controlsToggle.hidden = true;
+    controlsDrawer.hidden = true;
+    controlsDrawer.classList.remove("open");
+    controlsToggle.classList.remove("open");
     controlsPanel.innerHTML = "";
     return;
   }
-  controlsPanel.hidden = false;
+  controlsToggle.hidden = false;
+  controlsDrawer.hidden = false;
   controlsPanel.innerHTML = currentControlsPanels.map(renderPanel).join("");
 }
+function renderPanel(panel) {
+  const collapsed = collapsedSkills.has(panel.skill_name) ? " collapsed" : "";
+  const widgets = (panel.schema || []).map(spec => renderWidget(panel, spec)).join("");
+  return `<section class="ctl-panel${collapsed}" data-chain="${panel.chain_index}" data-skill="${esc(panel.skill_name)}"><header class="ctl-head" data-toggle-skill="${esc(panel.skill_name)}"><span>${esc(panel.skill_name)}</span><span class="ctl-chev">▼</span></header><div class="ctl-body">${widgets}</div></section>`;
+}
+controlsToggle.addEventListener("click", () => {
+  const open = !controlsDrawer.classList.contains("open");
+  controlsDrawer.classList.toggle("open", open);
+  controlsToggle.classList.toggle("open", open);
+  localStorage.sbDrawerOpen = open ? "1" : "0";
+});
+controlsPanel.addEventListener("click", e => {
+  const head = e.target.closest("[data-toggle-skill]");
+  if (head) {
+    const skill = head.dataset.toggleSkill;
+    const section = head.closest(".ctl-panel");
+    const willCollapse = !section.classList.contains("collapsed");
+    section.classList.toggle("collapsed", willCollapse);
+    if (willCollapse) collapsedSkills.add(skill); else collapsedSkills.delete(skill);
+    localStorage.sbCollapsedSkills = JSON.stringify([...collapsedSkills]);
+    return;
+  }
+  const target = e.target;
+  const sw = target.closest("button[data-palette]");
+  if (sw) {
+    const row = sw.closest(".ctl-palette");
+    const chain = +row.dataset.chain;
+    postControl({chain_index: chain, name: "palette", value: sw.dataset.palette});
+    return;
+  }
+  if (target.matches(".ctl-seg")) {
+    postControl({chain_index: +target.dataset.chain, name: target.dataset.name, value: JSON.parse(target.dataset.value)});
+    return;
+  }
+  const pan = target.closest(".ctl-pan");
+  const arrow = target.closest("button[data-dir]");
+  if (pan && arrow) {
+    const step = +pan.dataset.step || 0.1;
+    let x = +pan.dataset.x || 0, y = +pan.dataset.y || 0;
+    if (arrow.dataset.dir === "left") x -= step;
+    else if (arrow.dataset.dir === "right") x += step;
+    else if (arrow.dataset.dir === "up") y -= step;
+    else if (arrow.dataset.dir === "down") y += step;
+    pan.dataset.x = x; pan.dataset.y = y;
+    const cc = pan.querySelector(".ctl-pan-c"); if (cc) cc.textContent = `${fmtNum(x)}, ${fmtNum(y)}`;
+    postControl({chain_index: +pan.dataset.chain, name: pan.dataset.name, value: {x, y}});
+    return;
+  }
+  if (target.matches(".ctl-btn")) {
+    postControl({chain_index: +target.dataset.chain, name: target.dataset.name, value: null});
+  }
+});
+controlsPanel.addEventListener("input", e => {
+  const el = e.target;
+  const chain = +el.dataset.chain;
+  if (Number.isNaN(chain)) return;
+  if (el.dataset.kind === "slider") {
+    const valEl = el.parentElement.querySelector(".ctl-val");
+    if (valEl) valEl.textContent = fmtNum(+el.value);
+    debounceControl(`${chain}.${el.dataset.name}`, () => postControl({chain_index: chain, name: el.dataset.name, value: +el.value}));
+  }
+});
+controlsPanel.addEventListener("change", e => {
+  const el = e.target;
+  const chain = +el.dataset.chain;
+  if (Number.isNaN(chain)) return;
+  if (el.dataset.kind === "bool") {
+    postControl({chain_index: chain, name: el.dataset.name, value: el.checked});
+  }
+});
+
 function renderLayersStack(layers) {
   if (!layers.length) { layersStack.hidden = true; layersStack.innerHTML = ""; return; }
   layersStack.hidden = false;
   layersStack.innerHTML = layers.map(l => `<div class="layer-chip" title="${esc(l.skill_name)}"><span class="layer-face">${esc(l.skill_name)}</span><button type="button" class="layer-x" data-chain="${l.chain_index}" aria-label="Delete ${esc(l.skill_name)}">×</button></div>`).join("");
-}
-function renderPanel(panel) {
-  const widgets = (panel.schema || []).map(spec => renderWidget(panel, spec)).join("");
-  return `<section class="ctl-panel" data-chain="${panel.chain_index}"><header class="ctl-head">${esc(panel.skill_name)}</header>${widgets}</section>`;
 }
 function renderWidget(panel, spec) {
   const v = panel.values || {};
@@ -334,6 +537,8 @@ async function postControl(body) {
   finally { controlsPanel.classList.remove("loading"); }
 }
 function esc(x) { return String(x ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+// ----- Chat + actions -----
 form.addEventListener("submit", async e => {
   e.preventDefault();
   const text = input.value.trim();
@@ -352,10 +557,18 @@ document.querySelector("#newChat").addEventListener("click", async () => {
   messages.innerHTML = "";
   toolStatusEls.clear();
   render((await post("/api/new")).events);
-  loadGallery();
+  loadGallery(1);
 });
+
+// Empty-state example chips: pre-fill composer, focus, but let user send.
+emptyState.addEventListener("click", e => {
+  const chip = e.target.closest(".es-chip");
+  if (!chip) return;
+  input.value = chip.dataset.prompt || chip.textContent;
+  input.focus();
+});
+
 downloadImage.addEventListener("click", () => {
-  // Fire-and-forget telemetry — the actual download is the plain <a download>.
   if (downloadImage.getAttribute("href") && downloadImage.getAttribute("href") !== "#") {
     post("/api/download").catch(() => {});
   }
@@ -371,59 +584,6 @@ regenerateBtn.addEventListener("click", async () => {
 shareBtn.addEventListener("click", () => { sharePanel.hidden = !sharePanel.hidden; shareTitle.value ||= "untitled"; shareArtist.value ||= "anonymous"; });
 document.querySelector("#shareConfirm").addEventListener("click", async () => render((await post("/api/share", {title:shareTitle.value, artist:shareArtist.value})).events));
 gallery.addEventListener("click", async e => { if (e.target.matches("button[data-path]")) { render((await post("/api/remix", {path:e.target.dataset.path})).events); scrollTo({top:0, behavior:"smooth"}); } });
-controlsPanel.addEventListener("input", e => {
-  const el = e.target;
-  const chain = +el.dataset.chain;
-  if (Number.isNaN(chain)) return;
-  if (el.dataset.kind === "slider") {
-    const valEl = el.parentElement.querySelector(".ctl-val");
-    if (valEl) valEl.textContent = fmtNum(+el.value);
-    debounceControl(`${chain}.${el.dataset.name}`, () => postControl({chain_index: chain, name: el.dataset.name, value: +el.value}));
-  }
-});
-controlsPanel.addEventListener("change", e => {
-  const el = e.target;
-  const chain = +el.dataset.chain;
-  if (Number.isNaN(chain)) return;
-  if (el.dataset.kind === "bool") {
-    postControl({chain_index: chain, name: el.dataset.name, value: el.checked});
-  }
-});
-controlsPanel.addEventListener("click", e => {
-  const target = e.target;
-  // Palette swatch.
-  const sw = target.closest("button[data-palette]");
-  if (sw) {
-    const row = sw.closest(".ctl-palette");
-    const chain = +row.dataset.chain;
-    postControl({chain_index: chain, name: "palette", value: sw.dataset.palette});
-    return;
-  }
-  // Enum segment.
-  if (target.matches(".ctl-seg")) {
-    postControl({chain_index: +target.dataset.chain, name: target.dataset.name, value: JSON.parse(target.dataset.value)});
-    return;
-  }
-  // Pan arrow.
-  const pan = target.closest(".ctl-pan");
-  const arrow = target.closest("button[data-dir]");
-  if (pan && arrow) {
-    const step = +pan.dataset.step || 0.1;
-    let x = +pan.dataset.x || 0, y = +pan.dataset.y || 0;
-    if (arrow.dataset.dir === "left") x -= step;
-    else if (arrow.dataset.dir === "right") x += step;
-    else if (arrow.dataset.dir === "up") y -= step;
-    else if (arrow.dataset.dir === "down") y += step;
-    pan.dataset.x = x; pan.dataset.y = y;
-    const c = pan.querySelector(".ctl-pan-c"); if (c) c.textContent = `${fmtNum(x)}, ${fmtNum(y)}`;
-    postControl({chain_index: +pan.dataset.chain, name: pan.dataset.name, value: {x, y}});
-    return;
-  }
-  // Button (action) widget.
-  if (target.matches(".ctl-btn")) {
-    postControl({chain_index: +target.dataset.chain, name: target.dataset.name, value: null});
-  }
-});
 layersStack.addEventListener("click", async e => {
   const x = e.target.closest(".layer-x");
   if (!x) return;
@@ -433,27 +593,4 @@ layersStack.addEventListener("click", async e => {
   catch (err) { add("error", err.message); }
 });
 setInterval(poll, 1200);
-loadPalettes(); loadCanvas(); loadGallery(); refreshAccount();
-
-const canvas = document.querySelector("#fractal");
-const ctx = canvas.getContext("2d");
-let t = 0;
-function draw() {
-  const w = canvas.width = Math.max(2, Math.floor(canvas.clientWidth * .55 / 2) * 2);
-  const h = canvas.height = Math.max(2, Math.floor(canvas.clientHeight * .55 / 2) * 2);
-  const img = ctx.createImageData(w, h);
-  const zoom = 1.25 + Math.sin(t) * .35;
-  const cx = -0.745 + Math.cos(t * .37) * .018;
-  const cy = 0.112 + Math.sin(t * .31) * .018;
-  for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
-    let zx = (x / w - .5) * 3.2 / zoom + cx, zy = (y / h - .5) * 2.35 / zoom + cy, i = 0;
-    const ox = zx, oy = zy;
-    for (; i < 72 && zx*zx + zy*zy < 4; i++) { const nx = zx*zx - zy*zy + ox; zy = 2*zx*zy + oy; zx = nx; }
-    const p = (y*w + x) * 4, a = i / 72, r = 20 + 235*a, g = 30 + 120*Math.sin(a*5+t), b = 80 + 175*(1-a);
-    for (const d of [0,4,w*4,w*4+4]) { img.data[p+d]=r; img.data[p+d+1]=g; img.data[p+d+2]=b; img.data[p+d+3]=255; }
-  }
-  ctx.putImageData(img, 0, 0);
-  t += .018;
-  setTimeout(draw, 90);
-}
-draw();
+loadPalettes(); loadCanvas(); loadGallery(1); refreshAccount();

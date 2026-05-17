@@ -9,6 +9,7 @@
 </head>
 <body>
   <main class="account-page">
+    <a class="back-link" href="/">← Back to demo</a>
     <p class="eyebrow">Second Brain</p>
     <h1>Your account</h1>
     <div id="welcome" class="modal-status ok" hidden>Payment confirmed. Your credits are ready.</div>
@@ -29,16 +30,17 @@
       <div class="account-row"><span>Messages remaining</span><span id="rowCredits">—</span></div>
       <div class="account-actions">
         <button id="buyMore" type="button" class="primary-btn">Buy 2,000 more · $2.99</button>
-        <a href="/">Back to demo</a>
-        <a href="/auth/logout">Sign out</a>
+        <div class="account-secondary-row">
+          <a href="/">← Back to demo</a>
+          <a href="/auth/logout" class="danger">Sign out</a>
+        </div>
       </div>
     </div>
 
     <div class="account-card" id="promoCard" hidden>
-      <p class="modal-lead">Have a promo code?</p>
       <form id="promoForm">
-        <input id="promoCode" type="text" required placeholder="Promo code">
-        <button type="submit" class="primary-btn">Redeem</button>
+        <input id="promoCode" type="text" required placeholder=" Promo Code">
+        <button type="submit" class="primary-btn">Redeem Promo Code</button>
       </form>
       <p id="promoStatus" class="modal-status" hidden></p>
     </div>

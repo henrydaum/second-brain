@@ -692,12 +692,16 @@ class WebFrontend(BaseFrontend):
         skill_scoring.record_event(getattr(self.runtime, "db", None), "share", chain, str(dest.resolve()))
         return [{"type": "shared", "item": _gallery_url(meta)}, {"type": "message", "role": "assistant", "content": f'Shared "{meta["title"]}" by {meta["artist"]}.'}]
 
-    def gallery(self, session_id: str, limit: int = 24) -> list[dict]:
+    def gallery(self, session_id: str, limit: int = 24, offset: int = 0) -> dict:
         item = canvas(self.session_key(session_id))
         ctx = SimpleNamespace(services=getattr(self.runtime, "services", {}), db=getattr(self.runtime, "db", None))
         db = getattr(self.runtime, "db", None)
-        rows = similar_rows(item["path"], ctx, limit) if item and item.get("path") else gallery_rows(db)[:limit]
-        return [_gallery_url(r) for r in rows]
+        # Fetch a bigger window than the page so we can paginate over it.
+        # similar_rows is bounded by its arg; gallery_rows is the full list.
+        all_rows = similar_rows(item["path"], ctx, max(limit + offset, 200)) if item and item.get("path") else list(gallery_rows(db))
+        total = len(all_rows)
+        page = all_rows[offset : offset + limit]
+        return {"items": [_gallery_url(r) for r in page], "total": total}
 
     def remix(self, session_id: str, path: str) -> list[dict]:
         p = Path(unquote(path)).resolve()
@@ -820,7 +824,12 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "palettes": self.server.frontend.palettes_payload()})
         if path == "/api/gallery":
             qs = parse_qs(parsed.query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
-            return self._json({"ok": True, "items": self.server.frontend.gallery(sid)})
+            try: limit = max(1, min(96, int(qs.get("limit", ["24"])[0])))
+            except (TypeError, ValueError): limit = 24
+            try: offset = max(0, int(qs.get("offset", ["0"])[0]))
+            except (TypeError, ValueError): offset = 0
+            res = self.server.frontend.gallery(sid, limit=limit, offset=offset)
+            return self._json({"ok": True, **res})
         if path == "/api/account":
             qs = parse_qs(parsed.query)
             sid = str(qs.get("session_id", ["demo"])[0])[:80]

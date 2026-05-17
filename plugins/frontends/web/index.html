@@ -15,7 +15,7 @@
           <p class="eyebrow">Generative Art Maker</p>
           <h1>Second Brain</h1>
         </div>
-        <button id="newChat" title="Start a new conversation">New</button>
+        <button id="newChat" class="new-chat-link" title="Start a new conversation">+ New chat</button>
       </header>
       <div id="messages" class="messages">
         <article class="assistant">Ask about the demo files, search local notes, or make the agent use a tool.</article>
@@ -26,7 +26,15 @@
       </form>
     </section>
     <section class="showcase">
-      <canvas id="fractal" width="900" height="700"></canvas>
+      <div id="emptyState">
+        <div class="es-title">You can make something here.</div>
+        <div class="es-sub"><span class="arrow">←</span>Ask Second Brain to draw, paint, or fractal something. The chat on the left talks to an agent that can pick up tools, layer them, and remix what's already in the archive.</div>
+        <div class="es-chips">
+          <button type="button" class="es-chip" data-prompt="draw a mandelbrot zoom into a seahorse valley">draw a mandelbrot zoom</button>
+          <button type="button" class="es-chip" data-prompt="make me a circle and color it cyan">make me a circle</button>
+          <button type="button" class="es-chip" data-prompt="surprise me">surprise me</button>
+        </div>
+      </div>
       <img id="heroImage" alt="">
       <div id="layersStack" class="layers-stack" hidden></div>
       <div class="canvas-actions">
@@ -39,12 +47,18 @@
         <input id="shareArtist" placeholder="Your name">
         <button id="shareConfirm" type="button">Share</button>
       </div>
-      <div id="controlsPanel" class="controls-panel" hidden></div>
+      <button id="controlsToggle" class="controls-toggle" type="button" hidden>
+        <span>Controls</span><span class="count" id="controlsCount">0</span><span class="chev">▲</span>
+      </button>
+      <div id="controlsDrawer" class="controls-drawer" hidden>
+        <div id="controlsPanel" class="controls-panel"></div>
+      </div>
     </section>
   </main>
   <div id="accountBar" class="account-bar">
     <span id="accountChip" class="account-chip" hidden></span>
     <button id="signInBtn" type="button" class="link-btn">Sign in</button>
+    <span class="spacer"></span>
     <a id="accountLink" class="link-btn" href="/account" hidden>Account</a>
     <a id="logoutLink" class="link-btn" href="/auth/logout" hidden>Sign out</a>
   </div>
@@ -54,6 +68,7 @@
       <h2>Remix the nearest signals.</h2>
     </div>
     <div id="gallery" class="gallery"></div>
+    <div id="paginator" class="paginator" hidden></div>
   </section>
 
   <div id="paywallModal" class="modal" hidden>
