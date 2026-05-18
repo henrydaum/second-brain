@@ -123,9 +123,8 @@ function render(events) {
     else if (ev.type === "account") setAccount(ev.account);
     else if (ev.type === "hero_image") {
       setCanvas(ev.canvas || {url: ev.url, name: ev.name});
-      loaderForceStop();
     }
-    else if (ev.type === "canvas_reset") { setCanvas(null); loaderForceStop(); }
+    else if (ev.type === "canvas_reset") { setCanvas(null); }
     else if (ev.type === "shared") { sharePanel.hidden = true; loadGallery(1); }
     else if (ev.type === "attachment") add("assistant", `Attachment: ${ev.name}`);
     else if (ev.type === "typing") setTyping(!!ev.on);
@@ -621,7 +620,7 @@ function loaderSync() {
     if (loaderStopGrace) { clearTimeout(loaderStopGrace); loaderStopGrace = 0; }
     if (!showcase.classList.contains("loading")) loaderStartNow();
   } else if (showcase.classList.contains("loading") && !loaderStopGrace) {
-    loaderStopGrace = setTimeout(loaderForceStop, 1500);
+    loaderStopGrace = setTimeout(loaderForceStop, 200);
   }
 }
 function loaderStartNow() {
