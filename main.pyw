@@ -184,11 +184,25 @@ def main():
 			if not _restart_lock.acquire(blocking=False):
 				return
 			logger.info("Re-execing process now.")
-			# Use os.execv so the new process keeps our controlling TTY
-			# and stdin/stdout — Popen+exit detaches the child on Unix,
-			# which kills the REPL frontend on the next input() call.
-			# On Windows os.execv replaces the process the same way.
-			os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
+			args = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]
+			if sys.platform == "win32":
+				# Windows os.execv doesn't truly overlay — the MSVC runtime
+				# spawns a child and exits the parent, orphaning the child
+				# from the parent's console. Result: terminal returns to
+				# prompt and the "new" process is gone. Spawn with a fresh
+				# console so the new instance survives the parent exit.
+				import subprocess
+				subprocess.Popen(
+					args,
+					cwd=str(_ROOT),
+					close_fds=True,
+					creationflags=subprocess.CREATE_NEW_CONSOLE,
+				)
+				os._exit(0)
+			# On Unix execv overlays the process in place, keeping stdin
+			# attached so the REPL frontend's blocking input() keeps reading
+			# from the user's terminal.
+			os.execv(sys.executable, args)
 
 		def graceful_then_exec():
 			try:
