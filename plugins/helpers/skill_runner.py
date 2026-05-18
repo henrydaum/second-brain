@@ -44,7 +44,16 @@ def run_skill(
     timeout_s: float = DEFAULT_TIMEOUT_S,
 ) -> dict:
     """Execute a skill in a sandboxed subprocess. Returns a small status dict."""
-    assert_valid(skill.code)
+    try:
+        assert_valid(skill.code)
+    except Exception as e:
+        msg = str(e)
+        if "disallowed import" in msg:
+            raise SkillRunError(
+                f"skill '{skill.slug}' failed validation: {msg}\n"
+                "  hint: Only math, random, colorsys, numpy, and PIL.* (Image, ImageDraw, ImageFilter, ImageOps, ImageEnhance, ImageChops, ImageColor) are importable. Remove the disallowed import."
+            )
+        raise SkillRunError(f"skill '{skill.slug}' failed validation: {msg}")
     if skill.kind == "transform" and (input_image_path is None or not Path(input_image_path).is_file()):
         raise SkillRunError("transform skills require a current canvas image; create one first")
 
@@ -107,21 +116,57 @@ def run_skill(
             pass
 
     elapsed = time.time() - t0
+    sidecar = _read_sidecar(output_image_path)
     if proc.returncode != 0:
         err = (stderr or b"").decode("utf-8", errors="replace").strip()
         out = (stdout or b"").decode("utf-8", errors="replace").strip()
-        msg = err.splitlines()[-1] if err else out or "unknown error"
         logger.error("Skill '%s' failed (rc=%s).\nSTDERR:\n%s\nSTDOUT:\n%s", skill.slug, proc.returncode, err or "(empty)", out or "(empty)")
-        raise SkillRunError(f"skill '{skill.slug}' failed: {msg}")
+        raise SkillRunError(_format_error(skill.slug, sidecar, err, out))
     if not output_image_path.is_file():
         raise SkillRunError(f"skill '{skill.slug}' did not commit an image")
 
-    return {
+    result = {
         "slug": skill.slug,
         "duration_s": elapsed,
         "output_image_path": str(output_image_path),
         "stdout": (stdout or b"").decode("utf-8", errors="replace"),
     }
+    if sidecar and sidecar.get("warning"):
+        result["warning"] = sidecar.get("warning")
+        result["warning_message"] = sidecar.get("message") or ""
+    return result
+
+
+def _read_sidecar(output_image_path: Path) -> dict | None:
+    p = Path(str(output_image_path) + ".err.json")
+    if not p.is_file():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    finally:
+        try: p.unlink()
+        except OSError: pass
+    return data if isinstance(data, dict) else None
+
+
+def _format_error(slug: str, sidecar: dict | None, stderr: str, stdout: str) -> str:
+    """Build a rich, agent-readable error message from a sandbox diagnostic."""
+    if sidecar and sidecar.get("error_type"):
+        parts = [f"skill '{slug}' failed: {sidecar['error_type']}: {sidecar.get('message', '')}"]
+        lineno = sidecar.get("skill_lineno")
+        line = (sidecar.get("skill_line") or "").strip()
+        if lineno and line:
+            parts.append(f"  at line {lineno}: {line}")
+        elif lineno:
+            parts.append(f"  at line {lineno}")
+        if sidecar.get("hint"):
+            parts.append(f"  hint: {sidecar['hint']}")
+        return "\n".join(parts)
+    # Fallback: legacy path with no sidecar.
+    msg = stderr.splitlines()[-1] if stderr else stdout or "unknown error"
+    return f"skill '{slug}' failed: {msg}"
 
 
 def make_chain_entry(skill: Skill, params: dict, seed: int, controls: dict | None = None) -> dict:

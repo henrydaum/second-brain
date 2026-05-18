@@ -46,13 +46,16 @@ class ExecuteSkill(BaseTool):
         merged_params, step_palette = resolve_entry(entry, fallback_palette=get_palette(state.get("palette_id")))
         tmp = lc.image_path(session_key).with_name(f"_skill_{slug}_{int(time.time()*1000)}.png")
         try:
-            run_skill(skill, params=merged_params, palette=step_palette, size=int(state.get("size") or lc.DEFAULT_SIZE), seed=seed, input_image_path=Path(state["image_path"]) if state.get("image_path") else None, output_image_path=tmp)
+            status = run_skill(skill, params=merged_params, palette=step_palette, size=int(state.get("size") or lc.DEFAULT_SIZE), seed=seed, input_image_path=Path(state["image_path"]) if state.get("image_path") else None, output_image_path=tmp)
             with Image.open(tmp) as img:
                 new_state = lc.commit_image(session_key, img.convert("RGBA"), f"skill:{slug}", entry)
             final = lc.canvas(session_key)["path"]
             # Log a per-skill generation row (denominator for share-rate stats).
             skill_scoring.record_event(getattr(context, "db", None), "generate", [entry], final)
-            return ToolResult(data={"canvas": lc.canvas(session_key), "chain": new_state.get("last_chain")}, llm_summary=f"Executed {skill.kind} skill '{slug}' on the canvas.", attachment_paths=[final])
+            summary = f"Executed {skill.kind} skill '{slug}' on the canvas."
+            if status and status.get("warning"):
+                summary += f" ⚠️ Warning ({status['warning']}): {status.get('warning_message', '')}"
+            return ToolResult(data={"canvas": lc.canvas(session_key), "chain": new_state.get("last_chain")}, llm_summary=summary, attachment_paths=[final])
         except (SkillRunError, Exception) as e:
             logger.exception("execute_skill failed: slug=%s session=%s params=%s", slug, session_key, params)
             return ToolResult.failed(str(e))

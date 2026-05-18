@@ -207,7 +207,9 @@ Techniques available via art_kit (good-for hints):
 
 When in doubt, prefer noise, gradients, and procedural patterns in palette tones over explicit shapes. Compose multiple techniques (e.g. fbm background + vogel foreground + radial vignette) rather than drawing literal features.
 
-Skill kinds: creation starts a new image; transform requires the current canvas and uses canvas.image. Skill code must call canvas.commit(image). Create a blank image with canvas.new(color=canvas.palette.background) or canvas.create_image(). Use canvas.palette.primary, secondary, tertiary, accent, and background instead of hard-coded colors; palette slots behave as "#RRGGBB" strings and as RGB sequences. Use canvas.size/canvas.width/canvas.height and canvas.seed for deterministic output. Allowed imports: math, random, colorsys, numpy, PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps, PIL.ImageEnhance."""
+Skill kinds: creation starts a new image; transform requires the current canvas and uses canvas.image. Skill code must call canvas.commit(image). Create a blank image with canvas.new(color=canvas.palette.background) or canvas.create_image(). Use canvas.palette.primary, secondary, tertiary, accent, and background instead of hard-coded colors; palette slots behave as "#RRGGBB" strings and as RGB sequences. Use canvas.size/canvas.width/canvas.height and canvas.seed for deterministic output. Allowed imports: math, random, colorsys, numpy, PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps, PIL.ImageEnhance.
+
+Iteration is normal. Before each tool call, write one short sentence in plain language telling the user what you're about to try or adjust ("first attempt rendered blank — let me try a different normalization", "the bloom was too heavy, dialing back radius"). If a skill fails or surfaces a blank-canvas warning, don't apologize or treat it as broken — say what you're changing and try again. Skill errors include a hint line — read it and act on it. Tell the user that art is iterative and they can always say what to change."""
 
 
 def _sandbox_files() -> str:

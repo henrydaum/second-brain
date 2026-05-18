@@ -232,6 +232,17 @@ class ConversationLoop:
         if self._cancelled():
             return None, None
         if self._pending_tool_calls:
+            # If the assistant returned narration alongside this batch of tool
+            # calls, surface it to the user FIRST as a send_text action so the
+            # frontend renders it before the tool pill appears. The send_text
+            # path also records it as an assistant history row, so we clear
+            # _assistant_text_for_pending after to avoid duplicating it on the
+            # call_tool's assistant message.
+            pending_text = _clean(self._assistant_text_for_pending or "")
+            if pending_text:
+                self._assistant_text_for_pending = None
+                return "send_text", pending_text
+
             tc = self._pending_tool_calls.pop(0)
             try:
                 args = json.loads(tc.get("arguments") or "{}")
@@ -243,7 +254,7 @@ class ConversationLoop:
                 "_tool_call_id": tc.get("id"),
                 "_assistant_text": self._assistant_text_for_pending,
             }
-            self._assistant_text_for_pending = None  # only first call carries it
+            self._assistant_text_for_pending = None
             return "call_tool", content
 
         # 2) Final text was already emitted but turn isn't ended → end it.
