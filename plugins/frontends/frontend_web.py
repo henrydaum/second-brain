@@ -626,7 +626,7 @@ class WebFrontend(BaseFrontend):
         p = Path(unquote(path)).resolve()
         if not _is_archive_image(p, owner):
             raise ValueError("That archive entry is not available to remix.")
-        return self.remix(session_id, str(p))
+        return self._remix(self.session_key(session_id), p)
 
     def history(self, session_id: str) -> list[dict]:
         """Return user/assistant text messages for this session, oldest first.
@@ -799,7 +799,9 @@ class WebFrontend(BaseFrontend):
         p = Path(unquote(path)).resolve()
         if not _is_gallery_image(p):
             raise ValueError("That gallery image is not available to remix.")
-        key = self.session_key(session_id)
+        return self._remix(self.session_key(session_id), p)
+
+    def _remix(self, key: str, p: Path) -> list[dict]:
         meta = read_json(p.with_suffix(".json"))
         reset_canvas(key)
         source_chain = list(meta.get("chain") or [])
