@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 
 # Mutable demo data: database, config, credentials. Override for deployments.
-_APP_DATA_NAME = os.getenv("SECOND_BRAIN_APP_DATA", "Second Brain Demo")
+_APP_DATA_NAME = os.getenv("SECOND_BRAIN_APP_DATA", "Second Brain Art")
 _DATA_OVERRIDE = os.getenv("SECOND_BRAIN_DATA_DIR")
 _system = platform.system()
 if _DATA_OVERRIDE:

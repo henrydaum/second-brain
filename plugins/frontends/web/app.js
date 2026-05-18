@@ -185,8 +185,8 @@ document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click
 
 function setAccount(acc) {
   if (acc?.signed_in) {
-    const credits = acc.tier === "unlimited" ? "∞ messages" : `${(acc.credits || 0).toLocaleString()} left`;
-    accountChip.textContent = `${acc.email} · ${credits}`;
+    const remaining = acc.tier === "unlimited" ? "∞ messages" : `${(acc.messages_remaining ?? 0).toLocaleString()} left`;
+    accountChip.textContent = `${acc.email} · ${remaining}`;
     accountChip.hidden = false;
     signInBtn.hidden = true;
     accountLink.hidden = false;
