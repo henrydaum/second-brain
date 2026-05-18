@@ -156,11 +156,21 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .paginator button.active { border-color: var(--accent); color: var(--accent); background: rgba(61,242,255,.06); }
 .paginator button:disabled { opacity: .4; cursor: default; }
 
-/* ---- Account bar ---- */
-.account-bar { display: flex; align-items: center; gap: 14px; padding: 14px 32px; background: var(--panel); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.account-chip { color: var(--text); font-size: 13px; padding: 6px 10px; background: #1a1f2c; border: 1px solid var(--line); }
-.account-bar .spacer { margin-left: auto; }
-.account-bar .link-btn + .link-btn { margin-left: 4px; }
+/* ---- Header actions + account avatar ---- */
+.header-actions { display: flex; align-items: center; gap: 12px; }
+.account-avatar { position: relative; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+.account-avatar[hidden] { display: none; }
+.account-avatar .ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.account-avatar .ring-track { fill: none; stroke: var(--line); stroke-width: 2; transition: stroke 200ms ease; }
+.account-avatar .ring-fill { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
+  stroke-dasharray: 100.531; stroke-dashoffset: 100.531;
+  transition: stroke-dashoffset 400ms ease, stroke 300ms ease; }
+.account-avatar.low .ring-fill { stroke: var(--hot); }
+.account-avatar.unlimited .ring-fill { stroke: var(--accent); filter: drop-shadow(0 0 4px var(--accent-glow)); }
+.account-avatar .avatar-inner { font-size: 12px; font-weight: 700; color: var(--text); letter-spacing: 0; user-select: none; line-height: 1; }
+.account-avatar:hover .ring-track { stroke: var(--muted); }
+
+/* ---- Misc link button (used inside modals) ---- */
 .link-btn { background: transparent; color: var(--accent); border: 0; padding: 4px 0; cursor: pointer; font-size: 14px; text-decoration: none; transition: color 200ms ease; }
 .link-btn:hover { color: var(--text); text-decoration: underline; }
 

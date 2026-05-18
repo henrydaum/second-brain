@@ -163,10 +163,10 @@ function setTyping(on) {
 }
 
 // ----- account + paywall + auth -----
-const accountChip = document.querySelector("#accountChip");
-const signInBtn = document.querySelector("#signInBtn");
-const accountLink = document.querySelector("#accountLink");
-const logoutLink = document.querySelector("#logoutLink");
+const accountAvatar = document.querySelector("#accountAvatar");
+const avatarInner = document.querySelector("#avatarInner");
+const avatarRingFill = accountAvatar.querySelector(".ring-fill");
+const RING_CIRC = 2 * Math.PI * 16; // r=16 in viewBox; matches stroke-dasharray
 const paywallModal = document.querySelector("#paywallModal");
 const signinModal = document.querySelector("#signinModal");
 const promoModal = document.querySelector("#promoModal");
@@ -184,24 +184,27 @@ document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click
 [paywallModal, signinModal, promoModal].forEach(m => m.addEventListener("click", e => { if (e.target === m) closeModal(m); }));
 
 function setAccount(acc) {
-  const remainingText = acc?.tier === "unlimited"
-    ? "∞ messages"
-    : `${(acc?.messages_remaining ?? 0).toLocaleString()} left`;
-  if (acc?.signed_in) {
-    accountChip.textContent = `${acc.email} · ${remainingText}`;
-    signInBtn.hidden = true;
-    accountLink.hidden = false;
-    logoutLink.hidden = false;
+  const remaining = acc?.messages_remaining;
+  const max = acc?.messages_max;
+  const unlimited = max == null;
+  const fill = unlimited ? 1 : Math.max(0, Math.min(1, (remaining ?? 0) / max));
+  avatarRingFill.style.strokeDashoffset = String(RING_CIRC * (1 - fill));
+  if (acc?.signed_in && acc.email) {
+    avatarInner.textContent = acc.email[0].toUpperCase();
   } else {
-    accountChip.textContent = remainingText;
-    signInBtn.hidden = false;
-    accountLink.hidden = true;
-    logoutLink.hidden = true;
+    avatarInner.textContent = "·";
   }
-  accountChip.hidden = false;
+  accountAvatar.classList.toggle("low", !unlimited && typeof remaining === "number" && remaining <= 5);
+  accountAvatar.classList.toggle("unlimited", unlimited);
+  const tier = acc?.tier || "free";
+  const tierLabel = acc?.signed_in ? (tier === "unlimited" ? "Unlimited" : tier === "paid" ? "Paid" : "Free") : "Free demo";
+  const tail = unlimited ? "Unlimited" : `${(remaining ?? 0).toLocaleString()} messages left`;
+  accountAvatar.title = `${tierLabel} — ${tail}`;
+  accountAvatar.hidden = false;
 }
 async function refreshAccount() {
-  try { const r = await get("/api/account"); setAccount(r.account); } catch {}
+  try { const r = await get("/api/account"); setAccount(r.account); }
+  catch (err) { console.warn("[account] refresh failed:", err); }
 }
 function openPaywall(ev) {
   const card = paywallModal.querySelector(".modal-card");
@@ -226,7 +229,6 @@ buyBtn.addEventListener("click", async () => {
     add("error", e.message);
   }
 });
-signInBtn.addEventListener("click", () => openModal(signinModal));
 document.querySelector("#signInFromPaywall").addEventListener("click", () => { closeModal(paywallModal); openModal(signinModal); });
 document.querySelector("#promoLink").addEventListener("click", () => { closeModal(paywallModal); openModal(promoModal); });
 signinForm.addEventListener("submit", async e => {

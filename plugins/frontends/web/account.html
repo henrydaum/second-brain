@@ -27,7 +27,7 @@
     <div id="signedIn" class="account-card" hidden>
       <div class="account-row"><span>Email</span><span id="rowEmail">—</span></div>
       <div class="account-row"><span>Plan</span><span id="rowTier">—</span></div>
-      <div class="account-row"><span>Messages remaining</span><span id="rowCredits">—</span></div>
+      <div class="account-row"><span>Messages remaining</span><span id="rowRemaining">—</span></div>
       <div class="account-actions">
         <button id="buyMore" type="button" class="primary-btn">Buy 2,000 more · $2.99</button>
         <div class="account-secondary-row">
@@ -91,7 +91,7 @@
       $("#rowEmail").textContent = a.email || "—";
       const plan = a.tier === "unlimited" ? "Unlimited" : a.tier === "paid" ? "Paid" : "Free";
       $("#rowTier").textContent = plan;
-      $("#rowCredits").textContent = a.tier === "unlimited" ? "Unlimited" : (a.credits || 0).toLocaleString();
+      $("#rowRemaining").textContent = a.messages_remaining == null ? "Unlimited" : a.messages_remaining.toLocaleString();
       window._sbEmail = a.email || "";
     } else {
       $("#signedOut").hidden = false;

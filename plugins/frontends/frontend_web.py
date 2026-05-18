@@ -343,11 +343,12 @@ class WebFrontend(BaseFrontend):
                     "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen) "
                     "VALUES (?, ?, ?, ?, ?) "
                     "ON CONFLICT(user_id) DO UPDATE SET last_seen = excluded.last_seen, "
+                    "  ip_hash = excluded.ip_hash, "
                     "  session_id = COALESCE(web_users.session_id, excluded.session_id)",
                     (uid, session_id, ip_hash, now, now),
                 )
             else:
-                db.conn.execute("UPDATE web_users SET last_seen = ?, ip_hash = COALESCE(ip_hash, ?) WHERE user_id = ?", (now, ip_hash, uid))
+                db.conn.execute("UPDATE web_users SET last_seen = ?, ip_hash = ? WHERE user_id = ?", (now, ip_hash, uid))
 
             # Tier shortcuts: unlimited never blocks; paid consumes credits.
             tier = (account or {}).get("tier") or "free"
@@ -368,22 +369,11 @@ class WebFrontend(BaseFrontend):
 
             # Free tier: rolling windows + IP backstop.
             db.conn.execute("DELETE FROM web_usage_events WHERE ts < ?", (week,))
-            g5 = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE ts >= ?", (five_h,)).fetchone()["n"]
-            gw = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE ts >= ?", (week,)).fetchone()["n"]
-            s5 = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, five_h)).fetchone()["n"]
-            sw = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, week)).fetchone()["n"]
-            ip5 = 0
-            if ip_hash:
-                ip5 = db.conn.execute(
-                    "SELECT COUNT(*) AS n FROM web_usage_events e "
-                    "JOIN web_users u ON u.user_id = e.user_id "
-                    "WHERE u.ip_hash = ? AND e.ts >= ?",
-                    (ip_hash, five_h),
-                ).fetchone()["n"]
+            q = self._quota_status(db, uid, ip_hash)
 
             global_caps = (
-                (g5, _int(self.config.get("web_global_5h_turn_limit"), 600), "The public demo is busy right now. Try again a little later."),
-                (gw, _int(self.config.get("web_global_week_turn_limit"), 6000), "The public demo hit its weekly budget. Try again later."),
+                (q["g5"], q["g5_lim"], "The public demo is busy right now. Try again a little later."),
+                (q["gw"], q["gw_lim"], "The public demo hit its weekly budget. Try again later."),
             )
             for used, limit, msg in global_caps:
                 if limit > 0 and used >= limit:
@@ -391,9 +381,9 @@ class WebFrontend(BaseFrontend):
                     return False, msg, None  # global cap → plain error, no paywall
 
             personal_caps = (
-                (s5, _int(self.config.get("web_session_5h_turn_limit"), 40), "You've hit your 5-hour demo limit."),
-                (sw, _int(self.config.get("web_session_week_turn_limit"), 160), "You've hit your weekly demo limit."),
-                (ip5, _int(self.config.get("web_ip_5h_turn_limit"), 60), "This network has hit its 5-hour demo limit."),
+                (q["s5"], q["s5_lim"], "You've hit your 5-hour demo limit."),
+                (q["sw"], q["sw_lim"], "You've hit your weekly demo limit."),
+                (q["ip5"], q["ip5_lim"], "This network has hit its 5-hour demo limit."),
             )
             for used, limit, msg in personal_caps:
                 if limit > 0 and used >= limit:
@@ -412,10 +402,12 @@ class WebFrontend(BaseFrontend):
 
     # ----- account / billing / auth -----
 
-    def _free_tier_remaining(self, db, uid: str, ip_hash: str) -> int:
-        """Personal cap remaining for the free tier — min of (session-5h, session-week, IP-5h)."""
+    def _quota_status(self, db, uid: str, ip_hash: str) -> dict:
+        """All counters + limits the free tier needs. Single source of truth."""
         now = time.time()
         five_h, week = now - 5 * 3600, now - 7 * 24 * 3600
+        g5 = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE ts >= ?", (five_h,)).fetchone()["n"]
+        gw = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE ts >= ?", (week,)).fetchone()["n"]
         s5 = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, five_h)).fetchone()["n"]
         sw = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, week)).fetchone()["n"]
         ip5 = 0
@@ -426,15 +418,31 @@ class WebFrontend(BaseFrontend):
                 "WHERE u.ip_hash = ? AND e.ts >= ?",
                 (ip_hash, five_h),
             ).fetchone()["n"]
-        s5_lim = _int(self.config.get("web_session_5h_turn_limit"), 40)
-        sw_lim = _int(self.config.get("web_session_week_turn_limit"), 160)
-        ip5_lim = _int(self.config.get("web_ip_5h_turn_limit"), 60)
-        return max(0, min(s5_lim - s5, sw_lim - sw, ip5_lim - ip5))
+        return {
+            "g5": g5, "gw": gw, "s5": s5, "sw": sw, "ip5": ip5,
+            "g5_lim": _int(self.config.get("web_global_5h_turn_limit"), 600),
+            "gw_lim": _int(self.config.get("web_global_week_turn_limit"), 6000),
+            "s5_lim": _int(self.config.get("web_session_5h_turn_limit"), 40),
+            "sw_lim": _int(self.config.get("web_session_week_turn_limit"), 160),
+            "ip5_lim": _int(self.config.get("web_ip_5h_turn_limit"), 60),
+        }
+
+    def _free_tier_remaining(self, db, uid: str, ip_hash: str) -> int:
+        """Personal cap remaining for the free tier — min of (session-5h, session-week, IP-5h)."""
+        q = self._quota_status(db, uid, ip_hash)
+        return max(0, min(q["s5_lim"] - q["s5"], q["sw_lim"] - q["sw"], q["ip5_lim"] - q["ip5"]))
 
     def _account_snapshot(self, session_id: str, ip: str, account_id: str) -> dict:
+        """Single-field quota surface: `messages_remaining` is an int, or null for unlimited.
+        `messages_max` is the upper bound for ring-fill rendering (free → session 5h limit,
+        paid → credit pack size, unlimited → null). For free tier remaining is derived from
+        rolling windows; for paid it's the stored credit balance. Callers should never have
+        to branch on tier to render this."""
         db = getattr(self.runtime, "db", None)
+        free_max = _int(self.config.get("web_session_5h_turn_limit"), 40)
+        pack_max = _int(self.config.get("web_credit_pack_size"), 2000)
         if db is None:
-            return {"signed_in": False, "tier": "free", "messages_remaining": None}
+            return {"signed_in": False, "tier": "free", "messages_remaining": None, "messages_max": free_max}
         ip_hash = self._ip_hash(ip)
         with db.lock:
             row = None
@@ -445,17 +453,19 @@ class WebFrontend(BaseFrontend):
                 ).fetchone()
             if row:
                 tier = row["tier"] or "free"
-                credits = int(row["credits"] or 0)
                 if tier == "unlimited":
                     remaining: int | None = None
+                    max_val: int | None = None
                 elif tier == "paid":
-                    remaining = credits
+                    remaining = int(row["credits"] or 0)
+                    max_val = pack_max
                 else:
                     remaining = self._free_tier_remaining(db, row["user_id"], ip_hash)
-                return {"signed_in": True, "email": row["email"], "tier": tier, "credits": credits, "messages_remaining": remaining}
+                    max_val = free_max
+                return {"signed_in": True, "email": row["email"], "tier": tier, "messages_remaining": remaining, "messages_max": max_val}
             anon_uid = self._anon_user_id(session_id, ip)
             remaining = self._free_tier_remaining(db, anon_uid, ip_hash)
-        return {"signed_in": False, "tier": "free", "messages_remaining": remaining}
+        return {"signed_in": False, "tier": "free", "messages_remaining": remaining, "messages_max": free_max}
 
     def account_info(self, session_id: str, ip: str, account_id: str) -> dict:
         return self._account_snapshot(session_id, ip, account_id)
