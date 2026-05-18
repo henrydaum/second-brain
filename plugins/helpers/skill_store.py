@@ -356,6 +356,43 @@ def _strip_metadata(source: str) -> str:
     return "\n".join(kept).lstrip("\n")
 
 
+def anonymize_owner(owner_values) -> int:
+    """Rewrite SKILL_OWNER to 'anonymous' on every sandbox skill whose owner
+    matches one of `owner_values` (case-insensitive). Built-in skills are
+    skipped. Returns the number of files rewritten."""
+    targets = {str(v).strip().lower() for v in owner_values if v}
+    if not targets or not SKILLS_DIR.exists():
+        return 0
+    rewritten = 0
+    for path in SKILLS_DIR.glob("*.skill.py"):
+        try:
+            source = path.read_text(encoding="utf-8")
+            meta = _extract_metadata(source)
+        except Exception:
+            continue
+        owner = str(meta.get("SKILL_OWNER") or "").strip().lower()
+        if not owner or owner not in targets or owner == "anonymous":
+            continue
+        try:
+            tree = ast.parse(source)
+        except Exception:
+            continue
+        target_line = None
+        for node in tree.body:
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == "SKILL_OWNER"):
+                target_line = node.lineno
+                break
+        if target_line is None:
+            continue
+        lines = source.splitlines(keepends=True)
+        lines[target_line - 1] = f'SKILL_OWNER = {json.dumps("anonymous")}\n'
+        path.write_text("".join(lines), encoding="utf-8")
+        rewritten += 1
+    return rewritten
+
+
 def _load_skill_from_path(path: Path) -> Skill | None:
     try:
         source = path.read_text(encoding="utf-8")

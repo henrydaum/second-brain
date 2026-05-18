@@ -206,6 +206,38 @@ body.account-body { background:
 .account-secondary-row a:hover { color: var(--accent); }
 .account-secondary-row a.danger:hover { color: var(--accent-2); }
 
+/* ---- Privacy banner on landing page ---- */
+.privacy-banner { background: #0c1016; border-top: 1px solid var(--line); padding: 56px 48px; }
+.privacy-banner-inner { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.privacy-banner h2 { font-size: 32px; line-height: 1.1; max-width: 640px; }
+.privacy-banner-lead { color: var(--muted); font-size: 15px; max-width: 640px; }
+.privacy-banner-link { color: var(--accent); font-weight: 700; text-decoration: none; font-size: 14px; letter-spacing: .02em; align-self: flex-start; padding: 10px 16px; border: 1px solid var(--accent); transition: background 200ms ease, color 200ms ease; }
+.privacy-banner-link:hover { background: var(--accent); color: #08090d; }
+
+/* ---- Privacy page ---- */
+.privacy-page { max-width: 720px; }
+.privacy-page .effective { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+.privacy-page .account-card { padding: 24px 28px; }
+.privacy-page h2 { font-size: 20px; margin-bottom: 12px; letter-spacing: 0; }
+.privacy-page p { margin-bottom: 12px; color: var(--text); }
+.privacy-page p:last-child { margin-bottom: 0; }
+.privacy-page ul { margin: 8px 0 12px; padding-left: 22px; color: var(--text); }
+.privacy-page li { margin-bottom: 6px; }
+.privacy-page a { color: var(--accent); }
+.privacy-page a:hover { color: var(--text); }
+.privacy-page .back-link-foot { margin-top: 24px; }
+
+/* ---- Danger zone (delete account) ---- */
+.danger-zone { border-color: #7f3150; }
+.danger-zone h2 { font-size: 18px; margin-bottom: 8px; color: #ffb5c8; letter-spacing: 0; }
+.danger-zone p { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+.danger-zone form { display: flex; flex-direction: column; gap: 10px; }
+.danger-zone input { height: 40px; padding: 0 12px; background: #0b0d13; border: 1px solid var(--line); color: var(--text); }
+.danger-zone input:focus { outline: none; border-color: #ffb5c8; }
+.danger-btn { height: 42px; background: transparent; color: #ffb5c8; border: 1px solid #7f3150; cursor: pointer; font-weight: 700; letter-spacing: .02em; transition: background 200ms ease, color 200ms ease; }
+.danger-btn:hover:not(:disabled) { background: #7f3150; color: #fff; }
+.danger-btn:disabled { opacity: .5; cursor: default; }
+
 /* Promo card single-row form */
 #promoCard form { display: flex; flex-direction: row; gap: 10px; align-items: stretch; margin-top: 12px; }
 #promoCard input { flex: 1; height: 42px; }
@@ -219,4 +251,6 @@ body.account-body { background:
   .gallery-section { padding: 28px; }
   .gallery-head { display: block; }
   h2 { font-size: 34px; }
+  .privacy-banner { padding: 36px 24px; }
+  .privacy-banner h2 { font-size: 26px; }
 }

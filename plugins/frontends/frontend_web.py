@@ -25,9 +25,9 @@ from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
 from plugins.helpers import skill_scoring
 from plugins.helpers.palettes import get_palette, list_palettes
 from plugins.helpers.skill_runner import replay_chain
-from plugins.helpers.skill_store import read_skill
+from plugins.helpers.skill_store import anonymize_owner as anonymize_skill_owner, read_skill
 from plugins.tools.helpers import layered_canvas as lc
-from plugins.helpers.gallery import GALLERY_DIR, archive_dir, archive_rows, canvas, gallery_rows, migrate_archive, read_json, reset_canvas, save_to_archive, set_current, share_current, similar_rows
+from plugins.helpers.gallery import GALLERY_DIR, anonymize_shared, archive_dir, archive_rows, canvas, delete_archive, gallery_rows, migrate_archive, read_json, reset_canvas, save_to_archive, set_current, share_current, similar_rows
 from paths import DATA_DIR
 
 logger = logging.getLogger("WebFrontend")
@@ -596,6 +596,79 @@ class WebFrontend(BaseFrontend):
             db.conn.commit()
         return {"ok": True, "granted": granted}
 
+    def delete_account(self, account_id: str, session_id: str, confirm_email: str) -> dict:
+        """Permanent erasure: account row, auth tokens, payment history, private
+        archive, and conversations on the current session. Skills and shared
+        gallery items are kept but author/owner is anonymized."""
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return {"ok": False, "error": "Server not ready."}
+        if not account_id:
+            return {"ok": False, "error": "Not signed in."}
+        typed = (confirm_email or "").strip().lower()
+        if not typed:
+            return {"ok": False, "error": "Type your email to confirm."}
+        with db.lock:
+            row = db.conn.execute(
+                "SELECT user_id, email FROM web_users WHERE account_id = ?",
+                (account_id,),
+            ).fetchone()
+        if not row:
+            return {"ok": False, "error": "Account not found."}
+        email = str(row["email"] or "").strip()
+        if email.lower() != typed:
+            return {"ok": False, "error": "Email doesn't match the account."}
+
+        # Conversations bound to the current browser session.
+        key = self.session_key(session_id)
+        try:
+            session = self.runtime.sessions.get(key)
+            cid = getattr(session, "conversation_id", None) if session else None
+            if cid is not None:
+                try:
+                    db.delete_conversation(cid)
+                except Exception:
+                    logger.exception("delete_account: delete_conversation failed")
+            with self._lock:
+                self._outbox.pop(key, None)
+            if session is not None:
+                try:
+                    self.runtime.sessions.pop(key, None)
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception("delete_account: session teardown failed")
+
+        # Anonymize public artifacts authored by this account.
+        owner_values = {email, account_id}
+        try:
+            skills_changed = anonymize_skill_owner(owner_values)
+        except Exception:
+            logger.exception("delete_account: skill anonymize failed")
+            skills_changed = 0
+        try:
+            shared_changed = anonymize_shared(owner_values)
+        except Exception:
+            logger.exception("delete_account: shared anonymize failed")
+            shared_changed = 0
+
+        # Delete private archive directory.
+        try:
+            delete_archive(account_id)
+        except Exception:
+            logger.exception("delete_account: archive delete failed")
+
+        # Drop DB rows last so the email/account_id are still available above.
+        with db.lock:
+            db.conn.execute("DELETE FROM web_auth_tokens WHERE email = ?", (email,))
+            db.conn.execute("DELETE FROM web_payments WHERE email = ?", (email,))
+            db.conn.execute("DELETE FROM web_users WHERE account_id = ?", (account_id,))
+            db.conn.commit()
+
+        logger.info("Account deleted (skills_anonymized=%s shared_anonymized=%s)",
+                    skills_changed, shared_changed)
+        return {"ok": True}
+
     def _owner_id(self, session_id: str, ip: str, account_id: str) -> str:
         """Stable identity for the saved archive: account_id when signed in,
         otherwise the anonymous fallback derived from session+IP."""
@@ -974,6 +1047,8 @@ class _Handler(BaseHTTPRequestHandler):
         rel = "index.html" if path in {"", "/"} else path.lstrip("/")
         if rel == "account":
             rel = "account.html"
+        if rel == "privacy":
+            rel = "privacy.html"
         return self._file(WEB_ROOT / rel)
 
     def do_POST(self):
@@ -1004,6 +1079,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json(self.server.frontend.request_magic_link(str(body.get("email") or "")))
             if self.path == "/api/promo/redeem":
                 return self._json(self.server.frontend.redeem_promo(str(body.get("code") or ""), self._cookie_uid()))
+            if self.path == "/api/account/delete":
+                return self._json(self.server.frontend.delete_account(
+                    self._cookie_uid(), sid, str(body.get("confirm_email") or "")))
             if self.path == "/api/new":
                 return self._json({"ok": True, "events": self.server.frontend.new_chat(sid)})
             if self.path == "/api/cancel":

@@ -120,6 +120,40 @@ def archive_rows(owner_id):
     return sorted(rows, key=lambda r: r["created_at"], reverse=True)
 
 
+def delete_archive(owner_id) -> int:
+    """Remove the owner's entire private archive directory. Returns # of files removed."""
+    d = archive_dir(owner_id)
+    if not d.exists():
+        return 0
+    count = sum(1 for _ in d.iterdir())
+    shutil.rmtree(d, ignore_errors=True)
+    return count
+
+
+def anonymize_shared(artist_values) -> int:
+    """Rewrite shared-gallery sidecar JSON to anonymize matching authors.
+
+    `artist_values` is an iterable of strings (email, display name) that should
+    be treated as the same author. PNGs are left untouched. Returns number of
+    sidecars rewritten.
+    """
+    targets = {str(v).strip().lower() for v in artist_values if v}
+    if not targets or not GALLERY_DIR.exists():
+        return 0
+    rewritten = 0
+    for sidecar in GALLERY_DIR.glob("*.json"):
+        try:
+            meta = read_json(sidecar)
+            artist = str(meta.get("artist") or "").strip().lower()
+            if artist and artist in targets and meta.get("artist") != "anonymous":
+                meta["artist"] = "anonymous"
+                write_json(sidecar, meta)
+                rewritten += 1
+        except Exception:
+            continue
+    return rewritten
+
+
 def migrate_archive(old_owner, new_owner):
     """Move an anonymous archive folder under a new (signed-in) owner id."""
     if not old_owner or not new_owner or old_owner == new_owner:

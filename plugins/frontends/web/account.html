@@ -44,6 +44,22 @@
       </form>
       <p id="promoStatus" class="modal-status" hidden></p>
     </div>
+
+    <div class="account-card danger-zone" id="dangerCard" hidden>
+      <h2>Danger zone</h2>
+      <p>Deleting your account removes your email, your private archive, your magic-link tokens, your payment history, and the conversations on this device. <strong>Skills you caused the agent to make and canvases you shared publicly are kept</strong>, but the author field is anonymized. This cannot be undone.</p>
+      <p>To confirm, type your email below.</p>
+      <form id="deleteForm">
+        <input id="deleteConfirm" type="email" required placeholder="you@example.com" autocomplete="off">
+        <button type="submit" class="danger-btn">Delete my account</button>
+      </form>
+      <p id="deleteStatus" class="modal-status" hidden></p>
+    </div>
+
+    <p class="account-secondary-row" style="margin-top:24px;">
+      <a href="/privacy">Privacy Policy</a>
+      <a href="mailto:secondbrainservice@gmail.com">Contact support</a>
+    </p>
   </main>
 
   <script>
@@ -72,15 +88,45 @@
     if (a.signed_in) {
       $("#signedIn").hidden = false;
       $("#promoCard").hidden = false;
+      $("#dangerCard").hidden = false;
       $("#rowEmail").textContent = a.email || "—";
       const plan = a.tier === "unlimited" ? "Unlimited" : a.tier === "paid" ? "Paid" : "Free";
       $("#rowTier").textContent = plan;
       $("#rowCredits").textContent = a.tier === "unlimited" ? "Unlimited" : (a.credits || 0).toLocaleString();
+      window._sbEmail = a.email || "";
     } else {
       $("#signedOut").hidden = false;
     }
   }
   load();
+
+  $("#deleteForm")?.addEventListener("submit", async e => {
+    e.preventDefault();
+    const typed = $("#deleteConfirm").value.trim().toLowerCase();
+    const expected = (window._sbEmail || "").trim().toLowerCase();
+    const status = $("#deleteStatus");
+    status.hidden = false;
+    if (!expected || typed !== expected) {
+      status.className = "modal-status err";
+      status.textContent = "Email doesn't match. Type the email on your account exactly.";
+      return;
+    }
+    if (!confirm("This permanently deletes your account, archive, and conversations on this device. Continue?")) return;
+    const btn = e.target.querySelector("button");
+    btn.disabled = true;
+    btn.textContent = "Deleting…";
+    const r = await post("/api/account/delete", {confirm_email: typed});
+    if (r.ok) {
+      status.className = "modal-status ok";
+      status.textContent = "Account deleted. Redirecting…";
+      setTimeout(() => { window.location = "/auth/logout"; }, 1200);
+    } else {
+      status.className = "modal-status err";
+      status.textContent = r.error || "Could not delete account.";
+      btn.disabled = false;
+      btn.textContent = "Delete my account";
+    }
+  });
 
   $("#signinForm")?.addEventListener("submit", async e => {
     e.preventDefault();
