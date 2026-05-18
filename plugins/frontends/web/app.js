@@ -164,9 +164,9 @@ function setTyping(on) {
 
 // ----- account + paywall + auth -----
 const accountAvatar = document.querySelector("#accountAvatar");
-const avatarInner = document.querySelector("#avatarInner");
 const avatarBar = document.querySelector("#avatarBar");
-const SILHOUETTE_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="12" cy="9" r="4"/><ellipse cx="12" cy="22" rx="8" ry="6"/></svg>';
+const avatarSilhouette = document.querySelector("#avatarSilhouette");
+const avatarLetter = document.querySelector("#avatarLetter");
 const paywallModal = document.querySelector("#paywallModal");
 const signinModal = document.querySelector("#signinModal");
 const promoModal = document.querySelector("#promoModal");
@@ -184,23 +184,30 @@ document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click
 [paywallModal, signinModal, promoModal].forEach(m => m.addEventListener("click", e => { if (e.target === m) closeModal(m); }));
 
 function setAccount(acc) {
-  const remaining = acc?.messages_remaining;
-  const max = acc?.messages_max;
-  const unlimited = acc?.tier === "unlimited";
-  // If max is missing (stale backend), fall back to 0 fill — visibly broken instead of misleadingly full.
-  const fill = unlimited ? 1 : (typeof max === "number" && max > 0 ? Math.max(0, Math.min(1, (remaining ?? 0) / max)) : 0);
-  const pct = (fill * 100).toFixed(2);
-  avatarBar.style.backgroundSize = `100% ${pct}%`;
-  avatarBar.style.boxShadow = unlimited ? "0 0 6px var(--accent-glow)" : "none";
-  if (acc?.signed_in && acc.email) {
-    avatarInner.textContent = acc.email[0].toUpperCase();
-  } else {
-    avatarInner.innerHTML = SILHOUETTE_SVG;
+  try {
+    const remaining = acc?.messages_remaining;
+    const max = acc?.messages_max;
+    const unlimited = acc?.tier === "unlimited";
+    const fill = unlimited ? 1 : (typeof max === "number" && max > 0 ? Math.max(0, Math.min(1, (remaining ?? 0) / max)) : 0);
+    const pct = (fill * 100).toFixed(2);
+    avatarBar.style.backgroundSize = `100% ${pct}%`;
+    avatarBar.style.boxShadow = unlimited ? "0 0 6px var(--accent-glow)" : "none";
+    const email = acc?.signed_in && typeof acc?.email === "string" && acc.email.length > 0 ? acc.email : "";
+    if (email) {
+      avatarLetter.textContent = email[0].toUpperCase();
+      avatarLetter.style.display = "";
+      avatarSilhouette.style.display = "none";
+    } else {
+      avatarLetter.style.display = "none";
+      avatarSilhouette.style.display = "block";
+    }
+    const tail = unlimited ? "Unlimited" : (typeof max === "number" ? `${(remaining ?? 0).toLocaleString()} of ${max.toLocaleString()} messages left` : "Loading…");
+    avatarBar.title = tail;
+    accountAvatar.title = email ? `Signed in as ${email}` : "Account";
+    accountAvatar.hidden = false;
+  } catch (err) {
+    console.warn("[account] setAccount failed:", err, acc);
   }
-  const tail = unlimited ? "Unlimited" : `${(remaining ?? 0).toLocaleString()} messages left`;
-  avatarBar.title = tail;
-  accountAvatar.title = acc?.signed_in ? `Signed in as ${acc.email}` : "Account";
-  accountAvatar.hidden = false;
 }
 async function refreshAccount() {
   try { const r = await get("/api/account"); setAccount(r.account); }
