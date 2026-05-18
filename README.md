@@ -399,7 +399,7 @@ Second Brain is built around a simple bet: an AI system should be fully customiz
 
 Most software products are static, whereas Second Brain can write its own code and extend itself. The Second Brain core code is so versatile and strong that it can turn into almost any shape. 
 
-Although my app is still a ways off from being like a human brain, it can still do quite a lot, and I think it is worthy of the name: Second Brain.
+Although Second Brain is still a ways off from being like a human brain, it can still do quite a lot, and I think it is worthy of the name. The goal has always been to create something intelligent, adaptable, and useful. Those are the three things that have driven this from the start.
 
 ## License
 
