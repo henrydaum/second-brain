@@ -412,42 +412,50 @@ class WebFrontend(BaseFrontend):
 
     # ----- account / billing / auth -----
 
+    def _free_tier_remaining(self, db, uid: str, ip_hash: str) -> int:
+        """Personal cap remaining for the free tier — min of (session-5h, session-week, IP-5h)."""
+        now = time.time()
+        five_h, week = now - 5 * 3600, now - 7 * 24 * 3600
+        s5 = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, five_h)).fetchone()["n"]
+        sw = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, week)).fetchone()["n"]
+        ip5 = 0
+        if ip_hash:
+            ip5 = db.conn.execute(
+                "SELECT COUNT(*) AS n FROM web_usage_events e "
+                "JOIN web_users u ON u.user_id = e.user_id "
+                "WHERE u.ip_hash = ? AND e.ts >= ?",
+                (ip_hash, five_h),
+            ).fetchone()["n"]
+        s5_lim = _int(self.config.get("web_session_5h_turn_limit"), 40)
+        sw_lim = _int(self.config.get("web_session_week_turn_limit"), 160)
+        ip5_lim = _int(self.config.get("web_ip_5h_turn_limit"), 60)
+        return max(0, min(s5_lim - s5, sw_lim - sw, ip5_lim - ip5))
+
     def _account_snapshot(self, session_id: str, ip: str, account_id: str) -> dict:
         db = getattr(self.runtime, "db", None)
-        if db is None or not account_id:
-            return {"signed_in": False}
+        if db is None:
+            return {"signed_in": False, "tier": "free", "messages_remaining": None}
+        ip_hash = self._ip_hash(ip)
         with db.lock:
-            row = db.conn.execute(
-                "SELECT user_id, email, tier, credits FROM web_users WHERE account_id = ?",
-                (account_id,),
-            ).fetchone()
-            if not row:
-                return {"signed_in": False}
-            tier = row["tier"] or "free"
-            credits = int(row["credits"] or 0)
-            remaining: int | None = None
-            if tier == "paid":
-                remaining = credits
-            elif tier == "free":
-                now = time.time()
-                five_h, week = now - 5 * 3600, now - 7 * 24 * 3600
-                uid = row["user_id"]
-                ip_hash = self._ip_hash(ip)
-                s5 = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, five_h)).fetchone()["n"]
-                sw = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, week)).fetchone()["n"]
-                ip5 = 0
-                if ip_hash:
-                    ip5 = db.conn.execute(
-                        "SELECT COUNT(*) AS n FROM web_usage_events e "
-                        "JOIN web_users u ON u.user_id = e.user_id "
-                        "WHERE u.ip_hash = ? AND e.ts >= ?",
-                        (ip_hash, five_h),
-                    ).fetchone()["n"]
-                s5_lim = _int(self.config.get("web_session_5h_turn_limit"), 40)
-                sw_lim = _int(self.config.get("web_session_week_turn_limit"), 160)
-                ip5_lim = _int(self.config.get("web_ip_5h_turn_limit"), 60)
-                remaining = max(0, min(s5_lim - s5, sw_lim - sw, ip5_lim - ip5))
-        return {"signed_in": True, "email": row["email"], "tier": tier, "credits": credits, "messages_remaining": remaining}
+            row = None
+            if account_id:
+                row = db.conn.execute(
+                    "SELECT user_id, email, tier, credits FROM web_users WHERE account_id = ?",
+                    (account_id,),
+                ).fetchone()
+            if row:
+                tier = row["tier"] or "free"
+                credits = int(row["credits"] or 0)
+                if tier == "unlimited":
+                    remaining: int | None = None
+                elif tier == "paid":
+                    remaining = credits
+                else:
+                    remaining = self._free_tier_remaining(db, row["user_id"], ip_hash)
+                return {"signed_in": True, "email": row["email"], "tier": tier, "credits": credits, "messages_remaining": remaining}
+            anon_uid = self._anon_user_id(session_id, ip)
+            remaining = self._free_tier_remaining(db, anon_uid, ip_hash)
+        return {"signed_in": False, "tier": "free", "messages_remaining": remaining}
 
     def account_info(self, session_id: str, ip: str, account_id: str) -> dict:
         return self._account_snapshot(session_id, ip, account_id)

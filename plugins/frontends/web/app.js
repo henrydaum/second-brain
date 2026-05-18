@@ -184,19 +184,21 @@ document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click
 [paywallModal, signinModal, promoModal].forEach(m => m.addEventListener("click", e => { if (e.target === m) closeModal(m); }));
 
 function setAccount(acc) {
+  const remainingText = acc?.tier === "unlimited"
+    ? "∞ messages"
+    : `${(acc?.messages_remaining ?? 0).toLocaleString()} left`;
   if (acc?.signed_in) {
-    const remaining = acc.tier === "unlimited" ? "∞ messages" : `${(acc.messages_remaining ?? 0).toLocaleString()} left`;
-    accountChip.textContent = `${acc.email} · ${remaining}`;
-    accountChip.hidden = false;
+    accountChip.textContent = `${acc.email} · ${remainingText}`;
     signInBtn.hidden = true;
     accountLink.hidden = false;
     logoutLink.hidden = false;
   } else {
-    accountChip.hidden = true;
+    accountChip.textContent = remainingText;
     signInBtn.hidden = false;
     accountLink.hidden = true;
     logoutLink.hidden = true;
   }
+  accountChip.hidden = false;
 }
 async function refreshAccount() {
   try { const r = await get("/api/account"); setAccount(r.account); } catch {}
