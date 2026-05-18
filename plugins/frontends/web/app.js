@@ -638,7 +638,7 @@ form.addEventListener("submit", async e => {
   finally { loaderTicketEnd(); setTyping(false); setBusy(false); }
 });
 document.querySelector("#newChat").addEventListener("click", async () => {
-  messages.innerHTML = "";
+  messages.innerHTML = `<div class="ephemeral-note"><strong>Chats vanish.</strong><span>Nothing you say here is saved — start a new chat and it's gone. Your art stays.</span></div>`;
   render((await post("/api/new")).events);
   loadGallery(1);
 });

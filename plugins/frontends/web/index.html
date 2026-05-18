@@ -18,7 +18,10 @@
         <button id="newChat" class="new-chat-link" title="Start a new conversation">+ New chat</button>
       </header>
       <div id="messages" class="messages">
-        <article class="assistant">Ask Second Brain to draw, paint, or render something.</article>
+        <div class="ephemeral-note">
+          <strong>Chats vanish.</strong>
+          <span>Nothing you say here is saved — start a new chat and it's gone. Your art stays.</span>
+        </div>
       </div>
       <form id="chatForm" class="composer">
         <input id="chatInput" autocomplete="off" placeholder="Ask Second Brain..." />
@@ -82,13 +85,10 @@
     </div>
   </section>
 
-  <footer class="privacy-banner">
-    <div class="privacy-banner-inner">
-      <p class="eyebrow">Privacy</p>
-      <h2>How Second Brain handles your data.</h2>
-      <p class="privacy-banner-lead">Skills the agent invents are public and stay in the shared catalog. Your archive, email, and conversations are private — and you can delete your account anytime from the account page.</p>
-      <a class="privacy-banner-link" href="/privacy">Read the Privacy Policy →</a>
-    </div>
+  <footer class="site-footer">
+    <span>Second Brain</span>
+    <a href="/privacy">Privacy</a>
+    <a href="mailto:secondbrainservice@gmail.com">Contact</a>
   </footer>
 
   <div id="paywallModal" class="modal" hidden>

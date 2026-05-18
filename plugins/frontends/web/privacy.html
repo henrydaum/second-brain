@@ -35,7 +35,7 @@
       <ul>
         <li><strong>Email address</strong> — used to send you a magic-link sign-in and a receipt when you pay.</li>
         <li><strong>Generated images</strong> — both the canvases you save to your private archive and the ones you share publicly.</li>
-        <li><strong>Prompts and conversations</strong> — the text you send the agent, and the agent's replies.</li>
+        <li><strong>Prompts and conversations</strong> — the text you send the agent, and the agent's replies. These are ephemeral: a conversation is wiped when you start a new chat, and any conversation untouched for 24 hours is purged automatically.</li>
         <li><strong>Skills</strong> — the small Python programs the agent writes on your behalf to draw, paint, or transform images.</li>
         <li><strong>Payment confirmation metadata</strong> from Stripe (which plan, when, how much). We never see and never store your card details.</li>
         <li><strong>Basic request logs</strong> (IP address, timestamp, browser session ID), kept for abuse prevention and debugging.</li>
@@ -86,7 +86,7 @@
 
     <div class="account-card">
       <h2>Don't share sensitive information</h2>
-      <p>This is an art tool, not a confidant. The operator can technically read conversations (they are stored unencrypted), and may review them for abuse, quality, or to debug issues. The agent can chat about other things and will give general advice if asked, but please don't paste passwords, financial data, medical records, or anything you wouldn't want a stranger to see.</p>
+      <p>This is an art tool, not a confidant. Conversations are stored unencrypted while they exist, and the operator can technically read them — but they don't stick around: a conversation is wiped when you start a new chat, and anything older than 24 hours is purged automatically. The agent can chat about other things and will give general advice if asked, but please don't paste passwords, financial data, medical records, or anything you wouldn't want a stranger to see.</p>
     </div>
 
     <div class="account-card">

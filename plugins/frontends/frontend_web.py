@@ -86,7 +86,47 @@ class WebFrontend(BaseFrontend):
         port = int(self.config.get("web_port") or 8765)
         self._server = _Server((host, port), _Handler, self)
         logger.info("Web demo listening at http://%s:%s", host, port)
+        self._start_conversation_sweeper()
         self._server.serve_forever()
+
+    def _start_conversation_sweeper(self) -> None:
+        """Periodically purge demo conversations older than 24h that aren't
+        currently bound to a live session. Conversations are intentionally
+        ephemeral on the web demo — this catches the ones left behind when
+        users close the tab without hitting "New chat"."""
+        def loop():
+            interval = 3600.0  # hourly
+            max_age = 86400.0  # 24h
+            while self._server is not None:
+                try:
+                    self._sweep_stale_conversations(max_age)
+                except Exception:
+                    logger.exception("conversation sweeper failed")
+                time.sleep(interval)
+        t = threading.Thread(target=loop, name="web-conversation-sweeper", daemon=True)
+        t.start()
+
+    def _sweep_stale_conversations(self, max_age: float) -> int:
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return 0
+        cutoff = time.time() - max_age
+        live_ids = {getattr(s, "conversation_id", None) for s in self.runtime.sessions.values()}
+        live_ids.discard(None)
+        with db.lock:
+            rows = db.conn.execute(
+                "SELECT id FROM conversations WHERE category = 'Demo' AND COALESCE(updated_at, created_at) < ?",
+                (cutoff,),
+            ).fetchall()
+        stale = [int(r["id"]) for r in rows if int(r["id"]) not in live_ids]
+        for cid in stale:
+            try:
+                db.delete_conversation(cid)
+            except Exception:
+                logger.exception("sweeper: delete_conversation failed cid=%s", cid)
+        if stale:
+            logger.info("conversation sweeper purged %d stale demo conversation(s)", len(stale))
+        return len(stale)
 
     def stop(self) -> None:
         if self._server:
@@ -122,7 +162,17 @@ class WebFrontend(BaseFrontend):
 
     def new_chat(self, session_id: str) -> list[dict]:
         key = self.session_key(session_id)
+        # Ephemeral conversations: wipe the previous transcript before opening a
+        # fresh one. The 24h sweeper picks up anything left behind when users
+        # close the tab without hitting "New chat".
+        session = self.runtime.sessions.get(key)
+        prev_cid = getattr(session, "conversation_id", None) if session else None
         self.runtime.close_session(key)
+        if prev_cid is not None:
+            try:
+                self.runtime.db.delete_conversation(prev_cid)
+            except Exception:
+                logger.exception("new_chat: delete_conversation failed cid=%s", prev_cid)
         reset_canvas(key)
         self._ensure_conversation(key)
         return [{"type": "canvas_reset"}, *self._drain(key)]

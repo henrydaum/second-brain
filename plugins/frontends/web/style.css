@@ -29,6 +29,9 @@ header button:hover, .composer button:hover { border-color: var(--accent); }
 .new-chat-link:hover { color: var(--accent); border-color: transparent; }
 
 .messages { overflow: auto; padding: 22px; display: flex; flex-direction: column; gap: 12px; }
+.ephemeral-note { align-self: center; margin: auto; max-width: 320px; padding: 18px 20px; border: 1px dashed var(--line); color: var(--muted); font-size: 13px; text-align: center; display: flex; flex-direction: column; gap: 6px; background: transparent; }
+.ephemeral-note strong { color: var(--text); font-weight: 700; font-size: 14px; }
+.messages > .ephemeral-note:not(:only-child) { display: none; }
 article { max-width: 92%; padding: 12px 14px; border: 1px solid var(--line); background: #141823; white-space: pre-wrap; overflow-wrap: anywhere; }
 article.user { align-self: flex-end; background: #162335; border-color: var(--accent-2); transition: border-color 600ms ease; }
 article.assistant { align-self: flex-start; }
@@ -206,13 +209,10 @@ body.account-body { background:
 .account-secondary-row a:hover { color: var(--accent); }
 .account-secondary-row a.danger:hover { color: var(--accent-2); }
 
-/* ---- Privacy banner on landing page ---- */
-.privacy-banner { background: #0c1016; border-top: 1px solid var(--line); padding: 56px 48px; }
-.privacy-banner-inner { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
-.privacy-banner h2 { font-size: 32px; line-height: 1.1; max-width: 640px; }
-.privacy-banner-lead { color: var(--muted); font-size: 15px; max-width: 640px; }
-.privacy-banner-link { color: var(--accent); font-weight: 700; text-decoration: none; font-size: 14px; letter-spacing: .02em; align-self: flex-start; padding: 10px 16px; border: 1px solid var(--accent); transition: background 200ms ease, color 200ms ease; }
-.privacy-banner-link:hover { background: var(--accent); color: #08090d; }
+/* ---- Site footer ---- */
+.site-footer { display: flex; gap: 18px; align-items: center; justify-content: center; padding: 18px 24px; background: #0c1016; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.site-footer a { color: var(--muted); text-decoration: none; transition: color 160ms ease; }
+.site-footer a:hover { color: var(--accent); }
 
 /* ---- Privacy page ---- */
 .privacy-page { max-width: 720px; }
@@ -251,6 +251,4 @@ body.account-body { background:
   .gallery-section { padding: 28px; }
   .gallery-head { display: block; }
   h2 { font-size: 34px; }
-  .privacy-banner { padding: 36px 24px; }
-  .privacy-banner h2 { font-size: 26px; }
 }
