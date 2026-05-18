@@ -22,7 +22,7 @@ from plugins.helpers.palettes import DEFAULT_PALETTE_ID, palette_exists
 CANVAS_ROOT = DATA_DIR / "canvas"
 STATE_PATH = CANVAS_ROOT / "state.json"
 COMPOSITE_DIR = CANVAS_ROOT / "composites"
-DEFAULT_SIZE = 768
+DEFAULT_SIZE = 1024
 MIN_SIZE = 256
 MAX_SIZE = 1536
 MAX_CHAIN_LENGTH = 4

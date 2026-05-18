@@ -19,7 +19,6 @@ const paginator = document.querySelector("#paginator");
 const controlsPanel = document.querySelector("#controlsPanel");
 const controlsDrawer = document.querySelector("#controlsDrawer");
 const controlsToggle = document.querySelector("#controlsToggle");
-const controlsCountEl = document.querySelector("#controlsCount");
 const emptyState = document.querySelector("#emptyState");
 const NEAR_BOTTOM_PX = 80;
 const GALLERY_PAGE = 18;
@@ -28,7 +27,9 @@ let currentControlsPanels = [];
 let galleryPage = 1;
 const controlDebounce = new Map();
 const toolStatusEls = new Map();
-const collapsedSkills = new Set(JSON.parse(localStorage.sbCollapsedSkills || "[]"));
+let typingEl = null;
+let agentBusy = false;
+const sendBtn = form.querySelector("button");
 const atBottom = () => messages.scrollHeight - messages.scrollTop - messages.clientHeight < NEAR_BOTTOM_PX;
 const bottom = (force = false) => {
   const stick = force || atBottom();
@@ -121,8 +122,44 @@ function render(events) {
     else if (ev.type === "canvas_reset") { setCanvas(null); loaderForceStop(); }
     else if (ev.type === "shared") { sharePanel.hidden = true; loadGallery(1); }
     else if (ev.type === "attachment") add("assistant", `Attachment: ${ev.name}`);
+    else if (ev.type === "typing") setTyping(!!ev.on);
   }
   bottom();
+}
+
+function setBusy(on) {
+  agentBusy = !!on;
+  if (agentBusy) {
+    sendBtn.type = "button";
+    sendBtn.textContent = "Cancel";
+    sendBtn.classList.add("cancel");
+  } else {
+    sendBtn.type = "submit";
+    sendBtn.textContent = "Send";
+    sendBtn.classList.remove("cancel");
+  }
+}
+sendBtn.addEventListener("click", async e => {
+  if (!agentBusy) return; // let submit handler run
+  e.preventDefault();
+  sendBtn.disabled = true;
+  try { render((await post("/api/cancel")).events); }
+  catch (err) { add("error", err.message); }
+  finally { sendBtn.disabled = false; }
+});
+
+function setTyping(on) {
+  if (on) {
+    if (typingEl && typingEl.isConnected) { bottom(); return; }
+    typingEl = document.createElement("article");
+    typingEl.className = "status typing";
+    typingEl.textContent = "Thinking…";
+    messages.appendChild(typingEl);
+    bottom();
+  } else if (typingEl) {
+    typingEl.remove();
+    typingEl = null;
+  }
 }
 
 // ----- account + paywall + auth -----
@@ -300,12 +337,15 @@ function applyAccents(imgEl) {
     const a1 = avgBin(sorted[0]);
     // Find a second bin > 60° away on the hue wheel
     const a2 = avgBin(sorted.find(b => Math.min(Math.abs(b.h/b.weight - a1.h), 360 - Math.abs(b.h/b.weight - a1.h)) > 60) || sorted[1] || sorted[0]);
-    const accent = hslToHex(a1.h, Math.min(1, a1.s * 1.15), Math.min(0.7, Math.max(0.5, a1.l)));
-    const accent2 = hslToHex(a2.h, Math.min(1, a2.s * 1.15), Math.min(0.7, Math.max(0.5, a2.l)));
+    const accent = hslToHex(a1.h, Math.min(0.55, a1.s), Math.min(0.66, Math.max(0.55, a1.l * 0.5 + 0.31)));
+    const accent2 = hslToHex(a2.h, Math.min(0.55, a2.s), Math.min(0.66, Math.max(0.55, a2.l * 0.5 + 0.31)));
     document.documentElement.style.setProperty("--accent", accent);
     document.documentElement.style.setProperty("--accent-2", accent2);
-    document.documentElement.style.setProperty("--accent-glow", hexWithAlpha(accent, 0.22));
-    document.documentElement.style.setProperty("--accent-2-glow", hexWithAlpha(accent2, 0.32));
+    const glow = hexWithAlpha(accent, 0.10);
+    const glow2 = hexWithAlpha(accent2, 0.14);
+    document.documentElement.style.setProperty("--accent-glow", glow);
+    document.documentElement.style.setProperty("--accent-2-glow", glow2);
+    try { localStorage.sbAccents = JSON.stringify({accent, accent2, glow, glow2}); } catch {}
   } catch (e) {
     // Likely a canvas taint (cross-origin) — silently fall back to defaults.
     resetAccents();
@@ -400,7 +440,6 @@ function paletteSwatchHtml(p, activeId) {
 function renderControlsPanel(panels) {
   currentControlsPanels = panels || [];
   const n = currentControlsPanels.length;
-  controlsCountEl.textContent = String(n);
   if (!n) {
     controlsToggle.hidden = true;
     controlsDrawer.hidden = true;
@@ -414,9 +453,8 @@ function renderControlsPanel(panels) {
   controlsPanel.innerHTML = currentControlsPanels.map(renderPanel).join("");
 }
 function renderPanel(panel) {
-  const collapsed = collapsedSkills.has(panel.skill_name) ? " collapsed" : "";
   const widgets = (panel.schema || []).map(spec => renderWidget(panel, spec)).join("");
-  return `<section class="ctl-panel${collapsed}" data-chain="${panel.chain_index}" data-skill="${esc(panel.skill_name)}"><header class="ctl-head" data-toggle-skill="${esc(panel.skill_name)}"><span>${esc(panel.skill_name)}</span><span class="ctl-chev">▼</span></header><div class="ctl-body">${widgets}</div></section>`;
+  return `<section class="ctl-panel" data-chain="${panel.chain_index}" data-skill="${esc(panel.skill_name)}"><header class="ctl-head">${esc(panel.skill_name)}</header><div class="ctl-body">${widgets}</div></section>`;
 }
 controlsToggle.addEventListener("click", () => {
   const open = !controlsDrawer.classList.contains("open");
@@ -425,16 +463,6 @@ controlsToggle.addEventListener("click", () => {
   localStorage.sbDrawerOpen = open ? "1" : "0";
 });
 controlsPanel.addEventListener("click", e => {
-  const head = e.target.closest("[data-toggle-skill]");
-  if (head) {
-    const skill = head.dataset.toggleSkill;
-    const section = head.closest(".ctl-panel");
-    const willCollapse = !section.classList.contains("collapsed");
-    section.classList.toggle("collapsed", willCollapse);
-    if (willCollapse) collapsedSkills.add(skill); else collapsedSkills.delete(skill);
-    localStorage.sbCollapsedSkills = JSON.stringify([...collapsedSkills]);
-    return;
-  }
   const target = e.target;
   const sw = target.closest("button[data-palette]");
   if (sw) {
@@ -537,18 +565,11 @@ async function postControl(body) {
 }
 function esc(x) { return String(x ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
-// ----- Canvas loader: particle field + chain-progress arc -----
-const loaderCanvasEl = document.querySelector("#loadCanvas");
+// ----- Canvas loader: blur the hero while work is in flight -----
 let userTickets = 0;
 const activeRenderTools = new Set();
-let loaderRaf = 0;
 let loaderSafetyTimer = 0;
 let loaderStopGrace = 0;
-let particleCtx = null;
-let particles = [];
-let pW = 0, pH = 0, pT = 0;
-let accentRgb = [165, 175, 195];
-let accent2Rgb = [195, 175, 195];
 
 function loaderShouldShow() { return userTickets > 0 || activeRenderTools.size > 0; }
 function loaderSync() {
@@ -556,21 +577,17 @@ function loaderSync() {
     if (loaderStopGrace) { clearTimeout(loaderStopGrace); loaderStopGrace = 0; }
     if (!showcase.classList.contains("loading")) loaderStartNow();
   } else if (showcase.classList.contains("loading") && !loaderStopGrace) {
-    // Short grace period — the next polling tick might bring a tool_status.
     loaderStopGrace = setTimeout(loaderForceStop, 1500);
   }
 }
 function loaderStartNow() {
   showcase.classList.add("loading");
-  particleInit();
-  loaderRaf = requestAnimationFrame(particleStep);
   clearTimeout(loaderSafetyTimer);
   loaderSafetyTimer = setTimeout(loaderForceStop, 45000);
 }
 function loaderForceStop() {
   userTickets = 0; activeRenderTools.clear();
   showcase.classList.remove("loading");
-  if (loaderRaf) { cancelAnimationFrame(loaderRaf); loaderRaf = 0; }
   clearTimeout(loaderSafetyTimer); loaderSafetyTimer = 0;
   if (loaderStopGrace) { clearTimeout(loaderStopGrace); loaderStopGrace = 0; }
 }
@@ -579,196 +596,6 @@ function loaderTicketEnd() { if (userTickets > 0) userTickets--; loaderSync(); }
 function loaderToolStart(id) { activeRenderTools.add(id); loaderSync(); }
 function loaderToolEnd(id) { activeRenderTools.delete(id); loaderSync(); }
 
-// Read current accent CSS vars, then desaturate + soften so the field stays low-key.
-function refreshAccentRgb() {
-  const root = document.documentElement;
-  const a = (getComputedStyle(root).getPropertyValue("--accent").trim()) || "#3df2ff";
-  const a2 = (getComputedStyle(root).getPropertyValue("--accent-2").trim()) || "#ff4d8d";
-  accentRgb = softenRgb(parseColor(a));
-  accent2Rgb = softenRgb(parseColor(a2));
-}
-function parseColor(s) {
-  s = s.trim();
-  if (s.startsWith("#")) {
-    let h = s.slice(1);
-    if (h.length === 3) h = h.split("").map(c => c+c).join("");
-    const n = parseInt(h, 16);
-    return [(n>>16)&255, (n>>8)&255, n&255];
-  }
-  const m = s.match(/rgba?\(([^)]+)\)/);
-  if (m) {
-    const p = m[1].split(",").map(x => parseFloat(x));
-    return [p[0]|0, p[1]|0, p[2]|0];
-  }
-  return [180, 180, 180];
-}
-// Pull toward gray (desaturate) and toward a soft mid-tone (lower contrast).
-function softenRgb([r,g,b]) {
-  const gray = 0.299*r + 0.587*g + 0.114*b;
-  const SAT = 0.38;    // 0 = full gray, 1 = full color
-  const LIFT = 0.55;   // 0 = original, 1 = pure 180-gray
-  const dr = gray + (r - gray) * SAT;
-  const dg = gray + (g - gray) * SAT;
-  const db = gray + (b - gray) * SAT;
-  return [
-    Math.round(dr * (1 - LIFT) + 180 * LIFT),
-    Math.round(dg * (1 - LIFT) + 180 * LIFT),
-    Math.round(db * (1 - LIFT) + 180 * LIFT),
-  ];
-}
-
-// Small value-noise grid for vector-field flow.
-const NSIZE = 64;
-let nGrid = null;
-function noiseInit() {
-  nGrid = new Float32Array(NSIZE * NSIZE);
-  for (let i = 0; i < nGrid.length; i++) nGrid[i] = Math.random();
-}
-function noise2(x, y) {
-  const xi = Math.floor(x), yi = Math.floor(y);
-  const xf = x - xi, yf = y - yi;
-  const wx0 = ((xi % NSIZE) + NSIZE) % NSIZE;
-  const wx1 = (wx0 + 1) % NSIZE;
-  const wy0 = ((yi % NSIZE) + NSIZE) % NSIZE;
-  const wy1 = (wy0 + 1) % NSIZE;
-  const u = xf*xf*(3-2*xf), v = yf*yf*(3-2*yf);
-  const n00 = nGrid[wy0*NSIZE + wx0], n10 = nGrid[wy0*NSIZE + wx1];
-  const n01 = nGrid[wy1*NSIZE + wx0], n11 = nGrid[wy1*NSIZE + wx1];
-  return (n00*(1-u) + n10*u) * (1-v) + (n01*(1-u) + n11*u) * v;
-}
-
-const PARTICLE_COUNT = 280;
-// Edge-following flow field, sampled from the prior canvas image.
-const FIELD_RES = 96;
-let flowCos = null, flowSin = null, flowMag = null;
-function buildFlowFieldFromImage(imgEl) {
-  try {
-    if (!imgEl || !imgEl.complete || !imgEl.naturalWidth) { flowCos = flowSin = flowMag = null; return; }
-    const c = document.createElement("canvas");
-    c.width = FIELD_RES; c.height = FIELD_RES;
-    const ctx = c.getContext("2d");
-    ctx.drawImage(imgEl, 0, 0, FIELD_RES, FIELD_RES);
-    const d = ctx.getImageData(0, 0, FIELD_RES, FIELD_RES).data;
-    const lum = new Float32Array(FIELD_RES * FIELD_RES);
-    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-      lum[j] = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-    }
-    const n = FIELD_RES;
-    flowCos = new Float32Array(n*n);
-    flowSin = new Float32Array(n*n);
-    flowMag = new Float32Array(n*n);
-    let maxMag = 1e-6;
-    // Sobel
-    for (let y = 1; y < n-1; y++) {
-      for (let x = 1; x < n-1; x++) {
-        const i = y*n + x;
-        const tl=lum[i-n-1], t=lum[i-n], tr=lum[i-n+1];
-        const l =lum[i-1],          r=lum[i+1];
-        const bl=lum[i+n-1], b=lum[i+n], br=lum[i+n+1];
-        const gx = (tr + 2*r + br) - (tl + 2*l + bl);
-        const gy = (bl + 2*b + br) - (tl + 2*t + tr);
-        const mag = Math.hypot(gx, gy);
-        if (mag > 1e-3) {
-          // Tangent = perpendicular to gradient = (-gy, gx) normalized
-          flowCos[i] = -gy / mag;
-          flowSin[i] =  gx / mag;
-          flowMag[i] = mag;
-          if (mag > maxMag) maxMag = mag;
-        }
-      }
-    }
-    // Normalize magnitude into 0..1 with a curve so most particles feel the pull only on real edges.
-    for (let i = 0; i < flowMag.length; i++) {
-      const m = flowMag[i] / maxMag;
-      flowMag[i] = Math.pow(m, 0.6);
-    }
-  } catch { flowCos = flowSin = flowMag = null; }
-}
-function sampleFlow(px, py) {
-  // px/py are in loader canvas pixels; map to FIELD_RES grid.
-  const fx = (px / pW) * (FIELD_RES - 1);
-  const fy = (py / pH) * (FIELD_RES - 1);
-  const xi = Math.max(0, Math.min(FIELD_RES - 1, fx | 0));
-  const yi = Math.max(0, Math.min(FIELD_RES - 1, fy | 0));
-  return yi*FIELD_RES + xi;
-}
-function particleInit() {
-  refreshAccentRgb();
-  if (!nGrid) noiseInit();
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-  pW = loaderCanvasEl.width = Math.max(2, Math.floor(loaderCanvasEl.clientWidth * dpr));
-  pH = loaderCanvasEl.height = Math.max(2, Math.floor(loaderCanvasEl.clientHeight * dpr));
-  particleCtx = loaderCanvasEl.getContext("2d");
-  particleCtx.clearRect(0, 0, pW, pH);
-  particles = [];
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
-    particles.push({
-      x: Math.random() * pW,
-      y: Math.random() * pH,
-      mix: Math.random(),
-      phase: Math.random() * Math.PI * 2,   // breaks alignment artifacts
-    });
-  }
-  pT = 0;
-  // Build the edge field from whatever's on the canvas right now.
-  buildFlowFieldFromImage(showcase.classList.contains("has-image") ? heroImage : null);
-}
-let accentRefreshTick = 0;
-function particleStep() {
-  if (!particleCtx) return;
-  pT += 0.0028;
-  accentRefreshTick = (accentRefreshTick + 1) % 36;
-  if (accentRefreshTick === 0) refreshAccentRgb();
-  // Fade existing trails by chipping away their alpha — never paints dark
-  // onto the canvas, so the blurred image below stays visible.
-  particleCtx.globalCompositeOperation = "destination-out";
-  particleCtx.fillStyle = "rgba(0,0,0,.06)";
-  particleCtx.fillRect(0, 0, pW, pH);
-  particleCtx.globalCompositeOperation = "source-over";
-  const hasField = flowCos !== null;
-  for (const p of particles) {
-    // Two-octave noise sampled at different scales to avoid grid alignment.
-    const n1 = noise2(p.x / 140 + p.phase, p.y / 140 + pT * 2.4);
-    const n2 = noise2(p.x / 47, p.y / 47 - pT * 1.7);
-    const n = 0.65 * n1 + 0.35 * n2;
-    // Centered range: (n - 0.5) * 2π → smooth noise gives smooth angles, no whip.
-    const noiseAngle = (n - 0.5) * Math.PI * 2 + p.phase * 0.12;
-    let vx = Math.cos(noiseAngle), vy = Math.sin(noiseAngle);
-    if (hasField) {
-      const idx = sampleFlow(p.x, p.y);
-      const m = flowMag[idx];
-      if (m > 0.03) {
-        // Edge tangents have two possible directions; pick whichever aligns
-        // with the particle's current heading so it flows along, not into.
-        let tx = flowCos[idx], ty = flowSin[idx];
-        if (tx * vx + ty * vy < 0) { tx = -tx; ty = -ty; }
-        // Aggressive blend: strong edges (m≈1) almost entirely override noise.
-        const w = Math.min(1, m * 2.2);
-        vx = vx * (1 - w) + tx * w;
-        vy = vy * (1 - w) + ty * w;
-        const L = Math.hypot(vx, vy) || 1; vx /= L; vy /= L;
-      }
-    }
-    const speed = 0.55 + Math.abs(n - 0.5) * 0.9;
-    p.x += vx * speed;
-    p.y += vy * speed;
-    p.life--;
-    // Respawn at random location periodically so we don't get clumping.
-    if (p.life <= 0 || p.x < 0 || p.x >= pW || p.y < 0 || p.y >= pH) {
-      p.x = Math.random() * pW; p.y = Math.random() * pH;
-      p.life = Math.random() * 220 + 60;
-    }
-    const r = accentRgb[0] * (1 - p.mix) + accent2Rgb[0] * p.mix;
-    const g = accentRgb[1] * (1 - p.mix) + accent2Rgb[1] * p.mix;
-    const b = accentRgb[2] * (1 - p.mix) + accent2Rgb[2] * p.mix;
-    particleCtx.fillStyle = `rgba(${r|0},${g|0},${b|0},.7)`;
-    particleCtx.beginPath();
-    particleCtx.arc(p.x, p.y, 1.8, 0, Math.PI * 2);
-    particleCtx.fill();
-  }
-  loaderRaf = requestAnimationFrame(particleStep);
-}
-
 // ----- Chat + actions -----
 form.addEventListener("submit", async e => {
   e.preventDefault();
@@ -776,15 +603,12 @@ form.addEventListener("submit", async e => {
   if (!text) return;
   input.value = "";
   add("user", text);
-  const thinking = document.createElement("article");
-  thinking.className = "status";
-  thinking.textContent = "Thinking...";
-  messages.appendChild(thinking);
   bottom(true);
   loaderTicketStart();
-  try { const result = await post("/api/chat", {message:text}); thinking.remove(); render(result.events); }
+  setBusy(true);
+  try { render((await post("/api/chat", {message:text})).events); }
   catch (err) { add("error", err.message); }
-  finally { loaderTicketEnd(); }
+  finally { loaderTicketEnd(); setTyping(false); setBusy(false); }
 });
 document.querySelector("#newChat").addEventListener("click", async () => {
   messages.innerHTML = "";
@@ -825,5 +649,26 @@ gallery.addEventListener("click", async e => {
   catch (err) { add("error", err.message); }
   finally { loaderTicketEnd(); }
 });
+(function rehydrateAccents() {
+  try {
+    const a = JSON.parse(localStorage.sbAccents || "null");
+    if (!a) return;
+    const root = document.documentElement.style;
+    if (a.accent) root.setProperty("--accent", a.accent);
+    if (a.accent2) root.setProperty("--accent-2", a.accent2);
+    if (a.glow) root.setProperty("--accent-glow", a.glow);
+    if (a.glow2) root.setProperty("--accent-2-glow", a.glow2);
+  } catch {}
+})();
+async function loadHistory() {
+  try {
+    const r = await get("/api/history");
+    const msgs = Array.isArray(r.history) ? r.history : [];
+    if (!msgs.length) return;
+    // Replace boilerplate greeting only when real history exists.
+    messages.innerHTML = "";
+    for (const m of msgs) add(m.role === "user" ? "user" : "assistant", m.content, m.role === "assistant");
+  } catch {}
+}
 setInterval(poll, 1200);
-loadPalettes(); loadCanvas(); loadGallery(1); refreshAccount();
+loadHistory(); loadPalettes(); loadCanvas(); loadGallery(1); refreshAccount();

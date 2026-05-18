@@ -4,6 +4,22 @@ You are building one skill: a small, deterministic Python function that either
 **creates** a new image on the canvas or **transforms** the current one. This
 guide is the single source of truth for how to do that well.
 
+## Palette: non-negotiable
+
+Every color in your skill MUST come from `canvas.palette` slots
+(`primary`, `secondary`, `tertiary`, `accent`, `background`) or
+`art_kit.palette_color(t)`. **Never hardcode hex strings or RGB tuples**
+(e.g. `(255, 80, 80)`, `"#ff5050"`) unless the user explicitly asks for a
+named color. Hardcoded colors break palette swapping and ignore the user's
+chosen palette — they are the single most common bug.
+
+- Wrong: `draw.ellipse(box, fill=(255, 80, 80, 255))`
+- Right: `draw.ellipse(box, fill=canvas.palette.primary)`
+- Right: `draw.ellipse(box, fill=art_kit.palette_color(t))`
+
+Reserve `palette.accent` for ≤10% of pixels. Let `palette.background` set
+the mood.
+
 Before authoring a new skill from scratch, **search_skills first** — the
 built-in library already has high-quality references for common subjects.
 Clone-and-adjust beats freehand every time.

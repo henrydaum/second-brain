@@ -7,7 +7,7 @@
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <link rel="stylesheet" href="/style.css">
 </head>
-<body>
+<body class="account-body">
   <main class="account-page">
     <a class="back-link" href="/">← Back to demo</a>
     <p class="eyebrow">Second Brain</p>
@@ -47,6 +47,17 @@
   </main>
 
   <script>
+  (function rehydrateAccents() {
+    try {
+      const a = JSON.parse(localStorage.sbAccents || "null");
+      if (!a) return;
+      const root = document.documentElement.style;
+      if (a.accent) root.setProperty("--accent", a.accent);
+      if (a.accent2) root.setProperty("--accent-2", a.accent2);
+      if (a.glow) root.setProperty("--accent-glow", a.glow);
+      if (a.glow2) root.setProperty("--accent-2-glow", a.glow2);
+    } catch {}
+  })();
   const sid = localStorage.sbDemoSession || (localStorage.sbDemoSession = crypto.randomUUID());
   async function post(url, body = {}) {
     const res = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({session_id:sid, ...body})});

@@ -18,7 +18,7 @@
         <button id="newChat" class="new-chat-link" title="Start a new conversation">+ New chat</button>
       </header>
       <div id="messages" class="messages">
-        <article class="assistant">Ask about the demo files, search local notes, or make the agent use a tool.</article>
+        <article class="assistant">Ask Second Brain to draw, paint, or render something.</article>
       </div>
       <form id="chatForm" class="composer">
         <input id="chatInput" autocomplete="off" placeholder="Ask Second Brain..." />
@@ -30,13 +30,12 @@
         <div class="es-title">You can make something here.</div>
         <div class="es-sub"><span class="arrow">←</span>Ask Second Brain to draw, paint, or fractal something. The chat on the left talks to an agent that can pick up tools, layer them, and remix what's already in the archive.</div>
         <div class="es-chips">
-          <button type="button" class="es-chip" data-prompt="draw a mandelbrot zoom into a seahorse valley">draw a mandelbrot zoom</button>
-          <button type="button" class="es-chip" data-prompt="make me a circle and color it cyan">make me a circle</button>
+          <button type="button" class="es-chip" data-prompt="draw me a Mandelbrot zoom explorer">draw a mandelbrot zoom</button>
+          <button type="button" class="es-chip" data-prompt="make me some modern art">modern art</button>
           <button type="button" class="es-chip" data-prompt="surprise me">surprise me</button>
         </div>
       </div>
       <img id="heroImage" alt="">
-      <canvas id="loadCanvas"></canvas>
       <div class="canvas-actions">
         <a id="downloadImage" href="#" download title="Download current image">Download</a>
         <button id="regenerateImage" type="button" title="Re-render the current chain with new seeds">Regenerate</button>
@@ -48,7 +47,7 @@
         <button id="shareConfirm" type="button">Share</button>
       </div>
       <button id="controlsToggle" class="controls-toggle" type="button" hidden>
-        <span>Controls</span><span class="count" id="controlsCount">0</span><span class="chev">▲</span>
+        <span>Controls</span><span class="chev">▲</span>
       </button>
       <div id="controlsDrawer" class="controls-drawer" hidden>
         <div id="controlsPanel" class="controls-panel"></div>
@@ -64,7 +63,7 @@
   </div>
   <section class="gallery-section">
     <div class="gallery-head">
-      <p class="eyebrow">Shared Archive</p>
+      <p class="eyebrow">Shared Gallery</p>
       <h2>Remix the nearest signals.</h2>
     </div>
     <div id="gallery" class="gallery"></div>

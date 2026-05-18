@@ -125,7 +125,7 @@ class WebFrontend(BaseFrontend):
         self.runtime.close_session(key)
         reset_canvas(key)
         self._ensure_conversation(key)
-        return [{"type": "canvas_reset"}, *(self._drain(key) or [{"type": "message", "role": "assistant", "content": "New image ready."}])]
+        return [{"type": "canvas_reset"}, *self._drain(key)]
 
     def _ensure_conversation(self, key: str) -> None:
         self._ensure_web_profile()
@@ -146,6 +146,7 @@ class WebFrontend(BaseFrontend):
             "prompt_suffix": (
                 "You are running the public Second Brain web demo. You make generative art collaboratively with the user. "
                 "Keep replies short, warm, and conversational — like an artist talking through their work. Never use slash commands.\n\n"
+                "**Palette is non-negotiable.** Every color in a skill must come from canvas.palette slots (primary/secondary/tertiary/accent/background) or art_kit.palette_color(t). NEVER hardcode hex strings or RGB tuples like (255,80,80,255) — only canvas.palette.* values, unless the user explicitly asks for a specific color. Wrong: `fill=(255,80,80)` or `fill='#ff5050'`. Right: `fill=canvas.palette.primary` or `fill=art_kit.palette_color(t)`. If you violate this, the user's chosen palette won't apply and palette-swap won't work.\n\n"
                 "The canvas is one square image with a selected color-theory palette and size. For any request to draw, render, stylize, or transform the canvas: first call search_skills; if a strong match exists, execute_skill; otherwise create_skill with Python code, then execute_skill. Creation skills start a new image. Transform skills receive canvas.image and modify it.\n\n"
                 "Before authoring a new skill, call read_skill_guide ONCE per session for the canonical template, API reference, and method catalog. Then search_skills for adjacent references — the built-in library contains high-quality skills you can clone-and-adjust instead of writing from scratch. To clone-and-adjust an existing skill, call read_skill(slug) to see its source, then create_skill with your modifications.\n\n"
                 "For natural subjects (suns, flowers, mountains, trees, landscapes, waves), prefer established generative methods — Vogel spirals for petals/seeds, flow fields for organic curves, Voronoi for cell structures, L-systems for branching, sediment bands for landscapes — over freehand drawing. Freehand draws of natural subjects look amateurish; method-based draws look designed.\n\n"
@@ -211,6 +212,9 @@ class WebFrontend(BaseFrontend):
             last = (self._outbox.get(session_key) or [{}])[-1]
         if last.get("content") != text:
             self._push(session_key, {"type": "error", "content": text})
+
+    def render_typing(self, session_key: str, on: bool) -> None:
+        self._push(session_key, {"type": "typing", "on": bool(on)})
 
     def render_tool_status(self, session_key: str, payload: dict) -> None:
         name = payload.get("tool_name") or payload.get("command_name") or payload.get("name") or "tool"
@@ -591,6 +595,37 @@ class WebFrontend(BaseFrontend):
             db.conn.commit()
         return {"ok": True, "granted": granted}
 
+    def history(self, session_id: str) -> list[dict]:
+        """Return user/assistant text messages for this session, oldest first.
+
+        Lets the client rehydrate the chat view on page (re)load so navigating
+        away and back doesn't drop the transcript.
+        """
+        key = self.session_key(session_id)
+        session = self.runtime.sessions.get(key)
+        if session is None:
+            return []
+        out: list[dict] = []
+        for msg in session.history or []:
+            role = msg.get("role")
+            content = msg.get("content")
+            if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+                continue
+            out.append({"role": role, "content": content})
+        return out
+
+    def cancel(self, session_id: str) -> list[dict]:
+        """Set the cancel flag on the in-flight agent turn for this session."""
+        key = self.session_key(session_id)
+        if key not in self.runtime.sessions:
+            return []
+        result = self.runtime.cancel_session(key)
+        events = self._drain(key)
+        if result and getattr(result, "messages", None):
+            for msg in result.messages:
+                events.append({"type": "status", "content": msg})
+        return events
+
     def canvas_payload(self, session_id: str) -> dict:
         key = self.session_key(session_id)
         return _canvas_payload_full(key, canvas(key))
@@ -838,6 +873,9 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/events":
             sid = str(parse_qs(parsed.query).get("session_id", ["demo"])[0])[:80]
             return self._json({"ok": True, "events": self.server.frontend._drain(self.server.frontend.session_key(sid))})
+        if path == "/api/history":
+            sid = str(parse_qs(parsed.query).get("session_id", ["demo"])[0])[:80]
+            return self._json({"ok": True, "history": self.server.frontend.history(sid)})
         if path == "/api/canvas":
             sid = str(parse_qs(parsed.query).get("session_id", ["demo"])[0])[:80]
             return self._json({"ok": True, "canvas": self.server.frontend.canvas_payload(sid)})
@@ -912,6 +950,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json(self.server.frontend.redeem_promo(str(body.get("code") or ""), self._cookie_uid()))
             if self.path == "/api/new":
                 return self._json({"ok": True, "events": self.server.frontend.new_chat(sid)})
+            if self.path == "/api/cancel":
+                return self._json({"ok": True, "events": self.server.frontend.cancel(sid)})
             if self.path == "/api/approval":
                 return self._json({"ok": True, "events": self.server.frontend.approve(sid, bool(body.get("value")))})
             if self.path == "/api/share":

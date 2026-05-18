@@ -135,6 +135,14 @@ Payload:
     command_name: str
     args:         dict"""
 
+AGENT_THINKING = "agent_thinking"
+"""The agent loop is waiting on an LLM response (or has just received one).
+Lets frontends show a faithful "thinking" indicator that mirrors the real
+state machine rather than synthesizing one in the UI.
+Payload:
+    session_key: str
+    on:          bool  — True before each LLM call, False when it returns"""
+
 COMMAND_CALL_FINISHED = "command_call_finished"
 """The runtime finished a slash command.
 Payload:

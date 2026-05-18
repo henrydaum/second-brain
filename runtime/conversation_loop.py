@@ -380,26 +380,40 @@ class ConversationLoop:
         self._tool_call_counts[name] = used + 1
         return None
 
+    def _emit_thinking(self, on: bool) -> None:
+        if not self.session_key:
+            return
+        try:
+            from events.event_bus import bus
+            from events.event_channels import AGENT_THINKING
+            bus.emit(AGENT_THINKING, {"session_key": self.session_key, "on": bool(on)})
+        except Exception:
+            logger.debug("emit AGENT_THINKING failed", exc_info=True)
+
     def _invoke(self, messages, tools, attachments=None, history=None):
         """Internal helper to handle invoke."""
         from plugins.services.service_llm import is_context_limit_error
 
         bundle = attachments or None
+        self._emit_thinking(True)
         try:
-            response = self.llm.chat_with_tools(messages, tools, attachments=bundle)
-        except Exception as e:
-            if history is None or not is_context_limit_error(e):
-                raise
-            logger.warning("Context limit hit, compacting and retrying: %s", e)
-            response = self._retry_after_overflow(tools, history)
-        if getattr(response, "is_error", False):
-            err = getattr(response, "error", None) or getattr(response, "content", None) or "LLM provider error."
-            if history is not None and is_context_limit_error(err):
-                logger.warning("Context limit hit (response error), compacting and retrying: %s", err)
+            try:
+                response = self.llm.chat_with_tools(messages, tools, attachments=bundle)
+            except Exception as e:
+                if history is None or not is_context_limit_error(e):
+                    raise
+                logger.warning("Context limit hit, compacting and retrying: %s", e)
                 response = self._retry_after_overflow(tools, history)
-            else:
-                raise RuntimeError(err)
-        return response
+            if getattr(response, "is_error", False):
+                err = getattr(response, "error", None) or getattr(response, "content", None) or "LLM provider error."
+                if history is not None and is_context_limit_error(err):
+                    logger.warning("Context limit hit (response error), compacting and retrying: %s", err)
+                    response = self._retry_after_overflow(tools, history)
+                else:
+                    raise RuntimeError(err)
+            return response
+        finally:
+            self._emit_thinking(False)
 
     def _retry_after_overflow(self, tools, history):
         """Compact + retry. If retry still overflows, drop history down to

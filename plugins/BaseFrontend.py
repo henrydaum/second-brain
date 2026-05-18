@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from events.event_bus import bus
 from events.event_channels import (
+    AGENT_THINKING,
     APPROVAL_REQUESTED,
     CHAT_MESSAGE_PUSHED,
     COMMAND_CALL_FINISHED,
@@ -260,6 +261,7 @@ class BaseFrontend:
             bus.subscribe(COMMAND_CALL_FINISHED, self.on_bus_command_call_finished),
             bus.subscribe(TOOL_CALL_STARTED, self.on_bus_tool_call_started),
             bus.subscribe(TOOL_CALL_FINISHED, self.on_bus_tool_call_finished),
+            bus.subscribe(AGENT_THINKING, self.on_bus_agent_thinking),
             bus.subscribe(TOOLS_CHANGED, self.on_tools_changed),
             bus.subscribe(TASKS_CHANGED, self.on_tasks_changed),
         ]
@@ -443,6 +445,16 @@ class BaseFrontend:
     def on_bus_plan_mode_changed(self, payload: dict) -> None:
         """Render plan-mode state changes through the normal message surface."""
         self.on_bus_message_pushed(payload)
+
+    def on_bus_agent_thinking(self, payload: dict) -> None:
+        """Dispatch agent-thinking events to the frontend's typing indicator."""
+        key = (payload or {}).get("session_key")
+        if not key or key not in self._live_session_keys():
+            return
+        try:
+            self.render_typing(key, bool((payload or {}).get("on")))
+        except Exception:
+            logger.exception(f"render_typing failed for '{self.name}'")
 
     def on_bus_tool_call_started(self, payload: dict) -> None:
         """Handle on bus tool call started."""
