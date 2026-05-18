@@ -13,7 +13,7 @@ logger = logging.getLogger("SkillTools")
 
 class CreateSkill(BaseTool):
     name = "create_skill"
-    description = "Create a Python canvas skill. Code must define run(canvas, **params), use canvas.palette slots, and call canvas.commit(image). Optionally declare up to 3 user-facing controls (slider/enum/bool/pan/button) plus an optional palette control via the 'controls' arg — these appear in the UI and let the user fine-tune the result without another agent turn."
+    description = "Create a Python canvas skill. Code must define run(canvas, **params), use canvas.palette slots, and call canvas.commit(image). Optionally declare up to 3 user-facing controls (slider/enum/bool/pan/button) via the 'controls' arg — these appear in the UI and let the user fine-tune the result without another agent turn. A palette swatch is added to every skill automatically; do not declare a palette control yourself."
     max_calls = 4
     parameters = {
         "type": "object",

@@ -121,23 +121,72 @@ def _split_comp(id_: str, name: str, base: int) -> Palette:
     )
 
 
+def _curated(id_: str, name: str, kind: str, base: int, *, primary: str, secondary: str, tertiary: str, accent: str, background: str) -> Palette:
+    return Palette(id=id_, name=name, kind=kind, base_hue=base,
+                   primary=primary, secondary=secondary, tertiary=tertiary,
+                   accent=accent, background=background)
+
+
 _CATALOG: list[Palette] = [
-    _neutral("monochromatic_neutral", "Neutral Mono"),
-    _monochromatic("monochromatic_indigo", "Indigo Mono", 245),
-    _monochromatic("monochromatic_rose", "Rose Mono", 345),
-    _complementary("complementary_teal_coral", "Teal & Coral", 185),
-    _complementary("complementary_violet_lime", "Violet & Lime", 280),
+    # ── Muted / modern / minimal (default-leaning) ───────────────────────────
+    _curated("neutral_mono", "Neutral Mono", "monochromatic", 220,
+             primary="#C9D3E0", secondary="#8D99A8", tertiary="#586271",
+             accent="#FFFFFF", background="#111318"),
+    _curated("sandstone", "Sandstone", "earthy", 30,
+             primary="#D4A574", secondary="#A67B5B", tertiary="#7A6553",
+             accent="#F5EBE0", background="#2C2419"),
+    _curated("coastal_mist", "Coastal Mist", "cool_muted", 210,
+             primary="#94A8B5", secondary="#B4BFC4", tertiary="#6A7884",
+             accent="#E8E2D5", background="#1F2832"),
+    _curated("japandi", "Japandi", "warm_minimal", 35,
+             primary="#BFA888", secondary="#7A7568", tertiary="#3D3A36",
+             accent="#E8E0D0", background="#2A2724"),
+    _curated("linen", "Linen", "soft_neutral", 25,
+             primary="#C9B8A8", secondary="#B89A8E", tertiary="#8B9A85",
+             accent="#EFE7DB", background="#3A3530"),
+    _curated("studio_mono", "Studio Mono", "monochromatic", 210,
+             primary="#A8B0B8", secondary="#7A828A", tertiary="#4E555C",
+             accent="#D8D5CF", background="#1A1D20"),
+    _curated("botanical", "Botanical", "earthy", 90,
+             primary="#8FA68E", secondary="#B58572", tertiary="#5C6E5C",
+             accent="#EBE2D4", background="#1F2A1D"),
+    _curated("concrete", "Concrete", "industrial", 30,
+             primary="#B8B0A6", secondary="#8C807A", tertiary="#564F49",
+             accent="#C9967A", background="#232120"),
+    _curated("dusk", "Dusk", "moody", 320,
+             primary="#B59DAE", secondary="#D4A89A", tertiary="#7A6A78",
+             accent="#EDDCD2", background="#2A1F2A"),
+    _curated("cafe", "Café", "warm_earthy", 30,
+             primary="#C9A876", secondary="#8B5E3C", tertiary="#5C4030",
+             accent="#EBDBC7", background="#1F1410"),
+    _curated("ochre", "Ochre", "midcentury", 40,
+             primary="#C99A48", secondary="#8B6F4E", tertiary="#5A4030",
+             accent="#E8DCC8", background="#1F1812"),
+    _curated("frost", "Frost", "cool_minimal", 200,
+             primary="#D8DFE3", secondary="#A5B0B8", tertiary="#6A7884",
+             accent="#EFEDE9", background="#1B2026"),
+    _curated("clay", "Clay", "earthy", 15,
+             primary="#C4856C", secondary="#9C6B57", tertiary="#5E3F33",
+             accent="#E8D4C0", background="#241813"),
+    _curated("nordic", "Nordic", "cool_minimal", 215,
+             primary="#A8B5C2", secondary="#7B8794", tertiary="#4A5560",
+             accent="#E5E1D6", background="#1C2128"),
+    _curated("moss", "Moss", "earthy", 110,
+             primary="#7A8C6B", secondary="#A8A082", tertiary="#4D5C44",
+             accent="#E1DCC8", background="#1E2419"),
+    _curated("ink_paper", "Ink & Paper", "monochromatic", 35,
+             primary="#3A3530", secondary="#7A7268", tertiary="#A89C8C",
+             accent="#C99A48", background="#E8E0D0"),
+    # ── Vivid / playful (used sparingly) ─────────────────────────────────────
     _analogous("analogous_sunset", "Sunset Analogous", 20),
-    _analogous("analogous_forest", "Forest Analogous", 130),
-    _triadic("triadic_warm", "Warm Triad", 20),
     _triadic("triadic_jewel", "Jewel Triad", 200),
     _tetradic("tetradic_neon", "Neon Tetrad", 300),
-    _split_comp("split_complementary_ember", "Ember Split", 15),
+    _complementary("teal_coral", "Teal & Coral", 185),
 ]
 
 _BY_ID: dict[str, Palette] = {p.id: p for p in _CATALOG}
 
-DEFAULT_PALETTE_ID = "monochromatic_neutral"
+DEFAULT_PALETTE_ID = "japandi"
 
 
 def list_palettes() -> list[Palette]:

@@ -123,15 +123,27 @@ def _coerce_number(value, *, field: str) -> float:
     return float(value)
 
 
-def validate_controls(controls, run_param_names: set[str]) -> list[dict]:
+def _code_uses_palette(code: str | None) -> bool:
+    """True if the skill body references the palette in any color-bearing way."""
+    if not code:
+        return False
+    return ("canvas.palette" in code) or ("palette_color" in code)
+
+
+def validate_controls(controls, run_param_names: set[str], code: str | None = None) -> list[dict]:
     """Validate and normalize a list of SKILL_CONTROLS entries.
 
     Returns the normalized list. Raises SkillValidationError on any problem.
     The 'palette' and 'seed' names are always considered valid param targets —
     'palette' is resolved by the runner, 'seed' lives on the chain entry.
+
+    If `code` is provided and the skill references canvas.palette or
+    art_kit.palette_color, a palette swatch is auto-injected when the agent
+    didn't declare one. Skills that don't touch color (e.g. pure blur
+    transforms) skip the injection so the UI doesn't show a noop control.
     """
-    if controls in (None, []):
-        return []
+    if controls is None:
+        controls = []
     if not isinstance(controls, list):
         raise SkillValidationError("SKILL_CONTROLS must be a list")
     valid_params = set(run_param_names) | {"palette", "seed"}
@@ -212,6 +224,11 @@ def validate_controls(controls, run_param_names: set[str]) -> list[dict]:
         raise SkillValidationError(
             f"a skill may declare at most {MAX_NON_PALETTE_CONTROLS} non-palette controls (got {non_palette})"
         )
+    # Auto-inject a palette swatch when the skill actually references the
+    # palette in its code. Skips skills that don't touch color so the UI
+    # doesn't show a control that does nothing.
+    if _code_uses_palette(code) and not any(c.get("type") == "palette" for c in out):
+        out.insert(0, {"type": "palette", "name": "palette", "label": "Palette"})
     return out
 
 
@@ -358,7 +375,7 @@ def _load_skill_from_path(path: Path) -> Skill | None:
     # ones created via create_skill -- notably, palette controls without an
     # explicit name get name="palette" so schema lookups work.
     try:
-        controls = validate_controls(raw_list, _run_param_names(code_body))
+        controls = validate_controls(raw_list, _run_param_names(code_body), code=code_body)
     except SkillValidationError:
         controls = raw_list
     return Skill(
@@ -468,7 +485,7 @@ def write_skill(
     if kind not in _KINDS:
         raise ValueError(f"kind must be one of {_KINDS}, got {kind!r}")
     assert_valid(code)
-    normalized_controls = validate_controls(controls, _run_param_names(code))
+    normalized_controls = validate_controls(controls, _run_param_names(code), code=code)
     slug = slugify(name)
     if not slug:
         raise ValueError("name produced an empty slug")
@@ -510,7 +527,7 @@ def update_skill(
     if code is not None:
         assert_valid(new_code)
     if controls is not None:
-        new_controls = validate_controls(controls, _run_param_names(new_code))
+        new_controls = validate_controls(controls, _run_param_names(new_code), code=new_code)
     else:
         new_controls = list(existing.controls or [])
     updated = Skill(
