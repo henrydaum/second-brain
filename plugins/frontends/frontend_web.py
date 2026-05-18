@@ -1205,6 +1205,7 @@ def _canvas_payload_full(session_key: str, state: dict | None) -> dict:
     chain = state.get("chain") or state.get("last_chain") or []
     panels = []
     layers = []
+    palette_shown = False
     for idx, step in enumerate(chain):
         skill = read_skill(step.get("slug") or "")
         slug = step.get("slug") or ""
@@ -1212,12 +1213,27 @@ def _canvas_payload_full(session_key: str, state: dict | None) -> dict:
         layers.append({"chain_index": idx, "slug": slug, "skill_name": name, "kind": step.get("kind") or (skill.kind if skill else "")})
         if not skill or not skill.controls:
             continue
+        # The canvas has one palette. Keep the palette swatch on the first
+        # panel that has one; strip it from later panels so chains don't
+        # show a redundant swatch for every layer that touches color.
+        schema = []
+        for c in skill.controls:
+            if c.get("type") == "palette":
+                if palette_shown:
+                    continue
+                palette_shown = True
+            schema.append(c)
+        if not schema:
+            continue
+        values = dict(step.get("controls") or {})
+        if not any(c.get("type") == "palette" for c in schema):
+            values.pop("palette", None)
         panels.append({
             "chain_index": idx,
             "slug": skill.slug,
             "skill_name": skill.name,
-            "schema": skill.controls,
-            "values": dict(step.get("controls") or {}),
+            "schema": schema,
+            "values": values,
             "seed": int(step.get("seed") or 0),
         })
     base["controls_panels"] = panels
