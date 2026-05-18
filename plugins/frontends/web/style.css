@@ -29,7 +29,7 @@ header button:hover, .composer button:hover { border-color: var(--accent); }
 .new-chat-link:hover { color: var(--accent); border-color: transparent; }
 
 .messages { overflow: auto; padding: 22px; display: flex; flex-direction: column; gap: 12px; }
-.ephemeral-note { align-self: center; margin: auto; max-width: 320px; padding: 18px 20px; border: 1px dashed var(--line); color: var(--muted); font-size: 13px; text-align: center; display: flex; flex-direction: column; gap: 6px; background: transparent; }
+.ephemeral-note { align-self: center; margin: auto; max-width: 320px; padding: 18px 20px; border: 2px dashed rgba(243,246,255,.35); color: var(--muted); font-size: 13px; text-align: center; display: flex; flex-direction: column; gap: 6px; background: transparent; }
 .ephemeral-note strong { color: var(--text); font-weight: 700; font-size: 14px; }
 .messages > .ephemeral-note:not(:only-child) { display: none; }
 article { max-width: 92%; padding: 12px 14px; border: 1px solid var(--line); background: #141823; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -227,16 +227,15 @@ body.account-body { background:
 .privacy-page a:hover { color: var(--text); }
 .privacy-page .back-link-foot { margin-top: 24px; }
 
-/* ---- Danger zone (delete account) ---- */
-.danger-zone { border-color: #7f3150; }
-.danger-zone h2 { font-size: 18px; margin-bottom: 8px; color: #ffb5c8; letter-spacing: 0; }
-.danger-zone p { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
-.danger-zone form { display: flex; flex-direction: column; gap: 10px; }
-.danger-zone input { height: 40px; padding: 0 12px; background: #0b0d13; border: 1px solid var(--line); color: var(--text); }
-.danger-zone input:focus { outline: none; border-color: #ffb5c8; }
-.danger-btn { height: 42px; background: transparent; color: #ffb5c8; border: 1px solid #7f3150; cursor: pointer; font-weight: 700; letter-spacing: .02em; transition: background 200ms ease, color 200ms ease; }
-.danger-btn:hover:not(:disabled) { background: #7f3150; color: #fff; }
-.danger-btn:disabled { opacity: .5; cursor: default; }
+/* ---- Delete account card ---- */
+.delete-card h2 { font-size: 16px; margin-bottom: 8px; letter-spacing: 0; color: var(--text); font-weight: 600; }
+.delete-card p { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+.delete-card form { display: flex; flex-direction: column; gap: 10px; }
+.delete-card input { height: 40px; padding: 0 12px; background: #0b0d13; border: 1px solid var(--line); color: var(--text); }
+.delete-card input:focus { outline: none; border-color: var(--accent); }
+.delete-btn { height: 38px; background: transparent; color: var(--muted); border: 1px solid var(--line); cursor: pointer; font-weight: 600; transition: border-color 200ms ease, color 200ms ease; }
+.delete-btn:hover:not(:disabled) { border-color: var(--muted); color: var(--text); }
+.delete-btn:disabled { opacity: .5; cursor: default; }
 
 /* Promo card single-row form */
 #promoCard form { display: flex; flex-direction: row; gap: 10px; align-items: stretch; margin-top: 12px; }

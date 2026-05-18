@@ -45,13 +45,12 @@
       <p id="promoStatus" class="modal-status" hidden></p>
     </div>
 
-    <div class="account-card danger-zone" id="dangerCard" hidden>
-      <h2>Danger zone</h2>
-      <p>Deleting your account removes your email, your private archive, your magic-link tokens, your payment history, and the conversations on this device. <strong>Skills you caused the agent to make and canvases you shared publicly are kept</strong>, but the author field is anonymized. This cannot be undone.</p>
-      <p>To confirm, type your email below.</p>
+    <div class="account-card delete-card" id="dangerCard" hidden>
+      <h2>Delete account</h2>
+      <p>Removes your email, private archive, and any chats from this device. Skills and shared canvases stay in the public catalog with the author set to anonymous. Type your email to confirm.</p>
       <form id="deleteForm">
         <input id="deleteConfirm" type="email" required placeholder="you@example.com" autocomplete="off">
-        <button type="submit" class="danger-btn">Delete my account</button>
+        <button type="submit" class="delete-btn">Delete account</button>
       </form>
       <p id="deleteStatus" class="modal-status" hidden></p>
     </div>
