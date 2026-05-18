@@ -75,7 +75,7 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .es-chip:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ---- Loading overlay (blurred hero only) ---- */
-.showcase.loading #heroImage { filter: saturate(1.4) contrast(1.05) blur(18px) brightness(.55); }
+.showcase.loading #heroImage { filter: saturate(1.4) contrast(1.05) blur(10px) brightness(.55); }
 .showcase.loading #emptyState { opacity: .35; filter: blur(2px); transition: opacity 320ms ease, filter 320ms ease; }
 /* Canvas-actions moved to top-left */
 .canvas-actions { display: none; position: absolute; left: 22px; top: 22px; z-index: 2; gap: 8px; }
