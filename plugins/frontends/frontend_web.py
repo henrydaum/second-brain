@@ -35,7 +35,7 @@ WEB_ROOT = Path(__file__).with_name("web")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FAVICON_PATH = PROJECT_ROOT / "icon.ico"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
-WEB_PROFILE = "web_demo"
+WEB_PROFILE = "artist"
 WEB_TOOLS = [
     "search_skills",
     "create_skill",
@@ -217,7 +217,7 @@ class WebFrontend(BaseFrontend):
         if session:
             session.profile_override = WEB_PROFILE
             session.active_agent_profile = WEB_PROFILE
-        self.runtime.add_system_prompt_extra(key, "web_demo", "Website safety: browser users cannot run slash commands or edit runtime configuration. Use the skill workflow for canvas work: search_skills, then execute_skill or create_skill plus execute_skill. Do not call sharing or gallery tools.")
+        self.runtime.add_system_prompt_extra(key, "artist", "Website safety: browser users cannot run slash commands or edit runtime configuration. Use the skill workflow for canvas work: search_skills, then execute_skill or create_skill plus execute_skill. Do not call sharing or gallery tools.")
 
     def _push(self, session_key: str, item: dict) -> None:
         with self._lock:

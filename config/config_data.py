@@ -108,7 +108,7 @@ SETTINGS_DATA = [
          "llm": "default",
          "prompt_suffix": "",
          "whitelist_or_blacklist_tools": "blacklist",
-         "tools_list": [],
+         "tools_list": []
      },
      "artist": {
          "llm": "default",
