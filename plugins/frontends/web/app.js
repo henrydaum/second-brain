@@ -186,12 +186,11 @@ document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click
 function setAccount(acc) {
   const remaining = acc?.messages_remaining;
   const max = acc?.messages_max;
-  const unlimited = max == null;
-  const fill = unlimited ? 1 : Math.max(0, Math.min(1, (remaining ?? 0) / max));
-  const low = !unlimited && typeof remaining === "number" && remaining <= 5;
-  const fillColor = low ? "var(--hot)" : "var(--accent)";
+  const unlimited = acc?.tier === "unlimited";
+  // If max is missing (stale backend), fall back to 0 fill — visibly broken instead of misleadingly full.
+  const fill = unlimited ? 1 : (typeof max === "number" && max > 0 ? Math.max(0, Math.min(1, (remaining ?? 0) / max)) : 0);
   const pct = (fill * 100).toFixed(2);
-  avatarBar.style.background = `linear-gradient(to top, ${fillColor} ${pct}%, var(--line) 0)`;
+  avatarBar.style.backgroundSize = `100% ${pct}%`;
   avatarBar.style.boxShadow = unlimited ? "0 0 6px var(--accent-glow)" : "none";
   if (acc?.signed_in && acc.email) {
     avatarInner.textContent = acc.email[0].toUpperCase();
