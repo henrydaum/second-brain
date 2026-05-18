@@ -18,9 +18,11 @@
         <div class="header-actions" style="display:flex;align-items:center;gap:12px;">
           <button id="newChat" class="new-chat-link" title="Start a new conversation">+ New chat</button>
           <a id="accountAvatar" class="account-avatar" href="/account" title="Account" hidden
-             style="position:relative;display:inline-flex;width:32px;height:32px;flex:0 0 32px;border-radius:50%;text-decoration:none;align-items:center;justify-content:center;background:conic-gradient(var(--accent) 100%, var(--line) 0);transition:background 400ms ease,box-shadow 300ms ease;">
+             style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;flex:0 0 auto;">
             <span id="avatarInner"
-                  style="display:flex;width:26px;height:26px;border-radius:50%;background:var(--bg);align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--text);line-height:1;user-select:none;">·</span>
+                  style="display:inline-flex;width:24px;height:24px;align-items:center;justify-content:center;border-radius:50%;background:var(--panel);border:1px solid var(--line);color:var(--text);font-size:11px;font-weight:700;line-height:1;user-select:none;overflow:hidden;"></span>
+            <span id="avatarBar" title=""
+                  style="display:inline-block;width:6px;height:24px;border-radius:3px;background:linear-gradient(to top, var(--accent) 100%, var(--line) 0);transition:background 400ms ease, box-shadow 300ms ease;"></span>
           </a>
         </div>
       </header>

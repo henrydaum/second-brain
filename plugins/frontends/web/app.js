@@ -165,6 +165,8 @@ function setTyping(on) {
 // ----- account + paywall + auth -----
 const accountAvatar = document.querySelector("#accountAvatar");
 const avatarInner = document.querySelector("#avatarInner");
+const avatarBar = document.querySelector("#avatarBar");
+const SILHOUETTE_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><circle cx="12" cy="9" r="4"/><ellipse cx="12" cy="22" rx="8" ry="6"/></svg>';
 const paywallModal = document.querySelector("#paywallModal");
 const signinModal = document.querySelector("#signinModal");
 const promoModal = document.querySelector("#promoModal");
@@ -189,13 +191,16 @@ function setAccount(acc) {
   const low = !unlimited && typeof remaining === "number" && remaining <= 5;
   const fillColor = low ? "var(--hot)" : "var(--accent)";
   const pct = (fill * 100).toFixed(2);
-  accountAvatar.style.background = `conic-gradient(${fillColor} ${pct}%, var(--line) 0)`;
-  accountAvatar.style.boxShadow = unlimited ? "0 0 8px var(--accent-glow)" : "none";
-  avatarInner.textContent = (acc?.signed_in && acc.email) ? acc.email[0].toUpperCase() : "·";
-  const tier = acc?.tier || "free";
-  const tierLabel = acc?.signed_in ? (tier === "unlimited" ? "Unlimited" : tier === "paid" ? "Paid" : "Free") : "Free demo";
+  avatarBar.style.background = `linear-gradient(to top, ${fillColor} ${pct}%, var(--line) 0)`;
+  avatarBar.style.boxShadow = unlimited ? "0 0 6px var(--accent-glow)" : "none";
+  if (acc?.signed_in && acc.email) {
+    avatarInner.textContent = acc.email[0].toUpperCase();
+  } else {
+    avatarInner.innerHTML = SILHOUETTE_SVG;
+  }
   const tail = unlimited ? "Unlimited" : `${(remaining ?? 0).toLocaleString()} messages left`;
-  accountAvatar.title = `${tierLabel} — ${tail}`;
+  avatarBar.title = tail;
+  accountAvatar.title = acc?.signed_in ? `Signed in as ${acc.email}` : "Account";
   accountAvatar.hidden = false;
 }
 async function refreshAccount() {
