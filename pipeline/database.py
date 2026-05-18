@@ -259,10 +259,16 @@ class Database:
 				shares       REAL DEFAULT 0,
 				downloads    REAL DEFAULT 0,
 				remixes      REAL DEFAULT 0,
+				saves        REAL DEFAULT 0,
 				generations  INTEGER DEFAULT 0,
 				updated_at   REAL
 			)
 		""")
+		# Idempotent migration for existing installs.
+		try:
+			self.conn.execute("ALTER TABLE skill_scores ADD COLUMN saves REAL DEFAULT 0")
+		except Exception:
+			pass
 
 		self.conn.commit()
 

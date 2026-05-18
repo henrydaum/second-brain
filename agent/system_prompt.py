@@ -187,7 +187,25 @@ The context object is passed to every plugin and contains relevant runtime infor
 
 def _skill_workflow() -> str:
     return """## Canvas skill workflow
-For canvas requests, call search_skills first. If a strong matching skill exists, call execute_skill. If not, call create_skill with Python code defining run(canvas, **params), then execute_skill with the returned slug.
+This product makes generative, algorithmic art -- not literal illustration. Treat every canvas request as a prompt for an abstract algorithmic interpretation, not a representational depiction. A "sun" is a radial gradient over an fbm noise field in a warm palette ramp, not an orange circle with line rays. A "flower" is a Vogel spiral of palette-blended cells, not stacked petals. A "cat" is a flow field of warm streamlines or an attractor cloud, not eyes-nose-whiskers. The literal version always looks amateurish; the algorithmic version looks intentional.
+
+Workflow:
+1. Call search_skills with the subject. If a strong match exists, call execute_skill.
+2. If no match, pick an algorithmic technique appropriate to the subject *before* writing code. Then call create_skill with run(canvas, **params), then execute_skill with the returned slug.
+
+Techniques available via art_kit (good-for hints):
+- vogel_spiral -- flowers, sunflowers, galaxies, star fields, seed-pod patterns
+- fbm / value_noise -- clouds, terrain, atmospheres, fog, organic textures, ray fields
+- radial_falloff -- suns, moons, vignettes, centered radiant subjects
+- flow_field -- wind, hair, currents, smoke, motion, fur, weather
+- lindenmayer + turtle_segments -- trees, branches, ferns, coral, lightning, roots
+- voronoi_assign -- cells, cracked glass, abstract portraits, stained glass, basalt
+- wave_field -- water, ripples, sound, interference, reflections
+- attractor_points (de Jong, Clifford) -- organic abstract forms, smoke, dust
+- jittered_grid -- skylines, crowds, forests-from-far, tiled mosaics
+- rule_of_thirds -- horizon and focal-point placement for any composition
+
+When in doubt, prefer noise, gradients, and procedural patterns in palette tones over explicit shapes. Compose multiple techniques (e.g. fbm background + vogel foreground + radial vignette) rather than drawing literal features.
 
 Skill kinds: creation starts a new image; transform requires the current canvas and uses canvas.image. Skill code must call canvas.commit(image). Create a blank image with canvas.new(color=canvas.palette.background) or canvas.create_image(). Use canvas.palette.primary, secondary, tertiary, accent, and background instead of hard-coded colors; palette slots behave as "#RRGGBB" strings and as RGB sequences. Use canvas.size/canvas.width/canvas.height and canvas.seed for deterministic output. Allowed imports: math, random, colorsys, numpy, PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps, PIL.ImageEnhance."""
 

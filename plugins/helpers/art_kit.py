@@ -159,8 +159,9 @@ def jittered_grid(rng, cols, rows, jitter=0.4):
 # ---------------------------------------------------------------------------
 
 def _hash01(rng_seed, ix, iy):
-    # Deterministic value at lattice point (ix, iy) using a single Random.
-    return random.Random((rng_seed, int(ix), int(iy))).random()
+    # Deterministic value at lattice point (ix, iy). Uses a string seed for
+    # Python 3.13 compatibility (tuple seeds were removed). Stable across runs.
+    return random.Random(f"{rng_seed}:{int(ix)}:{int(iy)}").random()
 
 
 def value_noise(seed, x, y):
@@ -208,6 +209,168 @@ def radial_falloff(w, h, cx=None, cy=None):
 
 
 # ---------------------------------------------------------------------------
+# Voronoi.
+# ---------------------------------------------------------------------------
+
+def voronoi_nearest(points):
+    """Return a closure f(x, y) -> (index, distance) of the nearest seed.
+
+    Pure Python; skills that want a full per-pixel map and care about speed
+    should implement Voronoi inline with numpy broadcasting. This form is
+    useful for sparse sampling or for caller-driven decisions (e.g. shade
+    edges when distance to second-nearest is small).
+    """
+    pts = [(float(px), float(py)) for (px, py) in points]
+
+    def f(x, y):
+        best_i, best_d2 = 0, float("inf")
+        for i, (px, py) in enumerate(pts):
+            dx, dy = x - px, y - py
+            d2 = dx * dx + dy * dy
+            if d2 < best_d2:
+                best_d2, best_i = d2, i
+        return best_i, math.sqrt(best_d2)
+
+    return f
+
+
+# ---------------------------------------------------------------------------
+# Flow fields.
+# ---------------------------------------------------------------------------
+
+def flow_field(seed, scale=0.005, octaves=4):
+    """Return a closure f(x, y) -> angle_radians driven by fbm noise.
+
+    Skills can advect particles or draw streamlines through it. `scale` controls
+    how tightly the field swirls; smaller -> broader, smoother swirls.
+    """
+
+    def f(x, y):
+        return fbm(seed, x * scale, y * scale, octaves=octaves) * math.tau
+
+    return f
+
+
+# ---------------------------------------------------------------------------
+# L-systems.
+# ---------------------------------------------------------------------------
+
+def lindenmayer(axiom, rules, iterations):
+    """Iteratively rewrite `axiom` using a {char: replacement} dict."""
+    s = str(axiom)
+    rules = dict(rules)
+    for _ in range(int(iterations)):
+        s = "".join(rules.get(ch, ch) for ch in s)
+    return s
+
+
+def turtle_segments(sentence, start=(0.0, 0.0), heading=None, step=10.0, turn=None):
+    """Interpret an L-system string as turtle moves; return line segments.
+
+    Symbols:
+      F, G  forward by `step`, emit a segment.
+      f     forward by `step` without emitting.
+      +     turn right by `turn`.
+      -     turn left by `turn`.
+      [ ]   push / pop (position, heading).
+    Other symbols are ignored (useful for non-drawing terminals like X, Y).
+
+    Returns a list of (x1, y1, x2, y2) tuples for ImageDraw.line().
+    """
+    if heading is None:
+        heading = -math.pi / 2.0
+    if turn is None:
+        turn = math.radians(25.0)
+    x, y = float(start[0]), float(start[1])
+    h = float(heading)
+    step = float(step)
+    turn = float(turn)
+    stack = []
+    out = []
+    for ch in sentence:
+        if ch == "F" or ch == "G":
+            nx = x + math.cos(h) * step
+            ny = y + math.sin(h) * step
+            out.append((x, y, nx, ny))
+            x, y = nx, ny
+        elif ch == "f":
+            x += math.cos(h) * step
+            y += math.sin(h) * step
+        elif ch == "+":
+            h += turn
+        elif ch == "-":
+            h -= turn
+        elif ch == "[":
+            stack.append((x, y, h))
+        elif ch == "]":
+            if stack:
+                x, y, h = stack.pop()
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Wave interference.
+# ---------------------------------------------------------------------------
+
+def wave_field(sources):
+    """Return a closure f(x, y) -> summed wave intensity.
+
+    `sources` is a list of (cx, cy, wavelength, phase). Each contributes
+    sin(2π * (dist/wavelength + phase)). The sum is roughly in [-N, +N] for N
+    sources -- callers should normalize or pass through tanh / smoothstep.
+    """
+    srcs = [(float(cx), float(cy), float(wl) or 1e-9, float(ph)) for (cx, cy, wl, ph) in sources]
+
+    def f(x, y):
+        total = 0.0
+        for cx, cy, wl, ph in srcs:
+            d = math.hypot(x - cx, y - cy)
+            total += math.sin(math.tau * (d / wl + ph))
+        return total
+
+    return f
+
+
+# ---------------------------------------------------------------------------
+# Strange attractors.
+# ---------------------------------------------------------------------------
+
+def attractor_points(name, n, seed, params=None):
+    """Return n (x, y) points from a 2D strange attractor, normalized to ~[-1, 1].
+
+    Supported names: "de_jong", "clifford". If `params` is None, the (a, b, c, d)
+    constants are drawn from `seed` in a known-interesting range.
+    """
+    n = max(0, int(n))
+    rng = random.Random(f"art_kit.attractor:{seed}")
+    kind = str(name).lower()
+    if params is None:
+        if kind == "clifford":
+            params = (rng.uniform(-2.0, 2.0), rng.uniform(-2.0, 2.0),
+                      rng.uniform(-2.0, 2.0), rng.uniform(-2.0, 2.0))
+        else:
+            params = (rng.uniform(-3.0, 3.0), rng.uniform(-3.0, 3.0),
+                      rng.uniform(-3.0, 3.0), rng.uniform(-3.0, 3.0))
+    a, b, c, d = (float(p) for p in params)
+
+    def step(x, y):
+        if kind == "clifford":
+            return (math.sin(a * y) + c * math.cos(a * x),
+                    math.sin(b * x) + d * math.cos(b * y))
+        return (math.sin(a * y) - math.cos(b * x),
+                math.sin(c * x) - math.cos(d * y))
+
+    x, y = 0.1, 0.1
+    for _ in range(100):  # burn-in
+        x, y = step(x, y)
+    out = []
+    for _ in range(n):
+        x, y = step(x, y)
+        out.append((x / 2.5, y / 2.5))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Namespace factory used by the sandbox.
 # ---------------------------------------------------------------------------
 
@@ -239,6 +402,17 @@ def build_namespace(canvas_palette):
         fbm=fbm,
         # masks
         radial_falloff=radial_falloff,
+        # voronoi
+        voronoi_nearest=voronoi_nearest,
+        # flow
+        flow_field=flow_field,
+        # l-systems
+        lindenmayer=lindenmayer,
+        turtle_segments=turtle_segments,
+        # waves
+        wave_field=wave_field,
+        # attractors
+        attractor_points=attractor_points,
         # stdlib re-exports for convenience
         pi=math.pi,
         tau=math.tau,

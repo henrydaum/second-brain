@@ -9,13 +9,18 @@ const input = document.querySelector("#chatInput");
 const showcase = document.querySelector(".showcase");
 const heroImage = document.querySelector("#heroImage");
 const downloadImage = document.querySelector("#downloadImage");
-const regenerateBtn = document.querySelector("#regenerateImage");
+const saveBtn = document.querySelector("#saveImage");
 const shareBtn = document.querySelector("#shareImage");
 const sharePanel = document.querySelector("#sharePanel");
 const shareTitle = document.querySelector("#shareTitle");
 const shareArtist = document.querySelector("#shareArtist");
 const gallery = document.querySelector("#gallery");
 const paginator = document.querySelector("#paginator");
+const archive = document.querySelector("#archive");
+const archivePaginator = document.querySelector("#archivePaginator");
+const galleryTabs = document.querySelector("#galleryTabs");
+const sharedPanel = document.querySelector("#sharedPanel");
+const archivePanel = document.querySelector("#archivePanel");
 const controlsPanel = document.querySelector("#controlsPanel");
 const controlsDrawer = document.querySelector("#controlsDrawer");
 const controlsToggle = document.querySelector("#controlsToggle");
@@ -24,7 +29,8 @@ const NEAR_BOTTOM_PX = 80;
 const GALLERY_PAGE = 18;
 let palettesCache = [];
 let currentControlsPanels = [];
-let galleryPage = 1;
+const galleryPages = {shared: 1, archive: 1};
+let activeTab = "shared";
 const controlDebounce = new Map();
 const toolStatusEls = new Map();
 let typingEl = null;
@@ -133,19 +139,21 @@ function setBusy(on) {
     sendBtn.type = "button";
     sendBtn.textContent = "Cancel";
     sendBtn.classList.add("cancel");
+    sendBtn.disabled = false;
   } else {
     sendBtn.type = "submit";
     sendBtn.textContent = "Send";
     sendBtn.classList.remove("cancel");
+    sendBtn.disabled = false;
   }
 }
 sendBtn.addEventListener("click", async e => {
   if (!agentBusy) return; // let submit handler run
   e.preventDefault();
+  // Stay disabled until the in-flight chat() returns and setBusy(false) re-enables.
   sendBtn.disabled = true;
   try { render((await post("/api/cancel")).events); }
   catch (err) { add("error", err.message); }
-  finally { sendBtn.disabled = false; }
 });
 
 function setTyping(on) {
@@ -279,9 +287,9 @@ promoForm.addEventListener("submit", async e => {
 
 // ----- Canvas + theming -----
 function setCanvas(c) {
-  renderControlsPanel(c?.controls_panels || []);
   if (!c?.url) {
     showcase.classList.remove("has-image");
+    renderControlsPanel([]);
     heroImage.classList.remove("fading");
     heroImage.removeAttribute("src");
     downloadImage.href = "#";
@@ -293,6 +301,7 @@ function setCanvas(c) {
     heroImage.src = newUrl; heroImage.alt = newName;
     downloadImage.href = newUrl; downloadImage.download = newName;
     showcase.classList.add("has-image");
+    renderControlsPanel(c?.controls_panels || []);
   };
   if (!showcase.classList.contains("has-image")) { apply(); heroImage.addEventListener("load", () => applyAccents(heroImage), {once: true}); loadGallery(1); return; }
   // Preload the new image, then crossfade out → swap → crossfade in.
@@ -304,10 +313,10 @@ function setCanvas(c) {
       apply();
       heroImage.addEventListener("load", () => applyAccents(heroImage), {once: true});
       requestAnimationFrame(() => requestAnimationFrame(() => heroImage.classList.remove("fading")));
-      loadGallery(galleryPage);
+      loadGallery(galleryPages.shared);
     }, 280);
   };
-  pre.onerror = () => { apply(); loadGallery(galleryPage); };
+  pre.onerror = () => { apply(); loadGallery(galleryPages.shared); };
   pre.src = newUrl;
 }
 
@@ -392,38 +401,62 @@ function hexWithAlpha(hex, a) {
 async function loadCanvas() { const r = await get("/api/canvas"); setCanvas(r.canvas); }
 
 // ----- Gallery + pagination -----
-async function loadGallery(page = 1) {
-  galleryPage = Math.max(1, page);
-  const offset = (galleryPage - 1) * GALLERY_PAGE;
-  const r = await get(`/api/gallery?limit=${GALLERY_PAGE}&offset=${offset}`);
+const GALLERY_TABS = {
+  shared: {url: "/api/gallery", grid: gallery, paginator: paginator, empty: "No shared canvases yet.", action: "Remix", endpoint: "/api/remix"},
+  archive: {url: "/api/archive", grid: archive, paginator: archivePaginator, empty: "Your archive is empty. Save a canvas to start.", action: "Remix", endpoint: "/api/archive_remix"},
+};
+
+async function loadGalleryFor(kind, page = 1) {
+  const cfg = GALLERY_TABS[kind];
+  if (!cfg) return;
+  galleryPages[kind] = Math.max(1, page);
+  const offset = (galleryPages[kind] - 1) * GALLERY_PAGE;
+  const r = await get(`${cfg.url}?limit=${GALLERY_PAGE}&offset=${offset}`);
   const items = Array.isArray(r.items) ? r.items : (Array.isArray(r) ? r : []);
   const total = typeof r.total === "number" ? r.total : items.length + offset;
-  gallery.innerHTML = items.map(x => `<article class="gallery-card"><img src="${x.url}" alt=""><div><strong>${esc(x.title)}</strong><small>${esc(x.artist)}${x.score ? ` · ${(x.score*100).toFixed(0)}% similar` : ""}</small><button data-path="${esc(x.path)}">Remix</button></div></article>`).join("") || "<article class='assistant'>No shared canvases yet.</article>";
-  renderPaginator(total);
+  cfg.grid.innerHTML = items.map(x => `<article class="gallery-card"><img src="${x.url}" alt=""><div><strong>${esc(x.title)}</strong><small>${esc(x.artist)}${x.score ? ` · ${(x.score*100).toFixed(0)}% similar` : ""}</small><button data-kind="${kind}" data-path="${esc(x.path)}">${cfg.action}</button></div></article>`).join("") || `<article class='assistant'>${cfg.empty}</article>`;
+  renderPaginatorFor(kind, total);
 }
-function renderPaginator(total) {
+function loadGallery(page = 1) { return loadGalleryFor("shared", page); }
+
+function renderPaginatorFor(kind, total) {
+  const cfg = GALLERY_TABS[kind];
+  const el = cfg.paginator;
   const pages = Math.max(1, Math.ceil(total / GALLERY_PAGE));
-  if (pages <= 1) { paginator.hidden = true; paginator.innerHTML = ""; return; }
-  paginator.hidden = false;
-  const cur = galleryPage;
+  if (pages <= 1) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  const cur = galleryPages[kind];
   const btns = [];
   btns.push(`<button type="button" data-page="${cur-1}" ${cur===1?"disabled":""}>‹</button>`);
-  // Window of pages around current; always show 1 and last.
   const set = new Set([1, pages, cur-1, cur, cur+1]);
   for (let p = 1; p <= pages; p++) {
     if (set.has(p)) btns.push(`<button type="button" data-page="${p}" class="${p===cur?"active":""}">${p}</button>`);
     else if (p === 2 || p === pages-1) btns.push(`<button type="button" disabled>…</button>`);
   }
   btns.push(`<button type="button" data-page="${cur+1}" ${cur===pages?"disabled":""}>›</button>`);
-  paginator.innerHTML = btns.join("");
+  el.innerHTML = btns.join("");
 }
-paginator.addEventListener("click", e => {
-  const b = e.target.closest("button[data-page]");
-  if (!b || b.disabled) return;
-  const p = +b.dataset.page;
-  if (!Number.isFinite(p)) return;
-  loadGallery(p);
-  document.querySelector(".gallery-section").scrollIntoView({behavior: "smooth", block: "start"});
+
+for (const [kind, cfg] of Object.entries(GALLERY_TABS)) {
+  cfg.paginator.addEventListener("click", e => {
+    const b = e.target.closest("button[data-page]");
+    if (!b || b.disabled) return;
+    const p = +b.dataset.page;
+    if (!Number.isFinite(p)) return;
+    loadGalleryFor(kind, p);
+    document.querySelector(".gallery-section").scrollIntoView({behavior: "smooth", block: "start"});
+  });
+}
+
+galleryTabs.addEventListener("click", e => {
+  const b = e.target.closest("button[data-tab]");
+  if (!b) return;
+  const kind = b.dataset.tab;
+  activeTab = kind;
+  galleryTabs.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t === b));
+  sharedPanel.hidden = kind !== "shared";
+  archivePanel.hidden = kind !== "archive";
+  loadGalleryFor(kind, galleryPages[kind]);
 });
 
 async function loadPalettes() {
@@ -439,8 +472,8 @@ function paletteSwatchHtml(p, activeId) {
 // ----- Controls drawer -----
 function renderControlsPanel(panels) {
   currentControlsPanels = panels || [];
-  const n = currentControlsPanels.length;
-  if (!n) {
+  const hasImage = showcase.classList.contains("has-image");
+  if (!hasImage) {
     controlsToggle.hidden = true;
     controlsDrawer.hidden = true;
     controlsDrawer.classList.remove("open");
@@ -450,7 +483,8 @@ function renderControlsPanel(panels) {
   }
   controlsToggle.hidden = false;
   controlsDrawer.hidden = false;
-  controlsPanel.innerHTML = currentControlsPanels.map(renderPanel).join("");
+  const globalPanel = `<section class="ctl-panel"><header class="ctl-head">Global</header><div class="ctl-body"><div class="ctl-row"><span>Regenerate</span><button type="button" class="ctl-global" id="globalRegenerate" title="Re-render the current chain with new seeds">Regenerate</button></div></div></section>`;
+  controlsPanel.innerHTML = globalPanel + currentControlsPanels.map(renderPanel).join("");
 }
 function renderPanel(panel) {
   const widgets = (panel.schema || []).map(spec => renderWidget(panel, spec)).join("");
@@ -462,7 +496,17 @@ controlsToggle.addEventListener("click", () => {
   controlsToggle.classList.toggle("open", open);
   localStorage.sbDrawerOpen = open ? "1" : "0";
 });
-controlsPanel.addEventListener("click", e => {
+controlsPanel.addEventListener("click", async e => {
+  if (e.target.id === "globalRegenerate") {
+    const btn = e.target;
+    if (btn.disabled) return;
+    btn.disabled = true;
+    loaderTicketStart();
+    try { render((await post("/api/regenerate")).events); }
+    catch (err) { add("error", err.message); }
+    finally { btn.disabled = false; loaderTicketEnd(); }
+    return;
+  }
   const target = e.target;
   const sw = target.closest("button[data-palette]");
   if (sw) {
@@ -630,25 +674,32 @@ downloadImage.addEventListener("click", () => {
     post("/api/download").catch(() => {});
   }
 });
-regenerateBtn.addEventListener("click", async () => {
-  if (regenerateBtn.disabled) return;
-  regenerateBtn.disabled = true;
-  regenerateBtn.classList.add("loading");
-  loaderTicketStart();
-  try { render((await post("/api/regenerate")).events); }
-  catch (err) { add("error", err.message); }
-  finally { regenerateBtn.disabled = false; regenerateBtn.classList.remove("loading"); loaderTicketEnd(); }
+saveBtn.addEventListener("click", async () => {
+  if (saveBtn.disabled) return;
+  saveBtn.disabled = true;
+  saveBtn.classList.add("loading");
+  try {
+    const r = await post("/api/save");
+    render(r.events);
+    loadGalleryFor("archive", 1);
+  } catch (err) { add("error", err.message); }
+  finally { saveBtn.disabled = false; saveBtn.classList.remove("loading"); }
 });
 shareBtn.addEventListener("click", () => { sharePanel.hidden = !sharePanel.hidden; shareTitle.value ||= "untitled"; shareArtist.value ||= "anonymous"; });
 document.querySelector("#shareConfirm").addEventListener("click", async () => render((await post("/api/share", {title:shareTitle.value, artist:shareArtist.value})).events));
-gallery.addEventListener("click", async e => {
-  if (!e.target.matches("button[data-path]")) return;
+async function handleGalleryRemix(e) {
+  const btn = e.target.closest("button[data-path]");
+  if (!btn) return;
+  const kind = btn.dataset.kind || "shared";
+  const endpoint = GALLERY_TABS[kind]?.endpoint || "/api/remix";
   scrollTo({top:0, behavior:"smooth"});
   loaderTicketStart();
-  try { render((await post("/api/remix", {path:e.target.dataset.path})).events); }
+  try { render((await post(endpoint, {path: btn.dataset.path})).events); }
   catch (err) { add("error", err.message); }
   finally { loaderTicketEnd(); }
-});
+}
+gallery.addEventListener("click", handleGalleryRemix);
+archive.addEventListener("click", handleGalleryRemix);
 (function rehydrateAccents() {
   try {
     const a = JSON.parse(localStorage.sbAccents || "null");
@@ -671,4 +722,4 @@ async function loadHistory() {
   } catch {}
 }
 setInterval(poll, 1200);
-loadHistory(); loadPalettes(); loadCanvas(); loadGallery(1); refreshAccount();
+loadHistory(); loadPalettes(); loadCanvas(); loadGallery(1); loadGalleryFor("archive", 1); refreshAccount();

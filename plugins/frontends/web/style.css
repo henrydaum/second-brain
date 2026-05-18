@@ -119,6 +119,9 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .ctl-pan-down { grid-column: 2; grid-row: 3; }
 .ctl-btn { padding: 5px 10px; background: #11151d; color: var(--text); border: 1px solid var(--line); cursor: pointer; font-size: 11px; }
 .ctl-btn:hover { border-color: var(--accent); color: var(--accent); }
+.ctl-global { padding: 6px 10px 5px 10px; background: #11151d; color: var(--text); border: 1px solid var(--line); cursor: pointer; font-size: 11px; font-weight: 700; letter-spacing: .04em; }
+.ctl-global:hover { border-color: var(--accent); color: var(--accent); }
+.ctl-global:disabled { opacity: .5; cursor: default; }
 .ctl-palette { grid-template-columns: 86px 1fr; }
 .ctl-palette-strip { display: flex; flex-wrap: wrap; gap: 6px; }
 .ctl-palette-strip .swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255,255,255,.28); background: var(--swatch); cursor: pointer; padding: 0; }
@@ -126,6 +129,11 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 
 /* ---- Gallery ---- */
 .gallery-section { min-height: 60vh; padding: 48px; background: #0c1016; border-top: 1px solid var(--line); }
+.tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--line); margin-bottom: 28px; }
+.tabs .tab { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--muted); padding: 10px 2px; cursor: pointer; font-size: 13px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; transition: color 200ms ease, border-color 200ms ease; }
+.tabs .tab:hover { color: var(--text); }
+.tabs .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.tab-panel[hidden] { display: none; }
 .gallery-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
 .gallery-card { max-width: none; padding: 0; white-space: normal; border: 1px solid var(--line); background: #121722; overflow: hidden; transition: border-color 220ms ease, transform 220ms ease; }

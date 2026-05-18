@@ -17,7 +17,7 @@ import time
 from typing import Iterable
 
 
-_KIND_FIELDS = {"share": "shares", "download": "downloads", "remix": "remixes"}
+_KIND_FIELDS = {"share": "shares", "download": "downloads", "remix": "remixes", "save": "saves"}
 
 
 def _attribution(chain: list[dict]) -> list[tuple[str, str, float]]:
@@ -104,14 +104,14 @@ def get_scores(db, slugs: Iterable[str] | None = None) -> dict[str, dict]:
     with db.lock:
         try:
             if slugs is None:
-                cur = db.conn.execute("SELECT slug, shares, downloads, remixes, generations FROM skill_scores")
+                cur = db.conn.execute("SELECT slug, shares, downloads, remixes, saves, generations FROM skill_scores")
             else:
                 slugs = list(slugs)
                 if not slugs:
                     return {}
                 placeholders = ",".join("?" * len(slugs))
                 cur = db.conn.execute(
-                    f"SELECT slug, shares, downloads, remixes, generations FROM skill_scores WHERE slug IN ({placeholders})",
+                    f"SELECT slug, shares, downloads, remixes, saves, generations FROM skill_scores WHERE slug IN ({placeholders})",
                     slugs,
                 )
             for row in cur.fetchall():
@@ -119,6 +119,7 @@ def get_scores(db, slugs: Iterable[str] | None = None) -> dict[str, dict]:
                     "shares": float(row["shares"] or 0),
                     "downloads": float(row["downloads"] or 0),
                     "remixes": float(row["remixes"] or 0),
+                    "saves": float(row["saves"] or 0),
                     "generations": int(row["generations"] or 0),
                 }
         except Exception:
@@ -130,7 +131,7 @@ def weighted_score(stats: dict) -> float:
     """Blend of implicit signals. Tunable; kept here so it's easy to change."""
     if not stats:
         return 0.0
-    return 2.0 * stats.get("shares", 0.0) + 2.0 * stats.get("remixes", 0.0) + stats.get("downloads", 0.0)
+    return 2.0 * stats.get("shares", 0.0) + 2.0 * stats.get("remixes", 0.0) + 2.0 * stats.get("saves", 0.0) + stats.get("downloads", 0.0)
 
 
 def search_multiplier(stats: dict) -> float:

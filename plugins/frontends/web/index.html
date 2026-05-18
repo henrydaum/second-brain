@@ -38,7 +38,7 @@
       <img id="heroImage" alt="">
       <div class="canvas-actions">
         <a id="downloadImage" href="#" download title="Download current image">Download</a>
-        <button id="regenerateImage" type="button" title="Re-render the current chain with new seeds">Regenerate</button>
+        <button id="saveImage" type="button" title="Save to your private archive">Save</button>
         <button id="shareImage" type="button">Share</button>
       </div>
       <div id="sharePanel" class="share-panel" hidden>
@@ -62,12 +62,24 @@
     <a id="logoutLink" class="link-btn" href="/auth/logout" hidden>Sign out</a>
   </div>
   <section class="gallery-section">
-    <div class="gallery-head">
-      <p class="eyebrow">Shared Gallery</p>
-      <h2>Remix the nearest signals.</h2>
+    <nav class="tabs" id="galleryTabs">
+      <button type="button" class="tab active" data-tab="shared">Shared Gallery</button>
+      <button type="button" class="tab" data-tab="archive">Saved Archive</button>
+    </nav>
+    <div class="tab-panel" id="sharedPanel">
+      <div class="gallery-head">
+        <h2>Remix the nearest signals.</h2>
+      </div>
+      <div id="gallery" class="gallery"></div>
+      <div id="paginator" class="paginator" hidden></div>
     </div>
-    <div id="gallery" class="gallery"></div>
-    <div id="paginator" class="paginator" hidden></div>
+    <div class="tab-panel" id="archivePanel" hidden>
+      <div class="gallery-head">
+        <h2>Your saved canvases.</h2>
+      </div>
+      <div id="archive" class="gallery"></div>
+      <div id="archivePaginator" class="paginator" hidden></div>
+    </div>
   </section>
 
   <div id="paywallModal" class="modal" hidden>

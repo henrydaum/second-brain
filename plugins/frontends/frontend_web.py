@@ -27,7 +27,7 @@ from plugins.helpers.palettes import get_palette, list_palettes
 from plugins.helpers.skill_runner import replay_chain
 from plugins.helpers.skill_store import read_skill
 from plugins.tools.helpers import layered_canvas as lc
-from plugins.helpers.gallery import GALLERY_DIR, canvas, gallery_rows, read_json, reset_canvas, set_current, share_current, similar_rows
+from plugins.helpers.gallery import GALLERY_DIR, archive_dir, archive_rows, canvas, gallery_rows, migrate_archive, read_json, reset_canvas, save_to_archive, set_current, share_current, similar_rows
 from paths import DATA_DIR
 
 logger = logging.getLogger("WebFrontend")
@@ -595,6 +595,39 @@ class WebFrontend(BaseFrontend):
             db.conn.commit()
         return {"ok": True, "granted": granted}
 
+    def _owner_id(self, session_id: str, ip: str, account_id: str) -> str:
+        """Stable identity for the saved archive: account_id when signed in,
+        otherwise the anonymous fallback derived from session+IP."""
+        return account_id or self._anon_user_id(session_id, ip)
+
+    def save_canvas(self, session_id: str, ip: str, account_id: str, title: str = "") -> list[dict]:
+        """Persist the current composite into the owner's private archive and
+        boost skill scores for the chain that produced it."""
+        key = self.session_key(session_id)
+        snapshot = canvas(key) or {}
+        src = snapshot.get("path")
+        if not src:
+            return [{"type": "error", "content": "Nothing to save yet — make something first."}]
+        chain = list(snapshot.get("chain") or [])
+        owner = self._owner_id(session_id, ip, account_id)
+        dest, meta = save_to_archive(src, owner, title=title, chain=chain)
+        skill_scoring.record_event(getattr(self.runtime, "db", None), "save", chain, str(dest.resolve()))
+        return [{"type": "saved", "item": _archive_url(meta)}, {"type": "status", "content": f'Saved "{meta["title"]}" to your archive.'}]
+
+    def archive_listing(self, session_id: str, ip: str, account_id: str, limit: int = 24, offset: int = 0) -> dict:
+        owner = self._owner_id(session_id, ip, account_id)
+        all_rows = archive_rows(owner)
+        total = len(all_rows)
+        page = all_rows[offset : offset + limit]
+        return {"items": [_archive_url(r) for r in page], "total": total}
+
+    def archive_remix(self, session_id: str, ip: str, account_id: str, path: str) -> list[dict]:
+        owner = self._owner_id(session_id, ip, account_id)
+        p = Path(unquote(path)).resolve()
+        if not _is_archive_image(p, owner):
+            raise ValueError("That archive entry is not available to remix.")
+        return self.remix(session_id, str(p))
+
     def history(self, session_id: str) -> list[dict]:
         """Return user/assistant text messages for this session, oldest first.
 
@@ -605,11 +638,16 @@ class WebFrontend(BaseFrontend):
         session = self.runtime.sessions.get(key)
         if session is None:
             return []
+        from runtime.token_stripper import strip_model_tokens
         out: list[dict] = []
         for msg in session.history or []:
             role = msg.get("role")
             content = msg.get("content")
-            if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+            if role not in ("user", "assistant") or not isinstance(content, str):
+                continue
+            if role == "assistant":
+                content = strip_model_tokens(content)[0]
+            if not content.strip():
                 continue
             out.append({"role": role, "content": content})
         return out
@@ -889,6 +927,14 @@ class _Handler(BaseHTTPRequestHandler):
             except (TypeError, ValueError): offset = 0
             res = self.server.frontend.gallery(sid, limit=limit, offset=offset)
             return self._json({"ok": True, **res})
+        if path == "/api/archive":
+            qs = parse_qs(parsed.query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
+            try: limit = max(1, min(96, int(qs.get("limit", ["24"])[0])))
+            except (TypeError, ValueError): limit = 24
+            try: offset = max(0, int(qs.get("offset", ["0"])[0]))
+            except (TypeError, ValueError): offset = 0
+            res = self.server.frontend.archive_listing(sid, self.client_address[0], self._cookie_uid(), limit=limit, offset=offset)
+            return self._json({"ok": True, **res})
         if path == "/api/account":
             qs = parse_qs(parsed.query)
             sid = str(qs.get("session_id", ["demo"])[0])[:80]
@@ -896,12 +942,16 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/files":
             qs = parse_qs(parsed.query)
             sid = str(qs.get("session_id", [self._cookie_sid()])[0])[:80]
-            return self._local_file(qs.get("path", [""])[0], sid)
+            owner = self.server.frontend._owner_id(sid, self.client_address[0], self._cookie_uid())
+            return self._local_file(qs.get("path", [""])[0], sid, owner)
         if path == "/auth/verify":
             qs = parse_qs(parsed.query)
             token = str(qs.get("token", [""])[0])
             account_id = self.server.frontend.verify_magic_link(token)
             if account_id:
+                anon = self.server.frontend._anon_user_id(self._cookie_sid(), self.client_address[0])
+                try: migrate_archive(anon, account_id)
+                except Exception: logger.exception("archive migrate (magic-link) failed")
                 return self._redirect_with_uid("/account", account_id)
             return self._html("<!doctype html><meta charset=utf-8><title>Sign in</title><style>body{font-family:system-ui;max-width:480px;margin:80px auto;padding:0 24px;color:#222}</style><h1>Link expired</h1><p>That sign-in link is invalid or already used. Request a new one from the home page.</p><p><a href=\"/\">Back home</a></p>", 400)
         if path == "/auth/claim":
@@ -909,6 +959,9 @@ class _Handler(BaseHTTPRequestHandler):
             token = str(qs.get("token", [""])[0])
             account_id = self.server.frontend.claim_checkout(token)
             if account_id:
+                anon = self.server.frontend._anon_user_id(self._cookie_sid(), self.client_address[0])
+                try: migrate_archive(anon, account_id)
+                except Exception: logger.exception("archive migrate (claim) failed")
                 return self._redirect_with_uid("/account?welcome=1", account_id)
             return self._redirect("/?checkout=pending")
         if path == "/auth/logout":
@@ -958,6 +1011,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "events": self.server.frontend.share(sid, str(body.get("title") or "untitled"), str(body.get("artist") or "anonymous"))})
             if self.path == "/api/remix":
                 return self._json({"ok": True, "events": self.server.frontend.remix(sid, str(body.get("path") or ""))})
+            if self.path == "/api/save":
+                return self._json({"ok": True, "events": self.server.frontend.save_canvas(sid, self.client_address[0], self._cookie_uid(), str(body.get("title") or ""))})
+            if self.path == "/api/archive_remix":
+                return self._json({"ok": True, "events": self.server.frontend.archive_remix(sid, self.client_address[0], self._cookie_uid(), str(body.get("path") or ""))})
             if self.path == "/api/palette":
                 return self._json({"ok": True, "events": self.server.frontend.set_palette(sid, str(body.get("palette_id") or ""))})
             if self.path == "/api/download":
@@ -1054,9 +1111,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _local_file(self, raw_path: str, session_id: str = ""):
+    def _local_file(self, raw_path: str, session_id: str = "", owner_id: str = ""):
         path = Path(unquote(raw_path))
-        if not _is_user_accessible_image(path, self.server.frontend.session_key(session_id) if session_id else ""):
+        if not _is_user_accessible_image(path, self.server.frontend.session_key(session_id) if session_id else "", owner_id):
             return self.send_error(404)
         raw = path.read_bytes()
         self.send_response(200)
@@ -1077,6 +1134,19 @@ def _is_public_image(path: Path) -> bool:
         return False
 
 
+def _is_archive_image(path: Path, owner_id: str) -> bool:
+    try:
+        target = path.resolve()
+        owner_root = archive_dir(owner_id).resolve()
+        return target.is_file() and target.suffix.lower() in IMAGE_EXTS and owner_root in target.parents
+    except Exception:
+        return False
+
+
+def _archive_url(row: dict) -> dict:
+    return {**row, "url": _file_url(Path(row["path"]))}
+
+
 def _is_gallery_image(path: Path) -> bool:
     try:
         target, root = path.resolve(), GALLERY_DIR.resolve()
@@ -1085,8 +1155,8 @@ def _is_gallery_image(path: Path) -> bool:
         return False
 
 
-def _is_user_accessible_image(path: Path, session_key: str) -> bool:
-    """Either the shared gallery (public) or the requester's own canvas dir."""
+def _is_user_accessible_image(path: Path, session_key: str, owner_id: str = "") -> bool:
+    """Public shared gallery, the requester's own canvas dir, or their archive."""
     try:
         target = path.resolve()
         if not (target.is_file() and target.suffix.lower() in IMAGE_EXTS):
@@ -1097,6 +1167,8 @@ def _is_user_accessible_image(path: Path, session_key: str) -> bool:
             own = lc.image_path(session_key).parent.resolve()
             if own in target.parents or target.parent == own:
                 return True
+        if owner_id and _is_archive_image(target, owner_id):
+            return True
         return False
     except Exception:
         return False
