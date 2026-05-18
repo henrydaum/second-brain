@@ -1,3 +1,12 @@
+// TIPS is defined in tips.js, loaded before this script in index.html.
+function pickTip() {
+  const el = document.querySelector("#tipText");
+  if (el && Array.isArray(TIPS) && TIPS.length) {
+    el.textContent = TIPS[Math.floor(Math.random() * TIPS.length)];
+  }
+}
+pickTip();
+
 const sid = localStorage.sbDemoSession || (localStorage.sbDemoSession = crypto.randomUUID());
 // Mirror sid into a cookie so /files img requests carry the identity
 // (image <img src=...> requests can't easily set query params, but they
@@ -638,7 +647,8 @@ form.addEventListener("submit", async e => {
   finally { loaderTicketEnd(); setTyping(false); setBusy(false); }
 });
 document.querySelector("#newChat").addEventListener("click", async () => {
-  messages.innerHTML = `<div class="ephemeral-note"><strong>Chats vanish.</strong><span>Nothing you say here is saved — start a new chat and it's gone. Your art stays.</span></div>`;
+  messages.innerHTML = `<div class="ephemeral-note" id="tipNote"><strong>Tip</strong><span id="tipText"></span></div>`;
+  pickTip();
   render((await post("/api/new")).events);
   loadGallery(1);
 });

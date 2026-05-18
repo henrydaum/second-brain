@@ -18,9 +18,9 @@
         <button id="newChat" class="new-chat-link" title="Start a new conversation">+ New chat</button>
       </header>
       <div id="messages" class="messages">
-        <div class="ephemeral-note">
-          <strong>Chats vanish.</strong>
-          <span>Nothing you say here is saved — start a new chat and it's gone. Your art stays.</span>
+        <div class="ephemeral-note" id="tipNote">
+          <strong>Tip</strong>
+          <span id="tipText">Ask Second Brain to draw something — anything. "A field of flow lines." "Voronoi cells in jewel tones." "A Mandelbrot."</span>
         </div>
       </div>
       <form id="chatForm" class="composer">
@@ -131,6 +131,7 @@
     </div>
   </div>
 
+  <script src="/tips.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
