@@ -395,11 +395,11 @@ For source-controlled additions, move stable sandbox plugins into the matching b
 
 ## Philosophy
 
-Second Brain is built around a simple bet: a personal AI system should live close to your files, remember what matters, act on your behalf, and become more capable as you use it.
+Second Brain is built around a simple bet: an AI system should be fully customizable and easy to adapt and change, like LEGOs.
 
-Most AI apps are fixed products. Second Brain is closer to a runtime. It has an opinionated core, but the edges are meant to be authored: a new task for a new file type, a command for a personal workflow, a frontend for a new surface, a service for a new API, a scheduled agent for work that should happen while you are away.
+Most software products are static, whereas Second Brain can write its own code and extend itself. The Second Brain core code is so versatile and strong that it can turn into almost any shape. 
 
-That is the point. Your assistant should not just answer questions. It should become infrastructure you can shape.
+Although my app is still a ways off from being like a human brain, it can still do quite a lot, and I think it is worthy of the name: Second Brain.
 
 ## License
 
