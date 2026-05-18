@@ -15,14 +15,12 @@
           <p class="eyebrow">Generative Art Maker</p>
           <h1>Second Brain</h1>
         </div>
-        <div class="header-actions">
+        <div class="header-actions" style="display:flex;align-items:center;gap:12px;">
           <button id="newChat" class="new-chat-link" title="Start a new conversation">+ New chat</button>
-          <a id="accountAvatar" class="account-avatar" href="/account" title="Account" hidden>
-            <svg class="ring" viewBox="0 0 36 36" aria-hidden="true">
-              <circle class="ring-track" cx="18" cy="18" r="16"></circle>
-              <circle class="ring-fill"  cx="18" cy="18" r="16"></circle>
-            </svg>
-            <span class="avatar-inner" id="avatarInner">·</span>
+          <a id="accountAvatar" class="account-avatar" href="/account" title="Account" hidden
+             style="position:relative;display:inline-flex;width:32px;height:32px;flex:0 0 32px;border-radius:50%;text-decoration:none;align-items:center;justify-content:center;background:conic-gradient(var(--accent) 100%, var(--line) 0);transition:background 400ms ease,box-shadow 300ms ease;">
+            <span id="avatarInner"
+                  style="display:flex;width:26px;height:26px;border-radius:50%;background:var(--bg);align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--text);line-height:1;user-select:none;">·</span>
           </a>
         </div>
       </header>
