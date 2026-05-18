@@ -303,34 +303,7 @@ class ConversationRuntime:
             session.cancel_event.clear()
             session.full_permissions_this_turn = False
 
-        # Render every standalone assistant text row from this turn, in order.
-        # This surfaces mid-turn narration (assistant text emitted alongside a
-        # tool call, unwrapped into a send_text action by ConversationLoop) as
-        # well as the final reply. We skip assistant rows that ride along with
-        # tool_calls — those carry placeholder text for the provider transcript
-        # only, not user-facing prose.
-        mid_turn_texts = [
-            m.get("content")
-            for m in new_messages
-            if m.get("role") == "assistant" and m.get("content") and not m.get("tool_calls")
-        ]
-        if mid_turn_texts:
-            # Dedup: if `reply` (the final text) is the same as the last mid-
-            # turn text, the loop already recorded it as the final send_text;
-            # don't render twice.
-            if reply and mid_turn_texts and mid_turn_texts[-1] == reply:
-                pass
-            elif reply:
-                mid_turn_texts.append(reply)
-            out.messages.extend(mid_turn_texts)
-            from events.event_channels import SESSION_MESSAGE
-            bus.emit(SESSION_MESSAGE, {
-                "session_key": session.key,
-                "role": "assistant",
-                "content": reply or mid_turn_texts[-1],
-                "actor_id": "agent",
-            })
-        elif reply:
+        if reply:
             out.messages.append(reply)
             from events.event_channels import SESSION_MESSAGE
             bus.emit(SESSION_MESSAGE, {
@@ -339,6 +312,9 @@ class ConversationRuntime:
                 "content": reply,
                 "actor_id": "agent",
             })
+        elif new_messages:
+            last_assistant = next((m for m in reversed(new_messages) if m.get("role") == "assistant"), None)
+            out.messages.append(last_assistant.get("content") if last_assistant and last_assistant.get("content") else "Cancelled.")
         else:
             out.messages.append("Cancelled.")
 

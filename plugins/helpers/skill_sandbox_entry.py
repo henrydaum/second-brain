@@ -158,7 +158,7 @@ def _diagnose(exc: BaseException, code: str) -> dict:
     }
 
 
-def _blank_canvas_check(img: Image.Image) -> dict | None:
+def _blank_canvas_check(img: Image.Image, canvas: "Canvas") -> dict | None:
     """Cheap heuristic: did the skill commit a flat-color image?"""
     try:
         import numpy as np
@@ -167,7 +167,6 @@ def _blank_canvas_check(img: Image.Image) -> dict | None:
         if sample.size == 0:
             return None
         std = float(sample.astype(np.float32).std(axis=0).max())
-        # `np.unique` on rows: collapse to a uint32 key for speed.
         keys = (sample[:, 0].astype(np.uint32) << 16) | (sample[:, 1].astype(np.uint32) << 8) | sample[:, 2].astype(np.uint32)
         unique_ratio = float(np.unique(keys).size) / float(keys.size)
         if std < 4.0 and unique_ratio < 0.005:
@@ -179,6 +178,89 @@ def _blank_canvas_check(img: Image.Image) -> dict | None:
             }
     except Exception:
         return None
+    return None
+
+
+def _palette_adherence_check(img: Image.Image, canvas: "Canvas") -> dict | None:
+    """Detect skills that drew using hardcoded RGB/hex values outside the palette.
+
+    Builds a dense polyline through the 5 palette slots (sorted by luminance,
+    matching art_kit.palette_color), measures the minimum RGB distance from each
+    sampled pixel to that ramp, and fires when a meaningful fraction of pixels
+    are clearly off-ramp.
+    """
+    try:
+        import numpy as np
+        slots = ("background", "tertiary", "secondary", "primary", "accent")
+        colors: list[tuple[int, int, int]] = []
+        for slot in slots:
+            hexv = getattr(canvas.palette, slot, None)
+            if hexv is None:
+                continue
+            h = str(hexv).lstrip("#")
+            colors.append((int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)))
+        if len(colors) < 2:
+            return None
+        colors_arr = np.array(colors, dtype=np.float32)
+        lum = 0.2126 * colors_arr[:, 0] + 0.7152 * colors_arr[:, 1] + 0.0722 * colors_arr[:, 2]
+        colors_arr = colors_arr[np.argsort(lum)]
+        # Densify: 16 evenly-spaced points across each segment.
+        ramp_pts = []
+        for i in range(len(colors_arr) - 1):
+            ts = np.linspace(0.0, 1.0, 16, endpoint=False)[:, None]
+            seg = colors_arr[i] * (1 - ts) + colors_arr[i + 1] * ts
+            ramp_pts.append(seg)
+        ramp_pts.append(colors_arr[-1:])
+        ramp = np.concatenate(ramp_pts, axis=0)  # (N_ramp, 3)
+
+        arr = np.asarray(img.convert("RGB"))
+        sample = arr[::8, ::8].reshape(-1, 3).astype(np.float32)
+        if sample.size == 0:
+            return None
+        # Min euclidean distance from each sample to any ramp point.
+        diff = sample[:, None, :] - ramp[None, :, :]
+        min_dist = np.sqrt((diff * diff).sum(axis=2)).min(axis=1)
+        off_ratio = float((min_dist > 60.0).mean())
+        if off_ratio > 0.15:
+            return {
+                "warning": "palette_drift",
+                "message": f"{int(off_ratio * 100)}% of pixels are far from the palette ramp — likely hardcoded RGB/hex values in the skill. Every color must come from canvas.palette.background/primary/secondary/tertiary/accent or art_kit.palette_color(t). Replace any literal (r,g,b) tuples or '#xxxxxx' strings.",
+                "off_ratio": off_ratio,
+            }
+    except Exception:
+        return None
+    return None
+
+
+def _transparent_canvas_check(img: Image.Image, canvas: "Canvas") -> dict | None:
+    """Catch skills that committed a mostly-transparent image (alpha-composite bug)."""
+    try:
+        import numpy as np
+        arr = np.asarray(img.convert("RGBA"))
+        alpha = arr[::8, ::8, 3]
+        if alpha.size == 0:
+            return None
+        transparent_ratio = float((alpha < 16).mean())
+        if transparent_ratio > 0.5:
+            return {
+                "warning": "transparent_canvas",
+                "message": f"{int(transparent_ratio * 100)}% of the canvas is transparent. Start from an opaque base (canvas.new(color=canvas.palette.background)) and ensure your draw/paste operations preserve coverage. If using Image.alpha_composite, both operands must be RGBA.",
+                "transparent_ratio": transparent_ratio,
+            }
+    except Exception:
+        return None
+    return None
+
+
+_VALIDATORS = (_transparent_canvas_check, _palette_adherence_check, _blank_canvas_check)
+
+
+def _validate_output(img: Image.Image, canvas: "Canvas") -> dict | None:
+    """Run the post-render validator pipeline; return the first warning that fires."""
+    for check in _VALIDATORS:
+        result = check(img, canvas)
+        if result is not None:
+            return result
     return None
 
 
@@ -223,7 +305,7 @@ def main():
         print(tail, file=sys.stderr)
         sys.exit(1)
 
-    warning = _blank_canvas_check(canvas._committed)
+    warning = _validate_output(canvas._committed, canvas)
     if warning is not None:
         _write_sidecar(output_image_path, warning)
 

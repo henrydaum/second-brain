@@ -299,6 +299,24 @@ class ConversationLoop:
         if action_type == "send_text":
             text = content if isinstance(content, str) else ""
             self._record({"role": "assistant", "content": text}, history, new_messages, db, conversation_id)
+            # Mid-turn narration: if more tool calls are still queued, the
+            # final-reply path won't render this text (it's not the `reply`
+            # returned by drive()). Stream it now via the chat-message bus
+            # event the frontends subscribe to, the same way tool-status
+            # pills stream. We skip this for the LAST send_text of the
+            # turn — that one is the agent's final reply and gets rendered
+            # by _drive_agent_turn from `reply`.
+            if text and self._pending_tool_calls:
+                try:
+                    from events.event_bus import bus
+                    from events.event_channels import CHAT_MESSAGE_PUSHED
+                    bus.emit(CHAT_MESSAGE_PUSHED, {
+                        "message": text,
+                        "session_key": self.session_key,
+                        "source": "agent_narration",
+                    })
+                except Exception:
+                    logger.debug("emit CHAT_MESSAGE_PUSHED failed", exc_info=True)
             return
 
         if action_type == "call_tool":
