@@ -32,7 +32,6 @@ let currentControlsPanels = [];
 const galleryPages = {shared: 1, archive: 1};
 let activeTab = "shared";
 const controlDebounce = new Map();
-const toolStatusEls = new Map();
 let typingEl = null;
 let agentBusy = false;
 const sendBtn = form.querySelector("button");
@@ -89,27 +88,12 @@ function approval(ev) {
   bottom();
 }
 function renderToolStatus(ev) {
+  // Tool-status chips are intentionally not shown in chat — the loader and the
+  // agent's own step-by-step messages cover what the user needs to see.
+  // We still drive the loader so "Thinking…" stays alive across tool calls.
   const id = ev.call_id || `${ev.name}:${Date.now()}`;
-  // Loader tracking — render-class tool statuses keep the loader alive.
   if (ev.status === "started") loaderToolStart(id);
   else if (ev.status === "finished") loaderToolEnd(id);
-  if (ev.status === "progressed") { bottom(); return; }
-  let el = toolStatusEls.get(id);
-  if (!el) {
-    el = document.createElement("article");
-    el.className = "status tool-status running";
-    messages.appendChild(el);
-    toolStatusEls.set(id, el);
-  }
-  const finished = ev.status === "finished";
-  const failed = finished && (ev.ok === false || !!ev.error);
-  const glyph = failed ? "✕" : finished ? "✓" : "";
-  el.classList.toggle("running", !finished);
-  el.classList.toggle("done", finished && !failed);
-  el.classList.toggle("failed", failed);
-  el.textContent = `${glyph} ${ev.name}${failed && ev.error ? ` — ${ev.error}` : ""}`;
-  if (finished) toolStatusEls.delete(id);
-  bottom();
 }
 function render(events) {
   for (const ev of events || []) {
@@ -655,7 +639,6 @@ form.addEventListener("submit", async e => {
 });
 document.querySelector("#newChat").addEventListener("click", async () => {
   messages.innerHTML = "";
-  toolStatusEls.clear();
   render((await post("/api/new")).events);
   loadGallery(1);
 });
