@@ -20,7 +20,6 @@ const controlsPanel = document.querySelector("#controlsPanel");
 const controlsDrawer = document.querySelector("#controlsDrawer");
 const controlsToggle = document.querySelector("#controlsToggle");
 const controlsCountEl = document.querySelector("#controlsCount");
-const layersStack = document.querySelector("#layersStack");
 const emptyState = document.querySelector("#emptyState");
 const NEAR_BOTTOM_PX = 80;
 const GALLERY_PAGE = 18;
@@ -87,12 +86,7 @@ function renderToolStatus(ev) {
   // Loader tracking — render-class tool statuses keep the loader alive.
   if (ev.status === "started") loaderToolStart(id);
   else if (ev.status === "finished") loaderToolEnd(id);
-  if (ev.progress && typeof ev.progress.total === "number") {
-    setProgress(ev.progress.done | 0, ev.progress.total | 0);
-  }
-  // "progressed" events without a chat counterpart shouldn't render a chat line —
-  // they're for the canvas arc only.
-  if (ev.status === "progressed" && !toolStatusEls.has(id)) { bottom(); return; }
+  if (ev.status === "progressed") { bottom(); return; }
   let el = toolStatusEls.get(id);
   if (!el) {
     el = document.createElement("article");
@@ -249,7 +243,6 @@ promoForm.addEventListener("submit", async e => {
 // ----- Canvas + theming -----
 function setCanvas(c) {
   renderControlsPanel(c?.controls_panels || []);
-  renderLayersStack(c?.layers || []);
   if (!c?.url) {
     showcase.classList.remove("has-image");
     heroImage.classList.remove("fading");
@@ -491,11 +484,6 @@ controlsPanel.addEventListener("change", e => {
   }
 });
 
-function renderLayersStack(layers) {
-  if (!layers.length) { layersStack.hidden = true; layersStack.innerHTML = ""; return; }
-  layersStack.hidden = false;
-  layersStack.innerHTML = layers.map(l => `<div class="layer-chip" title="${esc(l.skill_name)}"><span class="layer-face">${esc(l.skill_name)}</span><button type="button" class="layer-x" data-chain="${l.chain_index}" aria-label="Delete ${esc(l.skill_name)}">×</button></div>`).join("");
-}
 function renderWidget(panel, spec) {
   const v = panel.values || {};
   const id = `c${panel.chain_index}-${spec.name}`;
@@ -551,8 +539,6 @@ function esc(x) { return String(x ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;',
 
 // ----- Canvas loader: particle field + chain-progress arc -----
 const loaderCanvasEl = document.querySelector("#loadCanvas");
-const progressArc = document.querySelector("#progressArc");
-const progressFill = progressArc.querySelector(".fill");
 let userTickets = 0;
 const activeRenderTools = new Set();
 let loaderRaf = 0;
@@ -587,26 +573,11 @@ function loaderForceStop() {
   if (loaderRaf) { cancelAnimationFrame(loaderRaf); loaderRaf = 0; }
   clearTimeout(loaderSafetyTimer); loaderSafetyTimer = 0;
   if (loaderStopGrace) { clearTimeout(loaderStopGrace); loaderStopGrace = 0; }
-  setProgress(0, 0);
 }
 function loaderTicketStart() { userTickets++; loaderSync(); }
 function loaderTicketEnd() { if (userTickets > 0) userTickets--; loaderSync(); }
 function loaderToolStart(id) { activeRenderTools.add(id); loaderSync(); }
 function loaderToolEnd(id) { activeRenderTools.delete(id); loaderSync(); }
-async function withLoader(fn) {
-  loaderTicketStart();
-  try { return await fn(); }
-  finally { loaderTicketEnd(); }
-}
-function setProgress(done, total) {
-  if (total <= 1 || done <= 0) {
-    progressArc.classList.remove("visible");
-    progressFill.style.strokeDashoffset = "1";
-    return;
-  }
-  progressArc.classList.add("visible");
-  progressFill.style.strokeDashoffset = String(Math.max(0, 1 - (done / total)));
-}
 
 // Read current accent CSS vars, then desaturate + soften so the field stays low-key.
 function refreshAccentRgb() {
@@ -666,7 +637,61 @@ function noise2(x, y) {
   return (n00*(1-u) + n10*u) * (1-v) + (n01*(1-u) + n11*u) * v;
 }
 
-const PARTICLE_COUNT = 360;
+const PARTICLE_COUNT = 280;
+// Edge-following flow field, sampled from the prior canvas image.
+const FIELD_RES = 96;
+let flowCos = null, flowSin = null, flowMag = null;
+function buildFlowFieldFromImage(imgEl) {
+  try {
+    if (!imgEl || !imgEl.complete || !imgEl.naturalWidth) { flowCos = flowSin = flowMag = null; return; }
+    const c = document.createElement("canvas");
+    c.width = FIELD_RES; c.height = FIELD_RES;
+    const ctx = c.getContext("2d");
+    ctx.drawImage(imgEl, 0, 0, FIELD_RES, FIELD_RES);
+    const d = ctx.getImageData(0, 0, FIELD_RES, FIELD_RES).data;
+    const lum = new Float32Array(FIELD_RES * FIELD_RES);
+    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+      lum[j] = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+    }
+    const n = FIELD_RES;
+    flowCos = new Float32Array(n*n);
+    flowSin = new Float32Array(n*n);
+    flowMag = new Float32Array(n*n);
+    let maxMag = 1e-6;
+    // Sobel
+    for (let y = 1; y < n-1; y++) {
+      for (let x = 1; x < n-1; x++) {
+        const i = y*n + x;
+        const tl=lum[i-n-1], t=lum[i-n], tr=lum[i-n+1];
+        const l =lum[i-1],          r=lum[i+1];
+        const bl=lum[i+n-1], b=lum[i+n], br=lum[i+n+1];
+        const gx = (tr + 2*r + br) - (tl + 2*l + bl);
+        const gy = (bl + 2*b + br) - (tl + 2*t + tr);
+        const mag = Math.hypot(gx, gy);
+        if (mag > 1e-3) {
+          // Tangent = perpendicular to gradient = (-gy, gx) normalized
+          flowCos[i] = -gy / mag;
+          flowSin[i] =  gx / mag;
+          flowMag[i] = mag;
+          if (mag > maxMag) maxMag = mag;
+        }
+      }
+    }
+    // Normalize magnitude into 0..1 with a curve so most particles feel the pull only on real edges.
+    for (let i = 0; i < flowMag.length; i++) {
+      const m = flowMag[i] / maxMag;
+      flowMag[i] = Math.pow(m, 0.6);
+    }
+  } catch { flowCos = flowSin = flowMag = null; }
+}
+function sampleFlow(px, py) {
+  // px/py are in loader canvas pixels; map to FIELD_RES grid.
+  const fx = (px / pW) * (FIELD_RES - 1);
+  const fy = (py / pH) * (FIELD_RES - 1);
+  const xi = Math.max(0, Math.min(FIELD_RES - 1, fx | 0));
+  const yi = Math.max(0, Math.min(FIELD_RES - 1, fy | 0));
+  return yi*FIELD_RES + xi;
+}
 function particleInit() {
   refreshAccentRgb();
   if (!nGrid) noiseInit();
@@ -674,13 +699,19 @@ function particleInit() {
   pW = loaderCanvasEl.width = Math.max(2, Math.floor(loaderCanvasEl.clientWidth * dpr));
   pH = loaderCanvasEl.height = Math.max(2, Math.floor(loaderCanvasEl.clientHeight * dpr));
   particleCtx = loaderCanvasEl.getContext("2d");
-  particleCtx.fillStyle = "rgba(8,9,13,1)";
-  particleCtx.fillRect(0, 0, pW, pH);
+  particleCtx.clearRect(0, 0, pW, pH);
   particles = [];
   for (let i = 0; i < PARTICLE_COUNT; i++) {
-    particles.push({ x: Math.random()*pW, y: Math.random()*pH, mix: Math.random() });
+    particles.push({
+      x: Math.random() * pW,
+      y: Math.random() * pH,
+      mix: Math.random(),
+      phase: Math.random() * Math.PI * 2,   // breaks alignment artifacts
+    });
   }
   pT = 0;
+  // Build the edge field from whatever's on the canvas right now.
+  buildFlowFieldFromImage(showcase.classList.contains("has-image") ? heroImage : null);
 }
 let accentRefreshTick = 0;
 function particleStep() {
@@ -688,22 +719,52 @@ function particleStep() {
   pT += 0.0028;
   accentRefreshTick = (accentRefreshTick + 1) % 36;
   if (accentRefreshTick === 0) refreshAccentRgb();
-  // Soft trail fade — low alpha keeps the field low-key.
-  particleCtx.fillStyle = "rgba(8,9,13,.075)";
+  // Fade existing trails by chipping away their alpha — never paints dark
+  // onto the canvas, so the blurred image below stays visible.
+  particleCtx.globalCompositeOperation = "destination-out";
+  particleCtx.fillStyle = "rgba(0,0,0,.06)";
   particleCtx.fillRect(0, 0, pW, pH);
+  particleCtx.globalCompositeOperation = "source-over";
+  const hasField = flowCos !== null;
   for (const p of particles) {
-    const n = noise2(p.x/120, p.y/120 + pT*3.5);
-    const angle = n * Math.PI * 4;
-    const speed = 0.4 + n * 0.55;
-    p.x += Math.cos(angle) * speed;
-    p.y += Math.sin(angle) * speed;
-    if (p.x < 0) p.x += pW; else if (p.x >= pW) p.x -= pW;
-    if (p.y < 0) p.y += pH; else if (p.y >= pH) p.y -= pH;
-    const r = accentRgb[0]*(1-p.mix) + accent2Rgb[0]*p.mix;
-    const g = accentRgb[1]*(1-p.mix) + accent2Rgb[1]*p.mix;
-    const b = accentRgb[2]*(1-p.mix) + accent2Rgb[2]*p.mix;
-    particleCtx.fillStyle = `rgba(${r|0},${g|0},${b|0},.42)`;
-    particleCtx.fillRect(p.x, p.y, 1.3, 1.3);
+    // Two-octave noise sampled at different scales to avoid grid alignment.
+    const n1 = noise2(p.x / 140 + p.phase, p.y / 140 + pT * 2.4);
+    const n2 = noise2(p.x / 47, p.y / 47 - pT * 1.7);
+    const n = 0.65 * n1 + 0.35 * n2;
+    // Centered range: (n - 0.5) * 2π → smooth noise gives smooth angles, no whip.
+    const noiseAngle = (n - 0.5) * Math.PI * 2 + p.phase * 0.12;
+    let vx = Math.cos(noiseAngle), vy = Math.sin(noiseAngle);
+    if (hasField) {
+      const idx = sampleFlow(p.x, p.y);
+      const m = flowMag[idx];
+      if (m > 0.03) {
+        // Edge tangents have two possible directions; pick whichever aligns
+        // with the particle's current heading so it flows along, not into.
+        let tx = flowCos[idx], ty = flowSin[idx];
+        if (tx * vx + ty * vy < 0) { tx = -tx; ty = -ty; }
+        // Aggressive blend: strong edges (m≈1) almost entirely override noise.
+        const w = Math.min(1, m * 2.2);
+        vx = vx * (1 - w) + tx * w;
+        vy = vy * (1 - w) + ty * w;
+        const L = Math.hypot(vx, vy) || 1; vx /= L; vy /= L;
+      }
+    }
+    const speed = 0.55 + Math.abs(n - 0.5) * 0.9;
+    p.x += vx * speed;
+    p.y += vy * speed;
+    p.life--;
+    // Respawn at random location periodically so we don't get clumping.
+    if (p.life <= 0 || p.x < 0 || p.x >= pW || p.y < 0 || p.y >= pH) {
+      p.x = Math.random() * pW; p.y = Math.random() * pH;
+      p.life = Math.random() * 220 + 60;
+    }
+    const r = accentRgb[0] * (1 - p.mix) + accent2Rgb[0] * p.mix;
+    const g = accentRgb[1] * (1 - p.mix) + accent2Rgb[1] * p.mix;
+    const b = accentRgb[2] * (1 - p.mix) + accent2Rgb[2] * p.mix;
+    particleCtx.fillStyle = `rgba(${r|0},${g|0},${b|0},.7)`;
+    particleCtx.beginPath();
+    particleCtx.arc(p.x, p.y, 1.8, 0, Math.PI * 2);
+    particleCtx.fill();
   }
   loaderRaf = requestAnimationFrame(particleStep);
 }
@@ -763,14 +824,6 @@ gallery.addEventListener("click", async e => {
   try { render((await post("/api/remix", {path:e.target.dataset.path})).events); }
   catch (err) { add("error", err.message); }
   finally { loaderTicketEnd(); }
-});
-layersStack.addEventListener("click", async e => {
-  const x = e.target.closest(".layer-x");
-  if (!x) return;
-  const chain = +x.dataset.chain;
-  if (Number.isNaN(chain)) return;
-  try { render((await post("/api/layer_delete", {chain_index: chain})).events); }
-  catch (err) { add("error", err.message); }
 });
 setInterval(poll, 1200);
 loadPalettes(); loadCanvas(); loadGallery(1); refreshAccount();
