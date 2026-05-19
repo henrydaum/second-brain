@@ -244,7 +244,7 @@ function setAccount(acc) {
   }
 }
 async function refreshAccount() {
-  try { const r = await get("/api/account"); setAccount(r.account); }
+  try { const r = await get(`/api/account?_=${Date.now()}`); setAccount(r.account); }
   catch (err) { console.warn("[account] refresh failed:", err); }
 }
 function openPaywall(ev) {
