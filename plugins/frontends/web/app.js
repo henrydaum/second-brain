@@ -165,8 +165,12 @@ function setTyping(on) {
 // ----- account + paywall + auth -----
 const accountAvatar = document.querySelector("#accountAvatar");
 const avatarBar = document.querySelector("#avatarBar");
+const avatarInner = document.querySelector("#avatarInner");
 const avatarSilhouette = document.querySelector("#avatarSilhouette");
 const avatarLetter = document.querySelector("#avatarLetter");
+avatarInner.style.transition = "border-color 160ms ease, color 160ms ease";
+avatarInner.addEventListener("mouseenter", () => { avatarInner.style.borderColor = "var(--accent)"; avatarInner.style.color = "var(--accent)"; });
+avatarInner.addEventListener("mouseleave", () => { avatarInner.style.borderColor = "var(--line)"; avatarInner.style.color = "var(--text)"; });
 const outOfMessages = document.querySelector("#outOfMessages");
 const oomBody = document.querySelector("#oomBody");
 const chatInput = document.querySelector("#chatInput");
@@ -199,7 +203,7 @@ function setOutOfMessages(acc) {
   if (sendBtn) sendBtn.disabled = out && !agentBusy;
   if (chatInput) {
     chatInput.disabled = out;
-    if (out) chatInput.placeholder = "Out of messages";
+    if (out) chatInput.placeholder = "Out of Messages";
     else chatInput.placeholder = "Ask Second Brain...";
   }
   if (out) oomBody.textContent = formatRefill(acc?.next_refill_seconds);
@@ -242,7 +246,7 @@ function openPaywall(ev) {
   outOfMessages.hidden = false;
   oomBody.textContent = ev?.message || "Visit your account to add more.";
   if (sendBtn) sendBtn.disabled = !agentBusy;
-  if (chatInput) { chatInput.disabled = true; chatInput.placeholder = "Out of messages"; }
+  if (chatInput) { chatInput.disabled = true; chatInput.placeholder = "Out of Messages"; }
   refreshAccount();
 }
 signinForm.addEventListener("submit", async e => {
