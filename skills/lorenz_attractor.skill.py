@@ -29,22 +29,25 @@ def run(canvas, projection="xz", **_):
     dt = 0.005
     sigma, rho, beta = 10.0, 28.0, 8.0 / 3.0
 
-    # Slight per-seed jitter on the starting point keeps each seed distinct.
-    x = float(0.1 + rng.uniform(-0.05, 0.05))
-    y = float(0.1 + rng.uniform(-0.05, 0.05))
-    z = float(0.1 + rng.uniform(-0.05, 0.05))
+    # Start from a known-good point near the attractor with tiny jitter for
+    # per-seed variety. Lorenz is globally bounded for these constants, so
+    # NaN/Inf during burn-in means numerical drift; fall back to the canonical
+    # (1, 1, 1) seed which is well-tested.
+    def _burn(x, y, z, steps):
+        for _ in range(steps):
+            dx = sigma * (y - x); dy = x * (rho - z) - y; dz = x * y - beta * z
+            x += dx * dt; y += dy * dt; z += dz * dt
+        return x, y, z
+    x = 1.0 + float(rng.uniform(-0.02, 0.02))
+    y = 1.0 + float(rng.uniform(-0.02, 0.02))
+    z = 1.0 + float(rng.uniform(-0.02, 0.02))
+    x, y, z = _burn(x, y, z, 2000)
+    if not all(np.isfinite([x, y, z])):
+        x, y, z = _burn(1.0, 1.0, 1.0, 2000)
 
     xs = np.empty(n_steps, dtype=np.float32)
     ys = np.empty(n_steps, dtype=np.float32)
     zs = np.empty(n_steps, dtype=np.float32)
-    # Burn-in 2000 steps so we drop the transient approach onto the attractor.
-    for _ in range(2000):
-        dx = sigma * (y - x)
-        dy = x * (rho - z) - y
-        dz = x * y - beta * z
-        x += dx * dt
-        y += dy * dt
-        z += dz * dt
     for i in range(n_steps):
         dx = sigma * (y - x)
         dy = x * (rho - z) - y

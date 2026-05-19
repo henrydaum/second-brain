@@ -23,16 +23,19 @@ def _rossler_trajectory(n, seed):
     rng = np.random.default_rng(seed)
     a, b, c = 0.2, 0.2, 5.7  # canonical Rossler producing a clean ribbon
     dt = 0.02
-    x = float(0.1 + rng.uniform(-0.05, 0.05))
-    y = float(0.0)
-    z = float(0.0)
-    for _ in range(2000):
-        dx = -y - z
-        dy = x + a * y
-        dz = b + z * (x - c)
-        x += dx * dt
-        y += dy * dt
-        z += dz * dt
+
+    def burn(x, y, z, steps):
+        for _ in range(steps):
+            dx = -y - z; dy = x + a * y; dz = b + z * (x - c)
+            x += dx * dt; y += dy * dt; z += dz * dt
+        return x, y, z
+
+    x = 1.0 + float(rng.uniform(-0.02, 0.02))
+    y = 1.0 + float(rng.uniform(-0.02, 0.02))
+    z = 0.0 + float(rng.uniform(-0.02, 0.02))
+    x, y, z = burn(x, y, z, 2000)
+    if not all(np.isfinite([x, y, z])):
+        x, y, z = burn(1.0, 1.0, 0.0, 2000)
     xs = np.empty(n, dtype=np.float32)
     ys = np.empty(n, dtype=np.float32)
     zs = np.empty(n, dtype=np.float32)

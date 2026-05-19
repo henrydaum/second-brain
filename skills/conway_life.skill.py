@@ -47,10 +47,13 @@ def _seed_grid(N, kind, seed_int):
     g = np.zeros((N, N), dtype=np.uint8)
     rng = np.random.default_rng(seed_int)
     if kind == "soup":
-        # Dense-ish random patch covering ~60% of the grid; classic chaotic Life.
-        margin = N // 8
+        # Cover most of the grid with a dense random patch; Conway stabilizes
+        # to ~3% live density after a few hundred steps but the *trails* it
+        # leaves behind track every cell that was alive recently, so we want
+        # a big initial footprint.
+        margin = N // 20
         size = N - 2 * margin
-        density = 0.32
+        density = 0.38
         block = (rng.random((size, size)) < density).astype(np.uint8)
         g[margin:margin + size, margin:margin + size] = block
         return g
@@ -89,12 +92,13 @@ def run(canvas, seed_pattern="soup", **_):
 
     # Grid resolution: 256 cells across; upscale to canvas size at the end.
     N = 256
-    n_steps = {"soup": 200, "r_pentomino": 350, "glider_gun": 240,
-               "acorn": 400, "replicator": 160}.get(kind, 200)
+    n_steps = {"soup": 600, "r_pentomino": 700, "glider_gun": 400,
+               "acorn": 800, "replicator": 240}.get(kind, 500)
 
     g = _seed_grid(N, kind, seed)
     decay = np.zeros((N, N), dtype=np.float32)
-    decay_rate = 0.96
+    # Slow decay so trails persist long enough to fill the canvas.
+    decay_rate = 0.985
     for _ in range(n_steps):
         decay *= decay_rate
         decay[g == 1] = 1.0  # refresh on every live cell

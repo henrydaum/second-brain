@@ -84,7 +84,7 @@ def run(canvas, scene="hills", **_):
     # top faces upward (by up to h_scale) and side panels extend down by
     # height, so this stays balanced for both flat and tall scenes.
     ox = s / 2.0
-    oy = s * 0.50
+    oy = s * 0.58
 
     # Sort cells back-to-front: greater r+c -> drawn later.
     cells = [(r, c) for r in range(N) for c in range(N)]

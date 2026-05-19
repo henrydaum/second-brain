@@ -23,11 +23,13 @@ from PIL import Image
 
 _PRESETS = {
     # f, k, steps -- chosen so the resulting B texture is mature, not noisy.
-    "spots":  (0.0367, 0.0649, 3500),
-    "maze":   (0.0290, 0.0570, 3500),
-    "worms":  (0.0780, 0.0610, 3500),
-    "coral":  (0.0620, 0.0620, 3500),
-    "uskate": (0.0620, 0.0609, 4500),
+    # Native grid is 384x384; values picked from the canonical mitchell map
+    # and verified to produce the named texture at this scale.
+    "spots":  (0.0540, 0.0620, 5000),
+    "maze":   (0.0290, 0.0570, 5000),
+    "worms":  (0.0780, 0.0610, 5000),
+    "coral":  (0.0620, 0.0620, 5000),
+    "uskate": (0.0620, 0.0609, 6000),
 }
 
 
@@ -45,15 +47,16 @@ def run(canvas, regime="coral", **_):
     f, k, n_steps = _PRESETS.get(str(regime), _PRESETS["coral"])
     rng = np.random.default_rng(seed)
 
-    N = 256
+    N = 384
     A = np.ones((N, N), dtype=np.float32)
     B = np.zeros((N, N), dtype=np.float32)
-    # Seed several noisy patches of B so multiple texture regions develop.
-    n_seeds = 8
+    # Seed many small noisy patches of B distributed across the canvas so the
+    # pattern develops from multiple nucleation sites and fills the frame.
+    n_seeds = 14
     for _ in range(n_seeds):
-        r0 = int(rng.integers(N // 6, N - N // 6))
-        c0 = int(rng.integers(N // 6, N - N // 6))
-        rad = int(rng.integers(6, 14))
+        r0 = int(rng.integers(N // 8, N - N // 8))
+        c0 = int(rng.integers(N // 8, N - N // 8))
+        rad = int(rng.integers(8, 18))
         for dr in range(-rad, rad + 1):
             for dc in range(-rad, rad + 1):
                 if dr * dr + dc * dc <= rad * rad:
@@ -89,5 +92,5 @@ def run(canvas, regime="coral", **_):
     )
     idx = np.clip((t_field * (LUT - 1)).astype(np.int32), 0, LUT - 1)
     rgb = lut[idx]
-    img = Image.fromarray(rgb, "RGB").resize((s, s), Image.BICUBIC).convert("RGBA")
+    img = Image.fromarray(rgb, "RGB").resize((s, s), Image.LANCZOS).convert("RGBA")
     canvas.commit(img)

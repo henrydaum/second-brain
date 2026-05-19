@@ -1,5 +1,5 @@
 SKILL_NAME = "L-System Grove"
-SKILL_DESCRIPTION = "Trees as Lindenmayer systems: a stochastic rule rewrites a string into branching turtle paths, drawn with palette-graded line thickness. Several seeded trees clustered into a grove with fbm sky behind. No leaves, no trunks -- just branching grammar. Good for \"tree\", \"forest\", \"grove\", \"branches\", \"fern\", \"coral\", or \"lightning\"."
+SKILL_DESCRIPTION = "Trees as Lindenmayer systems traced by a turtle: depth-aware line width and palette ramp give a heavy trunk fading into a fine halo of thin tip-branches. No leaves, no fbm sky -- pure branching grammar on a clean palette-background. Presets: a single big specimen at canvas center, a perfectly symmetric pure-math tree (no jitter), a grove of stylized silhouettes, a Barnsley-style fern, and a coral form. Good for \"tree\", \"forest\", \"grove\", \"branches\", \"fern\", \"coral\", \"sapling\", \"botanical\", or \"L-system\"."
 SKILL_KIND = "creation"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1779667200.0
@@ -7,73 +7,184 @@ SKILL_HIDDEN = False
 SKILL_CONTROLS = [
     {"type": "enum", "name": "shape", "label": "Shape",
      "options": [
-         {"value": "tree", "label": "Tree"},
-         {"value": "fern", "label": "Fern"},
-         {"value": "coral", "label": "Coral"},
-     ], "default": "tree"},
+         {"value": "specimen", "label": "Single Specimen"},
+         {"value": "pure",     "label": "Pure Symmetric"},
+         {"value": "grove",    "label": "Grove Silhouettes"},
+         {"value": "fern",     "label": "Barnsley Fern"},
+         {"value": "coral",    "label": "Coral"},
+     ], "default": "specimen"},
     {"type": "palette", "name": "palette", "label": "Palette"},
 ]
 
 import math
 import random
-import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 
+# axiom, rules, angle_deg, iterations.
 _GRAMMARS = {
-    "tree":  {"axiom": "F", "rules": {"F": "FF+[+F-F-F]-[-F+F+F]"}, "iter": 4, "angle": 22.5},
-    "fern":  {"axiom": "X", "rules": {"X": "F+[[X]-X]-F[-FX]+X", "F": "FF"}, "iter": 5, "angle": 25.0},
-    "coral": {"axiom": "F", "rules": {"F": "F[+F]F[-F][F]"}, "iter": 4, "angle": 28.0},
+    # Open-canopy binary fan: clean trunk, splits into recognisable major
+    # branches, fine halo of tip-branches. Matches the reference image feel.
+    "specimen": {"axiom": "F", "rules": {"F": "F[+F][-F]F"}, "angle": 25.7, "iter": 7},
+    "pure":     {"axiom": "F", "rules": {"F": "F[+F]F[-F][F]"},           "angle": 25.7, "iter": 6},
+    "grove":    {"axiom": "F", "rules": {"F": "FF-[-F+F+F]+[+F-F-F]"},    "angle": 22.5, "iter": 5},
+    "fern":     {"axiom": "X", "rules": {"X": "F+[[X]-X]-F[-FX]+X", "F": "FF"}, "angle": 25.0, "iter": 5},
+    "coral":    {"axiom": "F", "rules": {"F": "FF+[+F-F-F]-[-F+F+F]"},    "angle": 18.0, "iter": 5},
 }
 
 
-def run(canvas, shape="tree", **_):
-    s = int(canvas.size)
-    seed = int(canvas.seed)
-    rng = random.Random(seed)
-    g = _GRAMMARS.get(str(shape), _GRAMMARS["tree"])
+def _turtle_with_depth(sentence, start, heading, step, turn):
+    """Like art_kit.turtle_segments, but each segment carries its bracket depth.
+    Returns list of (x1, y1, x2, y2, depth)."""
+    x, y = float(start[0]), float(start[1])
+    h = float(heading)
+    stack = []
+    depth = 0
+    out = []
+    for ch in sentence:
+        if ch == "F" or ch == "G":
+            nx = x + math.cos(h) * step
+            ny = y + math.sin(h) * step
+            out.append((x, y, nx, ny, depth))
+            x, y = nx, ny
+        elif ch == "f":
+            x += math.cos(h) * step
+            y += math.sin(h) * step
+        elif ch == "+":
+            h += turn
+        elif ch == "-":
+            h -= turn
+        elif ch == "[":
+            stack.append((x, y, h, depth))
+            depth += 1
+        elif ch == "]":
+            if stack:
+                x, y, h, depth = stack.pop()
+    return out
 
-    # Sky background: fbm sampled on a coarse grid then upscaled.
-    LOW = 96
-    low = np.array(
-        [[art_kit.fbm(seed + 17, x * 0.06, y * 0.06, octaves=3) for x in range(LOW)]
-         for y in range(LOW)],
-        dtype=np.float32,
-    )
-    low_img = Image.fromarray(np.clip(low * 255.0, 0, 255).astype(np.uint8), "L").resize((s, s), Image.BICUBIC)
-    noise = np.asarray(low_img, dtype=np.float32) / 255.0
-    y_idx, _ = np.mgrid[0:s, 0:s].astype(np.float32)
-    t = y_idx / s
-    field = np.clip(t * 0.85 + (noise - 0.5) * 0.25, 0.0, 1.0)
-    LUT = 256
-    sky_lut = np.array(
-        [art_kit.hex_to_rgb(art_kit.mix_hex(
-            art_kit.palette_color(0.9), art_kit.palette_color(0.45),
-            k / (LUT - 1))) for k in range(LUT)],
-        dtype=np.uint8,
-    )
-    rgb = sky_lut[np.clip((field * (LUT - 1)).astype(np.int32), 0, LUT - 1)]
-    img = Image.fromarray(rgb, "RGB").convert("RGBA")
+
+def _bbox(segs):
+    xs = [p for s in segs for p in (s[0], s[2])]
+    ys = [p for s in segs for p in (s[1], s[3])]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _draw_tree(img_draw, segs, max_depth, palette_lo, palette_hi, trunk_w, tip_w, jitter_color=False, rng=None):
+    """Draw segments with width and palette ramp scaled by bracket depth."""
+    if not segs:
+        return
+    for x1, y1, x2, y2, d in segs:
+        t = min(d / max(max_depth, 1), 1.0)
+        ramp = palette_lo + (palette_hi - palette_lo) * t
+        if jitter_color and rng is not None:
+            ramp = max(0.0, min(1.0, ramp + (rng.random() - 0.5) * 0.06))
+        color = art_kit.palette_color(ramp)
+        width = max(1, int(round(trunk_w + (tip_w - trunk_w) * t)))
+        img_draw.line(((x1, y1), (x2, y2)), fill=color, width=width)
+
+
+def _render_single(canvas, s, kind, jitter):
+    g = _GRAMMARS[kind]
+    rng = random.Random(int(canvas.seed)) if jitter else None
+    sentence = art_kit.lindenmayer(g["axiom"], g["rules"], g["iter"])
+    angle = g["angle"] + (rng.uniform(-1.5, 1.5) if rng else 0.0)
+    segs = _turtle_with_depth(sentence, start=(0.0, 0.0), heading=-math.pi / 2.0,
+                              step=1.0, turn=math.radians(angle))
+    if not segs:
+        return Image.new("RGBA", (s, s), canvas.palette.background)
+
+    # Normalize bbox into the canvas.
+    x0, y0, x1, y1 = _bbox(segs)
+    w = max(1e-9, x1 - x0)
+    h = max(1e-9, y1 - y0)
+    margin = s * 0.06
+    avail = s - 2 * margin
+    scale = avail / max(w, h)
+    pad_x = (s - w * scale) * 0.5
+    pad_y = (s - h * scale) * 0.5
+    norm = [(pad_x + (a - x0) * scale, pad_y + (b - y0) * scale,
+             pad_x + (c - x0) * scale, pad_y + (d - y0) * scale, dp)
+            for (a, b, c, d, dp) in segs]
+    max_d = max((dp for *_, dp in norm), default=1)
+
+    img = Image.new("RGBA", (s, s), canvas.palette.background)
     draw = ImageDraw.Draw(img, "RGBA")
 
-    n_trees = 5
-    for ti in range(n_trees):
-        sentence = art_kit.lindenmayer(g["axiom"], g["rules"], g["iter"])
-        scale = 0.55 + rng.random() * 0.55
-        base_x = s * (0.12 + 0.18 * ti) + rng.uniform(-s * 0.04, s * 0.04)
-        base_y = s * (0.92 + rng.uniform(-0.03, 0.02))
-        step = (s * 0.012) * scale
-        turn = math.radians(g["angle"] + rng.uniform(-3.0, 3.0))
-        segments = art_kit.turtle_segments(
-            sentence, start=(base_x, base_y), heading=-math.pi / 2.0,
-            step=step, turn=turn,
-        )
-        # Color: trunks darker (palette_color near 0.1), tips brighter.
-        n_seg = max(1, len(segments))
-        for si, (x1, y1, x2, y2) in enumerate(segments):
-            t_seg = si / n_seg
-            color = art_kit.palette_color(0.1 + 0.45 * t_seg)
-            width = max(1, int((1.0 - t_seg) * (4.0 * scale) + 1.0))
-            draw.line((x1, y1, x2, y2), fill=color, width=width)
+    trunk_w = max(4, int(s * 0.012))
+    tip_w = 1
+    if kind == "specimen":
+        # Heavier trunk, palette ramp from dark trunk to bright tips.
+        _draw_tree(draw, norm, max_d, palette_lo=0.05, palette_hi=0.92,
+                   trunk_w=trunk_w, tip_w=tip_w, jitter_color=True, rng=rng)
+    else:
+        # Pure: keep colors uniform-ish so the math reads as math.
+        _draw_tree(draw, norm, max_d, palette_lo=0.12, palette_hi=0.80,
+                   trunk_w=max(3, trunk_w - 1), tip_w=tip_w,
+                   jitter_color=False, rng=None)
+    return img
 
-    canvas.commit(img)
+
+def _render_grove(canvas, s):
+    rng = random.Random(int(canvas.seed))
+    img = Image.new("RGBA", (s, s), canvas.palette.background)
+    draw = ImageDraw.Draw(img, "RGBA")
+
+    # Seven silhouetted trees on a baseline, alternating rules so they look
+    # like the species variety in a botanical chart.
+    rule_pool = [
+        {"axiom": "F", "rules": {"F": "FF-[-F+F+F]+[+F-F-F]"}, "angle": 22.5, "iter": 5},
+        {"axiom": "F", "rules": {"F": "F[+FF][-FF]F[-F][+F]F"}, "angle": 25.0, "iter": 4},
+        {"axiom": "F", "rules": {"F": "FF+[+F-F-F]-[-F+F+F]"}, "angle": 18.0, "iter": 5},
+        {"axiom": "F", "rules": {"F": "F[+F][-F]F[-F][+F]F"},  "angle": 30.0, "iter": 5},
+        {"axiom": "F", "rules": {"F": "F[+F]F[-F]F"},          "angle": 25.7, "iter": 6},
+        {"axiom": "F", "rules": {"F": "FF[-F+F]F[+F-F]F"},     "angle": 20.0, "iter": 5},
+        {"axiom": "F", "rules": {"F": "F[+F-F+F]F[-F+F-F]"},   "angle": 28.0, "iter": 4},
+    ]
+    n = len(rule_pool)
+    cell_w = s / n
+    baseline = s * 0.95
+    cell_h = s * 0.92  # max tree height -- fill most of the canvas
+
+    for i, g in enumerate(rule_pool):
+        sentence = art_kit.lindenmayer(g["axiom"], g["rules"], g["iter"])
+        segs = _turtle_with_depth(sentence, start=(0.0, 0.0), heading=-math.pi / 2.0,
+                                  step=1.0, turn=math.radians(g["angle"]))
+        if not segs:
+            continue
+        x0, y0, x1_b, y1_b = _bbox(segs)
+        w = max(1e-9, x1_b - x0)
+        h = max(1e-9, y1_b - y0)
+        scale = min(cell_w * 0.82 / w, cell_h / h)
+        cx = (i + 0.5) * cell_w
+        # Anchor the tree's baseline at `baseline`.
+        norm = [(cx + (a - (x0 + w / 2.0)) * scale, baseline - (y1_b - b) * scale,
+                 cx + (c - (x0 + w / 2.0)) * scale, baseline - (y1_b - d) * scale, dp)
+                for (a, b, c, d, dp) in segs]
+        max_d = max((dp for *_, dp in norm), default=1)
+        # Each tree drawn near-uniform palette (the "silhouette" look).
+        ramp = 0.10 + 0.25 * (i / max(1, n - 1))
+        for x1s, y1s, x2s, y2s, d in norm:
+            t = min(d / max(max_d, 1), 1.0)
+            color = art_kit.palette_color(ramp + 0.18 * t)
+            width = max(1, int(round(3 + (1 - 3) * t)))
+            draw.line(((x1s, y1s), (x2s, y2s)), fill=color, width=width)
+    return img
+
+
+def run(canvas, shape="specimen", **_):
+    s = int(canvas.size)
+    kind = str(shape)
+    if kind == "grove":
+        out = _render_grove(canvas, s)
+    elif kind == "pure":
+        out = _render_single(canvas, s, kind="pure", jitter=False)
+    else:
+        out = _render_single(canvas, s, kind=kind, jitter=True)
+
+    # Optional soft glow under the lines so the canopy gets a faint halo
+    # (matches the dense-fine-branch feel of the reference). Skip for
+    # the "pure" preset where crisp math is the whole point.
+    if kind != "pure":
+        glow = out.filter(ImageFilter.GaussianBlur(radius=s * 0.004))
+        out = Image.alpha_composite(glow, out)
+    canvas.commit(out)
