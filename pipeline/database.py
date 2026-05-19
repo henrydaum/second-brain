@@ -270,6 +270,29 @@ class Database:
 		except Exception:
 			pass
 
+		# Shareable canvas links: every share/save/get-link mints a stable
+		# short id that resolves back to the canvas image + replay chain.
+		# kind='ephemeral' covers Get-link-without-publishing (image lives in
+		# DATA_DIR/shared_links/), 'gallery' covers /api/share, 'archive'
+		# covers /api/save. Unique (kind,image_path) lets us lazily backfill
+		# legacy gallery/archive items on first link request.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS canvas_shares (
+				share_id     TEXT PRIMARY KEY,
+				kind         TEXT NOT NULL,
+				image_path   TEXT NOT NULL,
+				title        TEXT,
+				artist       TEXT,
+				chain_json   TEXT NOT NULL,
+				palette_id   TEXT,
+				size         INTEGER,
+				owner_id     TEXT,
+				created_at   REAL NOT NULL,
+				view_count   INTEGER DEFAULT 0
+			)
+		""")
+		self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_canvas_shares_path ON canvas_shares(kind, image_path)")
+
 		self.conn.commit()
 
 	# =================================================================

@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "Map luminance through the canvas palette ramp for a cohesiv
 SKILL_KIND = "transform"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1730000000.0
+SKILL_HIDDEN = False
 
 import numpy as np
 from PIL import Image

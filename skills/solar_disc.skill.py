@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "An abstract sun -- a radial-falloff core over an fbm field 
 SKILL_KIND = "creation"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1779667200.0
+SKILL_HIDDEN = False
 SKILL_CONTROLS = [
     {"type": "enum", "name": "mood", "label": "Mood",
      "options": [

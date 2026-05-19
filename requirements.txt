@@ -7,3 +7,4 @@ watchdog
 torch
 torchvision
 stripe
+qrcode[pil]

@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "Tune contrast, brightness, and saturation in one pass. Good
 SKILL_KIND = "transform"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1730000000.0
+SKILL_HIDDEN = False
 
 from PIL import ImageEnhance
 

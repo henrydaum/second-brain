@@ -84,9 +84,45 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .canvas-actions { display: none; position: absolute; left: 22px; top: 22px; z-index: 2; gap: 8px; }
 .showcase.has-image .canvas-actions { display: flex; }
 .canvas-actions a, .canvas-actions button { font-weight: 800; backdrop-filter: blur(8px); }
-.share-panel { position: absolute; left: 22px; top: 72px; z-index: 3; display: grid; gap: 8px; width: min(280px, calc(100% - 44px)); padding: 12px; border: 1px solid rgba(255,255,255,.24); background: rgba(5,7,12,.86); backdrop-filter: blur(16px); }
+.share-panel { position: absolute; left: 22px; top: 72px; z-index: 3; display: grid; gap: 10px; width: min(320px, calc(100% - 44px)); padding: 14px; border: 1px solid rgba(255,255,255,.24); background: rgba(5,7,12,.86); backdrop-filter: blur(16px); }
 .share-panel[hidden] { display: none; }
 .share-panel input { height: 38px; min-width: 0; border: 1px solid var(--line); background: #10141e; color: var(--text); padding: 0 10px; }
+.share-link-block { display: grid; gap: 8px; }
+.share-link-row { display: flex; gap: 6px; }
+.share-link-row input { flex: 1; font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12px; }
+.share-link-row button { padding: 0 12px; }
+.share-qr-details summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 4px 0; user-select: none; }
+.share-qr-details img { display: block; margin: 8px auto 6px; background: white; padding: 6px; }
+.share-qr-details a { display: inline-block; font-size: 12px; color: var(--muted); text-decoration: underline; }
+.share-divider { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.share-publish { display: grid; gap: 8px; }
+.share-publish-lead { font-size: 12px; color: var(--muted); margin: 0; }
+.gallery-card-actions { display: flex; gap: 6px; }
+.gallery-card-actions button { flex: 1; }
+.gallery-card-actions button.secondary { background: transparent; }
+#linkModal .modal-card { max-width: 360px; display: grid; gap: 12px; place-items: center; text-align: center; }
+#linkModal .share-link-row { width: 100%; }
+#linkModal img { background: white; padding: 8px; }
+#linkModal a { color: var(--muted); font-size: 13px; text-decoration: underline; }
+/* ---- /share/{id} landing page ---- */
+body.share-landing { background: var(--bg); color: var(--text); margin: 0; min-height: 100vh; font-family: inherit; }
+.share-landing-shell { max-width: 880px; margin: 0 auto; padding: 32px 24px 64px; display: grid; gap: 24px; }
+.share-landing-head { display: flex; justify-content: flex-start; }
+.share-landing-home { color: var(--muted); text-decoration: none; font-size: 14px; }
+.share-landing-home:hover { color: var(--accent); }
+.share-landing-art img { width: 100%; height: auto; display: block; border: 1px solid var(--line); }
+.share-landing-art .missing-art { padding: 48px 24px; border: 1px dashed var(--line); color: var(--muted); text-align: center; }
+.share-landing-meta { display: grid; gap: 10px; }
+.share-landing-meta h1 { margin: 0; font-size: 28px; letter-spacing: -.01em; }
+.share-landing-artist { margin: 0; color: var(--muted); font-size: 14px; }
+.share-landing-actions { display: flex; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
+.share-landing-actions a, .share-landing-actions button { padding: 10px 16px; border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer; text-decoration: none; font-weight: 600; }
+.share-landing-actions a.primary-btn { background: var(--accent); border-color: var(--accent); color: #0b0d13; }
+.share-landing-actions a.primary-btn:hover { filter: brightness(1.05); }
+.share-landing-qr summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-top: 12px; user-select: none; }
+.share-landing-qr img { background: white; padding: 8px; margin-top: 10px; display: block; }
+.share-landing-qr a { color: var(--muted); font-size: 13px; }
+body.share-landing.missing .share-landing-meta { text-align: center; }
 
 /* ---- Controls drawer ---- */
 .controls-toggle { position: absolute; right: 22px; bottom: 22px; z-index: 4; height: 36px; padding: 0 14px; border: 1px solid rgba(255,255,255,.28); background: rgba(5,7,12,.78); backdrop-filter: blur(10px); color: var(--text); font-weight: 700; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: border-color 200ms ease, color 200ms ease; }

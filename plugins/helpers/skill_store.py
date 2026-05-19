@@ -262,6 +262,7 @@ class Skill:
     code: str
     created_at: float
     controls: list = None  # list[dict] — user-facing controls; empty when none declared
+    hidden: bool = False  # soft-delete flag — hidden skills still load for replay
 
     def __post_init__(self):
         if self.controls is None:
@@ -316,6 +317,7 @@ def _format_skill_file(skill: Skill) -> str:
         f'SKILL_KIND = {json.dumps(skill.kind)}\n'
         f'SKILL_OWNER = {json.dumps(skill.owner)}\n'
         f'SKILL_CREATED_AT = {skill.created_at!r}\n'
+        f'SKILL_HIDDEN = {bool(skill.hidden)!r}\n'
         f'{controls_line}'
         f'\n'
         f'{skill.code.rstrip()}\n'
@@ -329,7 +331,7 @@ def _extract_metadata(source: str) -> dict:
     for node in tree.body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             name = node.targets[0].id
-            if name in ("SKILL_NAME", "SKILL_DESCRIPTION", "SKILL_KIND", "SKILL_OWNER", "SKILL_CREATED_AT", "SKILL_CONTROLS"):
+            if name in ("SKILL_NAME", "SKILL_DESCRIPTION", "SKILL_KIND", "SKILL_OWNER", "SKILL_CREATED_AT", "SKILL_CONTROLS", "SKILL_HIDDEN"):
                 try:
                     out[name] = ast.literal_eval(node.value)
                 except Exception:
@@ -425,6 +427,7 @@ def _load_skill_from_path(path: Path) -> Skill | None:
         code=code_body,
         created_at=float(meta.get("SKILL_CREATED_AT") or path.stat().st_mtime),
         controls=controls,
+        hidden=bool(meta.get("SKILL_HIDDEN") or False),
     )
 
 
@@ -475,6 +478,7 @@ def _ensure_embeddings(text_embedder) -> None:
                 "description": skill.description,
                 "kind": skill.kind,
                 "owner": skill.owner,
+                "hidden": bool(skill.hidden),
             }
         # Drop cache entries for deleted skills.
         for slug in list(_emb_cache):
@@ -494,12 +498,15 @@ def _cosine(a: list[float], b: list[float]) -> float:
 # ---------------------------------------------------------------------------
 
 
-def list_skills() -> list[Skill]:
+def list_skills(*, include_hidden: bool = False) -> list[Skill]:
     out: list[Skill] = []
     for path in _iter_skill_paths():
         skill = _load_skill_from_path(path)
-        if skill is not None:
-            out.append(skill)
+        if skill is None:
+            continue
+        if skill.hidden and not include_hidden:
+            continue
+        out.append(skill)
     out.sort(key=lambda s: s.created_at, reverse=True)
     return out
 
@@ -581,18 +588,48 @@ def update_skill(
     return updated
 
 
+_HIDDEN_RE = re.compile(r"^SKILL_HIDDEN\s*=.*$", re.MULTILINE)
+
+
+def _set_skill_hidden_in_source(source: str, hidden: bool) -> str:
+    """Rewrite (or append) the SKILL_HIDDEN constant. Single-line constant,
+    same shape the rest of the SKILL_* metadata uses."""
+    replacement = f"SKILL_HIDDEN = {bool(hidden)!r}"
+    new_source, count = _HIDDEN_RE.subn(replacement, source, count=1)
+    if count:
+        return new_source
+    # Constant missing — inject it after the last SKILL_* assignment so it
+    # sits with the other metadata. Falls back to prepending if none found.
+    tree = ast.parse(source)
+    last_skill_line = 0
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id.startswith("SKILL_")):
+            last_skill_line = max(last_skill_line, getattr(node, "end_lineno", node.lineno))
+    lines = source.splitlines(keepends=True)
+    if last_skill_line:
+        lines.insert(last_skill_line, replacement + "\n")
+    else:
+        lines.insert(0, replacement + "\n")
+    return "".join(lines)
+
+
 def delete_skill(slug: str, *, owner: str) -> bool:
+    """Soft-delete: mark the skill hidden so it disappears from
+    list_skills/search_skills, but keep the file on disk so existing shared
+    links can still replay the chain. Built-ins can be hidden too — being
+    built-in only protects against file removal, which we no longer do."""
     existing = read_skill(slug)
     if existing is None:
         return False
-    if _is_built_in(existing.path):
-        raise PermissionError(f"'{slug}' is a built-in skill and cannot be deleted.")
-    if existing.owner and existing.owner != owner:
-        raise PermissionError(f"only owner '{existing.owner}' can delete this skill")
-    try:
-        Path(existing.path).unlink()
-    except FileNotFoundError:
-        pass
+    if existing.owner and existing.owner != owner and not _is_built_in(existing.path):
+        raise PermissionError(f"only owner '{existing.owner}' can hide this skill")
+    if existing.hidden:
+        return True
+    path = Path(existing.path)
+    source = path.read_text(encoding="utf-8")
+    path.write_text(_set_skill_hidden_in_source(source, True), encoding="utf-8")
     with _emb_lock:
         _emb_cache.pop(slug, None)
     return True
@@ -600,6 +637,7 @@ def delete_skill(slug: str, *, owner: str) -> bool:
 
 def search_skills(
     query: str, *, top_k: int = 5, kind: str | None = None, text_embedder=None,
+    include_hidden: bool = False,
 ) -> list[dict]:
     _ensure_embeddings(text_embedder)
     qvec = _embed_text(text_embedder, query) if text_embedder else None
@@ -607,7 +645,7 @@ def search_skills(
         # Fall back to lexical substring scoring so the tool still works without an embedder.
         q = (query or "").lower()
         out: list[dict] = []
-        for skill in list_skills():
+        for skill in list_skills(include_hidden=include_hidden):
             if kind and skill.kind != kind:
                 continue
             score = 0.0
@@ -622,6 +660,8 @@ def search_skills(
     with _emb_lock:
         for slug, entry in _emb_cache.items():
             if kind and entry["kind"] != kind:
+                continue
+            if entry.get("hidden") and not include_hidden:
                 continue
             rows.append({
                 "slug": slug, "name": entry["name"], "description": entry["description"],

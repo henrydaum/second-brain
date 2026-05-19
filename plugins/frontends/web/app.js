@@ -23,6 +23,15 @@ const shareBtn = document.querySelector("#shareImage");
 const sharePanel = document.querySelector("#sharePanel");
 const shareTitle = document.querySelector("#shareTitle");
 const shareArtist = document.querySelector("#shareArtist");
+const shareLinkInput = document.querySelector("#shareLink");
+const shareQrImg = document.querySelector("#shareQr");
+const shareQrDownload = document.querySelector("#downloadQr");
+const copyShareLinkBtn = document.querySelector("#copyShareLink");
+const linkModal = document.querySelector("#linkModal");
+const linkModalUrl = document.querySelector("#linkModalUrl");
+const linkModalQr = document.querySelector("#linkModalQr");
+const linkModalCopy = document.querySelector("#linkModalCopy");
+const linkModalDownload = document.querySelector("#linkModalDownload");
 const gallery = document.querySelector("#gallery");
 const paginator = document.querySelector("#paginator");
 const archive = document.querySelector("#archive");
@@ -118,7 +127,8 @@ function render(events) {
       setCanvas(ev.canvas || {url: ev.url, name: ev.name});
     }
     else if (ev.type === "canvas_reset") { setCanvas(null); }
-    else if (ev.type === "shared") { sharePanel.hidden = true; loadGallery(1); }
+    else if (ev.type === "shared") { loadGallery(1); }
+    else if (ev.type === "share_link") { setShareLink(ev.url, ev.qr_url); }
     else if (ev.type === "attachment") add("assistant", `Attachment: ${ev.name}`);
     else if (ev.type === "typing") setTyping(!!ev.on);
   }
@@ -435,7 +445,7 @@ async function loadGalleryFor(kind, page = 1) {
   const r = await get(`${cfg.url}?limit=${GALLERY_PAGE}&offset=${offset}`);
   const items = Array.isArray(r.items) ? r.items : (Array.isArray(r) ? r : []);
   const total = typeof r.total === "number" ? r.total : items.length + offset;
-  cfg.grid.innerHTML = items.map(x => `<article class="gallery-card"><img src="${x.url}" alt=""><div><strong>${esc(x.title)}</strong><small>${esc(x.artist)}${x.score ? ` · ${(x.score*100).toFixed(0)}% similar` : ""}</small><button data-kind="${kind}" data-path="${esc(x.path)}">${cfg.action}</button></div></article>`).join("") || `<article class='assistant'>${cfg.empty}</article>`;
+  cfg.grid.innerHTML = items.map(x => `<article class="gallery-card"><img src="${x.url}" alt=""><div><strong>${esc(x.title)}</strong><small>${esc(x.artist)}${x.score ? ` · ${(x.score*100).toFixed(0)}% similar` : ""}</small><div class="gallery-card-actions"><button data-kind="${kind}" data-path="${esc(x.path)}" data-action="remix">${cfg.action}</button><button class="secondary" data-kind="${kind}" data-path="${esc(x.path)}" data-action="link">Get link</button></div></div></article>`).join("") || `<article class='assistant'>${cfg.empty}</article>`;
   renderPaginatorFor(kind, total);
 }
 function loadGallery(page = 1) { return loadGalleryFor("shared", page); }
@@ -706,12 +716,60 @@ saveBtn.addEventListener("click", async () => {
   } catch (err) { add("error", err.message); }
   finally { saveBtn.disabled = false; saveBtn.classList.remove("loading"); }
 });
-shareBtn.addEventListener("click", () => { sharePanel.hidden = !sharePanel.hidden; shareTitle.value ||= "untitled"; shareArtist.value ||= "anonymous"; });
+function setShareLink(url, qrUrl) {
+  if (shareLinkInput) shareLinkInput.value = url || "";
+  if (shareQrImg && qrUrl) shareQrImg.src = qrUrl;
+  if (shareQrDownload && qrUrl) shareQrDownload.href = qrUrl;
+}
+async function fetchCurrentShareLink() {
+  if (!showcase.classList.contains("has-image")) return;
+  setShareLink("Generating link…", "");
+  try {
+    const r = await post("/api/get_link", {kind: "current"});
+    if (r && r.ok) setShareLink(r.url, r.qr_url);
+    else setShareLink("Could not generate link", "");
+  } catch (err) { setShareLink("Could not generate link", ""); }
+}
+async function copyToClipboard(text, btn) {
+  if (!text) return;
+  try { await navigator.clipboard.writeText(text); }
+  catch { try { const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch {} }
+  if (btn) { const old = btn.textContent; btn.textContent = "Copied!"; setTimeout(() => btn.textContent = old, 1400); }
+}
+shareBtn.addEventListener("click", () => {
+  const opening = sharePanel.hidden;
+  sharePanel.hidden = !sharePanel.hidden;
+  shareTitle.value ||= "untitled";
+  shareArtist.value ||= "anonymous";
+  if (opening) fetchCurrentShareLink();
+});
+copyShareLinkBtn?.addEventListener("click", () => copyToClipboard(shareLinkInput.value, copyShareLinkBtn));
 document.querySelector("#shareConfirm").addEventListener("click", async () => render((await post("/api/share", {title:shareTitle.value, artist:shareArtist.value})).events));
-async function handleGalleryRemix(e) {
+
+function openLinkModal(url, qrUrl, shareId) {
+  linkModalUrl.value = url || "";
+  if (qrUrl) { linkModalQr.src = qrUrl; linkModalDownload.href = qrUrl; }
+  linkModalDownload.download = `second-brain-${shareId || "share"}.png`;
+  linkModal.hidden = false;
+}
+linkModalCopy?.addEventListener("click", () => copyToClipboard(linkModalUrl.value, linkModalCopy));
+document.querySelectorAll('[data-close="linkModal"]').forEach(b => b.addEventListener("click", () => linkModal.hidden = true));
+
+async function handleGalleryAction(e) {
   const btn = e.target.closest("button[data-path]");
   if (!btn) return;
   const kind = btn.dataset.kind || "shared";
+  const action = btn.dataset.action || "remix";
+  if (action === "link") {
+    // gallery tab uses tile-kind 'shared' but the share-link kind is 'gallery'.
+    const linkKind = kind === "shared" ? "gallery" : "archive";
+    try {
+      const r = await post("/api/get_link", {kind: linkKind, path: btn.dataset.path});
+      if (r && r.ok) openLinkModal(r.url, r.qr_url, r.share_id);
+      else add("error", (r && r.error) || "Could not generate link.");
+    } catch (err) { add("error", err.message); }
+    return;
+  }
   const endpoint = GALLERY_TABS[kind]?.endpoint || "/api/remix";
   scrollTo({top:0, behavior:"smooth"});
   loaderTicketStart();
@@ -719,8 +777,23 @@ async function handleGalleryRemix(e) {
   catch (err) { add("error", err.message); }
   finally { loaderTicketEnd(); }
 }
-gallery.addEventListener("click", handleGalleryRemix);
-archive.addEventListener("click", handleGalleryRemix);
+gallery.addEventListener("click", handleGalleryAction);
+archive.addEventListener("click", handleGalleryAction);
+
+async function handleShareDeepLink() {
+  const params = new URLSearchParams(location.search);
+  const shareId = params.get("share");
+  if (!shareId) return;
+  // Strip the param so reloads don't re-trigger remix.
+  params.delete("share");
+  const qs = params.toString();
+  history.replaceState({}, "", location.pathname + (qs ? "?" + qs : ""));
+  scrollTo({top:0, behavior:"smooth"});
+  loaderTicketStart();
+  try { render((await post("/api/remix", {share_id: shareId})).events); }
+  catch (err) { add("error", err.message); }
+  finally { loaderTicketEnd(); }
+}
 (function rehydrateAccents() {
   try {
     const a = JSON.parse(localStorage.sbAccents || "null");
@@ -743,4 +816,4 @@ async function loadHistory() {
   } catch {}
 }
 setInterval(poll, 1200);
-loadHistory(); loadPalettes(); loadCanvas(); loadGallery(1); loadGalleryFor("archive", 1); refreshAccount();
+loadHistory(); loadPalettes(); loadCanvas(); loadGallery(1); loadGalleryFor("archive", 1); refreshAccount(); handleShareDeepLink();

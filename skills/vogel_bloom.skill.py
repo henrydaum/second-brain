@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "A flower as a Vogel sunflower spiral: cells laid out by the
 SKILL_KIND = "creation"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1779667200.0
+SKILL_HIDDEN = False
 SKILL_CONTROLS = [
     {"type": "enum", "name": "density", "label": "Density",
      "options": [

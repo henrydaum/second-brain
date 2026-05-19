@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "Quantize the image to N palette anchors via nearest-color i
 SKILL_KIND = "transform"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1730000000.0
+SKILL_HIDDEN = False
 
 import numpy as np
 from PIL import Image

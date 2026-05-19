@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "Water as interference: several point sources sum into a wav
 SKILL_KIND = "creation"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1779667200.0
+SKILL_HIDDEN = False
 SKILL_CONTROLS = [
     {"type": "enum", "name": "weather", "label": "Weather",
      "options": [

@@ -68,9 +68,36 @@
         <button id="shareImage" type="button">Share</button>
       </div>
       <div id="sharePanel" class="share-panel" hidden>
-        <input id="shareTitle" placeholder="Title">
-        <input id="shareArtist" placeholder="Your name">
-        <button id="shareConfirm" type="button">Share</button>
+        <div class="share-link-block">
+          <div class="share-link-row">
+            <input id="shareLink" readonly placeholder="Generating link…">
+            <button id="copyShareLink" type="button">Copy</button>
+          </div>
+          <details class="share-qr-details">
+            <summary>QR</summary>
+            <img id="shareQr" alt="QR code" width="180" height="180">
+            <a id="downloadQr" download>Download</a>
+          </details>
+        </div>
+        <hr class="share-divider">
+        <div class="share-publish">
+          <p class="share-publish-lead">Add to the Shared Gallery (optional)</p>
+          <input id="shareTitle" placeholder="Title">
+          <input id="shareArtist" placeholder="Your name">
+          <button id="shareConfirm" type="button">Publish</button>
+        </div>
+      </div>
+      <div id="linkModal" class="modal" hidden>
+        <div class="modal-card">
+          <h2>Share this canvas</h2>
+          <div class="share-link-row">
+            <input id="linkModalUrl" readonly>
+            <button id="linkModalCopy" type="button">Copy</button>
+          </div>
+          <img id="linkModalQr" alt="QR code" width="200" height="200">
+          <a id="linkModalDownload" download>Download QR</a>
+          <button class="close-btn" type="button" data-close="linkModal" aria-label="Close">×</button>
+        </div>
       </div>
       <button id="controlsToggle" class="controls-toggle" type="button" hidden>
         <span>Controls</span><span class="chev">▲</span>

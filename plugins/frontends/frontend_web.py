@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from plugins.helpers import stripe_client, web_auth
+from plugins.helpers import share_links, stripe_client, web_auth
 
 from PIL import Image
 
@@ -792,8 +792,18 @@ class WebFrontend(BaseFrontend):
         chain = list(snapshot.get("chain") or [])
         owner = self._owner_id(session_id, ip, account_id)
         dest, meta = save_to_archive(src, owner, title=title, chain=chain)
-        skill_scoring.record_event(getattr(self.runtime, "db", None), "save", chain, str(dest.resolve()))
-        return [{"type": "saved", "item": _archive_url(meta)}, {"type": "status", "content": f'Saved "{meta["title"]}" to your archive.'}]
+        db = getattr(self.runtime, "db", None)
+        skill_scoring.record_event(db, "save", chain, str(dest.resolve()))
+        events: list[dict] = [{"type": "saved", "item": _archive_url(meta)}]
+        link_event = self._mint_share_link(
+            db, kind="archive", image_path=str(dest.resolve()),
+            title=meta.get("title"), artist="you",
+            chain=chain, session_key=key, owner_id=owner,
+        )
+        if link_event:
+            events.append(link_event)
+        events.append({"type": "status", "content": f'Saved "{meta["title"]}" to your archive.'})
+        return events
 
     def archive_listing(self, session_id: str, ip: str, account_id: str, limit: int = 24, offset: int = 0) -> dict:
         owner = self._owner_id(session_id, ip, account_id)
@@ -956,14 +966,25 @@ class WebFrontend(BaseFrontend):
             lc.replace_state(key, before)
             return [{"type": "error", "content": f"Delete layer failed: {e}"}]
 
-    def share(self, session_id: str, title: str, artist: str) -> list[dict]:
+    def share(self, session_id: str, title: str, artist: str, *, ip: str = "", account_id: str = "") -> list[dict]:
         key = self.session_key(session_id)
         snapshot = canvas(key) or {}
         chain = list(snapshot.get("chain") or [])
         dest, meta = share_current(key, title, artist)
         self._sync_gallery_file(dest)
-        skill_scoring.record_event(getattr(self.runtime, "db", None), "share", chain, str(dest.resolve()))
-        return [{"type": "shared", "item": _gallery_url(meta)}, {"type": "message", "role": "assistant", "content": f'Shared "{meta["title"]}" by {meta["artist"]}.'}]
+        db = getattr(self.runtime, "db", None)
+        skill_scoring.record_event(db, "share", chain, str(dest.resolve()))
+        events: list[dict] = [{"type": "shared", "item": _gallery_url(meta)}]
+        link_event = self._mint_share_link(
+            db, kind="gallery", image_path=str(dest.resolve()),
+            title=meta.get("title"), artist=meta.get("artist"),
+            chain=chain, session_key=key,
+            owner_id=self._owner_id(session_id, ip, account_id),
+        )
+        if link_event:
+            events.append(link_event)
+        events.append({"type": "message", "role": "assistant", "content": f'Shared "{meta["title"]}" by {meta["artist"]}.'})
+        return events
 
     def gallery(self, session_id: str, limit: int = 24, offset: int = 0) -> dict:
         item = canvas(self.session_key(session_id))
@@ -976,14 +997,157 @@ class WebFrontend(BaseFrontend):
         page = all_rows[offset : offset + limit]
         return {"items": [_gallery_url(r) for r in page], "total": total}
 
-    def remix(self, session_id: str, path: str) -> list[dict]:
+    def remix(self, session_id: str, path: str = "", share_id: str = "") -> list[dict]:
+        key = self.session_key(session_id)
+        if share_id:
+            db = getattr(self.runtime, "db", None)
+            share = share_links.lookup_share(db, share_id) if db else None
+            if not share:
+                raise ValueError("That share link is invalid or has expired.")
+            p = Path(share["image_path"]).resolve()
+            if not p.is_file():
+                raise ValueError("That shared canvas is no longer available.")
+            return self._remix(key, p, share=share)
         p = Path(unquote(path)).resolve()
         if not _is_gallery_image(p):
             raise ValueError("That gallery image is not available to remix.")
-        return self._remix(self.session_key(session_id), p)
+        return self._remix(key, p)
 
-    def _remix(self, key: str, p: Path) -> list[dict]:
-        meta = read_json(p.with_suffix(".json"))
+    # --- Share links ---------------------------------------------------
+
+    def _mint_share_link(
+        self, db, *, kind: str, image_path: str,
+        title: str | None, artist: str | None,
+        chain: list, session_key: str, owner_id: str = "",
+    ) -> dict | None:
+        if db is None:
+            return None
+        state = lc.get_state(session_key) or {}
+        try:
+            sid = share_links.create_share(
+                db, kind=kind, image_path=image_path,
+                title=title, artist=artist, chain=chain,
+                palette_id=state.get("palette_id"),
+                size=int(state.get("size") or lc.DEFAULT_SIZE),
+                owner_id=owner_id or None,
+            )
+        except Exception:
+            logger.exception("create_share failed (kind=%s)", kind)
+            return None
+        base = self._base_url()
+        return {
+            "type": "share_link",
+            "share_id": sid,
+            "url": share_links.build_share_url(base, sid),
+            "qr_url": share_links.build_qr_url(base, sid),
+            "kind": kind,
+        }
+
+    def get_link(
+        self, session_id: str, ip: str, account_id: str,
+        kind: str, path: str = "", title: str = "", artist: str = "",
+    ) -> dict:
+        """Mint (or return existing) share link for the current canvas, a
+        gallery item, or an archive item."""
+        key = self.session_key(session_id)
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            raise RuntimeError("share links require the database to be available")
+        owner = self._owner_id(session_id, ip, account_id)
+        if kind == "current":
+            snapshot = canvas(key) or {}
+            src = snapshot.get("path")
+            if not src:
+                raise ValueError("Nothing to share yet — make something first.")
+            chain = list(snapshot.get("chain") or [])
+            sid = share_links.create_share(
+                db, kind="ephemeral", image_path="__placeholder__",
+                title=title or None, artist=artist or None, chain=chain,
+                palette_id=(lc.get_state(key) or {}).get("palette_id"),
+                size=int((lc.get_state(key) or {}).get("size") or lc.DEFAULT_SIZE),
+                owner_id=owner,
+            )
+            # Snapshot the live canvas under the share's own filename so it
+            # survives further edits in this session.
+            snap = share_links.snapshot_current_canvas(src, sid)
+            with db.lock:
+                db.conn.execute(
+                    "UPDATE canvas_shares SET image_path = ? WHERE share_id = ?",
+                    (str(snap.resolve()), sid),
+                )
+                db.conn.commit()
+        elif kind in ("gallery", "archive"):
+            target = Path(unquote(path)).resolve()
+            if kind == "gallery":
+                if not _is_gallery_image(target):
+                    raise ValueError("That gallery image is not available.")
+            else:
+                if not _is_archive_image(target, owner):
+                    raise ValueError("That archive entry is not available.")
+            meta = read_json(target.with_suffix(".json"))
+            chain = list(meta.get("chain") or [])
+            sid = share_links.find_or_create_for_path(
+                db, kind=kind, image_path=str(target),
+                title=meta.get("title"), artist=meta.get("artist") or ("you" if kind == "archive" else "anonymous"),
+                chain=chain,
+                palette_id=meta.get("palette_id"),
+                size=meta.get("size"),
+                owner_id=owner,
+            )
+        else:
+            raise ValueError(f"unknown link kind: {kind!r}")
+        base = self._base_url()
+        return {
+            "share_id": sid,
+            "url": share_links.build_share_url(base, sid),
+            "qr_url": share_links.build_qr_url(base, sid),
+            "kind": kind,
+        }
+
+    def share_landing_data(self, share_id: str) -> dict | None:
+        """Resolve a share_id to render the landing page."""
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return None
+        share = share_links.lookup_share(db, share_id)
+        if not share:
+            return None
+        image_path = Path(share["image_path"])
+        share["image_exists"] = image_path.is_file()
+        share["image_url"] = _file_url(image_path) if share["image_exists"] else ""
+        share_links.bump_view_count(db, share_id)
+        return share
+
+    def share_qr_png(self, share_id: str) -> bytes | None:
+        db = getattr(self.runtime, "db", None)
+        if db is None or not share_links.lookup_share(db, share_id):
+            return None
+        return share_links.generate_qr_png(share_links.build_share_url(self._base_url(), share_id))
+
+    def share_image_path(self, share_id: str) -> Path | None:
+        """Resolve the canvas image for a share_id. Authorization is the
+        share_id itself — anyone with the link sees the image."""
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return None
+        share = share_links.lookup_share(db, share_id)
+        if not share:
+            return None
+        p = Path(share["image_path"])
+        return p if p.is_file() else None
+
+    def _remix(self, key: str, p: Path, *, share: dict | None = None) -> list[dict]:
+        # Share rows carry their own chain. Sidecar JSON (gallery/archive)
+        # carries chain + title/artist. For ephemeral shares there is no
+        # sidecar — fall back to share.chain and synth a meta dict.
+        if share is not None:
+            meta = {
+                "title": share.get("title") or "shared canvas",
+                "artist": share.get("artist") or "anonymous",
+                "chain": list(share.get("chain") or []),
+            }
+        else:
+            meta = read_json(p.with_suffix(".json"))
         reset_canvas(key)
         source_chain = list(meta.get("chain") or [])
         chain_restored = False
@@ -1118,6 +1282,33 @@ class _Handler(BaseHTTPRequestHandler):
             except (TypeError, ValueError): offset = 0
             res = self.server.frontend.archive_listing(sid, self.client_address[0], self._cookie_uid(), limit=limit, offset=offset)
             return self._json({"ok": True, **res})
+        if path.startswith("/share/"):
+            tail = path[len("/share/"):]
+            share_id, _, sub = tail.partition("/")
+            if not share_links.is_valid_share_id(share_id):
+                return self.send_error(404)
+            if sub == "qr.png":
+                raw = self.server.frontend.share_qr_png(share_id)
+                if raw is None:
+                    return self.send_error(404)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            if sub == "image.png":
+                image_path = self.server.frontend.share_image_path(share_id)
+                if image_path is None:
+                    return self.send_error(404)
+                return self._raw_file(image_path, "image/png")
+            if sub == "":
+                share = self.server.frontend.share_landing_data(share_id)
+                if share is None:
+                    return self._html(_share_missing_html(share_id), 404)
+                return self._html(_share_landing_html(share, self.server.frontend._base_url()))
+            return self.send_error(404)
         if path == "/api/account":
             qs = parse_qs(parsed.query)
             sid = str(qs.get("session_id", ["demo"])[0])[:80]
@@ -1196,9 +1387,20 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path == "/api/approval":
                 return self._json({"ok": True, "events": self.server.frontend.approve(sid, bool(body.get("value")))})
             if self.path == "/api/share":
-                return self._json({"ok": True, "events": self.server.frontend.share(sid, str(body.get("title") or "untitled"), str(body.get("artist") or "anonymous"))})
+                return self._json({"ok": True, "events": self.server.frontend.share(
+                    sid, str(body.get("title") or "untitled"), str(body.get("artist") or "anonymous"),
+                    ip=self.client_address[0], account_id=self._cookie_uid())})
             if self.path == "/api/remix":
-                return self._json({"ok": True, "events": self.server.frontend.remix(sid, str(body.get("path") or ""))})
+                return self._json({"ok": True, "events": self.server.frontend.remix(
+                    sid, path=str(body.get("path") or ""), share_id=str(body.get("share_id") or ""))})
+            if self.path == "/api/get_link":
+                return self._json({"ok": True, **self.server.frontend.get_link(
+                    sid, self.client_address[0], self._cookie_uid(),
+                    kind=str(body.get("kind") or ""),
+                    path=str(body.get("path") or ""),
+                    title=str(body.get("title") or ""),
+                    artist=str(body.get("artist") or ""),
+                )})
             if self.path == "/api/save":
                 return self._json({"ok": True, "events": self.server.frontend.save_canvas(sid, self.client_address[0], self._cookie_uid(), str(body.get("title") or ""))})
             if self.path == "/api/archive_remix":
@@ -1453,6 +1655,81 @@ def _coerce_control_value(spec: dict, value):
 
 def _gallery_url(row: dict) -> dict:
     return {**row, "url": _file_url(Path(row["path"]))}
+
+
+def _share_landing_html(share: dict, base_url: str) -> str:
+    """Minimal standalone landing page for /share/{id}. Includes OG tags so
+    link unfurls in chat apps preview the canvas."""
+    import html as _html
+    sid = share["share_id"]
+    title = share.get("title") or "Untitled"
+    artist = share.get("artist") or "anonymous"
+    url = share_links.build_share_url(base_url, sid)
+    image_exists = share.get("image_exists")
+    image_url = f"/share/{sid}/image.png" if image_exists else ""
+    og_image = f"{base_url.rstrip('/')}{image_url}" if image_url else ""
+    page_title = f"{title} — Second Brain"
+    body_class = "ok" if image_exists else "missing"
+    image_block = (
+        f'<img src="{_html.escape(image_url)}" alt="{_html.escape(title)}">'
+        if image_exists else
+        '<div class="missing-art">This canvas\'s image is no longer on disk, but the chain that built it is preserved. Click "Open in Second Brain" to replay it.</div>'
+    )
+    qr_url = share_links.build_qr_url(base_url, sid)
+    open_app_href = f"/?share={_html.escape(sid)}"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{_html.escape(page_title)}</title>
+  <meta property="og:title" content="{_html.escape(title)}">
+  <meta property="og:description" content="A canvas by {_html.escape(artist)} on Second Brain.">
+  {f'<meta property="og:image" content="{_html.escape(og_image)}">' if og_image else ''}
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="{_html.escape(url)}">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/style.css?v=9">
+</head>
+<body class="share-landing {body_class}">
+  <main class="share-landing-shell">
+    <header class="share-landing-head">
+      <a href="/" class="share-landing-home">← Second Brain</a>
+    </header>
+    <section class="share-landing-art">
+      {image_block}
+    </section>
+    <section class="share-landing-meta">
+      <h1>{_html.escape(title)}</h1>
+      <p class="share-landing-artist">by {_html.escape(artist)}</p>
+      <div class="share-landing-actions">
+        <a class="primary-btn" href="{open_app_href}">Open in Second Brain</a>
+        <button type="button" class="copy-link-btn" data-copy="{_html.escape(url)}">Copy link</button>
+      </div>
+      <details class="share-landing-qr">
+        <summary>Show QR</summary>
+        <img src="{_html.escape(qr_url)}" alt="QR code" width="220" height="220">
+        <a href="{_html.escape(qr_url)}" download="second-brain-{_html.escape(sid)}.png">Download QR</a>
+      </details>
+    </section>
+  </main>
+  <script>
+    document.querySelectorAll(".copy-link-btn").forEach(btn => {{
+      btn.addEventListener("click", async () => {{
+        try {{ await navigator.clipboard.writeText(btn.dataset.copy); btn.textContent = "Copied!"; setTimeout(() => btn.textContent = "Copy link", 1400); }}
+        catch (e) {{ btn.textContent = "Press Ctrl+C"; }}
+      }});
+    }});
+  </script>
+</body>
+</html>"""
+
+
+def _share_missing_html(share_id: str) -> str:
+    import html as _html
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Link not found</title><link rel="stylesheet" href="/style.css?v=9"></head>
+<body class="share-landing missing"><main class="share-landing-shell"><section class="share-landing-meta"><h1>Link not found</h1><p>No canvas exists for <code>{_html.escape(share_id)}</code>. It may have been removed.</p><p><a href="/">← Back to Second Brain</a></p></section></main></body></html>"""
 
 
 def _int(value, default: int) -> int:

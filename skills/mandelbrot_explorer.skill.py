@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "A guided tour of the Mandelbrot set's most famous landmarks
 SKILL_KIND = "creation"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1730000000.0
+SKILL_HIDDEN = False
 SKILL_CONTROLS = [
     {"type": "enum", "name": "spot", "label": "Spot",
      "options": [

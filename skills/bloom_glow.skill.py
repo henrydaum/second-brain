@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "Highlight bloom: extract bright pixels, blur them, screen-b
 SKILL_KIND = "transform"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1730000000.0
+SKILL_HIDDEN = False
 
 from PIL import Image, ImageChops, ImageFilter, ImageOps
 

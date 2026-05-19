@@ -1,4 +1,4 @@
-"""delete_skill: remove an owned canvas skill."""
+"""delete_skill: hide an owned canvas skill from discovery (soft-delete)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ logger = logging.getLogger("SkillTools")
 
 class DeleteSkill(BaseTool):
     name = "delete_skill"
-    description = "Delete a canvas skill you own. Skills owned by another frontend cannot be deleted."
+    description = "Hide a canvas skill from search results. The skill file stays on disk so that any shared canvas that uses it can still be replayed — links never break. Skills owned by another frontend cannot be hidden."
     max_calls = 2
     parameters = {"type": "object", "properties": {"slug": {"type": "string"}}, "required": ["slug"]}
 
@@ -20,12 +20,8 @@ class DeleteSkill(BaseTool):
         slug = str(kwargs.get("slug") or "")
         try:
             skill = skill_store.read_skill(slug)
-            deleted = skill_store.delete_skill(slug, owner=str(getattr(context, "session_key", "") or "local"))
-            if deleted and skill and context.orchestrator:
-                context.orchestrator.on_file_deleted(skill.path)
-            if deleted and skill and context.db:
-                context.db.remove_file(skill.path)
-            return ToolResult(data={"deleted": deleted}, llm_summary=f"Deleted skill '{slug}'." if deleted else f"No skill named '{slug}' exists.")
+            hidden = skill_store.delete_skill(slug, owner=str(getattr(context, "session_key", "") or "local"))
+            return ToolResult(data={"hidden": hidden}, llm_summary=f"Hid skill '{slug}' (file kept for link replay)." if hidden else f"No skill named '{slug}' exists.")
         except Exception as e:
             logger.exception("delete_skill failed: slug=%r", slug)
             return ToolResult.failed(str(e))

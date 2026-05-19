@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "Particles advected through an fbm-driven flow field, leavin
 SKILL_KIND = "creation"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1779667200.0
+SKILL_HIDDEN = False
 SKILL_CONTROLS = [
     {"type": "enum", "name": "swirl", "label": "Swirl",
      "options": [

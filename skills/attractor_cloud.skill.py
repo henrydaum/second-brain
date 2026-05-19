@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "Strange-attractor point cloud (de Jong or Clifford) accumul
 SKILL_KIND = "creation"
 SKILL_OWNER = "web:0e0c7c0c-92af-46ef-bb48-69154d2c9f44"
 SKILL_CREATED_AT = 1779071212.705876
+SKILL_HIDDEN = False
 SKILL_CONTROLS = [{'type': 'enum', 'name': 'kind', 'label': 'Attractor Type', 'options': [{'value': 'de_jong', 'label': 'de Jong'}, {'value': 'clifford', 'label': 'Clifford'}], 'default': 'de_jong'}, {'type': 'slider', 'name': 'density_boost', 'label': 'Density', 'min': 0.5, 'max': 3.0, 'step': 0.1, 'default': 1.0}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
 
 # Attractor Cloud (creation)

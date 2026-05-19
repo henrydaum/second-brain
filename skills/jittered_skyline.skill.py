@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "A city as silhouettes of varying-height rectangles on a jit
 SKILL_KIND = "creation"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1779667200.0
+SKILL_HIDDEN = False
 SKILL_CONTROLS = [
     {"type": "enum", "name": "time", "label": "Time",
      "options": [

@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "Deterministic per-pixel noise overlay seeded from canvas.se
 SKILL_KIND = "transform"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1730000000.0
+SKILL_HIDDEN = False
 
 import numpy as np
 from PIL import Image

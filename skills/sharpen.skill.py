@@ -3,6 +3,7 @@ SKILL_DESCRIPTION = "Crisp up edge detail with an unsharp mask. Good final-pass 
 SKILL_KIND = "transform"
 SKILL_OWNER = "library"
 SKILL_CREATED_AT = 1730000000.0
+SKILL_HIDDEN = False
 
 from PIL import ImageFilter
 
