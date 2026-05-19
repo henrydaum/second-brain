@@ -1702,7 +1702,7 @@ def _share_landing_html(share: dict, base_url: str) -> str:
   <meta property="og:type" content="article">
   <meta property="og:url" content="{_html.escape(url)}">
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/style.css?v=9">
+  <link rel="stylesheet" href="/style.css?v=11">
 </head>
 <body class="share-landing {body_class}">
   <main class="share-landing-shell">
@@ -1741,7 +1741,7 @@ def _share_landing_html(share: dict, base_url: str) -> str:
 def _share_missing_html(share_id: str) -> str:
     import html as _html
     return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Link not found</title><link rel="stylesheet" href="/style.css?v=9"></head>
+<html lang="en"><head><meta charset="utf-8"><title>Link not found</title><link rel="stylesheet" href="/style.css?v=11"></head>
 <body class="share-landing missing"><main class="share-landing-shell"><section class="share-landing-meta"><h1>Link not found</h1><p>No canvas exists for <code>{_html.escape(share_id)}</code>. It may have been removed.</p><p><a href="/">← Back to Second Brain</a></p></section></main></body></html>"""
 
 

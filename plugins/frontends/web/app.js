@@ -27,6 +27,8 @@ const shareLinkInput = document.querySelector("#shareLink");
 const shareQrImg = document.querySelector("#shareQr");
 const shareQrDownload = document.querySelector("#downloadQr");
 const copyShareLinkBtn = document.querySelector("#copyShareLink");
+const toggleShareQrBtn = document.querySelector("#toggleShareQr");
+const shareQrWrap = document.querySelector("#shareQrWrap");
 const linkModal = document.querySelector("#linkModal");
 const linkModalUrl = document.querySelector("#linkModalUrl");
 const linkModalQr = document.querySelector("#linkModalQr");
@@ -450,7 +452,8 @@ async function loadGalleryFor(kind, page = 1) {
   const r = await get(`${cfg.url}?limit=${GALLERY_PAGE}&offset=${offset}`);
   const items = Array.isArray(r.items) ? r.items : (Array.isArray(r) ? r : []);
   const total = typeof r.total === "number" ? r.total : items.length + offset;
-  cfg.grid.innerHTML = items.map(x => `<article class="gallery-card"><img src="${x.url}" alt=""><div><strong>${esc(x.title)}</strong><small>${esc(x.artist)}${x.score ? ` · ${(x.score*100).toFixed(0)}% similar` : ""}</small><div class="gallery-card-actions"><button data-kind="${kind}" data-path="${esc(x.path)}" data-action="remix">${cfg.action}</button><button class="secondary" data-kind="${kind}" data-path="${esc(x.path)}" data-action="link">Get link</button></div></div></article>`).join("") || `<article class='assistant'>${cfg.empty}</article>`;
+  const shareIcon = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><line x1="8.1" y1="11" x2="15.9" y2="7.1"/><line x1="8.1" y1="13" x2="15.9" y2="16.9"/></svg>`;
+  cfg.grid.innerHTML = items.map(x => `<article class="gallery-card"><img src="${x.url}" alt=""><div><strong>${esc(x.title)}</strong><small>${esc(x.artist)}${x.score ? ` · ${(x.score*100).toFixed(0)}% similar` : ""}</small><div class="gallery-card-actions"><button data-kind="${kind}" data-path="${esc(x.path)}" data-action="remix">${cfg.action}</button><button class="gc-share-btn" data-kind="${kind}" data-path="${esc(x.path)}" data-action="link" title="Get share link" aria-label="Get share link">${shareIcon}</button></div></div></article>`).join("") || `<article class='assistant'>${cfg.empty}</article>`;
   renderPaginatorFor(kind, total);
 }
 function loadGallery(page = 1) { return loadGalleryFor("shared", page); }
@@ -723,32 +726,39 @@ saveBtn.addEventListener("click", async () => {
 });
 function setShareLink(url, qrUrl) {
   if (shareLinkInput) shareLinkInput.value = url || "";
-  if (shareQrImg && qrUrl) shareQrImg.src = qrUrl;
-  if (shareQrDownload && qrUrl) shareQrDownload.href = qrUrl;
+  if (qrUrl) {
+    if (shareQrImg) shareQrImg.src = qrUrl;
+    if (shareQrDownload) shareQrDownload.href = qrUrl;
+  }
 }
 async function fetchCurrentShareLink() {
-  if (!showcase.classList.contains("has-image")) return;
-  setShareLink("Generating link…", "");
+  setShareLink("", "");
   try {
     const r = await post("/api/get_link", {kind: "current"});
-    if (r && r.ok) setShareLink(r.url, r.qr_url);
-    else setShareLink("Could not generate link", "");
-  } catch (err) { setShareLink("Could not generate link", ""); }
+    if (r && r.ok && r.url) setShareLink(r.url, r.qr_url);
+    else shareLinkInput.value = (r && r.error) || "Nothing to share yet — make something first.";
+  } catch (err) { shareLinkInput.value = "Could not generate link."; }
 }
 async function copyToClipboard(text, btn) {
-  if (!text) return;
+  if (!text || /^Nothing to share|^Could not/.test(text)) return;
   try { await navigator.clipboard.writeText(text); }
   catch { try { const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); } catch {} }
-  if (btn) { const old = btn.textContent; btn.textContent = "Copied!"; setTimeout(() => btn.textContent = old, 1400); }
+  if (btn) {
+    btn.classList.add("copied");
+    setTimeout(() => btn.classList.remove("copied"), 1200);
+  }
 }
 shareBtn.addEventListener("click", () => {
   const opening = sharePanel.hidden;
   sharePanel.hidden = !sharePanel.hidden;
-  shareTitle.value ||= "untitled";
-  shareArtist.value ||= "anonymous";
   if (opening) fetchCurrentShareLink();
 });
 copyShareLinkBtn?.addEventListener("click", () => copyToClipboard(shareLinkInput.value, copyShareLinkBtn));
+toggleShareQrBtn?.addEventListener("click", () => {
+  const showing = shareQrWrap.hidden;
+  shareQrWrap.hidden = !showing;
+  toggleShareQrBtn.setAttribute("aria-pressed", String(showing));
+});
 document.querySelector("#shareConfirm").addEventListener("click", async () => render((await post("/api/share", {title:shareTitle.value, artist:shareArtist.value})).events));
 
 function openLinkModal(url, qrUrl, shareId) {

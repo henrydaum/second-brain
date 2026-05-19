@@ -84,26 +84,36 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .canvas-actions { display: none; position: absolute; left: 22px; top: 22px; z-index: 2; gap: 8px; }
 .showcase.has-image .canvas-actions { display: flex; }
 .canvas-actions a, .canvas-actions button { font-weight: 800; backdrop-filter: blur(8px); }
-.share-panel { position: absolute; left: 22px; top: 72px; z-index: 3; display: grid; gap: 10px; width: min(320px, calc(100% - 44px)); padding: 14px; border: 1px solid rgba(255,255,255,.24); background: rgba(5,7,12,.86); backdrop-filter: blur(16px); }
+.share-panel { position: absolute; left: 22px; top: 72px; z-index: 3; display: grid; gap: 10px; width: min(320px, calc(100% - 44px)); padding: 14px; border: 1px solid rgba(255,255,255,.24); background: rgba(5,7,12,.92); backdrop-filter: blur(16px); }
 .share-panel[hidden] { display: none; }
-.share-panel input { height: 38px; min-width: 0; border: 1px solid var(--line); background: #10141e; color: var(--text); padding: 0 10px; }
-.share-link-block { display: grid; gap: 8px; }
-.share-link-row { display: flex; gap: 6px; }
-.share-link-row input { flex: 1; font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12px; }
-.share-link-row button { padding: 0 12px; }
-.share-qr-details summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 4px 0; user-select: none; }
-.share-qr-details img { display: block; margin: 8px auto 6px; background: white; padding: 6px; }
-.share-qr-details a { display: inline-block; font-size: 12px; color: var(--muted); text-decoration: underline; }
-.share-divider { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
-.share-publish { display: grid; gap: 8px; }
-.share-publish-lead { font-size: 12px; color: var(--muted); margin: 0; }
-.gallery-card-actions { display: flex; gap: 6px; }
-.gallery-card-actions button { flex: 1; }
-.gallery-card-actions button.secondary { background: transparent; }
-#linkModal .modal-card { max-width: 360px; display: grid; gap: 12px; place-items: center; text-align: center; }
-#linkModal .share-link-row { width: 100%; }
-#linkModal img { background: white; padding: 8px; }
-#linkModal a { color: var(--muted); font-size: 13px; text-decoration: underline; }
+.share-panel input { height: 34px; min-width: 0; border: 1px solid var(--line); background: #10141e; color: var(--text); padding: 0 10px; box-sizing: border-box; }
+.share-panel .sp-link { display: flex; gap: 6px; align-items: stretch; }
+.share-panel .sp-link input { flex: 1 1 auto; min-width: 0; width: 100%; font-family: ui-monospace, "Cascadia Code", "Consolas", monospace; font-size: 11.5px; letter-spacing: -.01em; }
+.share-panel .sp-icon-btn, .link-modal-card .sp-icon-btn { flex: 0 0 auto; width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); background: #171f2d; color: var(--text); cursor: pointer; transition: border-color 160ms ease, color 160ms ease; }
+.share-panel .sp-icon-btn:hover, .link-modal-card .sp-icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+.share-panel .sp-icon-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.share-panel .sp-icon-btn.copied { border-color: var(--green); color: var(--green); }
+.share-panel .sp-icon-btn svg { display: block; }
+.share-panel .sp-qr { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px; background: #fff; border: 1px solid var(--line); }
+.share-panel .sp-qr[hidden] { display: none; }
+.share-panel .sp-qr img { width: 168px; height: 168px; display: block; image-rendering: pixelated; }
+.share-panel .sp-qr a { color: #333; font-size: 11px; text-decoration: underline; }
+.share-panel .sp-divider { border: 0; border-top: 1px solid var(--line); margin: 2px 0; }
+.share-panel .sp-publish { display: grid; gap: 8px; }
+.share-panel .sp-publish-lead { font-size: 10.5px; color: var(--muted); margin: 0; text-transform: uppercase; letter-spacing: .08em; }
+.share-panel .sp-publish-btn { font-weight: 700; height: 36px; }
+.gallery-card-actions { display: flex; gap: 6px; align-items: stretch; }
+.gallery-card-actions button { height: 34px; }
+.gallery-card-actions button[data-action="remix"] { flex: 1 1 auto; }
+.gallery-card .gc-share-btn { flex: 0 0 auto; width: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
+.gallery-card .gc-share-btn:hover { border-color: var(--accent-2); color: var(--accent-2); }
+.gallery-card .gc-share-btn.copied { border-color: var(--green); color: var(--green); }
+.gallery-card .gc-share-btn svg { display: block; }
+#linkModal .modal-card.link-modal-card { max-width: 320px; display: grid; gap: 14px; place-items: center; text-align: center; }
+#linkModal .link-modal-card .sp-link { width: 100%; display: flex; gap: 6px; }
+#linkModal .link-modal-card input { flex: 1 1 auto; min-width: 0; height: 34px; padding: 0 10px; background: #10141e; border: 1px solid var(--line); color: var(--text); font-family: ui-monospace, monospace; font-size: 11.5px; }
+#linkModal .link-modal-card img { width: 200px; height: 200px; background: #fff; padding: 8px; image-rendering: pixelated; }
+#linkModal .link-modal-card a { color: var(--muted); font-size: 12px; text-decoration: underline; }
 /* ---- /share/{id} landing page ---- */
 body.share-landing { background: var(--bg); color: var(--text); margin: 0; min-height: 100vh; font-family: inherit; }
 .share-landing-shell { max-width: 880px; margin: 0 auto; padding: 32px 24px 64px; display: grid; gap: 24px; }
