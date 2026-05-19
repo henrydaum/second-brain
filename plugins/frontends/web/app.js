@@ -200,7 +200,7 @@ function setOutOfMessages(acc) {
   const unlimited = acc?.tier === "unlimited";
   const remaining = acc?.messages_remaining;
   const out = !unlimited && remaining === 0;
-  outOfMessages.hidden = !out;
+  outOfMessages.style.display = out ? "flex" : "none";
   if (sendBtn) sendBtn.disabled = out && !agentBusy;
   if (chatInput) {
     chatInput.disabled = out;
@@ -250,7 +250,7 @@ async function refreshAccount() {
 function openPaywall(ev) {
   // Server rejected mid-flight (e.g. race with another tab). Force the overlay,
   // assuming free-tier exhaustion — refreshAccount() will reconcile the exact state.
-  outOfMessages.hidden = false;
+  outOfMessages.style.display = "flex";
   oomBody.textContent = ev?.message || "Visit your account to add more.";
   if (sendBtn) sendBtn.disabled = !agentBusy;
   if (chatInput) { chatInput.disabled = true; chatInput.placeholder = "Out of Messages"; }
