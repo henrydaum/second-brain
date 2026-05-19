@@ -18,6 +18,8 @@ from typing import Any
 
 from paths import DATA_DIR
 from plugins.helpers.palettes import DEFAULT_PALETTE_ID, palette_exists
+from events.event_bus import bus
+from events.event_channels import CANVAS_COMMITTED
 
 CANVAS_ROOT = DATA_DIR / "canvas"
 STATE_PATH = CANVAS_ROOT / "state.json"
@@ -110,7 +112,13 @@ def commit_image(session_key: str, pil_image, op: str, chain_entry: dict | None 
         _push_history(entry, op)
         store[session_key] = entry
         _write_state(store)
-        return entry
+    bus.emit(CANVAS_COMMITTED, {
+        "session_key": session_key,
+        "image_path": entry["image_path"],
+        "chain": list(entry.get("last_chain") or []),
+        "op": op,
+    })
+    return entry
 
 
 def set_palette(session_key: str, palette_id: str) -> dict:
@@ -254,6 +262,12 @@ def reset(session_key: str) -> None:
         d = COMPOSITE_DIR / _slug(session_key)
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
+    bus.emit(CANVAS_COMMITTED, {
+        "session_key": session_key,
+        "image_path": None,
+        "chain": [],
+        "op": "reset",
+    })
 
 
 def reset_canvas(session_key: str) -> None:

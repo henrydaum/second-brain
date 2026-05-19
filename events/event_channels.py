@@ -224,6 +224,21 @@ Payload:
     message:     str"""
 
 
+# ── Canvas ─────────────────────────────────────────────────────────
+
+CANVAS_COMMITTED = "canvas_committed"
+"""The canvas state for a session changed and should be re-rendered. Fires
+on skill execution, chain edits that replay through commit_image, and
+resets. Lets any frontend (web, REPL, Telegram, future) react without a
+direct dependency on layered_canvas.
+
+Payload:
+    session_key: str
+    image_path:  str | None    # absolute path to the new composite, or None on reset
+    chain:       list[dict]    # current replay chain (may be empty)
+    op:          str           # short tag, e.g. "skill:vogel_bloom", "manage_layers:delete:1", "reset" """
+
+
 # ── Reserved (not yet emitted) ─────────────────────────────────────
 # Documented here so future work has an obvious home instead of inventing
 # new strings. Add emissions/subscriptions as needs arise.

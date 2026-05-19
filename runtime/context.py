@@ -52,6 +52,11 @@ class SecondBrainContext:
     user_initiated: bool = False # Explicit user command, not an autonomous agent call.
     current_tool_name: str | None = None
     approval_denial_reason: str = ""
+    build_art_kit: Any = None    # callable(palette) -> SimpleNamespace of art helpers
+                                 # (palette_color, vogel_spiral, fbm, voronoi_nearest,
+                                 # flow_field, lerp, smoothstep, oklch_to_rgb, ...).
+                                 # Lets parent-process tools/tasks reuse the same
+                                 # primitives skills consume in the sandbox.
 
 
 def build_context(db, config: dict, services: dict, call_tool=None,
@@ -117,6 +122,8 @@ def build_context(db, config: dict, services: dict, call_tool=None,
                 return False
             return req.approved
 
+    from plugins.skills.helpers.art_kit import build_namespace as _build_art_kit
+
     ctx = SecondBrainContext(
         db=db,
         config=config,
@@ -133,5 +140,6 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         session_key=session_key,
         user_initiated=user_initiated,
         current_tool_name=current_tool_name,
+        build_art_kit=_build_art_kit,
     )
     return ctx
