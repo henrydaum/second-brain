@@ -135,11 +135,12 @@ body.share-landing { background: var(--bg); color: var(--text); margin: 0; min-h
 body.share-landing.missing .share-landing-meta { text-align: center; }
 
 /* ---- Controls drawer ---- */
-.controls-toggle { position: absolute; right: 22px; bottom: 22px; z-index: 4; height: 36px; padding: 0 14px; border: 1px solid rgba(255,255,255,.28); background: rgba(5,7,12,.78); backdrop-filter: blur(10px); color: var(--text); font-weight: 700; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: border-color 200ms ease, color 200ms ease; }
+.controls-toggle { position: absolute; right: 22px; bottom: 22px; z-index: 4; width: 36px; height: 36px; padding: 0; border: 1px solid rgba(255,255,255,.28); background: rgba(5,7,12,.78); backdrop-filter: blur(10px); color: var(--text); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: border-color 200ms ease, color 200ms ease; }
 .controls-toggle[hidden] { display: none; }
 .controls-toggle:hover { border-color: var(--accent); color: var(--accent); }
-.controls-toggle .chev { transition: transform 200ms ease; font-size: 10px; }
-.controls-toggle.open .chev { transform: rotate(180deg); }
+.controls-toggle svg { transition: transform 300ms ease, color 200ms ease; }
+.controls-toggle.open { color: var(--accent); border-color: var(--accent); }
+.controls-toggle.open svg { transform: rotate(60deg); }
 
 .controls-drawer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; max-height: 60%; display: flex; flex-direction: column; background: rgba(5,7,12,.88); backdrop-filter: blur(18px); border-top: 1px solid rgba(255,255,255,.18); transform: translateY(100%); transition: transform 280ms cubic-bezier(.2,.8,.2,1); }
 .controls-drawer.open { transform: translateY(0); }
@@ -276,15 +277,15 @@ body.account-body { background:
 .delete-card h2 { font-size: 16px; margin-bottom: 8px; letter-spacing: 0; color: var(--text); font-weight: 600; }
 .delete-card p { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
 .delete-card form { display: flex; flex-direction: column; gap: 10px; }
-.delete-card input { height: 40px; padding: 0 12px; background: #0b0d13; border: 1px solid var(--line); color: var(--text); }
-.delete-card input:focus { outline: none; border-color: var(--accent); }
+.delete-card input, #promoCard input { height: 40px; padding: 0 12px; background: #0b0d13; border: 1px solid var(--line); color: var(--text); }
+.delete-card input:focus, #promoCard input:focus { outline: none; border-color: var(--accent); }
 .delete-btn { height: 38px; background: transparent; color: var(--muted); border: 1px solid var(--line); cursor: pointer; font-weight: 600; transition: border-color 200ms ease, color 200ms ease; }
 .delete-btn:hover:not(:disabled) { border-color: var(--muted); color: var(--text); }
 .delete-btn:disabled { opacity: .5; cursor: default; }
 
 /* Promo card single-row form */
 #promoCard form { display: flex; flex-direction: row; gap: 10px; align-items: stretch; margin-top: 12px; }
-#promoCard input { flex: 1; height: 42px; }
+#promoCard input { flex: 1; }
 #promoCard button { flex: 0 0 auto; height: 42px; padding: 0 18px; background: transparent; color: var(--text); border: 1px solid var(--line); font-weight: 700; cursor: pointer; transition: border-color 200ms ease, color 200ms ease; }
 #promoCard button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: transparent; filter: none; }
 
