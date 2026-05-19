@@ -195,6 +195,7 @@ function formatRefill(seconds) {
   const hours = Math.ceil(seconds / 3600);
   return `Your free messages refresh in about ${hours} hour${hours === 1 ? "" : "s"}, or visit your account to add more.`;
 }
+let oomPoll = null;
 function setOutOfMessages(acc) {
   const unlimited = acc?.tier === "unlimited";
   const remaining = acc?.messages_remaining;
@@ -203,11 +204,17 @@ function setOutOfMessages(acc) {
   if (sendBtn) sendBtn.disabled = out && !agentBusy;
   if (chatInput) {
     chatInput.disabled = out;
-    if (out) chatInput.placeholder = "Out of Messages";
-    else chatInput.placeholder = "Ask Second Brain...";
+    chatInput.placeholder = out ? "Out of Messages" : "Ask Second Brain...";
   }
-  if (out) oomBody.textContent = formatRefill(acc?.next_refill_seconds);
+  if (out) {
+    oomBody.textContent = formatRefill(acc?.next_refill_seconds);
+    if (!oomPoll) oomPoll = setInterval(refreshAccount, 20000);
+  } else if (oomPoll) {
+    clearInterval(oomPoll);
+    oomPoll = null;
+  }
 }
+window.addEventListener("pageshow", () => refreshAccount());
 
 function setAccount(acc) {
   try {
