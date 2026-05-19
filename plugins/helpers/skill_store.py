@@ -395,6 +395,25 @@ def anonymize_owner(owner_values) -> int:
     return rewritten
 
 
+def _coerce_created_at(raw, path: Path) -> float:
+    """Best-effort epoch seconds. Accepts numbers, numeric strings, ISO 8601."""
+    if raw is None or raw == "":
+        return float(path.stat().st_mtime)
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw)
+    if isinstance(raw, str):
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+        except (ValueError, AttributeError):
+            pass
+    return float(path.stat().st_mtime)
+
+
 def _load_skill_from_path(path: Path) -> Skill | None:
     try:
         source = path.read_text(encoding="utf-8")
@@ -425,7 +444,7 @@ def _load_skill_from_path(path: Path) -> Skill | None:
         kind=str(meta.get("SKILL_KIND") or "creation"),
         owner=str(meta.get("SKILL_OWNER") or ""),
         code=code_body,
-        created_at=float(meta.get("SKILL_CREATED_AT") or path.stat().st_mtime),
+        created_at=_coerce_created_at(meta.get("SKILL_CREATED_AT"), path),
         controls=controls,
         hidden=bool(meta.get("SKILL_HIDDEN") or False),
     )
