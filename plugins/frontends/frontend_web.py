@@ -432,17 +432,29 @@ class WebFrontend(BaseFrontend):
         q = self._quota_status(db, uid, ip_hash)
         return max(0, min(q["s5_lim"] - q["s5"], q["sw_lim"] - q["sw"], q["ip5_lim"] - q["ip5"]))
 
+    def _next_refill_seconds(self, db, uid: str) -> int | None:
+        """Free tier: seconds until the oldest event in the 5h window expires (freeing one slot).
+        None if the user has no events in the window (nothing to refill)."""
+        now = time.time()
+        five_h_ago = now - 5 * 3600
+        row = db.conn.execute(
+            "SELECT MIN(ts) AS oldest FROM web_usage_events WHERE user_id = ? AND ts >= ?",
+            (uid, five_h_ago),
+        ).fetchone()
+        if not row or row["oldest"] is None:
+            return None
+        return max(0, int(row["oldest"] + 5 * 3600 - now))
+
     def _account_snapshot(self, session_id: str, ip: str, account_id: str) -> dict:
         """Single-field quota surface: `messages_remaining` is an int, or null for unlimited.
-        `messages_max` is the upper bound for ring-fill rendering (free → session 5h limit,
-        paid → credit pack size, unlimited → null). For free tier remaining is derived from
-        rolling windows; for paid it's the stored credit balance. Callers should never have
-        to branch on tier to render this."""
+        `messages_max` is the upper bound (free → session 5h limit, paid → credit pack size,
+        unlimited → null). `next_refill_seconds` is populated only for free users at 0
+        remaining so the out-of-messages UI can show a wait time."""
         db = getattr(self.runtime, "db", None)
         free_max = _int(self.config.get("web_session_5h_turn_limit"), 40)
         pack_max = _int(self.config.get("web_credit_pack_size"), 2000)
         if db is None:
-            return {"signed_in": False, "tier": "free", "messages_remaining": None, "messages_max": free_max}
+            return {"signed_in": False, "tier": "free", "messages_remaining": None, "messages_max": free_max, "next_refill_seconds": None}
         ip_hash = self._ip_hash(ip)
         with db.lock:
             row = None
@@ -453,6 +465,7 @@ class WebFrontend(BaseFrontend):
                 ).fetchone()
             if row:
                 tier = row["tier"] or "free"
+                refill: int | None = None
                 if tier == "unlimited":
                     remaining: int | None = None
                     max_val: int | None = None
@@ -462,10 +475,13 @@ class WebFrontend(BaseFrontend):
                 else:
                     remaining = self._free_tier_remaining(db, row["user_id"], ip_hash)
                     max_val = free_max
-                return {"signed_in": True, "email": row["email"], "tier": tier, "messages_remaining": remaining, "messages_max": max_val}
+                    if remaining == 0:
+                        refill = self._next_refill_seconds(db, row["user_id"])
+                return {"signed_in": True, "email": row["email"], "tier": tier, "messages_remaining": remaining, "messages_max": max_val, "next_refill_seconds": refill}
             anon_uid = self._anon_user_id(session_id, ip)
             remaining = self._free_tier_remaining(db, anon_uid, ip_hash)
-        return {"signed_in": False, "tier": "free", "messages_remaining": remaining, "messages_max": free_max}
+            refill = self._next_refill_seconds(db, anon_uid) if remaining == 0 else None
+        return {"signed_in": False, "tier": "free", "messages_remaining": remaining, "messages_max": free_max, "next_refill_seconds": refill}
 
     def account_info(self, session_id: str, ip: str, account_id: str) -> dict:
         return self._account_snapshot(session_id, ip, account_id)

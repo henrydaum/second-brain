@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Second Brain Art</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/style.css?v=4">
+  <link rel="stylesheet" href="/style.css?v=5">
 </head>
 <body>
   <main class="shell">
@@ -42,6 +42,14 @@
         <input id="chatInput" autocomplete="off" placeholder="Ask Second Brain..." />
         <button>Send</button>
       </form>
+      <div id="outOfMessages" hidden
+           style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(8,9,13,.72);backdrop-filter:blur(4px);z-index:5;padding:24px;">
+        <div style="max-width:340px;text-align:center;padding:24px 22px;border:1px solid #7f3150;background:rgba(40,15,22,.92);color:#ffd0dc;">
+          <h3 style="margin:0 0 10px;font-size:18px;color:#ffb5c8;font-weight:700;letter-spacing:.01em;">Out of messages</h3>
+          <p id="oomBody" style="margin:0 0 16px;font-size:14px;color:#ffd0dc;line-height:1.5;">Your free messages will refresh shortly.</p>
+          <a href="/account" style="display:inline-block;padding:8px 16px;border:1px solid #ffb5c8;color:#ffb5c8;text-decoration:none;font-weight:600;font-size:13px;">Open account →</a>
+        </div>
+      </div>
     </section>
     <section class="showcase">
       <div id="emptyState">
@@ -99,20 +107,6 @@
     <a href="mailto:secondbrainservice@gmail.com">Contact</a>
   </footer>
 
-  <div id="paywallModal" class="modal" hidden>
-    <div class="modal-card">
-      <h2>Out of messages</h2>
-      <p class="modal-lead">Keep going for <strong>$2.99</strong> — get <strong>2,000 messages</strong>.</p>
-      <p class="modal-sub">One-time payment. We'll send a sign-in link to your email so you can come back anytime.</p>
-      <button id="buyBtn" type="button" class="primary-btn">Buy $2.99</button>
-      <div class="modal-secondary">
-        <button id="promoLink" type="button" class="link-btn">I have a promo code</button>
-        <button id="signInFromPaywall" type="button" class="link-btn">Already paid? Sign in</button>
-      </div>
-      <button class="close-btn" type="button" data-close="paywallModal" aria-label="Close">×</button>
-    </div>
-  </div>
-
   <div id="signinModal" class="modal" hidden>
     <div class="modal-card">
       <h2>Sign in</h2>
@@ -139,7 +133,7 @@
     </div>
   </div>
 
-  <script src="/tips.js?v=4"></script>
-  <script src="/app.js?v=4"></script>
+  <script src="/tips.js?v=5"></script>
+  <script src="/app.js?v=5"></script>
 </body>
 </html>

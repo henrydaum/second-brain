@@ -167,10 +167,11 @@ const accountAvatar = document.querySelector("#accountAvatar");
 const avatarBar = document.querySelector("#avatarBar");
 const avatarSilhouette = document.querySelector("#avatarSilhouette");
 const avatarLetter = document.querySelector("#avatarLetter");
-const paywallModal = document.querySelector("#paywallModal");
+const outOfMessages = document.querySelector("#outOfMessages");
+const oomBody = document.querySelector("#oomBody");
+const chatInput = document.querySelector("#chatInput");
 const signinModal = document.querySelector("#signinModal");
 const promoModal = document.querySelector("#promoModal");
-const buyBtn = document.querySelector("#buyBtn");
 const signinForm = document.querySelector("#signinForm");
 const signinEmail = document.querySelector("#signinEmail");
 const signinStatus = document.querySelector("#signinStatus");
@@ -181,7 +182,28 @@ const promoStatus = document.querySelector("#promoStatus");
 function openModal(el) { el.hidden = false; }
 function closeModal(el) { el.hidden = true; }
 document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", () => closeModal(document.getElementById(b.dataset.close))));
-[paywallModal, signinModal, promoModal].forEach(m => m.addEventListener("click", e => { if (e.target === m) closeModal(m); }));
+[signinModal, promoModal].forEach(m => m.addEventListener("click", e => { if (e.target === m) closeModal(m); }));
+
+function formatRefill(seconds) {
+  if (seconds == null) return "Visit your account to add more.";
+  if (seconds <= 60) return "Your free messages refresh in less than a minute, or visit your account to add more.";
+  if (seconds < 3600) return `Your free messages refresh in about ${Math.ceil(seconds / 60)} minutes, or visit your account to add more.`;
+  const hours = Math.ceil(seconds / 3600);
+  return `Your free messages refresh in about ${hours} hour${hours === 1 ? "" : "s"}, or visit your account to add more.`;
+}
+function setOutOfMessages(acc) {
+  const unlimited = acc?.tier === "unlimited";
+  const remaining = acc?.messages_remaining;
+  const out = !unlimited && remaining === 0;
+  outOfMessages.hidden = !out;
+  if (sendBtn) sendBtn.disabled = out && !agentBusy;
+  if (chatInput) {
+    chatInput.disabled = out;
+    if (out) chatInput.placeholder = "Out of messages";
+    else chatInput.placeholder = "Ask Second Brain...";
+  }
+  if (out) oomBody.textContent = formatRefill(acc?.next_refill_seconds);
+}
 
 function setAccount(acc) {
   try {
@@ -205,6 +227,7 @@ function setAccount(acc) {
     avatarBar.title = tail;
     accountAvatar.title = email ? `Signed in as ${email}` : "Account";
     accountAvatar.hidden = false;
+    setOutOfMessages(acc);
   } catch (err) {
     console.warn("[account] setAccount failed:", err, acc);
   }
@@ -214,30 +237,14 @@ async function refreshAccount() {
   catch (err) { console.warn("[account] refresh failed:", err); }
 }
 function openPaywall(ev) {
-  const card = paywallModal.querySelector(".modal-card");
-  const lead = card.querySelector(".modal-lead");
-  if (ev?.price_cents && ev?.credits) {
-    lead.innerHTML = `Keep going for <strong>$${(ev.price_cents/100).toFixed(2)}</strong> — get <strong>${ev.credits.toLocaleString()} messages</strong>.`;
-  }
-  openModal(paywallModal);
+  // Server rejected mid-flight (e.g. race with another tab). Force the overlay,
+  // assuming free-tier exhaustion — refreshAccount() will reconcile the exact state.
+  outOfMessages.hidden = false;
+  oomBody.textContent = ev?.message || "Visit your account to add more.";
+  if (sendBtn) sendBtn.disabled = !agentBusy;
+  if (chatInput) { chatInput.disabled = true; chatInput.placeholder = "Out of messages"; }
+  refreshAccount();
 }
-buyBtn.addEventListener("click", async () => {
-  buyBtn.disabled = true;
-  buyBtn.textContent = "Opening Stripe…";
-  try {
-    const r = await post("/api/checkout");
-    if (r.ok && r.url) { window.location = r.url; return; }
-    buyBtn.textContent = "Buy $2.99";
-    buyBtn.disabled = false;
-    add("error", r.error || "Could not start checkout.");
-  } catch (e) {
-    buyBtn.textContent = "Buy $2.99";
-    buyBtn.disabled = false;
-    add("error", e.message);
-  }
-});
-document.querySelector("#signInFromPaywall").addEventListener("click", () => { closeModal(paywallModal); openModal(signinModal); });
-document.querySelector("#promoLink").addEventListener("click", () => { closeModal(paywallModal); openModal(promoModal); });
 signinForm.addEventListener("submit", async e => {
   e.preventDefault();
   signinStatus.hidden = true;
