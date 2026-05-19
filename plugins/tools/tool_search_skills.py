@@ -11,7 +11,7 @@ from plugins.helpers import skill_scoring, skill_store
 
 class SearchSkills(BaseTool):
     name = "search_skills"
-    description = "Search persistent canvas skills by intent. Use before creating a new drawing or transform skill."
+    description = "Find existing canvas skills by intent before writing a new one. The built-in library covers most common subjects (fractals, L-systems, attractors, flow fields, Voronoi, waves); a strong match lets you go search → execute in one shot. Always try this before create_skill."
     max_calls = 4
     parameters = {"type": "object", "properties": {"query": {"type": "string"}, "top_k": {"type": "integer", "default": 5}, "kind": {"type": "string", "enum": ["creation", "transform"]}}, "required": ["query"]}
 

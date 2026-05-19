@@ -13,7 +13,7 @@ logger = logging.getLogger("SkillTools")
 
 class UpdateSkill(BaseTool):
     name = "update_skill"
-    description = "Update a canvas skill you own. Everyone can execute skills, but only the owner can edit them."
+    description = "Edit a canvas skill you own (matches your session_key). Use to fix a bug or iterate on an existing variant. Anyone can execute any skill, but you cannot edit one owned by another session — clone-and-adjust via read_skill + create_skill if you need to fork."
     max_calls = 3
     parameters = {"type": "object", "properties": {"slug": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "code": {"type": "string"}, "controls": {"type": "array", "items": {"type": "object"}, "description": "Replace the skill's controls list (same shape as create_skill). Omit to leave unchanged."}}, "required": ["slug"]}
 

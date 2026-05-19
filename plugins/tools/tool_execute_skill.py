@@ -11,7 +11,7 @@ from PIL import Image
 
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.helpers.palettes import get_palette
-from plugins.helpers import skill_scoring
+from plugins.helpers import skill_error_log, skill_scoring
 from plugins.helpers.skill_runner import SkillRunError, default_controls, make_chain_entry, resolve_entry, run_skill
 from plugins.helpers.skill_store import read_skill
 from plugins.tools.helpers import layered_canvas as lc
@@ -21,7 +21,7 @@ logger = logging.getLogger("SkillTools")
 
 class ExecuteSkill(BaseTool):
     name = "execute_skill"
-    description = "Execute a creation or transform skill on the canvas. Creations start a new chain; transforms require an existing canvas."
+    description = "Run a stored skill on the canvas by slug. Creations start a new chain from a blank palette-background image; transforms read the current canvas and require something already on it. Chain cap is 4 layers (1 creation + up to 3 transforms). Errors include a hint line — read it and adjust before retrying."
     max_calls = 6
     parameters = {"type": "object", "properties": {"slug": {"type": "string"}, "params": {"type": "object", "default": {}}}, "required": ["slug"]}
 
@@ -58,4 +58,6 @@ class ExecuteSkill(BaseTool):
             return ToolResult(data={"canvas": lc.canvas(session_key), "chain": new_state.get("last_chain")}, llm_summary=summary, attachment_paths=[final])
         except (SkillRunError, Exception) as e:
             logger.exception("execute_skill failed: slug=%s session=%s params=%s", slug, session_key, params)
+            diagnostic = getattr(e, "diagnostic", None) or {"error_type": type(e).__name__, "message": str(e)}
+            skill_error_log.record_error(getattr(context, "db", None), slug, params, diagnostic, session_key=session_key)
             return ToolResult.failed(str(e))

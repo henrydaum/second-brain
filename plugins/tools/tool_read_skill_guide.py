@@ -18,11 +18,13 @@ _GUIDE_PATH = Path(__file__).resolve().parents[1] / "helpers" / "skill_guide.md"
 class ReadSkillGuide(BaseTool):
     name = "read_skill_guide"
     description = (
-        "Return the canvas-skill authoring guide: the skill template, the canvas/"
-        "art_kit API reference, established generative methods (Vogel spirals, "
-        "Voronoi, flow fields, L-systems), composition rules, palette discipline, "
-        "and determinism rules. Read this once per session before authoring a new "
-        "skill."
+        "Return the canvas-skill authoring guide — the taste half of the "
+        "reference. The system prompt has the formulas (fractals, L-systems, "
+        "attractors, noise) and the sandbox rules; this guide has style, "
+        "composition, palette discipline, and the chaining strategy that makes "
+        "an image feel finished. Call once per session before your first "
+        "create_skill if you need a refresher; skip if you're cloning a known "
+        "skill via read_skill."
     )
     max_calls = 2
     background_safe = True

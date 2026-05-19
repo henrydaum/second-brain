@@ -29,7 +29,14 @@ DEFAULT_TIMEOUT_S = 30.0
 
 
 class SkillRunError(RuntimeError):
-    pass
+    """Raised when a skill fails. `diagnostic` carries structured fields
+    (error_type, message, skill_lineno, skill_line, hint) when available —
+    populated from the sandbox sidecar, or built directly for validation /
+    timeout failures."""
+
+    def __init__(self, message: str, diagnostic: dict | None = None):
+        super().__init__(message)
+        self.diagnostic = diagnostic or {}
 
 
 def run_skill(
@@ -49,13 +56,24 @@ def run_skill(
     except Exception as e:
         msg = str(e)
         if "disallowed import" in msg:
+            hint = "Only math, random, colorsys, numpy, and PIL.* (Image, ImageDraw, ImageFilter, ImageOps, ImageEnhance, ImageChops, ImageColor) are importable. Remove the disallowed import."
             raise SkillRunError(
-                f"skill '{skill.slug}' failed validation: {msg}\n"
-                "  hint: Only math, random, colorsys, numpy, and PIL.* (Image, ImageDraw, ImageFilter, ImageOps, ImageEnhance, ImageChops, ImageColor) are importable. Remove the disallowed import."
+                f"skill '{skill.slug}' failed validation: {msg}\n  hint: {hint}",
+                diagnostic={"error_type": "ValidationError", "message": msg, "hint": hint},
             )
-        raise SkillRunError(f"skill '{skill.slug}' failed validation: {msg}")
+        raise SkillRunError(
+            f"skill '{skill.slug}' failed validation: {msg}",
+            diagnostic={"error_type": "ValidationError", "message": msg},
+        )
     if skill.kind == "transform" and (input_image_path is None or not Path(input_image_path).is_file()):
-        raise SkillRunError("transform skills require a current canvas image; create one first")
+        raise SkillRunError(
+            "transform skills require a current canvas image; create one first",
+            diagnostic={
+                "error_type": "TransformWithoutCanvas",
+                "message": "transform skills require a current canvas image; create one first",
+                "hint": "Run a creation skill first, then chain this transform.",
+            },
+        )
 
     output_image_path = Path(output_image_path)
     output_image_path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,7 +126,14 @@ def run_skill(
                 proc.communicate(timeout=2.0)
             except Exception:
                 pass
-            raise SkillRunError(f"skill '{skill.slug}' exceeded {timeout_s:.0f}s timeout")
+            raise SkillRunError(
+                f"skill '{skill.slug}' exceeded {timeout_s:.0f}s timeout",
+                diagnostic={
+                    "error_type": "Timeout",
+                    "message": f"exceeded {timeout_s:.0f}s timeout",
+                    "hint": "Vectorize with numpy or reduce iteration counts; per-pixel Python loops at full resolution always time out.",
+                },
+            )
     finally:
         try:
             os.unlink(job_path)
@@ -121,9 +146,17 @@ def run_skill(
         err = (stderr or b"").decode("utf-8", errors="replace").strip()
         out = (stdout or b"").decode("utf-8", errors="replace").strip()
         logger.error("Skill '%s' failed (rc=%s).\nSTDERR:\n%s\nSTDOUT:\n%s", skill.slug, proc.returncode, err or "(empty)", out or "(empty)")
-        raise SkillRunError(_format_error(skill.slug, sidecar, err, out))
+        diag = dict(sidecar) if sidecar else {"error_type": "SandboxFailure", "message": (err.splitlines()[-1] if err else (out or "unknown error"))}
+        raise SkillRunError(_format_error(skill.slug, sidecar, err, out), diagnostic=diag)
     if not output_image_path.is_file():
-        raise SkillRunError(f"skill '{skill.slug}' did not commit an image")
+        raise SkillRunError(
+            f"skill '{skill.slug}' did not commit an image",
+            diagnostic={
+                "error_type": "MissingCommit",
+                "message": "run() returned without calling canvas.commit(image)",
+                "hint": "Every code path through run() must end with canvas.commit(image).",
+            },
+        )
 
     result = {
         "slug": skill.slug,

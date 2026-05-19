@@ -19,11 +19,14 @@ logger = logging.getLogger("ManageLayers")
 class ManageLayers(BaseTool):
     name = "manage_layers"
     description = (
-        "Manage the canvas layer chain. action=delete removes a layer by index "
-        "(0 is the creation; deleting it clears the canvas). action=move reorders "
-        "a layer from from_index to to_index (layer 0 must stay a creation). "
-        "action=clear wipes the canvas. Layers are 0-indexed; use list_state on "
-        "the canvas snapshot if you forget the current order."
+        "Edit the canvas layer chain (max 4 layers: 1 creation + up to 3 "
+        "transforms). action=delete removes layer at chain_index (0 is the "
+        "creation — deleting it clears the canvas). action=move reorders from "
+        "from_index to to_index; layer 0 must stay a creation. action=clear "
+        "wipes the canvas entirely. Surviving layers are replayed end-to-end "
+        "to rebuild the image. Reach for this when the chain hits the cap and "
+        "you need to free a slot, or when a transform belongs in a different "
+        "order."
     )
     max_calls = 4
     parameters = {

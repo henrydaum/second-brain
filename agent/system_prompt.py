@@ -16,10 +16,18 @@ from runtime.agent_scope import AgentScope
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _STATIC_PROMPT_PATH = Path(__file__).with_name("system_prompt_static.md")
+_ART_ENCYCLOPEDIA_PATH = Path(__file__).with_name("generative_art_encyclopedia.md")
 
 
 def _static_prompt() -> str:
     return _STATIC_PROMPT_PATH.read_text(encoding="utf-8").strip()
+
+
+def _generative_art_encyclopedia() -> str:
+    try:
+        return _ART_ENCYCLOPEDIA_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def build_prompt_sections(
@@ -46,6 +54,7 @@ def build_prompt_sections(
         _sandbox_files() if _has_tool(r, "test_plugin") else "",
         _attachments() if _has_tool(r, "sql_query") else "",
         _database_tables(db) if _has_tool(r, "sql_query") else "",
+        _generative_art_encyclopedia() if _has_tool(r, "execute_skill") else "",
         _skill_workflow() if _has_tool(r, "execute_skill") else "",
     ]
     dynamic = [
@@ -193,7 +202,7 @@ Workflow:
 1. Call search_skills with the subject. If a strong match exists, call execute_skill.
 2. If no match, pick an algorithmic technique appropriate to the subject *before* writing code. Then call create_skill with run(canvas, **params), then execute_skill with the returned slug.
 
-Techniques available via art_kit (good-for hints):
+Techniques (good-for hints — formulas live in the encyclopedia above):
 - vogel_spiral -- flowers, sunflowers, galaxies, star fields, seed-pod patterns
 - fbm / value_noise -- clouds, terrain, atmospheres, fog, organic textures, ray fields
 - radial_falloff -- suns, moons, vignettes, centered radiant subjects
@@ -207,9 +216,7 @@ Techniques available via art_kit (good-for hints):
 
 When in doubt, prefer noise, gradients, and procedural patterns in palette tones over explicit shapes. Compose multiple techniques (e.g. fbm background + vogel foreground + radial vignette) rather than drawing literal features.
 
-Skill kinds: creation starts a new image; transform requires the current canvas and uses canvas.image. Skill code must call canvas.commit(image). Create a blank image with canvas.new(color=canvas.palette.background) or canvas.create_image(). Use canvas.palette.primary, secondary, tertiary, accent, and background instead of hard-coded colors; palette slots behave as "#RRGGBB" strings and as RGB sequences. Use canvas.size/canvas.width/canvas.height and canvas.seed for deterministic output. Allowed imports: math, random, colorsys, numpy, PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps, PIL.ImageEnhance.
-
-Iteration is normal. Before each tool call, write one short sentence in plain language telling the user what you're about to try or adjust ("first attempt rendered blank — let me try a different normalization", "the bloom was too heavy, dialing back radius"). If a skill fails or surfaces a blank-canvas warning, don't apologize or treat it as broken — say what you're changing and try again. Skill errors include a hint line — read it and act on it. Tell the user that art is iterative and they can always say what to change."""
+Before each tool call, write one short sentence in plain language telling the user what you're about to try or adjust ("first attempt rendered blank — let me try a different normalization", "the bloom was too heavy, dialing back radius"). Iteration is normal; tell the user that art is iterative and they can always say what to change."""
 
 
 def _sandbox_files() -> str:

@@ -270,6 +270,26 @@ class Database:
 		except Exception:
 			pass
 
+		# Skill execution errors — metadata only (no conversation content). The
+		# agent boots cold every session; this table is the "pain signal" record
+		# we mine offline to fold common pitfalls into the system prompt.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS skill_errors (
+				id            INTEGER PRIMARY KEY,
+				ts            REAL NOT NULL,
+				slug          TEXT NOT NULL,
+				error_type    TEXT NOT NULL,
+				message       TEXT,
+				skill_lineno  INTEGER,
+				skill_line    TEXT,
+				hint          TEXT,
+				params_json   TEXT,
+				session_key   TEXT
+			)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_errors_slug ON skill_errors(slug)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_errors_type ON skill_errors(error_type)")
+
 		# Shareable canvas links: every share/save/get-link mints a stable
 		# short id that resolves back to the canvas image + replay chain.
 		# kind='ephemeral' covers Get-link-without-publishing (image lives in

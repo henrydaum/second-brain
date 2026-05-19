@@ -12,7 +12,7 @@ logger = logging.getLogger("SkillTools")
 
 class DeleteSkill(BaseTool):
     name = "delete_skill"
-    description = "Hide a canvas skill from search results. The skill file stays on disk so that any shared canvas that uses it can still be replayed — links never break. Skills owned by another frontend cannot be hidden."
+    description = "Hide one of your skills from search and the UI. This is a soft-delete: the file stays on disk so previously shared canvases still replay correctly — links never break. You can only hide skills you own."
     max_calls = 2
     parameters = {"type": "object", "properties": {"slug": {"type": "string"}}, "required": ["slug"]}
 

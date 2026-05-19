@@ -14,8 +14,10 @@ from plugins.helpers import skill_store
 class ReadSkill(BaseTool):
     name = "read_skill"
     description = (
-        "Return the full source of a stored canvas skill by slug. Use this to "
-        "clone-and-adjust an existing skill instead of writing one from scratch."
+        "Return the full Python source of a stored canvas skill by slug. The "
+        "primary path for reuse: clone the closest hit from search_skills, "
+        "adjust what differs, and write the variant via create_skill. Almost "
+        "always cheaper and better than authoring from scratch."
     )
     max_calls = 6
     background_safe = True
