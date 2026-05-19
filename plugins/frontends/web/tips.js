@@ -1,19 +1,17 @@
 // Random tips shown in the empty chat. Edit freely — kept in their own file
 // so adding/removing tips doesn't touch app logic.
 const TIPS = [
-  "Ask for a vibe, not a thing. \"Foggy harbor at dawn\" beats \"draw a boat.\"",
-  "Skills stack. Make something, then ask to \"add bloom\" or \"warm the palette.\"",
-  "Don't like a color? Just say \"try a cooler palette\" — Second Brain will re-render.",
-  "Tap a canvas in the gallery to remix it. Your version goes on top of the chain.",
-  "Save lives in your private archive. Share posts to the public gallery.",
+  "Second Brain specializes in algorithmic art. It writes code to make images.",
+  "Skills stack. Make something, then ask to \"add bloom\" or \"sharpen the image.\"",
+  "Tap a canvas in the shared gallery or saved archive to remix it.",
   "Stuck? Try \"surprise me\" — the agent picks a direction.",
-  "Open Controls under the canvas to fine-tune without another chat turn.",
-  "Conversations are wiped when you start a new chat. Your art is kept.",
+  "Open Controls (gear icon) to fine-tune without another chat turn.",
+  "Conversations are ephemeral — your messages are cleared from the database when you start a new chat.",
   "Ask for a style: \"in the style of risograph print,\" \"like a 70s sci-fi paperback.\"",
-  "Combine ideas: \"Voronoi cells, but each one is a tiny Mandelbrot.\"", 
-  "Second Brain specializes in algorithmic art. Ask it to use geometry rather than organic shapes.",
-  "Don't like the result? Ask Second Brain to change it.",
-  "After Second Brain has made something, ask it if there is anything it would like to change about it. Very often, it will have a good idea for how to improve the image.",
+  "Combine ideas: \"Voronoi cells, but each one is a tiny whirlpool.\"", 
+  "Don't like the result? Ask Second Brain to change any part of it.",
+  "After Second Brain has made something, ask it \"How did you make this?\" to get a peek at the code.",
+  "After Second Brain has made something, ask it \"Is there anything you would change about this image?\" to get suggestions for improvement.",
   "Ask Second Brain to interview you, then make something based on your answers.",
-  "To stay in the loop, ask Second Brain to pause and ask you if it has any questions."
+  "To stay in the loop, tell Second Brain to \"Let me know if you have any questions\"."
 ];
