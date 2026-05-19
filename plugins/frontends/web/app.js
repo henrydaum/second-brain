@@ -128,7 +128,12 @@ function render(events) {
     }
     else if (ev.type === "canvas_reset") { setCanvas(null); }
     else if (ev.type === "shared") { loadGallery(1); }
-    else if (ev.type === "share_link") { setShareLink(ev.url, ev.qr_url); }
+    else if (ev.type === "share_link") {
+      setShareLink(ev.url, ev.qr_url);
+      // When Save mints a link, the share panel is usually closed — surface
+      // it in the same modal that gallery "Get link" uses so the user sees it.
+      if (sharePanel.hidden && ev.kind === "archive") openLinkModal(ev.url, ev.qr_url, ev.share_id);
+    }
     else if (ev.type === "attachment") add("assistant", `Attachment: ${ev.name}`);
     else if (ev.type === "typing") setTyping(!!ev.on);
   }

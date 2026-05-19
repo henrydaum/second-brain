@@ -760,6 +760,7 @@ class WebFrontend(BaseFrontend):
             shared_changed = 0
 
         # Delete private archive directory.
+        archive_root = str(archive_dir(account_id).resolve())
         try:
             delete_archive(account_id)
         except Exception:
@@ -770,6 +771,18 @@ class WebFrontend(BaseFrontend):
             db.conn.execute("DELETE FROM web_auth_tokens WHERE email = ?", (email,))
             db.conn.execute("DELETE FROM web_payments WHERE email = ?", (email,))
             db.conn.execute("DELETE FROM web_users WHERE account_id = ?", (account_id,))
+            # Anonymize gallery/ephemeral shares this user created so their
+            # name doesn't survive on rows we keep; archive-kind rows now
+            # point at deleted files, so drop them entirely.
+            db.conn.execute(
+                "UPDATE canvas_shares SET owner_id = NULL, artist = 'anonymous' "
+                "WHERE owner_id = ? OR (artist IS NOT NULL AND lower(artist) = ?)",
+                (account_id, email.lower()),
+            )
+            db.conn.execute(
+                "DELETE FROM canvas_shares WHERE kind = 'archive' AND image_path LIKE ?",
+                (archive_root + "%",),
+            )
             db.conn.commit()
 
         logger.info("Account deleted (skills_anonymized=%s shared_anonymized=%s)",
