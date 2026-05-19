@@ -38,9 +38,9 @@ def run(canvas, projection="xz", **_):
             dx = sigma * (y - x); dy = x * (rho - z) - y; dz = x * y - beta * z
             x += dx * dt; y += dy * dt; z += dz * dt
         return x, y, z
-    x = 1.0 + float(rng.uniform(-0.02, 0.02))
-    y = 1.0 + float(rng.uniform(-0.02, 0.02))
-    z = 1.0 + float(rng.uniform(-0.02, 0.02))
+    x = 1.0 + float(rng.uniform(-0.04, 0.04))
+    y = 1.0 + float(rng.uniform(-0.04, 0.04))
+    z = 1.0 + float(rng.uniform(-0.04, 0.04))
     x, y, z = _burn(x, y, z, 2000)
     if not all(np.isfinite([x, y, z])):
         x, y, z = _burn(1.0, 1.0, 1.0, 2000)
@@ -48,6 +48,14 @@ def run(canvas, projection="xz", **_):
     xs = np.empty(n_steps, dtype=np.float32)
     ys = np.empty(n_steps, dtype=np.float32)
     zs = np.empty(n_steps, dtype=np.float32)
+    # Burn-in 2000 steps so we drop the transient approach onto the attractor.
+    for _ in range(2000):
+        dx = sigma * (y - x)
+        dy = x * (rho - z) - y
+        dz = x * y - beta * z
+        x += dx * dt
+        y += dy * dt
+        z += dz * dt
     for i in range(n_steps):
         dx = sigma * (y - x)
         dy = x * (rho - z) - y
