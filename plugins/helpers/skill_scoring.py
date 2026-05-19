@@ -20,6 +20,24 @@ from typing import Iterable
 _KIND_FIELDS = {"share": "shares", "download": "downloads", "remix": "remixes", "save": "saves"}
 
 
+def _safe_float(v) -> float:
+    if v is None or v == "":
+        return 0.0
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _safe_int(v) -> int:
+    if v is None or v == "":
+        return 0
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _attribution(chain: list[dict]) -> list[tuple[str, str, float]]:
     """Return [(slug, chain_position, weight), ...] summing to 1.0."""
     if not chain:
@@ -116,11 +134,11 @@ def get_scores(db, slugs: Iterable[str] | None = None) -> dict[str, dict]:
                 )
             for row in cur.fetchall():
                 out[row["slug"]] = {
-                    "shares": float(row["shares"] or 0),
-                    "downloads": float(row["downloads"] or 0),
-                    "remixes": float(row["remixes"] or 0),
-                    "saves": float(row["saves"] or 0),
-                    "generations": int(row["generations"] or 0),
+                    "shares": _safe_float(row["shares"]),
+                    "downloads": _safe_float(row["downloads"]),
+                    "remixes": _safe_float(row["remixes"]),
+                    "saves": _safe_float(row["saves"]),
+                    "generations": _safe_int(row["generations"]),
                 }
         except Exception:
             return {}

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from array import array
 from math import sqrt
 
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.helpers import skill_scoring, skill_store
+
+logger = logging.getLogger("SearchSkills")
 
 
 class SearchSkills(BaseTool):
@@ -17,23 +20,35 @@ class SearchSkills(BaseTool):
 
     def run(self, context, **kwargs) -> ToolResult:
         query, kind, top_k = str(kwargs.get("query") or ""), kwargs.get("kind"), int(kwargs.get("top_k") or 5)
-        # Merge DB results (indexed by the embed_skills task) with in-memory
-        # results (covers built-in skills before the indexer has run). Dedupe by
-        # slug, keep the higher score.
-        merged: dict[str, dict] = {}
-        for row in _db_search(context, query, top_k, kind):
-            merged[row["slug"]] = row
-        for row in skill_store.search_skills(query, top_k=top_k, kind=kind, text_embedder=context.services.get("text_embedder")):
-            prev = merged.get(row["slug"])
-            if prev is None or row["score"] > prev["score"]:
+        try:
+            # Merge DB results (indexed by the embed_skills task) with in-memory
+            # results (covers built-in skills before the indexer has run). Dedupe by
+            # slug, keep the higher score.
+            merged: dict[str, dict] = {}
+            for row in _db_search(context, query, top_k, kind):
                 merged[row["slug"]] = row
-        # Boost by implicit signals — multiplier is 1.0 for zero-score skills,
-        # so the cold start is unchanged.
-        stats = skill_scoring.get_scores(getattr(context, "db", None), merged.keys())
-        for slug, row in merged.items():
-            row["cosine"] = row["score"]
-            row["score"] = row["score"] * skill_scoring.search_multiplier(stats.get(slug, {}))
-        rows = sorted(merged.values(), key=lambda r: r["score"], reverse=True)[:top_k]
+            for row in skill_store.search_skills(query, top_k=top_k, kind=kind, text_embedder=context.services.get("text_embedder")):
+                prev = merged.get(row["slug"])
+                if prev is None or row["score"] > prev["score"]:
+                    merged[row["slug"]] = row
+            # Boost by implicit signals — multiplier is 1.0 for zero-score skills,
+            # so the cold start is unchanged.
+            stats = skill_scoring.get_scores(getattr(context, "db", None), merged.keys())
+            for slug, row in merged.items():
+                try:
+                    cosine = float(row.get("score") or 0.0)
+                except (TypeError, ValueError):
+                    cosine = 0.0
+                try:
+                    mult = float(skill_scoring.search_multiplier(stats.get(slug, {})))
+                except (TypeError, ValueError):
+                    mult = 1.0
+                row["cosine"] = cosine
+                row["score"] = cosine * mult
+            rows = sorted(merged.values(), key=lambda r: r["score"], reverse=True)[:top_k]
+        except Exception as e:
+            logger.exception("search_skills failed: query=%r kind=%r top_k=%r", query, kind, top_k)
+            return ToolResult.failed(f"search failed ({type(e).__name__}: {e}). Check Second Brain logs for the full traceback.")
         return ToolResult(data=rows, llm_summary=("No matching skills found." if not rows else "Matching skills:\n" + "\n".join(f"- {r['slug']} ({r['kind']}, score {r['score']:.2f}): {r['description']}" for r in rows)))
 
 
