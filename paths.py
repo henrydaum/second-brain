@@ -32,20 +32,20 @@ SANDBOX_TASKS    = DATA_DIR / "sandbox_tasks"
 SANDBOX_SERVICES = DATA_DIR / "sandbox_services"
 SANDBOX_COMMANDS = DATA_DIR / "sandbox_commands"
 SANDBOX_FRONTENDS = DATA_DIR / "sandbox_frontends"
+SANDBOX_SKILLS   = DATA_DIR / "sandbox_skills"
+SANDBOX_SKILLS.mkdir(parents=True, exist_ok=True)
 
 # Attachment cache: files dropped in from frontends (e.g. Telegram).
 # Registered as a sync_directory by default so the Stage_2 pipeline indexes them.
 ATTACHMENT_CACHE = DATA_DIR / "attachment_cache"
 ATTACHMENT_CACHE.mkdir(parents=True, exist_ok=True)
 
-# Skills: agent-authored canvas code. Each file is one skill.
+# Legacy skill directories (pre-plugin-format `.skill.py` files). The new
+# loader does not read these; files here will not load until they are
+# migrated to the BaseSkill class form under plugins/skills/ + sandbox_skills/.
+# Kept as named constants so the migration task can find them.
 SKILLS_DIR = DATA_DIR / "skills"
-SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-
-# Baked-in skill library shipped with the repo. Sandbox slugs in SKILLS_DIR
-# override built-ins on collision so users/agent can fork-and-edit freely.
 BUILT_IN_SKILLS_DIR = ROOT_DIR / "skills"
-BUILT_IN_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def open_file(path):

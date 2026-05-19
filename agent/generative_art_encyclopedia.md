@@ -7,14 +7,17 @@ and the canvas size you're rendering into.
 
 ### §1 Sandbox rules (these are tattoos — not opinions)
 
-Every skill is a Python file with `SKILL_NAME`, `SKILL_DESCRIPTION`,
-`SKILL_KIND` ("creation" or "transform"), `SKILL_OWNER`, `SKILL_CREATED_AT`
-constants and a `run(canvas, **params)` function. The `owner` and
-`created_at` fields are filled in by `create_skill` automatically.
+Every skill is a Python file containing a `class <Name>(BaseSkill):` that
+declares its metadata as class attributes (`name`, `description`,
+`kind` — "creation" or "transform" — `owner`, `created_at`, `controls`,
+`hidden`) and defines `def run(self, canvas, **params)`. The `create_skill`
+tool wraps the module-level body you give it (imports + `def run(canvas, ...)`)
+in that class shell automatically and fills in `owner` and `created_at`.
 
 - **Allowed imports only**: `math`, `random`, `colorsys`, `numpy`,
   `numpy.random`, `PIL.Image`, `PIL.ImageDraw`, `PIL.ImageFilter`,
-  `PIL.ImageOps`, `PIL.ImageEnhance`, `PIL.ImageChops`, `PIL.ImageColor`.
+  `PIL.ImageOps`, `PIL.ImageEnhance`, `PIL.ImageChops`, `PIL.ImageColor`,
+  and the literal `from plugins.BaseSkill import BaseSkill`.
   Any other import is rejected at AST validation time *before* the skill
   ever runs. No `os`, `sys`, `subprocess`, `socket`, `requests`,
   `matplotlib`, `cv2`, `torch`, `scipy`. Reach for numpy if a math function

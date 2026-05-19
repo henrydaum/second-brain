@@ -163,9 +163,11 @@ def _form_hint(form, commands=None) -> str:
 def _plugin_contracts() -> str:
     return (
         """## Plugin contracts
-Second Brain has five plugin families: tools, tasks, services, commands, and frontends.
+Second Brain has six plugin families: tools, tasks, services, commands, frontends, and skills.
 
-Built-in plugins live under plugins/<family>. Sandbox plugins live in the matching DATA_DIR sandbox directory. Templates are the source of truth. To learn more about how they work, read the files directly."""
+Built-in plugins live under plugins/<family>. Sandbox plugins live in the matching DATA_DIR sandbox directory. Templates are the source of truth. To learn more about how they work, read the files directly.
+
+Skills are the canvas family: each skill is a `class X(BaseSkill)` defining `def run(self, canvas, **params)` that creates or transforms an image. They run in a sandboxed subprocess with restricted imports — see templates/skill_template.py and plugins/BaseSkill.py."""
     )
 
 
@@ -173,9 +175,11 @@ def _authoring_guidance() -> str:
     from paths import DATA_DIR, ROOT_DIR
     return (
         f"""## Building plugins
-You can extend Second Brain by authoring tools, tasks, services, commands, and frontends.
+You can extend Second Brain by authoring tools, tasks, services, commands, frontends, and skills.
 
-Read the matching template in templates/, then write the plugin into {DATA_DIR}/sandbox_<family>/ with the required prefix, e.g. tool_foo.py in {DATA_DIR}/sandbox_tools/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
+Read the matching template in templates/, then write the plugin into {DATA_DIR}/sandbox_<family>/ with the required prefix, e.g. tool_foo.py in {DATA_DIR}/sandbox_tools/, or skill_foo.py in {DATA_DIR}/sandbox_skills/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
+
+Skills are special: prefer the dedicated `create_skill` / `update_skill` tools over hand-writing the file. Those tools wrap your `def run(canvas, **params):` body in a `class FooSkill(BaseSkill):` shell, fill in metadata, AST-validate, and register it with the runtime registry in one step.
 
 Workflow:
 1. Understand the user's intended behavior. Ask clarifying questions when a missing decision would materially change the design.

@@ -6,14 +6,14 @@ import logging
 from pathlib import Path
 
 from plugins.BaseTool import BaseTool, ToolResult
-from plugins.helpers import skill_store
+from plugins.skills.helpers import skill_store
 
 logger = logging.getLogger("SkillTools")
 
 
 class CreateSkill(BaseTool):
     name = "create_skill"
-    description = "Author a new canvas skill — a Python file defining run(canvas, **params) that either creates or transforms an image. Only use when search_skills + read_skill cannot supply a close enough starting point. Code must pull every color from canvas.palette slots (or art_kit.palette_color(t)), seed RNGs from canvas.seed, and call canvas.commit(image) on every path. Allowed imports only: math, random, colorsys, numpy, PIL.*. Optionally declare up to 3 user-facing controls (slider/enum/bool/pan/button) — a palette swatch is added automatically, don't declare one yourself."
+    description = "Author a new canvas skill — supply the module-level body (imports + `def run(canvas, **params)`) and Second Brain wraps it in a BaseSkill subclass and writes it to the sandbox skills folder. Only use when search_skills + read_skill cannot supply a close enough starting point. Code must pull every color from canvas.palette slots (or art_kit.palette_color(t)), seed RNGs from canvas.seed, and call canvas.commit(image) on every path. Allowed imports only: math, random, colorsys, numpy, PIL.*, and `from plugins.BaseSkill import BaseSkill`. Optionally declare up to 3 user-facing controls (slider/enum/bool/pan/button) — a palette swatch is added automatically, don't declare one yourself."
     max_calls = 4
     parameters = {
         "type": "object",
@@ -21,7 +21,7 @@ class CreateSkill(BaseTool):
             "name": {"type": "string"},
             "description": {"type": "string"},
             "kind": {"type": "string", "enum": ["creation", "transform"]},
-            "code": {"type": "string"},
+            "code": {"type": "string", "description": "Module-level body: any needed imports plus `def run(canvas, **params):`. Will be wrapped in a BaseSkill class automatically."},
             "controls": {
                 "type": "array",
                 "default": [],
@@ -34,26 +34,40 @@ class CreateSkill(BaseTool):
 
     def run(self, context, **kwargs) -> ToolResult:
         try:
-            skill = skill_store.write_skill(
+            skill, path = skill_store.write_skill(
                 name=str(kwargs.get("name") or ""),
                 description=str(kwargs.get("description") or ""),
                 kind=str(kwargs.get("kind") or "creation"),
                 owner=_owner(context),
                 code=str(kwargs.get("code") or ""),
                 controls=list(kwargs.get("controls") or []),
-                text_embedder=context.services.get("text_embedder"),
             )
-            _notify(context, skill.path)
-            return ToolResult(data=skill.to_dict(), llm_summary=f"Created {skill.kind} skill '{skill.slug}'. Now call execute_skill with this slug.")
+            _register(context, path)
+            _notify(context, str(path))
+            return ToolResult(
+                data=skill.to_dict(),
+                llm_summary=f"Created {skill.kind} skill '{skill.slug}'. Now call execute_skill with this slug.",
+            )
         except Exception as e:
             logger.exception("create_skill failed: name=%r kind=%r owner=%r", kwargs.get("name"), kwargs.get("kind"), _owner(context))
             return ToolResult.failed(str(e))
 
 
 def _owner(context) -> str:
-    # Full session_key so each user owns their own skills (e.g. 'web:{uuid}',
-    # 'telegram:{chat_id}'). Two browsers can no longer overwrite each other.
     return str(getattr(context, "session_key", "") or "local")
+
+
+def _register(context, path: Path) -> None:
+    """Load the freshly-written skill into the SkillRegistry so it's
+    discoverable immediately without waiting for the watcher to fire."""
+    registry = getattr(context, "skill_registry", None)
+    if registry is None:
+        return
+    try:
+        from plugins.plugin_discovery import load_single_plugin
+        load_single_plugin("skill", path, skill_registry=registry)
+    except Exception:
+        logger.exception("create_skill: failed to register %s with SkillRegistry", path)
 
 
 def _notify(context, path: str) -> None:

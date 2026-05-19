@@ -22,10 +22,20 @@ from PIL import Image
 
 from config import config_manager
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
-from plugins.helpers import skill_scoring
+from plugins.skills.helpers import skill_scoring
 from plugins.helpers.palettes import get_palette, list_palettes
-from plugins.helpers.skill_runner import replay_chain
-from plugins.helpers.skill_store import anonymize_owner as anonymize_skill_owner, read_skill
+from plugins.skills.helpers.skill_runner import replay_chain
+from plugins.skills.helpers.skill_store import anonymize_owner_in_dir
+from paths import SANDBOX_SKILLS
+
+
+def __anonymize_skill_owner(owner_values):
+    return anonymize_owner_in_dir(SANDBOX_SKILLS, owner_values)
+
+
+def _read_skill_via(runtime, slug: str):
+    registry = getattr(runtime, "skill_registry", None)
+    return registry.get_record(slug) if registry is not None else None
 from plugins.tools.helpers import layered_canvas as lc
 from plugins.helpers.gallery import GALLERY_DIR, anonymize_shared, archive_dir, archive_rows, canvas, delete_archive, gallery_rows, migrate_archive, read_json, reset_canvas, save_to_archive, set_current, share_current, similar_rows
 from paths import DATA_DIR
@@ -749,7 +759,7 @@ class WebFrontend(BaseFrontend):
         # Anonymize public artifacts authored by this account.
         owner_values = {email, account_id}
         try:
-            skills_changed = anonymize_skill_owner(owner_values)
+            skills_changed = _anonymize_skill_owner(owner_values)
         except Exception:
             logger.exception("delete_account: skill anonymize failed")
             skills_changed = 0
@@ -885,7 +895,7 @@ class WebFrontend(BaseFrontend):
             chain = state.get("last_chain") or []
             if chain:
                 out = lc.image_path(key).with_name("_palette_replay.png")
-                replay_chain(chain, palette=get_palette(palette_id), size=int(state.get("size") or lc.DEFAULT_SIZE), output_image_path=out, workdir=out.parent, skill_loader=read_skill)
+                replay_chain(chain, palette=get_palette(palette_id), size=int(state.get("size") or lc.DEFAULT_SIZE), output_image_path=out, workdir=out.parent, skill_loader=lambda slug: _read_skill_via(self.runtime, slug))
                 with Image.open(out) as img:
                     lc.commit_image(key, img.convert("RGBA"), f"palette:{palette_id}", None)
             c = canvas(key)
@@ -902,7 +912,7 @@ class WebFrontend(BaseFrontend):
         if not (0 <= chain_index < len(chain)):
             return [{"type": "error", "content": "That control no longer exists."}]
         step = chain[chain_index]
-        skill = read_skill(step.get("slug") or "")
+        skill = _read_skill_via(self.runtime, step.get("slug") or "")
         if not skill:
             return [{"type": "error", "content": "Skill for that control was deleted."}]
         schema = {c.get("name"): c for c in (skill.controls or [])}
@@ -936,7 +946,7 @@ class WebFrontend(BaseFrontend):
                 size=int(state.get("size") or lc.DEFAULT_SIZE),
                 output_image_path=out,
                 workdir=out.parent,
-                skill_loader=read_skill,
+                skill_loader=lambda slug: _read_skill_via(self.runtime, slug),
                 on_step=self._chain_progress_cb(key),
             )
             with Image.open(out) as img:
@@ -966,7 +976,7 @@ class WebFrontend(BaseFrontend):
                 size=int(before.get("size") or lc.DEFAULT_SIZE),
                 output_image_path=out,
                 workdir=out.parent,
-                skill_loader=read_skill,
+                skill_loader=lambda slug: _read_skill_via(self.runtime, slug),
             )
             with Image.open(out) as img:
                 lc.commit_image(key, img.convert("RGBA"), f"layer_delete:{chain_index}", None)
@@ -1166,7 +1176,7 @@ class WebFrontend(BaseFrontend):
         chain_restored = False
         restore_note = ""
         if source_chain:
-            missing = [s.get("slug") for s in source_chain if not read_skill(s.get("slug") or "")]
+            missing = [s.get("slug") for s in source_chain if not _read_skill_via(self.runtime, s.get("slug") or "")]
             if not missing:
                 try:
                     state = lc.get_state(key)
@@ -1177,7 +1187,7 @@ class WebFrontend(BaseFrontend):
                         size=int(state.get("size") or lc.DEFAULT_SIZE),
                         output_image_path=out,
                         workdir=out.parent,
-                        skill_loader=read_skill,
+                        skill_loader=lambda slug: _read_skill_via(self.runtime, slug),
                         on_step=self._chain_progress_cb(key),
                     )
                     with Image.open(out) as img:
@@ -1225,7 +1235,7 @@ class WebFrontend(BaseFrontend):
                 size=int(state.get("size") or lc.DEFAULT_SIZE),
                 output_image_path=out,
                 workdir=out.parent,
-                skill_loader=read_skill,
+                skill_loader=lambda slug: _read_skill_via(self.runtime, slug),
                 on_step=self._chain_progress_cb(key),
             )
             with Image.open(out) as img:
@@ -1611,7 +1621,7 @@ def _canvas_payload_full(session_key: str, state: dict | None) -> dict:
     layers = []
     palette_shown = False
     for idx, step in enumerate(chain):
-        skill = read_skill(step.get("slug") or "")
+        skill = _read_skill_via(self.runtime, step.get("slug") or "")
         slug = step.get("slug") or ""
         name = skill.name if skill else slug
         layers.append({"chain_index": idx, "slug": slug, "skill_name": name, "kind": step.get("kind") or (skill.kind if skill else "")})

@@ -188,7 +188,7 @@ def gallery_rows(db=None):
     remix_counts: dict[str, int] = {}
     if db is not None:
         try:
-            from plugins.helpers import skill_scoring
+            from plugins.skills.helpers import skill_scoring
             remix_counts = skill_scoring.remix_counts_by_path(db)
         except Exception:
             remix_counts = {}

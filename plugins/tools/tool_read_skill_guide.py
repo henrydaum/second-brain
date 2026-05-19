@@ -1,8 +1,8 @@
 """read_skill_guide: return the long-form generative-art guide.
 
 The web demo agent calls this once per session before authoring new skills.
-The content lives in plugins/helpers/skill_guide.md so it can be iterated on
-without touching code.
+The content lives in plugins/skills/helpers/skill_guide.md so it can be
+iterated on without touching code.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pathlib import Path
 from plugins.BaseTool import BaseTool, ToolResult
 
 
-_GUIDE_PATH = Path(__file__).resolve().parents[1] / "helpers" / "skill_guide.md"
+_GUIDE_PATH = Path(__file__).resolve().parents[1] / "skills" / "helpers" / "skill_guide.md"
 
 
 class ReadSkillGuide(BaseTool):

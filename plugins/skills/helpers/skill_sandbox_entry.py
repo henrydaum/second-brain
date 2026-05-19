@@ -1,4 +1,15 @@
-"""Child process for skill execution."""
+"""Child process for skill execution.
+
+The parent (skill_runner.py) spawns this with ``python -I -B`` and hands it
+a JSON job over a temp file. We re-validate the source via AST, exec the
+module under a restricted ``__builtins__``, locate the BaseSkill subclass,
+instantiate it, and call ``instance.run(canvas, **params)``.
+
+Imports inside the user's skill go through ``_import``, which permits only
+the literal entries in ``ALLOWED`` (plus the ``plugins.BaseSkill`` import
+that every skill needs). ``plugins`` is NOT admitted as a top-level alias
+— that would let a skill reach into the rest of the helpers tree.
+"""
 
 from __future__ import annotations
 
@@ -14,11 +25,17 @@ from types import SimpleNamespace
 
 from PIL import Image
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from plugins.helpers.skill_store import validate_skill_code
-from plugins.helpers.art_kit import build_namespace as _build_art_kit
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from plugins.skills.helpers.skill_store import validate_skill_code
+from plugins.skills.helpers.art_kit import build_namespace as _build_art_kit
+from plugins.BaseSkill import BaseSkill
 
-ALLOWED = {"math", "random", "colorsys", "numpy", "PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFilter", "PIL.ImageOps", "PIL.ImageEnhance", "PIL.ImageChops", "PIL.ImageColor"}
+ALLOWED = {
+    "math", "random", "colorsys",
+    "numpy", "PIL", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFilter",
+    "PIL.ImageOps", "PIL.ImageEnhance", "PIL.ImageChops", "PIL.ImageColor",
+    "plugins.BaseSkill",
+}
 
 PALETTE_SLOTS = {"background", "primary", "secondary", "tertiary", "accent"}
 
@@ -31,12 +48,19 @@ def _limits():
 
 
 def _import(name, globals=None, locals=None, fromlist=(), level=0):
-    if level or name not in ALLOWED and name.split(".")[0] not in ALLOWED:
+    if level:
+        raise ImportError(f"relative import not allowed: {name}")
+    if name in ALLOWED:
+        for item in fromlist or ():
+            full = f"{name}.{item}"
+            if full in ALLOWED:
+                importlib.import_module(full)
+        return importlib.import_module(name)
+    # Top-level fallback for things like `PIL.ImageDraw.foo`. Never for
+    # `plugins.*` — only literal `plugins.BaseSkill` is admitted above.
+    top = name.split(".")[0]
+    if top == "plugins" or top not in ALLOWED:
         raise ImportError(f"import not allowed: {name}")
-    for item in fromlist or ():
-        full = f"{name}.{item}"
-        if full in ALLOWED:
-            importlib.import_module(full)
     return importlib.import_module(name)
 
 
@@ -94,13 +118,16 @@ def _hint_for(error_type: str, message: str, skill_line: str) -> str | None:
     if "import not allowed" in msg:
         m = re.search(r"import not allowed:\s*(\S+)", msg)
         name = m.group(1) if m else "that module"
-        return f"Only math, random, colorsys, numpy, and PIL.* are importable inside a skill. Got '{name}'. Drop that import or replace it with the allowed equivalents."
+        return f"Only math, random, colorsys, numpy, PIL.*, and `from plugins.BaseSkill import BaseSkill` are importable inside a skill. Got '{name}'. Drop that import or replace it with the allowed equivalents."
 
     if "did not call canvas.commit" in msg:
         return "Your run() finished without calling canvas.commit(image). Every code path must end with canvas.commit(img). If you built a numpy array, wrap it: canvas.commit(Image.fromarray(arr, 'RGB').convert('RGBA'))."
 
     if "canvas.image is only available to transform skills" in msg:
         return "This is a creation skill — canvas.image only exists for transform skills. Start a fresh image with canvas.new(color=canvas.palette.background) or canvas.create_image()."
+
+    if "no BaseSkill subclass found" in msg or "must define" in msg:
+        return "Every skill must define `class <Name>(BaseSkill):` with a `def run(self, canvas, **params):` method. Wrap your code accordingly."
 
     if error_type == "AttributeError":
         m = re.search(r"has no attribute '([^']+)'", msg)
@@ -126,6 +153,8 @@ def _hint_for(error_type: str, message: str, skill_line: str) -> str | None:
             return "You used `Image` but didn't import it. Add `from PIL import Image` at the top of the skill."
         if name == "math":
             return "You used `math` but didn't import it. Add `import math` at the top of the skill."
+        if name == "BaseSkill":
+            return "You used `BaseSkill` but didn't import it. Add `from plugins.BaseSkill import BaseSkill` at the top of the skill."
 
     return None
 
@@ -159,7 +188,6 @@ def _diagnose(exc: BaseException, code: str) -> dict:
 
 
 def _blank_canvas_check(img: Image.Image, canvas: "Canvas") -> dict | None:
-    """Cheap heuristic: did the skill commit a flat-color image?"""
     try:
         import numpy as np
         arr = np.asarray(img.convert("RGB"))
@@ -182,13 +210,6 @@ def _blank_canvas_check(img: Image.Image, canvas: "Canvas") -> dict | None:
 
 
 def _palette_adherence_check(img: Image.Image, canvas: "Canvas") -> dict | None:
-    """Detect skills that drew using hardcoded RGB/hex values outside the palette.
-
-    Builds a dense polyline through the 5 palette slots (sorted by luminance,
-    matching art_kit.palette_color), measures the minimum RGB distance from each
-    sampled pixel to that ramp, and fires when a meaningful fraction of pixels
-    are clearly off-ramp.
-    """
     try:
         import numpy as np
         slots = ("background", "tertiary", "secondary", "primary", "accent")
@@ -204,20 +225,18 @@ def _palette_adherence_check(img: Image.Image, canvas: "Canvas") -> dict | None:
         colors_arr = np.array(colors, dtype=np.float32)
         lum = 0.2126 * colors_arr[:, 0] + 0.7152 * colors_arr[:, 1] + 0.0722 * colors_arr[:, 2]
         colors_arr = colors_arr[np.argsort(lum)]
-        # Densify: 16 evenly-spaced points across each segment.
         ramp_pts = []
         for i in range(len(colors_arr) - 1):
             ts = np.linspace(0.0, 1.0, 16, endpoint=False)[:, None]
             seg = colors_arr[i] * (1 - ts) + colors_arr[i + 1] * ts
             ramp_pts.append(seg)
         ramp_pts.append(colors_arr[-1:])
-        ramp = np.concatenate(ramp_pts, axis=0)  # (N_ramp, 3)
+        ramp = np.concatenate(ramp_pts, axis=0)
 
         arr = np.asarray(img.convert("RGB"))
         sample = arr[::8, ::8].reshape(-1, 3).astype(np.float32)
         if sample.size == 0:
             return None
-        # Min euclidean distance from each sample to any ramp point.
         diff = sample[:, None, :] - ramp[None, :, :]
         min_dist = np.sqrt((diff * diff).sum(axis=2)).min(axis=1)
         off_ratio = float((min_dist > 60.0).mean())
@@ -233,7 +252,6 @@ def _palette_adherence_check(img: Image.Image, canvas: "Canvas") -> dict | None:
 
 
 def _transparent_canvas_check(img: Image.Image, canvas: "Canvas") -> dict | None:
-    """Catch skills that committed a mostly-transparent image (alpha-composite bug)."""
     try:
         import numpy as np
         arr = np.asarray(img.convert("RGBA"))
@@ -256,7 +274,6 @@ _VALIDATORS = (_transparent_canvas_check, _palette_adherence_check, _blank_canva
 
 
 def _validate_output(img: Image.Image, canvas: "Canvas") -> dict | None:
-    """Run the post-render validator pipeline; return the first warning that fires."""
     for check in _VALIDATORS:
         result = check(img, canvas)
         if result is not None:
@@ -271,6 +288,14 @@ def _write_sidecar(output_image_path: str, payload: dict) -> None:
         pass
 
 
+def _find_skill_instance(ns: dict) -> object:
+    """Locate the BaseSkill subclass in the exec'd namespace, instantiate it."""
+    for value in ns.values():
+        if isinstance(value, type) and value is not BaseSkill and issubclass(value, BaseSkill):
+            return value()
+    raise ValueError("no BaseSkill subclass found in skill file")
+
+
 def main():
     _limits()
     job_path = sys.argv[1]
@@ -283,12 +308,21 @@ def main():
         if errors:
             raise ValueError("; ".join(errors))
         canvas = Canvas(job)
-        safe = {k: getattr(_builtins, k) for k in ("abs", "all", "any", "bool", "dict", "enumerate", "Exception", "filter", "float", "int", "len", "list", "map", "max", "min", "pow", "range", "round", "set", "sorted", "str", "sum", "tuple", "ValueError", "zip")}
+        safe = {k: getattr(_builtins, k) for k in (
+            "abs", "all", "any", "bool", "dict", "enumerate", "Exception",
+            "filter", "float", "int", "len", "list", "map", "max", "min",
+            "pow", "property", "range", "round", "set", "sorted", "staticmethod",
+            "classmethod", "str", "sum", "tuple", "ValueError", "zip",
+            "isinstance", "issubclass", "type", "object", "super",
+        )}
         safe.update({"__import__": _import, "print": lambda *a, **k: None})
+        # BaseSkill is injected by name so the skill's `from plugins.BaseSkill
+        # import BaseSkill` resolves through _import — keep that path live.
         art_kit = _build_art_kit(canvas.palette)
         ns = {"__builtins__": safe, "__name__": "__skill__", "art_kit": art_kit}
         exec(code, ns, ns)
-        result = ns["run"](canvas, **(job.get("params") or {}))
+        instance = _find_skill_instance(ns)
+        result = instance.run(canvas, **(job.get("params") or {}))
         if canvas._committed is None and isinstance(result, Image.Image):
             canvas.commit(result)
         if canvas._committed is None:
@@ -297,8 +331,6 @@ def main():
     except BaseException as exc:
         diag = _diagnose(exc, code)
         _write_sidecar(output_image_path, diag)
-        # Print a compact, agent-friendly summary as the last stderr line so
-        # older callers that only read the last line still get useful info.
         tail = f"{diag['error_type']}: {diag['message']}"
         if diag.get("skill_lineno"):
             tail += f" (line {diag['skill_lineno']}: {diag['skill_line'].strip()!r})"

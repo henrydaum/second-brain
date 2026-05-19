@@ -40,6 +40,10 @@ class Orchestrator:
 		# runtime is constructed. Tasks that need to drive a state-machine
 		# session reach it via context.runtime.
 		self.runtime = None
+		# SkillRegistry, populated by main.pyw after construction. Tasks
+		# that need to enumerate or look up skills reach it via
+		# context.skill_registry.
+		self.skill_registry = None
 
 		# Task registry: name -> BaseTask instance
 		self.tasks: dict[str, BaseTask] = {}
@@ -692,6 +696,7 @@ class Orchestrator:
 		context = build_context(
 			self.db, self.config, self.services,
 			tool_registry=self.tool_registry,
+			skill_registry=self.skill_registry,
 			orchestrator=self,
 			runtime=self.runtime,
 		)
@@ -779,6 +784,7 @@ class Orchestrator:
 		context = build_context(
 			self.db, self.config, self.services,
 			tool_registry=self.tool_registry,
+			skill_registry=self.skill_registry,
 			orchestrator=self,
 			runtime=self.runtime,
 		)

@@ -42,6 +42,7 @@ class SecondBrainContext:
     approve_command: Any = None  # callable(command, justification) -> bool (tools only)
     request_user_input: Any = None # callable(...)->StateMachineApprovalRequest (tools only)
     tool_registry: Any = None    # ToolRegistry instance (tools only)
+    skill_registry: Any = None   # SkillRegistry instance (skill tools only)
     orchestrator: Any = None     # Orchestrator instance (tools only)
     runtime: Any = None          # ConversationRuntime — present for tasks that
                                  # need to drive a state-machine session.
@@ -59,7 +60,8 @@ def build_context(db, config: dict, services: dict, call_tool=None,
                    root_dir=None, command_registry=None,
                    session_key: str | None = None,
                    user_initiated: bool = False,
-                   current_tool_name: str | None = None) -> SecondBrainContext:
+                   current_tool_name: str | None = None,
+                   skill_registry=None) -> SecondBrainContext:
     """
     Build a fully wired runtime context.
 
@@ -123,6 +125,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         approve_command=approve_command,
         request_user_input=request_user_input,
         tool_registry=tool_registry,
+        skill_registry=skill_registry,
         orchestrator=orchestrator,
         runtime=runtime,
         root_dir=root_dir,

@@ -123,12 +123,14 @@ class FrontendManager:
 
 
 def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
-                    tool_registry, services, config, root_dir):
+                    tool_registry, services, config, root_dir,
+                    skill_registry=None):
     """Start frontends."""
     if not frontends:
         return None, {}, []
 
-    runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir)
+    runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir,
+                                    skill_registry=skill_registry)
     classes = discover_frontends(root_dir, config)
     config_manager.reconcile_plugin_config(config, get_plugin_settings())
     manager = FrontendManager(runtime, runtime.command_registry, config)
@@ -149,7 +151,8 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
     return runtime, manager.adapters, manager.threads
 
 
-def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir):
+def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir,
+                          skill_registry=None):
     """Internal helper to handle conversation runtime."""
     ref = {}
     registry = CommandRegistry(
@@ -157,6 +160,7 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
             scaffold.db, config, services, tool_registry=tool_registry,
             orchestrator=scaffold.orchestrator, runtime=ref.get("runtime"),
             root_dir=root_dir, session_key=session_key,
+            skill_registry=skill_registry,
         )
     )
     discover_commands(root_dir, registry, config)
@@ -181,6 +185,7 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
     )
     runtime.command_registry = registry
     runtime._orchestrator_ref = scaffold.orchestrator
+    runtime.skill_registry = skill_registry
     ref["runtime"] = runtime
     # Tasks running through the orchestrator reach the runtime via
     # context.runtime.

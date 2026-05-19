@@ -37,7 +37,8 @@ from pipeline.watcher import Watcher
 from pipeline.event_trigger import EventTrigger
 from agent.tool_registry import ToolRegistry
 from plugins.frontends.helpers.bootstrap import start_frontends
-from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
+from plugins.plugin_discovery import discover_services, discover_skills, discover_tasks, discover_tools, get_plugin_settings
+from plugins.skills.helpers.skill_registry import SkillRegistry
 
 
 @dataclass
@@ -48,10 +49,27 @@ class Scaffold:
 	services: dict = field(default_factory=dict)
 	config: dict = field(default_factory=dict)
 	tool_registry: Any = None
+	skill_registry: Any = None
 	watcher: Any = None
 	event_trigger: Any = None
 	frontend_runtime: Any = None
 	restart: Any = None
+
+
+def _warn_about_legacy_skills() -> None:
+	"""One-line warning if legacy ``.skill.py`` files are sitting in the
+	old directories. They will not load until migrated to the BaseSkill
+	class form under ``plugins/skills/`` + ``sandbox_skills/``."""
+	from paths import SKILLS_DIR, BUILT_IN_SKILLS_DIR
+	stragglers: list[Path] = []
+	for d in (BUILT_IN_SKILLS_DIR, SKILLS_DIR):
+		if d.exists():
+			stragglers.extend(d.glob("*.skill.py"))
+	if stragglers:
+		logger.warning(
+			f"{len(stragglers)} legacy .skill.py file(s) found and NOT loaded "
+			f"(migrate to plugins/skills/skill_*.py with BaseSkill class form)."
+		)
 
 
 _ROOT = Path(__file__).parent
@@ -76,8 +94,8 @@ def main():
 		sys.exit(1)
 
 	# --- 1b. Ensure sandbox directories exist ---
-	from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS
-	for d in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS):
+	from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS, SANDBOX_SKILLS
+	for d in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS, SANDBOX_SKILLS):
 		d.mkdir(parents=True, exist_ok=True)
 
 	# --- 1c. Load existing plugin config into runtime config ---
@@ -121,11 +139,20 @@ def main():
 	discover_tools(_ROOT, tool_registry, config)
 	logger.info(f"Tools registered: {list(tool_registry.tools.keys())} ({time.time() - t0:.2f}s)")
 
+	# --- 5d. Initialize skill registry ---
+	t0 = time.time()
+	skill_registry = SkillRegistry()
+	discover_skills(_ROOT, skill_registry, config)
+	tool_registry.skill_registry = skill_registry
+	orchestrator.skill_registry = skill_registry
+	logger.info(f"Skills registered: {len(skill_registry.list(include_hidden=True))} ({time.time() - t0:.2f}s)")
+	_warn_about_legacy_skills()
+
 	# --- 5c. Reconcile plugin config defaults ---
 	config_manager.reconcile_plugin_config(config, get_plugin_settings())
 
 	# --- 6. Initialize app context ---
-	scaffold = Scaffold(orchestrator, database, services, config, tool_registry)
+	scaffold = Scaffold(orchestrator, database, services, config, tool_registry, skill_registry)
 
 	# --- 6b. Determine which frontends to start ---
 	frontends = set(config.get("enabled_frontends", ["web"]))
@@ -241,15 +268,16 @@ def main():
 
 	# --- 10. Start frontends via the shared runtime/bootstrap path ---
 	scaffold.frontend_runtime, _adapters, _frontend_threads = start_frontends(
-		frontends, scaffold, shutdown, _shutdown, tool_registry, services, config, _ROOT
+		frontends, scaffold, shutdown, _shutdown, tool_registry, services, config, _ROOT,
+		skill_registry=skill_registry,
 	)
-	_bind_runtime_services(services, tool_registry, orchestrator, scaffold.frontend_runtime)
+	_bind_runtime_services(services, tool_registry, orchestrator, scaffold.frontend_runtime, skill_registry)
 
 	# --- 11. Main thread idles until shutdown ---
 	while not _shutdown.is_set():
 		_shutdown.wait(timeout=1.0)
 
-def _bind_runtime_services(services, tool_registry, orchestrator, runtime):
+def _bind_runtime_services(services, tool_registry, orchestrator, runtime, skill_registry=None):
 	for svc in services.values():
 		if hasattr(svc, "bind_runtime"):
 			svc.bind_runtime(
@@ -257,6 +285,7 @@ def _bind_runtime_services(services, tool_registry, orchestrator, runtime):
 				orchestrator=orchestrator,
 				command_registry=getattr(runtime, "command_registry", None),
 				frontend_manager=getattr(runtime, "frontend_manager", None),
+				skill_registry=skill_registry,
 			)
 
 

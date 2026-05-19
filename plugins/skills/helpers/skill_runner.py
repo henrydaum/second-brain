@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 from plugins.helpers.palettes import Palette, get_palette, palette_exists
-from plugins.helpers.skill_store import Skill, assert_valid
+from plugins.skills.helpers.skill_store import Skill, assert_valid
 
 logger = logging.getLogger("SkillRunner")
 
@@ -56,7 +56,7 @@ def run_skill(
     except Exception as e:
         msg = str(e)
         if "disallowed import" in msg:
-            hint = "Only math, random, colorsys, numpy, and PIL.* (Image, ImageDraw, ImageFilter, ImageOps, ImageEnhance, ImageChops, ImageColor) are importable. Remove the disallowed import."
+            hint = "Only math, random, colorsys, numpy, PIL.*, and `from plugins.BaseSkill import BaseSkill` are importable. Remove the disallowed import."
             raise SkillRunError(
                 f"skill '{skill.slug}' failed validation: {msg}\n  hint: {hint}",
                 diagnostic={"error_type": "ValidationError", "message": msg, "hint": hint},
@@ -77,7 +77,6 @@ def run_skill(
 
     output_image_path = Path(output_image_path)
     output_image_path.parent.mkdir(parents=True, exist_ok=True)
-    # Pre-delete any stale output so we can detect missing commits.
     if output_image_path.exists():
         try:
             output_image_path.unlink()
@@ -96,10 +95,9 @@ def run_skill(
     }
 
     entry = Path(__file__).with_name("skill_sandbox_entry.py")
-    # PYTHONPATH so the child can import plugins.helpers.palettes / numpy / PIL from the parent env.
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
-    project_root = Path(__file__).resolve().parents[2]
+    project_root = Path(__file__).resolve().parents[3]
     extra = str(project_root)
     if "PYTHONPATH" in env:
         env["PYTHONPATH"] = extra + os.pathsep + env["PYTHONPATH"]
@@ -197,7 +195,6 @@ def _format_error(slug: str, sidecar: dict | None, stderr: str, stdout: str) -> 
         if sidecar.get("hint"):
             parts.append(f"  hint: {sidecar['hint']}")
         return "\n".join(parts)
-    # Fallback: legacy path with no sidecar.
     msg = stderr.splitlines()[-1] if stderr else stdout or "unknown error"
     return f"skill '{slug}' failed: {msg}"
 
@@ -221,10 +218,8 @@ def default_controls(skill: Skill) -> dict:
             values[c["x_param"]] = c.get("x_default", 0.0)
             values[c["y_param"]] = c.get("y_default", 0.0)
         elif ctype == "button":
-            # Buttons trigger actions; no default value lives in the entry.
             continue
         elif ctype == "palette":
-            # Filled in by the caller (seeded from canvas state).
             continue
         else:
             if "default" in c:
@@ -240,7 +235,6 @@ def resolve_entry(entry: dict, *, fallback_palette: Palette) -> tuple[dict, Pale
     palette_id = controls.pop("palette", None) or params.pop("palette", None)
     if isinstance(palette_id, str) and palette_exists(palette_id):
         palette = get_palette(palette_id)
-    # Pan controls live under their x_param/y_param names already; same for sliders/enums/bools.
     params.update(controls)
     return params, palette
 
@@ -258,8 +252,7 @@ def replay_chain(
 ) -> dict:
     """Replay a chain of (creation, *transforms) into output_image_path.
 
-    skill_loader(slug) -> Skill | None — caller supplies the lookup so the runner
-    doesn't have to depend on skill_store directly.
+    skill_loader(slug) -> Skill | None — caller supplies the lookup.
     """
     if not chain:
         raise SkillRunError("nothing to replay")

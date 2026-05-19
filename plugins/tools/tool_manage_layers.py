@@ -9,8 +9,7 @@ from PIL import Image
 
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.helpers.palettes import get_palette
-from plugins.helpers.skill_runner import replay_chain
-from plugins.helpers.skill_store import read_skill
+from plugins.skills.helpers.skill_runner import replay_chain
 from plugins.tools.helpers import layered_canvas as lc
 
 logger = logging.getLogger("ManageLayers")
@@ -57,7 +56,7 @@ class ManageLayers(BaseTool):
                 return ToolResult(data={"canvas": lc.canvas(session_key)}, llm_summary="Deleted the creation layer; canvas cleared.")
             try:
                 new_state = lc.delete_chain_entry(session_key, idx)
-                return _replay_and_commit(session_key, new_state, f"manage_layers:delete:{idx}", f"Deleted layer {idx}.")
+                return _replay_and_commit(context, session_key, new_state, f"manage_layers:delete:{idx}", f"Deleted layer {idx}.")
             except Exception as e:
                 logger.exception("manage_layers delete failed")
                 return ToolResult.failed(str(e))
@@ -72,7 +71,7 @@ class ManageLayers(BaseTool):
                 return ToolResult(data={"canvas": lc.canvas(session_key)}, llm_summary="No-op (from_index == to_index).")
             try:
                 new_state = lc.move_chain_entry(session_key, fi, ti)
-                return _replay_and_commit(session_key, new_state, f"manage_layers:move:{fi}->{ti}", f"Moved layer {fi} to position {ti}.")
+                return _replay_and_commit(context, session_key, new_state, f"manage_layers:move:{fi}->{ti}", f"Moved layer {fi} to position {ti}.")
             except ValueError as e:
                 return ToolResult.failed(str(e))
             except Exception as e:
@@ -81,19 +80,21 @@ class ManageLayers(BaseTool):
         return ToolResult.failed(f"Unknown action '{action}'. Use delete, move, or clear.")
 
 
-def _replay_and_commit(session_key: str, state: dict, op: str, summary: str) -> ToolResult:
+def _replay_and_commit(context, session_key: str, state: dict, op: str, summary: str) -> ToolResult:
     chain = list(state.get("last_chain") or [])
     if not chain:
         lc.reset(session_key)
         return ToolResult(data={"canvas": lc.canvas(session_key)}, llm_summary=summary + " Canvas cleared.")
     out = lc.image_path(session_key).with_name("_manage_layers.png")
+    registry = getattr(context, "skill_registry", None)
+    loader = registry.get_record if registry is not None else (lambda _slug: None)
     replay_chain(
         chain,
         palette=get_palette(state.get("palette_id")),
         size=int(state.get("size") or lc.DEFAULT_SIZE),
         output_image_path=out,
         workdir=out.parent,
-        skill_loader=read_skill,
+        skill_loader=loader,
     )
     with Image.open(out) as img:
         lc.commit_image(session_key, img.convert("RGBA"), op, None)

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from paths import ROOT_DIR, DATA_DIR, SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS
+from paths import ROOT_DIR, DATA_DIR, SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS, SANDBOX_SKILLS
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,7 @@ PLUGIN_CONFIG = {
     "service": (ROOT_DIR / "plugins" / "services", SANDBOX_SERVICES, "service_", ("plugins.services.{stem}", "sandbox_services_{stem}")),
     "command": (ROOT_DIR / "plugins" / "commands", SANDBOX_COMMANDS, "command_", ("plugins.commands.{stem}", "sandbox_commands_{stem}")),
     "frontend": (ROOT_DIR / "plugins" / "frontends", SANDBOX_FRONTENDS, "frontend_", ("plugins.frontends.{stem}", "sandbox_frontends_{stem}")),
+    "skill": (ROOT_DIR / "plugins" / "skills", SANDBOX_SKILLS, "skill_", ("plugins.skills.{stem}", "sandbox_skills_{stem}")),
 }
 ALLOWED_ROOTS = tuple(p.resolve() for p in (ROOT_DIR, DATA_DIR))
 

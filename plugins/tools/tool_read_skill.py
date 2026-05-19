@@ -8,7 +8,6 @@ close reference.
 from __future__ import annotations
 
 from plugins.BaseTool import BaseTool, ToolResult
-from plugins.helpers import skill_store
 
 
 class ReadSkill(BaseTool):
@@ -31,7 +30,10 @@ class ReadSkill(BaseTool):
         slug = str(kwargs.get("slug") or "").strip()
         if not slug:
             return ToolResult.failed("slug is required")
-        skill = skill_store.read_skill(slug)
+        registry = getattr(context, "skill_registry", None)
+        if registry is None:
+            return ToolResult.failed("skill registry not available")
+        skill = registry.get_record(slug)
         if skill is None:
             return ToolResult.failed(f"No skill named '{slug}'.")
         header = (
