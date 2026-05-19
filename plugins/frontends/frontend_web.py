@@ -1671,69 +1671,37 @@ def _gallery_url(row: dict) -> dict:
 
 
 def _share_landing_html(share: dict, base_url: str) -> str:
-    """Minimal standalone landing page for /share/{id}. Includes OG tags so
-    link unfurls in chat apps preview the canvas."""
+    """/share/{id} is a redirect into the SPA so the visitor lands on the
+    canvas, not on a metadata page. The HTML body redirects via JS + meta
+    refresh; the <head> keeps OG tags so link unfurls (Slack/Discord/Twitter)
+    still preview the canvas. Crawlers read the meta, humans get redirected."""
     import html as _html
     sid = share["share_id"]
     title = share.get("title") or "Untitled"
     artist = share.get("artist") or "anonymous"
     url = share_links.build_share_url(base_url, sid)
-    image_exists = share.get("image_exists")
-    image_url = f"/share/{sid}/image.png" if image_exists else ""
+    image_url = f"/share/{sid}/image.png" if share.get("image_exists") else ""
     og_image = f"{base_url.rstrip('/')}{image_url}" if image_url else ""
-    page_title = f"{title} — Second Brain"
-    body_class = "ok" if image_exists else "missing"
-    image_block = (
-        f'<img src="{_html.escape(image_url)}" alt="{_html.escape(title)}">'
-        if image_exists else
-        '<div class="missing-art">This canvas\'s image is no longer on disk, but the chain that built it is preserved. Click "Open in Second Brain" to replay it.</div>'
-    )
-    qr_url = share_links.build_qr_url(base_url, sid)
-    open_app_href = f"/?share={_html.escape(sid)}"
+    target = f"/?share={_html.escape(sid, quote=True)}"
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{_html.escape(page_title)}</title>
+  <title>{_html.escape(title)} — Second Brain</title>
+  <meta http-equiv="refresh" content="0; url={target}">
+  <link rel="canonical" href="/">
   <meta property="og:title" content="{_html.escape(title)}">
   <meta property="og:description" content="A canvas by {_html.escape(artist)} on Second Brain.">
   {f'<meta property="og:image" content="{_html.escape(og_image)}">' if og_image else ''}
   <meta property="og:type" content="article">
   <meta property="og:url" content="{_html.escape(url)}">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/style.css?v=11">
+  <script>location.replace({json.dumps(target)});</script>
 </head>
-<body class="share-landing {body_class}">
-  <main class="share-landing-shell">
-    <header class="share-landing-head">
-      <a href="/" class="share-landing-home">← Second Brain</a>
-    </header>
-    <section class="share-landing-art">
-      {image_block}
-    </section>
-    <section class="share-landing-meta">
-      <h1>{_html.escape(title)}</h1>
-      <p class="share-landing-artist">by {_html.escape(artist)}</p>
-      <div class="share-landing-actions">
-        <a class="primary-btn" href="{open_app_href}">Open in Second Brain</a>
-        <button type="button" class="copy-link-btn" data-copy="{_html.escape(url)}">Copy link</button>
-      </div>
-      <details class="share-landing-qr">
-        <summary>Show QR</summary>
-        <img src="{_html.escape(qr_url)}" alt="QR code" width="220" height="220">
-        <a href="{_html.escape(qr_url)}" download="second-brain-{_html.escape(sid)}.png">Download QR</a>
-      </details>
-    </section>
-  </main>
-  <script>
-    document.querySelectorAll(".copy-link-btn").forEach(btn => {{
-      btn.addEventListener("click", async () => {{
-        try {{ await navigator.clipboard.writeText(btn.dataset.copy); btn.textContent = "Copied!"; setTimeout(() => btn.textContent = "Copy link", 1400); }}
-        catch (e) {{ btn.textContent = "Press Ctrl+C"; }}
-      }});
-    }});
-  </script>
+<body style="background:#0b0d13;color:#888;font-family:system-ui;margin:0;padding:48px 24px;text-align:center;font-size:14px;">
+  Opening canvas… <a href="{target}" style="color:#888;">Continue</a>
 </body>
 </html>"""
 
@@ -1741,7 +1709,7 @@ def _share_landing_html(share: dict, base_url: str) -> str:
 def _share_missing_html(share_id: str) -> str:
     import html as _html
     return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Link not found</title><link rel="stylesheet" href="/style.css?v=11"></head>
+<html lang="en"><head><meta charset="utf-8"><title>Link not found</title><link rel="stylesheet" href="/style.css?v=12"></head>
 <body class="share-landing missing"><main class="share-landing-shell"><section class="share-landing-meta"><h1>Link not found</h1><p>No canvas exists for <code>{_html.escape(share_id)}</code>. It may have been removed.</p><p><a href="/">← Back to Second Brain</a></p></section></main></body></html>"""
 
 
