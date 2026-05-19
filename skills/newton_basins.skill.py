@@ -1,0 +1,103 @@
+SKILL_NAME = "Newton Basins"
+SKILL_DESCRIPTION = "Newton's method on a complex polynomial, colored by basin of attraction. Each pixel iterates z = z - f(z)/f'(z); the root it converges to picks the palette band, the iteration count modulates brightness within the band. Produces lacy, intricate boundaries between basins -- a different geometry than escape-time fractals. Good for \"fractal\", \"newton\", \"basins\", \"lace\", \"stained glass\", or any mathematically-elaborate algorithmic motif."
+SKILL_KIND = "creation"
+SKILL_OWNER = "library"
+SKILL_CREATED_AT = 1779667200.0
+SKILL_HIDDEN = False
+SKILL_CONTROLS = [
+    {"type": "enum", "name": "polynomial", "label": "Polynomial",
+     "options": [
+         {"value": "cubic",       "label": "z^3 - 1 (three roots)"},
+         {"value": "perturbed",   "label": "z^3 - 2z + 2 (cycles)"},
+         {"value": "quartic",     "label": "z^4 - 1 (four roots)"},
+         {"value": "quintic",     "label": "z^5 - 1 (five roots)"},
+         {"value": "sextic",      "label": "z^6 - 1 (six roots)"},
+         {"value": "octic",       "label": "z^8 - 1 (eight roots)"},
+     ],
+     "default": "cubic"},
+    {"type": "palette", "name": "palette", "label": "Palette"},
+]
+
+import math
+import numpy as np
+from PIL import Image
+
+
+def _roots_of_unity(n):
+    return [math.cos(2 * math.pi * k / n) + 1j * math.sin(2 * math.pi * k / n) for k in range(n)]
+
+
+# (f, fprime, roots, view_half).
+def _polys():
+    return {
+        "cubic":     (lambda z: z**3 - 1,        lambda z: 3 * z**2,           _roots_of_unity(3), 1.6),
+        "perturbed": (lambda z: z**3 - 2*z + 2,  lambda z: 3 * z**2 - 2,       None,               1.8),
+        "quartic":   (lambda z: z**4 - 1,        lambda z: 4 * z**3,           _roots_of_unity(4), 1.6),
+        "quintic":   (lambda z: z**5 - 1,        lambda z: 5 * z**4,           _roots_of_unity(5), 1.6),
+        "sextic":    (lambda z: z**6 - 1,        lambda z: 6 * z**5,           _roots_of_unity(6), 1.6),
+        "octic":     (lambda z: z**8 - 1,        lambda z: 8 * z**7,           _roots_of_unity(8), 1.6),
+    }
+
+
+def run(canvas, polynomial="cubic", **_):
+    s = int(canvas.size)
+    key = str(polynomial)
+    polys = _polys()
+    f, fp, roots, view_half = polys.get(key, polys["cubic"])
+
+    re = np.linspace(-view_half, view_half, s, dtype=np.float64)
+    im = np.linspace(-view_half, view_half, s, dtype=np.float64)
+    R, I = np.meshgrid(re, im)
+    Z = R + 1j * I
+
+    n_iter = 40
+    tol = 1e-5
+    iters = np.zeros(Z.shape, dtype=np.float32)
+    converged = np.zeros(Z.shape, dtype=bool)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for i in range(n_iter):
+            denom = fp(Z)
+            # Avoid division by zero -- nudge tiny derivatives.
+            denom = np.where(np.abs(denom) < 1e-14, 1e-14, denom)
+            dZ = f(Z) / denom
+            Z = Z - dZ
+            newly = (~converged) & (np.abs(dZ) < tol)
+            iters[newly] = i + 1
+            converged |= newly
+            if converged.all():
+                break
+    iters[~converged] = n_iter
+
+    # For polynomials with known roots, classify by nearest root.
+    # For "perturbed" (which has three roots we'd need to solve for), classify
+    # by final Z's argument -- still produces a clean basin map.
+    if roots is not None:
+        root_arr = np.array(roots, dtype=np.complex128)
+        d = np.abs(Z[..., None] - root_arr[None, None, :])
+        basin = np.argmin(d, axis=-1).astype(np.int32)
+        n_basins = len(roots)
+    else:
+        # Quantize argument into 6 bins; pretty and stable for cycling polys.
+        n_basins = 6
+        ang = (np.angle(Z) + math.pi) / (2 * math.pi)  # [0,1)
+        basin = np.clip((ang * n_basins).astype(np.int32), 0, n_basins - 1)
+
+    # Brightness from iteration count -- few iters = sharp center, many = boundary haze.
+    brightness = 1.0 - np.clip(iters / float(n_iter), 0.0, 1.0)
+    brightness = 0.25 + 0.75 * brightness  # keep some color in the slow regions
+
+    # Build a per-basin base color from the palette ramp, then attenuate by brightness.
+    base = np.zeros((n_basins, 3), dtype=np.float32)
+    for b in range(n_basins):
+        t = b / max(1, n_basins - 1)
+        # Pull each basin toward a distinct palette slot, biased away from 0 (background).
+        base[b] = np.array(art_kit.hex_to_rgb(art_kit.palette_color(0.18 + 0.78 * t)), dtype=np.float32)
+    rgb = base[basin] * brightness[..., None]
+
+    # The deeply-unconverged pixels go to background -- those are the fractal seams.
+    bg = np.array(art_kit.hex_to_rgb(canvas.palette.background), dtype=np.float32)
+    unstable = ~converged
+    rgb[unstable] = bg
+
+    rgb = np.clip(rgb, 0, 255).astype(np.uint8)
+    canvas.commit(Image.fromarray(rgb, "RGB").convert("RGBA"))

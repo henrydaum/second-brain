@@ -12,5 +12,8 @@ const TIPS = [
   "Ask for a style: \"in the style of risograph print,\" \"like a 70s sci-fi paperback.\"",
   "Combine ideas: \"Voronoi cells, but each one is a tiny Mandelbrot.\"", 
   "Second Brain specializes in algorithmic art. Ask it to use geometry rather than organic shapes.",
-  "Don't like the result? A"
+  "Don't like the result? Ask Second Brain to change it.",
+  "After Second Brain has made something, ask it if there is anything it would like to change about it. Very often, it will have a good idea for how to improve the image.",
+  "Ask Second Brain to interview you, then make something based on your answers.",
+  "To stay in the loop, ask Second Brain to pause and ask you if it has any questions."
 ];
