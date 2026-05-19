@@ -10,5 +10,7 @@ const TIPS = [
   "Open Controls under the canvas to fine-tune without another chat turn.",
   "Conversations are wiped when you start a new chat. Your art is kept.",
   "Ask for a style: \"in the style of risograph print,\" \"like a 70s sci-fi paperback.\"",
-  "Combine ideas: \"Voronoi cells, but each one is a tiny Mandelbrot.\"", "Second Brain specializes in algorithmic art and draws on the canvas using code."
+  "Combine ideas: \"Voronoi cells, but each one is a tiny Mandelbrot.\"", 
+  "Second Brain specializes in algorithmic art. Ask it to use geometry rather than organic shapes.",
+  "Don't like the result? A"
 ];

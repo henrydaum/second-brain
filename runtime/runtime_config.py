@@ -263,6 +263,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
                 conversation_metadata=_conversation_meta(),
                 prompt_extras=prompt_extras,
                 notification_suffix=_notify_suffix(),
+                session_key=session.key,
             )
         return _session_prompt
 

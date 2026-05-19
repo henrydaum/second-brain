@@ -44,6 +44,7 @@ def build_prompt_sections(
     conversation_metadata: dict[str, Any] | None = None,
     prompt_extras: dict[str, Any] | None = None,
     notification_suffix: str = "",
+    session_key: str | None = None,
 ) -> list[dict[str, str]]:
     """Build ordered system prompt messages."""
     r = tool_registry
@@ -61,15 +62,15 @@ def build_prompt_sections(
         _current_datetime(),
         _model_status(services),
         _profile_status(profile_name, scope),
-        _services_status(services),
-        _pipeline_status(db, orchestrator),
-        _sync_dirs(config),
+        _canvas_state(session_key) if _has_tool(r, "execute_skill") else "",
+        # _services_status(services),
+        # _pipeline_status(db, orchestrator),
+        # _sync_dirs(config),
         _file_inventory(db) if _has_any(r, "read_file", "hybrid_search", "lexical_search") else "",
-        _agent_memory(),
-        _conversation_metadata(conversation_metadata),
+        # _agent_memory(),
+        _conversation_metadata(conversation_metadata) if _has_tool(r, "sql_query") else "",
         _prompt_extras(prompt_extras),
         notification_suffix,
-        _scope_prompt_note(profile_name, scope),
         getattr(scope, "prompt_suffix", "") if scope else "",
         extra_suffix,
     ]
@@ -219,6 +220,29 @@ When in doubt, prefer noise, gradients, and procedural patterns in palette tones
 Before each tool call, write one short sentence in plain language telling the user what you're about to try or adjust ("first attempt rendered blank — let me try a different normalization", "the bloom was too heavy, dialing back radius"). Iteration is normal; tell the user that art is iterative and they can always say what to change."""
 
 
+def _canvas_state(session_key: str | None) -> str:
+    if not session_key:
+        return ""
+    try:
+        from plugins.tools.helpers import layered_canvas as lc
+        state = lc.get_state(session_key)
+    except Exception:
+        return ""
+    chain = state.get("last_chain") or []
+    palette = state.get("palette_id")
+    size = state.get("size")
+    lines = ["## Current canvas"]
+    if not chain:
+        lines.append("Canvas is blank -- no skills applied yet.")
+    else:
+        lines.append(f"Chain ({len(chain)}/4 layers, palette: {palette}, size: {size}):")
+        for i, step in enumerate(chain):
+            slug = step.get("slug") or "?"
+            kind = step.get("kind") or "?"
+            lines.append(f"  {i}. {slug} ({kind})")
+    return "\n".join(lines)
+
+
 def _sandbox_files() -> str:
     from paths import SANDBOX_COMMANDS, SANDBOX_FRONTENDS, SANDBOX_SERVICES, SANDBOX_TASKS, SANDBOX_TOOLS
     lines = []
@@ -315,14 +339,4 @@ def _conversation_metadata(meta: dict[str, Any] | None) -> str:
 def _prompt_extras(extras: dict[str, Any] | None) -> str:
     values = [v for v in (extras or {}).values() if isinstance(v, str) and v]
     return "\n\n".join(values)
-
-
-def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
-    if profile_name == "default" or not scope or not scope.has_tool_filter:
-        return ""
-    return (
-        f"""## Agent profile limits
-You are running under the '{profile_name}' agent profile. Tool access is limited to the tools exposed in this prompt. """
-    )
-
 
