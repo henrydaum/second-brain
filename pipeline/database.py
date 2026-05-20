@@ -309,30 +309,39 @@ class Database:
 		#
 		# Keyed on pool_hash (the deterministic hash of the canvas
 		# configuration), NOT canvas_id. A canvas_id is a private editing
-		# handle; pool_hash is the public content identity. So "user U
-		# shared this look" is durable even if the editor mutates onward.
+		# handle; pool_hash is the public content identity.
+		#
+		# Phase 0 installs have a dangling FK to the now-deleted `canvases`
+		# table baked into the original CREATE statement; ALTER TABLE RENAME
+		# COLUMN doesn't strip that FK, so we detect and rebuild.
+		fk_rows = []
+		try:
+			fk_rows = self.conn.execute("PRAGMA foreign_key_list(user_canvas_actions)").fetchall()
+		except sqlite3.OperationalError:
+			pass
+		if any((r["table"] if "table" in r.keys() else r[2]) == "canvases" for r in fk_rows):
+			# Empty in practice (only just started writing); drop & rebuild.
+			self.conn.execute("DROP TABLE user_canvas_actions")
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS user_canvas_actions (
 				id         INTEGER PRIMARY KEY,
 				user_id    TEXT NOT NULL,
 				pool_hash  TEXT NOT NULL,
 				action     TEXT NOT NULL,
-				ts         REAL NOT NULL
+				ts         REAL NOT NULL,
+				meta_json  TEXT
 			)
 		""")
-		# Idempotent migration for installs that have the old canvas_id
-		# column (Phase 0 schema). Table is always empty in practice
-		# since no app code wrote to it before this rename.
+		# Idempotent migrations for installs that took the in-place rename
+		# path before we switched to drop-and-rebuild (no-ops on fresh DBs).
 		try:
 			self.conn.execute("ALTER TABLE user_canvas_actions RENAME COLUMN canvas_id TO pool_hash")
 		except sqlite3.OperationalError:
 			pass
-		# Optional per-action metadata (title / artist on share, etc).
 		try:
 			self.conn.execute("ALTER TABLE user_canvas_actions ADD COLUMN meta_json TEXT")
 		except sqlite3.OperationalError:
 			pass
-		# Drop old indexes (referencing canvas_id) and create new ones.
 		self.conn.execute("DROP INDEX IF EXISTS idx_user_canvas_actions_canvas")
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_canvas_actions_user ON user_canvas_actions(user_id, action, ts)")
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_canvas_actions_pool ON user_canvas_actions(pool_hash, action)")

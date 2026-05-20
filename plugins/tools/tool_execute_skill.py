@@ -89,6 +89,7 @@ class ExecuteSkill(BaseTool):
 			render_result = render_canvas(
 				cs,
 				skill_loader=skill_registry.get_record,
+				db=getattr(context, "db", None),
 			)
 		except SkillRunError as e:
 			canvas_rt.handle_action(cs.canvas_id, "remove_layer", {"chain_index": len(cs.canvas.layers) - 1})

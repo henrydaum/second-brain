@@ -101,6 +101,55 @@ def test_canvas_domain_indexes_exist():
 		_cleanup(db, path)
 
 
+def test_phase0_dangling_fk_is_rebuilt_on_startup():
+	"""Phase 0 installs had a FK on user_canvas_actions(canvas_id) -> canvases(id).
+	After dropping `canvases`, INSERTs failed with 'no such table: canvases'.
+	Startup must detect that FK and rebuild the table cleanly so writes work."""
+	path = Path(".canvas_schema_test_fk_rebuild.sqlite")
+	path.unlink(missing_ok=True)
+	try:
+		# Hand-craft the Phase 0 shape: a `canvases` table + a
+		# `user_canvas_actions` table whose FK points at it. Then drop
+		# `canvases` to simulate the post-cleanup state.
+		import sqlite3
+		raw = sqlite3.connect(str(path))
+		raw.execute("CREATE TABLE canvases (id TEXT PRIMARY KEY)")
+		raw.execute("""
+			CREATE TABLE user_canvas_actions (
+				id INTEGER PRIMARY KEY,
+				user_id TEXT NOT NULL,
+				canvas_id TEXT NOT NULL,
+				action TEXT NOT NULL,
+				ts REAL NOT NULL,
+				FOREIGN KEY (canvas_id) REFERENCES canvases(id) ON DELETE CASCADE
+			)
+		""")
+		raw.commit()
+		raw.close()
+
+		# Opening the Database should drop `canvases` and rebuild
+		# user_canvas_actions without the dangling FK.
+		db = Database(str(path))
+		try:
+			# An insert that would have triggered the FK lookup must succeed.
+			import time as _t
+			db.conn.execute(
+				"INSERT INTO user_canvas_actions (user_id, pool_hash, action, ts) VALUES (?, ?, ?, ?)",
+				("u1", "ph1", "share", _t.time()),
+			)
+			db.conn.commit()
+			row = db.conn.execute("SELECT user_id, pool_hash FROM user_canvas_actions").fetchone()
+			assert row["user_id"] == "u1"
+			assert row["pool_hash"] == "ph1"
+			# No FK to canvases remains on the rebuilt table.
+			fks = db.conn.execute("PRAGMA foreign_key_list(user_canvas_actions)").fetchall()
+			assert not any((r["table"] if "table" in r.keys() else r[2]) == "canvases" for r in fks)
+		finally:
+			db.conn.close()
+	finally:
+		path.unlink(missing_ok=True)
+
+
 def test_setup_is_idempotent():
 	"""Re-opening the same DB doesn't crash and keeps the canvas tables."""
 	path = Path(".canvas_schema_test_reopen.sqlite")

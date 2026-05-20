@@ -58,7 +58,11 @@ def _enact_and_render(context, action_type: str, payload: dict) -> ToolResult:
 		return ToolResult.failed("skill registry not available; cannot re-render")
 
 	try:
-		render_result = render_canvas(cs, skill_loader=skill_registry.get_record)
+		render_result = render_canvas(
+			cs,
+			skill_loader=skill_registry.get_record,
+			db=getattr(context, "db", None),
+		)
 	except Exception as e:
 		logger.exception("manage_layers render crashed: action=%s", action_type)
 		return ToolResult.failed(str(e))

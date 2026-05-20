@@ -140,6 +140,19 @@ def render_canvas(
 	folder = folder_for(canvas)
 	folder.mkdir(parents=True, exist_ok=True)
 
+	# Register the configuration in canvas_pools on every render call (not
+	# just cache misses). INSERT OR IGNORE makes this idempotent, and
+	# running it on hits backfills pools for canvases rendered before
+	# this code path existed. Anything that needs to resolve a
+	# pool_hash (share page, QR, gallery/archive listings) depends on
+	# this row.
+	if db is not None:
+		try:
+			from canvas.persistence import save_pool
+			save_pool(db, pool_hash=folder.name, state=canvas.to_dict())
+		except Exception:
+			logger.exception("save_pool failed for pool=%s", folder.name)
+
 	# Resolve seed + decide whether a cache short-circuit applies.
 	if seed is not None:
 		seed_val = int(seed)
@@ -199,15 +212,6 @@ def render_canvas(
 		# current_input is the final PNG produced by the last layer.
 		with Image.open(current_input) as img:
 			img.save(out_path, format="WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
-
-	# Cache miss → this configuration was just rendered for the first
-	# time. Register it in canvas_pools so it's publicly addressable.
-	if db is not None:
-		try:
-			from canvas.persistence import save_pool
-			save_pool(db, pool_hash=folder.name, state=canvas.to_dict())
-		except Exception:
-			logger.exception("save_pool failed for pool=%s", folder.name)
 
 	logger.info(
 		"render canvas_id=%s pool=%s seed=%d layers=%d",

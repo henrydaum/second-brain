@@ -155,6 +155,32 @@ def test_render_canvas_does_not_require_db(monkeypatch, renders_dir):
 	canvas_render.render_canvas(cs, skill_loader=loader, seed=7)
 
 
+def test_render_canvas_writes_pool_on_cache_hit_too(monkeypatch, renders_dir):
+	"""Pool write must run on cache hits, not just misses — otherwise canvases
+	rendered before canvas_pools existed would never become shareable. INSERT OR
+	IGNORE keeps repeat writes free."""
+	_install_fake_run_skill(monkeypatch)
+	db, dbpath = _fresh_db("render_pool_hit")
+	try:
+		cs = _seed_state("fractal")
+		loader = _loader({"fractal": _skill("fractal")})
+
+		# First call: miss → renders, writes pool row.
+		canvas_render.render_canvas(cs, skill_loader=loader, seed=11, db=db)
+		# Clear canvas_pools to simulate "pool entry never existed yet"
+		# (e.g. file on disk from before the new code).
+		with db.lock:
+			db.conn.execute("DELETE FROM canvas_pools")
+			db.conn.commit()
+
+		# Second call: same config → cache hit. MUST still write the pool row.
+		canvas_render.render_canvas(cs, skill_loader=loader, db=db)
+		ph = canvas_render.pool_hash(cs.canvas)
+		assert canvas_persistence.load_pool(db, ph) is not None
+	finally:
+		_cleanup(db, dbpath)
+
+
 # =============================================================
 # CanvasRuntime.remix
 # =============================================================

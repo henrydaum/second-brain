@@ -886,24 +886,26 @@ class WebFrontend(BaseFrontend):
             meta={"title": title, "artist": artist},
         )
         share_url = f"{self._base_url()}/share/{ph}"
+        qr_url = f"/share/{ph}/qr.png"
         return [
-            {"type": "share_link", "share_id": ph, "url": share_url, "kind": "pool"},
+            {"type": "share_link", "share_id": ph, "url": share_url, "qr_url": qr_url, "kind": "pool"},
             {"type": "message", "role": "assistant",
              "content": f'Shared "{title}" by {artist}.' if title else "Shared."},
         ]
 
-    def remix(self, session_id: str, pool_hash: str = "", **_unused) -> list[dict]:
+    def remix(self, session_id: str, pool_hash: str = "", share_id: str = "", path: str = "", **_unused) -> list[dict]:
         """Open a remix of another canvas in the current session.
 
-        Pool-based only: pass ``pool_hash`` (the value embedded in a
-        /share/{pool_hash} URL). The legacy ``path`` / ``share_id`` paths
-        are gone along with the gallery / canvas_shares / share_links
-        infrastructure.
+        ``pool_hash`` is the canonical key. ``share_id`` and ``path`` are
+        accepted as aliases so existing UI callers (share-deep-link
+        handler, gallery item buttons) keep working — they all carry the
+        same value (the pool_hash) under different names.
         """
         key = self.session_key(session_id)
-        if not pool_hash:
-            raise ValueError("remix requires a pool_hash.")
-        return self._remix_from_pool(key, pool_hash)
+        ph = pool_hash or share_id or path
+        if not ph:
+            raise ValueError("remix requires a pool_hash (or share_id / path alias).")
+        return self._remix_from_pool(key, ph)
 
     def _remix_from_pool(self, key: str, pool_hash: str) -> list[dict]:
         """Pool-hash remix: clone canvas_pools entry into a new canvas_id."""
@@ -1009,6 +1011,139 @@ class WebFrontend(BaseFrontend):
             "layers": list(state.get("layers") or []),
         }
 
+    # ── pool-hash listings, share links, QR codes ─────────────────────
+
+    def get_link(self, session_id: str, ip: str, account_id: str,
+                 kind: str = "current", path: str = "",
+                 title: str = "", artist: str = "") -> dict:
+        """Return a /share/{pool_hash} URL for the current canvas or for a
+        ``pool_hash`` passed via ``path``. Does NOT record a share action —
+        get_link is "give me the URL", not "share". Saving a share goes
+        through ``/api/share``.
+
+        Title/artist are accepted for backward compat with the legacy UI
+        signature but are no longer attached at link-mint time; they're
+        only meaningful when an actual share action is recorded.
+        """
+        del title, artist  # ignored under the pool-hash model
+        cr = self._canvas_runtime()
+        db = getattr(self.runtime, "db", None)
+        if cr is None or db is None:
+            raise RuntimeError("share links require the canvas runtime and DB")
+        if kind == "current":
+            key = self.session_key(session_id)
+            cs = cr.for_session(key)
+            if not cs.canvas.layers:
+                raise ValueError("Nothing to share yet — make something first.")
+            snap = self._new_canvas_snap(key) or {}
+            ph = snap.get("pool_hash") or _pool_hash(cs.canvas)
+        elif kind in ("gallery", "archive", "pool"):
+            ph = (path or "").strip()
+            if not ph:
+                raise ValueError("get_link requires a pool_hash via 'path'.")
+        else:
+            raise ValueError(f"unknown link kind: {kind!r}")
+        del account_id, ip  # currently unused; kept for signature compat
+        base = self._base_url()
+        return {
+            "share_id": ph,
+            "url": f"{base}/share/{ph}",
+            "qr_url": f"/share/{ph}/qr.png",
+            "kind": kind,
+        }
+
+    def share_qr_png(self, pool_hash: str) -> bytes | None:
+        """Render a PNG QR code for the canvas's share URL, or None if unknown."""
+        if not self.pool_share_payload(pool_hash):
+            return None
+        try:
+            import io
+            import qrcode
+            url = f"{self._base_url()}/share/{pool_hash}"
+            img = qrcode.make(url)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue()
+        except Exception:
+            logger.exception("share_qr_png failed for pool_hash=%s", pool_hash)
+            return None
+
+    def gallery(self, session_id: str, limit: int = 24, offset: int = 0) -> dict:
+        """Publicly shared canvases, newest first.
+
+        Backed by user_canvas_actions: every "share" action is a vote.
+        We deduplicate by pool_hash and present each unique configuration
+        once, with metadata (title/artist) from its most recent share row.
+        """
+        del session_id  # gallery is global, not per-session
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return {"items": [], "total": 0}
+        return self._listing(db, action="share", limit=limit, offset=offset, owner=None)
+
+    def archive_listing(self, session_id: str, ip: str, account_id: str,
+                        limit: int = 24, offset: int = 0) -> dict:
+        """Canvases this user has saved (i.e. added to their own collection)."""
+        owner = self._owner_id(session_id, ip, account_id)
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return {"items": [], "total": 0}
+        return self._listing(db, action="save", limit=limit, offset=offset, owner=owner)
+
+    def _listing(self, db, *, action: str, limit: int, offset: int,
+                 owner: str | None) -> dict:
+        """Shared implementation for gallery / archive listings."""
+        owner_clause = "AND user_id = ?" if owner else ""
+        sql_count = (
+            f"SELECT COUNT(DISTINCT pool_hash) AS n FROM user_canvas_actions "
+            f"WHERE action = ? {owner_clause}"
+        )
+        # SQL placeholder order is (action, [owner]). Match it exactly.
+        sql_count_params: tuple = (action, owner) if owner else (action,)
+        # Sub-query picks the most recent row per pool_hash so meta_json
+        # follows the latest user-supplied title/artist for that look.
+        sql_page = f"""
+            SELECT a.pool_hash, a.meta_json, a.ts
+              FROM user_canvas_actions a
+              JOIN (
+                SELECT pool_hash, MAX(ts) AS max_ts FROM user_canvas_actions
+                 WHERE action = ? {owner_clause}
+                 GROUP BY pool_hash
+              ) latest
+                ON latest.pool_hash = a.pool_hash AND latest.max_ts = a.ts
+             WHERE a.action = ? {owner_clause}
+             ORDER BY a.ts DESC
+             LIMIT ? OFFSET ?
+        """
+        page_params = (
+            ((action, owner) if owner else (action,))
+            + ((action, owner) if owner else (action,))
+            + (limit, offset)
+        )
+        with db.lock:
+            total = int(db.conn.execute(sql_count, sql_count_params).fetchone()["n"] or 0)
+            rows = db.conn.execute(sql_page, page_params).fetchall()
+        items: list[dict] = []
+        for row in rows:
+            ph = row["pool_hash"]
+            payload = self.pool_share_payload(ph)
+            if payload is None:
+                continue
+            meta = {}
+            try:
+                if row["meta_json"]:
+                    meta = json.loads(row["meta_json"])
+            except (TypeError, ValueError):
+                meta = {}
+            items.append({
+                "pool_hash": ph,
+                "path": ph,  # JS uses `path` as the remix identifier
+                "url": _file_url(Path(payload["image_path"])),
+                "title": str(meta.get("title") or "untitled"),
+                "artist": str(meta.get("artist") or "anonymous"),
+            })
+        return {"items": items, "total": total}
+
     # ── new canvas system: helpers ────────────────────────────────────
 
     def _canvas_runtime(self):
@@ -1040,7 +1175,10 @@ class WebFrontend(BaseFrontend):
             return None
         try:
             rr = _new_render_canvas(
-                cs, skill_loader=skill_registry.get_record, force_new_seed=force_new_seed,
+                cs,
+                skill_loader=skill_registry.get_record,
+                force_new_seed=force_new_seed,
+                db=getattr(self.runtime, "db", None),
             )
         except Exception as e:
             logger.exception("new canvas render failed for session=%s", session_key)
@@ -1113,6 +1251,25 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "canvas": self.server.frontend.canvas_payload(sid)})
         if path == "/api/palettes":
             return self._json({"ok": True, "palettes": self.server.frontend.palettes_payload()})
+        if path == "/api/gallery":
+            qs = parse_qs(parsed.query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
+            try: limit = max(1, min(96, int(qs.get("limit", ["24"])[0])))
+            except (TypeError, ValueError): limit = 24
+            try: offset = max(0, int(qs.get("offset", ["0"])[0]))
+            except (TypeError, ValueError): offset = 0
+            res = self.server.frontend.gallery(sid, limit=limit, offset=offset)
+            return self._json({"ok": True, **res})
+        if path == "/api/archive":
+            qs = parse_qs(parsed.query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
+            try: limit = max(1, min(96, int(qs.get("limit", ["24"])[0])))
+            except (TypeError, ValueError): limit = 24
+            try: offset = max(0, int(qs.get("offset", ["0"])[0]))
+            except (TypeError, ValueError): offset = 0
+            res = self.server.frontend.archive_listing(
+                sid, self.client_address[0], self._cookie_uid(),
+                limit=limit, offset=offset,
+            )
+            return self._json({"ok": True, **res})
         if path.startswith("/share/"):
             tail = path[len("/share/"):]
             share_id, _, sub = tail.partition("/")
@@ -1134,6 +1291,17 @@ class _Handler(BaseHTTPRequestHandler):
                 if img is None:
                     return self.send_error(404)
                 return self._raw_file(Path(img), "image/webp")
+            if sub == "qr.png":
+                raw = self.server.frontend.share_qr_png(share_id)
+                if raw is None:
+                    return self.send_error(404)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
             return self.send_error(404)
         if path == "/api/account":
             qs = parse_qs(parsed.query)
@@ -1214,7 +1382,27 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "events": self.server.frontend.remix(
                     sid,
                     pool_hash=str(body.get("pool_hash") or ""),
+                    share_id=str(body.get("share_id") or ""),
+                    path=str(body.get("path") or ""),
                 )})
+            if self.path == "/api/archive_remix":
+                # Backward-compat alias: same as /api/remix; gallery card buttons
+                # post here with `path` carrying the pool_hash.
+                return self._json({"ok": True, "events": self.server.frontend.remix(
+                    sid, path=str(body.get("path") or ""),
+                )})
+            if self.path == "/api/get_link":
+                try:
+                    res = self.server.frontend.get_link(
+                        sid, self.client_address[0], self._cookie_uid(),
+                        kind=str(body.get("kind") or "current"),
+                        path=str(body.get("path") or ""),
+                        title=str(body.get("title") or ""),
+                        artist=str(body.get("artist") or ""),
+                    )
+                    return self._json({"ok": True, **res})
+                except (ValueError, RuntimeError) as e:
+                    return self._json({"ok": False, "error": str(e)}, 400)
             if self.path == "/api/save":
                 return self._json({"ok": True, "events": self.server.frontend.save_canvas(sid, self.client_address[0], self._cookie_uid(), str(body.get("title") or ""))})
             if self.path == "/api/palette":
