@@ -114,6 +114,7 @@ def render_canvas(
 	skill_loader: Callable[[str], Any],
 	seed: int | None = None,
 	force_new_seed: bool = False,
+	db: Any = None,
 ) -> RenderResult:
 	"""Render ``cs.canvas``'s chain to a WebP file and return the result.
 
@@ -126,6 +127,11 @@ def render_canvas(
 
 	``skill_loader(slug) -> Skill | None`` mirrors what
 	``skill_runner.replay_chain`` accepts; caller provides the lookup.
+
+	If ``db`` is provided, a fresh render also writes the configuration
+	to ``canvas_pools`` (idempotent on pool_hash). That row is what
+	``/share/{pool_hash}`` and remix resolve against — every config that
+	was ever rendered is publicly addressable.
 	"""
 	canvas = cs.canvas
 	if not canvas.layers:
@@ -193,6 +199,15 @@ def render_canvas(
 		# current_input is the final PNG produced by the last layer.
 		with Image.open(current_input) as img:
 			img.save(out_path, format="WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
+
+	# Cache miss → this configuration was just rendered for the first
+	# time. Register it in canvas_pools so it's publicly addressable.
+	if db is not None:
+		try:
+			from canvas.persistence import save_pool
+			save_pool(db, pool_hash=folder.name, state=canvas.to_dict())
+		except Exception:
+			logger.exception("save_pool failed for pool=%s", folder.name)
 
 	logger.info(
 		"render canvas_id=%s pool=%s seed=%d layers=%d",

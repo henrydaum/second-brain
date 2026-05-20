@@ -19,6 +19,7 @@ import logging
 from typing import Any
 
 from canvas import persistence as canvas_persistence
+from canvas.canvas import Canvas
 from canvas.state import CanvasState
 from state_machine.errors import ActionResult, ERROR_INVALID_ACTION
 
@@ -84,6 +85,27 @@ class CanvasRuntime:
 		"""Serialize one canvas to a dict, or None if unknown."""
 		cs = self.get(canvas_id)
 		return cs.to_dict() if cs else None
+
+	def remix(self, pool_hash: str) -> CanvasState | None:
+		"""Materialize a fresh canvas from a pool_hash and register it.
+
+		Looks up ``canvas_pools`` for the state at that hash, builds a
+		brand-new ``CanvasState`` with its own canvas_id (private editing
+		handle), and returns it. The caller is responsible for binding it
+		to a session via ``bind_session``. Returns None if the pool_hash
+		is unknown or the db isn't wired.
+		"""
+		if self.db is None:
+			return None
+		state = canvas_persistence.load_pool(self.db, pool_hash)
+		if state is None:
+			return None
+		# Fresh editing handle; same content.
+		cs = CanvasState(canvas=Canvas.from_dict(state))
+		self.canvases[cs.canvas_id] = cs
+		self._persist(cs)
+		logger.info("remix pool=%s -> new canvas_id=%s", pool_hash, cs.canvas_id)
+		return cs
 
 	def for_session(self, session_key: str) -> CanvasState:
 		"""Return the canvas bound to ``session_key``, creating it lazily.

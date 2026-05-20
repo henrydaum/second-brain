@@ -432,21 +432,52 @@ class Database:
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_image_generations_last_used ON image_generations(last_used)")
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_image_generations_input ON image_generations(input_generation_id)")
 
-		# User-to-canvas interactions. One row per (user, canvas, action,
+		# User-to-canvas interactions. One row per (user, pool_hash, action,
 		# ts). Anonymous link_opens still get rows (web_users has anon
 		# user_ids). The action set is intentionally open-ended via TEXT.
+		#
+		# Keyed on pool_hash (the deterministic hash of the canvas
+		# configuration), NOT canvas_id. A canvas_id is a private editing
+		# handle; pool_hash is the public content identity. So "user U
+		# shared this look" is durable even if the editor mutates onward.
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS user_canvas_actions (
 				id         INTEGER PRIMARY KEY,
 				user_id    TEXT NOT NULL,
-				canvas_id  TEXT NOT NULL,
+				pool_hash  TEXT NOT NULL,
 				action     TEXT NOT NULL,
-				ts         REAL NOT NULL,
-				FOREIGN KEY (canvas_id) REFERENCES canvases(id) ON DELETE CASCADE
+				ts         REAL NOT NULL
 			)
 		""")
+		# Idempotent migration for installs that have the old canvas_id
+		# column (Phase 0 schema). Table is always empty in practice
+		# since no app code wrote to it before this rename.
+		try:
+			self.conn.execute("ALTER TABLE user_canvas_actions RENAME COLUMN canvas_id TO pool_hash")
+		except sqlite3.OperationalError:
+			pass
+		# Optional per-action metadata (title / artist on share, etc).
+		try:
+			self.conn.execute("ALTER TABLE user_canvas_actions ADD COLUMN meta_json TEXT")
+		except sqlite3.OperationalError:
+			pass
+		# Drop old indexes (referencing canvas_id) and create new ones.
+		self.conn.execute("DROP INDEX IF EXISTS idx_user_canvas_actions_canvas")
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_canvas_actions_user ON user_canvas_actions(user_id, action, ts)")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_canvas_actions_canvas ON user_canvas_actions(canvas_id, action)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_canvas_actions_pool ON user_canvas_actions(pool_hash, action)")
+
+		# Canvas pools — one row per unique canvas configuration ever
+		# rendered. Keyed by pool_hash (the renderer's content hash). This
+		# is how /share/{pool_hash} resolves and how remix finds the
+		# source state. INSERT OR IGNORE on render: idempotent dedup.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS canvas_pools (
+				pool_hash   TEXT PRIMARY KEY,
+				state_json  TEXT NOT NULL,
+				created_at  REAL NOT NULL
+			)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_canvas_pools_created ON canvas_pools(created_at)")
 
 		# link_opens mirrors the lazy-add pattern used for `saves` above.
 		try:

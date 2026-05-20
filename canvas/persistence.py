@@ -68,3 +68,42 @@ def delete(db, canvas_id: str) -> None:
 		db.conn.execute("DELETE FROM canvas_states WHERE canvas_id = ?", (canvas_id,))
 		db.conn.commit()
 	logger.debug("delete canvas_id=%s", canvas_id)
+
+
+# =================================================================
+# canvas_pools — public content identity, keyed by pool_hash
+# =================================================================
+
+def save_pool(db, *, pool_hash: str, state: dict) -> None:
+	"""Idempotent insert into canvas_pools keyed by pool_hash.
+
+	``state`` is the canvas portion (size / palette_id / layers) — the
+	render-determining state, not the full CanvasState envelope. Repeat
+	calls with the same hash are no-ops (INSERT OR IGNORE).
+	"""
+	now = time.time()
+	payload = json.dumps(state, separators=(",", ":"))
+	with db.lock:
+		db.conn.execute(
+			"INSERT OR IGNORE INTO canvas_pools (pool_hash, state_json, created_at) "
+			"VALUES (?, ?, ?)",
+			(pool_hash, payload, now),
+		)
+		db.conn.commit()
+	logger.debug("save_pool pool_hash=%s", pool_hash)
+
+
+def load_pool(db, pool_hash: str) -> dict | None:
+	"""Return the canvas-state dict associated with ``pool_hash`` or None."""
+	with db.lock:
+		row = db.conn.execute(
+			"SELECT state_json FROM canvas_pools WHERE pool_hash = ?",
+			(pool_hash,),
+		).fetchone()
+	if not row:
+		return None
+	try:
+		return json.loads(row["state_json"])
+	except (TypeError, ValueError):
+		logger.exception("canvas_pools.state_json invalid for pool_hash=%s", pool_hash)
+		return None
