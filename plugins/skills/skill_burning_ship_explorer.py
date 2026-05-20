@@ -8,6 +8,15 @@ try:
 except NameError:
     art_kit = None
 
+_SPOTS = {
+    "full":      (-0.5,      -0.5,      0.0,  220),  # whole armada
+    "main_ship": (-1.762,    -0.028,    5.0,  300),  # the big iconic ship
+    "antenna":   (-1.625,    -0.0085,   7.5,  400),  # vertical mast above main ship
+    "mini_ship": (-1.7755,   -0.0335,  10.0,  500),  # tiny embedded ship in the main hull
+    "mast":      (-1.7395,   -0.000045,11.0,  500),  # thin top of the antenna
+    "deep_keel": (-1.76225,  -0.03415, 13.0,  600),  # deep-zoom keel detail
+}
+
 
 class BurningShipExplorerSkill(BaseSkill):
     name = 'Burning Ship Explorer'
@@ -17,15 +26,6 @@ class BurningShipExplorerSkill(BaseSkill):
     created_at = 1779667200.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'spot', 'label': 'Spot', 'options': [{'value': 'full', 'label': 'Full Set'}, {'value': 'main_ship', 'label': 'Main Ship'}, {'value': 'antenna', 'label': 'Antenna'}, {'value': 'mini_ship', 'label': 'Embedded Mini-Ship'}, {'value': 'mast', 'label': 'Mast Spire'}, {'value': 'deep_keel', 'label': 'Deep Keel'}], 'default': 'main_ship'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    _SPOTS = {
-        "full":      (-0.5,      -0.5,      0.0,  220),  # whole armada
-        "main_ship": (-1.762,    -0.028,    5.0,  300),  # the big iconic ship
-        "antenna":   (-1.625,    -0.0085,   7.5,  400),  # vertical mast above main ship
-        "mini_ship": (-1.7755,   -0.0335,  10.0,  500),  # tiny embedded ship in the main hull
-        "mast":      (-1.7395,   -0.000045,11.0,  500),  # thin top of the antenna
-        "deep_keel": (-1.76225,  -0.03415, 13.0,  600),  # deep-zoom keel detail
-    }
 
     def run(self, canvas, spot="main_ship", **_):
         cx, cy, zoom_exp, detail = _SPOTS.get(str(spot), _SPOTS["main_ship"])

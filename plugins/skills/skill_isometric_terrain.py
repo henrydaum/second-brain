@@ -9,6 +9,42 @@ try:
 except NameError:
     art_kit = None
 
+def _heightmap(seed, N, mode):
+    h = np.zeros((N, N), dtype=np.float32)
+    if mode == "hills":
+        for r in range(N):
+            for c in range(N):
+                h[r, c] = art_kit.fbm(seed, c * 0.10, r * 0.10, octaves=4)
+    elif mode == "islands":
+        for r in range(N):
+            for c in range(N):
+                h[r, c] = art_kit.fbm(seed, c * 0.09, r * 0.09, octaves=4)
+        # Distance-from-center falloff so the field reads as an island.
+        ys, xs = np.mgrid[0:N, 0:N].astype(np.float32)
+        rad = np.sqrt((xs - N / 2.0) ** 2 + (ys - N / 2.0) ** 2) / (N / 2.0)
+        h = np.clip(h - rad * 0.55, 0.0, 1.0)
+        # Below sea level -> snap to a low flat plateau (the water).
+        sea = 0.18
+        h = np.where(h < sea, sea * 0.6, h)
+    elif mode == "city":
+        for r in range(N):
+            for c in range(N):
+                h[r, c] = art_kit.fbm(seed, c * 0.18, r * 0.18, octaves=3)
+        h = np.round(h * 6.0) / 6.0  # quantize to 6 levels for blocky look
+    elif mode == "mesa":
+        for r in range(N):
+            for c in range(N):
+                h[r, c] = art_kit.fbm(seed, c * 0.06, r * 0.06, octaves=4)
+        h = np.round(h * 4.0) / 4.0  # only 4 plateau levels
+    else:  # village
+        for r in range(N):
+            for c in range(N):
+                h[r, c] = art_kit.fbm(seed, c * 0.20, r * 0.20, octaves=3)
+        h = np.round(h * 5.0) / 5.0
+    h = h - float(h.min())
+    h /= max(float(h.max()), 1e-6)
+    return h
+
 
 class IsometricTerrainSkill(BaseSkill):
     name = 'Isometric Terrain'
@@ -18,42 +54,6 @@ class IsometricTerrainSkill(BaseSkill):
     created_at = 1779667200.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'scene', 'label': 'Scene', 'options': [{'value': 'hills', 'label': 'Rolling Hills'}, {'value': 'islands', 'label': 'Islands'}, {'value': 'city', 'label': 'City Blocks'}, {'value': 'mesa', 'label': 'Stepped Mesa'}, {'value': 'village', 'label': 'Tower Village'}], 'default': 'hills'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    def _heightmap(seed, N, mode):
-        h = np.zeros((N, N), dtype=np.float32)
-        if mode == "hills":
-            for r in range(N):
-                for c in range(N):
-                    h[r, c] = art_kit.fbm(seed, c * 0.10, r * 0.10, octaves=4)
-        elif mode == "islands":
-            for r in range(N):
-                for c in range(N):
-                    h[r, c] = art_kit.fbm(seed, c * 0.09, r * 0.09, octaves=4)
-            # Distance-from-center falloff so the field reads as an island.
-            ys, xs = np.mgrid[0:N, 0:N].astype(np.float32)
-            rad = np.sqrt((xs - N / 2.0) ** 2 + (ys - N / 2.0) ** 2) / (N / 2.0)
-            h = np.clip(h - rad * 0.55, 0.0, 1.0)
-            # Below sea level -> snap to a low flat plateau (the water).
-            sea = 0.18
-            h = np.where(h < sea, sea * 0.6, h)
-        elif mode == "city":
-            for r in range(N):
-                for c in range(N):
-                    h[r, c] = art_kit.fbm(seed, c * 0.18, r * 0.18, octaves=3)
-            h = np.round(h * 6.0) / 6.0  # quantize to 6 levels for blocky look
-        elif mode == "mesa":
-            for r in range(N):
-                for c in range(N):
-                    h[r, c] = art_kit.fbm(seed, c * 0.06, r * 0.06, octaves=4)
-            h = np.round(h * 4.0) / 4.0  # only 4 plateau levels
-        else:  # village
-            for r in range(N):
-                for c in range(N):
-                    h[r, c] = art_kit.fbm(seed, c * 0.20, r * 0.20, octaves=3)
-            h = np.round(h * 5.0) / 5.0
-        h = h - float(h.min())
-        h /= max(float(h.max()), 1e-6)
-        return h
 
     def run(self, canvas, scene="hills", **_):
         s = int(canvas.size)

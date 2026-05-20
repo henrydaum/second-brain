@@ -8,6 +8,15 @@ try:
 except NameError:
     art_kit = None
 
+_SPOTS = {
+    "full":          (-0.5,      0.0,       0.0, 200),  # the whole set
+    "seahorse":      (-0.7453,   0.1127,    9.0, 400),  # west "valley" between cardioid and period-2 bulb
+    "elephant":      ( 0.2825,   0.01,      8.0, 400),  # east valley off the cardioid
+    "triple_spiral": (-0.088,    0.654,     8.0, 400),  # upper antenna, triple-armed spiral
+    "lightning":          (0,   1,       45, 250),  # Mandelbrot edge shows lighting-like dendritic patterns
+    "spiral_galaxy": (-0.74543,  0.11301,  12.0, 600),  # deep seahorse: galactic spirals
+}
+
 
 class MandelbrotExplorerSkill(BaseSkill):
     name = 'Mandelbrot Explorer'
@@ -17,15 +26,6 @@ class MandelbrotExplorerSkill(BaseSkill):
     created_at = 1730000000.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'spot', 'label': 'Spot', 'options': [{'value': 'full', 'label': 'Full Set'}, {'value': 'seahorse', 'label': 'Seahorse Valley'}, {'value': 'elephant', 'label': 'Elephant Valley'}, {'value': 'triple_spiral', 'label': 'Triple Spiral'}, {'value': 'lightning', 'label': 'Lightning'}, {'value': 'spiral_galaxy', 'label': 'Spiral Galaxy'}], 'default': 'full'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    _SPOTS = {
-        "full":          (-0.5,      0.0,       0.0, 200),  # the whole set
-        "seahorse":      (-0.7453,   0.1127,    9.0, 400),  # west "valley" between cardioid and period-2 bulb
-        "elephant":      ( 0.2825,   0.01,      8.0, 400),  # east valley off the cardioid
-        "triple_spiral": (-0.088,    0.654,     8.0, 400),  # upper antenna, triple-armed spiral
-        "lightning":          (0,   1,       45, 250),  # Mandelbrot edge shows lighting-like dendritic patterns
-        "spiral_galaxy": (-0.74543,  0.11301,  12.0, 600),  # deep seahorse: galactic spirals
-    }
 
     def run(self, canvas, spot="full", **_):
         cx, cy, zoom_exp, detail = _SPOTS.get(str(spot), _SPOTS["full"])

@@ -8,6 +8,37 @@ try:
 except NameError:
     art_kit = None
 
+def _split(rect, depth, rng, stop_p=0.15, min_depth=3):
+    # Force a minimum subdivision depth so no single cell ever dominates the
+    # canvas; without this, an early stop at depth 1 produces a giant rect.
+    if depth == 0 or (depth < (8 - min_depth) and rng.random() < stop_p):
+        yield rect
+        return
+    x, y, w, h = rect
+    if w >= h:
+        t = rng.uniform(0.3, 0.7)
+        cut = max(1, int(w * t))
+        yield from _split((x, y, cut, h), depth - 1, rng, stop_p)
+        yield from _split((x + cut, y, w - cut, h), depth - 1, rng, stop_p)
+    else:
+        t = rng.uniform(0.3, 0.7)
+        cut = max(1, int(h * t))
+        yield from _split((x, y, w, cut), depth - 1, rng, stop_p)
+        yield from _split((x, y + cut, w, h - cut), depth - 1, rng, stop_p)
+
+def _pick_color(rng, accent_quota):
+    # Weighted draw: 0.6 chance light-ish ramp pos, 0.3 chance mid, accent_quota chance the top of the ramp.
+    r = rng.random()
+    if r < accent_quota:
+        t = 0.94
+    elif r < 0.5:
+        t = rng.uniform(0.18, 0.42)   # near background/tertiary
+    elif r < 0.85:
+        t = rng.uniform(0.42, 0.7)    # secondary/primary
+    else:
+        t = rng.uniform(0.7, 0.88)    # bright but not accent
+    return art_kit.palette_color(t)
+
 
 class MondrianSubdivisionSkill(BaseSkill):
     name = 'Mondrian Subdivision'
@@ -17,37 +48,6 @@ class MondrianSubdivisionSkill(BaseSkill):
     created_at = 1779667200.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'style', 'label': 'Style', 'options': [{'value': 'mondrian', 'label': 'Classic Mondrian'}, {'value': 'stained_glass', 'label': 'Stained Glass'}, {'value': 'low_poly', 'label': 'Low Poly'}], 'default': 'mondrian'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    def _split(rect, depth, rng, stop_p=0.15, min_depth=3):
-        # Force a minimum subdivision depth so no single cell ever dominates the
-        # canvas; without this, an early stop at depth 1 produces a giant rect.
-        if depth == 0 or (depth < (8 - min_depth) and rng.random() < stop_p):
-            yield rect
-            return
-        x, y, w, h = rect
-        if w >= h:
-            t = rng.uniform(0.3, 0.7)
-            cut = max(1, int(w * t))
-            yield from _split((x, y, cut, h), depth - 1, rng, stop_p)
-            yield from _split((x + cut, y, w - cut, h), depth - 1, rng, stop_p)
-        else:
-            t = rng.uniform(0.3, 0.7)
-            cut = max(1, int(h * t))
-            yield from _split((x, y, w, cut), depth - 1, rng, stop_p)
-            yield from _split((x, y + cut, w, h - cut), depth - 1, rng, stop_p)
-
-    def _pick_color(rng, accent_quota):
-        # Weighted draw: 0.6 chance light-ish ramp pos, 0.3 chance mid, accent_quota chance the top of the ramp.
-        r = rng.random()
-        if r < accent_quota:
-            t = 0.94
-        elif r < 0.5:
-            t = rng.uniform(0.18, 0.42)   # near background/tertiary
-        elif r < 0.85:
-            t = rng.uniform(0.42, 0.7)    # secondary/primary
-        else:
-            t = rng.uniform(0.7, 0.88)    # bright but not accent
-        return art_kit.palette_color(t)
 
     def run(self, canvas, style="mondrian", **_):
         s = int(canvas.size)

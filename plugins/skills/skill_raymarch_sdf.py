@@ -9,6 +9,37 @@ try:
 except NameError:
     art_kit = None
 
+def _smin(a, b, k):
+    """Polynomial smooth-min in [0, k]. Lower k -> sharper join."""
+    h = np.clip(0.5 + 0.5 * (b - a) / k, 0.0, 1.0)
+    return a * h + b * (1.0 - h) - k * h * (1.0 - h)
+
+def _sdf_spheres(x, y):
+    centers = [(-0.35, 0.20, 0.45), (0.30, -0.15, 0.40), (0.10, 0.40, 0.30)]
+    d = None
+    for cx, cy, r in centers:
+        di = np.sqrt((x - cx) ** 2 + (y - cy) ** 2) - r
+        d = di if d is None else _smin(d, di, 0.18)
+    return d
+
+def _sdf_torus(x, y):
+    # Annulus: outer radius - |dist - mean|.
+    r_mean = 0.55
+    thickness = 0.12
+    return np.abs(np.sqrt(x * x + y * y) - r_mean) - thickness
+
+def _sdf_rbox(x, y, hw, hh, r):
+    dx = np.abs(x) - hw
+    dy = np.abs(y) - hh
+    ax = np.maximum(dx, 0.0)
+    ay = np.maximum(dy, 0.0)
+    return np.sqrt(ax * ax + ay * ay) + np.minimum(np.maximum(dx, dy), 0.0) - r
+
+def _sdf_shapes(x, y):
+    box = _sdf_rbox(x + 0.15, y - 0.05, 0.45, 0.30, 0.10)
+    circ = np.sqrt((x - 0.35) ** 2 + (y + 0.30) ** 2) - 0.30
+    return _smin(box, circ, 0.20)
+
 
 class RaymarchSdfSkill(BaseSkill):
     name = 'Raymarch SDF'
@@ -18,37 +49,6 @@ class RaymarchSdfSkill(BaseSkill):
     created_at = 1779667200.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'scene', 'label': 'Scene', 'options': [{'value': 'spheres', 'label': 'Three Spheres'}, {'value': 'torus', 'label': 'Torus'}, {'value': 'shapes', 'label': 'Mixed Shapes'}], 'default': 'spheres'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    def _smin(a, b, k):
-        """Polynomial smooth-min in [0, k]. Lower k -> sharper join."""
-        h = np.clip(0.5 + 0.5 * (b - a) / k, 0.0, 1.0)
-        return a * h + b * (1.0 - h) - k * h * (1.0 - h)
-
-    def _sdf_spheres(x, y):
-        centers = [(-0.35, 0.20, 0.45), (0.30, -0.15, 0.40), (0.10, 0.40, 0.30)]
-        d = None
-        for cx, cy, r in centers:
-            di = np.sqrt((x - cx) ** 2 + (y - cy) ** 2) - r
-            d = di if d is None else _smin(d, di, 0.18)
-        return d
-
-    def _sdf_torus(x, y):
-        # Annulus: outer radius - |dist - mean|.
-        r_mean = 0.55
-        thickness = 0.12
-        return np.abs(np.sqrt(x * x + y * y) - r_mean) - thickness
-
-    def _sdf_rbox(x, y, hw, hh, r):
-        dx = np.abs(x) - hw
-        dy = np.abs(y) - hh
-        ax = np.maximum(dx, 0.0)
-        ay = np.maximum(dy, 0.0)
-        return np.sqrt(ax * ax + ay * ay) + np.minimum(np.maximum(dx, dy), 0.0) - r
-
-    def _sdf_shapes(x, y):
-        box = _sdf_rbox(x + 0.15, y - 0.05, 0.45, 0.30, 0.10)
-        circ = np.sqrt((x - 0.35) ** 2 + (y + 0.30) ** 2) - 0.30
-        return _smin(box, circ, 0.20)
 
     def run(self, canvas, scene="spheres", **_):
         s = int(canvas.size)

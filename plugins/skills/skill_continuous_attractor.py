@@ -9,6 +9,64 @@ try:
 except NameError:
     art_kit = None
 
+def _rossler_trajectory(n, seed):
+    rng = np.random.default_rng(seed)
+    a, b, c = 0.2, 0.2, 5.7  # canonical Rossler producing a clean ribbon
+    dt = 0.02
+
+    x = float(0.1 + rng.uniform(-0.05, 0.05))
+    y = float(0.0)
+    z = float(0.0)
+    for _ in range(2000):
+        dx = -y - z
+        dy = x + a * y
+        dz = b + z * (x - c)
+        x += dx * dt
+        y += dy * dt
+        z += dz * dt
+    xs = np.empty(n, dtype=np.float32)
+    ys = np.empty(n, dtype=np.float32)
+    zs = np.empty(n, dtype=np.float32)
+    for i in range(n):
+        dx = -y - z
+        dy = x + a * y
+        dz = b + z * (x - c)
+        x += dx * dt
+        y += dy * dt
+        z += dz * dt
+        xs[i] = x
+        ys[i] = y
+        zs[i] = z
+    return xs, ys, zs
+
+def _pickover_trajectory(n, seed):
+    # 3D discrete Pickover map. Several known-stable presets, chosen by seed.
+    presets = [
+        (-0.759494, 2.449138,  1.253602, 1.875347),
+        (2.07,     -2.36,      1.20,    -0.66),
+        (-1.4,     -1.1,       0.65,    -1.0),
+        (-1.7,     -1.3,       0.50,     1.5),
+    ]
+    a, b, c, d = presets[int(seed) % len(presets)]
+    x, y, z = 0.1, 0.1, 0.1
+    for _ in range(200):
+        x_n = math.sin(a * y) - z * math.cos(b * x)
+        y_n = z * math.sin(c * x) - math.cos(d * y)
+        z_n = math.sin(x)
+        x, y, z = x_n, y_n, z_n
+    xs = np.empty(n, dtype=np.float32)
+    ys = np.empty(n, dtype=np.float32)
+    zs = np.empty(n, dtype=np.float32)
+    for i in range(n):
+        x_n = math.sin(a * y) - z * math.cos(b * x)
+        y_n = z * math.sin(c * x) - math.cos(d * y)
+        z_n = math.sin(x)
+        x, y, z = x_n, y_n, z_n
+        xs[i] = x
+        ys[i] = y
+        zs[i] = z
+    return xs, ys, zs
+
 
 class ContinuousAttractorSkill(BaseSkill):
     name = 'Continuous Attractor'
@@ -18,64 +76,6 @@ class ContinuousAttractorSkill(BaseSkill):
     created_at = 1779667200.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'system', 'label': 'System', 'options': [{'value': 'rossler', 'label': 'Rossler'}, {'value': 'pickover', 'label': 'Pickover'}], 'default': 'rossler'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    def _rossler_trajectory(n, seed):
-        rng = np.random.default_rng(seed)
-        a, b, c = 0.2, 0.2, 5.7  # canonical Rossler producing a clean ribbon
-        dt = 0.02
-
-        x = float(0.1 + rng.uniform(-0.05, 0.05))
-        y = float(0.0)
-        z = float(0.0)
-        for _ in range(2000):
-            dx = -y - z
-            dy = x + a * y
-            dz = b + z * (x - c)
-            x += dx * dt
-            y += dy * dt
-            z += dz * dt
-        xs = np.empty(n, dtype=np.float32)
-        ys = np.empty(n, dtype=np.float32)
-        zs = np.empty(n, dtype=np.float32)
-        for i in range(n):
-            dx = -y - z
-            dy = x + a * y
-            dz = b + z * (x - c)
-            x += dx * dt
-            y += dy * dt
-            z += dz * dt
-            xs[i] = x
-            ys[i] = y
-            zs[i] = z
-        return xs, ys, zs
-
-    def _pickover_trajectory(n, seed):
-        # 3D discrete Pickover map. Several known-stable presets, chosen by seed.
-        presets = [
-            (-0.759494, 2.449138,  1.253602, 1.875347),
-            (2.07,     -2.36,      1.20,    -0.66),
-            (-1.4,     -1.1,       0.65,    -1.0),
-            (-1.7,     -1.3,       0.50,     1.5),
-        ]
-        a, b, c, d = presets[int(seed) % len(presets)]
-        x, y, z = 0.1, 0.1, 0.1
-        for _ in range(200):
-            x_n = math.sin(a * y) - z * math.cos(b * x)
-            y_n = z * math.sin(c * x) - math.cos(d * y)
-            z_n = math.sin(x)
-            x, y, z = x_n, y_n, z_n
-        xs = np.empty(n, dtype=np.float32)
-        ys = np.empty(n, dtype=np.float32)
-        zs = np.empty(n, dtype=np.float32)
-        for i in range(n):
-            x_n = math.sin(a * y) - z * math.cos(b * x)
-            y_n = z * math.sin(c * x) - math.cos(d * y)
-            z_n = math.sin(x)
-            x, y, z = x_n, y_n, z_n
-            xs[i] = x
-            ys[i] = y
-            zs[i] = z
-        return xs, ys, zs
 
     def run(self, canvas, system="rossler", **_):
         s = int(canvas.size)

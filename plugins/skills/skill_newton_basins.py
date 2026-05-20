@@ -9,6 +9,19 @@ try:
 except NameError:
     art_kit = None
 
+def _roots_of_unity(n):
+    return [math.cos(2 * math.pi * k / n) + 1j * math.sin(2 * math.pi * k / n) for k in range(n)]
+
+def _polys():
+    return {
+        "cubic":     (lambda z: z**3 - 1,        lambda z: 3 * z**2,           _roots_of_unity(3), 1.6),
+        "perturbed": (lambda z: z**3 - 2*z + 2,  lambda z: 3 * z**2 - 2,       None,               1.8),
+        "quartic":   (lambda z: z**4 - 1,        lambda z: 4 * z**3,           _roots_of_unity(4), 1.6),
+        "quintic":   (lambda z: z**5 - 1,        lambda z: 5 * z**4,           _roots_of_unity(5), 1.6),
+        "sextic":    (lambda z: z**6 - 1,        lambda z: 6 * z**5,           _roots_of_unity(6), 1.6),
+        "octic":     (lambda z: z**8 - 1,        lambda z: 8 * z**7,           _roots_of_unity(8), 1.6),
+    }
+
 
 class NewtonBasinsSkill(BaseSkill):
     name = 'Newton Basins'
@@ -18,19 +31,6 @@ class NewtonBasinsSkill(BaseSkill):
     created_at = 1779667200.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'polynomial', 'label': 'Polynomial', 'options': [{'value': 'cubic', 'label': 'z^3 - 1 (three roots)'}, {'value': 'perturbed', 'label': 'z^3 - 2z + 2 (cycles)'}, {'value': 'quartic', 'label': 'z^4 - 1 (four roots)'}, {'value': 'quintic', 'label': 'z^5 - 1 (five roots)'}, {'value': 'sextic', 'label': 'z^6 - 1 (six roots)'}, {'value': 'octic', 'label': 'z^8 - 1 (eight roots)'}], 'default': 'cubic'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    def _roots_of_unity(n):
-        return [math.cos(2 * math.pi * k / n) + 1j * math.sin(2 * math.pi * k / n) for k in range(n)]
-
-    def _polys():
-        return {
-            "cubic":     (lambda z: z**3 - 1,        lambda z: 3 * z**2,           _roots_of_unity(3), 1.6),
-            "perturbed": (lambda z: z**3 - 2*z + 2,  lambda z: 3 * z**2 - 2,       None,               1.8),
-            "quartic":   (lambda z: z**4 - 1,        lambda z: 4 * z**3,           _roots_of_unity(4), 1.6),
-            "quintic":   (lambda z: z**5 - 1,        lambda z: 5 * z**4,           _roots_of_unity(5), 1.6),
-            "sextic":    (lambda z: z**6 - 1,        lambda z: 6 * z**5,           _roots_of_unity(6), 1.6),
-            "octic":     (lambda z: z**8 - 1,        lambda z: 8 * z**7,           _roots_of_unity(8), 1.6),
-        }
 
     def run(self, canvas, polynomial="cubic", **_):
         s = int(canvas.size)

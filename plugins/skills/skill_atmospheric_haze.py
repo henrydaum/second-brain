@@ -8,6 +8,12 @@ try:
 except NameError:
     art_kit = None
 
+def _desaturate(rgb, amount):
+    # rgb: float32 (H, W, 3). amount in [0, 1].
+    lum = 0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]
+    gray = np.stack([lum, lum, lum], axis=-1)
+    return rgb * (1.0 - amount[..., None]) + gray * amount[..., None]
+
 
 class AtmosphericHazeSkill(BaseSkill):
     name = 'Atmospheric Haze'
@@ -17,12 +23,6 @@ class AtmosphericHazeSkill(BaseSkill):
     created_at = 1779667200.0
     hidden = False
     controls = [{'type': 'palette', 'name': 'palette', 'label': 'Palette'}, {'type': 'enum', 'name': 'direction', 'label': 'Direction', 'options': [{'value': 'top', 'label': 'Top (Atmospheric)'}, {'value': 'bottom', 'label': 'Bottom (Low Fog)'}, {'value': 'both', 'label': 'Both Ends'}], 'default': 'top'}, {'type': 'slider', 'name': 'strength', 'label': 'Strength', 'min': 0.0, 'max': 1.0, 'step': 0.05, 'default': 0.45}]
-
-    def _desaturate(rgb, amount):
-        # rgb: float32 (H, W, 3). amount in [0, 1].
-        lum = 0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]
-        gray = np.stack([lum, lum, lum], axis=-1)
-        return rgb * (1.0 - amount[..., None]) + gray * amount[..., None]
 
     def run(self, canvas, direction="top", strength=0.45, **_):
         img = canvas.image.convert("RGB")

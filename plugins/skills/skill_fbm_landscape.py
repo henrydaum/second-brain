@@ -8,6 +8,14 @@ try:
 except NameError:
     art_kit = None
 
+def _fbm_grid(seed, grid_size, freq, octaves):
+    """Sample art_kit.fbm on a `grid_size x grid_size` lattice. Scalar fbm; OK at 192-256."""
+    out = np.empty((grid_size, grid_size), dtype=np.float32)
+    for r in range(grid_size):
+        for c in range(grid_size):
+            out[r, c] = art_kit.fbm(seed, c * freq, r * freq, octaves=octaves)
+    return out
+
 
 class FbmLandscapeSkill(BaseSkill):
     name = 'fBm Landscape'
@@ -17,14 +25,6 @@ class FbmLandscapeSkill(BaseSkill):
     created_at = 1779667200.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'regime', 'label': 'Regime', 'options': [{'value': 'clouds', 'label': 'Clouds'}, {'value': 'terrain', 'label': 'Terrain'}, {'value': 'magma', 'label': 'Magma'}, {'value': 'nebula', 'label': 'Nebula'}, {'value': 'ridges', 'label': 'Ridged Turbulence'}], 'default': 'nebula'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    def _fbm_grid(seed, grid_size, freq, octaves):
-        """Sample art_kit.fbm on a `grid_size x grid_size` lattice. Scalar fbm; OK at 192-256."""
-        out = np.empty((grid_size, grid_size), dtype=np.float32)
-        for r in range(grid_size):
-            for c in range(grid_size):
-                out[r, c] = art_kit.fbm(seed, c * freq, r * freq, octaves=octaves)
-        return out
 
     def run(self, canvas, regime="nebula", **_):
         s = int(canvas.size)

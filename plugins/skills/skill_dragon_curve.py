@@ -9,6 +9,35 @@ try:
 except NameError:
     art_kit = None
 
+def _dragon_segments(iters):
+    sentence = art_kit.lindenmayer("FX", {"X": "X+YF+", "Y": "-FX-Y"}, iters)
+    return art_kit.turtle_segments(sentence, start=(0.0, 0.0), heading=0.0,
+                                   step=1.0, turn=math.radians(90.0))
+
+def _terdragon_segments(iters):
+    # axiom F, rules F -> F+F-F at 120 degrees.
+    sentence = art_kit.lindenmayer("F", {"F": "F+F-F"}, iters)
+    return art_kit.turtle_segments(sentence, start=(0.0, 0.0), heading=0.0,
+                                   step=1.0, turn=math.radians(120.0))
+
+def _rotate(segs, deg, ox, oy):
+    a = math.radians(deg)
+    ca, sa = math.cos(a), math.sin(a)
+    out = []
+    for x1, y1, x2, y2 in segs:
+        dx1, dy1 = x1 - ox, y1 - oy
+        dx2, dy2 = x2 - ox, y2 - oy
+        out.append((
+            ox + dx1 * ca - dy1 * sa, oy + dx1 * sa + dy1 * ca,
+            ox + dx2 * ca - dy2 * sa, oy + dx2 * sa + dy2 * ca,
+        ))
+    return out
+
+def _bbox(segs):
+    xs = [p for s in segs for p in (s[0], s[2])]
+    ys = [p for s in segs for p in (s[1], s[3])]
+    return min(xs), min(ys), max(xs), max(ys)
+
 
 class DragonCurveSkill(BaseSkill):
     name = 'Dragon Curve'
@@ -18,35 +47,6 @@ class DragonCurveSkill(BaseSkill):
     created_at = 1779667200.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'variant', 'label': 'Variant', 'options': [{'value': 'dragon', 'label': 'Dragon'}, {'value': 'twin', 'label': 'Twin Dragon'}, {'value': 'terdragon', 'label': 'Terdragon (3-fold)'}], 'default': 'dragon'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    def _dragon_segments(iters):
-        sentence = art_kit.lindenmayer("FX", {"X": "X+YF+", "Y": "-FX-Y"}, iters)
-        return art_kit.turtle_segments(sentence, start=(0.0, 0.0), heading=0.0,
-                                       step=1.0, turn=math.radians(90.0))
-
-    def _terdragon_segments(iters):
-        # axiom F, rules F -> F+F-F at 120 degrees.
-        sentence = art_kit.lindenmayer("F", {"F": "F+F-F"}, iters)
-        return art_kit.turtle_segments(sentence, start=(0.0, 0.0), heading=0.0,
-                                       step=1.0, turn=math.radians(120.0))
-
-    def _rotate(segs, deg, ox, oy):
-        a = math.radians(deg)
-        ca, sa = math.cos(a), math.sin(a)
-        out = []
-        for x1, y1, x2, y2 in segs:
-            dx1, dy1 = x1 - ox, y1 - oy
-            dx2, dy2 = x2 - ox, y2 - oy
-            out.append((
-                ox + dx1 * ca - dy1 * sa, oy + dx1 * sa + dy1 * ca,
-                ox + dx2 * ca - dy2 * sa, oy + dx2 * sa + dy2 * ca,
-            ))
-        return out
-
-    def _bbox(segs):
-        xs = [p for s in segs for p in (s[0], s[2])]
-        ys = [p for s in segs for p in (s[1], s[3])]
-        return min(xs), min(ys), max(xs), max(ys)
 
     def run(self, canvas, variant="dragon", **_):
         s = int(canvas.size)

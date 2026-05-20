@@ -10,6 +10,17 @@ try:
 except NameError:
     art_kit = None
 
+_SHAPES = {
+    "snowflake":      ("F--F--F",   {"F": "F+F--F+F"},                 60.0, 5),
+    "anti_snowflake": ("F++F++F",   {"F": "F-F++F-F"},                 60.0, 5),
+    "island":         ("F+F+F+F",   {"F": "F+F-F-FF+F+F-F"},           90.0, 3),
+}
+
+def _segments_bbox(segs):
+    xs = [p for s in segs for p in (s[0], s[2])]
+    ys = [p for s in segs for p in (s[1], s[3])]
+    return min(xs), min(ys), max(xs), max(ys)
+
 
 class KochSnowflakeSkill(BaseSkill):
     name = 'Koch Snowflake'
@@ -19,17 +30,6 @@ class KochSnowflakeSkill(BaseSkill):
     created_at = 1779667200.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'shape', 'label': 'Shape', 'options': [{'value': 'snowflake', 'label': 'Snowflake'}, {'value': 'anti_snowflake', 'label': 'Anti-Snowflake'}, {'value': 'island', 'label': 'Koch Island'}], 'default': 'snowflake'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    _SHAPES = {
-        "snowflake":      ("F--F--F",   {"F": "F+F--F+F"},                 60.0, 5),
-        "anti_snowflake": ("F++F++F",   {"F": "F-F++F-F"},                 60.0, 5),
-        "island":         ("F+F+F+F",   {"F": "F+F-F-FF+F+F-F"},           90.0, 3),
-    }
-
-    def _segments_bbox(segs):
-        xs = [p for s in segs for p in (s[0], s[2])]
-        ys = [p for s in segs for p in (s[1], s[3])]
-        return min(xs), min(ys), max(xs), max(ys)
 
     def run(self, canvas, shape="snowflake", **_):
         s = int(canvas.size)

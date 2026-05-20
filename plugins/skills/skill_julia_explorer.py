@@ -8,6 +8,17 @@ try:
 except NameError:
     art_kit = None
 
+_SPOTS = {
+    "dendrite":  ( 0.0,     1.0,     0.0, 250),   # c = i; thin tree-like fractal
+    "rabbit":    (-0.123,   0.745,   0.0, 250),   # the Douady rabbit
+    "san_marco": (-0.75,    0.0,     0.0, 250),   # symmetric basin shaped like the cathedral
+    "siegel":    (-0.391,  -0.587,   0.0, 280),   # quasi-circle Siegel disk
+    "dragon":    (-0.8,     0.156,   0.0, 250),   # curling dragon-like arms
+    "spiral":    (-0.7269,  0.1889,  0.0, 300),   # tight twin-spiral
+    "airplane":  (-1.755,   0.0,     0.0, 250),   # real-axis cantor-like airplane
+    "dust":      ( 0.45,    0.1428,  0.0, 220),   # totally disconnected dust
+}
+
 
 class JuliaExplorerSkill(BaseSkill):
     name = 'Julia Explorer'
@@ -17,17 +28,6 @@ class JuliaExplorerSkill(BaseSkill):
     created_at = 1730000000.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'spot', 'label': 'Spot', 'options': [{'value': 'dendrite', 'label': 'Dendrite'}, {'value': 'rabbit', 'label': 'Douady Rabbit'}, {'value': 'san_marco', 'label': 'San Marco'}, {'value': 'siegel', 'label': 'Siegel Disk'}, {'value': 'dragon', 'label': 'Dragon'}, {'value': 'spiral', 'label': 'Spiral'}, {'value': 'airplane', 'label': 'Airplane'}, {'value': 'dust', 'label': 'Cantor Dust'}], 'default': 'dragon'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    _SPOTS = {
-        "dendrite":  ( 0.0,     1.0,     0.0, 250),   # c = i; thin tree-like fractal
-        "rabbit":    (-0.123,   0.745,   0.0, 250),   # the Douady rabbit
-        "san_marco": (-0.75,    0.0,     0.0, 250),   # symmetric basin shaped like the cathedral
-        "siegel":    (-0.391,  -0.587,   0.0, 280),   # quasi-circle Siegel disk
-        "dragon":    (-0.8,     0.156,   0.0, 250),   # curling dragon-like arms
-        "spiral":    (-0.7269,  0.1889,  0.0, 300),   # tight twin-spiral
-        "airplane":  (-1.755,   0.0,     0.0, 250),   # real-axis cantor-like airplane
-        "dust":      ( 0.45,    0.1428,  0.0, 220),   # totally disconnected dust
-    }
 
     def run(self, canvas, spot="dragon", **_):
         jx, jy, zoom_exp, detail = _SPOTS.get(str(spot), _SPOTS["dragon"])

@@ -8,6 +8,18 @@ try:
 except NameError:
     art_kit = None
 
+def _hex_polygon(cx, cy, r):
+    # Pointy-top hexagon: vertices at 30, 90, 150, 210, 270, 330 degrees.
+    pts = []
+    for i in range(6):
+        a = math.radians(60 * i - 30)
+        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    return pts
+
+def _hex_top_face(cx, cy, r):
+    # Top face for iso-towers: same as hex polygon, drawn at the elevated y.
+    return _hex_polygon(cx, cy, r)
+
 
 class HexMosaicSkill(BaseSkill):
     name = 'Hex Mosaic'
@@ -17,18 +29,6 @@ class HexMosaicSkill(BaseSkill):
     created_at = 1779667200.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'style', 'label': 'Style', 'options': [{'value': 'gradient', 'label': 'Radial Gradient'}, {'value': 'fbm', 'label': 'fBm Regions'}, {'value': 'iso_towers', 'label': 'Iso Towers'}], 'default': 'fbm'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    def _hex_polygon(cx, cy, r):
-        # Pointy-top hexagon: vertices at 30, 90, 150, 210, 270, 330 degrees.
-        pts = []
-        for i in range(6):
-            a = math.radians(60 * i - 30)
-            pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
-        return pts
-
-    def _hex_top_face(cx, cy, r):
-        # Top face for iso-towers: same as hex polygon, drawn at the elevated y.
-        return _hex_polygon(cx, cy, r)
 
     def run(self, canvas, style="fbm", **_):
         s = int(canvas.size)

@@ -8,6 +8,24 @@ try:
 except NameError:
     art_kit = None
 
+_PRESETS = {
+    # f, k, steps -- chosen so the resulting B texture is mature, not noisy.
+    # Native grid is 384x384; values picked from the canonical mitchell map
+    # and verified to produce the named texture at this scale.
+    "spots":  (0.0540, 0.0620, 5000),
+    "maze":   (0.0290, 0.0570, 5000),
+    "worms":  (0.0780, 0.0610, 5000),
+    "coral":  (0.0620, 0.0620, 5000),
+    "uskate": (0.0620, 0.0609, 6000),
+}
+
+def _laplacian(z):
+    return (
+        np.roll(z, 1, 0) + np.roll(z, -1, 0)
+        + np.roll(z, 1, 1) + np.roll(z, -1, 1)
+        - 4.0 * z
+    )
+
 
 class GrayScottSkill(BaseSkill):
     name = 'Gray-Scott'
@@ -17,24 +35,6 @@ class GrayScottSkill(BaseSkill):
     created_at = 1779667200.0
     hidden = False
     controls = [{'type': 'enum', 'name': 'regime', 'label': 'Regime', 'options': [{'value': 'spots', 'label': 'Spots'}, {'value': 'maze', 'label': 'Maze'}, {'value': 'worms', 'label': 'Worms'}, {'value': 'coral', 'label': 'Coral'}, {'value': 'uskate', 'label': 'U-skate (solitons)'}], 'default': 'coral'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
-
-    _PRESETS = {
-        # f, k, steps -- chosen so the resulting B texture is mature, not noisy.
-        # Native grid is 384x384; values picked from the canonical mitchell map
-        # and verified to produce the named texture at this scale.
-        "spots":  (0.0540, 0.0620, 5000),
-        "maze":   (0.0290, 0.0570, 5000),
-        "worms":  (0.0780, 0.0610, 5000),
-        "coral":  (0.0620, 0.0620, 5000),
-        "uskate": (0.0620, 0.0609, 6000),
-    }
-
-    def _laplacian(z):
-        return (
-            np.roll(z, 1, 0) + np.roll(z, -1, 0)
-            + np.roll(z, 1, 1) + np.roll(z, -1, 1)
-            - 4.0 * z
-        )
 
     def run(self, canvas, regime="coral", **_):
         s = int(canvas.size)
