@@ -46,6 +46,9 @@ class SecondBrainContext:
     orchestrator: Any = None     # Orchestrator instance (tools only)
     runtime: Any = None          # ConversationRuntime — present for tasks that
                                  # need to drive a state-machine session.
+    canvas: Any = None           # CanvasRuntime — the parallel state machine for
+                                 # canvases. Tools and tasks reach the new canvas
+                                 # API via context.canvas.handle_action(...).
     root_dir: Any = None         # Project root for repo/plugin operations.
     command_registry: Any = None # Slash-command registry for command plugins.
     session_key: str | None = None # Frontend conversation/session key, when available.
@@ -62,6 +65,7 @@ class SecondBrainContext:
 def build_context(db, config: dict, services: dict, call_tool=None,
                    tool_registry=None, orchestrator=None,
                    runtime=None,
+                   canvas=None,
                    root_dir=None, command_registry=None,
                    session_key: str | None = None,
                    user_initiated: bool = False,
@@ -124,6 +128,12 @@ def build_context(db, config: dict, services: dict, call_tool=None,
 
     from plugins.skills.helpers.art_kit import build_namespace as _build_art_kit
 
+    # Callers that don't know about the canvas runtime (existing
+    # orchestrator/tool_registry sites) get it via the services dict, which
+    # the bootstrap populates once. Explicit ``canvas=`` wins if passed.
+    if canvas is None:
+        canvas = services.get("canvas")
+
     ctx = SecondBrainContext(
         db=db,
         config=config,
@@ -135,6 +145,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         skill_registry=skill_registry,
         orchestrator=orchestrator,
         runtime=runtime,
+        canvas=canvas,
         root_dir=root_dir,
         command_registry=command_registry,
         session_key=session_key,

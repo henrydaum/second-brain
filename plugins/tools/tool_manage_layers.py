@@ -1,82 +1,117 @@
 """manage_layers: agent-side control over the canvas chain (delete/move/clear).
 
-Thin adapter onto the DeleteLayer / MoveLayer / ResetCanvas state-machine
-actions; lets the agent reuse the same CANVAS_ACTION_* event lifecycle
-that user clicks already emit.
+Routes through the new CanvasRuntime: ``context.canvas.handle_action(...)``
+for the mutation, then ``render_canvas(...)`` to refresh the image (unless
+the action cleared the chain, in which case there's nothing to render).
 """
 
 from __future__ import annotations
 
 import logging
 
+from canvas.render import render_canvas
 from plugins.BaseTool import BaseTool, ToolResult
-from plugins.tools.helpers import layered_canvas as lc
 
 logger = logging.getLogger("ManageLayers")
 
 
-def _enact(context, session_key: str, action_type: str, payload: dict) -> ToolResult:
-    runtime = getattr(context, "runtime", None)
-    if runtime is None:
-        return ToolResult.failed("runtime not bound; cannot enact canvas action")
-    session = runtime.get_session(session_key) if hasattr(runtime, "get_session") else None
-    cs = getattr(session, "cs", None) if session else None
-    if cs is None:
-        return ToolResult.failed("no live conversation state for this session")
-    try:
-        result = cs.enact(action_type, payload, actor_id="agent")
-    except Exception as e:
-        logger.exception("manage_layers enact crashed: action=%s", action_type)
-        return ToolResult.failed(str(e))
-    if not result.ok:
-        return ToolResult.failed(result.error.message if result.error else (result.message or "action failed"))
-    snap = (result.data or {}).get("canvas") or lc.canvas(session_key) or {}
-    attach = [snap["path"]] if snap and snap.get("path") else []
-    return ToolResult(data={"canvas": snap, "chain": snap.get("chain") or []},
-                      llm_summary="", attachment_paths=attach)
+def _snap_after(cs, render_result) -> dict:
+	"""Build the canvas-dict shape the frontend (and old callers) expect."""
+	if render_result is None:
+		return {
+			"path": None,
+			"chain": list(cs.canvas.layers),
+			"size": cs.canvas.size,
+			"palette_id": cs.canvas.palette_id,
+			"canvas_id": cs.canvas_id,
+		}
+	return {
+		"path": str(render_result.image_path),
+		"chain": list(cs.canvas.layers),
+		"size": cs.canvas.size,
+		"palette_id": cs.canvas.palette_id,
+		"canvas_id": cs.canvas_id,
+		"pool_hash": render_result.pool_hash,
+		"seed": render_result.seed,
+		"cache_hit": render_result.cache_hit,
+	}
+
+
+def _enact_and_render(context, action_type: str, payload: dict) -> ToolResult:
+	"""Mutate via context.canvas, then render if the chain still has layers."""
+	session_key = getattr(context, "session_key", None) or "local"
+	canvas_rt = getattr(context, "canvas", None)
+	skill_registry = getattr(context, "skill_registry", None)
+	if canvas_rt is None:
+		return ToolResult.failed("canvas runtime not available on context")
+	cs = canvas_rt.for_session(session_key)
+	result = canvas_rt.handle_action(cs.canvas_id, action_type, payload)
+	if not result.ok:
+		msg = result.error.message if result.error else (result.message or f"{action_type} failed")
+		return ToolResult.failed(msg)
+
+	if not cs.canvas.layers:
+		snap = _snap_after(cs, None)
+		return ToolResult(data={"canvas": snap, "chain": []}, llm_summary="")
+
+	if skill_registry is None:
+		return ToolResult.failed("skill registry not available; cannot re-render")
+
+	try:
+		render_result = render_canvas(cs, skill_loader=skill_registry.get_record)
+	except Exception as e:
+		logger.exception("manage_layers render crashed: action=%s", action_type)
+		return ToolResult.failed(str(e))
+
+	snap = _snap_after(cs, render_result)
+	return ToolResult(
+		data={"canvas": snap, "chain": snap["chain"]},
+		llm_summary="",
+		attachment_paths=[snap["path"]],
+	)
 
 
 class ManageLayers(BaseTool):
-    name = "manage_layers"
-    description = (
-        "Edit the canvas layer chain (max 4 layers: 1 creation + up to 3 "
-        "transforms). action=delete removes layer at chain_index (0 is the "
-        "creation — deleting it clears the canvas). action=move reorders from "
-        "from_index to to_index; layer 0 must stay a creation. action=clear "
-        "wipes the canvas entirely. Surviving layers are replayed end-to-end "
-        "to rebuild the image."
-    )
-    max_calls = 4
-    parameters = {
-        "type": "object",
-        "properties": {
-            "action": {"type": "string", "enum": ["delete", "move", "clear"]},
-            "chain_index": {"type": "integer", "description": "Target layer index for delete."},
-            "from_index": {"type": "integer", "description": "Source layer index for move."},
-            "to_index": {"type": "integer", "description": "Destination layer index for move."},
-        },
-        "required": ["action"],
-    }
+	name = "manage_layers"
+	description = (
+		"Edit the canvas layer chain (max 4 layers: 1 creation + up to 3 "
+		"transforms). action=delete removes layer at chain_index (0 is the "
+		"creation — deleting it clears the canvas). action=move reorders from "
+		"from_index to to_index; layer 0 must stay a creation. action=clear "
+		"wipes the canvas entirely. Surviving layers are replayed end-to-end "
+		"to rebuild the image."
+	)
+	max_calls = 4
+	parameters = {
+		"type": "object",
+		"properties": {
+			"action": {"type": "string", "enum": ["delete", "move", "clear"]},
+			"chain_index": {"type": "integer", "description": "Target layer index for delete."},
+			"from_index": {"type": "integer", "description": "Source layer index for move."},
+			"to_index": {"type": "integer", "description": "Destination layer index for move."},
+		},
+		"required": ["action"],
+	}
 
-    def run(self, context, **kwargs) -> ToolResult:
-        session_key = getattr(context, "session_key", None) or "local"
-        action = str(kwargs.get("action") or "").lower()
-        if action == "clear":
-            result = _enact(context, session_key, "reset_canvas", {})
-            if result.data:
-                result.llm_summary = "Cleared the canvas."
-            return result
-        if action == "delete":
-            idx = int(kwargs.get("chain_index", -1))
-            result = _enact(context, session_key, "delete_canvas_layer", {"chain_index": idx})
-            if result.data:
-                result.llm_summary = f"Deleted layer {idx}."
-            return result
-        if action == "move":
-            fi = int(kwargs.get("from_index", -1))
-            ti = int(kwargs.get("to_index", -1))
-            result = _enact(context, session_key, "move_canvas_layer", {"from_index": fi, "to_index": ti})
-            if result.data:
-                result.llm_summary = f"Moved layer {fi} to position {ti}."
-            return result
-        return ToolResult.failed(f"Unknown action '{action}'. Use delete, move, or clear.")
+	def run(self, context, **kwargs) -> ToolResult:
+		"""Dispatch on the ``action`` argument to the matching canvas action."""
+		action = str(kwargs.get("action") or "").lower()
+		if action == "clear":
+			result = _enact_and_render(context, "clear", {})
+			if result.data:
+				result.llm_summary = "Cleared the canvas."
+			return result
+		if action == "delete":
+			idx = int(kwargs.get("chain_index", -1))
+			result = _enact_and_render(context, "remove_layer", {"chain_index": idx})
+			if result.data:
+				result.llm_summary = f"Deleted layer {idx}."
+			return result
+		if action == "move":
+			fi = int(kwargs.get("from_index", -1))
+			ti = int(kwargs.get("to_index", -1))
+			result = _enact_and_render(context, "move_layer", {"from_index": fi, "to_index": ti})
+			if result.data:
+				result.llm_summary = f"Moved layer {fi} to position {ti}."
+			return result
+		return ToolResult.failed(f"Unknown action '{action}'. Use delete, move, or clear.")

@@ -6,6 +6,7 @@ import logging
 import threading
 
 from agent.system_prompt import build_prompt_sections
+from canvas.runtime import CanvasRuntime
 from config import config_manager
 from events.event_bus import bus
 from plugins.BaseCommand import BaseCommand
@@ -154,6 +155,12 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
 def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir,
                           skill_registry=None):
     """Internal helper to handle conversation runtime."""
+    # Parallel canvas state machine. Lives in the same shared services bag so
+    # build_context picks it up wherever a SecondBrainContext is built —
+    # tools/tasks reach it via context.canvas.
+    if "canvas" not in services:
+        services["canvas"] = CanvasRuntime(db=scaffold.db)
+
     ref = {}
     registry = CommandRegistry(
         lambda session_key=None: build_context(

@@ -19,6 +19,7 @@ from plugins.helpers import share_links, stripe_client, web_auth
 
 from PIL import Image
 
+from canvas.render import render_canvas as _new_render_canvas
 from config import config_manager
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
 from plugins.skills.helpers import skill_scoring
@@ -847,36 +848,46 @@ class WebFrontend(BaseFrontend):
         return events
 
     def canvas_payload(self, session_id: str) -> dict:
+        """Return the current canvas (new system), rendering on-demand if needed."""
         key = self.session_key(session_id)
-        return _canvas_payload_full(self.runtime, key, canvas(key))
+        snap = self._new_canvas_snap(key) or {}
+        return _canvas_payload_full(self.runtime, key, snap)
 
     def palettes_payload(self) -> list[dict]:
         return [p.to_dict() for p in list_palettes()]
 
     def set_palette(self, session_id: str, palette_id: str) -> list[dict]:
         key = self.session_key(session_id)
-        return self._canvas_action_events(key, "set_canvas_palette", {"palette_id": palette_id}, fail_prefix="Palette replay failed")
+        return self._new_canvas_action_events(
+            key, "set_palette", {"palette_id": palette_id}, fail_prefix="Palette replay failed",
+        )
 
-    def set_skill_control(self, session_id: str, chain_index: int, name: str, value, action: str = "") -> list[dict]:
-        """Update one control on a chain entry, then replay the chain."""
+    def set_skill_control(self, session_id: str, chain_index: int, name: str, value, _action: str = "") -> list[dict]:
+        """Update one control on a chain entry, then re-render.
+
+        The legacy ``_action`` parameter (e.g. "randomize") is intentionally
+        unused under the new canvas system; reseed-on-control belongs in a
+        future renderer hook, not here. Kept in the signature so the HTTP
+        handler can keep passing it positionally without changes.
+        """
+        del _action  # intentionally unused; see docstring
         key = self.session_key(session_id)
-        return self._canvas_action_events(
-            key, "set_skill_control",
-            {"chain_index": chain_index, "name": name, "value": value, "action": action},
+        return self._new_canvas_action_events(
+            key, "set_control",
+            {"chain_index": chain_index, "name": name, "value": value},
             fail_prefix="Control replay failed",
         )
 
     def delete_layer(self, session_id: str, chain_index: int) -> list[dict]:
         """Remove one entry from the chain and re-render. Deleting index 0 clears the canvas."""
         key = self.session_key(session_id)
-        # The action emits a normal hero_image once the chain re-renders; if
-        # the deletion cleared the canvas we synthesize the canvas_reset event
-        # the UI expects.
-        events = self._canvas_action_events(
-            key, "delete_canvas_layer", {"chain_index": chain_index},
+        events = self._new_canvas_action_events(
+            key, "remove_layer", {"chain_index": chain_index},
             fail_prefix="Delete layer failed",
         )
-        if chain_index == 0 and events and events[0].get("type") == "hero_image":
+        # If the deletion left an empty chain, surface the canvas_reset event
+        # the UI expects instead of a hero_image-less response.
+        if events and events[0].get("type") == "hero_image" and not (events[0].get("canvas") or {}).get("path"):
             return [{"type": "canvas_reset"}]
         return events
 
@@ -1106,29 +1117,107 @@ class WebFrontend(BaseFrontend):
         return []
 
     def regenerate(self, session_id: str) -> list[dict]:
-        """Re-run the current chain with a fresh seed on every step."""
+        """Re-render the current chain with a fresh seed."""
         key = self.session_key(session_id)
-        return self._canvas_action_events(key, "regenerate_canvas", {}, fail_prefix="Regenerate failed")
+        # Record the intent on the canvas state machine (history event), then
+        # render with force_new_seed=True so the renderer mints a fresh seed
+        # and writes a new file into the pool folder.
+        cr = self._canvas_runtime()
+        if cr is None:
+            return [{"type": "error", "content": "Regenerate failed: canvas runtime not available"}]
+        cs = cr.for_session(key)
+        if not cs.canvas.layers:
+            return []
+        cr.handle_action(cs.canvas_id, "regenerate", {})
+        snap = self._new_canvas_snap(key, force_new_seed=True)
+        if not snap or not snap.get("path"):
+            return [{"type": "error", "content": "Regenerate failed: render produced no image"}]
+        return [{
+            "type": "hero_image",
+            "url": _file_url(Path(snap["path"])),
+            "name": Path(snap["path"]).name,
+            "canvas": _canvas_payload_full(self.runtime, key, snap),
+        }]
 
-    def _canvas_action_events(self, key: str, action_type: str, payload: dict, *, fail_prefix: str) -> list[dict]:
-        """Dispatch a canvas action through the runtime and translate the
-        result into the [{type:hero_image|error}] shape the UI consumes."""
+    # ── new canvas system: helpers ────────────────────────────────────
+
+    def _canvas_runtime(self):
+        """Return the new CanvasRuntime, or None if not wired."""
+        services = getattr(self.runtime, "services", None) or {}
+        return services.get("canvas")
+
+    def _new_canvas_snap(self, session_key: str, *, force_new_seed: bool = False) -> dict | None:
+        """Build the frontend canvas-payload from the new CanvasRuntime.
+
+        Renders on demand. If the chain is empty, returns an empty-canvas
+        shape (no render). If the pool already has a cached render, this is
+        essentially free.
+        """
+        cr = self._canvas_runtime()
+        if cr is None:
+            return None
+        cs = cr.for_session(session_key)
+        if not cs.canvas.layers:
+            return {
+                "path": None,
+                "chain": [],
+                "size": cs.canvas.size,
+                "palette_id": cs.canvas.palette_id,
+                "canvas_id": cs.canvas_id,
+            }
+        skill_registry = getattr(self.runtime, "skill_registry", None)
+        if skill_registry is None:
+            return None
         try:
-            result = self.runtime.handle_action(key, action_type, dict(payload))
+            rr = _new_render_canvas(
+                cs, skill_loader=skill_registry.get_record, force_new_seed=force_new_seed,
+            )
+        except Exception as e:
+            logger.exception("new canvas render failed for session=%s", session_key)
+            return {"path": None, "chain": list(cs.canvas.layers), "error": str(e),
+                    "size": cs.canvas.size, "palette_id": cs.canvas.palette_id, "canvas_id": cs.canvas_id}
+        return {
+            "path": str(rr.image_path),
+            "chain": list(cs.canvas.layers),
+            "size": cs.canvas.size,
+            "palette_id": cs.canvas.palette_id,
+            "canvas_id": cs.canvas_id,
+            "pool_hash": rr.pool_hash,
+            "seed": rr.seed,
+            "cache_hit": rr.cache_hit,
+        }
+
+    def _new_canvas_action_events(self, key: str, action_type: str, payload: dict, *, fail_prefix: str) -> list[dict]:
+        """Mutate the new canvas, render, return [{type:hero_image|error}] events."""
+        cr = self._canvas_runtime()
+        if cr is None:
+            return [{"type": "error", "content": f"{fail_prefix}: canvas runtime not available"}]
+        cs = cr.for_session(key)
+        try:
+            result = cr.handle_action(cs.canvas_id, action_type, dict(payload))
         except Exception as e:
             logger.exception("%s failed", fail_prefix)
             return [{"type": "error", "content": f"{fail_prefix}: {e}"}]
         if not getattr(result, "ok", True):
-            msg = (result.error or {}).get("message") if getattr(result, "error", None) else (result.messages[0] if result.messages else fail_prefix)
+            err = getattr(result, "error", None)
+            msg = err.message if err is not None else (result.message or fail_prefix)
             return [{"type": "error", "content": f"{fail_prefix}: {msg}"}]
-        c = canvas(key)
-        if not c or not c.get("path"):
-            return []
+        snap = self._new_canvas_snap(key) or {}
+        if "error" in snap:
+            return [{"type": "error", "content": f"{fail_prefix}: {snap['error']}"}]
+        if not snap.get("path"):
+            # Empty chain after the action (e.g. remove_layer on the last layer).
+            return [{
+                "type": "hero_image",
+                "url": None,
+                "name": None,
+                "canvas": _canvas_payload_full(self.runtime, key, snap),
+            }]
         return [{
             "type": "hero_image",
-            "url": _file_url(Path(c["path"])),
-            "name": Path(c["path"]).name,
-            "canvas": _canvas_payload_full(self.runtime, key, c),
+            "url": _file_url(Path(snap["path"])),
+            "name": Path(snap["path"]).name,
+            "canvas": _canvas_payload_full(self.runtime, key, snap),
         }]
 
     def _sync_gallery_file(self, path: Path) -> None:

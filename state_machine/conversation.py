@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from state_machine.canvas import Canvas
+from canvas.canvas import Canvas
 from state_machine.conversation_phases import BASE_PHASE, PHASE_AWAITING_INPUT
 
 Validator = Callable[[Any], tuple[bool, str | None]]

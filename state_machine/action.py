@@ -676,7 +676,7 @@ class _CanvasAction(Action):
     def execute(self):
         import uuid
         from events.event_channels import CANVAS_ACTION_STARTED, CANVAS_ACTION_FINISHED
-        from state_machine.canvas import Canvas
+        from canvas.canvas import Canvas
 
         call_id = f"canvas:{self.action_type}:{uuid.uuid4().hex[:8]}"
         draft = Canvas.from_dict(self.cs.canvas.to_dict())
@@ -729,7 +729,7 @@ class RunSkill(_CanvasAction):
             default_controls, make_chain_entry,
         )
         from plugins.tools.helpers import canvas_render
-        from state_machine.canvas import MAX_CHAIN_LENGTH
+        from canvas.canvas import MAX_CHAIN_LENGTH
 
         slug = str(self._arg("slug") or "")
         params = dict(self._arg("params") or {})

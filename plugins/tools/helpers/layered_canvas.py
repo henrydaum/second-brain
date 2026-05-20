@@ -26,7 +26,7 @@ from paths import DATA_DIR
 from plugins.helpers.palettes import DEFAULT_PALETTE_ID, palette_exists
 from events.event_bus import bus
 from events.event_channels import CANVAS_COMMITTED
-from state_machine.canvas import (
+from canvas.canvas import (
     Canvas,
     DEFAULT_SIZE,
     MIN_SIZE,

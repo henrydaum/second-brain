@@ -17,7 +17,7 @@ import time
 from typing import Iterable
 
 
-_KIND_FIELDS = {"share": "shares", "download": "downloads", "remix": "remixes", "save": "saves"}
+_KIND_FIELDS = {"share": "shares", "download": "downloads", "remix": "remixes", "save": "saves", "link_open": "link_opens"}
 
 
 def _safe_float(v) -> float:

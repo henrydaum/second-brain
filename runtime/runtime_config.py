@@ -134,7 +134,7 @@ def new_state(
         cache["session_key"] = session.key
     cache["agent_scoped_tool_names"] = scoped_tool_names(runtime, session, tools)
     phase = (marker or {}).get("phase", BASE_PHASE)
-    from state_machine.canvas import Canvas
+    from canvas.canvas import Canvas
     from types import SimpleNamespace
     cache["canvas_deps"] = SimpleNamespace(
         skill_loader=(lambda slug, r=runtime: getattr(getattr(r, "skill_registry", None), "get_record", lambda _s: None)(slug)),

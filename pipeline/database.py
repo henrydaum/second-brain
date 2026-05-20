@@ -347,6 +347,128 @@ class Database:
 		""")
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_canvas_seed_pool_key ON canvas_seed_pool(pool_key)")
 
+		# =================================================================
+		# NEW CANVAS DOMAIN (Phase 0 — defined here, not yet written by app)
+		# =================================================================
+		# These tables replace canvas_shares / canvas_layer_cache /
+		# canvas_seed_pool in a phased migration. Nothing reads or writes
+		# them yet — Phase 0 only declares the schema so later phases can
+		# wire up against a stable target.
+
+		# Master skill row. Analytics tables (skill_events / skill_scores /
+		# skill_errors) continue to hang off `slug`.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS skills (
+				slug         TEXT PRIMARY KEY,
+				name         TEXT,
+				kind         TEXT NOT NULL,
+				code         TEXT,
+				description  TEXT,
+				embedding    BLOB,
+				created_at   REAL NOT NULL,
+				updated_at   REAL NOT NULL
+			)
+		""")
+
+		# A canvas is a standalone, shareable document. `id` doubles as the
+		# share token in URLs — no separate share_kind/owner. The
+		# user↔canvas relationship lives in user_canvas_actions.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS canvases (
+				id                     TEXT PRIMARY KEY,
+				title                  TEXT,
+				artist                 TEXT,
+				size                   INTEGER,
+				palette_id             TEXT,
+				current_generation_id  INTEGER,
+				created_at             REAL NOT NULL,
+				updated_at             REAL NOT NULL,
+				FOREIGN KEY (current_generation_id) REFERENCES image_generations(id)
+			)
+		""")
+
+		# Ordered skill chain for a canvas. `controls_json` is the
+		# *current/editable* state of the layer's knobs; the snapshot used
+		# at render time lives on image_generations.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS canvas_layers (
+				id             INTEGER PRIMARY KEY,
+				canvas_id      TEXT NOT NULL,
+				position       INTEGER NOT NULL,
+				skill_slug     TEXT NOT NULL,
+				controls_json  TEXT,
+				FOREIGN KEY (canvas_id) REFERENCES canvases(id) ON DELETE CASCADE,
+				FOREIGN KEY (skill_slug) REFERENCES skills(slug),
+				UNIQUE (canvas_id, position)
+			)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_canvas_layers_canvas ON canvas_layers(canvas_id)")
+
+		# Per-render cache. Chain identity is recursive via
+		# input_generation_id (null for creations). `cache_key` includes
+		# the seed; `pool_key` omits it so we can sample existing seeds
+		# for a given (input, skill, controls) tuple cheaply.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS image_generations (
+				id                   INTEGER PRIMARY KEY,
+				cache_key            TEXT NOT NULL UNIQUE,
+				pool_key             TEXT NOT NULL,
+				skill_slug           TEXT NOT NULL,
+				input_generation_id  INTEGER,
+				controls_json        TEXT,
+				controls_hash        TEXT NOT NULL,
+				seed                 INTEGER,
+				file_path            TEXT NOT NULL,
+				bytes                INTEGER NOT NULL,
+				embedding            BLOB,
+				created_at           REAL NOT NULL,
+				last_used            REAL NOT NULL,
+				use_count            INTEGER DEFAULT 0,
+				FOREIGN KEY (skill_slug) REFERENCES skills(slug),
+				FOREIGN KEY (input_generation_id) REFERENCES image_generations(id)
+			)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_image_generations_pool ON image_generations(pool_key)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_image_generations_last_used ON image_generations(last_used)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_image_generations_input ON image_generations(input_generation_id)")
+
+		# User-to-canvas interactions. One row per (user, canvas, action,
+		# ts). Anonymous link_opens still get rows (web_users has anon
+		# user_ids). The action set is intentionally open-ended via TEXT.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS user_canvas_actions (
+				id         INTEGER PRIMARY KEY,
+				user_id    TEXT NOT NULL,
+				canvas_id  TEXT NOT NULL,
+				action     TEXT NOT NULL,
+				ts         REAL NOT NULL,
+				FOREIGN KEY (canvas_id) REFERENCES canvases(id) ON DELETE CASCADE
+			)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_canvas_actions_user ON user_canvas_actions(user_id, action, ts)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_user_canvas_actions_canvas ON user_canvas_actions(canvas_id, action)")
+
+		# link_opens mirrors the lazy-add pattern used for `saves` above.
+		try:
+			self.conn.execute("ALTER TABLE skill_scores ADD COLUMN link_opens REAL DEFAULT 0")
+		except Exception:
+			pass
+
+		logger.debug("canvas-domain schema (Phase 0) ensured")
+
+		# Canvas state machine snapshots — one row per CanvasState. The
+		# canvas_id doubles as the share-link id (/share/{canvas_id}).
+		# state_json is the to_dict() blob; decompose into structured
+		# queries later if/when sharing or search needs them.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS canvas_states (
+				canvas_id   TEXT PRIMARY KEY,
+				state_json  TEXT NOT NULL,
+				updated_at  REAL NOT NULL
+			)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_canvas_states_updated ON canvas_states(updated_at)")
+
 		self.conn.commit()
 
 	# =================================================================
