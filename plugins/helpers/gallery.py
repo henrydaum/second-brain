@@ -60,7 +60,7 @@ def mark_original(path, meta):
 def save_share(src, title="untitled", artist="anonymous", chain=None):
     GALLERY_DIR.mkdir(parents=True, exist_ok=True)
     title, artist = clean_text(title, "untitled"), clean_text(artist, "anonymous")
-    dest = GALLERY_DIR / f"{clean_text(title, 'untitled').replace(' ', '_')}-{Path(src).stem[-15:]}.png"
+    dest = GALLERY_DIR / f"{clean_text(title, 'untitled').replace(' ', '_')}-{Path(src).stem[-15:]}.webp"
     shutil.copy2(src, dest)
     meta = {"title": title, "artist": artist, "source_path": str(Path(src).resolve()),
             "path": str(dest.resolve()), "created_at": time.time(),
@@ -91,7 +91,7 @@ def save_to_archive(src, owner_id, title="", chain=None):
     dest_dir.mkdir(parents=True, exist_ok=True)
     title = clean_text(title, f"untitled-{int(time.time())}")
     safe = title.replace(" ", "_")
-    dest = dest_dir / f"{safe}-{Path(src).stem[-15:]}.png"
+    dest = dest_dir / f"{safe}-{Path(src).stem[-15:]}.webp"
     shutil.copy2(src, dest)
     meta = {"title": title, "owner_id": owner_id,
             "source_path": str(Path(src).resolve()),
@@ -107,7 +107,9 @@ def archive_rows(owner_id):
     d = archive_dir(owner_id)
     if not d.exists():
         return rows
-    for p in d.glob("*.png"):
+    # Glob both extensions so existing PNG archives stay visible alongside
+    # new WebP saves.
+    for p in sorted([*d.glob("*.png"), *d.glob("*.webp")]):
         if is_image(p):
             m = read_json(p.with_suffix(".json"))
             rows.append({
@@ -192,7 +194,7 @@ def gallery_rows(db=None):
             remix_counts = skill_scoring.remix_counts_by_path(db)
         except Exception:
             remix_counts = {}
-    for p in GALLERY_DIR.glob("*.png"):
+    for p in [*GALLERY_DIR.glob("*.png"), *GALLERY_DIR.glob("*.webp")]:
         if is_image(p):
             m = read_json(p.with_suffix(".json"))
             path_str = str(p.resolve())

@@ -1236,11 +1236,16 @@ class _Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(raw)
                 return
-            if sub == "image.png":
+            if sub in {"image.png", "image.webp", "image"}:
+                # URL kept extension-agnostic so old links to .png still
+                # work after the WebP migration; we serve whatever the
+                # actual file is with the right Content-Type.
                 image_path = self.server.frontend.share_image_path(share_id)
                 if image_path is None:
                     return self.send_error(404)
-                return self._raw_file(image_path, "image/png")
+                ext = image_path.suffix.lower()
+                mime = "image/webp" if ext == ".webp" else "image/png"
+                return self._raw_file(image_path, mime)
             if sub == "":
                 share = self.server.frontend.share_landing_data(share_id)
                 if share is None:

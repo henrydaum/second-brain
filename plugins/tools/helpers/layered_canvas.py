@@ -1,4 +1,4 @@
-"""Canvas state shims + composite PNG disk management.
+"""Canvas state shims + composite WebP disk management.
 
 The authoritative canvas state now lives on ``ConversationState.canvas``
 (``state_machine/canvas.py``). This module is the thin bridge between
@@ -37,6 +37,11 @@ from state_machine.canvas import (
 CANVAS_ROOT = DATA_DIR / "canvas"
 LEGACY_STATE_PATH = CANVAS_ROOT / "state.json"
 COMPOSITE_DIR = CANVAS_ROOT / "composites"
+# Pipeline-wide WebP: visually indistinguishable from PNG for art at q=90
+# and ~5-10x smaller on disk and over the wire. PNG is reserved for an
+# explicit download path (not yet implemented).
+WEBP_QUALITY = 90
+WEBP_METHOD = 6
 
 _state_lock = threading.RLock()
 _runtime_ref: Any = None
@@ -64,7 +69,7 @@ def _ensure_dir(session_key: str) -> Path:
 
 def image_path(session_key: str) -> Path:
     """Stable path for the current composite image."""
-    return _ensure_dir(session_key) / "current.png"
+    return _ensure_dir(session_key) / "current.webp"
 
 
 # ── legacy state.json migration ────────────────────────────────────
@@ -160,7 +165,7 @@ def commit_image(session_key: str, pil_image, op: str, chain_entry: dict | None 
     the draft's chain/image_path/history are updated, but the live
     ``cs.canvas`` is untouched until the caller assigns the draft."""
     dest = image_path(session_key)
-    pil_image.save(dest, format="PNG")
+    pil_image.save(dest, format="WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
     with _state_lock:
         c = canvas if canvas is not None else _resolve_canvas(session_key)
         c.image_path = str(dest.resolve())

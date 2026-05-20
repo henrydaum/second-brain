@@ -156,7 +156,10 @@ def snapshot_current_canvas(
     name. This is what makes an 'ephemeral' (get-link-without-publishing)
     link survive future canvas edits in the same session."""
     SHARED_LINKS_DIR.mkdir(parents=True, exist_ok=True)
-    dest = SHARED_LINKS_DIR / f"{share_id}.png"
+    # Mirror the source extension so old PNG composites keep working
+    # during the WebP transition; new shares pick up .webp automatically.
+    ext = Path(src_path).suffix.lower() or ".webp"
+    dest = SHARED_LINKS_DIR / f"{share_id}{ext}"
     shutil.copy2(src_path, dest)
     return dest
 
