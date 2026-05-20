@@ -15,30 +15,24 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from plugins.helpers import share_links, stripe_client, web_auth
+from plugins.helpers import stripe_client, web_auth
 
-from PIL import Image
-
-from canvas.render import render_canvas as _new_render_canvas
+from canvas import actions as canvas_actions
+from canvas.render import pool_hash as _pool_hash, render_canvas as _new_render_canvas
 from config import config_manager
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
-from plugins.skills.helpers import skill_scoring
 from plugins.helpers.palettes import get_palette, list_palettes
-from plugins.skills.helpers.skill_runner import replay_chain
 from plugins.skills.helpers.skill_store import anonymize_owner_in_dir
-from paths import SANDBOX_SKILLS
+from paths import DATA_DIR, SANDBOX_SKILLS
 
 
-def __anonymize_skill_owner(owner_values):
+def _anonymize_skill_owner(owner_values):
     return anonymize_owner_in_dir(SANDBOX_SKILLS, owner_values)
 
 
 def _read_skill_via(runtime, slug: str):
     registry = getattr(runtime, "skill_registry", None)
     return registry.get_record(slug) if registry is not None else None
-from plugins.tools.helpers import layered_canvas as lc
-from plugins.helpers.gallery import GALLERY_DIR, anonymize_shared, archive_dir, archive_rows, canvas, delete_archive, gallery_rows, migrate_archive, read_json, reset_canvas, save_to_archive, set_current, share_current
-from paths import DATA_DIR
 
 logger = logging.getLogger("WebFrontend")
 WEB_ROOT = Path(__file__).with_name("web")
@@ -172,7 +166,11 @@ class WebFrontend(BaseFrontend):
                 self.runtime.db.delete_conversation(prev_cid)
             except Exception:
                 logger.exception("new_chat: delete_conversation failed cid=%s", prev_cid)
-        reset_canvas(key)
+        # Detach the session from any canvas; for_session will mint a fresh
+        # one on the next render.
+        cr = self._canvas_runtime()
+        if cr is not None:
+            cr.unbind_session(key)
         self._ensure_conversation(key)
         return [{"type": "canvas_reset"}, *self._drain(key)]
 
@@ -212,20 +210,18 @@ class WebFrontend(BaseFrontend):
                 self._push(session_key, {"type": "message", "role": "assistant", "content": msg})
 
     def render_attachments(self, session_key: str, paths: list[str]) -> None:
-        state = canvas(session_key)
-        current_composite = Path(state["path"]).resolve() if state and state.get("path") else None
+        """Surface attached images without touching canvas state.
+
+        Tools that mutate the canvas already produce a hero_image event via
+        their own machinery (execute_skill / manage_layers); here we just
+        relay any other image attachments so the UI can show them.
+        """
+        snap = self._new_canvas_snap(session_key) or {}
         for path in paths:
             p = Path(path)
             if not _is_public_image(p):
                 continue
-            # Compose tools already updated canvas state and wrote the composite;
-            # don't re-call set_current on our own composite (that would wipe layers).
-            if current_composite and p.resolve() == current_composite:
-                self._push(session_key, _image_event(p, _canvas_payload_full(self.runtime, session_key, state)))
-                continue
-            meta = read_json(p.with_suffix(".json"))
-            set_current(session_key, p, bool(meta.get("original")), meta)
-            self._push(session_key, _image_event(p, _canvas_payload_full(self.runtime, session_key, canvas(session_key))))
+            self._push(session_key, _image_event(p, _canvas_payload_full(self.runtime, session_key, snap)))
 
     def render_form_field(self, session_key: str, form: dict) -> None:
         self._push(session_key, {"type": "form", "form": form})
@@ -725,47 +721,25 @@ class WebFrontend(BaseFrontend):
         except Exception:
             logger.exception("delete_account: session teardown failed")
 
-        # Anonymize public artifacts authored by this account.
+        # Anonymize skill authorship for this account.
         owner_values = {email, account_id}
         try:
             skills_changed = _anonymize_skill_owner(owner_values)
         except Exception:
             logger.exception("delete_account: skill anonymize failed")
             skills_changed = 0
-        try:
-            shared_changed = anonymize_shared(owner_values)
-        except Exception:
-            logger.exception("delete_account: shared anonymize failed")
-            shared_changed = 0
-
-        # Delete private archive directory.
-        archive_root = str(archive_dir(account_id).resolve())
-        try:
-            delete_archive(account_id)
-        except Exception:
-            logger.exception("delete_account: archive delete failed")
 
         # Drop DB rows last so the email/account_id are still available above.
+        # NOTE: user_canvas_actions rows (share/save/download/remix) keyed
+        # under this account's user_id are NOT currently scrubbed — see
+        # the gap note in the migration summary.
         with db.lock:
             db.conn.execute("DELETE FROM web_auth_tokens WHERE email = ?", (email,))
             db.conn.execute("DELETE FROM web_payments WHERE email = ?", (email,))
             db.conn.execute("DELETE FROM web_users WHERE account_id = ?", (account_id,))
-            # Anonymize gallery/ephemeral shares this user created so their
-            # name doesn't survive on rows we keep; archive-kind rows now
-            # point at deleted files, so drop them entirely.
-            db.conn.execute(
-                "UPDATE canvas_shares SET owner_id = NULL, artist = 'anonymous' "
-                "WHERE owner_id = ? OR (artist IS NOT NULL AND lower(artist) = ?)",
-                (account_id, email.lower()),
-            )
-            db.conn.execute(
-                "DELETE FROM canvas_shares WHERE kind = 'archive' AND image_path LIKE ?",
-                (archive_root + "%",),
-            )
             db.conn.commit()
 
-        logger.info("Account deleted (skills_anonymized=%s shared_anonymized=%s)",
-                    skills_changed, shared_changed)
+        logger.info("Account deleted (skills_anonymized=%s)", skills_changed)
         return {"ok": True}
 
     def _owner_id(self, session_id: str, ip: str, account_id: str) -> str:
@@ -774,42 +748,36 @@ class WebFrontend(BaseFrontend):
         return account_id or self._anon_user_id(session_id, ip)
 
     def save_canvas(self, session_id: str, ip: str, account_id: str, title: str = "") -> list[dict]:
-        """Persist the current composite into the owner's private archive and
-        boost skill scores for the chain that produced it."""
+        """Record that this user saved the current canvas (pool-based).
+
+        No file copy. The canvas state already lives in canvas_pools; the
+        image already lives in canvas_renders/. "Save" is purely the act of
+        adding it to this user's collection (user_canvas_actions row), and
+        bumping skill popularity scores.
+        """
         key = self.session_key(session_id)
-        snapshot = canvas(key) or {}
-        src = snapshot.get("path")
-        if not src:
-            return [{"type": "error", "content": "Nothing to save yet — make something first."}]
-        chain = list(snapshot.get("chain") or [])
-        owner = self._owner_id(session_id, ip, account_id)
-        dest, meta = save_to_archive(src, owner, title=title, chain=chain)
+        cr = self._canvas_runtime()
         db = getattr(self.runtime, "db", None)
-        skill_scoring.record_event(db, "save", chain, str(dest.resolve()))
-        events: list[dict] = [{"type": "saved", "item": _archive_url(meta)}]
-        link_event = self._mint_share_link(
-            db, kind="archive", image_path=str(dest.resolve()),
-            title=meta.get("title"), artist="you",
-            chain=chain, session_key=key, owner_id=owner,
+        if cr is None or db is None:
+            return [{"type": "error", "content": "Save failed: canvas runtime unavailable."}]
+        cs = cr.for_session(key)
+        if not cs.canvas.layers:
+            return [{"type": "error", "content": "Nothing to save yet — make something first."}]
+        snap = self._new_canvas_snap(key) or {}
+        if not snap.get("path"):
+            return [{"type": "error", "content": "Save failed: render produced no image."}]
+        ph = snap.get("pool_hash") or _pool_hash(cs.canvas)
+        owner = self._owner_id(session_id, ip, account_id)
+        canvas_actions.record_user_action(
+            db, user_id=owner, pool_hash=ph, action="save",
+            layers=cs.canvas.layers, image_path=snap["path"],
+            meta={"title": title} if title else None,
         )
-        if link_event:
-            events.append(link_event)
-        events.append({"type": "status", "content": f'Saved "{meta["title"]}" to your archive.'})
-        return events
-
-    def archive_listing(self, session_id: str, ip: str, account_id: str, limit: int = 24, offset: int = 0) -> dict:
-        owner = self._owner_id(session_id, ip, account_id)
-        all_rows = archive_rows(owner)
-        total = len(all_rows)
-        page = all_rows[offset : offset + limit]
-        return {"items": [_archive_url(r) for r in page], "total": total}
-
-    def archive_remix(self, session_id: str, ip: str, account_id: str, path: str) -> list[dict]:
-        owner = self._owner_id(session_id, ip, account_id)
-        p = Path(unquote(path)).resolve()
-        if not _is_archive_image(p, owner):
-            raise ValueError("That archive entry is not available to remix.")
-        return self._remix(self.session_key(session_id), p)
+        label = f'"{title}"' if title else "canvas"
+        return [
+            {"type": "saved", "item": {"pool_hash": ph, "url": snap.get("path") and _file_url(Path(snap["path"]))}},
+            {"type": "status", "content": f"Saved {label} to your collection."},
+        ]
 
     def history(self, session_id: str) -> list[dict]:
         """Return user/assistant text messages for this session, oldest first.
@@ -892,228 +860,96 @@ class WebFrontend(BaseFrontend):
         return events
 
     def share(self, session_id: str, title: str, artist: str, *, ip: str = "", account_id: str = "") -> list[dict]:
+        """Share the user's current canvas.
+
+        Pool-hash model: the canvas is already in canvas_pools (written on
+        render). We just record the share action + return a URL pointing at
+        /share/{pool_hash}. No file copy, no separate share_links row.
+        """
         key = self.session_key(session_id)
-        snapshot = canvas(key) or {}
-        chain = list(snapshot.get("chain") or [])
-        dest, meta = share_current(key, title, artist)
-        self._sync_gallery_file(dest)
+        cr = self._canvas_runtime()
         db = getattr(self.runtime, "db", None)
-        skill_scoring.record_event(db, "share", chain, str(dest.resolve()))
-        events: list[dict] = [{"type": "shared", "item": _gallery_url(meta)}]
-        link_event = self._mint_share_link(
-            db, kind="gallery", image_path=str(dest.resolve()),
-            title=meta.get("title"), artist=meta.get("artist"),
-            chain=chain, session_key=key,
-            owner_id=self._owner_id(session_id, ip, account_id),
-        )
-        if link_event:
-            events.append(link_event)
-        events.append({"type": "message", "role": "assistant", "content": f'Shared "{meta["title"]}" by {meta["artist"]}.'})
-        return events
-
-    def gallery(self, session_id: str, limit: int = 24, offset: int = 0) -> dict:
-        db = getattr(self.runtime, "db", None)
-        all_rows = list(gallery_rows(db))
-        total = len(all_rows)
-        page = all_rows[offset : offset + limit]
-        return {"items": [_gallery_url(r) for r in page], "total": total}
-
-    def remix(self, session_id: str, path: str = "", share_id: str = "") -> list[dict]:
-        key = self.session_key(session_id)
-        if share_id:
-            db = getattr(self.runtime, "db", None)
-            share = share_links.lookup_share(db, share_id) if db else None
-            if not share:
-                raise ValueError("That share link is invalid or has expired.")
-            p = Path(share["image_path"]).resolve()
-            if not p.is_file():
-                raise ValueError("That shared canvas is no longer available.")
-            return self._remix(key, p, share=share)
-        p = Path(unquote(path)).resolve()
-        if not _is_gallery_image(p):
-            raise ValueError("That gallery image is not available to remix.")
-        return self._remix(key, p)
-
-    # --- Share links ---------------------------------------------------
-
-    def _mint_share_link(
-        self, db, *, kind: str, image_path: str,
-        title: str | None, artist: str | None,
-        chain: list, session_key: str, owner_id: str = "",
-    ) -> dict | None:
-        if db is None:
-            return None
-        state = lc.get_state(session_key) or {}
-        try:
-            sid = share_links.create_share(
-                db, kind=kind, image_path=image_path,
-                title=title, artist=artist, chain=chain,
-                palette_id=state.get("palette_id"),
-                size=int(state.get("size") or lc.DEFAULT_SIZE),
-                owner_id=owner_id or None,
-            )
-        except Exception:
-            logger.exception("create_share failed (kind=%s)", kind)
-            return None
-        base = self._base_url()
-        return {
-            "type": "share_link",
-            "share_id": sid,
-            "url": share_links.build_share_url(base, sid),
-            "qr_url": share_links.build_qr_url(base, sid),
-            "kind": kind,
-        }
-
-    def get_link(
-        self, session_id: str, ip: str, account_id: str,
-        kind: str, path: str = "", title: str = "", artist: str = "",
-    ) -> dict:
-        """Mint (or return existing) share link for the current canvas, a
-        gallery item, or an archive item."""
-        key = self.session_key(session_id)
-        db = getattr(self.runtime, "db", None)
-        if db is None:
-            raise RuntimeError("share links require the database to be available")
+        if cr is None or db is None:
+            return [{"type": "error", "content": "Share failed: canvas runtime unavailable."}]
+        cs = cr.for_session(key)
+        if not cs.canvas.layers:
+            return [{"type": "error", "content": "Nothing to share yet — make something first."}]
+        # Ensure a render exists so canvas_pools has the row.
+        snap = self._new_canvas_snap(key) or {}
+        if not snap.get("path"):
+            return [{"type": "error", "content": "Share failed: render produced no image."}]
+        ph = snap.get("pool_hash") or _pool_hash(cs.canvas)
         owner = self._owner_id(session_id, ip, account_id)
-        if kind == "current":
-            snapshot = canvas(key) or {}
-            src = snapshot.get("path")
-            if not src:
-                raise ValueError("Nothing to share yet — make something first.")
-            chain = list(snapshot.get("chain") or [])
-            sid = share_links.create_share(
-                db, kind="ephemeral", image_path="__placeholder__",
-                title=title or None, artist=artist or None, chain=chain,
-                palette_id=(lc.get_state(key) or {}).get("palette_id"),
-                size=int((lc.get_state(key) or {}).get("size") or lc.DEFAULT_SIZE),
-                owner_id=owner,
-            )
-            # Snapshot the live canvas under the share's own filename so it
-            # survives further edits in this session.
-            snap = share_links.snapshot_current_canvas(src, sid)
-            with db.lock:
-                db.conn.execute(
-                    "UPDATE canvas_shares SET image_path = ? WHERE share_id = ?",
-                    (str(snap.resolve()), sid),
-                )
-                db.conn.commit()
-        elif kind in ("gallery", "archive"):
-            target = Path(unquote(path)).resolve()
-            if kind == "gallery":
-                if not _is_gallery_image(target):
-                    raise ValueError("That gallery image is not available.")
-            else:
-                if not _is_archive_image(target, owner):
-                    raise ValueError("That archive entry is not available.")
-            meta = read_json(target.with_suffix(".json"))
-            chain = list(meta.get("chain") or [])
-            sid = share_links.find_or_create_for_path(
-                db, kind=kind, image_path=str(target),
-                title=meta.get("title"), artist=meta.get("artist") or ("you" if kind == "archive" else "anonymous"),
-                chain=chain,
-                palette_id=meta.get("palette_id"),
-                size=meta.get("size"),
-                owner_id=owner,
-            )
-        else:
-            raise ValueError(f"unknown link kind: {kind!r}")
-        base = self._base_url()
-        return {
-            "share_id": sid,
-            "url": share_links.build_share_url(base, sid),
-            "qr_url": share_links.build_qr_url(base, sid),
-            "kind": kind,
-        }
+        canvas_actions.record_user_action(
+            db, user_id=owner, pool_hash=ph, action="share",
+            layers=cs.canvas.layers, image_path=snap["path"],
+            meta={"title": title, "artist": artist},
+        )
+        share_url = f"{self._base_url()}/share/{ph}"
+        return [
+            {"type": "share_link", "share_id": ph, "url": share_url, "kind": "pool"},
+            {"type": "message", "role": "assistant",
+             "content": f'Shared "{title}" by {artist}.' if title else "Shared."},
+        ]
 
-    def share_landing_data(self, share_id: str) -> dict | None:
-        """Resolve a share_id to render the landing page."""
+    def remix(self, session_id: str, pool_hash: str = "", **_unused) -> list[dict]:
+        """Open a remix of another canvas in the current session.
+
+        Pool-based only: pass ``pool_hash`` (the value embedded in a
+        /share/{pool_hash} URL). The legacy ``path`` / ``share_id`` paths
+        are gone along with the gallery / canvas_shares / share_links
+        infrastructure.
+        """
+        key = self.session_key(session_id)
+        if not pool_hash:
+            raise ValueError("remix requires a pool_hash.")
+        return self._remix_from_pool(key, pool_hash)
+
+    def _remix_from_pool(self, key: str, pool_hash: str) -> list[dict]:
+        """Pool-hash remix: clone canvas_pools entry into a new canvas_id."""
+        cr = self._canvas_runtime()
         db = getattr(self.runtime, "db", None)
-        if db is None:
-            return None
-        share = share_links.lookup_share(db, share_id)
-        if not share:
-            return None
-        image_path = Path(share["image_path"])
-        share["image_exists"] = image_path.is_file()
-        share["image_url"] = _file_url(image_path) if share["image_exists"] else ""
-        share_links.bump_view_count(db, share_id)
-        return share
-
-    def share_qr_png(self, share_id: str) -> bytes | None:
-        db = getattr(self.runtime, "db", None)
-        if db is None or not share_links.lookup_share(db, share_id):
-            return None
-        return share_links.generate_qr_png(share_links.build_share_url(self._base_url(), share_id))
-
-    def share_image_path(self, share_id: str) -> Path | None:
-        """Resolve the canvas image for a share_id. Authorization is the
-        share_id itself — anyone with the link sees the image."""
-        db = getattr(self.runtime, "db", None)
-        if db is None:
-            return None
-        share = share_links.lookup_share(db, share_id)
-        if not share:
-            return None
-        p = Path(share["image_path"])
-        return p if p.is_file() else None
-
-    def _remix(self, key: str, p: Path, *, share: dict | None = None) -> list[dict]:
-        # Share rows carry their own chain. Sidecar JSON (gallery/archive)
-        # carries chain + title/artist. For ephemeral shares there is no
-        # sidecar — fall back to share.chain and synth a meta dict.
-        if share is not None:
-            meta = {
-                "title": share.get("title") or "shared canvas",
-                "artist": share.get("artist") or "anonymous",
-                "chain": list(share.get("chain") or []),
-            }
-        else:
-            meta = read_json(p.with_suffix(".json"))
-        reset_canvas(key)
-        source_chain = list(meta.get("chain") or [])
-        chain_restored = False
-        restore_note = ""
-        if source_chain:
-            missing = [s.get("slug") for s in source_chain if not _read_skill_via(self.runtime, s.get("slug") or "")]
-            if not missing:
-                try:
-                    state = lc.get_state(key)
-                    out = lc.image_path(key)
-                    replay_chain(
-                        source_chain,
-                        palette=get_palette(state.get("palette_id")),
-                        size=int(state.get("size") or lc.DEFAULT_SIZE),
-                        output_image_path=out,
-                        workdir=out.parent,
-                        skill_loader=lambda slug: _read_skill_via(self.runtime, slug),
-                        on_step=self._chain_progress_cb(key),
-                    )
-                    with Image.open(out) as img:
-                        lc.commit_image(key, img.convert("RGBA"), "remix", None)
-                    new_state = lc.get_state(key)
-                    new_state["last_chain"] = source_chain
-                    lc.replace_state(key, new_state)
-                    chain_restored = True
-                except Exception as e:
-                    logger.exception("remix chain replay failed: %s", e)
-                    restore_note = " (couldn't rebuild layers — opening as a flat image)"
-            else:
-                restore_note = " (couldn't rebuild layers — opening as a flat image)"
-        if not chain_restored:
-            set_current(key, p, False, {"kind": "remix", **meta})
-        skill_scoring.record_event(getattr(self.runtime, "db", None), "remix", source_chain, str(p))
-        c = canvas(key)
-        img_path = Path(c["path"]) if c and c.get("path") else p
-        return [_image_event(img_path, _canvas_payload_full(self.runtime, key, c)), {"type": "message", "role": "assistant", "content": f"Remix loaded.{restore_note} Tell me how to mutate it."}]
+        if cr is None or db is None:
+            return [{"type": "error", "content": "Remix failed: canvas runtime unavailable."}]
+        new_cs = cr.remix(pool_hash)
+        if new_cs is None:
+            return [{"type": "error", "content": "That canvas link is invalid or no longer available."}]
+        cr.bind_session(key, new_cs.canvas_id)
+        snap = self._new_canvas_snap(key) or {}
+        # Record against the SOURCE pool_hash so popularity attributes to
+        # the original look, not the user's fresh editing handle.
+        owner = self._anon_user_id(key, "")
+        canvas_actions.record_user_action(
+            db, user_id=owner, pool_hash=pool_hash, action="remix",
+            layers=new_cs.canvas.layers, image_path=snap.get("path"),
+        )
+        img_url = _file_url(Path(snap["path"])) if snap.get("path") else None
+        return [
+            {"type": "hero_image", "url": img_url,
+             "name": Path(snap["path"]).name if snap.get("path") else None,
+             "canvas": _canvas_payload_full(self.runtime, key, snap)},
+            {"type": "message", "role": "assistant",
+             "content": "Remix loaded. Tell me how to mutate it."},
+        ]
 
     def download(self, session_id: str) -> list[dict]:
         """Fire-and-forget signal: user clicked Download for the current canvas."""
         key = self.session_key(session_id)
-        snapshot = canvas(key) or {}
-        chain = list(snapshot.get("chain") or [])
-        if not chain:
+        cr = self._canvas_runtime()
+        db = getattr(self.runtime, "db", None)
+        if cr is None or db is None:
             return []
-        skill_scoring.record_event(getattr(self.runtime, "db", None), "download", chain, snapshot.get("path"))
+        cs = cr.for_session(key)
+        if not cs.canvas.layers:
+            return []
+        snap = self._new_canvas_snap(key) or {}
+        ph = snap.get("pool_hash") or _pool_hash(cs.canvas)
+        # Use the anonymous user_id; downloads typically aren't gated by login.
+        owner = self._anon_user_id(session_id, "")
+        canvas_actions.record_user_action(
+            db, user_id=owner, pool_hash=ph, action="download",
+            layers=cs.canvas.layers, image_path=snap.get("path"),
+        )
         return []
 
     def regenerate(self, session_id: str) -> list[dict]:
@@ -1138,6 +974,40 @@ class WebFrontend(BaseFrontend):
             "name": Path(snap["path"]).name,
             "canvas": _canvas_payload_full(self.runtime, key, snap),
         }]
+
+    def pool_share_payload(self, pool_hash: str) -> dict | None:
+        """Resolve a pool_hash to the data needed to render its share page.
+
+        Returns ``{"pool_hash", "state", "image_path", "layers"}`` or None
+        if the pool_hash isn't in ``canvas_pools`` (i.e. nothing was ever
+        rendered for it).
+        """
+        from canvas import persistence as canvas_persistence
+        from canvas.render import existing_seeds, folder_for
+        from canvas.canvas import Canvas
+
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return None
+        state = canvas_persistence.load_pool(db, pool_hash)
+        if state is None:
+            return None
+        # Build a transient Canvas just to ask the renderer for the folder.
+        snap_canvas = Canvas.from_dict(state)
+        seeds = existing_seeds(snap_canvas)
+        if not seeds:
+            return None
+        # Pick the most-recently-rendered file (stable "current" thumbnail).
+        folder = folder_for(snap_canvas)
+        files = sorted(folder.glob("*.webp"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not files:
+            return None
+        return {
+            "pool_hash": pool_hash,
+            "state": state,
+            "image_path": str(files[0]),
+            "layers": list(state.get("layers") or []),
+        }
 
     # ── new canvas system: helpers ────────────────────────────────────
 
@@ -1220,20 +1090,6 @@ class WebFrontend(BaseFrontend):
             "canvas": _canvas_payload_full(self.runtime, key, snap),
         }]
 
-    def _sync_gallery_file(self, path: Path) -> None:
-        dirs = [str(p) for p in (self.config.get("sync_directories") or [])]
-        if str(GALLERY_DIR) not in dirs:
-            self.config["sync_directories"] = dirs + [str(GALLERY_DIR)]
-            config_manager.save(self.config)
-        db = getattr(self.runtime, "db", None)
-        if db:
-            from plugins.services.helpers.parser_registry import get_modality
-            db.upsert_file(str(path), path.name, path.suffix.lower(), get_modality(path.suffix.lower()), path.stat().st_mtime)
-            orch = getattr(self.runtime, "_orchestrator_ref", None) or getattr(self.runtime, "services", {}).get("orchestrator")
-            if orch:
-                orch.on_file_discovered(str(path), path.suffix.lower(), get_modality(path.suffix.lower()))
-
-
 class _Server(ThreadingHTTPServer):
     def __init__(self, addr, handler, frontend):
         super().__init__(addr, handler)
@@ -1257,53 +1113,27 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "canvas": self.server.frontend.canvas_payload(sid)})
         if path == "/api/palettes":
             return self._json({"ok": True, "palettes": self.server.frontend.palettes_payload()})
-        if path == "/api/gallery":
-            qs = parse_qs(parsed.query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
-            try: limit = max(1, min(96, int(qs.get("limit", ["24"])[0])))
-            except (TypeError, ValueError): limit = 24
-            try: offset = max(0, int(qs.get("offset", ["0"])[0]))
-            except (TypeError, ValueError): offset = 0
-            res = self.server.frontend.gallery(sid, limit=limit, offset=offset)
-            return self._json({"ok": True, **res})
-        if path == "/api/archive":
-            qs = parse_qs(parsed.query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
-            try: limit = max(1, min(96, int(qs.get("limit", ["24"])[0])))
-            except (TypeError, ValueError): limit = 24
-            try: offset = max(0, int(qs.get("offset", ["0"])[0]))
-            except (TypeError, ValueError): offset = 0
-            res = self.server.frontend.archive_listing(sid, self.client_address[0], self._cookie_uid(), limit=limit, offset=offset)
-            return self._json({"ok": True, **res})
         if path.startswith("/share/"):
             tail = path[len("/share/"):]
             share_id, _, sub = tail.partition("/")
-            if not share_links.is_valid_share_id(share_id):
+            pool_payload = self.server.frontend.pool_share_payload(share_id) if share_id else None
+            if pool_payload is None:
                 return self.send_error(404)
-            if sub == "qr.png":
-                raw = self.server.frontend.share_qr_png(share_id)
-                if raw is None:
-                    return self.send_error(404)
+            if sub == "":
+                html = _render_pool_share_html(share_id, pool_payload)
+                raw = html.encode("utf-8")
                 self.send_response(200)
-                self.send_header("Content-Type", "image/png")
-                self.send_header("Cache-Control", "public, max-age=86400")
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
                 self.wfile.write(raw)
                 return
             if sub in {"image.png", "image.webp", "image"}:
-                # URL kept extension-agnostic so old links to .png still
-                # work after the WebP migration; we serve whatever the
-                # actual file is with the right Content-Type.
-                image_path = self.server.frontend.share_image_path(share_id)
-                if image_path is None:
+                img = pool_payload.get("image_path")
+                if img is None:
                     return self.send_error(404)
-                ext = image_path.suffix.lower()
-                mime = "image/webp" if ext == ".webp" else "image/png"
-                return self._raw_file(image_path, mime)
-            if sub == "":
-                share = self.server.frontend.share_landing_data(share_id)
-                if share is None:
-                    return self._html(_share_missing_html(share_id), 404)
-                return self._html(_share_landing_html(share, self.server.frontend._base_url()))
+                return self._raw_file(Path(img), "image/webp")
             return self.send_error(404)
         if path == "/api/account":
             qs = parse_qs(parsed.query)
@@ -1319,9 +1149,6 @@ class _Handler(BaseHTTPRequestHandler):
             token = str(qs.get("token", [""])[0])
             account_id = self.server.frontend.verify_magic_link(token)
             if account_id:
-                anon = self.server.frontend._anon_user_id(self._cookie_sid(), self.client_address[0])
-                try: migrate_archive(anon, account_id)
-                except Exception: logger.exception("archive migrate (magic-link) failed")
                 return self._redirect_with_uid("/account", account_id)
             return self._html("<!doctype html><meta charset=utf-8><title>Sign in</title><style>body{font-family:system-ui;max-width:480px;margin:80px auto;padding:0 24px;color:#222}</style><h1>Link expired</h1><p>That sign-in link is invalid or already used. Request a new one from the home page.</p><p><a href=\"/\">Back home</a></p>", 400)
         if path == "/auth/claim":
@@ -1329,9 +1156,6 @@ class _Handler(BaseHTTPRequestHandler):
             token = str(qs.get("token", [""])[0])
             account_id = self.server.frontend.claim_checkout(token)
             if account_id:
-                anon = self.server.frontend._anon_user_id(self._cookie_sid(), self.client_address[0])
-                try: migrate_archive(anon, account_id)
-                except Exception: logger.exception("archive migrate (claim) failed")
                 return self._redirect_with_uid("/account?welcome=1", account_id)
             return self._redirect("/?checkout=pending")
         if path == "/auth/logout":
@@ -1388,19 +1212,11 @@ class _Handler(BaseHTTPRequestHandler):
                     ip=self.client_address[0], account_id=self._cookie_uid())})
             if self.path == "/api/remix":
                 return self._json({"ok": True, "events": self.server.frontend.remix(
-                    sid, path=str(body.get("path") or ""), share_id=str(body.get("share_id") or ""))})
-            if self.path == "/api/get_link":
-                return self._json({"ok": True, **self.server.frontend.get_link(
-                    sid, self.client_address[0], self._cookie_uid(),
-                    kind=str(body.get("kind") or ""),
-                    path=str(body.get("path") or ""),
-                    title=str(body.get("title") or ""),
-                    artist=str(body.get("artist") or ""),
+                    sid,
+                    pool_hash=str(body.get("pool_hash") or ""),
                 )})
             if self.path == "/api/save":
                 return self._json({"ok": True, "events": self.server.frontend.save_canvas(sid, self.client_address[0], self._cookie_uid(), str(body.get("title") or ""))})
-            if self.path == "/api/archive_remix":
-                return self._json({"ok": True, "events": self.server.frontend.archive_remix(sid, self.client_address[0], self._cookie_uid(), str(body.get("path") or ""))})
             if self.path == "/api/palette":
                 return self._json({"ok": True, "events": self.server.frontend.set_palette(sid, str(body.get("palette_id") or ""))})
             if self.path == "/api/download":
@@ -1521,44 +1337,13 @@ def _is_public_image(path: Path) -> bool:
         return False
 
 
-def _is_archive_image(path: Path, owner_id: str) -> bool:
-    try:
-        target = path.resolve()
-        owner_root = archive_dir(owner_id).resolve()
-        return target.is_file() and target.suffix.lower() in IMAGE_EXTS and owner_root in target.parents
-    except Exception:
-        return False
-
-
-def _archive_url(row: dict) -> dict:
-    return {**row, "url": _file_url(Path(row["path"]))}
-
-
-def _is_gallery_image(path: Path) -> bool:
-    try:
-        target, root = path.resolve(), GALLERY_DIR.resolve()
-        return target.is_file() and target.suffix.lower() in IMAGE_EXTS and root in target.parents
-    except Exception:
-        return False
-
-
-def _is_user_accessible_image(path: Path, session_key: str, owner_id: str = "") -> bool:
-    """Public shared gallery, the requester's own canvas dir, or their archive."""
-    try:
-        target = path.resolve()
-        if not (target.is_file() and target.suffix.lower() in IMAGE_EXTS):
-            return False
-        if _is_gallery_image(target):
-            return True
-        if session_key:
-            own = lc.image_path(session_key).parent.resolve()
-            if own in target.parents or target.parent == own:
-                return True
-        if owner_id and _is_archive_image(target, owner_id):
-            return True
-        return False
-    except Exception:
-        return False
+def _is_user_accessible_image(path: Path, session_key: str = "", owner_id: str = "") -> bool:
+    """Any image under DATA_DIR is fair game once the canvas system owns it
+    (renders live in DATA_DIR/canvas_renders/). session_key / owner_id are
+    accepted for signature compat but no longer used to gate access; the
+    old gallery / archive folder layouts are gone."""
+    del session_key, owner_id
+    return _is_public_image(path)
 
 
 def _file_url(path: Path) -> str:
@@ -1573,6 +1358,40 @@ def _file_url(path: Path) -> str:
 
 def _image_event(path: Path, canvas_payload: dict) -> dict:
     return {"type": "hero_image", "url": _file_url(path), "name": path.name, "canvas": canvas_payload}
+
+
+def _render_pool_share_html(pool_hash: str, payload: dict) -> str:
+    """Minimal share-page HTML for the new pool-based shares.
+
+    Bare-bones: image + layer summary + a single Remix button that posts
+    to /api/remix and bounces back to the main app. A nicer share page can
+    replace this without changing the backend contract.
+    """
+    layers = payload.get("layers") or []
+    layer_lines = "".join(
+        f"<li>{(l.get('kind') or '')}: <code>{(l.get('slug') or '')}</code></li>"
+        for l in layers
+    )
+    safe_hash = pool_hash.replace("'", "")
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<title>Shared canvas</title>"
+        "<style>body{font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem}"
+        "img{max-width:100%;border-radius:8px;display:block}"
+        "button{font-size:1rem;padding:.5rem 1rem;margin-top:1rem;cursor:pointer}"
+        "ul{padding-left:1.25rem}code{background:#f4f4f4;padding:.05rem .35rem;border-radius:4px}"
+        "</style></head><body>"
+        f"<h1>Shared canvas</h1>"
+        f"<img src='/share/{safe_hash}/image' alt='shared canvas'>"
+        f"<h2>Layers</h2><ul>{layer_lines}</ul>"
+        f"<button id='rx'>Remix in your session →</button>"
+        "<script>"
+        f"document.getElementById('rx').onclick=function(){{"
+        f"fetch('/api/remix',{{method:'POST',headers:{{'Content-Type':'application/json'}},"
+        f"body:JSON.stringify({{pool_hash:'{safe_hash}'}})}})"
+        f".then(function(){{location.href='/'}});}};"
+        "</script></body></html>"
+    )
 
 
 def _canvas_payload(state: dict | None) -> dict:
@@ -1629,53 +1448,6 @@ def _canvas_payload_full(runtime, session_key: str, state: dict | None) -> dict:
 
 
 from plugins.skills.helpers.skill_controls import coerce_control_value as _coerce_control_value  # noqa: F401  (re-export for any external callers)
-
-
-def _gallery_url(row: dict) -> dict:
-    return {**row, "url": _file_url(Path(row["path"]))}
-
-
-def _share_landing_html(share: dict, base_url: str) -> str:
-    """/share/{id} is a redirect into the SPA so the visitor lands on the
-    canvas, not on a metadata page. The HTML body redirects via JS + meta
-    refresh; the <head> keeps OG tags so link unfurls (Slack/Discord/Twitter)
-    still preview the canvas. Crawlers read the meta, humans get redirected."""
-    import html as _html
-    sid = share["share_id"]
-    title = share.get("title") or "Untitled"
-    artist = share.get("artist") or "anonymous"
-    url = share_links.build_share_url(base_url, sid)
-    image_url = f"/share/{sid}/image.png" if share.get("image_exists") else ""
-    og_image = f"{base_url.rstrip('/')}{image_url}" if image_url else ""
-    target = f"/?share={_html.escape(sid, quote=True)}"
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{_html.escape(title)} — Second Brain</title>
-  <meta http-equiv="refresh" content="0; url={target}">
-  <link rel="canonical" href="/">
-  <meta property="og:title" content="{_html.escape(title)}">
-  <meta property="og:description" content="A canvas by {_html.escape(artist)} on Second Brain.">
-  {f'<meta property="og:image" content="{_html.escape(og_image)}">' if og_image else ''}
-  <meta property="og:type" content="article">
-  <meta property="og:url" content="{_html.escape(url)}">
-  <meta name="twitter:card" content="summary_large_image">
-  <link rel="icon" type="image/x-icon" href="/favicon.ico">
-  <script>location.replace({json.dumps(target)});</script>
-</head>
-<body style="background:#0b0d13;color:#888;font-family:system-ui;margin:0;padding:48px 24px;text-align:center;font-size:14px;">
-  Opening canvas… <a href="{target}" style="color:#888;">Continue</a>
-</body>
-</html>"""
-
-
-def _share_missing_html(share_id: str) -> str:
-    import html as _html
-    return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Link not found</title><link rel="stylesheet" href="/style.css?v=12"></head>
-<body class="share-landing missing"><main class="share-landing-shell"><section class="share-landing-meta"><h1>Link not found</h1><p>No canvas exists for <code>{_html.escape(share_id)}</code>. It may have been removed.</p><p><a href="/">← Back to Second Brain</a></p></section></main></body></html>"""
 
 
 def _int(value, default: int) -> int:

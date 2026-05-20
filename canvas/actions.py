@@ -15,6 +15,7 @@ pool_hash; ``user_canvas_actions`` only ever sees pool_hashes.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Iterable
@@ -37,18 +38,24 @@ def record_user_action(
 	action: str,
 	layers: Iterable[dict] | None = None,
 	image_path: str | None = None,
+	meta: dict | None = None,
 ) -> None:
 	"""Insert a row + fan out to skill_scoring.
 
 	``layers`` is the canvas's layer list — used by ``skill_scoring`` to
 	distribute the signal across creation/transform skills.
+
+	``meta`` is optional per-action metadata (title, artist, …) stored as
+	JSON in ``user_canvas_actions.meta_json``. Useful so a share can carry
+	its own title without the title becoming part of the canvas identity.
 	"""
 	now = time.time()
+	meta_json = json.dumps(meta, separators=(",", ":")) if meta else None
 	with db.lock:
 		db.conn.execute(
-			"INSERT INTO user_canvas_actions (user_id, pool_hash, action, ts) "
-			"VALUES (?, ?, ?, ?)",
-			(user_id, pool_hash, action, now),
+			"INSERT INTO user_canvas_actions (user_id, pool_hash, action, ts, meta_json) "
+			"VALUES (?, ?, ?, ?, ?)",
+			(user_id, pool_hash, action, now, meta_json),
 		)
 		db.conn.commit()
 

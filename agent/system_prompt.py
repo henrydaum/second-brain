@@ -225,26 +225,16 @@ You always follow through. If you start a task, you see it through to completion
 
 
 def _canvas_state(session_key: str | None) -> str:
+    """Return a short summary of the user's current canvas for the agent prompt."""
     if not session_key:
         return ""
-    try:
-        from plugins.tools.helpers import layered_canvas as lc
-        state = lc.get_state(session_key)
-    except Exception:
-        return ""
-    chain = state.get("last_chain") or []
-    palette = state.get("palette_id")
-    size = state.get("size")
-    lines = ["## Current canvas"]
-    if not chain:
-        lines.append("Canvas is blank -- no skills applied yet.")
-    else:
-        lines.append(f"Chain ({len(chain)}/4 layers, palette: {palette}, size: {size}):")
-        for i, step in enumerate(chain):
-            slug = step.get("slug") or "?"
-            kind = step.get("kind") or "?"
-            lines.append(f"  {i}. {slug} ({kind})")
-    return "\n".join(lines)
+    # The canvas runtime lives on the services bag. We can't reach it from
+    # this pure-function helper without plumbing it through; the system
+    # prompt builder is called with the runtime/services available, so
+    # pull from there if a future caller threads it in. For now, no-op —
+    # the agent gets canvas state from execute_skill / manage_layers
+    # results in-conversation, not from the system prompt preamble.
+    return ""
 
 
 def _sandbox_files() -> str:

@@ -1,8 +1,14 @@
-"""Phase 0 schema regression for the canvas domain rework.
+"""Schema regression for the canvas-domain tables.
 
-Asserts the new tables, columns, and indexes are created by Database._setup
-so later phases can wire against a stable target. No app code reads or
-writes these tables yet.
+After the canvas-rework cleanup, the canvas tables in the central DB are:
+  - canvas_states      (per-user canvas editing handle: id -> state JSON)
+  - canvas_pools       (pool_hash -> render-determining state JSON)
+  - user_canvas_actions (user X did Y on pool Z at ts)
+  - skill_scores / skill_events / skill_errors (analytics, with link_opens)
+
+The legacy tables (canvas_shares, canvas_layer_cache, canvas_seed_pool,
+and the abandoned Phase 0 ones: skills, canvases, canvas_layers,
+image_generations) are dropped on startup for existing installs.
 """
 
 from pathlib import Path
@@ -29,82 +35,88 @@ def _fresh_db(name: str) -> tuple[Database, Path]:
 	return Database(str(path)), path
 
 
-def test_canvas_domain_tables_exist():
-	"""Phase 0: every new table is created with the expected columns."""
+def _cleanup(db: Database, path: Path) -> None:
+	"""Close + remove a test DB."""
+	db.conn.close()
+	for p in (path, path.with_suffix(".sqlite-wal"), path.with_suffix(".sqlite-shm")):
+		p.unlink(missing_ok=True)
+
+
+def test_canvas_tables_exist():
+	"""All current canvas-domain tables have the expected columns."""
 	db, path = _fresh_db("tables")
 	try:
-		assert _columns(db, "skills") == {
-			"slug", "name", "kind", "code", "description",
-			"embedding", "created_at", "updated_at",
-		}
-
-		assert _columns(db, "canvases") == {
-			"id", "title", "artist", "size", "palette_id",
-			"current_generation_id", "created_at", "updated_at",
-		}
-
-		assert _columns(db, "canvas_layers") == {
-			"id", "canvas_id", "position", "skill_slug", "controls_json",
-		}
-
-		assert _columns(db, "image_generations") == {
-			"id", "cache_key", "pool_key", "skill_slug",
-			"input_generation_id", "controls_json", "controls_hash",
-			"seed", "file_path", "bytes", "embedding",
-			"created_at", "last_used", "use_count",
-		}
-
+		assert _columns(db, "canvas_states") == {"canvas_id", "state_json", "updated_at"}
+		assert _columns(db, "canvas_pools") == {"pool_hash", "state_json", "created_at"}
 		assert _columns(db, "user_canvas_actions") == {
-			"id", "user_id", "canvas_id", "action", "ts",
+			"id", "user_id", "pool_hash", "action", "ts", "meta_json",
 		}
 	finally:
-		db.conn.close()
-		path.unlink(missing_ok=True)
+		_cleanup(db, path)
 
 
-def test_skill_scores_gains_link_opens_column():
-	"""Phase 0: skill_scores.link_opens is added via the lazy ALTER pattern."""
-	db, path = _fresh_db("alter")
+def test_skill_scores_has_link_opens_column():
+	"""skill_scores keeps the link_opens column added during the rework."""
+	db, path = _fresh_db("scores")
 	try:
 		assert "link_opens" in _columns(db, "skill_scores")
 	finally:
+		_cleanup(db, path)
+
+
+def test_legacy_tables_are_dropped_on_startup():
+	"""Old canvas tables and Phase 0 dormant tables are gone after _setup."""
+	db, path = _fresh_db("dropped")
+	try:
+		# Pretend an old install: manually create one of the legacy
+		# tables, close, reopen, and confirm it's gone.
+		db.conn.execute("CREATE TABLE IF NOT EXISTS canvas_shares (share_id TEXT PRIMARY KEY)")
+		db.conn.commit()
 		db.conn.close()
-		path.unlink(missing_ok=True)
+		db = Database(str(path))
+		tables = {
+			r["name"] for r in db.conn.execute(
+				"SELECT name FROM sqlite_master WHERE type='table'"
+			).fetchall()
+		}
+		for gone in (
+			"canvas_shares", "canvas_layer_cache", "canvas_seed_pool",
+			"skills", "canvases", "canvas_layers", "image_generations",
+		):
+			assert gone not in tables, f"legacy table {gone!r} still present"
+	finally:
+		_cleanup(db, path)
 
 
 def test_canvas_domain_indexes_exist():
-	"""Phase 0: indexes that back common queries are in place."""
+	"""Indexes that back common queries are in place."""
 	db, path = _fresh_db("idx")
 	try:
-		assert "idx_canvas_layers_canvas" in _indexes(db, "canvas_layers")
-		gen_idx = _indexes(db, "image_generations")
-		assert "idx_image_generations_pool" in gen_idx
-		assert "idx_image_generations_last_used" in gen_idx
-		assert "idx_image_generations_input" in gen_idx
 		action_idx = _indexes(db, "user_canvas_actions")
 		assert "idx_user_canvas_actions_user" in action_idx
-		assert "idx_user_canvas_actions_canvas" in action_idx
+		assert "idx_user_canvas_actions_pool" in action_idx
+		assert "idx_canvas_pools_created" in _indexes(db, "canvas_pools")
+		assert "idx_canvas_states_updated" in _indexes(db, "canvas_states")
 	finally:
-		db.conn.close()
-		path.unlink(missing_ok=True)
+		_cleanup(db, path)
 
 
 def test_setup_is_idempotent():
-	"""Re-opening the same DB doesn't crash on the new DDL or the lazy ALTER."""
+	"""Re-opening the same DB doesn't crash and keeps the canvas tables."""
 	path = Path(".canvas_schema_test_reopen.sqlite")
 	path.unlink(missing_ok=True)
 	try:
 		Database(str(path)).conn.close()
 		db = Database(str(path))
 		try:
-			assert "link_opens" in _columns(db, "skill_scores")
 			tables = {
 				r["name"] for r in db.conn.execute(
 					"SELECT name FROM sqlite_master WHERE type='table'"
 				).fetchall()
 			}
-			assert "skills" in tables
-			assert "canvases" in tables
+			assert "canvas_states" in tables
+			assert "canvas_pools" in tables
+			assert "user_canvas_actions" in tables
 		finally:
 			db.conn.close()
 	finally:

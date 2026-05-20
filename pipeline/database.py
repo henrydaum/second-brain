@@ -290,147 +290,18 @@ class Database:
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_errors_slug ON skill_errors(slug)")
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_errors_type ON skill_errors(error_type)")
 
-		# Shareable canvas links: every share/save/get-link mints a stable
-		# short id that resolves back to the canvas image + replay chain.
-		# kind='ephemeral' covers Get-link-without-publishing (image lives in
-		# DATA_DIR/shared_links/), 'gallery' covers /api/share, 'archive'
-		# covers /api/save. Unique (kind,image_path) lets us lazily backfill
-		# legacy gallery/archive items on first link request.
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS canvas_shares (
-				share_id     TEXT PRIMARY KEY,
-				kind         TEXT NOT NULL,
-				image_path   TEXT NOT NULL,
-				title        TEXT,
-				artist       TEXT,
-				chain_json   TEXT NOT NULL,
-				palette_id   TEXT,
-				size         INTEGER,
-				owner_id     TEXT,
-				created_at   REAL NOT NULL,
-				view_count   INTEGER DEFAULT 0
-			)
-		""")
-		self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_canvas_shares_path ON canvas_shares(kind, image_path)")
-
-		# Layer-level cache: each (slug, code, params+controls, palette, size,
-		# input_image_hash, seed) combination renders to exactly one PNG and is
-		# content-addressed. ``pool_key`` is the same key without ``seed`` so a
-		# group of cached renders for one context can be sampled cheaply.
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS canvas_layer_cache (
-				cache_key  TEXT PRIMARY KEY,
-				pool_key   TEXT NOT NULL,
-				skill_slug TEXT NOT NULL,
-				size       INTEGER NOT NULL,
-				palette_id TEXT,
-				seed       INTEGER,
-				file_path  TEXT NOT NULL,
-				bytes      INTEGER NOT NULL,
-				created_at REAL NOT NULL,
-				last_used  REAL NOT NULL,
-				use_count  INTEGER DEFAULT 0
-			)
-		""")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_canvas_layer_cache_last_used ON canvas_layer_cache(last_used)")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_canvas_layer_cache_pool ON canvas_layer_cache(pool_key)")
-
-		# Seed pool: previously-used seeds per pool_key. RunSkill samples
-		# from here; Regenerate and randomize-button paths mint new seeds.
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS canvas_seed_pool (
-				pool_key  TEXT NOT NULL,
-				seed      INTEGER NOT NULL,
-				last_used REAL NOT NULL,
-				PRIMARY KEY (pool_key, seed)
-			)
-		""")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_canvas_seed_pool_key ON canvas_seed_pool(pool_key)")
-
-		# =================================================================
-		# NEW CANVAS DOMAIN (Phase 0 — defined here, not yet written by app)
-		# =================================================================
-		# These tables replace canvas_shares / canvas_layer_cache /
-		# canvas_seed_pool in a phased migration. Nothing reads or writes
-		# them yet — Phase 0 only declares the schema so later phases can
-		# wire up against a stable target.
-
-		# Master skill row. Analytics tables (skill_events / skill_scores /
-		# skill_errors) continue to hang off `slug`.
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS skills (
-				slug         TEXT PRIMARY KEY,
-				name         TEXT,
-				kind         TEXT NOT NULL,
-				code         TEXT,
-				description  TEXT,
-				embedding    BLOB,
-				created_at   REAL NOT NULL,
-				updated_at   REAL NOT NULL
-			)
-		""")
-
-		# A canvas is a standalone, shareable document. `id` doubles as the
-		# share token in URLs — no separate share_kind/owner. The
-		# user↔canvas relationship lives in user_canvas_actions.
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS canvases (
-				id                     TEXT PRIMARY KEY,
-				title                  TEXT,
-				artist                 TEXT,
-				size                   INTEGER,
-				palette_id             TEXT,
-				current_generation_id  INTEGER,
-				created_at             REAL NOT NULL,
-				updated_at             REAL NOT NULL,
-				FOREIGN KEY (current_generation_id) REFERENCES image_generations(id)
-			)
-		""")
-
-		# Ordered skill chain for a canvas. `controls_json` is the
-		# *current/editable* state of the layer's knobs; the snapshot used
-		# at render time lives on image_generations.
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS canvas_layers (
-				id             INTEGER PRIMARY KEY,
-				canvas_id      TEXT NOT NULL,
-				position       INTEGER NOT NULL,
-				skill_slug     TEXT NOT NULL,
-				controls_json  TEXT,
-				FOREIGN KEY (canvas_id) REFERENCES canvases(id) ON DELETE CASCADE,
-				FOREIGN KEY (skill_slug) REFERENCES skills(slug),
-				UNIQUE (canvas_id, position)
-			)
-		""")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_canvas_layers_canvas ON canvas_layers(canvas_id)")
-
-		# Per-render cache. Chain identity is recursive via
-		# input_generation_id (null for creations). `cache_key` includes
-		# the seed; `pool_key` omits it so we can sample existing seeds
-		# for a given (input, skill, controls) tuple cheaply.
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS image_generations (
-				id                   INTEGER PRIMARY KEY,
-				cache_key            TEXT NOT NULL UNIQUE,
-				pool_key             TEXT NOT NULL,
-				skill_slug           TEXT NOT NULL,
-				input_generation_id  INTEGER,
-				controls_json        TEXT,
-				controls_hash        TEXT NOT NULL,
-				seed                 INTEGER,
-				file_path            TEXT NOT NULL,
-				bytes                INTEGER NOT NULL,
-				embedding            BLOB,
-				created_at           REAL NOT NULL,
-				last_used            REAL NOT NULL,
-				use_count            INTEGER DEFAULT 0,
-				FOREIGN KEY (skill_slug) REFERENCES skills(slug),
-				FOREIGN KEY (input_generation_id) REFERENCES image_generations(id)
-			)
-		""")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_image_generations_pool ON image_generations(pool_key)")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_image_generations_last_used ON image_generations(last_used)")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_image_generations_input ON image_generations(input_generation_id)")
+		# Legacy canvas tables (canvas_shares, canvas_layer_cache,
+		# canvas_seed_pool) and Phase 0 dormant tables (skills, canvases,
+		# canvas_layers, image_generations) are removed. Drop them on
+		# startup for existing installs so leftover rows don't linger.
+		for legacy in (
+			"canvas_shares", "canvas_layer_cache", "canvas_seed_pool",
+			"skills", "canvases", "canvas_layers", "image_generations",
+		):
+			try:
+				self.conn.execute(f"DROP TABLE IF EXISTS {legacy}")
+			except sqlite3.OperationalError:
+				pass
 
 		# User-to-canvas interactions. One row per (user, pool_hash, action,
 		# ts). Anonymous link_opens still get rows (web_users has anon
