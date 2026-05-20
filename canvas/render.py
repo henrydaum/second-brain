@@ -34,7 +34,7 @@ from PIL import Image
 from canvas.state import CanvasState
 from paths import DATA_DIR
 from plugins.helpers.palettes import get_palette as _default_get_palette
-from plugins.skills.helpers.skill_runner import run_skill
+from plugins.skills.helpers.skill_runner import resolve_entry, run_skill
 
 logger = logging.getLogger("CanvasRender")
 
@@ -188,7 +188,7 @@ def render_canvas(
 
 	# Cache miss: walk the chain in a temp workdir, then re-encode the
 	# final PNG as WebP into the canonical path.
-	palette = _default_get_palette(canvas.palette_id)
+	fallback_palette = _default_get_palette(canvas.palette_id)
 	with tempfile.TemporaryDirectory(prefix="canvas_render_") as workdir:
 		workdir_path = Path(workdir)
 		current_input: Path | None = None
@@ -198,9 +198,10 @@ def render_canvas(
 			if skill is None:
 				raise ValueError(f"chain references unknown skill: {slug!r}")
 			step_png = workdir_path / f"step_{idx:02d}.png"
+			params, palette = resolve_entry(layer, fallback_palette=fallback_palette)
 			run_skill(
 				skill,
-				params=dict(layer.get("controls") or {}),
+				params=params,
 				palette=palette,
 				size=int(canvas.size),
 				seed=int(seed_val),

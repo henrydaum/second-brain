@@ -13,7 +13,7 @@ Each entry: (title, variable_name, description, default, type_info)
                    {"type": "slider", "range": (min, max, divisions), "is_float": bool}
 """
 
-from paths import DATA_DIR, ATTACHMENT_CACHE, SKILLS_DIR
+from paths import DATA_DIR, ATTACHMENT_CACHE, ROOT_DIR, SANDBOX_SKILLS, SKILLS_DIR
 
 DEFAULT_SCHEDULED_JOBS = {}
 
@@ -21,7 +21,7 @@ SETTINGS_DATA = [
     # --- Directories ---
     ("Sync Directories", "sync_directories",
      "Folders to monitor for new and changed files. Sub-folders are included.",
-     [str(ATTACHMENT_CACHE), str(SKILLS_DIR)],
+     [str(ATTACHMENT_CACHE), str(SKILLS_DIR), str(ROOT_DIR / "plugins" / "skills"), str(SANDBOX_SKILLS)],
      {"type": "json_list"}),
 
     ("Database Path", "db_path",

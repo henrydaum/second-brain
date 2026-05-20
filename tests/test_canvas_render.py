@@ -41,6 +41,7 @@ def _install_fake_run_skill(monkeypatch):
 			"slug": skill.slug,
 			"kind": skill.kind,
 			"params": dict(params),
+			"palette_id": palette.id,
 			"size": size,
 			"seed": seed,
 			"input_image_path": str(input_image_path) if input_image_path else None,
@@ -178,6 +179,17 @@ def test_render_passes_seed_and_size_to_skills(monkeypatch, renders_dir):
 
 	assert {c["seed"] for c in calls} == {99}
 	assert {c["size"] for c in calls} == {768}
+
+
+def test_render_resolves_palette_control_out_of_params(monkeypatch, renders_dir):
+	"""Palette swatches change the palette object, not the skill kwargs."""
+	calls = _install_fake_run_skill(monkeypatch)
+	cs = _state_with_creation("fractal", palette="frost", zoom=2)
+
+	canvas_render.render_canvas(cs, skill_loader=_loader({"fractal": _skill("fractal")}), seed=4)
+
+	assert calls[0]["palette_id"] == "frost"
+	assert calls[0]["params"] == {"zoom": 2}
 
 
 def test_render_raises_on_empty_chain(monkeypatch, renders_dir):

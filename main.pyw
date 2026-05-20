@@ -6,7 +6,7 @@ import threading
 import time
 from pathlib import Path
 
-from paths import DATA_DIR, SKILLS_DIR
+from paths import DATA_DIR, ROOT_DIR, SANDBOX_SKILLS, SKILLS_DIR
 
 # Silence noisy libraries
 logging.getLogger("PIL").setLevel(logging.WARNING)
@@ -85,8 +85,11 @@ def main():
 	# --- 1. Load config ---
 	config = config_manager.load()
 	sync_dirs = [str(p) for p in (config.get("sync_directories") or [])]
-	if str(SKILLS_DIR) not in sync_dirs:
-		config["sync_directories"] = sync_dirs + [str(SKILLS_DIR)]
+	for d in (SKILLS_DIR, ROOT_DIR / "plugins" / "skills", SANDBOX_SKILLS):
+		if str(d) not in sync_dirs:
+			sync_dirs.append(str(d))
+	if sync_dirs != config.get("sync_directories"):
+		config["sync_directories"] = sync_dirs
 		config_manager.save(config)
 
 	if not config["sync_directories"]:
