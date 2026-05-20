@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from state_machine.canvas import Canvas
 from state_machine.conversation_phases import BASE_PHASE, PHASE_AWAITING_INPUT
 
 Validator = Callable[[Any], tuple[bool, str | None]]
@@ -178,6 +179,7 @@ class ConversationState:
         allowed_attachment_extensions: Iterable[str] = (),
         attachment_parser: Callable[[dict[str, Any]], Any] | None = None,
         attachment_lifecycle: str = "per_turn",
+        canvas: Canvas | None = None,
     ):
         """Initialize the conversation state."""
         self.participants = {p.id: p for p in participants}
@@ -200,6 +202,9 @@ class ConversationState:
         # Holds Attachment dataclasses produced by SendAttachment until the
         # next agent turn pulls them.
         self.pending_attachments: list[Any] = []
+        # First-class canvas state: skill chain, palette, size, composite path.
+        # Mutated by canvas actions (RunSkill, SetPalette, ...) in action.py.
+        self.canvas: Canvas = canvas if canvas is not None else Canvas()
 
     @property
     def active(self) -> Participant:
@@ -288,4 +293,5 @@ class ConversationState:
             "history": self.history[-100:],
             "participants": [{"id": p.id, "kind": p.kind, "name": p.name} for p in self.participants.values()],
             "pending_attachments": attachments_payload,
+            "canvas": self.canvas.to_dict(),
         }

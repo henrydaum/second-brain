@@ -226,6 +226,27 @@ Payload:
 
 # ── Canvas ─────────────────────────────────────────────────────────
 
+CANVAS_ACTION_STARTED = "canvas_action_started"
+"""A canvas-mutating action (run_skill, set_palette, regenerate, etc.)
+began. Mirrors COMMAND_CALL_STARTED so frontends can show a pending
+indicator while a chain re-renders.
+
+Payload:
+    session_key: str
+    call_id:     str   — short unique id; matched by FINISHED
+    action_name: str   — e.g. "run_skill", "set_palette", "regenerate"
+    args:        dict  — frontend-friendly arg summary"""
+
+CANVAS_ACTION_FINISHED = "canvas_action_finished"
+"""A canvas-mutating action finished (success or failure).
+
+Payload:
+    session_key: str
+    call_id:     str
+    action_name: str
+    ok:          bool
+    error:       str (optional)"""
+
 CANVAS_COMMITTED = "canvas_committed"
 """The canvas state for a session changed and should be re-rendered. Fires
 on skill execution, chain edits that replay through commit_image, and

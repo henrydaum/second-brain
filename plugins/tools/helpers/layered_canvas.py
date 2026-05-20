@@ -1,9 +1,15 @@
-"""Single-image canvas state.
+"""Canvas state shims + composite PNG disk management.
 
-A canvas per session holds: the current image path, a centralized palette id,
-a square size, a structured replay chain (skills run in order), and a
-short history list for the UI. Skills inherit `palette` and `size` from
-this state at execution time.
+The authoritative canvas state now lives on ``ConversationState.canvas``
+(``state_machine/canvas.py``). This module is the thin bridge between
+session keys and live ``Canvas`` instances: it resolves the cs from the
+bound runtime, performs the requested pure mutation on ``cs.canvas``,
+and emits ``CANVAS_COMMITTED`` after a successful image commit.
+
+Persistence of the chain/palette/size now rides on the existing
+state-machine marker (see ``state_machine/serialization.py``); the
+legacy ``DATA_DIR/canvas/state.json`` is consumed once per
+session_key as a one-time migration.
 """
 
 from __future__ import annotations
@@ -20,42 +26,34 @@ from paths import DATA_DIR
 from plugins.helpers.palettes import DEFAULT_PALETTE_ID, palette_exists
 from events.event_bus import bus
 from events.event_channels import CANVAS_COMMITTED
+from state_machine.canvas import (
+    Canvas,
+    DEFAULT_SIZE,
+    MIN_SIZE,
+    MAX_SIZE,
+    MAX_CHAIN_LENGTH,
+)
 
 CANVAS_ROOT = DATA_DIR / "canvas"
-STATE_PATH = CANVAS_ROOT / "state.json"
+LEGACY_STATE_PATH = CANVAS_ROOT / "state.json"
 COMPOSITE_DIR = CANVAS_ROOT / "composites"
-DEFAULT_SIZE = 1024
-MIN_SIZE = 256
-MAX_SIZE = 1536
-MAX_CHAIN_LENGTH = 4
 
 _state_lock = threading.RLock()
+_runtime_ref: Any = None
+# Detached canvases for sessions without a live runtime cs (tests,
+# autonomous flows). Lazily migrated from state.json on first access.
+_detached: dict[str, Canvas] = {}
+_migrated_keys: set[str] = set()
+
+
+def bind_runtime(runtime: Any) -> None:
+    """Hook called once at bootstrap so session lookups find the cs."""
+    global _runtime_ref
+    _runtime_ref = runtime
 
 
 def _slug(session_key: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", (session_key or "").lower()).strip("_") or "anon"
-
-
-def _read_state() -> dict:
-    try:
-        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def _write_state(data: dict) -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
-def _blank_entry() -> dict:
-    return {
-        "size": DEFAULT_SIZE,
-        "palette_id": DEFAULT_PALETTE_ID,
-        "image_path": None,
-        "last_chain": [],
-        "history": [],
-    }
 
 
 def _ensure_dir(session_key: str) -> Path:
@@ -64,201 +62,178 @@ def _ensure_dir(session_key: str) -> Path:
     return composite_dir
 
 
-def _push_history(entry: dict, op: str) -> None:
-    hist = (entry.get("history") or [])[-24:]
-    hist.append({"op": op, "at": time.time()})
-    entry["history"] = hist
-
-
-def get_state(session_key: str) -> dict:
-    """Return a snapshot of the canvas state for this session."""
-    with _state_lock:
-        store = _read_state()
-        entry = store.get(session_key) or _blank_entry()
-        # Backfill any missing keys (forward-compat after schema bumps).
-        merged = {**_blank_entry(), **entry}
-        return merged
-
-
 def image_path(session_key: str) -> Path:
     """Stable path for the current composite image."""
     return _ensure_dir(session_key) / "current.png"
 
 
-def commit_image(session_key: str, pil_image, op: str, chain_entry: dict | None = None) -> dict:
-    """Save a PIL image as the new composite. If chain_entry is given, update the replay chain.
+# ── legacy state.json migration ────────────────────────────────────
 
-    chain_entry is a dict like {slug, params, kind, seed}. For 'creation' kind the chain is
-    reset and replaced with [entry]; for 'transform' the entry is appended. For non-skill
-    operations (e.g. user wipes), pass chain_entry=None to leave the chain untouched.
-    """
+def _read_legacy_state() -> dict:
+    try:
+        return json.loads(LEGACY_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _consume_legacy(session_key: str) -> Canvas | None:
+    if session_key in _migrated_keys:
+        return None
+    _migrated_keys.add(session_key)
+    store = _read_legacy_state()
+    entry = store.get(session_key)
+    if not entry:
+        return None
+    return Canvas.from_dict(entry)
+
+
+# ── cs resolution ──────────────────────────────────────────────────
+
+def _resolve_canvas(session_key: str) -> Canvas:
+    """Return the live ``Canvas`` for this session, creating/migrating as needed."""
+    if _runtime_ref is not None:
+        try:
+            sessions = getattr(_runtime_ref, "sessions", {}) or {}
+            session = sessions.get(session_key)
+            if session is None and hasattr(_runtime_ref, "get_session"):
+                session = _runtime_ref.get_session(session_key)
+            if session is not None and getattr(session, "cs", None) is not None:
+                canvas = session.cs.canvas
+                # Lazy migration: empty canvas + legacy entry → populate.
+                if not canvas.last_chain and canvas.image_path is None:
+                    legacy = _consume_legacy(session_key)
+                    if legacy is not None:
+                        canvas.restore(legacy.to_dict())
+                return canvas
+        except Exception:
+            pass
+    # Fallback for tests / detached callers.
+    if session_key not in _detached:
+        legacy = _consume_legacy(session_key)
+        _detached[session_key] = legacy if legacy is not None else Canvas()
+    return _detached[session_key]
+
+
+# ── read API ───────────────────────────────────────────────────────
+
+def get_state(session_key: str) -> dict:
+    """Return a dict snapshot of the canvas state for this session."""
+    with _state_lock:
+        return _resolve_canvas(session_key).to_dict()
+
+
+def canvas(session_key: str) -> dict | None:
+    """Frontend-facing canvas snapshot. Returns the dict shape the UI expects."""
+    with _state_lock:
+        c = _resolve_canvas(session_key)
+        ip = c.image_path
+        has_image = bool(ip) and Path(ip).is_file()
+        return {
+            "path": ip if has_image else None,
+            "palette_id": c.palette_id or DEFAULT_PALETTE_ID,
+            "size": c.size or DEFAULT_SIZE,
+            "history": list(c.history),
+            "chain": list(c.last_chain),
+        }
+
+
+def current(session_key: str) -> dict | None:
+    """Compat helper used by share/remix flows."""
+    state = canvas(session_key)
+    if not state or not state.get("path"):
+        return None
+    return {"path": state["path"], "original": True, "kind": "composite"}
+
+
+# ── write API (operate on cs.canvas) ───────────────────────────────
+
+def commit_image(session_key: str, pil_image, op: str, chain_entry: dict | None = None) -> dict:
+    """Save a PIL image as the new composite, update the chain, emit
+    ``CANVAS_COMMITTED``, and return a dict snapshot."""
     dest = image_path(session_key)
     pil_image.save(dest, format="PNG")
     with _state_lock:
-        store = _read_state()
-        entry = store.get(session_key) or _blank_entry()
-        entry = {**_blank_entry(), **entry}
-        entry["image_path"] = str(dest.resolve())
+        c = _resolve_canvas(session_key)
+        c.image_path = str(dest.resolve())
         if chain_entry is not None:
             kind = chain_entry.get("kind")
             if kind == "creation":
-                entry["last_chain"] = [dict(chain_entry)]
+                c.last_chain = [dict(chain_entry)]
             elif kind == "transform":
-                # Don't append a transform if there's no base.
-                if entry["last_chain"]:
-                    entry["last_chain"] = list(entry["last_chain"]) + [dict(chain_entry)]
-                else:
-                    entry["last_chain"] = [dict(chain_entry)]
-        _push_history(entry, op)
-        store[session_key] = entry
-        _write_state(store)
+                c.last_chain = list(c.last_chain) + [dict(chain_entry)]
+        c.push_history(op)
+        snapshot = c.to_dict()
     bus.emit(CANVAS_COMMITTED, {
         "session_key": session_key,
-        "image_path": entry["image_path"],
-        "chain": list(entry.get("last_chain") or []),
+        "image_path": snapshot["image_path"],
+        "chain": list(snapshot.get("last_chain") or []),
         "op": op,
     })
-    return entry
+    return snapshot
 
 
 def set_palette(session_key: str, palette_id: str) -> dict:
-    """Update the session-default palette id and propagate it onto every chain
-    entry that declared a palette control. Returns the new state."""
     if not palette_exists(palette_id):
         raise ValueError(f"unknown palette: {palette_id}")
     with _state_lock:
-        store = _read_state()
-        entry = store.get(session_key) or _blank_entry()
-        entry = {**_blank_entry(), **entry}
-        entry["palette_id"] = palette_id
-        chain = list(entry.get("last_chain") or [])
-        for step in chain:
-            if "palette" in (step.get("controls") or {}):
-                step["controls"]["palette"] = palette_id
-        entry["last_chain"] = chain
-        store[session_key] = entry
-        _write_state(store)
-        return entry
+        c = _resolve_canvas(session_key)
+        c.apply_palette(palette_id)
+        return c.to_dict()
 
 
 def set_skill_control(session_key: str, chain_index: int, name: str, value) -> dict:
-    """Update one control value on a chain entry. Returns the new state.
-    Caller is responsible for replaying the chain afterward."""
     with _state_lock:
-        store = _read_state()
-        entry = store.get(session_key) or _blank_entry()
-        entry = {**_blank_entry(), **entry}
-        chain = list(entry.get("last_chain") or [])
-        if not (0 <= chain_index < len(chain)):
-            raise ValueError(f"chain_index {chain_index} out of range (len={len(chain)})")
-        step = dict(chain[chain_index])
-        controls = dict(step.get("controls") or {})
-        controls[name] = value
-        step["controls"] = controls
-        chain[chain_index] = step
-        entry["last_chain"] = chain
-        # Mirror palette selection onto the session default so future skills inherit.
-        if name == "palette" and isinstance(value, str) and palette_exists(value):
-            entry["palette_id"] = value
-        store[session_key] = entry
-        _write_state(store)
-        return entry
+        c = _resolve_canvas(session_key)
+        c.apply_control(chain_index, name, value)
+        return c.to_dict()
 
 
 def delete_chain_entry(session_key: str, chain_index: int) -> dict:
-    """Remove one entry from the chain. Returns the new state. Caller replays/commits."""
     with _state_lock:
-        store = _read_state()
-        entry = store.get(session_key) or _blank_entry()
-        entry = {**_blank_entry(), **entry}
-        chain = list(entry.get("last_chain") or [])
-        if not (0 <= chain_index < len(chain)):
-            raise ValueError(f"chain_index {chain_index} out of range (len={len(chain)})")
-        del chain[chain_index]
-        entry["last_chain"] = chain
-        store[session_key] = entry
-        _write_state(store)
-        return entry
+        c = _resolve_canvas(session_key)
+        c.delete_entry(chain_index)
+        return c.to_dict()
 
 
 def move_chain_entry(session_key: str, from_index: int, to_index: int) -> dict:
-    """Reorder one entry in the chain. Index 0 must remain a creation; raises otherwise."""
     with _state_lock:
-        store = _read_state()
-        entry = store.get(session_key) or _blank_entry()
-        entry = {**_blank_entry(), **entry}
-        chain = list(entry.get("last_chain") or [])
-        n = len(chain)
-        if not (0 <= from_index < n):
-            raise ValueError(f"from_index {from_index} out of range (len={n})")
-        if not (0 <= to_index < n):
-            raise ValueError(f"to_index {to_index} out of range (len={n})")
-        step = chain.pop(from_index)
-        chain.insert(to_index, step)
-        if chain and chain[0].get("kind") != "creation":
-            raise ValueError("layer 0 must be a creation; reorder rejected")
-        entry["last_chain"] = chain
-        store[session_key] = entry
-        _write_state(store)
-        return entry
+        c = _resolve_canvas(session_key)
+        c.move_entry(from_index, to_index)
+        return c.to_dict()
 
 
 def randomize_seed(session_key: str, chain_index: int, new_seed: int) -> dict:
-    """Replace the seed on one chain entry."""
     with _state_lock:
-        store = _read_state()
-        entry = store.get(session_key) or _blank_entry()
-        entry = {**_blank_entry(), **entry}
-        chain = list(entry.get("last_chain") or [])
-        if not (0 <= chain_index < len(chain)):
-            raise ValueError(f"chain_index {chain_index} out of range (len={len(chain)})")
-        step = dict(chain[chain_index])
-        step["seed"] = int(new_seed)
-        chain[chain_index] = step
-        entry["last_chain"] = chain
-        store[session_key] = entry
-        _write_state(store)
-        return entry
+        c = _resolve_canvas(session_key)
+        c.randomize_seed_at(chain_index, new_seed)
+        return c.to_dict()
 
 
 def replace_state(session_key: str, entry: dict) -> None:
+    """Restore a canvas from a snapshot dict (used for rollback on failure)."""
     with _state_lock:
-        store = _read_state()
-        store[session_key] = {**_blank_entry(), **(entry or {})}
-        _write_state(store)
+        c = _resolve_canvas(session_key)
+        c.restore(Canvas.from_dict(entry).to_dict())
 
 
 def set_size(session_key: str, size: int) -> dict:
-    """Update the centralized square resolution. Clamped to [MIN_SIZE, MAX_SIZE]."""
-    size = max(MIN_SIZE, min(MAX_SIZE, int(size)))
     with _state_lock:
-        store = _read_state()
-        entry = store.get(session_key) or _blank_entry()
-        entry = {**_blank_entry(), **entry}
-        entry["size"] = size
-        store[session_key] = entry
-        _write_state(store)
-        return entry
+        c = _resolve_canvas(session_key)
+        c.set_size(size)
+        return c.to_dict()
 
 
 def clear_chain(session_key: str) -> None:
-    """Drop the replay chain without touching the image (used after a manual override)."""
     with _state_lock:
-        store = _read_state()
-        entry = store.get(session_key)
-        if not entry:
-            return
-        entry["last_chain"] = []
-        store[session_key] = entry
-        _write_state(store)
+        c = _resolve_canvas(session_key)
+        c.clear_chain()
 
 
 def reset(session_key: str) -> None:
     """Wipe canvas state and on-disk image for a session."""
     with _state_lock:
-        store = _read_state()
-        store.pop(session_key, None)
-        _write_state(store)
+        c = _resolve_canvas(session_key)
+        c.reset()
         d = COMPOSITE_DIR / _slug(session_key)
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
@@ -273,36 +248,6 @@ def reset(session_key: str) -> None:
 def reset_canvas(session_key: str) -> None:
     """Compat alias."""
     reset(session_key)
-
-
-def canvas(session_key: str) -> dict | None:
-    """Frontend-facing canvas snapshot. Returns None when the canvas has no image yet."""
-    entry = get_state(session_key)
-    ip = entry.get("image_path")
-    if not ip or not Path(ip).is_file():
-        # Still return palette/size so the UI can show the active palette ring.
-        return {
-            "path": None,
-            "palette_id": entry.get("palette_id") or DEFAULT_PALETTE_ID,
-            "size": entry.get("size") or DEFAULT_SIZE,
-            "history": entry.get("history") or [],
-            "chain": entry.get("last_chain") or [],
-        }
-    return {
-        "path": ip,
-        "palette_id": entry.get("palette_id") or DEFAULT_PALETTE_ID,
-        "size": entry.get("size") or DEFAULT_SIZE,
-        "history": entry.get("history") or [],
-        "chain": entry.get("last_chain") or [],
-    }
-
-
-def current(session_key: str) -> dict | None:
-    """Compat helper used by share/remix flows."""
-    state = canvas(session_key)
-    if not state or not state.get("path"):
-        return None
-    return {"path": state["path"], "original": True, "kind": "composite"}
 
 
 def set_current(session_key: str, path: Any, original: bool = False, meta: dict | None = None) -> None:

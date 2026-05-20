@@ -316,7 +316,11 @@ def main():
             "classmethod", "str", "sum", "tuple", "ValueError", "zip",
             "isinstance", "issubclass", "type", "object", "super",
         )}
-        safe.update({"__import__": _import, "print": lambda *a, **k: None})
+        safe.update({
+            "__import__": _import,
+            "__build_class__": _builtins.__build_class__,
+            "print": lambda *a, **k: None,
+        })
         # BaseSkill is injected by name so the skill's `from plugins.BaseSkill
         # import BaseSkill` resolves through _import — keep that path live.
         art_kit = _build_art_kit(canvas.palette)

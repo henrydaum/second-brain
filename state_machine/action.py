@@ -610,3 +610,328 @@ class SendAttachment(Action):
             self.cs.switch_priority(self.actor_id)
         event = self.cs.event("attachment", self.actor_id, attachment=content, parsed=parsed)
         return ActionResult(True, self.action_type, events=[event], data={"parsed": parsed})
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Canvas actions
+#
+# First-class actions for canvas controls: skill execution, palette swap,
+# slider/control mutation, regenerate, layer delete/move, size, reset.
+# Each action mutates ``cs.canvas`` (the Canvas dataclass) and emits
+# CANVAS_ACTION_STARTED/FINISHED so frontends can render pending state
+# the same way they do for slash commands.
+#
+# Rendering itself (subprocess sandbox, PIL, PNG write) is delegated to
+# ``plugins.tools.helpers.canvas_render`` so the state machine stays
+# free of frontend / PIL / plugin imports.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _emit_canvas_event(channel: str, cs, payload: dict[str, Any]) -> None:
+    try:
+        from events.event_bus import bus
+        bus.emit(channel, {"session_key": cs.cache.get("session_key"), **payload})
+    except Exception:
+        pass
+
+
+class _CanvasAction(Action):
+    """Shared lifecycle for canvas-mutating actions.
+
+    Subclasses implement ``_run(content)`` to mutate ``cs.canvas`` and do
+    any rendering. The base emits CANVAS_ACTION_STARTED before and
+    CANVAS_ACTION_FINISHED after, snapshots the canvas for rollback on
+    exception, and packages the resulting canvas dict into the
+    ``ActionResult.data``.
+    """
+
+    action_type = "canvas_action"
+
+    def is_legal(self):
+        # Canvas actions are loose about turn priority — a user click on
+        # regenerate while the agent is mid-turn is rejected at the
+        # runtime busy guard, not here. We still require a known actor.
+        if self.actor_id not in self.cs.participants:
+            return False, f"Unknown participant: {self.actor_id}."
+        return True, None
+
+    def _arg(self, key: str, default: Any = None) -> Any:
+        if isinstance(self.content, dict):
+            return self.content.get(key, default)
+        return default
+
+    def _session_key(self) -> str:
+        return self.cs.cache.get("session_key") or "default"
+
+    def execute(self):
+        import uuid
+        from events.event_channels import CANVAS_ACTION_STARTED, CANVAS_ACTION_FINISHED
+        call_id = f"canvas:{self.action_type}:{uuid.uuid4().hex[:8]}"
+        snapshot = self.cs.canvas.snapshot()
+        _emit_canvas_event(CANVAS_ACTION_STARTED, self.cs, {
+            "call_id": call_id,
+            "action_name": self.action_type,
+            "args": self._summary_args(),
+        })
+        try:
+            data = self._run() or {}
+        except Exception as e:
+            self.cs.canvas.restore(snapshot)
+            _emit_canvas_event(CANVAS_ACTION_FINISHED, self.cs, {
+                "call_id": call_id,
+                "action_name": self.action_type,
+                "ok": False,
+                "error": str(e),
+            })
+            raise self.error(ERROR_EXECUTION_FAILED, str(e) or type(e).__name__)
+        _emit_canvas_event(CANVAS_ACTION_FINISHED, self.cs, {
+            "call_id": call_id,
+            "action_name": self.action_type,
+            "ok": True,
+        })
+        event = self.cs.event(self.action_type, self.actor_id, **{k: v for k, v in (data.get("event_data") or {}).items()})
+        return ActionResult(True, self.action_type, events=[event], data={"call_id": call_id, **{k: v for k, v in data.items() if k != "event_data"}})
+
+    def _summary_args(self) -> dict[str, Any]:
+        """Short, frontend-friendly arg summary for the STARTED event."""
+        return dict(self.content) if isinstance(self.content, dict) else {}
+
+    def _run(self) -> dict[str, Any]:
+        raise NotImplementedError
+
+
+class RunSkill(_CanvasAction):
+    """Execute a skill (creation or transform) and append/replace the chain."""
+
+    action_type = "run_skill"
+
+    def _run(self) -> dict[str, Any]:
+        import random
+        from plugins.helpers.palettes import get_palette
+        from plugins.skills.helpers.skill_runner import (
+            default_controls, make_chain_entry, resolve_entry,
+        )
+        from plugins.tools.helpers import canvas_render, layered_canvas as lc
+        from state_machine.canvas import MAX_CHAIN_LENGTH
+
+        slug = str(self._arg("slug") or "")
+        params = dict(self._arg("params") or {})
+        if not slug:
+            raise ValueError("slug is required")
+        runtime = getattr(lc, "_runtime_ref", None)
+        registry = getattr(runtime, "skill_registry", None) if runtime else None
+        if registry is None:
+            raise RuntimeError("skill registry not available")
+        skill = registry.get_record(slug)
+        if not skill:
+            raise ValueError(f"No skill named '{slug}'.")
+        canvas = self.cs.canvas
+        if skill.kind == "transform" and not canvas.image_path:
+            raise ValueError("Transform skills require a current canvas image.")
+        if skill.kind == "transform" and len(canvas.last_chain) >= MAX_CHAIN_LENGTH:
+            raise ValueError(f"Chain is at the {MAX_CHAIN_LENGTH}-layer cap — delete a layer first.")
+
+        seed = int(params.get("seed") or random.randint(1, 2_147_483_647))
+        controls = default_controls(skill)
+        if any(c.get("type") == "palette" for c in (skill.controls or [])):
+            controls["palette"] = canvas.palette_id
+        controls.update({k: v for k, v in params.items() if k in controls})
+        entry = make_chain_entry(skill, params, seed, controls=controls)
+        merged_params, step_palette = resolve_entry(entry, fallback_palette=get_palette(canvas.palette_id))
+        cfg = (getattr(runtime, "config", {}) or {})
+        from pathlib import Path
+        snap = canvas_render.run_one_skill(
+            self._session_key(),
+            skill,
+            params=merged_params,
+            palette_id=step_palette.id if hasattr(step_palette, "id") else canvas.palette_id,
+            size=int(canvas.size),
+            seed=seed,
+            input_image_path=Path(canvas.image_path) if canvas.image_path else None,
+            op=f"skill:{slug}",
+            chain_entry=entry,
+            timeout_s=float(cfg.get("skill_timeout_s", 30)),
+            memory_mb=int(cfg.get("skill_memory_mb", 768)),
+        )
+        return {"canvas": snap, "event_data": {"slug": slug, "kind": skill.kind}}
+
+
+class SetPalette(_CanvasAction):
+    """Switch the session palette and replay the chain."""
+
+    action_type = "set_canvas_palette"
+
+    def _run(self) -> dict[str, Any]:
+        from plugins.helpers.palettes import palette_exists
+        from plugins.tools.helpers import canvas_render, layered_canvas as lc
+
+        palette_id = str(self._arg("palette_id") or "")
+        if not palette_id or not palette_exists(palette_id):
+            raise ValueError(f"unknown palette: {palette_id!r}")
+        canvas = self.cs.canvas
+        if palette_id == canvas.palette_id:
+            return {"canvas": lc.canvas(self._session_key()), "event_data": {"palette_id": palette_id, "noop": True}}
+        canvas.apply_palette(palette_id)
+        snap = lc.canvas(self._session_key())
+        if canvas.last_chain:
+            snap = canvas_render.render_chain(
+                self._session_key(), list(canvas.last_chain),
+                palette_id=palette_id, size=int(canvas.size),
+                op=f"palette:{palette_id}", out_name="_palette_replay.png",
+            )
+        return {"canvas": snap, "event_data": {"palette_id": palette_id}}
+
+
+class SetSkillControl(_CanvasAction):
+    """Update one control on a chain entry, then replay the chain."""
+
+    action_type = "set_skill_control"
+
+    def _run(self) -> dict[str, Any]:
+        import random
+        from plugins.tools.helpers import canvas_render, layered_canvas as lc
+
+        chain_index = int(self._arg("chain_index") or 0)
+        name = str(self._arg("name") or "")
+        value = self._arg("value")
+        action = str(self._arg("action") or "")
+
+        canvas = self.cs.canvas
+        chain = list(canvas.last_chain)
+        if not (0 <= chain_index < len(chain)):
+            raise ValueError("That control no longer exists.")
+        step = chain[chain_index]
+        runtime = getattr(lc, "_runtime_ref", None)
+        registry = getattr(runtime, "skill_registry", None) if runtime else None
+        skill = registry.get_record(step.get("slug") or "") if registry else None
+        if not skill:
+            raise ValueError("Skill for that control was deleted.")
+        schema = {c.get("name"): c for c in (skill.controls or [])}
+        spec = schema.get(name)
+        if not spec:
+            raise ValueError(f"Unknown control '{name}'.")
+        if spec.get("type") == "button":
+            act = action or spec.get("action") or "randomize"
+            if act != "randomize":
+                raise ValueError(f"Unknown button action '{act}'.")
+            param = spec.get("param") or "seed"
+            new_val = random.randint(1, 2_147_483_647)
+            if param == "seed":
+                canvas.randomize_seed_at(chain_index, new_val)
+            else:
+                canvas.apply_control(chain_index, param, new_val)
+        elif spec.get("type") == "pan":
+            v = value or {}
+            xv = float(v.get("x", spec.get("x_default", 0.0)))
+            yv = float(v.get("y", spec.get("y_default", 0.0)))
+            canvas.apply_control(chain_index, spec["x_param"], xv)
+            canvas.apply_control(chain_index, spec["y_param"], yv)
+        else:
+            from plugins.frontends.frontend_web import _coerce_control_value  # type: ignore
+            canvas.apply_control(chain_index, name, _coerce_control_value(spec, value))
+        snap = canvas_render.render_chain(
+            self._session_key(), list(canvas.last_chain),
+            palette_id=canvas.palette_id, size=int(canvas.size),
+            op=f"control:{step.get('slug')}.{name}", out_name="_control_replay.png",
+        )
+        return {"canvas": snap, "event_data": {"chain_index": chain_index, "name": name}}
+
+
+class RegenerateCanvas(_CanvasAction):
+    """Re-run the current chain with a fresh seed on every step."""
+
+    action_type = "regenerate_canvas"
+
+    def _run(self) -> dict[str, Any]:
+        import random
+        from plugins.tools.helpers import canvas_render
+
+        canvas = self.cs.canvas
+        if not canvas.last_chain:
+            raise ValueError("Nothing to regenerate yet — make something first.")
+        fresh = [random.randint(1, 2_147_483_647) for _ in canvas.last_chain]
+        canvas.reseed_chain(fresh)
+        snap = canvas_render.render_chain(
+            self._session_key(), list(canvas.last_chain),
+            palette_id=canvas.palette_id, size=int(canvas.size),
+            op="regenerate", out_name="_regenerate.png",
+        )
+        return {"canvas": snap, "event_data": {"layers": len(canvas.last_chain)}}
+
+
+class DeleteLayer(_CanvasAction):
+    """Remove one chain entry and replay. Index 0 clears the canvas."""
+
+    action_type = "delete_canvas_layer"
+
+    def _run(self) -> dict[str, Any]:
+        from plugins.tools.helpers import canvas_render, layered_canvas as lc
+
+        chain_index = int(self._arg("chain_index") or 0)
+        canvas = self.cs.canvas
+        if not (0 <= chain_index < len(canvas.last_chain)):
+            raise ValueError("That layer no longer exists.")
+        if chain_index == 0:
+            lc.reset(self._session_key())
+            return {"canvas": lc.canvas(self._session_key()), "event_data": {"chain_index": 0, "cleared": True}}
+        canvas.delete_entry(chain_index)
+        snap = canvas_render.render_chain(
+            self._session_key(), list(canvas.last_chain),
+            palette_id=canvas.palette_id, size=int(canvas.size),
+            op=f"layer_delete:{chain_index}", out_name="_layer_delete.png",
+        )
+        return {"canvas": snap, "event_data": {"chain_index": chain_index}}
+
+
+class MoveLayer(_CanvasAction):
+    """Reorder one chain entry and replay."""
+
+    action_type = "move_canvas_layer"
+
+    def _run(self) -> dict[str, Any]:
+        from plugins.tools.helpers import canvas_render, layered_canvas as lc
+
+        from_index = int(self._arg("from_index") or 0)
+        to_index = int(self._arg("to_index") or 0)
+        canvas = self.cs.canvas
+        if from_index == to_index:
+            return {"canvas": lc.canvas(self._session_key()), "event_data": {"noop": True}}
+        canvas.move_entry(from_index, to_index)
+        snap = canvas_render.render_chain(
+            self._session_key(), list(canvas.last_chain),
+            palette_id=canvas.palette_id, size=int(canvas.size),
+            op=f"layer_move:{from_index}->{to_index}", out_name="_layer_move.png",
+        )
+        return {"canvas": snap, "event_data": {"from_index": from_index, "to_index": to_index}}
+
+
+class SetCanvasSize(_CanvasAction):
+    """Update the centralized canvas size. Replays if there is a chain."""
+
+    action_type = "set_canvas_size"
+
+    def _run(self) -> dict[str, Any]:
+        from plugins.tools.helpers import canvas_render, layered_canvas as lc
+
+        size = int(self._arg("size") or 0)
+        canvas = self.cs.canvas
+        canvas.set_size(size)
+        snap = lc.canvas(self._session_key())
+        if canvas.last_chain:
+            snap = canvas_render.render_chain(
+                self._session_key(), list(canvas.last_chain),
+                palette_id=canvas.palette_id, size=int(canvas.size),
+                op=f"size:{canvas.size}", out_name="_resize.png",
+            )
+        return {"canvas": snap, "event_data": {"size": canvas.size}}
+
+
+class ResetCanvas(_CanvasAction):
+    """Wipe the canvas (state + composite image)."""
+
+    action_type = "reset_canvas"
+
+    def _run(self) -> dict[str, Any]:
+        from plugins.tools.helpers import layered_canvas as lc
+        lc.reset(self._session_key())
+        return {"canvas": lc.canvas(self._session_key()), "event_data": {"cleared": True}}

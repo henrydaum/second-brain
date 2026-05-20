@@ -252,11 +252,11 @@ class WebFrontend(BaseFrontend):
             # Compose tools already updated canvas state and wrote the composite;
             # don't re-call set_current on our own composite (that would wipe layers).
             if current_composite and p.resolve() == current_composite:
-                self._push(session_key, _image_event(p, _canvas_payload_full(session_key, state)))
+                self._push(session_key, _image_event(p, _canvas_payload_full(self.runtime, session_key, state)))
                 continue
             meta = read_json(p.with_suffix(".json"))
             set_current(session_key, p, bool(meta.get("original")), meta)
-            self._push(session_key, _image_event(p, _canvas_payload_full(session_key, canvas(session_key))))
+            self._push(session_key, _image_event(p, _canvas_payload_full(self.runtime, session_key, canvas(session_key))))
 
     def render_form_field(self, session_key: str, form: dict) -> None:
         self._push(session_key, {"type": "form", "form": form})
@@ -880,114 +880,37 @@ class WebFrontend(BaseFrontend):
 
     def canvas_payload(self, session_id: str) -> dict:
         key = self.session_key(session_id)
-        return _canvas_payload_full(key, canvas(key))
+        return _canvas_payload_full(self.runtime, key, canvas(key))
 
     def palettes_payload(self) -> list[dict]:
         return [p.to_dict() for p in list_palettes()]
 
     def set_palette(self, session_id: str, palette_id: str) -> list[dict]:
         key = self.session_key(session_id)
-        before = lc.get_state(key)
-        if palette_id == before.get("palette_id"):
-            return [{"type": "hero_image", "canvas": _canvas_payload_full(key, canvas(key))}] if before.get("image_path") else []
-        try:
-            state = lc.set_palette(key, palette_id)
-            chain = state.get("last_chain") or []
-            if chain:
-                out = lc.image_path(key).with_name("_palette_replay.png")
-                replay_chain(chain, palette=get_palette(palette_id), size=int(state.get("size") or lc.DEFAULT_SIZE), output_image_path=out, workdir=out.parent, skill_loader=lambda slug: _read_skill_via(self.runtime, slug))
-                with Image.open(out) as img:
-                    lc.commit_image(key, img.convert("RGBA"), f"palette:{palette_id}", None)
-            c = canvas(key)
-            return [{"type": "hero_image", "url": _file_url(Path(c["path"])), "name": Path(c["path"]).name, "canvas": _canvas_payload_full(key, c)}] if c and c.get("path") else []
-        except Exception as e:
-            lc.replace_state(key, before)
-            return [{"type": "error", "content": f"Palette replay failed: {e}"}]
+        return self._canvas_action_events(key, "set_canvas_palette", {"palette_id": palette_id}, fail_prefix="Palette replay failed")
 
     def set_skill_control(self, session_id: str, chain_index: int, name: str, value, action: str = "") -> list[dict]:
         """Update one control on a chain entry, then replay the chain."""
         key = self.session_key(session_id)
-        before = lc.get_state(key)
-        chain = list(before.get("last_chain") or [])
-        if not (0 <= chain_index < len(chain)):
-            return [{"type": "error", "content": "That control no longer exists."}]
-        step = chain[chain_index]
-        skill = _read_skill_via(self.runtime, step.get("slug") or "")
-        if not skill:
-            return [{"type": "error", "content": "Skill for that control was deleted."}]
-        schema = {c.get("name"): c for c in (skill.controls or [])}
-        spec = schema.get(name)
-        if not spec:
-            return [{"type": "error", "content": f"Unknown control '{name}'."}]
-        try:
-            if spec.get("type") == "button":
-                act = action or spec.get("action") or "randomize"
-                if act == "randomize":
-                    param = spec.get("param") or "seed"
-                    new_val = random.randint(1, 2_147_483_647)
-                    if param == "seed":
-                        state = lc.randomize_seed(key, chain_index, new_val)
-                    else:
-                        state = lc.set_skill_control(key, chain_index, param, new_val)
-                else:
-                    return [{"type": "error", "content": f"Unknown button action '{act}'."}]
-            elif spec.get("type") == "pan":
-                v = value or {}
-                xv = float(v.get("x", spec.get("x_default", 0.0)))
-                yv = float(v.get("y", spec.get("y_default", 0.0)))
-                lc.set_skill_control(key, chain_index, spec["x_param"], xv)
-                state = lc.set_skill_control(key, chain_index, spec["y_param"], yv)
-            else:
-                state = lc.set_skill_control(key, chain_index, name, _coerce_control_value(spec, value))
-            out = lc.image_path(key).with_name("_control_replay.png")
-            replay_chain(
-                state.get("last_chain") or [],
-                palette=get_palette(state.get("palette_id")),
-                size=int(state.get("size") or lc.DEFAULT_SIZE),
-                output_image_path=out,
-                workdir=out.parent,
-                skill_loader=lambda slug: _read_skill_via(self.runtime, slug),
-                on_step=self._chain_progress_cb(key),
-            )
-            with Image.open(out) as img:
-                lc.commit_image(key, img.convert("RGBA"), f"control:{step.get('slug')}.{name}", None)
-            c = canvas(key)
-            return [{"type": "hero_image", "url": _file_url(Path(c["path"])), "name": Path(c["path"]).name, "canvas": _canvas_payload_full(key, c)}] if c and c.get("path") else []
-        except Exception as e:
-            lc.replace_state(key, before)
-            return [{"type": "error", "content": f"Control replay failed: {e}"}]
+        return self._canvas_action_events(
+            key, "set_skill_control",
+            {"chain_index": chain_index, "name": name, "value": value, "action": action},
+            fail_prefix="Control replay failed",
+        )
 
     def delete_layer(self, session_id: str, chain_index: int) -> list[dict]:
         """Remove one entry from the chain and re-render. Deleting index 0 clears the canvas."""
         key = self.session_key(session_id)
-        before = lc.get_state(key)
-        chain = list(before.get("last_chain") or [])
-        if not (0 <= chain_index < len(chain)):
-            return [{"type": "error", "content": "That layer no longer exists."}]
-        if chain_index == 0:
-            lc.reset(key)
+        # The action emits a normal hero_image once the chain re-renders; if
+        # the deletion cleared the canvas we synthesize the canvas_reset event
+        # the UI expects.
+        events = self._canvas_action_events(
+            key, "delete_canvas_layer", {"chain_index": chain_index},
+            fail_prefix="Delete layer failed",
+        )
+        if chain_index == 0 and events and events[0].get("type") == "hero_image":
             return [{"type": "canvas_reset"}]
-        trimmed = chain[:chain_index] + chain[chain_index + 1:]
-        out = lc.image_path(key).with_name("_layer_delete.png")
-        try:
-            replay_chain(
-                trimmed,
-                palette=get_palette(before.get("palette_id")),
-                size=int(before.get("size") or lc.DEFAULT_SIZE),
-                output_image_path=out,
-                workdir=out.parent,
-                skill_loader=lambda slug: _read_skill_via(self.runtime, slug),
-            )
-            with Image.open(out) as img:
-                lc.commit_image(key, img.convert("RGBA"), f"layer_delete:{chain_index}", None)
-            new_state = lc.get_state(key)
-            new_state["last_chain"] = trimmed
-            lc.replace_state(key, new_state)
-            c = canvas(key)
-            return [{"type": "hero_image", "url": _file_url(Path(c["path"])), "name": Path(c["path"]).name, "canvas": _canvas_payload_full(key, c)}] if c and c.get("path") else []
-        except Exception as e:
-            lc.replace_state(key, before)
-            return [{"type": "error", "content": f"Delete layer failed: {e}"}]
+        return events
 
     def share(self, session_id: str, title: str, artist: str, *, ip: str = "", account_id: str = "") -> list[dict]:
         key = self.session_key(session_id)
@@ -1206,7 +1129,7 @@ class WebFrontend(BaseFrontend):
         skill_scoring.record_event(getattr(self.runtime, "db", None), "remix", source_chain, str(p))
         c = canvas(key)
         img_path = Path(c["path"]) if c and c.get("path") else p
-        return [_image_event(img_path, _canvas_payload_full(key, c)), {"type": "message", "role": "assistant", "content": f"Remix loaded.{restore_note} Tell me how to mutate it."}]
+        return [_image_event(img_path, _canvas_payload_full(self.runtime, key, c)), {"type": "message", "role": "assistant", "content": f"Remix loaded.{restore_note} Tell me how to mutate it."}]
 
     def download(self, session_id: str) -> list[dict]:
         """Fire-and-forget signal: user clicked Download for the current canvas."""
@@ -1221,36 +1144,28 @@ class WebFrontend(BaseFrontend):
     def regenerate(self, session_id: str) -> list[dict]:
         """Re-run the current chain with a fresh seed on every step."""
         key = self.session_key(session_id)
-        state = lc.get_state(key)
-        chain = list(state.get("last_chain") or [])
-        if not chain:
-            return [{"type": "error", "content": "Nothing to regenerate yet — make something first."}]
-        # Reseed every step so the whole composition shifts, not just one layer.
-        reseeded = [{**step, "seed": random.randint(1, 2_147_483_647)} for step in chain]
-        out = lc.image_path(key).with_name("_regenerate.png")
+        return self._canvas_action_events(key, "regenerate_canvas", {}, fail_prefix="Regenerate failed")
+
+    def _canvas_action_events(self, key: str, action_type: str, payload: dict, *, fail_prefix: str) -> list[dict]:
+        """Dispatch a canvas action through the runtime and translate the
+        result into the [{type:hero_image|error}] shape the UI consumes."""
         try:
-            replay_chain(
-                reseeded,
-                palette=get_palette(state.get("palette_id")),
-                size=int(state.get("size") or lc.DEFAULT_SIZE),
-                output_image_path=out,
-                workdir=out.parent,
-                skill_loader=lambda slug: _read_skill_via(self.runtime, slug),
-                on_step=self._chain_progress_cb(key),
-            )
-            with Image.open(out) as img:
-                # commit_image with chain_entry=None preserves the chain; we
-                # update it ourselves so seeds reflect the new render.
-                lc.commit_image(key, img.convert("RGBA"), "regenerate", None)
-            # Persist the reseeded chain so subsequent palette swaps re-render
-            # against the same composition.
-            new_state = lc.get_state(key)
-            new_state["last_chain"] = reseeded
-            lc.replace_state(key, new_state)
-            c = canvas(key)
-            return [{"type": "hero_image", "url": _file_url(Path(c["path"])), "name": Path(c["path"]).name, "canvas": _canvas_payload_full(key, c)}] if c and c.get("path") else []
+            result = self.runtime.handle_action(key, action_type, dict(payload))
         except Exception as e:
-            return [{"type": "error", "content": f"Regenerate failed: {e}"}]
+            logger.exception("%s failed", fail_prefix)
+            return [{"type": "error", "content": f"{fail_prefix}: {e}"}]
+        if not getattr(result, "ok", True):
+            msg = (result.error or {}).get("message") if getattr(result, "error", None) else (result.messages[0] if result.messages else fail_prefix)
+            return [{"type": "error", "content": f"{fail_prefix}: {msg}"}]
+        c = canvas(key)
+        if not c or not c.get("path"):
+            return []
+        return [{
+            "type": "hero_image",
+            "url": _file_url(Path(c["path"])),
+            "name": Path(c["path"]).name,
+            "canvas": _canvas_payload_full(self.runtime, key, c),
+        }]
 
     def _sync_gallery_file(self, path: Path) -> None:
         dirs = [str(p) for p in (self.config.get("sync_directories") or [])]
@@ -1611,7 +1526,7 @@ def _canvas_payload(state: dict | None) -> dict:
     return {**state, "url": _file_url(p), "name": p.name}
 
 
-def _canvas_payload_full(session_key: str, state: dict | None) -> dict:
+def _canvas_payload_full(runtime, session_key: str, state: dict | None) -> dict:
     """Canvas payload plus per-entry control schemas for the website panel."""
     base = _canvas_payload(state)
     if not state:
@@ -1621,7 +1536,7 @@ def _canvas_payload_full(session_key: str, state: dict | None) -> dict:
     layers = []
     palette_shown = False
     for idx, step in enumerate(chain):
-        skill = _read_skill_via(self.runtime, step.get("slug") or "")
+        skill = _read_skill_via(runtime, step.get("slug") or "")
         slug = step.get("slug") or ""
         name = skill.name if skill else slug
         layers.append({"chain_index": idx, "slug": slug, "skill_name": name, "kind": step.get("kind") or (skill.kind if skill else "")})

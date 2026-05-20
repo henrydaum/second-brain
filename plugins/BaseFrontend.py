@@ -24,6 +24,8 @@ from events.event_bus import bus
 from events.event_channels import (
     AGENT_THINKING,
     APPROVAL_REQUESTED,
+    CANVAS_ACTION_FINISHED,
+    CANVAS_ACTION_STARTED,
     CHAT_MESSAGE_PUSHED,
     COMMAND_CALL_FINISHED,
     COMMAND_CALL_PROGRESSED,
@@ -262,6 +264,8 @@ class BaseFrontend:
             bus.subscribe(TOOL_CALL_STARTED, self.on_bus_tool_call_started),
             bus.subscribe(TOOL_CALL_FINISHED, self.on_bus_tool_call_finished),
             bus.subscribe(AGENT_THINKING, self.on_bus_agent_thinking),
+            bus.subscribe(CANVAS_ACTION_STARTED, self.on_bus_canvas_action_started),
+            bus.subscribe(CANVAS_ACTION_FINISHED, self.on_bus_canvas_action_finished),
             bus.subscribe(TOOLS_CHANGED, self.on_tools_changed),
             bus.subscribe(TASKS_CHANGED, self.on_tasks_changed),
         ]
@@ -475,6 +479,14 @@ class BaseFrontend:
     def on_bus_command_call_finished(self, payload: dict) -> None:
         """Handle on bus command call finished."""
         self._render_tool_status_event({**(payload or {}), "status": "finished", "kind": "command"})
+
+    def on_bus_canvas_action_started(self, payload: dict) -> None:
+        """Handle on bus canvas action started."""
+        self._render_tool_status_event({**(payload or {}), "status": "started", "kind": "canvas"})
+
+    def on_bus_canvas_action_finished(self, payload: dict) -> None:
+        """Handle on bus canvas action finished."""
+        self._render_tool_status_event({**(payload or {}), "status": "finished", "kind": "canvas"})
 
     def on_tools_changed(self, _payload) -> None:
         """Handle on tools changed."""
