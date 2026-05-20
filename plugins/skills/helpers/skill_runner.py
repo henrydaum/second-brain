@@ -255,14 +255,28 @@ def replay_chain(
 ) -> dict:
     """Replay a chain of (creation, *transforms) into output_image_path.
 
+    Each step consults the layer cache (``skill_cache``). On a hit the
+    cached PNG is copied/used as the step's output and no subprocess
+    runs. On a miss the subprocess renders, the result is cached, and
+    the seed is added to the pool. Entries with ``seed=None`` sample
+    from the seed pool first and only mint a fresh seed if the pool is
+    empty.
+
+    Mutates ``chain`` in place to record the resolved seed on each
+    entry (so the caller can persist it to ``cs.canvas``).
+
     skill_loader(slug) -> Skill | None — caller supplies the lookup.
     """
     if not chain:
         raise SkillRunError("nothing to replay")
+    from plugins.skills.helpers import skill_cache
+    import shutil
+
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     current_input: Path | None = None
     final = Path(output_image_path)
+    cache_hits = 0
 
     for idx, entry in enumerate(chain):
         slug = entry.get("slug")
@@ -271,18 +285,64 @@ def replay_chain(
             raise SkillRunError(f"chain references missing skill '{slug}'")
         step_out = final if idx == len(chain) - 1 else (workdir / f"_replay_{idx}.png")
         merged_params, step_palette = resolve_entry(entry, fallback_palette=palette)
+
+        # ── cache lookup ──
+        code_sha = skill_cache.code_version(skill.code)
+        in_hash = skill_cache.image_hash(current_input)
+        pkey = skill_cache.pool_key(
+            slug=slug, code_sha=code_sha, merged_params=merged_params,
+            palette_id=getattr(step_palette, "id", "") or "",
+            size=int(size), input_hash=in_hash,
+        )
+        raw_seed = entry.get("seed")
+        # seed=None means "let the pool decide" (RunSkill path); an explicit
+        # int means use it as-is (Regenerate, randomize-button, replay).
+        if raw_seed is None:
+            seed = skill_cache.sample_seed(pkey)
+            if seed is None:
+                seed = skill_cache.mint_seed()
+        else:
+            seed = int(raw_seed)
+        entry["seed"] = seed  # record back so cs.canvas persists it
+
+        ckey = skill_cache.cache_key(pkey, seed)
+        cached = skill_cache.get(ckey)
+        if cached is not None:
+            try:
+                shutil.copyfile(cached, step_out)
+                current_input = step_out
+                cache_hits += 1
+                if on_step is not None:
+                    try: on_step(idx + 1, len(chain))
+                    except Exception: pass
+                continue
+            except OSError:
+                logger.exception("cache copy-out failed; falling through to render")
+
+        # ── miss: render, then cache ──
         run_skill(
             skill,
             params=merged_params,
             palette=step_palette,
             size=size,
-            seed=int(entry.get("seed") or 0),
+            seed=int(seed),
             input_image_path=current_input,
             output_image_path=step_out,
             timeout_s=timeout_s,
         )
+        try:
+            skill_cache.put(
+                ckey, step_out,
+                skill_slug=slug, size=int(size),
+                palette_id=getattr(step_palette, "id", "") or "",
+                seed=int(seed), pool_key_=pkey,
+            )
+            skill_cache.add_seed(pkey, int(seed))
+        except Exception:
+            logger.exception("cache write failed (non-fatal)")
+
         current_input = step_out
         if on_step is not None:
             try: on_step(idx + 1, len(chain))
             except Exception: pass
-    return {"steps": len(chain), "output_image_path": str(final)}
+    return {"steps": len(chain), "cache_hits": cache_hits, "output_image_path": str(final)}

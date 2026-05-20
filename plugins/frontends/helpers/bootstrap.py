@@ -197,6 +197,9 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
     # Let the layered_canvas helpers resolve session_key -> cs.canvas.
     from plugins.tools.helpers import layered_canvas as _lc
     _lc.bind_runtime(runtime)
+    # Skill cache reads the DB handle off the runtime.
+    from plugins.skills.helpers import skill_cache as _sc
+    _sc.bind_runtime(runtime)
     return runtime
 
 

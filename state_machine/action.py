@@ -701,15 +701,19 @@ class _CanvasAction(Action):
 
 
 class RunSkill(_CanvasAction):
-    """Execute a skill (creation or transform) and append/replace the chain."""
+    """Execute a skill (creation or transform) and append/replace the chain.
+
+    Builds the new chain entry with ``seed=None`` so ``replay_chain`` can
+    sample from the seed pool — the second invocation of the same skill
+    with the same params/palette/size becomes a cache hit instead of a
+    fresh subprocess render.
+    """
 
     action_type = "run_skill"
 
     def _run(self) -> dict[str, Any]:
-        import random
-        from plugins.helpers.palettes import get_palette
         from plugins.skills.helpers.skill_runner import (
-            default_controls, make_chain_entry, resolve_entry,
+            default_controls, make_chain_entry,
         )
         from plugins.tools.helpers import canvas_render, layered_canvas as lc
         from state_machine.canvas import MAX_CHAIN_LENGTH
@@ -731,27 +735,23 @@ class RunSkill(_CanvasAction):
         if skill.kind == "transform" and len(canvas.last_chain) >= MAX_CHAIN_LENGTH:
             raise ValueError(f"Chain is at the {MAX_CHAIN_LENGTH}-layer cap — delete a layer first.")
 
-        seed = int(params.get("seed") or random.randint(1, 2_147_483_647))
         controls = default_controls(skill)
         if any(c.get("type") == "palette" for c in (skill.controls or [])):
             controls["palette"] = canvas.palette_id
         controls.update({k: v for k, v in params.items() if k in controls})
-        entry = make_chain_entry(skill, params, seed, controls=controls)
-        merged_params, step_palette = resolve_entry(entry, fallback_palette=get_palette(canvas.palette_id))
-        cfg = (getattr(runtime, "config", {}) or {})
-        from pathlib import Path
-        snap = canvas_render.run_one_skill(
-            self._session_key(),
-            skill,
-            params=merged_params,
-            palette_id=step_palette.id if hasattr(step_palette, "id") else canvas.palette_id,
-            size=int(canvas.size),
-            seed=seed,
-            input_image_path=Path(canvas.image_path) if canvas.image_path else None,
-            op=f"skill:{slug}",
-            chain_entry=entry,
-            timeout_s=float(cfg.get("skill_timeout_s", 30)),
-            memory_mb=int(cfg.get("skill_memory_mb", 768)),
+        # seed=0 is the slot value; replay_chain replaces it with a pool
+        # sample (or a freshly minted seed if the pool is empty) and writes
+        # the resolved value back onto the entry dict.
+        entry = make_chain_entry(skill, params, 0, controls=controls)
+        if params.get("seed") is None:
+            entry["seed"] = None  # let replay_chain sample from the pool
+        else:
+            entry["seed"] = int(params["seed"])
+        canvas.push_chain_entry(entry)
+        snap = canvas_render.render_chain(
+            self._session_key(), list(canvas.last_chain),
+            palette_id=canvas.palette_id, size=int(canvas.size),
+            op=f"skill:{slug}", out_name=f"_skill_{slug}.png",
         )
         return {"canvas": snap, "event_data": {"slug": slug, "kind": skill.kind}}
 

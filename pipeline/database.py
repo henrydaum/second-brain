@@ -313,6 +313,40 @@ class Database:
 		""")
 		self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_canvas_shares_path ON canvas_shares(kind, image_path)")
 
+		# Layer-level cache: each (slug, code, params+controls, palette, size,
+		# input_image_hash, seed) combination renders to exactly one PNG and is
+		# content-addressed. ``pool_key`` is the same key without ``seed`` so a
+		# group of cached renders for one context can be sampled cheaply.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS canvas_layer_cache (
+				cache_key  TEXT PRIMARY KEY,
+				pool_key   TEXT NOT NULL,
+				skill_slug TEXT NOT NULL,
+				size       INTEGER NOT NULL,
+				palette_id TEXT,
+				seed       INTEGER,
+				file_path  TEXT NOT NULL,
+				bytes      INTEGER NOT NULL,
+				created_at REAL NOT NULL,
+				last_used  REAL NOT NULL,
+				use_count  INTEGER DEFAULT 0
+			)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_canvas_layer_cache_last_used ON canvas_layer_cache(last_used)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_canvas_layer_cache_pool ON canvas_layer_cache(pool_key)")
+
+		# Seed pool: previously-used seeds per pool_key. RunSkill samples
+		# from here; Regenerate and randomize-button paths mint new seeds.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS canvas_seed_pool (
+				pool_key  TEXT NOT NULL,
+				seed      INTEGER NOT NULL,
+				last_used REAL NOT NULL,
+				PRIMARY KEY (pool_key, seed)
+			)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_canvas_seed_pool_key ON canvas_seed_pool(pool_key)")
+
 		self.conn.commit()
 
 	# =================================================================
