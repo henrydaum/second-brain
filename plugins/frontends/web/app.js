@@ -181,7 +181,6 @@ function setTyping(on) {
 
 // ----- account + paywall + auth -----
 const accountAvatar = document.querySelector("#accountAvatar");
-const avatarBar = document.querySelector("#avatarBar");
 const avatarInner = document.querySelector("#avatarInner");
 const avatarSilhouette = document.querySelector("#avatarSilhouette");
 const avatarLetter = document.querySelector("#avatarLetter");
@@ -235,13 +234,6 @@ window.addEventListener("pageshow", () => refreshAccount());
 
 function setAccount(acc) {
   try {
-    const remaining = acc?.messages_remaining;
-    const max = acc?.messages_max;
-    const unlimited = acc?.tier === "unlimited";
-    const fill = unlimited ? 1 : (typeof max === "number" && max > 0 ? Math.max(0, Math.min(1, (remaining ?? 0) / max)) : 0);
-    const pct = (fill * 100).toFixed(2);
-    avatarBar.style.backgroundSize = `100% ${pct}%`;
-    avatarBar.style.boxShadow = unlimited ? "0 0 6px var(--accent-glow)" : "none";
     const email = acc?.signed_in && typeof acc?.email === "string" && acc.email.length > 0 ? acc.email : "";
     if (email) {
       avatarLetter.textContent = email[0].toUpperCase();
@@ -251,8 +243,6 @@ function setAccount(acc) {
       avatarLetter.style.display = "none";
       avatarSilhouette.style.display = "block";
     }
-    const tail = unlimited ? "Unlimited" : (typeof max === "number" ? `${(remaining ?? 0).toLocaleString()} of ${max.toLocaleString()} messages left` : "Loading…");
-    avatarBar.title = tail;
     accountAvatar.title = email ? `Signed in as ${email}` : "Account";
     accountAvatar.hidden = false;
     setOutOfMessages(acc);
