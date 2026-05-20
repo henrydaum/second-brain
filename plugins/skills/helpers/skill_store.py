@@ -443,9 +443,22 @@ def wrap_user_code_in_class(*, class_name: str, name: str, description: str,
     if not any(_DEF_RUN_RE.search(b) for b in body):
         raise SkillValidationError("user code must contain `def run(canvas, ...)`")
 
+    # `art_kit` is injected into the skill's globals by the sandbox at exec
+    # time (see skill_sandbox_entry.py). The try/except below is a no-op in
+    # the sandbox (the name resolves) and binds `art_kit = None` outside it
+    # (in editors / plugin_discovery's parent-process import). The point is
+    # to give Pylance / Pyright a module-level definition so sandbox skill
+    # files don't light up with "undefined" squiggles.
+    art_kit_shim = (
+        "try:\n"
+        "    art_kit  # injected by sandbox at exec time\n"
+        "except NameError:\n"
+        "    art_kit = None"
+    )
     parts: list[str] = ["from plugins.BaseSkill import BaseSkill"]
     if imports:
         parts.append("\n".join(imports))
+    parts.append(art_kit_shim)
     header = "\n\n".join(parts) + "\n\n\n"
 
     attrs = (

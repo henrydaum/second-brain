@@ -10,7 +10,7 @@ const TIPS = [
   "Ask for a style: \"in the style of risograph print,\" \"like a 70s sci-fi paperback.\"",
   "Combine ideas: \"Voronoi cells, but each one is a tiny whirlpool.\"", 
   "Don't like the result? Ask Second Brain to change any part of it.",
-  "After Second Brain has made something, ask it \"How did you make this?\" to get a peek at the code.",
+  "See something interesting? Ask \"How did you make this?\"  or \"What does this mean?\"",
   "After Second Brain has made something, ask it \"Is there anything you would change about this image?\" to get suggestions for improvement.",
   "Ask Second Brain to interview you, then make something based on your answers.",
   "To stay in the loop, tell Second Brain to \"Let me know if you have any questions\"."

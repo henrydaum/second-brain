@@ -103,7 +103,11 @@ def main():
 
 	# --- 2. Initialize database ---
 	t0 = time.time()
-	database = Database(config["db_path"])
+	try:
+		database = Database(config["db_path"])
+	except Exception as e:
+		logger.error(f"Database initialization failed for path {config['db_path']}: {e}")
+		sys.exit(1)
 	logger.info(f"Database ready: {config['db_path']} ({time.time() - t0:.2f}s)")
 
 	# --- 3. Initialize services ---

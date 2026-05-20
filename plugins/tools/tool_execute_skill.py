@@ -29,6 +29,16 @@ class ExecuteSkill(BaseTool):
         "properties": {"slug": {"type": "string"}, "params": {"type": "object", "default": {}}},
         "required": ["slug"],
     }
+    config_settings = [
+        ("Skill Execution Timeout (s)", "skill_timeout_s",
+         "Wall-clock seconds before a single skill run is killed. Raise for heavy compute; lower to catch runaway loops sooner.",
+         30,
+         {"type": "slider", "range": (5, 180, 35), "is_float": False}),
+        ("Skill Memory Cap (MB)", "skill_memory_mb",
+         "Per-skill address-space limit for the sandbox subprocess. Linux-only — the cap is set via RLIMIT_AS and is ignored on Windows / macOS.",
+         768,
+         {"type": "slider", "range": (256, 4096, 30), "is_float": False}),
+    ]
 
     def run(self, context, **kwargs) -> ToolResult:
         session_key = getattr(context, "session_key", None) or "local"
@@ -54,11 +64,14 @@ class ExecuteSkill(BaseTool):
         merged_params, step_palette = resolve_entry(entry, fallback_palette=get_palette(state.get("palette_id")))
         tmp = lc.image_path(session_key).with_name(f"_skill_{slug}_{int(time.time()*1000)}.png")
         try:
+            cfg = getattr(context, "config", {}) or {}
             status = run_skill(
                 skill, params=merged_params, palette=step_palette,
                 size=int(state.get("size") or lc.DEFAULT_SIZE), seed=seed,
                 input_image_path=Path(state["image_path"]) if state.get("image_path") else None,
                 output_image_path=tmp,
+                timeout_s=float(cfg.get("skill_timeout_s", 30)),
+                memory_mb=int(cfg.get("skill_memory_mb", 768)),
             )
             with Image.open(tmp) as img:
                 new_state = lc.commit_image(session_key, img.convert("RGBA"), f"skill:{slug}", entry)

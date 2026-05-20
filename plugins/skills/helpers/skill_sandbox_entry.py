@@ -40,11 +40,12 @@ ALLOWED = {
 PALETTE_SLOTS = {"background", "primary", "secondary", "tertiary", "accent"}
 
 
-def _limits():
+def _limits(memory_mb: int = 768):
     if platform.system() == "Linux":
         import resource
         resource.setrlimit(resource.RLIMIT_CPU, (35, 35))
-        resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
+        cap = max(64, int(memory_mb)) * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
 
 
 def _import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -297,9 +298,9 @@ def _find_skill_instance(ns: dict) -> object:
 
 
 def main():
-    _limits()
     job_path = sys.argv[1]
     job = json.loads(Path(job_path).read_text(encoding="utf-8"))
+    _limits(memory_mb=int(job.get("memory_mb", 768)))
     output_image_path = job["output_image_path"]
     code = job["code"]
 

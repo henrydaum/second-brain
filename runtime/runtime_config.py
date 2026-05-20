@@ -82,6 +82,7 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
         cloned = ToolRegistry(registry.db, registry.config, registry.services)
         cloned.orchestrator = getattr(registry, "orchestrator", None)
         cloned.runtime = getattr(registry, "runtime", None)
+        cloned.skill_registry = getattr(registry, "skill_registry", None)
         cloned.tools.update(registry.tools)
         if getattr(registry, "visible_tool_names", None) is not None:
             cloned.visible_tool_names = set(registry.visible_tool_names)
@@ -96,6 +97,7 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
         cloned = ToolRegistry(registry.db, registry.config, registry.services)
         cloned.orchestrator = getattr(registry, "orchestrator", None)
         cloned.runtime = getattr(registry, "runtime", None)
+        cloned.skill_registry = getattr(registry, "skill_registry", None)
         cloned.tools.update(registry.tools)
         if getattr(registry, "visible_tool_names", None) is not None:
             cloned.visible_tool_names = set(registry.visible_tool_names)

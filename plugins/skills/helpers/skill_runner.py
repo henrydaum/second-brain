@@ -26,6 +26,7 @@ from plugins.skills.helpers.skill_store import Skill, assert_valid
 logger = logging.getLogger("SkillRunner")
 
 DEFAULT_TIMEOUT_S = 30.0
+DEFAULT_MEMORY_MB = 768
 
 
 class SkillRunError(RuntimeError):
@@ -49,6 +50,7 @@ def run_skill(
     input_image_path: Path | None,
     output_image_path: Path,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    memory_mb: int = DEFAULT_MEMORY_MB,
 ) -> dict:
     """Execute a skill in a sandboxed subprocess. Returns a small status dict."""
     try:
@@ -92,6 +94,7 @@ def run_skill(
         "seed": int(seed),
         "input_image_path": str(input_image_path) if input_image_path else None,
         "output_image_path": str(output_image_path),
+        "memory_mb": int(memory_mb),
     }
 
     entry = Path(__file__).with_name("skill_sandbox_entry.py")

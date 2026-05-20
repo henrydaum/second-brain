@@ -277,8 +277,8 @@ body.account-body { background:
 .delete-card h2 { font-size: 16px; margin-bottom: 8px; letter-spacing: 0; color: var(--text); font-weight: 600; }
 .delete-card p { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
 .delete-card form { display: flex; flex-direction: column; gap: 10px; }
-.delete-card input, #promoCard input { height: 40px; padding: 0 12px; background: #0b0d13; border: 1px solid var(--line); color: var(--text); }
-.delete-card input:focus, #promoCard input:focus { outline: none; border-color: var(--accent); }
+.delete-card input, #promoCard input, #signinModal input, #signedOut input { height: 40px; padding: 0 12px; background: #0b0d13; border: 1px solid var(--line); color: var(--text); }
+.delete-card input:focus, #promoCard input:focus, #signinModal input:focus, #signedOut input:focus { outline: none; border-color: var(--accent); }
 .delete-btn { height: 38px; background: transparent; color: var(--muted); border: 1px solid var(--line); cursor: pointer; font-weight: 600; transition: border-color 200ms ease, color 200ms ease; }
 .delete-btn:hover:not(:disabled) { border-color: var(--muted); color: var(--text); }
 .delete-btn:disabled { opacity: .5; cursor: default; }
