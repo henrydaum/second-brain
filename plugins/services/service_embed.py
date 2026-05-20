@@ -26,12 +26,12 @@ class BaseEmbedder(BaseService):
     config_settings = [
         ("Text Embedding Model", "embed_text_model_name",
          "SentenceTransformer model for text embeddings.",
-         "BAAI/bge-small-en-v1.5",
+         "BAAI/bge-m3",
          {"type": "text"}),
 
         ("Image Embedding Model", "embed_image_model_name",
          "CLIP model for image embeddings.",
-         "clip-ViT-B-32",
+         "clip-ViT-L-14",
          {"type": "text"}),
 
         ("GPU Acceleration", "embed_use_cuda",

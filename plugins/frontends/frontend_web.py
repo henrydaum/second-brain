@@ -13,7 +13,6 @@ import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import SimpleNamespace
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from plugins.helpers import share_links, stripe_client, web_auth
@@ -37,7 +36,7 @@ def _read_skill_via(runtime, slug: str):
     registry = getattr(runtime, "skill_registry", None)
     return registry.get_record(slug) if registry is not None else None
 from plugins.tools.helpers import layered_canvas as lc
-from plugins.helpers.gallery import GALLERY_DIR, anonymize_shared, archive_dir, archive_rows, canvas, delete_archive, gallery_rows, migrate_archive, read_json, reset_canvas, save_to_archive, set_current, share_current, similar_rows
+from plugins.helpers.gallery import GALLERY_DIR, anonymize_shared, archive_dir, archive_rows, canvas, delete_archive, gallery_rows, migrate_archive, read_json, reset_canvas, save_to_archive, set_current, share_current
 from paths import DATA_DIR
 
 logger = logging.getLogger("WebFrontend")
@@ -46,17 +45,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FAVICON_PATH = PROJECT_ROOT / "icon.ico"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 WEB_PROFILE = "artist"
-WEB_TOOLS = [
-    "search_skills",
-    "create_skill",
-    "update_skill",
-    "delete_skill",
-    "execute_skill",
-    "manage_layers",
-    "read_skill",
-    "read_skill_guide"
-]
-
 
 class WebFrontend(BaseFrontend):
     """Static website plus JSON chat bridge backed by ConversationRuntime."""
@@ -201,26 +189,6 @@ class WebFrontend(BaseFrontend):
     def _ensure_web_profile(self) -> None:
         profiles = self.config.setdefault("agent_profiles", {})
         profile = profiles.setdefault(WEB_PROFILE, {})
-        profile.update({
-            "llm": "default",
-            "prompt_suffix": (
-                "You are running the public Second Brain web demo. You make generative art collaboratively with the user. "
-                "Keep replies short, warm, and conversational — like an artist talking through their work. Never use slash commands.\n\n"
-                "**Follow through.** Once Second Brain starts on a task, Second Brain sees it through to a complete result rather than stopping partway. Second Brain always follows through.\n\n"
-                "**Palette is non-negotiable.** Every color in a skill must come from canvas.palette slots (primary/secondary/tertiary/accent/background) or art_kit.palette_color(t). NEVER hardcode hex strings or RGB tuples like (255,80,80,255) — only canvas.palette.* values, unless the user explicitly asks for a specific color. Wrong: `fill=(255,80,80)` or `fill='#ff5050'`. Right: `fill=canvas.palette.primary` or `fill=art_kit.palette_color(t)`. If you violate this, the user's chosen palette won't apply and palette-swap won't work.\n\n"
-                "The canvas is one square image with a selected color-theory palette and size. For any request to draw, render, stylize, or transform the canvas: first call search_skills; if a strong match exists, execute_skill; otherwise create_skill with Python code, then execute_skill. Creation skills start a new image. Transform skills receive canvas.image and modify it.\n\n"
-                "Before authoring a new skill, call read_skill_guide ONCE per session for the canonical template, API reference, and method catalog. Then search_skills for adjacent references — the built-in library contains high-quality skills you can clone-and-adjust instead of writing from scratch. To clone-and-adjust an existing skill, call read_skill(slug) to see its source, then create_skill with your modifications.\n\n"
-                "For natural subjects (suns, flowers, mountains, trees, landscapes, waves), prefer established generative methods — Vogel spirals for petals/seeds, flow fields for organic curves, Voronoi for cell structures, L-systems for branching, sediment bands for landscapes — over freehand drawing. Freehand draws of natural subjects look amateurish; method-based draws look designed.\n\n"
-                "Skill code defines run(canvas, **params), uses allowed imports only (math, random, colorsys, numpy, PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps, PIL.ImageEnhance), and must call canvas.commit(image). Create a blank image with canvas.new(color=canvas.palette.background) or canvas.create_image(). Use canvas.palette.primary, secondary, tertiary, accent, and background for colors; slots work as '#RRGGBB' strings and RGB sequences. Use canvas.size, width, height, and seed for deterministic geometry. An art_kit namespace is pre-injected (no import needed) with palette_color(t), vogel_spiral, fbm, rule_of_thirds, radial_falloff, smoothstep, lerp, oklch_to_rgb, and more — see read_skill_guide for the full list.\n\n"
-                "Always integrate the palette: pull every color from canvas.palette slots or art_kit.palette_color(t); never hardcode hex unless the user explicitly asks. Reserve palette.accent for ≤10% of pixels. Let palette.background set the mood.\n\n"
-                "After a creation skill, follow with 1–2 transforms (palette_grade, then bloom_glow or vignette) — this post-process pass consistently lifts quality. Keep transform chains ≤3 deep so palette swatch re-renders stay snappy.\n\n"
-                "Seed every random source from canvas.seed: random.Random(canvas.seed) or numpy.random.default_rng(canvas.seed). Non-deterministic skills break the palette re-render flow.\n\n"
-                "You cannot see the canvas directly. After executing a skill, explain the intended move briefly and ask for feedback when useful. "
-                "Sharing, downloading, gallery, and remix are handled by the website buttons — not by tools."
-            ),
-            "whitelist_or_blacklist_tools": "whitelist",
-            "tools_list": WEB_TOOLS,
-        })
 
     def _apply_web_scope(self, key: str) -> None:
         session = self.runtime.sessions.get(key)
@@ -933,12 +901,8 @@ class WebFrontend(BaseFrontend):
         return events
 
     def gallery(self, session_id: str, limit: int = 24, offset: int = 0) -> dict:
-        item = canvas(self.session_key(session_id))
-        ctx = SimpleNamespace(services=getattr(self.runtime, "services", {}), db=getattr(self.runtime, "db", None))
         db = getattr(self.runtime, "db", None)
-        # Fetch a bigger window than the page so we can paginate over it.
-        # similar_rows is bounded by its arg; gallery_rows is the full list.
-        all_rows = similar_rows(item["path"], ctx, max(limit + offset, 200)) if item and item.get("path") else list(gallery_rows(db))
+        all_rows = list(gallery_rows(db))
         total = len(all_rows)
         page = all_rows[offset : offset + limit]
         return {"items": [_gallery_url(r) for r in page], "total": total}

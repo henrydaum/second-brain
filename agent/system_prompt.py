@@ -23,13 +23,6 @@ def _static_prompt() -> str:
     return _STATIC_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
-def _generative_art_encyclopedia() -> str:
-    try:
-        return _ART_ENCYCLOPEDIA_PATH.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
-
-
 def build_prompt_sections(
     db,
     orchestrator,
@@ -51,7 +44,7 @@ def build_prompt_sections(
     semi = [
         _tool_catalog(r),
         _command_catalog(commands),
-        _authoring_guidance() if _has_tool(r, "test_plugin") else _plugin_contracts(),
+        _authoring_guidance() if _has_tool(r, "test_plugin") else "",
         _sandbox_files() if _has_tool(r, "test_plugin") else "",
         _attachments() if _has_tool(r, "sql_query") else "",
         _database_tables(db) if _has_tool(r, "sql_query") else "",
@@ -79,6 +72,13 @@ def build_prompt_sections(
         _system_message("SEMI-STABLE TOOL/SCHEMA INFO", "\n\n".join(s for s in semi if s)),
         _system_message("DYNAMIC RUNTIME CONTEXT", "\n\n".join(s for s in dynamic if s)),
     ]
+
+
+def _generative_art_encyclopedia() -> str:
+    try:
+        return _ART_ENCYCLOPEDIA_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def build_system_prompt(*args, **kwargs) -> str:
@@ -201,7 +201,7 @@ The context object is passed to every plugin and contains relevant runtime infor
 
 def _skill_workflow() -> str:
     return """## Canvas skill workflow
-This product makes generative, algorithmic art -- not literal illustration. Treat every canvas request as a prompt for an abstract algorithmic interpretation, not a representational depiction. A "sun" is a radial gradient over an fbm noise field in a warm palette ramp, not an orange circle with line rays. A "flower" is a Vogel spiral of palette-blended cells, not stacked petals. A "cat" is a flow field of warm streamlines or an attractor cloud, not eyes-nose-whiskers. The literal version always looks amateurish; the algorithmic version looks intentional.
+Your name is Second Brain. Second Brain makes generative, algorithmic art — not literal illustration. Treat every canvas request as a prompt for an abstract algorithmic interpretation, not a representational depiction. For example, a "flower" is a Vogel spiral of palette-blended cells, not stacked petals. Second Brain plays to their strengths: math, code, and procedural generation.
 
 Workflow:
 1. Call search_skills with the subject. If a strong match exists, call execute_skill.
@@ -221,7 +221,7 @@ Techniques (good-for hints — formulas live in the encyclopedia above):
 
 When in doubt, prefer noise, gradients, and procedural patterns in palette tones over explicit shapes. Compose multiple techniques (e.g. fbm background + vogel foreground + radial vignette) rather than drawing literal features.
 
-Before each tool call, write one short sentence in plain language telling the user what you're about to try or adjust ("first attempt rendered blank — let me try a different normalization", "the bloom was too heavy, dialing back radius"). Iteration is normal; tell the user that art is iterative and they can always say what to change."""
+You always follow through. If you start a task, you see it through to completion. Iteration is normal; tell the user that art is iterative and they can always say what to change."""
 
 
 def _canvas_state(session_key: str | None) -> str:
