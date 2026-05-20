@@ -1570,25 +1570,7 @@ def _canvas_payload_full(runtime, session_key: str, state: dict | None) -> dict:
     return base
 
 
-def _coerce_control_value(spec: dict, value):
-    """Coerce an incoming control value to match its declared type."""
-    t = spec.get("type")
-    if t == "slider":
-        v = float(value)
-        lo, hi = float(spec.get("min", v)), float(spec.get("max", v))
-        return max(lo, min(hi, v))
-    if t == "bool":
-        return bool(value)
-    if t == "enum":
-        allowed = [opt.get("value") for opt in (spec.get("options") or [])]
-        if value not in allowed:
-            raise ValueError(f"enum value {value!r} not in allowed options")
-        return value
-    if t == "palette":
-        return str(value)
-    # pan controls deliver values via their underlying numeric param names; this
-    # path only fires when the frontend sends {name: x_param, value: number}.
-    return value
+from plugins.skills.helpers.skill_controls import coerce_control_value as _coerce_control_value  # noqa: F401  (re-export for any external callers)
 
 
 def _gallery_url(row: dict) -> dict:

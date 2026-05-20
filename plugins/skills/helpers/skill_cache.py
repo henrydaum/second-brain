@@ -20,17 +20,23 @@ import hashlib
 import json
 import logging
 import random
-import shutil
 import threading
 import time
 from pathlib import Path
 from typing import Any
+
+from PIL import Image
 
 from paths import DATA_DIR
 
 logger = logging.getLogger("SkillCache")
 
 CACHE_DIR = DATA_DIR / "canvas" / "cache"
+# WebP quality is a strong knob for cache disk usage. q=90 is visually
+# indistinguishable from PNG for generative art and ~5-10x smaller;
+# method=6 burns more CPU at encode time for the best compression.
+WEBP_QUALITY = 90
+WEBP_METHOD = 6
 _disk_lock = threading.RLock()
 _runtime_ref: Any = None
 
@@ -68,13 +74,16 @@ def _normalize(merged_params: dict) -> str:
 
 def pool_key(
     *, slug: str, code_sha: str, merged_params: dict,
-    palette_id: str, size: int, input_hash: str,
+    palette_id: str, palette_fp: str, size: int, input_hash: str,
 ) -> str:
     """Cache key MINUS the seed. Two seeds in the same pool both produce
-    cached PNGs for that exact context."""
+    cached renders for that exact context. ``palette_fp`` is the
+    palette's content fingerprint — an edited palette produces a fresh
+    key, so old cached renders become unreachable rather than stale."""
     raw = "|".join([
         slug, code_sha, _normalize(merged_params),
-        str(palette_id or ""), str(int(size)), input_hash,
+        str(palette_id or ""), str(palette_fp or ""),
+        str(int(size)), input_hash,
     ])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
@@ -87,7 +96,7 @@ def cache_key(pool_key_: str, seed: int) -> str:
 # ── cache (PNG on disk, index in SQLite) ───────────────────────────
 
 def _cache_path(key: str) -> Path:
-    return CACHE_DIR / f"{key}.png"
+    return CACHE_DIR / f"{key}.webp"
 
 
 def get(key: str) -> Path | None:
@@ -116,15 +125,20 @@ def put(
     key: str, src_path: Path, *,
     skill_slug: str, size: int, palette_id: str, seed: int, pool_key_: str,
 ) -> Path:
-    """Copy ``src_path`` into the cache and register it. Returns the cached path."""
+    """Re-encode ``src_path`` as WebP into the cache and register it.
+
+    Source is expected to be a PNG (what the subprocess sandbox writes);
+    we open it with PIL and save as WebP at ``WEBP_QUALITY`` to shrink
+    on-disk size by ~5-10x. Returns the cached WebP path."""
     db = _db()
     dest = _cache_path(key)
     with _disk_lock:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         try:
-            shutil.copyfile(src_path, dest)
-        except OSError:
-            logger.exception("cache copy failed (src=%s)", src_path)
+            with Image.open(src_path) as img:
+                img.save(dest, format="WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
+        except Exception:
+            logger.exception("cache webp encode failed (src=%s)", src_path)
             return src_path
     try:
         bytes_ = dest.stat().st_size

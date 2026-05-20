@@ -270,7 +270,7 @@ def replay_chain(
     if not chain:
         raise SkillRunError("nothing to replay")
     from plugins.skills.helpers import skill_cache
-    import shutil
+    from PIL import Image as _PILImage
 
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
@@ -289,9 +289,11 @@ def replay_chain(
         # ── cache lookup ──
         code_sha = skill_cache.code_version(skill.code)
         in_hash = skill_cache.image_hash(current_input)
+        palette_fp = step_palette.fingerprint() if hasattr(step_palette, "fingerprint") else ""
         pkey = skill_cache.pool_key(
             slug=slug, code_sha=code_sha, merged_params=merged_params,
             palette_id=getattr(step_palette, "id", "") or "",
+            palette_fp=palette_fp,
             size=int(size), input_hash=in_hash,
         )
         raw_seed = entry.get("seed")
@@ -308,16 +310,19 @@ def replay_chain(
         ckey = skill_cache.cache_key(pkey, seed)
         cached = skill_cache.get(ckey)
         if cached is not None:
+            # Cache is WebP; the rest of the pipeline (subprocess input
+            # path, composite path) wants PNG, so decode on the way out.
             try:
-                shutil.copyfile(cached, step_out)
+                with _PILImage.open(cached) as img:
+                    img.convert("RGBA").save(step_out, format="PNG")
                 current_input = step_out
                 cache_hits += 1
                 if on_step is not None:
                     try: on_step(idx + 1, len(chain))
                     except Exception: pass
                 continue
-            except OSError:
-                logger.exception("cache copy-out failed; falling through to render")
+            except Exception:
+                logger.exception("cache decode failed; falling through to render")
 
         # ── miss: render, then cache ──
         run_skill(
@@ -345,4 +350,4 @@ def replay_chain(
         if on_step is not None:
             try: on_step(idx + 1, len(chain))
             except Exception: pass
-    return {"steps": len(chain), "cache_hits": cache_hits, "output_image_path": str(final)}
+    return {"steps": len(chain), "cache_hits": cache_hits, "output_image_path": str(final), "chain": chain}

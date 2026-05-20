@@ -122,19 +122,23 @@ def get_state(session_key: str) -> dict:
         return _resolve_canvas(session_key).to_dict()
 
 
+def to_frontend_shape(c) -> dict:
+    """Convert a ``Canvas`` instance into the dict shape the UI expects."""
+    ip = c.image_path
+    has_image = bool(ip) and Path(ip).is_file()
+    return {
+        "path": ip if has_image else None,
+        "palette_id": c.palette_id or DEFAULT_PALETTE_ID,
+        "size": c.size or DEFAULT_SIZE,
+        "history": list(c.history),
+        "chain": list(c.last_chain),
+    }
+
+
 def canvas(session_key: str) -> dict | None:
-    """Frontend-facing canvas snapshot. Returns the dict shape the UI expects."""
+    """Frontend-facing canvas snapshot for the session's live ``cs.canvas``."""
     with _state_lock:
-        c = _resolve_canvas(session_key)
-        ip = c.image_path
-        has_image = bool(ip) and Path(ip).is_file()
-        return {
-            "path": ip if has_image else None,
-            "palette_id": c.palette_id or DEFAULT_PALETTE_ID,
-            "size": c.size or DEFAULT_SIZE,
-            "history": list(c.history),
-            "chain": list(c.last_chain),
-        }
+        return to_frontend_shape(_resolve_canvas(session_key))
 
 
 def current(session_key: str) -> dict | None:
@@ -147,13 +151,18 @@ def current(session_key: str) -> dict | None:
 
 # ── write API (operate on cs.canvas) ───────────────────────────────
 
-def commit_image(session_key: str, pil_image, op: str, chain_entry: dict | None = None) -> dict:
-    """Save a PIL image as the new composite, update the chain, emit
-    ``CANVAS_COMMITTED``, and return a dict snapshot."""
+def commit_image(session_key: str, pil_image, op: str, chain_entry: dict | None = None, *, canvas=None) -> dict:
+    """Save a PIL image as the new composite WebP, update the chain on
+    ``canvas`` (or the session's live ``cs.canvas`` when no canvas is
+    given), emit ``CANVAS_COMMITTED``, and return a dict snapshot.
+
+    Passing ``canvas`` lets callers operate on a draft (swap-on-success):
+    the draft's chain/image_path/history are updated, but the live
+    ``cs.canvas`` is untouched until the caller assigns the draft."""
     dest = image_path(session_key)
     pil_image.save(dest, format="PNG")
     with _state_lock:
-        c = _resolve_canvas(session_key)
+        c = canvas if canvas is not None else _resolve_canvas(session_key)
         c.image_path = str(dest.resolve())
         if chain_entry is not None:
             kind = chain_entry.get("kind")
@@ -229,11 +238,12 @@ def clear_chain(session_key: str) -> None:
         c.clear_chain()
 
 
-def reset(session_key: str) -> None:
-    """Wipe canvas state and on-disk image for a session."""
+def _wipe_composite(session_key: str) -> None:
+    """Delete the on-disk composite directory; leave state untouched.
+
+    Used by canvas actions whose draft canvas has already been reset —
+    they own state, this owns disk."""
     with _state_lock:
-        c = _resolve_canvas(session_key)
-        c.reset()
         d = COMPOSITE_DIR / _slug(session_key)
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
@@ -243,6 +253,15 @@ def reset(session_key: str) -> None:
         "chain": [],
         "op": "reset",
     })
+
+
+def reset(session_key: str) -> None:
+    """Wipe canvas state and on-disk image for a session (legacy path
+    used by remix and similar flows outside the canvas-action framework)."""
+    with _state_lock:
+        c = _resolve_canvas(session_key)
+        c.reset()
+    _wipe_composite(session_key)
 
 
 def reset_canvas(session_key: str) -> None:

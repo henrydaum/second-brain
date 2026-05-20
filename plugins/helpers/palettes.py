@@ -43,6 +43,15 @@ class Palette:
     def to_dict(self) -> dict:
         return {"id": self.id, "name": self.name, "kind": self.kind, "base_hue": self.base_hue, "colors": self.colors}
 
+    def fingerprint(self) -> str:
+        """Short content hash of this palette's slots.
+
+        Cache keys use this rather than ``id`` so a palette whose colors
+        were edited produces a fresh key (and old cached renders become
+        unreachable rather than stale)."""
+        import hashlib
+        return hashlib.sha256("|".join(self.slots).encode("utf-8")).hexdigest()[:12]
+
 
 def _hex(h: float, s: float, v: float) -> str:
     h = (h % 360) / 360.0

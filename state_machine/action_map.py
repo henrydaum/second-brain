@@ -24,6 +24,7 @@ from state_machine.action import (
 from state_machine.conversation_phases import (
     PHASE_APPROVING_REQUEST,
     PHASE_AWAITING_INPUT,
+    PHASE_CALLING_TOOL,
     PHASE_FILLING_COMMAND_FORM,
     PHASE_FILLING_TOOL_FORM,
     PHASE_PARSING_ATTACHMENT,
@@ -71,6 +72,10 @@ ACTION_MAP = {
     },
     PHASE_FILLING_COMMAND_FORM: {ACTION_CALL_COMMAND: CallCommand, ACTION_SEND_TEXT: SubmitFormText, ACTION_SUBMIT_FORM_TEXT: SubmitFormText, ACTION_SKIP_FORM: SkipForm, ACTION_BACK_FORM: BackForm, ACTION_CANCEL: Cancel},
     PHASE_FILLING_TOOL_FORM: {ACTION_CALL_COMMAND: CallCommand, ACTION_SEND_TEXT: SubmitFormText, ACTION_SUBMIT_FORM_TEXT: SubmitFormText, ACTION_SKIP_FORM: SkipForm, ACTION_BACK_FORM: BackForm, ACTION_CANCEL: Cancel},
+    # Canvas actions are legal inside a tool call too, so the agent's
+    # execute_skill / manage_layers tools can nest cs.enact("run_skill", ...)
+    # and reuse the same CANVAS_ACTION_* event lifecycle as user clicks.
+    PHASE_CALLING_TOOL: dict(_CANVAS_ACTIONS),
     PHASE_APPROVING_REQUEST: {ACTION_SEND_TEXT: AnswerApproval, ACTION_ANSWER_APPROVAL: AnswerApproval, ACTION_CANCEL: Cancel},
     PHASE_PARSING_ATTACHMENT: {ACTION_CANCEL: Cancel},
 }

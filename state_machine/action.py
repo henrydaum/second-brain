@@ -638,11 +638,15 @@ def _emit_canvas_event(channel: str, cs, payload: dict[str, Any]) -> None:
 class _CanvasAction(Action):
     """Shared lifecycle for canvas-mutating actions.
 
-    Subclasses implement ``_run(content)`` to mutate ``cs.canvas`` and do
-    any rendering. The base emits CANVAS_ACTION_STARTED before and
-    CANVAS_ACTION_FINISHED after, snapshots the canvas for rollback on
-    exception, and packages the resulting canvas dict into the
-    ``ActionResult.data``.
+    Builds a *draft* ``Canvas`` (deep copy of ``cs.canvas``), passes it
+    to ``_run(draft)``, and only assigns ``cs.canvas = draft`` on success.
+    The live canvas is never observable mid-mutation; failures leave it
+    untouched. Emits ``CANVAS_ACTION_STARTED`` / ``CANVAS_ACTION_FINISHED``
+    around the call.
+
+    Deps (skill_loader, db, config) come from ``cs.cache['canvas_deps']``,
+    which the runtime populates at session construction — actions never
+    reach into the runtime directly.
     """
 
     action_type = "canvas_action"
@@ -663,20 +667,27 @@ class _CanvasAction(Action):
     def _session_key(self) -> str:
         return self.cs.cache.get("session_key") or "default"
 
+    def _deps(self) -> Any:
+        deps = self.cs.cache.get("canvas_deps")
+        if deps is None:
+            raise RuntimeError("canvas_deps missing from cs.cache; runtime did not wire them.")
+        return deps
+
     def execute(self):
         import uuid
         from events.event_channels import CANVAS_ACTION_STARTED, CANVAS_ACTION_FINISHED
+        from state_machine.canvas import Canvas
+
         call_id = f"canvas:{self.action_type}:{uuid.uuid4().hex[:8]}"
-        snapshot = self.cs.canvas.snapshot()
+        draft = Canvas.from_dict(self.cs.canvas.to_dict())
         _emit_canvas_event(CANVAS_ACTION_STARTED, self.cs, {
             "call_id": call_id,
             "action_name": self.action_type,
             "args": self._summary_args(),
         })
         try:
-            data = self._run() or {}
+            data = self._run(draft) or {}
         except Exception as e:
-            self.cs.canvas.restore(snapshot)
             _emit_canvas_event(CANVAS_ACTION_FINISHED, self.cs, {
                 "call_id": call_id,
                 "action_name": self.action_type,
@@ -684,6 +695,8 @@ class _CanvasAction(Action):
                 "error": str(e),
             })
             raise self.error(ERROR_EXECUTION_FAILED, str(e) or type(e).__name__)
+        # Atomic swap: only on success does the live canvas change.
+        self.cs.canvas = draft
         _emit_canvas_event(CANVAS_ACTION_FINISHED, self.cs, {
             "call_id": call_id,
             "action_name": self.action_type,
@@ -696,7 +709,7 @@ class _CanvasAction(Action):
         """Short, frontend-friendly arg summary for the STARTED event."""
         return dict(self.content) if isinstance(self.content, dict) else {}
 
-    def _run(self) -> dict[str, Any]:
+    def _run(self, draft) -> dict[str, Any]:
         raise NotImplementedError
 
 
@@ -711,47 +724,39 @@ class RunSkill(_CanvasAction):
 
     action_type = "run_skill"
 
-    def _run(self) -> dict[str, Any]:
+    def _run(self, draft) -> dict[str, Any]:
         from plugins.skills.helpers.skill_runner import (
             default_controls, make_chain_entry,
         )
-        from plugins.tools.helpers import canvas_render, layered_canvas as lc
+        from plugins.tools.helpers import canvas_render
         from state_machine.canvas import MAX_CHAIN_LENGTH
 
         slug = str(self._arg("slug") or "")
         params = dict(self._arg("params") or {})
         if not slug:
             raise ValueError("slug is required")
-        runtime = getattr(lc, "_runtime_ref", None)
-        registry = getattr(runtime, "skill_registry", None) if runtime else None
-        if registry is None:
-            raise RuntimeError("skill registry not available")
-        skill = registry.get_record(slug)
+        deps = self._deps()
+        skill = deps.skill_loader(slug)
         if not skill:
             raise ValueError(f"No skill named '{slug}'.")
-        canvas = self.cs.canvas
-        if skill.kind == "transform" and not canvas.image_path:
+        if skill.kind == "transform" and not draft.image_path:
             raise ValueError("Transform skills require a current canvas image.")
-        if skill.kind == "transform" and len(canvas.last_chain) >= MAX_CHAIN_LENGTH:
+        if skill.kind == "transform" and len(draft.last_chain) >= MAX_CHAIN_LENGTH:
             raise ValueError(f"Chain is at the {MAX_CHAIN_LENGTH}-layer cap — delete a layer first.")
 
         controls = default_controls(skill)
         if any(c.get("type") == "palette" for c in (skill.controls or [])):
-            controls["palette"] = canvas.palette_id
+            controls["palette"] = draft.palette_id
         controls.update({k: v for k, v in params.items() if k in controls})
-        # seed=0 is the slot value; replay_chain replaces it with a pool
-        # sample (or a freshly minted seed if the pool is empty) and writes
-        # the resolved value back onto the entry dict.
         entry = make_chain_entry(skill, params, 0, controls=controls)
-        if params.get("seed") is None:
-            entry["seed"] = None  # let replay_chain sample from the pool
-        else:
-            entry["seed"] = int(params["seed"])
-        canvas.push_chain_entry(entry)
+        # seed=None → pool sample; explicit int → use as-is.
+        entry["seed"] = int(params["seed"]) if params.get("seed") is not None else None
+        draft.push_chain_entry(entry)
         snap = canvas_render.render_chain(
-            self._session_key(), list(canvas.last_chain),
-            palette_id=canvas.palette_id, size=int(canvas.size),
+            self._session_key(), list(draft.last_chain),
+            palette_id=draft.palette_id, size=int(draft.size),
             op=f"skill:{slug}", out_name=f"_skill_{slug}.png",
+            canvas=draft, skill_loader=deps.skill_loader,
         )
         return {"canvas": snap, "event_data": {"slug": slug, "kind": skill.kind}}
 
@@ -761,23 +766,23 @@ class SetPalette(_CanvasAction):
 
     action_type = "set_canvas_palette"
 
-    def _run(self) -> dict[str, Any]:
+    def _run(self, draft) -> dict[str, Any]:
         from plugins.helpers.palettes import palette_exists
         from plugins.tools.helpers import canvas_render, layered_canvas as lc
 
         palette_id = str(self._arg("palette_id") or "")
         if not palette_id or not palette_exists(palette_id):
             raise ValueError(f"unknown palette: {palette_id!r}")
-        canvas = self.cs.canvas
-        if palette_id == canvas.palette_id:
-            return {"canvas": lc.canvas(self._session_key()), "event_data": {"palette_id": palette_id, "noop": True}}
-        canvas.apply_palette(palette_id)
-        snap = lc.canvas(self._session_key())
-        if canvas.last_chain:
+        if palette_id == draft.palette_id:
+            return {"canvas": lc.to_frontend_shape(draft), "event_data": {"palette_id": palette_id, "noop": True}}
+        draft.apply_palette(palette_id)
+        snap = lc.to_frontend_shape(draft)
+        if draft.last_chain:
             snap = canvas_render.render_chain(
-                self._session_key(), list(canvas.last_chain),
-                palette_id=palette_id, size=int(canvas.size),
+                self._session_key(), list(draft.last_chain),
+                palette_id=palette_id, size=int(draft.size),
                 op=f"palette:{palette_id}", out_name="_palette_replay.png",
+                canvas=draft, skill_loader=self._deps().skill_loader,
             )
         return {"canvas": snap, "event_data": {"palette_id": palette_id}}
 
@@ -787,23 +792,21 @@ class SetSkillControl(_CanvasAction):
 
     action_type = "set_skill_control"
 
-    def _run(self) -> dict[str, Any]:
+    def _run(self, draft) -> dict[str, Any]:
         import random
-        from plugins.tools.helpers import canvas_render, layered_canvas as lc
+        from plugins.tools.helpers import canvas_render
+        from plugins.skills.helpers.skill_controls import coerce_control_value
 
         chain_index = int(self._arg("chain_index") or 0)
         name = str(self._arg("name") or "")
         value = self._arg("value")
         action = str(self._arg("action") or "")
 
-        canvas = self.cs.canvas
-        chain = list(canvas.last_chain)
+        chain = list(draft.last_chain)
         if not (0 <= chain_index < len(chain)):
             raise ValueError("That control no longer exists.")
         step = chain[chain_index]
-        runtime = getattr(lc, "_runtime_ref", None)
-        registry = getattr(runtime, "skill_registry", None) if runtime else None
-        skill = registry.get_record(step.get("slug") or "") if registry else None
+        skill = self._deps().skill_loader(step.get("slug") or "")
         if not skill:
             raise ValueError("Skill for that control was deleted.")
         schema = {c.get("name"): c for c in (skill.controls or [])}
@@ -817,22 +820,22 @@ class SetSkillControl(_CanvasAction):
             param = spec.get("param") or "seed"
             new_val = random.randint(1, 2_147_483_647)
             if param == "seed":
-                canvas.randomize_seed_at(chain_index, new_val)
+                draft.randomize_seed_at(chain_index, new_val)
             else:
-                canvas.apply_control(chain_index, param, new_val)
+                draft.apply_control(chain_index, param, new_val)
         elif spec.get("type") == "pan":
             v = value or {}
             xv = float(v.get("x", spec.get("x_default", 0.0)))
             yv = float(v.get("y", spec.get("y_default", 0.0)))
-            canvas.apply_control(chain_index, spec["x_param"], xv)
-            canvas.apply_control(chain_index, spec["y_param"], yv)
+            draft.apply_control(chain_index, spec["x_param"], xv)
+            draft.apply_control(chain_index, spec["y_param"], yv)
         else:
-            from plugins.frontends.frontend_web import _coerce_control_value  # type: ignore
-            canvas.apply_control(chain_index, name, _coerce_control_value(spec, value))
+            draft.apply_control(chain_index, name, coerce_control_value(spec, value))
         snap = canvas_render.render_chain(
-            self._session_key(), list(canvas.last_chain),
-            palette_id=canvas.palette_id, size=int(canvas.size),
+            self._session_key(), list(draft.last_chain),
+            palette_id=draft.palette_id, size=int(draft.size),
             op=f"control:{step.get('slug')}.{name}", out_name="_control_replay.png",
+            canvas=draft, skill_loader=self._deps().skill_loader,
         )
         return {"canvas": snap, "event_data": {"chain_index": chain_index, "name": name}}
 
@@ -842,21 +845,21 @@ class RegenerateCanvas(_CanvasAction):
 
     action_type = "regenerate_canvas"
 
-    def _run(self) -> dict[str, Any]:
+    def _run(self, draft) -> dict[str, Any]:
         import random
         from plugins.tools.helpers import canvas_render
 
-        canvas = self.cs.canvas
-        if not canvas.last_chain:
+        if not draft.last_chain:
             raise ValueError("Nothing to regenerate yet — make something first.")
-        fresh = [random.randint(1, 2_147_483_647) for _ in canvas.last_chain]
-        canvas.reseed_chain(fresh)
+        fresh = [random.randint(1, 2_147_483_647) for _ in draft.last_chain]
+        draft.reseed_chain(fresh)
         snap = canvas_render.render_chain(
-            self._session_key(), list(canvas.last_chain),
-            palette_id=canvas.palette_id, size=int(canvas.size),
+            self._session_key(), list(draft.last_chain),
+            palette_id=draft.palette_id, size=int(draft.size),
             op="regenerate", out_name="_regenerate.png",
+            canvas=draft, skill_loader=self._deps().skill_loader,
         )
-        return {"canvas": snap, "event_data": {"layers": len(canvas.last_chain)}}
+        return {"canvas": snap, "event_data": {"layers": len(draft.last_chain)}}
 
 
 class DeleteLayer(_CanvasAction):
@@ -864,21 +867,23 @@ class DeleteLayer(_CanvasAction):
 
     action_type = "delete_canvas_layer"
 
-    def _run(self) -> dict[str, Any]:
+    def _run(self, draft) -> dict[str, Any]:
         from plugins.tools.helpers import canvas_render, layered_canvas as lc
 
         chain_index = int(self._arg("chain_index") or 0)
-        canvas = self.cs.canvas
-        if not (0 <= chain_index < len(canvas.last_chain)):
+        if not (0 <= chain_index < len(draft.last_chain)):
             raise ValueError("That layer no longer exists.")
         if chain_index == 0:
-            lc.reset(self._session_key())
-            return {"canvas": lc.canvas(self._session_key()), "event_data": {"chain_index": 0, "cleared": True}}
-        canvas.delete_entry(chain_index)
+            draft.reset()
+            # Wipe the composite WebP on disk too.
+            lc._wipe_composite(self._session_key())
+            return {"canvas": lc.to_frontend_shape(draft), "event_data": {"chain_index": 0, "cleared": True}}
+        draft.delete_entry(chain_index)
         snap = canvas_render.render_chain(
-            self._session_key(), list(canvas.last_chain),
-            palette_id=canvas.palette_id, size=int(canvas.size),
+            self._session_key(), list(draft.last_chain),
+            palette_id=draft.palette_id, size=int(draft.size),
             op=f"layer_delete:{chain_index}", out_name="_layer_delete.png",
+            canvas=draft, skill_loader=self._deps().skill_loader,
         )
         return {"canvas": snap, "event_data": {"chain_index": chain_index}}
 
@@ -888,19 +893,19 @@ class MoveLayer(_CanvasAction):
 
     action_type = "move_canvas_layer"
 
-    def _run(self) -> dict[str, Any]:
+    def _run(self, draft) -> dict[str, Any]:
         from plugins.tools.helpers import canvas_render, layered_canvas as lc
 
         from_index = int(self._arg("from_index") or 0)
         to_index = int(self._arg("to_index") or 0)
-        canvas = self.cs.canvas
         if from_index == to_index:
-            return {"canvas": lc.canvas(self._session_key()), "event_data": {"noop": True}}
-        canvas.move_entry(from_index, to_index)
+            return {"canvas": lc.to_frontend_shape(draft), "event_data": {"noop": True}}
+        draft.move_entry(from_index, to_index)
         snap = canvas_render.render_chain(
-            self._session_key(), list(canvas.last_chain),
-            palette_id=canvas.palette_id, size=int(canvas.size),
+            self._session_key(), list(draft.last_chain),
+            palette_id=draft.palette_id, size=int(draft.size),
             op=f"layer_move:{from_index}->{to_index}", out_name="_layer_move.png",
+            canvas=draft, skill_loader=self._deps().skill_loader,
         )
         return {"canvas": snap, "event_data": {"from_index": from_index, "to_index": to_index}}
 
@@ -910,20 +915,20 @@ class SetCanvasSize(_CanvasAction):
 
     action_type = "set_canvas_size"
 
-    def _run(self) -> dict[str, Any]:
+    def _run(self, draft) -> dict[str, Any]:
         from plugins.tools.helpers import canvas_render, layered_canvas as lc
 
         size = int(self._arg("size") or 0)
-        canvas = self.cs.canvas
-        canvas.set_size(size)
-        snap = lc.canvas(self._session_key())
-        if canvas.last_chain:
+        draft.set_size(size)
+        snap = lc.to_frontend_shape(draft)
+        if draft.last_chain:
             snap = canvas_render.render_chain(
-                self._session_key(), list(canvas.last_chain),
-                palette_id=canvas.palette_id, size=int(canvas.size),
-                op=f"size:{canvas.size}", out_name="_resize.png",
+                self._session_key(), list(draft.last_chain),
+                palette_id=draft.palette_id, size=int(draft.size),
+                op=f"size:{draft.size}", out_name="_resize.png",
+                canvas=draft, skill_loader=self._deps().skill_loader,
             )
-        return {"canvas": snap, "event_data": {"size": canvas.size}}
+        return {"canvas": snap, "event_data": {"size": draft.size}}
 
 
 class ResetCanvas(_CanvasAction):
@@ -931,7 +936,8 @@ class ResetCanvas(_CanvasAction):
 
     action_type = "reset_canvas"
 
-    def _run(self) -> dict[str, Any]:
+    def _run(self, draft) -> dict[str, Any]:
         from plugins.tools.helpers import layered_canvas as lc
-        lc.reset(self._session_key())
-        return {"canvas": lc.canvas(self._session_key()), "event_data": {"cleared": True}}
+        draft.reset()
+        lc._wipe_composite(self._session_key())
+        return {"canvas": lc.to_frontend_shape(draft), "event_data": {"cleared": True}}

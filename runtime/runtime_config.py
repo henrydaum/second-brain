@@ -135,6 +135,12 @@ def new_state(
     cache["agent_scoped_tool_names"] = scoped_tool_names(runtime, session, tools)
     phase = (marker or {}).get("phase", BASE_PHASE)
     from state_machine.canvas import Canvas
+    from types import SimpleNamespace
+    cache["canvas_deps"] = SimpleNamespace(
+        skill_loader=(lambda slug, r=runtime: getattr(getattr(r, "skill_registry", None), "get_record", lambda _s: None)(slug)),
+        db=getattr(runtime, "db", None),
+        config=getattr(runtime, "config", {}) or {},
+    )
     cs = ConversationState(
         [Participant("user", "user", commands=commands), Participant("agent", "agent", tools=tools)],
         (marker or {}).get("turn_priority", "user"),
