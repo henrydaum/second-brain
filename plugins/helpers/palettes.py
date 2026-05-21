@@ -1,8 +1,6 @@
-"""Color-theory palette catalog.
+"""Color palette catalog for generative art.
 
 Each palette has five named slots: primary, secondary, tertiary, accent, background.
-Colors are derived from a base hue using simple HSV math, so the catalog is just a
-list of (id, name, kind, base_hue) tuples — actual hex values are computed at import.
 
 Skills consume a Palette via the Canvas API and should reference slots by name
 rather than hard-coding hex values, so the user's selected palette is honored.
@@ -137,60 +135,26 @@ def _curated(id_: str, name: str, kind: str, base: int, *, primary: str, seconda
 
 
 _CATALOG: list[Palette] = [
-    # ── Muted / modern / minimal (default-leaning) ───────────────────────────
-    _curated("neutral_mono", "Neutral Mono", "monochromatic", 220,
-             primary="#C9D3E0", secondary="#8D99A8", tertiary="#586271",
-             accent="#FFFFFF", background="#111318"),
-    _curated("sandstone", "Sandstone", "earthy", 30,
-             primary="#D4A574", secondary="#A67B5B", tertiary="#7A6553",
-             accent="#F5EBE0", background="#2C2419"),
-    _curated("coastal_mist", "Coastal Mist", "cool_muted", 210,
-             primary="#94A8B5", secondary="#B4BFC4", tertiary="#6A7884",
-             accent="#E8E2D5", background="#1F2832"),
-    _curated("japandi", "Japandi", "warm_minimal", 35,
-             primary="#BFA888", secondary="#7A7568", tertiary="#3D3A36",
-             accent="#E8E0D0", background="#2A2724"),
-    _curated("linen", "Linen", "soft_neutral", 25,
-             primary="#C9B8A8", secondary="#B89A8E", tertiary="#8B9A85",
-             accent="#EFE7DB", background="#3A3530"),
-    _curated("studio_mono", "Studio Mono", "monochromatic", 210,
-             primary="#A8B0B8", secondary="#7A828A", tertiary="#4E555C",
-             accent="#D8D5CF", background="#1A1D20"),
-    _curated("botanical", "Botanical", "earthy", 90,
-             primary="#8FA68E", secondary="#B58572", tertiary="#5C6E5C",
-             accent="#EBE2D4", background="#1F2A1D"),
-    _curated("concrete", "Concrete", "industrial", 30,
-             primary="#B8B0A6", secondary="#8C807A", tertiary="#564F49",
-             accent="#C9967A", background="#232120"),
-    _curated("dusk", "Dusk", "moody", 320,
-             primary="#B59DAE", secondary="#D4A89A", tertiary="#7A6A78",
-             accent="#EDDCD2", background="#2A1F2A"),
-    _curated("cafe", "Café", "warm_earthy", 30,
-             primary="#C9A876", secondary="#8B5E3C", tertiary="#5C4030",
-             accent="#EBDBC7", background="#1F1410"),
-    _curated("ochre", "Ochre", "midcentury", 40,
-             primary="#C99A48", secondary="#8B6F4E", tertiary="#5A4030",
-             accent="#E8DCC8", background="#1F1812"),
-    _curated("frost", "Frost", "cool_minimal", 200,
-             primary="#D8DFE3", secondary="#A5B0B8", tertiary="#6A7884",
-             accent="#EFEDE9", background="#1B2026"),
-    _curated("clay", "Clay", "earthy", 15,
-             primary="#C4856C", secondary="#9C6B57", tertiary="#5E3F33",
-             accent="#E8D4C0", background="#241813"),
-    _curated("nordic", "Nordic", "cool_minimal", 215,
-             primary="#A8B5C2", secondary="#7B8794", tertiary="#4A5560",
-             accent="#E5E1D6", background="#1C2128"),
-    _curated("moss", "Moss", "earthy", 110,
-             primary="#7A8C6B", secondary="#A8A082", tertiary="#4D5C44",
-             accent="#E1DCC8", background="#1E2419"),
-    _curated("ink_paper", "Ink & Paper", "monochromatic", 35,
-             primary="#3A3530", secondary="#7A7268", tertiary="#A89C8C",
-             accent="#C99A48", background="#E8E0D0"),
-    # ── Vivid / playful (used sparingly) ─────────────────────────────────────
-    _analogous("analogous_sunset", "Sunset Analogous", 20),
-    _triadic("triadic_jewel", "Jewel Triad", 200),
-    _tetradic("tetradic_neon", "Neon Tetrad", 300),
-    _complementary("teal_coral", "Teal & Coral", 185),
+    _curated("japandi", "Japandi", "warm_minimal", 35, primary="#CBB48B", secondary="#8B8574", tertiary="#4B4740", accent="#EFE6D2", background="#26231F"),
+    _curated("neutral_mono", "Neutral Mono", "monochromatic", 220, primary="#D7DEE8", secondary="#9DA8B7", tertiary="#5B6472", accent="#FFFFFF", background="#101217"),
+    _curated("ink_paper", "Ink & Paper", "monochromatic", 35, primary="#28231F", secondary="#6F665B", tertiary="#B8AA96", accent="#D99A3D", background="#EFE5D0"),
+    _curated("obsidian", "Obsidian", "dark_prismatic", 265, primary="#7C5CFF", secondary="#1BD8D2", tertiary="#F05A9D", accent="#F7F2FF", background="#07070D"),
+    _curated("frost", "Frost", "cool_minimal", 200, primary="#DCEBEE", secondary="#91B8C4", tertiary="#4D6D82", accent="#FFF7D6", background="#111A22"),
+    _curated("aurora", "Aurora", "luminous_cool", 155, primary="#30F2A2", secondary="#3EA7FF", tertiary="#9A6BFF", accent="#E7FF7A", background="#06111C"),
+    _curated("magma", "Magma", "volcanic", 15, primary="#FF5A3D", secondary="#F6A32D", tertiary="#7B2346", accent="#FFE66D", background="#140609"),
+    _curated("deep_sea", "Deep Sea", "aquatic", 195, primary="#2DD6C7", secondary="#2567D8", tertiary="#17345F", accent="#B6FFF1", background="#03121F"),
+    _curated("botanical", "Botanical", "earthy", 105, primary="#9CCB70", secondary="#4F8F5B", tertiary="#D69A52", accent="#F0E6A8", background="#102116"),
+    _curated("desert_bloom", "Desert Bloom", "warm_earthy", 25, primary="#E09A5F", secondary="#C95C52", tertiary="#7E6A49", accent="#FFDFA3", background="#24150E"),
+    _curated("rose_circuit", "Rose Circuit", "electric_warm", 330, primary="#FF4FA3", secondary="#7A5CFF", tertiary="#26D4FF", accent="#FFE870", background="#130817"),
+    _curated("acid_lime", "Acid Lime", "high_energy", 85, primary="#B7FF2A", secondary="#00D9A3", tertiary="#2852FF", accent="#F8FF90", background="#071006"),
+    _curated("violet_storm", "Violet Storm", "moody", 275, primary="#A66BFF", secondary="#4D78FF", tertiary="#B23A62", accent="#D8C8FF", background="#100A1D"),
+    _curated("candy_glass", "Candy Glass", "pastel_vivid", 330, primary="#FF8BCB", secondary="#82E6FF", tertiary="#B69CFF", accent="#FFF2A8", background="#201326"),
+    _curated("bauhaus", "Bauhaus", "graphic", 45, primary="#E23D32", secondary="#F2C230", tertiary="#1D66B2", accent="#F7F1DF", background="#101010"),
+    _curated("synthwave", "Synthwave", "retro_neon", 300, primary="#FF3BD4", secondary="#23D7FF", tertiary="#6C4DFF", accent="#FFD166", background="#0B0620"),
+    _curated("lichen", "Lichen", "muted_organic", 95, primary="#B8C97A", secondary="#7D9A6B", tertiary="#D1B16A", accent="#F0EBD0", background="#202719"),
+    _curated("noir_gold", "Noir Gold", "luxury_dark", 42, primary="#D4AF37", secondary="#8A6A2A", tertiary="#C45C35", accent="#FFF0B8", background="#090807"),
+    _curated("coral_reef", "Coral Reef", "tropical", 175, primary="#2DD4BF", secondary="#FF6B6B", tertiary="#5B7CFA", accent="#FFE66D", background="#06242D"),
+    _curated("radioactive", "Radioactive", "toxic_contrast", 115, primary="#75FF33", secondary="#00B8A9", tertiary="#8A2BE2", accent="#F5FF00", background="#050A05"),
 ]
 
 _BY_ID: dict[str, Palette] = {p.id: p for p in _CATALOG}
