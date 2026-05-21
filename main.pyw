@@ -56,22 +56,6 @@ class Scaffold:
 	restart: Any = None
 
 
-def _warn_about_legacy_skills() -> None:
-	"""One-line warning if legacy ``.skill.py`` files are sitting in the
-	old directories. They will not load until migrated to the BaseSkill
-	class form under ``plugins/skills/`` + ``sandbox_skills/``."""
-	from paths import SKILLS_DIR, BUILT_IN_SKILLS_DIR
-	stragglers: list[Path] = []
-	for d in (BUILT_IN_SKILLS_DIR, SKILLS_DIR):
-		if d.exists():
-			stragglers.extend(d.glob("*.skill.py"))
-	if stragglers:
-		logger.warning(
-			f"{len(stragglers)} legacy .skill.py file(s) found and NOT loaded "
-			f"(migrate to plugins/skills/skill_*.py with BaseSkill class form)."
-		)
-
-
 _ROOT = Path(__file__).parent
 
 
