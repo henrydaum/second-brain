@@ -277,6 +277,10 @@ body.account-body { background:
 .account-secondary-row a { color: var(--muted); font-size: 13px; text-decoration: none; transition: color 200ms ease; }
 .account-secondary-row a:hover { color: var(--accent); }
 .account-secondary-row a.danger:hover { color: var(--accent-2); }
+#signedOut form { display: flex; gap: 10px; align-items: stretch; margin-top: 12px; }
+#signedOut input { flex: 1; min-width: 0; }
+#signedOut button.primary-btn { height: 40px; flex: 0 0 auto; padding: 0 18px; border: 1px solid var(--accent); background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #08090d; box-shadow: 0 0 24px var(--accent-glow); }
+#signedOut button.primary-btn:hover:not(:disabled) { filter: brightness(1.08); }
 
 /* ---- Site footer ---- */
 .site-footer { display: flex; gap: 18px; align-items: center; justify-content: center; padding: 18px 24px; background: #0c1016; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
@@ -323,4 +327,9 @@ body.account-body { background:
   .gallery-section { padding: 28px; }
   .gallery-head { display: block; }
   h2 { font-size: 34px; }
+}
+
+@media (max-width: 520px) {
+  #signedOut form { flex-direction: column; }
+  #signedOut button.primary-btn { width: 100%; }
 }
