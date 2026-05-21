@@ -1011,6 +1011,18 @@ class WebFrontend(BaseFrontend):
             "layers": list(state.get("layers") or []),
         }
 
+    def record_link_open(self, pool_hash: str, ip: str = "", account_id: str = "", payload: dict | None = None) -> None:
+        """Count a public share-page view as a pool-scored skill signal."""
+        db = getattr(self.runtime, "db", None)
+        payload = payload or self.pool_share_payload(pool_hash)
+        if db is None or not payload:
+            return
+        canvas_actions.record_user_action(
+            db, user_id=self._owner_id(f"share:{pool_hash}", ip, account_id),
+            pool_hash=pool_hash, action="link_open",
+            layers=payload.get("layers") or [], image_path=payload.get("image_path"),
+        )
+
     # ── pool-hash listings, share links, QR codes ─────────────────────
 
     def get_link(self, session_id: str, ip: str, account_id: str,
@@ -1277,6 +1289,7 @@ class _Handler(BaseHTTPRequestHandler):
             if pool_payload is None:
                 return self.send_error(404)
             if sub == "":
+                self.server.frontend.record_link_open(share_id, self.client_address[0], self._cookie_uid(), pool_payload)
                 html = _render_pool_share_html(share_id, pool_payload)
                 raw = html.encode("utf-8")
                 self.send_response(200)

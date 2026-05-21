@@ -125,6 +125,70 @@ def test_search_skills_accepts_slug_alias():
         _cleanup(db, path)
 
 
+def test_search_skills_exposes_popularity_config():
+    keys = {s[1]: s for s in SearchSkills.config_settings}
+    assert keys["weigh_popularity"][3] is True
+    assert keys["popularity_alpha"][3] == 0.25
+
+
+def test_search_skills_popularity_breaks_equal_cosine():
+    db, path = _fresh_db("pop_equal")
+    try:
+        db.write_outputs("skill_embeddings", [_row("a.py", "plain", "Plain", "Water", [1, 0]), _row("b.py", "popular", "Popular", "Water", [1, 0])])
+        _score(db, "popular", shares=5)
+        result = SearchSkills().run(_ctx(db, {"weigh_popularity": True, "popularity_alpha": 0.5}), query="water", limit=2)
+        assert [s["slug"] for s in result.data["skills"]] == ["popular", "plain"]
+    finally:
+        _cleanup(db, path)
+
+
+def test_search_skills_alpha_zero_is_pure_cosine():
+    db, path = _fresh_db("alpha0")
+    try:
+        db.write_outputs("skill_embeddings", [_row("a.py", "water", "Water", "Ocean", [1, 0]), _row("b.py", "fire", "Fire", "Flame", [0, 1])])
+        _score(db, "fire", shares=99)
+        result = SearchSkills().run(_ctx(db, {"weigh_popularity": True, "popularity_alpha": 0.0}), query="water", limit=2)
+        assert result.data["skills"][0]["slug"] == "water"
+    finally:
+        _cleanup(db, path)
+
+
+def test_search_skills_alpha_one_is_popularity_order():
+    db, path = _fresh_db("alpha1")
+    try:
+        db.write_outputs("skill_embeddings", [_row("a.py", "water", "Water", "Ocean", [1, 0]), _row("b.py", "fire", "Fire", "Flame", [0, 1])])
+        _score(db, "fire", saves=9)
+        result = SearchSkills().run(_ctx(db, {"weigh_popularity": True, "popularity_alpha": 1.0}), query="water", limit=2)
+        assert result.data["skills"][0]["slug"] == "fire"
+    finally:
+        _cleanup(db, path)
+
+
+def test_search_skills_can_disable_popularity():
+    db, path = _fresh_db("pop_off")
+    try:
+        db.write_outputs("skill_embeddings", [_row("a.py", "water", "Water", "Ocean", [1, 0]), _row("b.py", "fire", "Fire", "Flame", [0, 1])])
+        _score(db, "fire", remixes=99)
+        result = SearchSkills().run(_ctx(db, {"weigh_popularity": False, "popularity_alpha": 1.0}), query="water", limit=2)
+        assert result.data["skills"][0]["slug"] == "water"
+    finally:
+        _cleanup(db, path)
+
+
+def test_search_skills_returns_all_popularity_fields():
+    db, path = _fresh_db("pop_fields")
+    try:
+        db.write_outputs("skill_embeddings", [_row("a.py", "water", "Water", "Ocean", [1, 0])])
+        _score(db, "water", shares=1, downloads=2, remixes=3, saves=4, link_opens=5)
+        skill = SearchSkills().run(_ctx(db, {}), query="water").data["skills"][0]
+        assert {k: skill[k] for k in ("shares", "downloads", "remixes", "saves", "link_opens")} == {
+            "shares": 1.0, "downloads": 2.0, "remixes": 3.0, "saves": 4.0, "link_opens": 5.0,
+        }
+        assert set(("score", "cosine_score", "popularity_score")) <= set(skill)
+    finally:
+        _cleanup(db, path)
+
+
 def test_skill_embedding_cleanup_uses_path_key():
     db, path = _fresh_db("cleanup")
     try:
@@ -143,3 +207,16 @@ def _row(path, slug, name, desc, vec, hidden=0):
         "kind": "creation", "hidden": hidden, "embedding": arr.astype("<f4").tobytes(),
         "dim": int(arr.size), "model": "fake", "updated_at": 1.0,
     }
+
+
+def _ctx(db, config):
+    return SimpleNamespace(db=db, config=config, services={"text_embedder": FakeEmbedder()})
+
+
+def _score(db, slug, **vals):
+    cols = {"shares": 0, "downloads": 0, "remixes": 0, "saves": 0, "link_opens": 0, **vals}
+    db.conn.execute(
+        "INSERT OR REPLACE INTO skill_scores (slug, shares, downloads, remixes, saves, link_opens, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1)",
+        (slug, cols["shares"], cols["downloads"], cols["remixes"], cols["saves"], cols["link_opens"]),
+    )
+    db.conn.commit()

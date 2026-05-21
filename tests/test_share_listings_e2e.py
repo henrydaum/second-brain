@@ -193,3 +193,26 @@ def test_qr_png_is_generated_after_share(monkeypatch, renders_dir):
 		assert raw[:8] == b"\x89PNG\r\n\x1a\n"
 	finally:
 		_cleanup_db(db, dbpath)
+
+
+def test_share_page_link_open_scores_but_qr_does_not(monkeypatch, renders_dir):
+	"""HTML share-page opens count; QR generation does not."""
+	_install_fake_run_skill(monkeypatch)
+	db, dbpath = _fresh_db("linkopen")
+	try:
+		fe = _make_frontend(db)
+		fe._base_url = lambda: "http://localhost:8765"
+		_seed_canvas(fe)
+		fe.share("sess1", "T", "A", ip="127.0.0.1", account_id="alice")
+		ph = fe.gallery("sess1")["items"][0]["pool_hash"]
+		payload = fe.pool_share_payload(ph)
+
+		fe.record_link_open(ph, "127.0.0.1", "", payload)
+		fe.share_qr_png(ph)
+
+		actions = db.conn.execute("SELECT COUNT(*) AS n FROM user_canvas_actions WHERE action = 'link_open'").fetchone()["n"]
+		score = db.conn.execute("SELECT link_opens FROM skill_scores WHERE slug = 'fractal'").fetchone()["link_opens"]
+		assert actions == 1
+		assert score == 1.0
+	finally:
+		_cleanup_db(db, dbpath)
