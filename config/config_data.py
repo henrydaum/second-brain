@@ -59,7 +59,7 @@ SETTINGS_DATA = [
     # --- Frontends ---
     ("Enabled Frontends", "enabled_frontends",
      "Frontend modules to start on launch. Requires app restart.",
-     ["web", "repl"],
+     ["web", "repl", "telegram"],
      {"type": "json_list"}),
 
     # --- Processing ---
