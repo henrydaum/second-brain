@@ -191,6 +191,9 @@ function render(events) {
 
 function setBusy(on) {
   agentBusy = !!on;
+  form.classList.toggle("busy", agentBusy);
+  form.setAttribute("aria-busy", agentBusy ? "true" : "false");
+  input.readOnly = agentBusy;
   if (agentBusy) {
     sendBtn.type = "button";
     sendBtn.textContent = "Cancel";
@@ -694,6 +697,7 @@ function loaderToolEnd(id) { activeRenderTools.delete(id); }
 // ----- Chat + actions -----
 form.addEventListener("submit", async e => {
   e.preventDefault();
+  if (agentBusy) return;
   const text = input.value.trim();
   if (!text) return;
   input.value = "";
