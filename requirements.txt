@@ -8,3 +8,4 @@ torch
 torchvision
 stripe
 qrcode[pil]
+psutil

@@ -74,8 +74,15 @@
     } catch {}
   })();
   const sid = localStorage.sbDemoSession || (localStorage.sbDemoSession = crypto.randomUUID());
+  function readCookie(name) {
+    const m = document.cookie.match(new RegExp("(?:^|; )" + name.replace(/([.$?*|{}()\[\]\\\/\+^])/g, "\\$1") + "=([^;]*)"));
+    return m ? decodeURIComponent(m[1]) : "";
+  }
   async function post(url, body = {}) {
-    const res = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({session_id:sid, ...body})});
+    const headers = {"Content-Type": "application/json"};
+    const csrf = readCookie("sb_csrf");
+    if (csrf) headers["X-CSRF-Token"] = csrf;
+    const res = await fetch(url, {method:"POST", headers, body:JSON.stringify({session_id:sid, ...body})});
     return res.json();
   }
   const $ = (s) => document.querySelector(s);

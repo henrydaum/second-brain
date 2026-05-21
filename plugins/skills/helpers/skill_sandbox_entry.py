@@ -41,11 +41,24 @@ PALETTE_SLOTS = {"background", "primary", "secondary", "tertiary", "accent"}
 
 
 def _limits(memory_mb: int = 768):
-    if platform.system() == "Linux":
+    # RLIMIT_CPU works on Linux + Darwin. RLIMIT_AS is unreliable on Darwin
+    # across malloc backends, so memory enforcement is the parent's psutil
+    # watchdog (see skill_runner.run_skill); we only set RLIMIT_AS on Linux
+    # as belt-and-braces.
+    try:
         import resource
+    except ImportError:
+        return
+    try:
         resource.setrlimit(resource.RLIMIT_CPU, (35, 35))
-        cap = max(64, int(memory_mb)) * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
+    except (ValueError, OSError):
+        pass
+    if platform.system() == "Linux":
+        try:
+            cap = max(64, int(memory_mb)) * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
+        except (ValueError, OSError):
+            pass
 
 
 def _import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -115,6 +128,9 @@ def _hint_for(error_type: str, message: str, skill_line: str) -> str | None:
     """Pattern-match common skill bugs to a one-line corrective hint."""
     msg = message or ""
     line = skill_line or ""
+
+    if error_type == "PermissionError" and "assigned canvas paths" in msg:
+        return "Skills can't open or save arbitrary file paths. Read the input through `canvas.image` (transform skills only) and commit your result with `canvas.commit(image)`. The parent saves it."
 
     if "import not allowed" in msg:
         m = re.search(r"import not allowed:\s*(\S+)", msg)
@@ -289,6 +305,40 @@ def _write_sidecar(output_image_path: str, payload: dict) -> None:
         pass
 
 
+def _install_pil_path_guard(allowed: set[str]) -> None:
+    """After the parent's Image.open(input_image_path) is done, swap in
+    guarded versions of Image.open and Image.Image.save that refuse any path
+    outside the allowed set. File-like objects are passed through untouched
+    so in-memory PIL operations keep working."""
+    import os as _os
+    _orig_open = Image.open
+    _orig_save = Image.Image.save
+
+    def _check(fp, mode: str) -> None:
+        if isinstance(fp, (str, bytes, _os.PathLike)):
+            try:
+                resolved = str(Path(_os.fsdecode(fp)).resolve())
+            except (OSError, ValueError):
+                raise PermissionError(
+                    f"skill may only {mode} its assigned canvas paths"
+                )
+            if resolved not in allowed:
+                raise PermissionError(
+                    f"skill may only {mode} its assigned canvas paths; got {resolved}"
+                )
+
+    def _guarded_open(fp, *args, **kwargs):
+        _check(fp, "open")
+        return _orig_open(fp, *args, **kwargs)
+
+    def _guarded_save(self, fp, *args, **kwargs):
+        _check(fp, "save")
+        return _orig_save(self, fp, *args, **kwargs)
+
+    Image.open = _guarded_open
+    Image.Image.save = _guarded_save
+
+
 def _find_skill_instance(ns: dict) -> object:
     """Locate the BaseSkill subclass in the exec'd namespace, instantiate it."""
     for value in ns.values():
@@ -309,6 +359,16 @@ def main():
         if errors:
             raise ValueError("; ".join(errors))
         canvas = Canvas(job)
+        # Lock down Image.open / Image.save so skill code can only touch the
+        # paths the parent assigned. The parent already did its Image.open()
+        # via Canvas(job) above; the guard only affects user code below.
+        allowed_paths = {str(Path(output_image_path).resolve())}
+        if job.get("input_image_path"):
+            try:
+                allowed_paths.add(str(Path(job["input_image_path"]).resolve()))
+            except (OSError, ValueError):
+                pass
+        _install_pil_path_guard(allowed_paths)
         safe = {k: getattr(_builtins, k) for k in (
             "abs", "all", "any", "bool", "dict", "enumerate", "Exception",
             "filter", "float", "int", "len", "list", "map", "max", "min",

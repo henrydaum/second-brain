@@ -88,8 +88,15 @@ function mdToHtml(src) {
   });
   return s;
 }
+function readCookie(name) {
+  const m = document.cookie.match(new RegExp("(?:^|; )" + name.replace(/([.$?*|{}()\[\]\\\/\+^])/g, "\\$1") + "=([^;]*)"));
+  return m ? decodeURIComponent(m[1]) : "";
+}
 async function post(url, body = {}) {
-  const res = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({session_id:sid, ...body})});
+  const headers = {"Content-Type": "application/json"};
+  const csrf = readCookie("sb_csrf");
+  if (csrf) headers["X-CSRF-Token"] = csrf;
+  const res = await fetch(url, {method:"POST", headers, body:JSON.stringify({session_id:sid, ...body})});
   return res.json();
 }
 async function poll() { try { render((await fetch(`/api/events?session_id=${encodeURIComponent(sid)}`).then(r => r.json())).events); } catch {} }

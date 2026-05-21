@@ -17,8 +17,14 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 from plugins.helpers.palettes import Palette, get_palette, palette_exists
 from plugins.skills.helpers.skill_store import Skill, assert_valid
@@ -113,12 +119,44 @@ def run_skill(
 
     cmd = [sys.executable, "-I", "-B", str(entry), job_path]
     t0 = time.time()
+    mem_cap_bytes = max(64, int(memory_mb)) * 1024 * 1024
+    killed_for_memory = {"flag": False, "peak": 0}
     try:
         proc = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env, cwd=str(project_root),
         )
+        watchdog_stop = threading.Event()
+        if psutil is not None:
+            def _watchdog():
+                try:
+                    p = psutil.Process(proc.pid)
+                except psutil.Error:
+                    return
+                while not watchdog_stop.wait(0.2):
+                    try:
+                        rss = p.memory_info().rss
+                        for child in p.children(recursive=True):
+                            try:
+                                rss += child.memory_info().rss
+                            except psutil.Error:
+                                pass
+                    except psutil.Error:
+                        return
+                    if rss > killed_for_memory["peak"]:
+                        killed_for_memory["peak"] = rss
+                    if rss > mem_cap_bytes:
+                        killed_for_memory["flag"] = True
+                        try:
+                            proc.kill()
+                        except OSError:
+                            pass
+                        return
+            wd = threading.Thread(target=_watchdog, name=f"skill-mem-watchdog-{proc.pid}", daemon=True)
+            wd.start()
+        else:
+            wd = None
         try:
             stdout, stderr = proc.communicate(timeout=timeout_s)
         except subprocess.TimeoutExpired:
@@ -133,6 +171,20 @@ def run_skill(
                     "error_type": "Timeout",
                     "message": f"exceeded {timeout_s:.0f}s timeout",
                     "hint": "Vectorize with numpy or reduce iteration counts; per-pixel Python loops at full resolution always time out.",
+                },
+            )
+        finally:
+            watchdog_stop.set()
+            if wd is not None:
+                wd.join(timeout=1.0)
+        if killed_for_memory["flag"]:
+            peak_mb = killed_for_memory["peak"] / (1024 * 1024)
+            raise SkillRunError(
+                f"skill '{skill.slug}' exceeded {memory_mb} MB memory cap (peak ~{peak_mb:.0f} MB)",
+                diagnostic={
+                    "error_type": "MemoryCap",
+                    "message": f"exceeded {memory_mb} MB memory cap (peak ~{peak_mb:.0f} MB)",
+                    "hint": f"Reduce array sizes or canvas resolution; allocations like np.zeros((N, N, 4), dtype=uint8) need 4*N*N bytes, so N=10000 already uses ~400 MB. Stay under {memory_mb} MB total.",
                 },
             )
     finally:

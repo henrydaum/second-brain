@@ -44,23 +44,28 @@ def mint_token(db, email: str) -> str:
 
 
 def verify_token(db, token: str) -> str | None:
-    """Consume a token if valid and unused. Returns the email or None."""
+    """Consume a token if valid and unused. Returns the email or None.
+    The claim is a single conditional UPDATE so two concurrent verifies for
+    the same token can't both succeed; only the one whose UPDATE has
+    rowcount=1 reads the email back."""
     if not token:
         return None
     now = time.time()
     cutoff = now - TOKEN_TTL_SECONDS
     with db.lock:
+        cur = db.conn.execute(
+            "UPDATE web_auth_tokens SET used_at = ? "
+            "WHERE token = ? AND used_at IS NULL AND created_at >= ?",
+            (now, token, cutoff),
+        )
+        if (cur.rowcount or 0) != 1:
+            db.conn.commit()
+            return None
         row = db.conn.execute(
-            "SELECT email, created_at, used_at FROM web_auth_tokens WHERE token = ?",
-            (token,),
+            "SELECT email FROM web_auth_tokens WHERE token = ?", (token,),
         ).fetchone()
-        if not row or row["used_at"] is not None:
-            return None
-        if row["created_at"] < cutoff:
-            return None
-        db.conn.execute("UPDATE web_auth_tokens SET used_at = ? WHERE token = ?", (now, token))
         db.conn.commit()
-        return row["email"]
+        return row["email"] if row else None
 
 
 def send_magic_link(gmail_service, to_email: str, link_url: str, from_address: str | None = None) -> bool:
