@@ -7,6 +7,11 @@
   --accent-glow: rgba(127,200,212,.10);
 }
 * { box-sizing: border-box; }
+* { scrollbar-width: thin; scrollbar-color: rgba(154,166,189,.46) rgba(255,255,255,.04); }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: rgba(255,255,255,.035); }
+*::-webkit-scrollbar-thumb { background: linear-gradient(180deg, rgba(154,166,189,.55), rgba(127,200,212,.45)); border: 2px solid rgba(8,9,13,.88); }
+*::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, var(--accent), var(--accent-2)); }
 body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 70% 20%, var(--accent-2-glow, #302047) 0, transparent 32%), var(--bg); color: var(--text); font: 15px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; transition: background 600ms ease; }
 button, input { font: inherit; }
 
@@ -309,8 +314,8 @@ body.account-body { background:
 
 @media (max-width: 960px) {
   .shell { grid-template-columns: 1fr; }
+  .showcase { order: -1; aspect-ratio: auto; height: auto; min-height: 420px; }
   .chat { height: 58vh; position: relative; }
-  .showcase { aspect-ratio: auto; height: auto; min-height: 420px; }
   .gallery-section { padding: 28px; }
   .gallery-head { display: block; }
   h2 { font-size: 34px; }
