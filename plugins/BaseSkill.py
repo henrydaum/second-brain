@@ -20,6 +20,229 @@ Every code path through run() must end with ``canvas.commit(image)``.
 from __future__ import annotations
 
 
+# ---------------------------------------------------------------------------
+# Control descriptors.
+#
+# These let library skills declare controls as class attributes:
+#
+#     class Fisheye(BaseSkill):
+#         strength = Slider(-1.0, 1.0, default=0.6)
+#         mode     = Enum(['radial', 'uniform'], default='radial')
+#
+#         def run(self, canvas):
+#             # self.strength / self.mode already populated + clamped
+#             ...
+#
+# Descriptors are pure metadata holders — no __get__/__set__. ``BaseSkill.
+# __init_subclass__`` scans for them and *compiles* them into the existing
+# dict-form ``controls = [...]`` schema that the rest of the runtime
+# already understands. The sandbox dispatcher then sets the corresponding
+# attributes on the instance before calling run(), so ``self.x`` reads
+# the clamped current value.
+#
+# The dict-form schema remains the wire / storage / pool_hash format —
+# descriptors are an authoring convenience only. Skills written in the
+# legacy ``controls = [...]`` style keep working unchanged.
+# ---------------------------------------------------------------------------
+
+
+class _ControlDescriptor:
+    """Metadata-only base for control descriptors."""
+    control_type: str = ""
+
+
+class Slider(_ControlDescriptor):
+    """Numeric slider control. ``min`` and ``max`` define both the UI range
+    and the auto-clamp bounds applied to ``self.<name>`` at dispatch time.
+
+    Example:
+        strength = Slider(-1.0, 1.0, default=0.6)
+        radius   = Slider(1, 80, default=18, step=1)
+    """
+    control_type = "slider"
+
+    def __init__(self, min, max, default=None, *, step=None, label=None):
+        if max <= min:
+            raise ValueError(f"Slider needs max > min (got min={min}, max={max})")
+        self.min = float(min)
+        self.max = float(max)
+        self.default = float(default if default is not None else min)
+        self.step = float(step if step is not None else (max - min) / 100.0)
+        self.label = label
+
+
+class Bool(_ControlDescriptor):
+    """Boolean toggle control."""
+    control_type = "bool"
+
+    def __init__(self, default=False, *, label=None):
+        self.default = bool(default)
+        self.label = label
+
+
+class Enum(_ControlDescriptor):
+    """Multi-choice dropdown control.
+
+    ``options`` may be a list of strings (label == value) or a list of
+    ``(value, label)`` 2-tuples / dicts.
+    """
+    control_type = "enum"
+
+    def __init__(self, options, default=None, *, label=None):
+        if not options:
+            raise ValueError("Enum needs at least one option")
+        normalized = []
+        for o in options:
+            if isinstance(o, str):
+                normalized.append((o, o))
+            elif isinstance(o, dict):
+                normalized.append((o["value"], str(o.get("label", o["value"]))))
+            else:
+                value, lbl = o[0], (o[1] if len(o) > 1 else o[0])
+                normalized.append((value, str(lbl)))
+        self.options = normalized
+        self.default = default if default is not None else normalized[0][0]
+        self.label = label
+
+
+class Pan(_ControlDescriptor):
+    """Two-axis arrow-pad widget that drives two underlying Sliders.
+
+    ``x`` and ``y`` are names of *other* attributes on the same class —
+    both must be Sliders. Pan does NOT introduce its own injected
+    attribute; ``self.<pan_name>`` is unset. Read the underlying scalars.
+
+    Example:
+        cx     = Slider(0, 1, default=0.5)
+        cy     = Slider(0, 1, default=0.5)
+        center = Pan(x='cx', y='cy')
+    """
+    control_type = "pan"
+
+    def __init__(self, x, y, *, label=None, step=None):
+        self.x_param = str(x)
+        self.y_param = str(y)
+        self.label = label
+        self.step = step  # None → inherit from the underlying slider step
+
+
+class Palette(_ControlDescriptor):
+    """Per-layer palette override control. Declares that the skill should
+    expose a palette swatch. No injected attribute; the runtime resolves
+    the palette before run() is called.
+    """
+    control_type = "palette"
+
+    def __init__(self, *, label=None):
+        self.label = label
+
+
+def _compile_descriptors(cls) -> tuple[list[dict], dict[str, dict]] | None:
+    """Walk ``cls.__dict__`` for ``_ControlDescriptor`` instances and return
+    ``(controls, param_bounds)``:
+
+      * ``controls`` is the dict-form UI representation (what the runtime
+        stores). Sliders that are consumed by a Pan as ``x_param``/
+        ``y_param`` are *not* emitted as their own UI entries — the Pan
+        widget drives them.
+      * ``param_bounds`` is a dispatch-time table keyed by attribute name,
+        carrying ``{type, min, max, default}`` (or ``{type, default}`` for
+        bool/enum) for *every* declared descriptor. The sandbox dispatcher
+        uses this to clamp + default each ``self.<name>`` before run().
+
+    Returns None when no descriptors are declared (preserve any literal
+    ``controls = [...]`` the subclass set).
+    """
+    descriptors: list[tuple[str, _ControlDescriptor]] = []
+    sliders: dict[str, Slider] = {}
+    pans: list[tuple[str, Pan]] = []
+    for attr_name, value in cls.__dict__.items():
+        if isinstance(value, _ControlDescriptor):
+            descriptors.append((attr_name, value))
+            if isinstance(value, Slider):
+                sliders[attr_name] = value
+            if isinstance(value, Pan):
+                pans.append((attr_name, value))
+    if not descriptors:
+        return None
+
+    # Names of sliders absorbed by a Pan — they don't get their own UI entry.
+    pan_consumed: set[str] = set()
+    for _, pan in pans:
+        x = sliders.get(pan.x_param)
+        y = sliders.get(pan.y_param)
+        if x is None or y is None:
+            raise TypeError(
+                f"Pan on {cls.__name__} references x={pan.x_param!r}/"
+                f"y={pan.y_param!r}; both must be Slider attributes on "
+                f"the same class"
+            )
+        pan_consumed.add(pan.x_param)
+        pan_consumed.add(pan.y_param)
+
+    controls: list[dict] = []
+    param_bounds: dict[str, dict] = {}
+    for attr_name, d in descriptors:
+        label = d.label or attr_name.replace("_", " ").title()
+        if isinstance(d, Slider):
+            param_bounds[attr_name] = {
+                "type": "slider", "min": d.min, "max": d.max,
+                "default": d.default,
+            }
+            if attr_name in pan_consumed:
+                continue
+            controls.append({
+                "type": "slider",
+                "name": attr_name,
+                "label": label,
+                "min": d.min,
+                "max": d.max,
+                "step": d.step,
+                "default": d.default,
+            })
+        elif isinstance(d, Bool):
+            param_bounds[attr_name] = {"type": "bool", "default": d.default}
+            controls.append({
+                "type": "bool",
+                "name": attr_name,
+                "label": label,
+                "default": d.default,
+            })
+        elif isinstance(d, Enum):
+            allowed = [v for (v, _) in d.options]
+            param_bounds[attr_name] = {
+                "type": "enum", "default": d.default, "allowed": allowed,
+            }
+            controls.append({
+                "type": "enum",
+                "name": attr_name,
+                "label": label,
+                "options": [{"value": v, "label": l} for (v, l) in d.options],
+                "default": d.default,
+            })
+        elif isinstance(d, Pan):
+            x_slider = sliders[d.x_param]
+            y_slider = sliders[d.y_param]
+            step = d.step if d.step is not None else min(x_slider.step, y_slider.step)
+            controls.append({
+                "type": "pan",
+                "name": attr_name,
+                "label": label,
+                "x_param": d.x_param,
+                "y_param": d.y_param,
+                "step": float(step),
+                "x_default": x_slider.default,
+                "y_default": y_slider.default,
+            })
+        elif isinstance(d, Palette):
+            controls.append({
+                "type": "palette",
+                "name": "palette",
+                "label": label,
+            })
+    return controls, param_bounds
+
+
 class BaseSkill:
     """The contract every skill implements.
 
@@ -34,16 +257,23 @@ class BaseSkill:
             Either "creation" (produces a new image from scratch) or
             "transform" (takes the current canvas and reshapes it).
         owner:
-            Session key of the author. Empty for built-ins, or set to
-            "library" by convention.
+            Session key of the author. Defaults to "library" for skills
+            shipped in plugins/skills/; sandbox-authored skills set it to
+            the author's session key via ``write_skill``.
         created_at:
             Epoch seconds. Set automatically when written via the
-            create_skill tool.
+            create_skill tool. ``0.0`` triggers a fallback to file mtime.
         controls:
             Optional list of user-facing controls (slider/enum/bool/pan/
             palette). Validated against the run() signature. Max 3
             non-palette controls; add a palette control only when the
             skill uses palette and should expose a layer override.
+
+            **New form**: declare each control as a class-attribute
+            descriptor — ``strength = Slider(-1.0, 1.0, default=0.6)`` —
+            and the framework compiles them into this list automatically.
+            Read the values inside ``run()`` as ``self.strength``.
+            Auto-clamping to the declared range is applied at dispatch.
         hidden:
             Soft-delete flag. Hidden skills still load (so shared canvas
             chains can replay) but are excluded from list/search.
@@ -57,7 +287,7 @@ class BaseSkill:
     name: str = ""
     description: str = ""
     kind: str = "creation"          # "creation" | "transform"
-    owner: str = ""
+    owner: str = "library"          # library skills can omit this entirely
     created_at: float = 0.0
 
     # --- UI / catalog ---
@@ -69,13 +299,38 @@ class BaseSkill:
     requires_services: list[str] = []
     config_settings: list = []
 
+    # Dispatcher-facing bounds table for descriptor-declared parameters.
+    # Populated by ``__init_subclass__``; consumed by the sandbox to clamp
+    # + default each ``self.<name>`` before ``run()`` is called.
+    _param_bounds: dict = {}
+
     def __init_subclass__(cls, **kwargs):
-        """Defensive copies so subclasses don't mutate base-class containers."""
+        """Defensive copies so subclasses don't mutate base-class containers;
+        compile any control descriptors into the dict-form ``controls`` list."""
         super().__init_subclass__(**kwargs)
         for attr in ("controls", "requires_services", "config_settings"):
             value = getattr(cls, attr)
             if isinstance(value, (list, dict)):
                 setattr(cls, attr, value.copy())
+
+        # If the subclass declared a literal ``controls = [...]`` in its own
+        # body, honour it (do not overwrite). Otherwise, look for descriptors
+        # and compile them into both the UI controls list and the
+        # dispatcher-facing parameter bounds table.
+        own = cls.__dict__.get("controls")
+        if not own:
+            compiled = _compile_descriptors(cls)
+            if compiled is not None:
+                controls, param_bounds = compiled
+                cls.controls = controls
+                cls._param_bounds = param_bounds
+            else:
+                cls._param_bounds = {}
+        else:
+            # Dict-form literal stays a pure kwargs-passing path — no
+            # auto-clamping, no attribute injection. Skills get auto-clamp
+            # only by opting in via the descriptor syntax.
+            cls._param_bounds = {}
 
     @property
     def slug(self) -> str:

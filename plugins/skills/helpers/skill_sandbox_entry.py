@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import builtins as _builtins
+import inspect
 import json
 import platform
 import re
@@ -380,6 +381,69 @@ def _find_skill_instance(ns: dict) -> object:
     raise ValueError("no BaseSkill subclass found in skill file")
 
 
+def _apply_param_bounds(instance, params: dict) -> dict:
+    """For each entry in the instance's ``_param_bounds`` table, set
+    ``instance.<name>`` to the clamped/defaulted value drawn from
+    ``params``. Returns the residual params dict (values that don't
+    correspond to a declared bound — these are still passed through as
+    kwargs to ``run()`` so the legacy calling convention keeps working).
+    """
+    bounds = getattr(instance, "_param_bounds", None) or {}
+    if not bounds:
+        return params
+    residual = dict(params)
+    for name, spec in bounds.items():
+        if name in residual:
+            value = residual.pop(name)
+        else:
+            value = spec.get("default")
+        kind = spec.get("type")
+        if kind == "slider":
+            try:
+                v = float(value)
+            except (TypeError, ValueError):
+                v = float(spec.get("default", spec["min"]))
+            lo, hi = float(spec["min"]), float(spec["max"])
+            value = lo if v < lo else hi if v > hi else v
+        elif kind == "bool":
+            value = bool(value)
+        elif kind == "enum":
+            allowed = spec.get("allowed") or []
+            if value not in allowed:
+                value = spec.get("default")
+        setattr(instance, name, value)
+    return residual
+
+
+def _dispatch_run(instance, canvas, params: dict):
+    """Call ``instance.run(canvas, ...)``. If the run() signature accepts
+    only ``(self, canvas)`` (the new descriptor style), no kwargs are
+    passed. Otherwise, residual params are forwarded for backwards
+    compatibility with the legacy ``def run(self, canvas, **params)``
+    style.
+    """
+    residual = _apply_param_bounds(instance, params)
+    try:
+        sig = inspect.signature(instance.run)
+        non_self = [p for p in sig.parameters.values()]
+        accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in non_self)
+        named = {p.name for p in non_self if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)}
+        # Drop 'canvas' from the named set — it's the positional arg.
+        named.discard("canvas")
+        # Drop names already handled via descriptors (set via setattr above).
+        bound_names = set(getattr(instance, "_param_bounds", {}) or {})
+        named -= bound_names
+        if accepts_kwargs:
+            return instance.run(canvas, **residual)
+        if named:
+            kwargs = {k: residual[k] for k in named if k in residual}
+            return instance.run(canvas, **kwargs)
+        return instance.run(canvas)
+    except (TypeError, ValueError):
+        # Fall back to the legacy call shape if introspection misfires.
+        return instance.run(canvas, **residual)
+
+
 def main():
     job_path = sys.argv[1]
     job = json.loads(Path(job_path).read_text(encoding="utf-8"))
@@ -420,7 +484,7 @@ def main():
         ns = {"__builtins__": safe, "__name__": "__skill__", "art_kit": art_kit}
         exec(code, ns, ns)
         instance = _find_skill_instance(ns)
-        result = instance.run(canvas, **(job.get("params") or {}))
+        result = _dispatch_run(instance, canvas, dict(job.get("params") or {}))
         if canvas._committed is None and isinstance(result, Image.Image):
             canvas.commit(result)
         if canvas._committed is None:
