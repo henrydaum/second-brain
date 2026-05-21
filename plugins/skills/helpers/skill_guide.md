@@ -193,14 +193,14 @@ that, `execute_skill` errors and the user must delete a layer first.
 ## 8. Declaring user-facing controls (optional but encouraged)
 
 A skill may expose up to **3 non-palette controls** plus an optional palette
-control to the user. These render as widgets on the canvas — sliders, toggles,
-arrow pads, etc. — and re-run the skill chain whenever the user adjusts one.
+control when the skill actually uses `canvas.palette` or `art_kit.palette_color`.
+These render as widgets on the canvas — sliders, toggles, arrow pads, etc. —
+and re-run the skill chain whenever the user adjusts one.
 Used well, controls turn near-miss completions into successes without another
 agent turn.
 
 Pass `controls` to `create_skill`. Every control name (except `palette`) must
-correspond to a keyword parameter of your `run(canvas, ...)` function — or be
-`seed` (which lives on the chain entry).
+correspond to a keyword parameter of your `run(canvas, ...)` function.
 
 ```python
 controls = [

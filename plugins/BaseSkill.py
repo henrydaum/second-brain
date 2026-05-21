@@ -42,8 +42,8 @@ class BaseSkill:
         controls:
             Optional list of user-facing controls (slider/enum/bool/pan/
             palette). Validated against the run() signature. Max 3
-            non-palette controls; a palette swatch is auto-added when the
-            skill references canvas.palette or art_kit.palette_color.
+            non-palette controls; add a palette control only when the
+            skill uses palette and should expose a layer override.
         hidden:
             Soft-delete flag. Hidden skills still load (so shared canvas
             chains can replay) but are excluded from list/search.

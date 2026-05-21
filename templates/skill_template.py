@@ -86,14 +86,14 @@ blocked at AST validation time. There is no escape hatch.
 CONTROLS
 --------
 A skill may declare up to 3 non-palette controls (slider/enum/bool/pan).
-A palette swatch is added automatically when the skill references the palette,
-so don't declare one yourself.
+Declare a palette control only when the skill uses palette and should expose a
+layer-specific palette override.
 
   slider:  {"type": "slider", "name": "intensity", "min": 0.0, "max": 1.0, "step": 0.01, "default": 0.5}
   enum:    {"type": "enum",   "name": "mode",      "options": [{"value": "soft", "label": "Soft"}, ...], "default": "soft"}
   bool:    {"type": "bool",   "name": "wrap",      "default": False}
   pan:     {"type": "pan",    "name": "center",    "x_param": "cx", "y_param": "cy", "step": 0.05}
-Control `name` (except `palette` and `seed`) must match a parameter of
+Control `name` (except `palette`) must match a parameter of
 run(self, canvas, **params).
 """
 

@@ -13,7 +13,7 @@ logger = logging.getLogger("SkillTools")
 
 class CreateSkill(BaseTool):
     name = "create_skill"
-    description = "Author a new canvas skill — supply the module-level body (imports + `def run(canvas, **params)`) and Second Brain wraps it in a BaseSkill subclass and writes it to the sandbox skills folder. Only use when search_skills + read_skill cannot supply a close enough starting point. Code must pull every color from canvas.palette slots (or art_kit.palette_color(t)), seed RNGs from canvas.seed, and call canvas.commit(image) on every path. Allowed imports only: math, random, colorsys, numpy, PIL.*, and `from plugins.BaseSkill import BaseSkill`. Optionally declare up to 3 user-facing controls (slider/enum/bool/pan) — a palette swatch is added automatically, don't declare one yourself."
+    description = "Author a new canvas skill — supply the module-level body (imports + `def run(canvas, **params)`) and Second Brain wraps it in a BaseSkill subclass and writes it to the sandbox skills folder. Only use when search_skills + read_skill cannot supply a close enough starting point. Prefer colors from canvas.palette slots (or art_kit.palette_color(t)), seed RNGs from canvas.seed, and call canvas.commit(image) on every path. Allowed imports only: math, random, colorsys, numpy, PIL.*, and `from plugins.BaseSkill import BaseSkill`. Optionally declare up to 3 user-facing controls (slider/enum/bool/pan) plus a palette control when the skill actually uses palette and should show a layer-specific override."
     max_calls = 4
     parameters = {
         "type": "object",
@@ -25,7 +25,7 @@ class CreateSkill(BaseTool):
             "controls": {
                 "type": "array",
                 "default": [],
-                "description": "Optional user-facing controls. Each item is {type, name, label, ...type-specific fields}. Types: slider {min,max,step,default}; enum {options:[{value,label}],default}; bool {default}; pan {x_param,y_param,step,x_default,y_default}; palette (no extras). Max 3 non-palette + 1 palette. Names must match run() params except palette.",
+                "description": "Optional user-facing controls. Each item is {type, name, label, ...type-specific fields}. Types: slider {min,max,step,default}; enum {options:[{value,label}],default}; bool {default}; pan {x_param,y_param,step,x_default,y_default}; palette (no extras, shown only for skills that use canvas.palette/art_kit.palette_color). Max 3 non-palette + 1 palette. Names must match run() params except palette.",
                 "items": {"type": "object"},
             },
         },

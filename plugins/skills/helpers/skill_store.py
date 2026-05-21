@@ -189,15 +189,25 @@ def _coerce_number(value, *, field: str) -> float:
     return float(value)
 
 
-def _code_uses_palette(code: str | None) -> bool:
-    if not code:
-        return False
-    return ("canvas.palette" in code) or ("palette_color" in code)
-
-
 MAX_NON_PALETTE_CONTROLS = 3
 _CONTROL_TYPES = {"slider", "enum", "bool", "pan", "palette"}
 _KINDS = ("creation", "transform")
+
+
+def source_uses_palette(source: str | None) -> bool:
+    if not source:
+        return False
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    return any(
+        (isinstance(n, ast.Attribute)
+        and ((n.attr == "palette" and isinstance(n.value, ast.Name) and n.value.id == "canvas") or n.attr == "palette_color"))
+        or (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in {"new", "create_image"}
+            and isinstance(n.func.value, ast.Name) and n.func.value.id == "canvas")
+        for n in ast.walk(tree)
+    )
 
 
 def validate_controls(controls, run_param_names: set[str], code: str | None = None) -> list[dict]:
@@ -207,7 +217,7 @@ def validate_controls(controls, run_param_names: set[str], code: str | None = No
         controls = []
     if not isinstance(controls, list):
         raise SkillValidationError("controls must be a list")
-    valid_params = set(run_param_names) | {"palette", "seed"}
+    valid_params = set(run_param_names) | {"palette"}
     seen_names: set[str] = set()
     non_palette = 0
     out: list[dict] = []
@@ -275,8 +285,6 @@ def validate_controls(controls, run_param_names: set[str], code: str | None = No
         raise SkillValidationError(
             f"a skill may declare at most {MAX_NON_PALETTE_CONTROLS} non-palette controls (got {non_palette})"
         )
-    if _code_uses_palette(code) and not any(c.get("type") == "palette" for c in out):
-        out.insert(0, {"type": "palette", "name": "palette", "label": "Palette"})
     return out
 
 
@@ -373,6 +381,9 @@ def to_skill_record(instance) -> Skill:
     ``_source_path`` (set by plugin_discovery at load time)."""
     source_path = Path(getattr(instance, "_source_path", "") or "")
     code = source_path.read_text(encoding="utf-8") if source_path.is_file() else ""
+    controls = list(getattr(instance, "controls", []) or [])
+    if not source_uses_palette(code):
+        controls = [c for c in controls if not (isinstance(c, dict) and c.get("type") == "palette")]
     slug = slugify(getattr(instance, "name", "") or source_path.stem.removeprefix("skill_"))
     return Skill(
         slug=slug,
@@ -383,7 +394,7 @@ def to_skill_record(instance) -> Skill:
         owner=str(getattr(instance, "owner", "") or ""),
         code=code,
         created_at=float(getattr(instance, "created_at", 0.0) or _coerce_created_at(None, source_path)),
-        controls=list(getattr(instance, "controls", []) or []),
+        controls=controls,
         hidden=bool(getattr(instance, "hidden", False)),
     )
 
