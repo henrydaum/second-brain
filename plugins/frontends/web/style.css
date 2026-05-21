@@ -63,8 +63,7 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .composer button.cancel:hover { background: var(--accent-2); color: #08090d; filter: none; }
 
 /* ---- Canvas surface ---- */
-#heroImage { position: absolute; inset: 0; width: 100%; height: 100%; display: none; object-fit: cover; opacity: 1; filter: saturate(1.2) contrast(1.08); transition: opacity 320ms ease, filter 320ms ease; will-change: opacity, filter; }
-.showcase.has-image #heroImage.fading { opacity: 0; filter: saturate(1.4) contrast(1.15) blur(6px); }
+#heroImage { position: absolute; inset: 0; width: 100%; height: 100%; display: none; object-fit: cover; opacity: 1; filter: saturate(1.2) contrast(1.08); }
 .showcase.has-image #heroImage { display: block; }
 .showcase.has-image #emptyState { display: none; }
 
@@ -77,9 +76,6 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .es-chip { background: rgba(20,24,35,.85); color: var(--text); border: 1px solid var(--line); padding: 8px 12px; cursor: pointer; font-size: 13px; transition: border-color 200ms ease, color 200ms ease; }
 .es-chip:hover { border-color: var(--accent); color: var(--accent); }
 
-/* ---- Loading overlay (blurred hero only) ---- */
-.showcase.loading #heroImage { filter: saturate(1.4) contrast(1.05) blur(10px) brightness(.55); }
-.showcase.loading #emptyState { opacity: .35; filter: blur(2px); transition: opacity 320ms ease, filter 320ms ease; }
 /* Canvas-actions moved to top-left */
 .canvas-actions { display: none; position: absolute; left: 22px; top: 22px; z-index: 2; gap: 8px; }
 .showcase.has-image .canvas-actions { display: flex; }

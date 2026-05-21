@@ -318,7 +318,6 @@ function setCanvas(c) {
   if (!c?.url) {
     showcase.classList.remove("has-image");
     renderControlsPanel([]);
-    heroImage.classList.remove("fading");
     heroImage.removeAttribute("src");
     downloadImage.href = "#";
     resetAccents();
@@ -332,17 +331,12 @@ function setCanvas(c) {
     renderControlsPanel(c?.controls_panels || []);
   };
   if (!showcase.classList.contains("has-image")) { apply(); heroImage.addEventListener("load", () => applyAccents(heroImage), {once: true}); loadGallery(1); return; }
-  // Preload the new image, then crossfade out → swap → crossfade in.
   const pre = new Image();
   pre.crossOrigin = "anonymous";
   pre.onload = () => {
-    heroImage.classList.add("fading");
-    setTimeout(() => {
-      apply();
-      heroImage.addEventListener("load", () => applyAccents(heroImage), {once: true});
-      requestAnimationFrame(() => requestAnimationFrame(() => heroImage.classList.remove("fading")));
-      loadGallery(galleryPages.shared);
-    }, 280);
+    apply();
+    heroImage.addEventListener("load", () => applyAccents(heroImage), {once: true});
+    loadGallery(galleryPages.shared);
   };
   pre.onerror = () => { apply(); loadGallery(galleryPages.shared); };
   pre.src = newUrl;
@@ -638,36 +632,17 @@ async function postControl(body) {
 }
 function esc(x) { return String(x ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
-// ----- Canvas loader: blur the hero while work is in flight -----
+// ----- Canvas loader bookkeeping -----
 let userTickets = 0;
 const activeRenderTools = new Set();
-let loaderSafetyTimer = 0;
-let loaderStopGrace = 0;
 
-function loaderShouldShow() { return userTickets > 0 || activeRenderTools.size > 0; }
-function loaderSync() {
-  if (loaderShouldShow()) {
-    if (loaderStopGrace) { clearTimeout(loaderStopGrace); loaderStopGrace = 0; }
-    if (!showcase.classList.contains("loading")) loaderStartNow();
-  } else if (showcase.classList.contains("loading") && !loaderStopGrace) {
-    loaderStopGrace = setTimeout(loaderForceStop, 200);
-  }
-}
-function loaderStartNow() {
-  showcase.classList.add("loading");
-  clearTimeout(loaderSafetyTimer);
-  loaderSafetyTimer = setTimeout(loaderForceStop, 45000);
-}
 function loaderForceStop() {
   userTickets = 0; activeRenderTools.clear();
-  showcase.classList.remove("loading");
-  clearTimeout(loaderSafetyTimer); loaderSafetyTimer = 0;
-  if (loaderStopGrace) { clearTimeout(loaderStopGrace); loaderStopGrace = 0; }
 }
-function loaderTicketStart() { userTickets++; loaderSync(); }
-function loaderTicketEnd() { if (userTickets > 0) userTickets--; loaderSync(); }
-function loaderToolStart(id) { activeRenderTools.add(id); loaderSync(); }
-function loaderToolEnd(id) { activeRenderTools.delete(id); loaderSync(); }
+function loaderTicketStart() { userTickets++; }
+function loaderTicketEnd() { if (userTickets > 0) userTickets--; }
+function loaderToolStart(id) { activeRenderTools.add(id); }
+function loaderToolEnd(id) { activeRenderTools.delete(id); }
 
 // ----- Chat + actions -----
 form.addEventListener("submit", async e => {
