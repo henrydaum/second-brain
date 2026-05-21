@@ -37,7 +37,7 @@ header button:hover, .composer button:hover { border-color: var(--accent); }
 .ephemeral-note { align-self: center; margin: auto; max-width: 320px; padding: 18px 20px; border: 2px dashed rgba(243,246,255,.35); color: var(--muted); font-size: 13px; text-align: center; display: flex; flex-direction: column; gap: 6px; background: transparent; }
 .ephemeral-note strong { color: var(--text); font-weight: 700; font-size: 14px; }
 .messages > .ephemeral-note:not(:only-child) { display: none; }
-article { max-width: 92%; padding: 12px 14px; border: 1px solid var(--line); background: #141823; white-space: pre-wrap; overflow-wrap: anywhere; }
+article { align-self: flex-start; width: fit-content; max-width: 92%; padding: 12px 14px; border: 1px solid var(--line); background: #141823; white-space: pre-wrap; overflow-wrap: anywhere; }
 article.user { align-self: flex-end; background: #162335; border-color: var(--accent-2); transition: border-color 600ms ease; }
 article.assistant { align-self: flex-start; }
 article.status { color: var(--green); font-size: 13px; padding: 8px 10px; }
