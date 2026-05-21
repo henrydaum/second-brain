@@ -137,7 +137,6 @@ def main():
 	tool_registry.skill_registry = skill_registry
 	orchestrator.skill_registry = skill_registry
 	logger.info(f"Skills registered: {len(skill_registry.list(include_hidden=True))} ({time.time() - t0:.2f}s)")
-	_warn_about_legacy_skills()
 
 	# --- 5c. Reconcile plugin config defaults ---
 	config_manager.reconcile_plugin_config(config, get_plugin_settings())
