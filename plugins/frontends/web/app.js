@@ -564,6 +564,11 @@ function renderControlsPanel(panels) {
   const regen = `<section class="ctl-actions"><button type="button" class="ctl-global" id="globalRegenerate" title="Re-render the current chain with new seeds"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3Z"/></svg><span>Regenerate</span></button></section>`;
   controlsPanel.innerHTML = stack + regen;
 }
+function setControlsOpen(open) {
+  controlsDrawer.classList.toggle("open", open);
+  controlsToggle.classList.toggle("open", open);
+  localStorage.sbDrawerOpen = open ? "1" : "0";
+}
 function renderPanel(panel, movableLayers = 0) {
   const widgets = (panel.schema || []).map(spec => renderWidget(panel, spec)).join("");
   const empty = widgets || `<div class="ctl-empty">No controls for this layer.</div>`;
@@ -577,11 +582,11 @@ function renderPanel(panel, movableLayers = 0) {
     <div class="ctl-body">${empty}</div>
   </section>`;
 }
-controlsToggle.addEventListener("click", () => {
-  const open = !controlsDrawer.classList.contains("open");
-  controlsDrawer.classList.toggle("open", open);
-  controlsToggle.classList.toggle("open", open);
-  localStorage.sbDrawerOpen = open ? "1" : "0";
+controlsToggle.addEventListener("click", () => setControlsOpen(!controlsDrawer.classList.contains("open")));
+showcase.addEventListener("pointerdown", e => {
+  if (!controlsDrawer.classList.contains("open")) return;
+  if (controlsDrawer.contains(e.target) || controlsToggle.contains(e.target)) return;
+  setControlsOpen(false);
 });
 controlsPanel.addEventListener("click", async e => {
   if (e.target.id === "globalRegenerate") {
@@ -817,10 +822,16 @@ async function copyToClipboard(text, btn) {
     setTimeout(() => btn.classList.remove("copied"), 1200);
   }
 }
-shareBtn.addEventListener("click", () => {
-  const opening = sharePanel.hidden;
-  sharePanel.hidden = !sharePanel.hidden;
+function setSharePanelOpen(open) {
+  const opening = open && sharePanel.hidden;
+  sharePanel.hidden = !open;
   if (opening) fetchCurrentShareLink();
+}
+shareBtn.addEventListener("click", () => setSharePanelOpen(sharePanel.hidden));
+document.addEventListener("pointerdown", e => {
+  if (sharePanel.hidden) return;
+  if (sharePanel.contains(e.target) || shareBtn.contains(e.target)) return;
+  setSharePanelOpen(false);
 });
 copyShareLinkBtn?.addEventListener("click", () => copyToClipboard(shareLinkInput.value, copyShareLinkBtn));
 toggleShareQrBtn?.addEventListener("click", () => {

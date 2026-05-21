@@ -140,12 +140,11 @@ body.share-landing { background: var(--bg); color: var(--text); margin: 0; min-h
 body.share-landing.missing .share-landing-meta { text-align: center; }
 
 /* ---- Controls drawer ---- */
-.controls-toggle { position: absolute; right: 22px; bottom: 22px; z-index: 4; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: rgba(255,255,255,.7); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; filter: drop-shadow(0 1px 2px rgba(0,0,0,.6)); transition: color 200ms ease, transform 200ms ease; }
+.controls-toggle { position: absolute; right: 22px; bottom: 22px; z-index: 4; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: rgba(255,255,255,.7); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; filter: drop-shadow(0 1px 2px rgba(0,0,0,.6)); transition: color 200ms ease; }
 .controls-toggle[hidden] { display: none; }
 .controls-toggle:hover { color: var(--accent); }
-.controls-toggle svg { width: 100%; height: 100%; transition: transform 350ms ease; }
+.controls-toggle svg { width: 100%; height: 100%; }
 .controls-toggle.open { color: var(--accent); }
-.controls-toggle.open svg { transform: rotate(22.5deg); }
 
 .controls-drawer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; max-height: 58%; display: flex; flex-direction: column; background: rgba(5,7,12,.68); backdrop-filter: blur(10px); border-top: 1px solid rgba(255,255,255,.18); transform: translateY(100%); transition: transform 280ms cubic-bezier(.2,.8,.2,1); }
 .controls-drawer.open { transform: translateY(0); }
