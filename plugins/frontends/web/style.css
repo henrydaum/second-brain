@@ -314,8 +314,12 @@ body.account-body { background:
 
 @media (max-width: 960px) {
   .shell { grid-template-columns: 1fr; }
-  .showcase { order: -1; aspect-ratio: auto; height: auto; min-height: 420px; }
-  .chat { height: 58vh; position: relative; }
+  .chat { display: contents; }
+  .chat > header { order: -3; background: rgba(8,9,13,.94); }
+  .showcase { order: -2; aspect-ratio: auto; height: auto; min-height: 420px; }
+  .messages { order: -1; min-height: 42vh; background: rgba(8,9,13,.94); }
+  .composer { order: 0; }
+  #outOfMessages { position: fixed !important; }
   .gallery-section { padding: 28px; }
   .gallery-head { display: block; }
   h2 { font-size: 34px; }
