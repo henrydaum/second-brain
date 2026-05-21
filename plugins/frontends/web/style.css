@@ -66,6 +66,11 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 #heroImage { position: absolute; inset: 0; width: 100%; height: 100%; display: none; object-fit: cover; opacity: 1; filter: saturate(1.2) contrast(1.08); }
 .showcase.has-image #heroImage { display: block; }
 .showcase.has-image #emptyState { display: none; }
+.render-meter { position: absolute; left: 18px; right: 18px; bottom: 18px; z-index: 4; display: grid; gap: 7px; pointer-events: none; }
+.render-meter[hidden] { display: none; }
+.render-meter-line { height: 3px; background: rgba(243,246,255,.16); overflow: hidden; }
+.render-meter-line span { display: block; width: 100%; height: 100%; transform: scaleX(0); transform-origin: left center; background: linear-gradient(90deg, var(--accent), var(--accent-2)); box-shadow: 0 0 18px var(--accent-glow); }
+.render-meter-label { justify-self: start; max-width: min(520px, 100%); padding: 6px 9px; border: 1px solid rgba(255,255,255,.18); background: rgba(5,7,12,.78); color: var(--text); font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Empty-state hero */
 #emptyState { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 40px; text-align: center; background: radial-gradient(circle at 50% 50%, rgba(255,255,255,.025) 0, transparent 60%), #0b0d13; background-image: radial-gradient(rgba(255,255,255,.06) 1px, transparent 1px); background-size: 22px 22px; background-position: 0 0; }

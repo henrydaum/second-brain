@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from canvas.render import render_canvas
+from canvas.render import bus_progress, render_canvas
 from plugins.BaseTool import BaseTool, ToolResult
 
 logger = logging.getLogger("ManageLayers")
@@ -62,6 +62,7 @@ def _enact_and_render(context, action_type: str, payload: dict) -> ToolResult:
 			cs,
 			skill_loader=skill_registry.get_record,
 			db=getattr(context, "db", None),
+			on_event=bus_progress(getattr(context, "session_key", None), float((getattr(context, "config", {}) or {}).get("skill_timeout_s") or 30)),
 		)
 	except Exception as e:
 		logger.exception("manage_layers render crashed: action=%s", action_type)

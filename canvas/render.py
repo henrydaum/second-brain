@@ -126,6 +126,7 @@ def render_canvas(
 	seed: int | None = None,
 	force_new_seed: bool = False,
 	db: Any = None,
+	on_event: Callable[[dict], None] | None = None,
 ) -> RenderResult:
 	"""Render ``cs.canvas``'s chain to a WebP file and return the result.
 
@@ -191,6 +192,7 @@ def render_canvas(
 			)
 			cs.render_seed = cached_seed
 			_persist_seed(db, cs)
+			_emit(on_event, status="cached", total_layers=len(canvas.layers), cached_layers=len(canvas.layers), seed=cached_seed, pool_hash=folder.name)
 			return RenderResult(hit, cached_seed, folder.name, cache_hit=True)
 		# Pool empty — mint a fresh seed.
 		seed_val = _mint_seed()
@@ -204,6 +206,7 @@ def render_canvas(
 			"render cache HIT (exact seed) canvas_id=%s pool=%s seed=%d",
 			cs.canvas_id, folder.name, seed_val,
 		)
+		_emit(on_event, status="cached", total_layers=len(canvas.layers), cached_layers=len(canvas.layers), seed=seed_val, pool_hash=folder.name)
 		return RenderResult(out_path, seed_val, folder.name, cache_hit=True)
 
 	# Cache miss: walk the chain in a temp workdir, then re-encode the
@@ -212,34 +215,42 @@ def render_canvas(
 	with tempfile.TemporaryDirectory(prefix="canvas_render_") as workdir:
 		workdir_path = Path(workdir)
 		start_idx, current_input = _longest_prefix(canvas, seed_val, workdir_path)
-		for idx, layer in enumerate(canvas.layers[start_idx:], start=start_idx):
-			slug = layer.get("slug")
-			skill = skill_loader(slug) if slug else None
-			if skill is None:
-				raise ValueError(f"chain references unknown skill: {slug!r}")
-			step_png = workdir_path / f"step_{idx:02d}.png"
-			params, palette = resolve_entry(layer, fallback_palette=fallback_palette)
-			run_skill(
-				skill,
-				params=params,
-				palette=palette,
-				size=int(canvas.size),
-				seed=int(seed_val),
-				input_image_path=current_input,
-				output_image_path=step_png,
-			)
-			current_input = step_png
-			cache_path = _prefix_path(canvas, idx + 1, seed_val)
-			cache_path.parent.mkdir(parents=True, exist_ok=True)
-			try:
-				with Image.open(step_png) as img:
-					img.save(cache_path, format="PNG")
-			except Exception:
-				logger.exception("prefix cache write failed prefix=%s seed=%s", cache_path.parent.name, seed_val)
+		_emit(on_event, status="started", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name)
+		try:
+			for idx, layer in enumerate(canvas.layers[start_idx:], start=start_idx):
+				slug = layer.get("slug")
+				skill = skill_loader(slug) if slug else None
+				if skill is None:
+					raise ValueError(f"chain references unknown skill: {slug!r}")
+				step_png = workdir_path / f"step_{idx:02d}.png"
+				params, palette = resolve_entry(layer, fallback_palette=fallback_palette)
+				_emit(on_event, status="layer_started", layer_index=idx + 1, total_layers=len(canvas.layers), cached_layers=start_idx, skill_slug=str(slug), seed=seed_val, pool_hash=folder.name)
+				run_skill(
+					skill,
+					params=params,
+					palette=palette,
+					size=int(canvas.size),
+					seed=int(seed_val),
+					input_image_path=current_input,
+					output_image_path=step_png,
+				)
+				current_input = step_png
+				cache_path = _prefix_path(canvas, idx + 1, seed_val)
+				cache_path.parent.mkdir(parents=True, exist_ok=True)
+				try:
+					with Image.open(step_png) as img:
+						img.save(cache_path, format="PNG")
+				except Exception:
+					logger.exception("prefix cache write failed prefix=%s seed=%s", cache_path.parent.name, seed_val)
+				_emit(on_event, status="layer_finished", layer_index=idx + 1, total_layers=len(canvas.layers), cached_layers=start_idx, skill_slug=str(slug), seed=seed_val, pool_hash=folder.name)
+		except Exception as e:
+			_emit(on_event, status="error", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name, error=str(e))
+			raise
 
 		# current_input is the final PNG produced by the last layer.
 		with Image.open(current_input) as img:
 			img.save(out_path, format="WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
+		_emit(on_event, status="finished", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name)
 
 	logger.info(
 		"render canvas_id=%s pool=%s seed=%d layers=%d",
@@ -256,6 +267,23 @@ def _persist_seed(db: Any, cs: CanvasState) -> None:
 		save(db, cs)
 	except Exception:
 		logger.exception("save render_seed failed for canvas_id=%s", cs.canvas_id)
+
+
+def _emit(on_event: Callable[[dict], None] | None, **payload: Any) -> None:
+	if on_event is None:
+		return
+	try:
+		on_event(payload)
+	except Exception:
+		logger.exception("render progress callback failed")
+
+
+def bus_progress(session_key: str | None, timeout_s: float = 30.0):
+	if not session_key:
+		return None
+	from events.event_bus import bus
+	from events.event_channels import CANVAS_RENDER_STATUS
+	return lambda ev: bus.emit(CANVAS_RENDER_STATUS, {"session_key": session_key, "timeout_s": timeout_s, **ev})
 
 
 def _longest_prefix(canvas, seed: int, workdir_path: Path) -> tuple[int, Path | None]:

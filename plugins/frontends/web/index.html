@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Second Brain Art</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/style.css?v=12">
+  <link rel="stylesheet" href="/style.css?v=13">
 </head>
 <body>
   <main class="shell">
@@ -60,6 +60,10 @@
         </div>
       </div>
       <img id="heroImage" alt="">
+      <div id="renderMeter" class="render-meter" hidden>
+        <div class="render-meter-line"><span id="renderMeterFill"></span></div>
+        <div id="renderMeterLabel" class="render-meter-label">Rendering...</div>
+      </div>
       <div class="canvas-actions">
         <a id="downloadImage" href="#" download title="Download current image">Download</a>
         <button id="saveImage" type="button" title="Save to your private archive">Save</button>
@@ -164,7 +168,7 @@
     </div>
   </div>
 
-  <script src="/tips.js?v=12"></script>
-  <script src="/app.js?v=12"></script>
+  <script src="/tips.js?v=13"></script>
+  <script src="/app.js?v=13"></script>
 </body>
 </html>

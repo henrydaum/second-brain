@@ -25,6 +25,7 @@ from events.event_channels import (
     AGENT_THINKING,
     APPROVAL_REQUESTED,
     CHAT_MESSAGE_PUSHED,
+    CANVAS_RENDER_STATUS,
     COMMAND_CALL_FINISHED,
     COMMAND_CALL_PROGRESSED,
     COMMAND_CALL_STARTED,
@@ -232,6 +233,10 @@ class BaseFrontend:
         """Default no-op; frontends with status affordances override."""
         return
 
+    def render_canvas_status(self, session_key: str, payload: dict) -> None:
+        """Default no-op; web-like frontends can show render progress."""
+        return
+
     # ──────────────────────────────────────────────────────────────────────
     # Wiring — provided by the base.
     # ──────────────────────────────────────────────────────────────────────
@@ -261,6 +266,7 @@ class BaseFrontend:
             bus.subscribe(COMMAND_CALL_FINISHED, self.on_bus_command_call_finished),
             bus.subscribe(TOOL_CALL_STARTED, self.on_bus_tool_call_started),
             bus.subscribe(TOOL_CALL_FINISHED, self.on_bus_tool_call_finished),
+            bus.subscribe(CANVAS_RENDER_STATUS, self.on_bus_canvas_render_status),
             bus.subscribe(AGENT_THINKING, self.on_bus_agent_thinking),
             bus.subscribe(TOOLS_CHANGED, self.on_tools_changed),
             bus.subscribe(TASKS_CHANGED, self.on_tasks_changed),
@@ -463,6 +469,13 @@ class BaseFrontend:
     def on_bus_tool_call_finished(self, payload: dict) -> None:
         """Handle on bus tool call finished."""
         self._render_tool_status_event({**(payload or {}), "status": "finished"})
+
+    def on_bus_canvas_render_status(self, payload: dict) -> None:
+        """Handle canvas render status."""
+        key = (payload or {}).get("session_key")
+        if key and key in self._live_session_keys():
+            try: self.render_canvas_status(key, payload)
+            except Exception: logger.exception(f"render_canvas_status failed for '{self.name}'")
 
     def on_bus_command_call_started(self, payload: dict) -> None:
         """Handle on bus command call started."""

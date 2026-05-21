@@ -256,6 +256,9 @@ class WebFrontend(BaseFrontend):
             evt["progress"] = payload["progress"]
         self._push(session_key, evt)
 
+    def render_canvas_status(self, session_key: str, payload: dict) -> None:
+        self._push(session_key, {"type": "render_status", **dict(payload or {})})
+
     def _chain_progress_cb(self, key: str):
         """Build an on_step callback that emits tool_status progressed events.
         Only emits when the chain has >1 step, so single-skill renders stay quiet."""
@@ -1191,6 +1194,7 @@ class WebFrontend(BaseFrontend):
                 skill_loader=skill_registry.get_record,
                 force_new_seed=force_new_seed,
                 db=getattr(self.runtime, "db", None),
+                on_event=lambda ev: self.render_canvas_status(session_key, {"timeout_s": _int(self.config.get("skill_timeout_s"), 30), **ev}),
             )
         except Exception as e:
             logger.exception("new canvas render failed for session=%s", session_key)

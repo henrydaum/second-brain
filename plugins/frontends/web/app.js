@@ -17,6 +17,9 @@ const form = document.querySelector("#chatForm");
 const input = document.querySelector("#chatInput");
 const showcase = document.querySelector(".showcase");
 const heroImage = document.querySelector("#heroImage");
+const renderMeter = document.querySelector("#renderMeter");
+const renderMeterFill = document.querySelector("#renderMeterFill");
+const renderMeterLabel = document.querySelector("#renderMeterLabel");
 const downloadImage = document.querySelector("#downloadImage");
 const saveBtn = document.querySelector("#saveImage");
 const shareBtn = document.querySelector("#shareImage");
@@ -115,12 +118,56 @@ function renderToolStatus(ev) {
   if (ev.status === "started") loaderToolStart(id);
   else if (ev.status === "finished") loaderToolEnd(id);
 }
+let renderMeterFrame = 0, renderMeterHide = 0, renderMeterValue = 0;
+function setRenderMeter(v) {
+  renderMeterValue = Math.max(0, Math.min(1, v || 0));
+  renderMeterFill.style.transform = `scaleX(${renderMeterValue})`;
+}
+function animateRenderMeter(from, to, seconds) {
+  cancelAnimationFrame(renderMeterFrame);
+  const start = performance.now(), dur = Math.max(0.3, Number(seconds) || 30) * 1000;
+  const tick = now => {
+    const t = Math.min(1, (now - start) / dur);
+    setRenderMeter(from + (to - from) * t);
+    if (t < 1) renderMeterFrame = requestAnimationFrame(tick);
+  };
+  tick(start);
+}
+function renderRenderStatus(ev) {
+  clearTimeout(renderMeterHide);
+  const total = Math.max(1, Number(ev.total_layers) || 1);
+  const cached = Math.max(0, Number(ev.cached_layers) || 0);
+  const idx = Math.max(1, Number(ev.layer_index) || cached + 1);
+  renderMeter.hidden = false;
+  if (ev.status === "cached") {
+    renderMeterLabel.textContent = `Cached render · ${total}/${total} layers · seed ${ev.seed}`;
+    setRenderMeter(1);
+    renderMeterHide = setTimeout(() => renderMeter.hidden = true, 900);
+  } else if (ev.status === "started") {
+    renderMeterLabel.textContent = cached ? `Rendering · reused ${cached}/${total} cached layers` : `Rendering · ${total} layer${total === 1 ? "" : "s"}`;
+    setRenderMeter(cached / total);
+  } else if (ev.status === "layer_started") {
+    renderMeterLabel.textContent = `Rendering layer ${idx}/${total} · ${ev.skill_slug || "skill"} · seed ${ev.seed}`;
+    animateRenderMeter((idx - 1) / total, idx / total, ev.timeout_s);
+  } else if (ev.status === "layer_finished") {
+    setRenderMeter(idx / total);
+  } else if (ev.status === "finished") {
+    renderMeterLabel.textContent = cached ? `Rendered · reused ${cached}/${total} cached layers` : "Rendered";
+    setRenderMeter(1);
+    renderMeterHide = setTimeout(() => renderMeter.hidden = true, 1000);
+  } else if (ev.status === "error") {
+    renderMeterLabel.textContent = `Render failed · ${ev.error || "error"}`;
+    setRenderMeter(1);
+    renderMeterHide = setTimeout(() => renderMeter.hidden = true, 1800);
+  }
+}
 function render(events) {
   for (const ev of events || []) {
     if (ev.type === "message") add("assistant", ev.content, true);
     else if (ev.type === "status") add("status", ev.content);
     else if (ev.type === "tool_status") renderToolStatus(ev);
-    else if (ev.type === "error") { add("error", ev.content); loaderForceStop(); }
+    else if (ev.type === "render_status") renderRenderStatus(ev);
+    else if (ev.type === "error") { add("error", ev.content); loaderForceStop(); renderRenderStatus({status:"error", error:ev.content}); }
     else if (ev.type === "form") add("assistant", `${ev.form?.display?.prompt || "Input required"}\n${(ev.form?.display?.choices || []).map(c => c.label || c.value).join(" / ")}`);
     else if (ev.type === "approval") approval(ev);
     else if (ev.type === "paywall") openPaywall(ev);

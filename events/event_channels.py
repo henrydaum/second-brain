@@ -119,6 +119,16 @@ Payload:
     ok:          bool
     error:       str (optional)"""
 
+CANVAS_RENDER_STATUS = "canvas_render_status"
+"""Canvas render progress for frontends.
+Payload:
+    session_key: str
+    status:      str
+    layer_index: int (optional, 1-based)
+    total_layers:int
+    skill_slug:  str (optional)
+    timeout_s:   float"""
+
 COMMAND_CALL_STARTED = "command_call_started"
 """The runtime started a slash command.
 Payload:

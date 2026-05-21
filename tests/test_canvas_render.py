@@ -278,6 +278,20 @@ def test_appending_layer_reuses_cached_prefix(monkeypatch, renders_dir):
 	assert calls[0]["input_image_path"] is not None
 
 
+def test_render_progress_reports_cached_prefix(monkeypatch, renders_dir):
+	"""Progress events expose cached prefix count so the UI can show reuse."""
+	_install_fake_run_skill(monkeypatch)
+	events: list[dict] = []
+	cs = _state_with_creation("fractal")
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "transform"})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "transform"), "grain": _skill("grain", "transform")})
+	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
+	cs.enact("add_layer", {"skill_slug": "grain", "kind": "transform"})
+	canvas_render.render_canvas(cs, skill_loader=loader, on_event=events.append)
+	assert ("started", 2) in [(e["status"], e.get("cached_layers")) for e in events]
+	assert [e.get("skill_slug") for e in events if e["status"] == "layer_started"] == ["grain"]
+
+
 def test_editing_last_layer_reuses_earlier_prefix(monkeypatch, renders_dir):
 	"""Changing layer 3 keeps layers 1-2 cached and reruns only layer 3."""
 	calls = _install_fake_run_skill(monkeypatch)
