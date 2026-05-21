@@ -39,12 +39,14 @@ class CanvasState:
 		canvas_id: str | None = None,
 		phase: str = CANVAS_IDLE,
 		history: list[dict] | None = None,
+		render_seed: int | None = None,
 	):
 		"""Initialize the canvas state."""
 		self.canvas_id: str = canvas_id or _new_canvas_id()
 		self.canvas: Canvas = canvas or Canvas()
 		self.phase: str = phase
 		self.history: list[dict] = list(history or [])
+		self.render_seed: int | None = int(render_seed) if render_seed is not None else None
 		self.last_error: ActionError | None = None
 
 	def event(self, type_: str, **data: Any) -> dict:
@@ -73,6 +75,7 @@ class CanvasState:
 			"phase": self.phase,
 			"canvas": self.canvas.to_dict(),
 			"history": list(self.history),
+			"render_seed": self.render_seed,
 		}
 
 	@classmethod
@@ -85,4 +88,5 @@ class CanvasState:
 			canvas_id=data.get("canvas_id"),
 			phase=str(data.get("phase") or CANVAS_IDLE),
 			history=list(data.get("history") or []),
+			render_seed=data.get("render_seed"),
 		)

@@ -146,6 +146,7 @@ def test_to_dict_from_dict_round_trip():
 	cs.enact("set_palette", {"palette_id": "obsidian"})
 	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "creation", "controls": {"z": 2}})
 	cs.enact("set_size", {"size": 768})
+	cs.render_seed = 456
 	snap = cs.to_dict()
 	restored = CanvasState.from_dict(snap)
 	assert restored.canvas_id == cs.canvas_id
@@ -153,6 +154,7 @@ def test_to_dict_from_dict_round_trip():
 	assert restored.canvas.palette_id == "obsidian"
 	assert restored.canvas.size == 768
 	assert restored.canvas.layers == cs.canvas.layers
+	assert restored.render_seed == 456
 
 
 def test_history_trims_to_limit():

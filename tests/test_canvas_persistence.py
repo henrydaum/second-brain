@@ -48,6 +48,7 @@ def test_save_and_load_round_trip():
 		cs = CanvasState(canvas_id="abc")
 		cs.enact("set_palette", {"palette_id": "obsidian"})
 		cs.enact("add_layer", {"skill_slug": "fractal", "kind": "creation", "controls": {"z": 2}})
+		cs.render_seed = 123
 		canvas_persistence.save(db, cs)
 
 		restored = canvas_persistence.load(db, "abc")
@@ -55,6 +56,7 @@ def test_save_and_load_round_trip():
 		assert restored.canvas_id == "abc"
 		assert restored.canvas.palette_id == "obsidian"
 		assert restored.canvas.layers == cs.canvas.layers
+		assert restored.render_seed == 123
 	finally:
 		_cleanup(db, path)
 

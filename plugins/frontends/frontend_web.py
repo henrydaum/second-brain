@@ -1525,6 +1525,8 @@ class _Handler(BaseHTTPRequestHandler):
 def _is_public_image(path: Path) -> bool:
     try:
         target, root = path.resolve(), DATA_DIR.resolve()
+        if (root / "canvas_prefix_cache").resolve() in target.parents:
+            return False
         return target.is_file() and target.suffix.lower() in IMAGE_EXTS and (target == root or root in target.parents)
     except Exception:
         return False

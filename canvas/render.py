@@ -31,6 +31,7 @@ from typing import Any, Callable
 
 from PIL import Image
 
+from canvas.canvas import Canvas
 from canvas.state import CanvasState
 from paths import DATA_DIR
 from plugins.helpers.palettes import get_palette as _default_get_palette
@@ -39,6 +40,7 @@ from plugins.skills.helpers.skill_runner import resolve_entry, run_skill
 logger = logging.getLogger("CanvasRender")
 
 RENDERS_DIR = DATA_DIR / "canvas_renders"
+PREFIX_CACHE_DIR = DATA_DIR / "canvas_prefix_cache"
 WEBP_QUALITY = 90
 WEBP_METHOD = 6
 POOL_HASH_LEN = 16
@@ -101,6 +103,15 @@ def existing_seeds(canvas) -> list[int]:
 	return sorted(seeds)
 
 
+def _prefix_hash(canvas, count: int) -> str:
+	"""Hash the first ``count`` layers with the same render-determining inputs."""
+	return pool_hash(Canvas(size=canvas.size, palette_id=canvas.palette_id, layers=list(canvas.layers[:count])))
+
+
+def _prefix_path(canvas, count: int, seed: int) -> Path:
+	return PREFIX_CACHE_DIR / _prefix_hash(canvas, count) / f"{int(seed)}.png"
+
+
 # ── render ───────────────────────────────────────────────────────────
 
 def _mint_seed() -> int:
@@ -156,8 +167,12 @@ def render_canvas(
 	# Resolve seed + decide whether a cache short-circuit applies.
 	if seed is not None:
 		seed_val = int(seed)
+		cs.render_seed = seed_val
 	elif force_new_seed:
 		seed_val = _mint_seed()
+		cs.render_seed = seed_val
+	elif getattr(cs, "render_seed", None) is not None:
+		seed_val = int(cs.render_seed)
 	else:
 		# Default path: reuse the most recently modified render in the pool.
 		existing = sorted(
@@ -174,9 +189,14 @@ def render_canvas(
 				"render cache HIT (newest-in-pool) canvas_id=%s pool=%s seed=%d",
 				cs.canvas_id, folder.name, cached_seed,
 			)
+			cs.render_seed = cached_seed
+			_persist_seed(db, cs)
 			return RenderResult(hit, cached_seed, folder.name, cache_hit=True)
 		# Pool empty — mint a fresh seed.
 		seed_val = _mint_seed()
+		cs.render_seed = seed_val
+
+	_persist_seed(db, cs)
 
 	out_path = folder / f"{seed_val}.webp"
 	if out_path.is_file():
@@ -191,8 +211,8 @@ def render_canvas(
 	fallback_palette = _default_get_palette(canvas.palette_id)
 	with tempfile.TemporaryDirectory(prefix="canvas_render_") as workdir:
 		workdir_path = Path(workdir)
-		current_input: Path | None = None
-		for idx, layer in enumerate(canvas.layers):
+		start_idx, current_input = _longest_prefix(canvas, seed_val, workdir_path)
+		for idx, layer in enumerate(canvas.layers[start_idx:], start=start_idx):
 			slug = layer.get("slug")
 			skill = skill_loader(slug) if slug else None
 			if skill is None:
@@ -209,6 +229,13 @@ def render_canvas(
 				output_image_path=step_png,
 			)
 			current_input = step_png
+			cache_path = _prefix_path(canvas, idx + 1, seed_val)
+			cache_path.parent.mkdir(parents=True, exist_ok=True)
+			try:
+				with Image.open(step_png) as img:
+					img.save(cache_path, format="PNG")
+			except Exception:
+				logger.exception("prefix cache write failed prefix=%s seed=%s", cache_path.parent.name, seed_val)
 
 		# current_input is the final PNG produced by the last layer.
 		with Image.open(current_input) as img:
@@ -219,3 +246,27 @@ def render_canvas(
 		cs.canvas_id, folder.name, seed_val, len(canvas.layers),
 	)
 	return RenderResult(out_path, seed_val, folder.name, cache_hit=False)
+
+
+def _persist_seed(db: Any, cs: CanvasState) -> None:
+	if db is None:
+		return
+	try:
+		from canvas.persistence import save
+		save(db, cs)
+	except Exception:
+		logger.exception("save render_seed failed for canvas_id=%s", cs.canvas_id)
+
+
+def _longest_prefix(canvas, seed: int, workdir_path: Path) -> tuple[int, Path | None]:
+	for count in range(len(canvas.layers) - 1, 0, -1):
+		p = _prefix_path(canvas, count, seed)
+		if p.is_file():
+			local = workdir_path / f"prefix_{count:02d}.png"
+			try:
+				with Image.open(p) as img:
+					img.save(local, format="PNG")
+				return count, local
+			except Exception:
+				logger.exception("prefix cache read failed path=%s", p)
+	return 0, None
