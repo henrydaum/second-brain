@@ -862,6 +862,13 @@ class WebFrontend(BaseFrontend):
             return [{"type": "canvas_reset"}]
         return events
 
+    def move_layer(self, session_id: str, from_index: int, to_index: int) -> list[dict]:
+        key = self.session_key(session_id)
+        return self._new_canvas_action_events(
+            key, "move_layer", {"from_index": from_index, "to_index": to_index},
+            fail_prefix="Move layer failed",
+        )
+
     def share(self, session_id: str, title: str, artist: str, *, ip: str = "", account_id: str = "") -> list[dict]:
         """Share the user's current canvas.
 
@@ -1430,6 +1437,10 @@ class _Handler(BaseHTTPRequestHandler):
                 )})
             if self.path == "/api/layer_delete":
                 return self._json({"ok": True, "events": self.server.frontend.delete_layer(sid, int(body.get("chain_index") or 0))})
+            if self.path == "/api/layer_move":
+                return self._json({"ok": True, "events": self.server.frontend.move_layer(
+                    sid, int(body.get("from_index") or 0), int(body.get("to_index") or 0),
+                )})
         except Exception as e:
             logger.exception("Web request failed")
             return self._json({"ok": False, "events": [{"type": "error", "content": str(e)}]}, 500)
@@ -1576,33 +1587,21 @@ def _canvas_payload_full(runtime, session_key: str, state: dict | None) -> dict:
     chain = state.get("chain") or state.get("last_chain") or []
     panels = []
     layers = []
-    palette_shown = False
     for idx, step in enumerate(chain):
         skill = _read_skill_via(runtime, step.get("slug") or "")
         slug = step.get("slug") or ""
         name = skill.name if skill else slug
-        layers.append({"chain_index": idx, "slug": slug, "skill_name": name, "kind": step.get("kind") or (skill.kind if skill else "")})
-        if not skill or not skill.controls:
-            continue
-        # The canvas has one palette. Keep the palette swatch on the first
-        # panel that has one; strip it from later panels so chains don't
-        # show a redundant swatch for every layer that touches color.
-        schema = []
-        for c in skill.controls:
-            if c.get("type") == "palette":
-                if palette_shown:
-                    continue
-                palette_shown = True
-            schema.append(c)
-        if not schema:
-            continue
+        kind = step.get("kind") or (skill.kind if skill else "")
+        layers.append({"chain_index": idx, "slug": slug, "skill_name": name, "kind": kind})
+        schema = list(getattr(skill, "controls", None) or [])
         values = dict(step.get("controls") or {})
         if not any(c.get("type") == "palette" for c in schema):
             values.pop("palette", None)
         panels.append({
             "chain_index": idx,
-            "slug": skill.slug,
-            "skill_name": skill.name,
+            "slug": getattr(skill, "slug", slug),
+            "skill_name": name,
+            "kind": kind,
             "schema": schema,
             "values": values,
             "seed": int(step.get("seed") or 0),

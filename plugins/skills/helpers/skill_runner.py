@@ -220,8 +220,6 @@ def default_controls(skill: Skill) -> dict:
         if ctype == "pan":
             values[c["x_param"]] = c.get("x_default", 0.0)
             values[c["y_param"]] = c.get("y_default", 0.0)
-        elif ctype == "button":
-            continue
         elif ctype == "palette":
             continue
         else:

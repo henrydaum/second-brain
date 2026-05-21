@@ -222,7 +222,6 @@ one knob the user wants to turn:
 | `enum`   | `name, label, options:[{value,label}], default`                 | Sets one param to a discrete value. |
 | `bool`   | `name, label, default`                                          | Sets one boolean run param. |
 | `pan`    | `name, label, x_param, y_param, step, x_default, y_default`     | Two-axis arrow pad; updates both params together. |
-| `button` | `name, label, param, action:"randomize"`                        | One-shot action; the only action today is `randomize` (rolls a new value for `param`, usually `seed`). |
 | `palette`| no extras                                                       | Lets the user swap the canvas palette for this entry. Doesn't count toward the cap. |
 
 **Pick controls that generalize.** A `zoom` slider works for fractals, tilings,

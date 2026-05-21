@@ -539,7 +539,10 @@ async function loadPalettes() {
 }
 function paletteSwatchHtml(p, activeId) {
   const cls = p.id === activeId ? "swatch active" : "swatch";
-  return `<button type="button" class="${cls}" title="${esc(p.name)}" data-palette="${esc(p.id)}" style="--swatch:conic-gradient(${Object.values(p.colors).join(",")})"></button>`;
+  const colors = Object.values(p.colors || {});
+  if (!colors.length) return "";
+  const bars = colors.map(c => `<span style="background:${esc(c)}"></span>`).join("");
+  return `<button type="button" class="${cls}" title="${esc(p.name)}" aria-label="${esc(p.name)}" aria-pressed="${p.id === activeId ? "true" : "false"}" data-palette="${esc(p.id)}">${bars}</button>`;
 }
 
 // ----- Controls drawer -----
@@ -556,12 +559,23 @@ function renderControlsPanel(panels) {
   }
   controlsToggle.hidden = false;
   controlsDrawer.hidden = false;
-  const globalPanel = `<section class="ctl-panel"><header class="ctl-head">Global</header><div class="ctl-body"><div class="ctl-row"><span>Regenerate</span><button type="button" class="ctl-global" id="globalRegenerate" title="Re-render the current chain with new seeds">Regenerate</button></div></div></section>`;
-  controlsPanel.innerHTML = globalPanel + currentControlsPanels.map(renderPanel).join("");
+  const movableLayers = currentControlsPanels.filter(p => Number(p.chain_index) > 0).length;
+  const stack = [...currentControlsPanels].sort((a, b) => b.chain_index - a.chain_index).map(p => renderPanel(p, movableLayers)).join("");
+  const regen = `<section class="ctl-actions"><button type="button" class="ctl-global" id="globalRegenerate" title="Re-render the current chain with new seeds"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3Z"/></svg><span>Regenerate</span></button></section>`;
+  controlsPanel.innerHTML = stack + regen;
 }
-function renderPanel(panel) {
+function renderPanel(panel, movableLayers = 0) {
   const widgets = (panel.schema || []).map(spec => renderWidget(panel, spec)).join("");
-  return `<section class="ctl-panel" data-chain="${panel.chain_index}" data-skill="${esc(panel.skill_name)}"><header class="ctl-head">${esc(panel.skill_name)}</header><div class="ctl-body">${widgets}</div></section>`;
+  const empty = widgets || `<div class="ctl-empty">No controls for this layer.</div>`;
+  const draggable = Number(panel.chain_index) > 0 && movableLayers > 1;
+  return `<section class="ctl-panel" data-chain="${panel.chain_index}" data-kind="${esc(panel.kind || "")}" data-skill="${esc(panel.skill_name)}">
+    <header class="ctl-head ${draggable ? "" : "no-drag"}">
+      ${draggable ? `<button type="button" class="ctl-drag" title="Drag to reorder" aria-label="Drag layer">⋮⋮</button>` : ""}
+      <div><strong>${esc(panel.skill_name)}</strong><span>Layer ${panel.chain_index}${panel.kind ? ` · ${esc(panel.kind)}` : ""}</span></div>
+      <button type="button" class="ctl-remove" data-chain="${panel.chain_index}" title="Remove layer" aria-label="Remove layer">×</button>
+    </header>
+    <div class="ctl-body">${empty}</div>
+  </section>`;
 }
 controlsToggle.addEventListener("click", () => {
   const open = !controlsDrawer.classList.contains("open");
@@ -581,6 +595,17 @@ controlsPanel.addEventListener("click", async e => {
     return;
   }
   const target = e.target;
+  const remove = target.closest(".ctl-remove");
+  if (remove) {
+    const btn = remove;
+    if (btn.disabled) return;
+    btn.disabled = true;
+    loaderTicketStart();
+    try { render((await post("/api/layer_delete", {chain_index: +btn.dataset.chain})).events); }
+    catch (err) { add("error", err.message); }
+    finally { loaderTicketEnd(); }
+    return;
+  }
   const sw = target.closest("button[data-palette]");
   if (sw) {
     const row = sw.closest(".ctl-palette");
@@ -606,10 +631,41 @@ controlsPanel.addEventListener("click", async e => {
     postControl({chain_index: +pan.dataset.chain, name: pan.dataset.name, value: {x, y}});
     return;
   }
-  if (target.matches(".ctl-btn")) {
-    postControl({chain_index: +target.dataset.chain, name: target.dataset.name, value: null});
-  }
 });
+let ctlDrag = null;
+function clearCtlDrag() {
+  controlsPanel.querySelectorAll(".ctl-panel").forEach(p => p.classList.remove("dragging", "drop-target", "drop-illegal"));
+  ctlDrag = null;
+}
+controlsPanel.addEventListener("pointerdown", e => {
+  const handle = e.target.closest(".ctl-drag");
+  if (!handle || handle.disabled) return;
+  const card = handle.closest(".ctl-panel");
+  ctlDrag = {from: +card.dataset.chain, to: null, handle};
+  card.classList.add("dragging");
+  handle.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+controlsPanel.addEventListener("pointermove", e => {
+  if (!ctlDrag) return;
+  controlsPanel.querySelectorAll(".drop-target,.drop-illegal").forEach(p => p.classList.remove("drop-target", "drop-illegal"));
+  const card = document.elementFromPoint(e.clientX, e.clientY)?.closest(".ctl-panel");
+  if (!card || !controlsPanel.contains(card)) return;
+  const to = +card.dataset.chain;
+  card.classList.add(to > 0 ? "drop-target" : "drop-illegal");
+  ctlDrag.to = to > 0 ? to : null;
+});
+controlsPanel.addEventListener("pointerup", async () => {
+  if (!ctlDrag) return;
+  const {from, to} = ctlDrag;
+  clearCtlDrag();
+  if (!to || to === from) return;
+  loaderTicketStart();
+  try { render((await post("/api/layer_move", {from_index: from, to_index: to})).events); }
+  catch (err) { add("error", err.message); }
+  finally { loaderTicketEnd(); }
+});
+controlsPanel.addEventListener("pointercancel", clearCtlDrag);
 controlsPanel.addEventListener("input", e => {
   const el = e.target;
   const chain = +el.dataset.chain;
@@ -652,9 +708,6 @@ function renderWidget(panel, spec) {
     const xv = v[xp] ?? spec.x_default ?? 0;
     const yv = v[yp] ?? spec.y_default ?? 0;
     return `<div class="ctl-row"><span>${esc(spec.label)}</span><div class="ctl-pan" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-step="${spec.step}" data-x="${xv}" data-y="${yv}"><button type="button" class="ctl-pan-up" data-dir="up">↑</button><button type="button" class="ctl-pan-left" data-dir="left">←</button><span class="ctl-pan-c">${fmtNum(xv)}, ${fmtNum(yv)}</span><button type="button" class="ctl-pan-right" data-dir="right">→</button><button type="button" class="ctl-pan-down" data-dir="down">↓</button></div></div>`;
-  }
-  if (spec.type === "button") {
-    return `<div class="ctl-row"><span>${esc(spec.label)}</span><button type="button" class="ctl-btn" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-kind="button">${esc(spec.label)}</button></div>`;
   }
   if (spec.type === "palette") {
     const cur = v.palette || "";

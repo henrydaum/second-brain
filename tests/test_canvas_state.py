@@ -86,8 +86,10 @@ def test_move_layer_rejects_creation_displacement():
 	cs = CanvasState()
 	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "creation"})
 	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "transform"})
+	before = list(cs.canvas.layers)
 	r = cs.enact("move_layer", {"from_index": 1, "to_index": 0})
 	assert not r.ok
+	assert cs.canvas.layers == before
 
 
 def test_set_size_clamps_to_min_max():

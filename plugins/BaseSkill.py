@@ -41,7 +41,7 @@ class BaseSkill:
             create_skill tool.
         controls:
             Optional list of user-facing controls (slider/enum/bool/pan/
-            button/palette). Validated against the run() signature. Max 3
+            palette). Validated against the run() signature. Max 3
             non-palette controls; a palette swatch is auto-added when the
             skill references canvas.palette or art_kit.palette_color.
         hidden:

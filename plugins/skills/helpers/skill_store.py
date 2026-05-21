@@ -196,8 +196,7 @@ def _code_uses_palette(code: str | None) -> bool:
 
 
 MAX_NON_PALETTE_CONTROLS = 3
-_CONTROL_TYPES = {"slider", "enum", "bool", "pan", "button", "palette"}
-_BUTTON_ACTIONS = {"randomize"}
+_CONTROL_TYPES = {"slider", "enum", "bool", "pan", "palette"}
 _KINDS = ("creation", "transform")
 
 
@@ -270,15 +269,6 @@ def validate_controls(controls, run_param_names: set[str], code: str | None = No
             yd = _coerce_number(c.get("y_default", 0.0), field="y_default")
             c["x_default"], c["y_default"] = xd, yd
             c["default"] = {xp: xd, yp: yd}
-        elif ctype == "button":
-            action = c.get("action") or "randomize"
-            if action not in _BUTTON_ACTIONS:
-                raise SkillValidationError(f"button '{c['name']}' has unknown action {action!r}")
-            param = c.get("param") or "seed"
-            if param not in valid_params:
-                raise SkillValidationError(f"button '{c['name']}' targets unknown param {param!r}")
-            c["action"] = action
-            c["param"] = param
         out.append(c)
 
     if non_palette > MAX_NON_PALETTE_CONTROLS:
