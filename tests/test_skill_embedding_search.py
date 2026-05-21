@@ -125,6 +125,21 @@ def test_search_skills_accepts_slug_alias():
         _cleanup(db, path)
 
 
+def test_search_skills_can_filter_to_built_ins():
+    db, path = _fresh_db("builtins")
+    try:
+        root = Path(__file__).resolve().parents[1]
+        db.write_outputs("skill_embeddings", [
+            _row(str(root / "plugins" / "skills" / "skill_wave.py"), "built_wave", "Built Wave", "Water waves", [1, 0]),
+            _row(str(root / "data" / "sandbox_skills" / "skill_wave.py"), "sandbox_wave", "Sandbox Wave", "Water waves", [1, 0]),
+        ])
+        result = SearchSkills().run(_ctx(db, {"weigh_popularity": False}), query="water", limit=10, built_in_only=True)
+        assert result.success
+        assert [s["slug"] for s in result.data["skills"]] == ["built_wave"]
+    finally:
+        _cleanup(db, path)
+
+
 def test_search_skills_exposes_popularity_config():
     keys = {s[1]: s for s in SearchSkills.config_settings}
     assert keys["weigh_popularity"][3] is True

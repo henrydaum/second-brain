@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import sqlite3
 import math
+from pathlib import Path
 
 import numpy as np
 
+from paths import ROOT_DIR
 from plugins.BaseTool import BaseTool, ToolResult
 
 
@@ -25,6 +27,7 @@ class SearchSkills(BaseTool):
             "query": {"type": "string", "description": "Natural-language skill search query."},
             "slug": {"type": "string", "description": "Deprecated alias for query."},
             "limit": {"type": "integer", "default": 5, "minimum": 1, "maximum": 10},
+            "built_in_only": {"type": "boolean", "default": False, "description": "Only return built-in library skills."},
         },
     }
 
@@ -48,6 +51,8 @@ class SearchSkills(BaseTool):
         limit = max(1, min(10, int(kwargs.get("limit") or 5)))
         candidates = []
         for row in rows:
+            if kwargs.get("built_in_only") and not _built_in(row.get("path")):
+                continue
             vec = np.frombuffer(row["embedding"], dtype="<f4")
             if vec.size == q.size:
                 pop = _popularity(row)
@@ -64,7 +69,7 @@ class SearchSkills(BaseTool):
 def _rows(db):
     with db.lock:
         cur = db.conn.execute("""
-            SELECT slug, name, description, kind, embedding
+            SELECT path, slug, name, description, kind, embedding
                  , COALESCE(shares, 0) AS shares
                  , COALESCE(downloads, 0) AS downloads
                  , COALESCE(remixes, 0) AS remixes
@@ -75,6 +80,13 @@ def _rows(db):
             WHERE hidden = 0
         """)
         return [dict(row) for row in cur.fetchall()]
+
+
+def _built_in(path) -> bool:
+    try:
+        return Path(path).resolve().parent == (ROOT_DIR / "plugins" / "skills").resolve()
+    except Exception:
+        return False
 
 
 def _popularity(row) -> float:
