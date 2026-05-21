@@ -1290,15 +1290,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return self.send_error(404)
             if sub == "":
                 self.server.frontend.record_link_open(share_id, self.client_address[0], self._cookie_uid(), pool_payload)
-                html = _render_pool_share_html(share_id, pool_payload)
-                raw = html.encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
-                return
+                return self._redirect(f"/?share={quote(share_id, safe='')}")
             if sub in {"image.png", "image.webp", "image"}:
                 img = pool_payload.get("image_path")
                 if img is None:
@@ -1559,40 +1551,6 @@ def _file_url(path: Path) -> str:
 
 def _image_event(path: Path, canvas_payload: dict) -> dict:
     return {"type": "hero_image", "url": _file_url(path), "name": path.name, "canvas": canvas_payload}
-
-
-def _render_pool_share_html(pool_hash: str, payload: dict) -> str:
-    """Minimal share-page HTML for the new pool-based shares.
-
-    Bare-bones: image + layer summary + a single Remix button that posts
-    to /api/remix and bounces back to the main app. A nicer share page can
-    replace this without changing the backend contract.
-    """
-    layers = payload.get("layers") or []
-    layer_lines = "".join(
-        f"<li>{(l.get('kind') or '')}: <code>{(l.get('slug') or '')}</code></li>"
-        for l in layers
-    )
-    safe_hash = pool_hash.replace("'", "")
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<title>Shared canvas</title>"
-        "<style>body{font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem}"
-        "img{max-width:100%;border-radius:8px;display:block}"
-        "button{font-size:1rem;padding:.5rem 1rem;margin-top:1rem;cursor:pointer}"
-        "ul{padding-left:1.25rem}code{background:#f4f4f4;padding:.05rem .35rem;border-radius:4px}"
-        "</style></head><body>"
-        f"<h1>Shared canvas</h1>"
-        f"<img src='/share/{safe_hash}/image' alt='shared canvas'>"
-        f"<h2>Layers</h2><ul>{layer_lines}</ul>"
-        f"<button id='rx'>Remix in your session →</button>"
-        "<script>"
-        f"document.getElementById('rx').onclick=function(){{"
-        f"fetch('/api/remix',{{method:'POST',headers:{{'Content-Type':'application/json'}},"
-        f"body:JSON.stringify({{pool_hash:'{safe_hash}'}})}})"
-        f".then(function(){{location.href='/'}});}};"
-        "</script></body></html>"
-    )
 
 
 def _canvas_payload(state: dict | None) -> dict:

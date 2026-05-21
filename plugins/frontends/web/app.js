@@ -821,4 +821,5 @@ async function loadHistory() {
   } catch {}
 }
 setInterval(poll, 1200);
-loadHistory(); loadPalettes(); loadCanvas(); loadGallery(1); loadGalleryFor("archive", 1); refreshAccount(); handleShareDeepLink();
+const bootingShare = new URLSearchParams(location.search).has("share");
+loadHistory(); loadPalettes(); if (bootingShare) handleShareDeepLink(); else loadCanvas(); loadGallery(1); loadGalleryFor("archive", 1); refreshAccount();

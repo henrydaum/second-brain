@@ -216,3 +216,36 @@ def test_share_page_link_open_scores_but_qr_does_not(monkeypatch, renders_dir):
 		assert score == 1.0
 	finally:
 		_cleanup_db(db, dbpath)
+
+
+def test_share_route_redirects_to_landing_with_share_loaded(monkeypatch, renders_dir):
+	"""GET /share/{pool_hash} redirects to /?share=... and records link_open."""
+	_install_fake_run_skill(monkeypatch)
+	db, dbpath = _fresh_db("redirect")
+	try:
+		fe = _make_frontend(db)
+		_seed_canvas(fe)
+		fe.share("sess1", "T", "A", ip="127.0.0.1", account_id="alice")
+		ph = fe.gallery("sess1")["items"][0]["pool_hash"]
+		redirects = []
+		handler = fw._Handler.__new__(fw._Handler)
+		handler.path = f"/share/{ph}"
+		handler.server = SimpleNamespace(frontend=fe)
+		handler.client_address = ("127.0.0.1", 12345)
+		handler.headers = {}
+		handler._redirect = lambda location, extra_headers=(): redirects.append(location)
+		handler.send_error = lambda code: pytest.fail(f"unexpected send_error({code})")
+
+		handler.do_GET()
+
+		assert redirects == [f"/?share={ph}"]
+		assert db.conn.execute("SELECT COUNT(*) AS n FROM user_canvas_actions WHERE action = 'link_open'").fetchone()["n"] == 1
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_share_deep_link_boot_does_not_race_initial_canvas_load():
+	"""Share boot should remix instead of also firing the normal loadCanvas path."""
+	app_js = Path("plugins/frontends/web/app.js").read_text(encoding="utf-8")
+	assert "const bootingShare = new URLSearchParams(location.search).has(\"share\");" in app_js
+	assert "if (bootingShare) handleShareDeepLink(); else loadCanvas();" in app_js
