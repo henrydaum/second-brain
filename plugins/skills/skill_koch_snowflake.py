@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import random
@@ -26,16 +26,14 @@ class KochSnowflakeSkill(BaseSkill):
     name = 'Koch Snowflake'
     description = 'The Koch curve as a Lindenmayer system: F -> F+F--F+F rewritten to depth 5-6, traced by a turtle into a single closed polyline. Three flavors -- the classic snowflake, the inverted anti-snowflake, and an island variant with thicker arms. Rendered as a palette-graded outline with soft glow. Good for "snowflake", "koch", "frost", "crystal", "winter", "ornament", or "lace".'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'shape', 'label': 'Shape', 'options': [{'value': 'snowflake', 'label': 'Snowflake'}, {'value': 'anti_snowflake', 'label': 'Anti-Snowflake'}, {'value': 'island', 'label': 'Koch Island'}], 'default': 'snowflake'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    shape = Enum([('snowflake', 'Snowflake'), ('anti_snowflake', 'Anti-Snowflake'), ('island', 'Koch Island')], default='snowflake')
 
-    def run(self, canvas, shape="snowflake", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
         rng = random.Random(seed)
-        axiom, rules, angle_deg, iters = _SHAPES.get(str(shape), _SHAPES["snowflake"])
+        axiom, rules, angle_deg, iters = _SHAPES.get(str(self.shape), _SHAPES["snowflake"])
 
         sentence = art_kit.lindenmayer(axiom, rules, iters)
         # Step size will be normalized after we know the bbox; use 1.0 here.

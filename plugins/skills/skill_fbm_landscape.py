@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
@@ -21,15 +21,13 @@ class FbmLandscapeSkill(BaseSkill):
     name = 'fBm Landscape'
     description = 'A pure noise field rendered straight to canvas: fractional Brownian motion sampled at a coarse grid, smoothed back up to full resolution, then mapped through the palette ramp. Five regimes shift the personality completely -- soft cloud strata, rolling terrain with a warmer horizon, high-contrast magma, a layered nebula with secondary color modulation, and ridged turbulence. The universal fallback creation: looks composed on every palette. Good for "clouds", "terrain", "mist", "fog", "atmosphere", "magma", "nebula", "texture", or any abstract organic background.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'regime', 'label': 'Regime', 'options': [{'value': 'clouds', 'label': 'Clouds'}, {'value': 'terrain', 'label': 'Terrain'}, {'value': 'magma', 'label': 'Magma'}, {'value': 'nebula', 'label': 'Nebula'}, {'value': 'ridges', 'label': 'Ridged Turbulence'}], 'default': 'nebula'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    regime = Enum([('clouds', 'Clouds'), ('terrain', 'Terrain'), ('magma', 'Magma'), ('nebula', 'Nebula'), ('ridges', 'Ridged Turbulence')], default='nebula')
 
-    def run(self, canvas, regime="nebula", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
-        regime = str(regime)
+        self.regime = str(self.regime)
 
         # Each regime: (grid_size, frequency, octaves, gamma, t_lo, t_hi, special).
         # Grid sampled in pure-Python fbm and BICUBIC-upscaled to canvas. 160 is the
@@ -42,7 +40,7 @@ class FbmLandscapeSkill(BaseSkill):
             "nebula":  (160, 0.028, 5, 1.0,  0.20, 0.95, "nebula"),
             "ridges":  (160, 0.035, 5, 1.1,  0.15, 0.95, "ridged"),
         }
-        grid_size, freq, octaves, gamma, t_lo, t_hi, special = cfg.get(regime, cfg["nebula"])
+        grid_size, freq, octaves, gamma, t_lo, t_hi, special = cfg.get(self.regime, cfg["nebula"])
 
         base = _fbm_grid(seed, grid_size, freq, octaves)
         if special == "ridged":

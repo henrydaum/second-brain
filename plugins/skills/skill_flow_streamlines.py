@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import random
@@ -14,18 +14,16 @@ class FlowStreamlinesSkill(BaseSkill):
     name = 'Flow Streamlines'
     description = 'Particles advected through an fbm-driven flow field, leaving palette-graded streamlines. The field swirls smoothly across the canvas -- streamlines bend with it. Good for any "wind", "hair", "current", "smoke", "weather", "motion", or "abstract" request. Also a strong default when the subject doesn\'t fit any other technique.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'swirl', 'label': 'Swirl', 'options': [{'value': 'loose', 'label': 'Loose'}, {'value': 'tight', 'label': 'Tight'}, {'value': 'turbulent', 'label': 'Turbulent'}], 'default': 'loose'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    swirl = Enum([('loose', 'Loose'), ('tight', 'Tight'), ('turbulent', 'Turbulent')], default='loose')
 
-    def run(self, canvas, swirl="loose", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
         rng = random.Random(seed)
 
-        scale = {"loose": 0.0035, "tight": 0.008, "turbulent": 0.013}.get(str(swirl), 0.0035)
-        octaves = {"loose": 3, "tight": 4, "turbulent": 6}.get(str(swirl), 3)
+        scale = {"loose": 0.0035, "tight": 0.008, "turbulent": 0.013}.get(str(self.swirl), 0.0035)
+        octaves = {"loose": 3, "tight": 4, "turbulent": 6}.get(str(self.swirl), 3)
 
         img = Image.new("RGBA", (s, s), canvas.palette.background)
         draw = ImageDraw.Draw(img, "RGBA")

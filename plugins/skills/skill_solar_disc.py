@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import numpy as np
@@ -14,16 +14,14 @@ class SolarDiscSkill(BaseSkill):
     name = 'Solar Disc'
     description = 'An abstract sun -- a radial-falloff core over an fbm field of palette-warmed rays. No literal circle, no line rays: a luminous gradient in the palette\'s brightest tones. Good for any "sun", "star", "radiant", "dawn", or "sunset" request.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'mood', 'label': 'Mood', 'options': [{'value': 'calm', 'label': 'Calm'}, {'value': 'fierce', 'label': 'Fierce'}, {'value': 'eclipse', 'label': 'Eclipse'}], 'default': 'calm'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    mood = Enum([('calm', 'Calm'), ('fierce', 'Fierce'), ('eclipse', 'Eclipse')], default='calm')
 
-    def run(self, canvas, mood="calm", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
-        contrast = {"calm": 0.45, "fierce": 0.95, "eclipse": 1.25}.get(str(mood), 0.45)
-        core = {"calm": 0.55, "fierce": 0.45, "eclipse": 0.28}.get(str(mood), 0.55)
+        contrast = {"calm": 0.45, "fierce": 0.95, "eclipse": 1.25}.get(str(self.mood), 0.45)
+        core = {"calm": 0.55, "fierce": 0.45, "eclipse": 0.28}.get(str(self.mood), 0.55)
 
         cx, cy = s / 2.0, s / 2.0
         y_idx, x_idx = np.mgrid[0:s, 0:s].astype(np.float32)

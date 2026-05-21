@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import random
@@ -157,14 +157,12 @@ class LSystemGroveSkill(BaseSkill):
     name = 'L-System Grove'
     description = 'Trees as Lindenmayer systems traced by a turtle: depth-aware line width and palette ramp give a heavy trunk fading into a fine halo of thin tip-branches. No leaves, no fbm sky -- pure branching grammar on a clean palette-background. Presets: a single big specimen at canvas center, a perfectly symmetric pure-math tree (no jitter), a grove of stylized silhouettes, a Barnsley-style fern, and a coral form. Good for "tree", "forest", "grove", "branches", "fern", "coral", "sapling", "botanical", or "L-system".'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'shape', 'label': 'Shape', 'options': [{'value': 'specimen', 'label': 'Single Specimen'}, {'value': 'pure', 'label': 'Pure Symmetric'}, {'value': 'grove', 'label': 'Grove Silhouettes'}, {'value': 'fern', 'label': 'Barnsley Fern'}, {'value': 'coral', 'label': 'Coral'}], 'default': 'specimen'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    shape = Enum([('specimen', 'Single Specimen'), ('pure', 'Pure Symmetric'), ('grove', 'Grove Silhouettes'), ('fern', 'Barnsley Fern'), ('coral', 'Coral')], default='specimen')
 
-    def run(self, canvas, shape="specimen", **_):
+    def run(self, canvas):
         s = int(canvas.size)
-        kind = str(shape)
+        kind = str(self.shape)
         if kind == "grove":
             out = _render_grove(canvas, s)
         elif kind == "pure":

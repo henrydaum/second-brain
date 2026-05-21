@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import numpy as np
@@ -43,20 +43,18 @@ class DragonCurveSkill(BaseSkill):
     name = 'Dragon Curve'
     description = 'The Heighway dragon as a Lindenmayer system: X -> X+YF+, Y -> -FX-Y at 90 degrees, rewritten 10-13 times. The walk folds back on itself again and again until it tiles its own footprint. Presets render one dragon, a twin dragon (two copies rotated 180), or a terdragon (three at 120). Palette gradient runs from the start of the walk to the end so you can see the fold order. Good for "dragon", "curve", "fold", "fractal", "path", or "labyrinth".'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'variant', 'label': 'Variant', 'options': [{'value': 'dragon', 'label': 'Dragon'}, {'value': 'twin', 'label': 'Twin Dragon'}, {'value': 'terdragon', 'label': 'Terdragon (3-fold)'}], 'default': 'dragon'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    variant = Enum([('dragon', 'Dragon'), ('twin', 'Twin Dragon'), ('terdragon', 'Terdragon (3-fold)')], default='dragon')
 
-    def run(self, canvas, variant="dragon", **_):
+    def run(self, canvas):
         s = int(canvas.size)
-        variant = str(variant)
+        self.variant = str(self.variant)
 
-        if variant == "twin":
+        if self.variant == "twin":
             base = _dragon_segments(12)
             rotated = _rotate(base, 180.0, 0.0, 0.0)
             groups = [(base, 0.10, 0.75), (rotated, 0.55, 0.95)]
-        elif variant == "terdragon":
+        elif self.variant == "terdragon":
             base = _terdragon_segments(8)
             groups = [
                 (base, 0.10, 0.70),

@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
@@ -13,15 +13,13 @@ class LorenzAttractorSkill(BaseSkill):
     name = 'Lorenz Attractor'
     description = 'The Lorenz system integrated with explicit Euler -- dx=sigma*(y-x), dy=x*(rho-z)-y, dz=x*y-beta*z with sigma=10, rho=28, beta=8/3 -- traced for 200,000 steps. Project the 3D trajectory onto xy, xz (the canonical butterfly), or yz and accumulate into a 2D density buffer, log-compress, palette-map. The time-ordered palette gradient lets you read the flow direction around the two lobes. Good for "lorenz", "butterfly", "strange attractor", "chaos", or any continuous-dynamical-systems motif.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'projection', 'label': 'Projection', 'options': [{'value': 'xz', 'label': 'XZ (butterfly)'}, {'value': 'xy', 'label': 'XY (front)'}, {'value': 'yz', 'label': 'YZ (side)'}], 'default': 'xz'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    projection = Enum([('xz', 'XZ (butterfly)'), ('xy', 'XY (front)'), ('yz', 'YZ (side)')], default='xz')
 
-    def run(self, canvas, projection="xz", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
-        projection = str(projection)
+        self.projection = str(self.projection)
         rng = np.random.default_rng(seed)
 
         n_steps = 200_000
@@ -66,9 +64,9 @@ class LorenzAttractorSkill(BaseSkill):
             ys[i] = y
             zs[i] = z
 
-        if projection == "xy":
+        if self.projection == "xy":
             u, v = xs, ys
-        elif projection == "yz":
+        elif self.projection == "yz":
             u, v = ys, zs
         else:
             u, v = xs, zs

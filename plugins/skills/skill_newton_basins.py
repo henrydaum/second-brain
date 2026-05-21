@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import numpy as np
@@ -27,14 +27,12 @@ class NewtonBasinsSkill(BaseSkill):
     name = 'Newton Basins'
     description = 'Newton\'s method on a complex polynomial, colored by basin of attraction. Each pixel iterates z = z - f(z)/f\'(z); the root it converges to picks the palette band, the iteration count modulates brightness within the band. Produces lacy, intricate boundaries between basins -- a different geometry than escape-time fractals. Good for "fractal", "newton", "basins", "lace", "stained glass", or any mathematically-elaborate algorithmic motif.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'polynomial', 'label': 'Polynomial', 'options': [{'value': 'cubic', 'label': 'z^3 - 1 (three roots)'}, {'value': 'perturbed', 'label': 'z^3 - 2z + 2 (cycles)'}, {'value': 'quartic', 'label': 'z^4 - 1 (four roots)'}, {'value': 'quintic', 'label': 'z^5 - 1 (five roots)'}, {'value': 'sextic', 'label': 'z^6 - 1 (six roots)'}, {'value': 'octic', 'label': 'z^8 - 1 (eight roots)'}], 'default': 'cubic'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    polynomial = Enum([('cubic', 'z^3 - 1 (three roots)'), ('perturbed', 'z^3 - 2z + 2 (cycles)'), ('quartic', 'z^4 - 1 (four roots)'), ('quintic', 'z^5 - 1 (five roots)'), ('sextic', 'z^6 - 1 (six roots)'), ('octic', 'z^8 - 1 (eight roots)')], default='cubic')
 
-    def run(self, canvas, polynomial="cubic", **_):
+    def run(self, canvas):
         s = int(canvas.size)
-        key = str(polynomial)
+        key = str(self.polynomial)
         polys = _polys()
         f, fp, roots, view_half = polys.get(key, polys["cubic"])
 

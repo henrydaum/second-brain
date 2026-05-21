@@ -1,36 +1,28 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Slider, Bool
 
 import numpy as np
 from PIL import Image
 
 try:
-    art_kit  # injected by sandbox at exec time
+    art_kit
 except NameError:
     art_kit = None
 
 
 class FilmGrainSkill(BaseSkill):
     name = 'Film Grain'
-    description = 'Deterministic per-pixel noise overlay seeded from canvas.seed. Adds tactile texture; great over flat palette grades. Params: intensity (0.0-0.3, default 0.07), monochrome (bool, default True).'
+    description = 'Deterministic per-pixel noise overlay seeded from canvas.seed. Adds tactile texture; great over flat palette grades.'
     kind = 'transform'
-    owner = 'library'
-    created_at = 1730000000.0
-    hidden = False
-    controls = [
-        {'type': 'slider', 'name': 'intensity', 'label': 'Intensity', 'min': 0.0, 'max': 0.4, 'step': 0.005, 'default': 0.07},
-        {'type': 'bool', 'name': 'monochrome', 'label': 'Monochrome', 'default': True},
-    ]
 
-    def run(self, canvas, intensity=0.07, monochrome=True):
-        img = canvas.image.convert("RGB")
+    intensity  = Slider(0.0, 0.4, default=0.07, step=0.005)
+    monochrome = Bool(default=True)
+
+    def run(self, canvas):
         s = canvas.size
-        intensity = float(art_kit.clamp(intensity, 0.0, 0.4))
         rng = np.random.default_rng(canvas.seed)
-        arr = np.asarray(img).astype(np.float32) / 255.0
-        if bool(monochrome):
-            noise = rng.standard_normal((s, s, 1)).astype(np.float32) * intensity
+        arr = canvas.image_array(mode="RGB", dtype="float")
+        if self.monochrome:
+            noise = rng.standard_normal((s, s, 1)).astype(np.float32) * float(self.intensity)
         else:
-            noise = rng.standard_normal((s, s, 3)).astype(np.float32) * intensity
-        out = np.clip(arr + noise, 0.0, 1.0)
-        out = (out * 255.0).astype(np.uint8)
-        canvas.commit(Image.fromarray(out, "RGB").convert("RGBA"))
+            noise = rng.standard_normal((s, s, 3)).astype(np.float32) * float(self.intensity)
+        canvas.commit_array(np.clip(arr + noise, 0.0, 1.0))

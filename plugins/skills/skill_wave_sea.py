@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import random
@@ -15,22 +15,20 @@ class WaveSeaSkill(BaseSkill):
     name = 'Wave Sea'
     description = 'Water as interference: several point sources sum into a wave field, palette-mapped from troughs to crests. No literal waves drawn -- the surface emerges from sin(2*pi*d/lambda) sums. Good for "ocean", "water", "ripples", "pond", "reflection", or "sound".'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'weather', 'label': 'Weather', 'options': [{'value': 'calm', 'label': 'Calm'}, {'value': 'choppy', 'label': 'Choppy'}, {'value': 'storm', 'label': 'Storm'}], 'default': 'calm'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    weather = Enum([('calm', 'Calm'), ('choppy', 'Choppy'), ('storm', 'Storm')], default='calm')
 
-    def run(self, canvas, weather="calm", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
         rng = random.Random(seed)
 
-        n_sources = {"calm": 3, "choppy": 6, "storm": 10}.get(str(weather), 3)
+        n_sources = {"calm": 3, "choppy": 6, "storm": 10}.get(str(self.weather), 3)
         wl_min, wl_max = {
             "calm": (s * 0.18, s * 0.35),
             "choppy": (s * 0.08, s * 0.22),
             "storm": (s * 0.05, s * 0.18),
-        }.get(str(weather), (s * 0.18, s * 0.35))
+        }.get(str(self.weather), (s * 0.18, s * 0.35))
 
         sources = []
         for _ in range(n_sources):

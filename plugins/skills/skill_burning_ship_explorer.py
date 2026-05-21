@@ -1,35 +1,41 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
 
 try:
-    art_kit  # injected by sandbox at exec time
+    art_kit
 except NameError:
     art_kit = None
 
 _SPOTS = {
-    "full":      (-0.5,      -0.5,      0.0,  220),  # whole armada
-    "main_ship": (-1.762,    -0.028,    5.0,  300),  # the big iconic ship
-    "antenna":   (-1.625,    -0.0085,   7.5,  400),  # vertical mast above main ship
-    "mini_ship": (-1.7755,   -0.0335,  10.0,  500),  # tiny embedded ship in the main hull
-    "mast":      (-1.7395,   -0.000045,11.0,  500),  # thin top of the antenna
-    "deep_keel": (-1.76225,  -0.03415, 13.0,  600),  # deep-zoom keel detail
+    "full":      (-0.5,      -0.5,      0.0,  220),
+    "main_ship": (-1.762,    -0.028,    5.0,  300),
+    "antenna":   (-1.625,    -0.0085,   7.5,  400),
+    "mini_ship": (-1.7755,   -0.0335,  10.0,  500),
+    "mast":      (-1.7395,   -0.000045,11.0,  500),
+    "deep_keel": (-1.76225,  -0.03415, 13.0,  600),
 }
 
 
 class BurningShipExplorerSkill(BaseSkill):
     name = 'Burning Ship Explorer'
-    description = 'A guided tour of the Burning Ship fractal -- the inferno cousin of the Mandelbrot set. The iteration takes absolute values before squaring (z = (|Re| + i|Im|)^2 + c), which breaks holomorphic symmetry and yields jagged, ship-like silhouettes with antennas, masts, and embedded mini-ships. Pick a landmark and pair with any palette. Good for "fractal", "ship", "burning", "inferno", "jagged", or any algorithmic flame-and-iron motif.'
+    description = 'A guided tour of the Burning Ship fractal -- the inferno cousin of the Mandelbrot set. Jagged, ship-like silhouettes with antennas, masts, and embedded mini-ships.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'spot', 'label': 'Spot', 'options': [{'value': 'full', 'label': 'Full Set'}, {'value': 'main_ship', 'label': 'Main Ship'}, {'value': 'antenna', 'label': 'Antenna'}, {'value': 'mini_ship', 'label': 'Embedded Mini-Ship'}, {'value': 'mast', 'label': 'Mast Spire'}, {'value': 'deep_keel', 'label': 'Deep Keel'}], 'default': 'main_ship'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
 
-    def run(self, canvas, spot="main_ship", **_):
-        cx, cy, zoom_exp, detail = _SPOTS.get(str(spot), _SPOTS["main_ship"])
-        s = int(canvas.size)
+    palette = Palette()
+    spot    = Enum([
+        ('full',      'Full Set'),
+        ('main_ship', 'Main Ship'),
+        ('antenna',   'Antenna'),
+        ('mini_ship', 'Embedded Mini-Ship'),
+        ('mast',      'Mast Spire'),
+        ('deep_keel', 'Deep Keel'),
+    ], default='main_ship')
+
+    def run(self, canvas):
+        cx, cy, zoom_exp, detail = _SPOTS[self.spot]
+        s = canvas.size
         zoom = float(2.0 ** zoom_exp)
         n_iter = int(detail)
 
@@ -39,7 +45,6 @@ class BurningShipExplorerSkill(BaseSkill):
         view = 3.0 / zoom
         half = view * 0.5
         re = np.linspace(cx - half, cx + half, s, dtype=real)
-        # Flip y so the ship reads right-side up on screen.
         im = np.linspace(cy + half, cy - half, s, dtype=real)
         R, I = np.meshgrid(re, im)
 
@@ -47,7 +52,6 @@ class BurningShipExplorerSkill(BaseSkill):
         out_flat = np.zeros(N, dtype=np.float64)
         inside_flat = np.zeros(N, dtype=bool)
 
-        # Track real / imag parts separately so we can take abs each step.
         zr = np.zeros(N, dtype=real)
         zi = np.zeros(N, dtype=real)
         cr = R.ravel().copy()

@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
@@ -22,13 +22,11 @@ class MandelbrotExplorerSkill(BaseSkill):
     name = 'Mandelbrot Explorer'
     description = "A guided tour of the Mandelbrot set's most famous landmarks. Pick a spot -- Seahorse Valley, Elephant Valley, dendritic lightning patterns, deep spiral galaxies -- and the view, zoom, and iteration depth are all dialed in for you. Pair with any palette to taste. Optimized for M1: complex64 working set, cardioid + period-2 bulb early-exit, and live-buffer compaction every 3 iterations."
     kind = 'creation'
-    owner = 'library'
-    created_at = 1730000000.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'spot', 'label': 'Spot', 'options': [{'value': 'full', 'label': 'Full Set'}, {'value': 'seahorse', 'label': 'Seahorse Valley'}, {'value': 'elephant', 'label': 'Elephant Valley'}, {'value': 'triple_spiral', 'label': 'Triple Spiral'}, {'value': 'lightning', 'label': 'Lightning'}, {'value': 'spiral_galaxy', 'label': 'Spiral Galaxy'}], 'default': 'full'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    spot = Enum([('full', 'Full Set'), ('seahorse', 'Seahorse Valley'), ('elephant', 'Elephant Valley'), ('triple_spiral', 'Triple Spiral'), ('lightning', 'Lightning'), ('spiral_galaxy', 'Spiral Galaxy')], default='full')
 
-    def run(self, canvas, spot="full", **_):
-        cx, cy, zoom_exp, detail = _SPOTS.get(str(spot), _SPOTS["full"])
+    def run(self, canvas):
+        cx, cy, zoom_exp, detail = _SPOTS.get(str(self.spot), _SPOTS["full"])
         s = int(canvas.size)
         zoom = float(2.0 ** zoom_exp)
         n_iter = int(detail)

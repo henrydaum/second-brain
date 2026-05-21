@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import random
@@ -14,15 +14,13 @@ class VogelBloomSkill(BaseSkill):
     name = 'Vogel Bloom'
     description = 'A flower as a Vogel sunflower spiral: cells laid out by the golden angle, sized by their seed index, colored by palette ramp position. No stacked petals, no center circle -- the bloom emerges from the spiral itself. Good for "flower", "sunflower", "bloom", "seed pod", or "mandala".'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'density', 'label': 'Density', 'options': [{'value': 'sparse', 'label': 'Sparse'}, {'value': 'full', 'label': 'Full'}, {'value': 'packed', 'label': 'Packed'}], 'default': 'full'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    density = Enum([('sparse', 'Sparse'), ('full', 'Full'), ('packed', 'Packed')], default='full')
 
-    def run(self, canvas, density="full", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
-        n = {"sparse": 220, "full": 600, "packed": 1100}.get(str(density), 600)
+        n = {"sparse": 220, "full": 600, "packed": 1100}.get(str(self.density), 600)
         rng = random.Random(seed)
 
         img = Image.new("RGBA", (s, s), canvas.palette.background)

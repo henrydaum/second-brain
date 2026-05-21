@@ -178,7 +178,7 @@ def _hint_for(error_type: str, message: str, skill_line: str) -> str | None:
         return "This is a creation skill — canvas.image only exists for transform skills. Start a fresh image with canvas.new(color=canvas.palette.background) or canvas.create_image()."
 
     if "no BaseSkill subclass found" in msg or "must define" in msg:
-        return "Every skill must define `class <Name>(BaseSkill):` with a `def run(self, canvas, **params):` method. Wrap your code accordingly."
+        return "Every skill must define `class <Name>(BaseSkill):` with a `def run(self, canvas):` method. Wrap your code accordingly."
 
     if error_type == "AttributeError":
         m = re.search(r"has no attribute '([^']+)'", msg)

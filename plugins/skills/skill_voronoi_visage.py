@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import random
@@ -15,16 +15,14 @@ class VoronoiVisageSkill(BaseSkill):
     name = 'Voronoi Visage'
     description = 'An abstract portrait: a head-shaped mask filled with Voronoi cells in palette tones. No eyes, no nose, no mouth -- the face is implied by the silhouette. The cell boundaries read as fragmentation or stained glass. Good for "portrait", "face", "head", "abstract figure", or "stained glass".'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'density', 'label': 'Density', 'options': [{'value': 'few', 'label': 'Few'}, {'value': 'many', 'label': 'Many'}, {'value': 'dense', 'label': 'Dense'}], 'default': 'many'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    density = Enum([('few', 'Few'), ('many', 'Many'), ('dense', 'Dense')], default='many')
 
-    def run(self, canvas, density="many", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
         rng = random.Random(seed)
-        n = {"few": 22, "many": 55, "dense": 110}.get(str(density), 55)
+        n = {"few": 22, "many": 55, "dense": 110}.get(str(self.density), 55)
 
         cx, cy = s * 0.5, s * 0.5
         ax, ay = s * 0.30, s * 0.40

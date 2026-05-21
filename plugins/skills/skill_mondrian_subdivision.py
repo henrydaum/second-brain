@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import random
 from PIL import Image, ImageDraw
@@ -44,16 +44,14 @@ class MondrianSubdivisionSkill(BaseSkill):
     name = 'Mondrian Subdivision'
     description = 'Recursive rectangular subdivision: at each step pick the longer axis, cut between 30% and 70% across, recurse with a 15% chance of stopping early. The canvas fills with axis-aligned cells whose colors come from a weighted palette draw -- background and secondary slots dominate, accent gets a tight quota. Three flavors: classic Mondrian with thick black gutters, stained-glass with thin dark seams, and low-poly which jitters each rect\'s corners into a pair of triangles. Good for "mondrian", "abstract", "modernist", "grid", "stained glass", "low poly", or any flat geometric composition.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'style', 'label': 'Style', 'options': [{'value': 'mondrian', 'label': 'Classic Mondrian'}, {'value': 'stained_glass', 'label': 'Stained Glass'}, {'value': 'low_poly', 'label': 'Low Poly'}], 'default': 'mondrian'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    style = Enum([('mondrian', 'Classic Mondrian'), ('stained_glass', 'Stained Glass'), ('low_poly', 'Low Poly')], default='mondrian')
 
-    def run(self, canvas, style="mondrian", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
         rng = random.Random(seed)
-        style = str(style)
+        self.style = str(self.style)
 
         img = Image.new("RGBA", (s, s), canvas.palette.background)
         draw = ImageDraw.Draw(img, "RGBA")
@@ -63,7 +61,7 @@ class MondrianSubdivisionSkill(BaseSkill):
         accent_quota = 0.06
         gutter_color = art_kit.palette_color(0.02)  # near darkest
 
-        if style == "low_poly":
+        if self.style == "low_poly":
             for x, y, w, h in rects:
                 t = _pick_color(rng, accent_quota)
                 # Two triangles with corner jitter.
@@ -81,7 +79,7 @@ class MondrianSubdivisionSkill(BaseSkill):
                     draw.polygon([p00, p10, p01], fill=t)
                     draw.polygon([p10, p11, p01], fill=_pick_color(rng, accent_quota))
         else:
-            gutter_w = 6 if style == "mondrian" else 2
+            gutter_w = 6 if self.style == "mondrian" else 2
             for x, y, w, h in rects:
                 t = _pick_color(rng, accent_quota)
                 draw.rectangle((x, y, x + w - 1, y + h - 1), fill=t,

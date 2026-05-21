@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
@@ -24,13 +24,11 @@ class JuliaExplorerSkill(BaseSkill):
     name = 'Julia Explorer'
     description = 'A guided tour of the most beloved filled Julia sets. Pick a constant -- the spindly Dendrite, the Douady Rabbit, the curling Dragon, the Siegel Disk, the cantor-dust airplane -- and the right framing and iteration depth come along for free. Pair with any palette. Optimized for M1: complex64 working set, |z0| pre-escape filter, and live-buffer compaction every 3 iterations.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1730000000.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'spot', 'label': 'Spot', 'options': [{'value': 'dendrite', 'label': 'Dendrite'}, {'value': 'rabbit', 'label': 'Douady Rabbit'}, {'value': 'san_marco', 'label': 'San Marco'}, {'value': 'siegel', 'label': 'Siegel Disk'}, {'value': 'dragon', 'label': 'Dragon'}, {'value': 'spiral', 'label': 'Spiral'}, {'value': 'airplane', 'label': 'Airplane'}, {'value': 'dust', 'label': 'Cantor Dust'}], 'default': 'dragon'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    spot = Enum([('dendrite', 'Dendrite'), ('rabbit', 'Douady Rabbit'), ('san_marco', 'San Marco'), ('siegel', 'Siegel Disk'), ('dragon', 'Dragon'), ('spiral', 'Spiral'), ('airplane', 'Airplane'), ('dust', 'Cantor Dust')], default='dragon')
 
-    def run(self, canvas, spot="dragon", **_):
-        jx, jy, zoom_exp, detail = _SPOTS.get(str(spot), _SPOTS["dragon"])
+    def run(self, canvas):
+        jx, jy, zoom_exp, detail = _SPOTS.get(str(self.spot), _SPOTS["dragon"])
         s = int(canvas.size)
         zoom = float(2.0 ** zoom_exp)
         n_iter = int(detail)

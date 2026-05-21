@@ -1,36 +1,28 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Slider
 
 from PIL import Image, ImageChops, ImageFilter, ImageOps
 
 try:
-    art_kit  # injected by sandbox at exec time
+    art_kit
 except NameError:
     art_kit = None
 
 
 class BloomGlowSkill(BaseSkill):
     name = 'Bloom Glow'
-    description = 'Highlight bloom: extract bright pixels, blur them, screen-blend back over the image. Adds atmosphere to suns, lights, glowing edges. Params: radius (1-60, default 18), strength (0.0-1.5, default 0.75), threshold (0-255, default 165).'
+    description = 'Highlight bloom: extract bright pixels, blur them, screen-blend back over the image. Adds atmosphere to suns, lights, glowing edges.'
     kind = 'transform'
-    owner = 'library'
-    created_at = 1730000000.0
-    hidden = False
-    controls = [
-        {'type': 'slider', 'name': 'radius', 'label': 'Radius', 'min': 1, 'max': 80, 'step': 1, 'default': 18},
-        {'type': 'slider', 'name': 'strength', 'label': 'Strength', 'min': 0.0, 'max': 1.5, 'step': 0.05, 'default': 0.75},
-        {'type': 'slider', 'name': 'threshold', 'label': 'Threshold', 'min': 0, 'max': 255, 'step': 5, 'default': 165},
-    ]
 
-    def run(self, canvas, radius=18, strength=0.75, threshold=165):
+    radius    = Slider(1, 80, default=18, step=1)
+    strength  = Slider(0.0, 1.5, default=0.75, step=0.05)
+    threshold = Slider(0, 255, default=165, step=5)
+
+    def run(self, canvas):
         img = canvas.image.convert("RGB")
-        r = float(art_kit.clamp(radius, 1, 80))
-        strength = float(art_kit.clamp(strength, 0.0, 1.5))
-        th = int(art_kit.clamp(threshold, 0, 255))
-
         gray = ImageOps.grayscale(img)
-        mask = gray.point(lambda v, t=th: 255 if v > t else 0)
-        blurred = img.filter(ImageFilter.GaussianBlur(r))
+        mask = gray.point(lambda v, t=int(self.threshold): 255 if v > t else 0)
+        blurred = img.filter(ImageFilter.GaussianBlur(float(self.radius)))
         glowed = ImageChops.screen(img, blurred)
         composite = Image.composite(glowed, img, mask)
-        out = Image.blend(img, composite, strength)
+        out = Image.blend(img, composite, float(self.strength))
         canvas.commit(out.convert("RGBA"))

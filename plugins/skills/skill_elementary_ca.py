@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
@@ -13,15 +13,13 @@ class ElementaryCaSkill(BaseSkill):
     name = 'Elementary CA'
     description = 'Wolfram\'s 1D cellular automata: each row is the next time step of the row above, computed from a 2-state, 3-cell neighborhood according to a numbered rule. Rule 30 is chaos; rule 90 grows the Sierpinski triangle from a single cell; rule 110 is Turing-complete and weaves tangled gliders; rule 184 models traffic flow. The full evolution is rendered as a palette-graded image -- live cells warm, dead cells background. Good for "cellular automata", "wolfram", "rule 30", "rule 90", "emergence", or any algorithmic-evolution motif.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'rule', 'label': 'Rule', 'options': [{'value': '30', 'label': 'Rule 30 (chaos)'}, {'value': '90', 'label': 'Rule 90 (Sierpinski)'}, {'value': '110', 'label': 'Rule 110 (complex)'}, {'value': '73', 'label': 'Rule 73 (crystal)'}, {'value': '184', 'label': 'Rule 184 (traffic)'}, {'value': '150', 'label': 'Rule 150 (XOR weave)'}], 'default': '110'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    rule = Enum([('30', 'Rule 30 (chaos)'), ('90', 'Rule 90 (Sierpinski)'), ('110', 'Rule 110 (complex)'), ('73', 'Rule 73 (crystal)'), ('184', 'Rule 184 (traffic)'), ('150', 'Rule 150 (XOR weave)')], default='110')
 
-    def run(self, canvas, rule="110", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         try:
-            rule_num = int(str(rule))
+            rule_num = int(str(self.rule))
         except (TypeError, ValueError):
             rule_num = 110
         rule_num &= 0xFF

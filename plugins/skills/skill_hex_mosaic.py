@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 from PIL import Image, ImageDraw
@@ -25,15 +25,13 @@ class HexMosaicSkill(BaseSkill):
     name = 'Hex Mosaic'
     description = 'Pointy-top hexagonal tiling with column-offset coordinates. Each hex is drawn as a filled polygon, colored by one of three rules: a radial palette gradient outward from center, an fbm-perturbed mosaic so soft regions of related hue emerge across the grid, or an isometric extrusion that treats each hex\'s height as a three-shade column. Hex outlines are anti-aliased and flush so the mosaic reads clean. Good for "hex", "hexagons", "tiling", "mosaic", "honeycomb", "cells", or any modular-grid algorithmic motif.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'style', 'label': 'Style', 'options': [{'value': 'gradient', 'label': 'Radial Gradient'}, {'value': 'fbm', 'label': 'fBm Regions'}, {'value': 'iso_towers', 'label': 'Iso Towers'}], 'default': 'fbm'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    style = Enum([('gradient', 'Radial Gradient'), ('fbm', 'fBm Regions'), ('iso_towers', 'Iso Towers')], default='fbm')
 
-    def run(self, canvas, style="fbm", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
-        style = str(style)
+        self.style = str(self.style)
 
         img = Image.new("RGBA", (s, s), canvas.palette.background)
         draw = ImageDraw.Draw(img, "RGBA")
@@ -53,7 +51,7 @@ class HexMosaicSkill(BaseSkill):
         outline = art_kit.palette_color(0.05)
         outline_w = max(1, int(r * 0.06))
 
-        if style == "iso_towers":
+        if self.style == "iso_towers":
             # Render back-to-front so towers in front overlap towers behind.
             cells = []
             for row in range(-1, rows):
@@ -94,7 +92,7 @@ class HexMosaicSkill(BaseSkill):
                 cy = row * hex_h_step + r
                 if not (-hex_w <= cx <= s + hex_w and -hex_h_step <= cy <= s + hex_h_step):
                     continue
-                if style == "gradient":
+                if self.style == "gradient":
                     d = math.hypot(cx - cx_center, cy - cy_center) / max_d
                     t = art_kit.clamp(0.18 + 0.78 * d, 0.0, 1.0)
                 else:  # fbm

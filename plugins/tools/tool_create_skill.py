@@ -13,7 +13,7 @@ logger = logging.getLogger("SkillTools")
 
 class CreateSkill(BaseTool):
     name = "create_skill"
-    description = "Author a new canvas skill — supply the module-level body (imports + `def run(canvas, **params)`) and Second Brain wraps it in a BaseSkill subclass and writes it to the sandbox skills folder. Only use when search_skills + read_skill cannot supply a close enough starting point. Prefer colors from canvas.palette slots (or art_kit.palette_color(t)), seed RNGs from canvas.seed, and call canvas.commit(image) on every path. Allowed imports only: math, random, colorsys, numpy, PIL.*, and `from plugins.BaseSkill import BaseSkill`. Optionally declare up to 3 user-facing controls (slider/enum/bool/pan) plus a palette control when the skill actually uses palette and should show a layer-specific override."
+    description = "Author a new canvas skill — supply the module-level body (imports + `def run(canvas, **params)`) and Second Brain wraps it in a BaseSkill subclass and writes it to the sandbox skills folder. Only use when search_skills + read_skill cannot supply a close enough starting point. Prefer colors from canvas.palette slots (or art_kit.palette_color(t)), seed RNGs from canvas.seed, and call canvas.commit(image) on every path. Allowed imports only: math, random, colorsys, numpy, PIL.*, and `from plugins.BaseSkill import BaseSkill`. Optionally declare up to 3 user-facing controls (slider/enum/bool/pan) plus a palette control when the skill actually uses palette and should show a layer-specific override. Built-in skills may use BaseSkill descriptors directly; this tool still uses the dict control schema."
     max_calls = 4
     parameters = {
         "type": "object",

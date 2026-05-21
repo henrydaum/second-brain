@@ -137,6 +137,13 @@ class Palette(_ControlDescriptor):
         self.label = label
 
 
+_RESERVED_ATTRS = frozenset({
+    "name", "description", "kind", "owner", "created_at",
+    "controls", "hidden", "auto_register", "requires_services",
+    "config_settings", "slug", "run", "_param_bounds",
+})
+
+
 def _compile_descriptors(cls) -> tuple[list[dict], dict[str, dict]] | None:
     """Walk ``cls.__dict__`` for ``_ControlDescriptor`` instances and return
     ``(controls, param_bounds)``:
@@ -158,6 +165,12 @@ def _compile_descriptors(cls) -> tuple[list[dict], dict[str, dict]] | None:
     pans: list[tuple[str, Pan]] = []
     for attr_name, value in cls.__dict__.items():
         if isinstance(value, _ControlDescriptor):
+            if attr_name in _RESERVED_ATTRS:
+                raise TypeError(
+                    f"{cls.__name__}: control name '{attr_name}' collides with "
+                    f"a BaseSkill metadata attribute; pick another name "
+                    f"(e.g. '{attr_name}_kind' or a semantic synonym)"
+                )
             descriptors.append((attr_name, value))
             if isinstance(value, Slider):
                 sliders[attr_name] = value

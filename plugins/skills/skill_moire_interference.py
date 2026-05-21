@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import numpy as np
@@ -14,15 +14,13 @@ class MoireInterferenceSkill(BaseSkill):
     name = 'Moire Interference'
     description = 'Sum of plane waves: field(x,y) = sum_i A_i * sin(k_i * (x*cos(theta_i) + y*sin(theta_i)) + phi_i). Two waves with nearly the same theta produce slow moire beats; orthogonal waves give crosshatch; mixing in a radial wave bends the linear interference into rosettes. Four named presets dial in distinct interference geometries; the summed field is normalized and pushed through a palette ramp. Good for "interference", "moire", "waves", "beats", "crosshatch", "rosette", or any optical-pattern algorithmic motif.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'pattern', 'label': 'Pattern', 'options': [{'value': 'beats', 'label': 'Parallel Beats'}, {'value': 'crosshatch', 'label': 'Crosshatch'}, {'value': 'rosette', 'label': 'Radial Rosette'}, {'value': 'turbulent', 'label': 'Turbulent'}], 'default': 'beats'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    pattern = Enum([('beats', 'Parallel Beats'), ('crosshatch', 'Crosshatch'), ('rosette', 'Radial Rosette'), ('turbulent', 'Turbulent')], default='beats')
 
-    def run(self, canvas, pattern="beats", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
-        pattern = str(pattern)
+        self.pattern = str(self.pattern)
         rng = np.random.default_rng(seed)
 
         ys, xs = np.mgrid[0:s, 0:s].astype(np.float32)
@@ -35,7 +33,7 @@ class MoireInterferenceSkill(BaseSkill):
         field = np.zeros((s, s), dtype=np.float32)
         n_waves = 0
 
-        if pattern == "beats":
+        if self.pattern == "beats":
             # Three waves: two nearly parallel (very close theta) -> visible moire,
             # plus one orthogonal at a different wavelength.
             base_theta = rng.uniform(0, math.pi)
@@ -45,14 +43,14 @@ class MoireInterferenceSkill(BaseSkill):
                 phi = rng.uniform(0, 1)
                 field += np.sin(k * (nx * math.cos(theta) + ny * math.sin(theta)) + phi * 2 * math.pi)
                 n_waves += 1
-        elif pattern == "crosshatch":
+        elif self.pattern == "crosshatch":
             for dt in (0.0, math.pi / 2.0, math.pi / 4.0, 3 * math.pi / 4.0):
                 wl = float(rng.uniform(0.10, 0.18))
                 k = 2 * math.pi / wl
                 phi = float(rng.uniform(0, 1))
                 field += np.sin(k * (nx * math.cos(dt) + ny * math.sin(dt)) + phi * 2 * math.pi)
                 n_waves += 1
-        elif pattern == "rosette":
+        elif self.pattern == "rosette":
             # One radial wave + three plane waves.
             r = np.sqrt(nx * nx + ny * ny)
             wl_r = 0.10

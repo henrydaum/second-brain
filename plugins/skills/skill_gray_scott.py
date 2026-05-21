@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
@@ -31,15 +31,13 @@ class GrayScottSkill(BaseSkill):
     name = 'Gray-Scott'
     description = 'Reaction-diffusion as Gray-Scott PDE on a 256x256 grid, integrated for ~3500 steps then upscaled. Two species A and B diffuse and react; the steady-state texture depends entirely on the feed rate f and kill rate k. Five named presets explore the parameter landscape: spots, mazes, worms, coral, and U-skate (moving solitons). Final B concentration mapped through palette LUT -- the patterns emerge from chemistry, not drawing. Good for "reaction diffusion", "gray scott", "texture", "spots", "stripes", "coral", "organic", or any biology-flavored algorithmic motif.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'regime', 'label': 'Regime', 'options': [{'value': 'spots', 'label': 'Spots'}, {'value': 'maze', 'label': 'Maze'}, {'value': 'worms', 'label': 'Worms'}, {'value': 'coral', 'label': 'Coral'}, {'value': 'uskate', 'label': 'U-skate (solitons)'}], 'default': 'coral'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    regime = Enum([('spots', 'Spots'), ('maze', 'Maze'), ('worms', 'Worms'), ('coral', 'Coral'), ('uskate', 'U-skate (solitons)')], default='coral')
 
-    def run(self, canvas, regime="coral", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
-        f, k, n_steps = _PRESETS.get(str(regime), _PRESETS["coral"])
+        f, k, n_steps = _PRESETS.get(str(self.regime), _PRESETS["coral"])
         rng = np.random.default_rng(seed)
 
         N = 384

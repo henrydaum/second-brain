@@ -1,31 +1,26 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Slider, Bool, Palette
 
 import numpy as np
 
 try:
-    art_kit  # injected by sandbox at exec time
+    art_kit
 except NameError:
     art_kit = None
 
 
 class EdgeDetectSkill(BaseSkill):
     name = 'Edge Detect'
-    description = 'Sobel edge map rendered in palette colors: edges painted with palette.primary on a palette.background field. Strength dials the gradient magnitude, invert flips which side gets edges. Params: strength (0.5-6.0, default 2.0), invert bool.'
+    description = 'Sobel edge map rendered in palette colors: edges painted with palette.primary on a palette.background field.'
     kind = 'transform'
-    owner = 'library'
-    created_at = 1730000000.0
-    hidden = False
-    controls = [
-        {'type': 'palette', 'name': 'palette', 'label': 'Palette'},
-        {'type': 'slider', 'name': 'strength', 'label': 'Strength', 'min': 0.5, 'max': 6.0, 'step': 0.1, 'default': 2.0},
-        {'type': 'bool', 'name': 'invert', 'label': 'Invert', 'default': False},
-    ]
 
-    def run(self, canvas, strength=2.0, invert=False):
-        k = float(art_kit.clamp(strength, 0.1, 10.0))
+    palette  = Palette()
+    strength = Slider(0.5, 6.0, default=2.0, step=0.1)
+    invert   = Bool(default=False)
+
+    def run(self, canvas):
+        k = float(self.strength)
         arr = canvas.image_array(mode="RGB", dtype="float")
         lum = arr[..., 0] * 0.2126 + arr[..., 1] * 0.7152 + arr[..., 2] * 0.0722
-        # Sobel via slicing.
         gx = np.zeros_like(lum)
         gy = np.zeros_like(lum)
         gx[:, 1:-1] = (
@@ -38,12 +33,10 @@ class EdgeDetectSkill(BaseSkill):
             + 0.5 * (np.roll(lum[2:, :], -1, axis=1) - np.roll(lum[:-2, :], -1, axis=1))
             + 0.5 * (np.roll(lum[2:, :], 1, axis=1) - np.roll(lum[:-2, :], 1, axis=1))
         )
-        mag = np.sqrt(gx * gx + gy * gy)
-        mag = np.clip(mag * k, 0.0, 1.0)
-        if bool(invert):
+        mag = np.clip(np.sqrt(gx * gx + gy * gy) * k, 0.0, 1.0)
+        if self.invert:
             mag = 1.0 - mag
         bg = np.array(art_kit.hex_to_rgb(canvas.palette.background), dtype=np.float32) / 255.0
         fg = np.array(art_kit.hex_to_rgb(canvas.palette.primary), dtype=np.float32) / 255.0
         m = mag[..., None]
-        out = bg[None, None, :] * (1.0 - m) + fg[None, None, :] * m
-        canvas.commit_array(out)
+        canvas.commit_array(bg[None, None, :] * (1.0 - m) + fg[None, None, :] * m)

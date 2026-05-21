@@ -1,38 +1,30 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Slider
 
 import numpy as np
 from PIL import Image, ImageFilter
 
 try:
-    art_kit  # injected by sandbox at exec time
+    art_kit
 except NameError:
     art_kit = None
 
 
 class TiltShiftSkill(BaseSkill):
     name = 'Tilt Shift'
-    description = "Blur the top and bottom of the image while keeping a horizontal focus band sharp — the 'miniature' look. Params: focus_y (0.1-0.9, default 0.55), focus_band (0.05-0.6, default 0.22), max_blur (1-30, default 12)."
+    description = "Blur the top and bottom of the image while keeping a horizontal focus band sharp — the 'miniature' look."
     kind = 'transform'
-    owner = 'library'
-    created_at = 1730000000.0
-    hidden = False
-    controls = [
-        {'type': 'slider', 'name': 'focus_y', 'label': 'Focus Y', 'min': 0.05, 'max': 0.95, 'step': 0.05, 'default': 0.55},
-        {'type': 'slider', 'name': 'focus_band', 'label': 'Band', 'min': 0.05, 'max': 0.6, 'step': 0.05, 'default': 0.22},
-        {'type': 'slider', 'name': 'max_blur', 'label': 'Blur', 'min': 1, 'max': 40, 'step': 1, 'default': 12},
-    ]
 
-    def run(self, canvas, focus_y=0.55, focus_band=0.22, max_blur=12):
+    focus_y    = Slider(0.05, 0.95, default=0.55, step=0.05)
+    focus_band = Slider(0.05, 0.6, default=0.22, step=0.05)
+    max_blur   = Slider(1, 40, default=12, step=1)
+
+    def run(self, canvas):
         img = canvas.image.convert("RGB")
         s = canvas.size
-        fy = float(art_kit.clamp(focus_y, 0.05, 0.95))
-        fb = float(art_kit.clamp(focus_band, 0.05, 0.6))
-        mb = float(art_kit.clamp(max_blur, 1, 40))
-
-        blurred = img.filter(ImageFilter.GaussianBlur(mb))
+        blurred = img.filter(ImageFilter.GaussianBlur(float(self.max_blur)))
         yy = np.arange(s).astype(np.float32) / max(1, s - 1)
-        d = np.abs(yy - fy)
-        edge0 = fb / 2.0
+        d = np.abs(yy - float(self.focus_y))
+        edge0 = float(self.focus_band) / 2.0
         edge1 = edge0 + 0.15
         t = np.clip((d - edge0) / max(1e-6, edge1 - edge0), 0.0, 1.0)
         smooth = (t * t * (3.0 - 2.0 * t))

@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import numpy as np
@@ -50,18 +50,16 @@ class IsometricTerrainSkill(BaseSkill):
     name = 'Isometric Terrain'
     description = 'Fake 3D from pure 2D primitives: a small fbm heightmap rasterized cell by cell in back-to-front order, each cell drawn as a footprint hex base plus a top and two shaded side panels. Three palette shades per cell -- top (brightest), left (mid), right (darkest) -- give consistent diagonal lighting without any real depth buffer. Presets: rolling hills, islands above sea level, blocky city, stepped mesa, and a village of quantized towers. Good for "terrain", "voxel", "isometric", "village", "island", "hill", or any tilted-grid worldbuilding.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'scene', 'label': 'Scene', 'options': [{'value': 'hills', 'label': 'Rolling Hills'}, {'value': 'islands', 'label': 'Islands'}, {'value': 'city', 'label': 'City Blocks'}, {'value': 'mesa', 'label': 'Stepped Mesa'}, {'value': 'village', 'label': 'Tower Village'}], 'default': 'hills'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    scene = Enum([('hills', 'Rolling Hills'), ('islands', 'Islands'), ('city', 'City Blocks'), ('mesa', 'Stepped Mesa'), ('village', 'Tower Village')], default='hills')
 
-    def run(self, canvas, scene="hills", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
-        scene = str(scene)
+        self.scene = str(self.scene)
 
         N = 36
-        h = _heightmap(seed, N, scene)
+        h = _heightmap(seed, N, self.scene)
 
         img = Image.new("RGBA", (s, s), canvas.palette.background)
         draw = ImageDraw.Draw(img, "RGBA")

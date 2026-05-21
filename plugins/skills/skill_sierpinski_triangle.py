@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import random
@@ -139,18 +139,16 @@ class SierpinskiTriangleSkill(BaseSkill):
     name = 'Sierpinski Triangle'
     description = 'The Sierpinski gasket -- the same self-similar shape rendered two completely different ways, both demonstrated side by side as named presets. The L-system preset uses F->F-G+F+G-F at 120 degrees to trace the gasket as a single turtle path. The chaos-game preset throws 200,000 random points at the midpoint-toward-a-random-vertex rule and accumulates them into a palette-graded density buffer. The carpet preset trades triangles for squares (the 2D Cantor carpet, also Sierpinski). Good for "sierpinski", "gasket", "triangle", "chaos game", "carpet", or "self-similar".'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'method', 'label': 'Method', 'options': [{'value': 'lsystem', 'label': 'L-system Turtle'}, {'value': 'chaos_game', 'label': 'Chaos Game'}, {'value': 'carpet', 'label': 'Sierpinski Carpet'}], 'default': 'chaos_game'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    method = Enum([('lsystem', 'L-system Turtle'), ('chaos_game', 'Chaos Game'), ('carpet', 'Sierpinski Carpet')], default='chaos_game')
 
-    def run(self, canvas, method="chaos_game", **_):
+    def run(self, canvas):
         s = int(canvas.size)
         seed = int(canvas.seed)
-        method = str(method)
-        if method == "lsystem":
+        self.method = str(self.method)
+        if self.method == "lsystem":
             out = _render_lsystem(canvas, s)
-        elif method == "carpet":
+        elif self.method == "carpet":
             out = _render_carpet(canvas, s)
         else:
             out = _render_chaos(canvas, s, seed)

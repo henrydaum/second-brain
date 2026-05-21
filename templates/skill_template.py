@@ -30,7 +30,8 @@ AUTO-DISCOVERY RULES
 - File must be in plugins/skills/ (baked-in) or the sandbox skills dir
 - File name must start with "skill_"
 - Class must inherit from BaseSkill
-- Class must define `def run(self, canvas, **params)`
+- Class must define `def run(self, canvas)` for descriptor-style built-ins
+  or `def run(self, canvas, **params)` for wrapped sandbox skills
 - One skill class per file
 
 
@@ -77,7 +78,7 @@ Only these modules may be imported inside a skill:
   numpy (and numpy.random)
   PIL.Image, PIL.ImageDraw, PIL.ImageFilter, PIL.ImageOps,
   PIL.ImageEnhance, PIL.ImageChops, PIL.ImageColor
-  plugins.BaseSkill  (literal — for the `from plugins.BaseSkill import BaseSkill` line)
+  plugins.BaseSkill  (literal — for `BaseSkill`, `Slider`, `Bool`, `Enum`, `Pan`, `Palette`)
 
 Everything else (os, sys, subprocess, requests, plugins.helpers.*, etc.) is
 blocked at AST validation time. There is no escape hatch.
@@ -85,16 +86,20 @@ blocked at AST validation time. There is no escape hatch.
 
 CONTROLS
 --------
-A skill may declare up to 3 non-palette controls (slider/enum/bool/pan).
-Declare a palette control only when the skill uses palette and should expose a
-layer-specific palette override.
+Built-in skills declare up to 3 non-palette controls as BaseSkill descriptors:
 
-  slider:  {"type": "slider", "name": "intensity", "min": 0.0, "max": 1.0, "step": 0.01, "default": 0.5}
-  enum:    {"type": "enum",   "name": "mode",      "options": [{"value": "soft", "label": "Soft"}, ...], "default": "soft"}
-  bool:    {"type": "bool",   "name": "wrap",      "default": False}
-  pan:     {"type": "pan",    "name": "center",    "x_param": "cx", "y_param": "cy", "step": 0.05}
-Control `name` (except `palette`) must match a parameter of
-run(self, canvas, **params).
+  intensity = Slider(0.0, 1.0, default=0.5, step=0.01)
+  mode      = Enum([("soft", "Soft"), ("crisp", "Crisp")], default="soft")
+  wrap      = Bool(default=False)
+  cx        = Slider(0.0, 1.0, default=0.5)
+  cy        = Slider(0.0, 1.0, default=0.5)
+  center    = Pan(x="cx", y="cy")
+  palette   = Palette()
+
+Read values as self.intensity/self.mode/etc. Slider values are clamped before
+run() starts. Pan is only a UI grouping over two sliders; read self.cx/self.cy.
+Sandbox skills created through create_skill still use the dict-form controls
+schema because the tool wraps a module-level run(canvas, **params) function.
 """
 
 # =====================================================================
@@ -107,7 +112,7 @@ class BaseSkill:
     name: str = ""
     description: str = ""
     kind: str = "creation"          # "creation" | "transform"
-    owner: str = ""
+    owner: str = "library"
     created_at: float = 0.0
     controls: list = []
     hidden: bool = False
@@ -115,7 +120,7 @@ class BaseSkill:
     requires_services: list[str] = []
     config_settings: list = []
 
-    def run(self, canvas, **params):
+    def run(self, canvas):
         raise NotImplementedError
 
 
@@ -123,7 +128,7 @@ class BaseSkill:
 # EXAMPLE — a creation skill (full file shape; create_skill emits this)
 # =====================================================================
 #
-# from plugins.BaseSkill import BaseSkill
+# from plugins.BaseSkill import BaseSkill, Slider, Palette
 # import math
 # import random
 # from PIL import Image, ImageDraw
@@ -133,20 +138,17 @@ class BaseSkill:
 #     name = "Vogel Bloom"
 #     description = "A sunflower-style bloom of palette-blended cells."
 #     kind = "creation"
-#     owner = "library"
-#     created_at = 1779667200.0
-#     hidden = False
-#     controls = [
-#         {"type": "slider", "name": "density", "min": 200, "max": 1500, "step": 50, "default": 600},
-#     ]
+#     palette = Palette()
+#     density = Slider(200, 1500, default=600, step=50)
 #
-#     def run(self, canvas, density=600, **_):
+#     def run(self, canvas):
 #         rng = random.Random(canvas.seed)
 #         img = canvas.create_image()
 #         draw = ImageDraw.Draw(img, "RGBA")
 #         s = canvas.size
 #         scale = s * 0.42
-#         for i, (x, y) in enumerate(art_kit.vogel_spiral(int(density), scale=scale)):
+#         density = int(self.density)
+#         for i, (x, y) in enumerate(art_kit.vogel_spiral(density, scale=scale)):
 #             t = i / max(1, density - 1)
 #             color = art_kit.palette_color(t)
 #             r = 4 + 8 * (1.0 - t)
@@ -159,7 +161,7 @@ class BaseSkill:
 # EXAMPLE — a transform skill (reads canvas.image, returns reshaped)
 # =====================================================================
 #
-# from plugins.BaseSkill import BaseSkill
+# from plugins.BaseSkill import BaseSkill, Slider
 # from PIL import ImageFilter
 #
 #
@@ -167,14 +169,9 @@ class BaseSkill:
 #     name = "Bloom Glow"
 #     description = "A soft luminous bloom over the current canvas."
 #     kind = "transform"
-#     owner = "library"
-#     created_at = 1779667200.0
-#     hidden = False
-#     controls = [
-#         {"type": "slider", "name": "radius", "min": 1.0, "max": 24.0, "step": 0.5, "default": 8.0},
-#     ]
+#     radius = Slider(1.0, 24.0, default=8.0, step=0.5)
 #
-#     def run(self, canvas, radius=8.0, **_):
+#     def run(self, canvas):
 #         base = canvas.image
-#         glow = base.filter(ImageFilter.GaussianBlur(radius=float(radius)))
+#         glow = base.filter(ImageFilter.GaussianBlur(radius=float(self.radius)))
 #         canvas.commit(canvas.image.alpha_composite(glow) or glow)

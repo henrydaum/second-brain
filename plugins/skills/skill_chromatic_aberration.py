@@ -1,34 +1,30 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Slider, Bool
 
 import math
 import numpy as np
 
 try:
-    art_kit  # injected by sandbox at exec time
+    art_kit
 except NameError:
     art_kit = None
 
 
 class ChromaticAberrationSkill(BaseSkill):
     name = 'Chromatic Aberration'
-    description = 'Lens-fringe color separation — split R/G/B and offset each. Radial mode pushes channels outward from the center (camera-lens look). Uniform mode offsets all channels along a fixed direction (CRT/print misregistration look). Params: strength (0-30 px, default 6), radial bool, angle (0-360, only used when radial=False).'
+    description = 'Lens-fringe color separation — split R/G/B and offset each. Radial mode pushes channels outward from the center; uniform mode offsets along a fixed direction.'
     kind = 'transform'
-    owner = 'library'
-    created_at = 1730000000.0
-    hidden = False
-    controls = [
-        {'type': 'slider', 'name': 'strength', 'label': 'Strength', 'min': 0, 'max': 30, 'step': 1, 'default': 6},
-        {'type': 'bool', 'name': 'radial', 'label': 'Radial', 'default': True},
-        {'type': 'slider', 'name': 'angle', 'label': 'Angle', 'min': 0, 'max': 360, 'step': 5, 'default': 0},
-    ]
 
-    def run(self, canvas, strength=6, radial=True, angle=0):
-        amt = float(art_kit.clamp(strength, 0, 60))
+    strength = Slider(0, 30, default=6, step=1)
+    radial   = Bool(default=True)
+    angle    = Slider(0, 360, default=0, step=5)
+
+    def run(self, canvas):
+        amt = float(self.strength)
         arr = canvas.image_array(mode="RGB", dtype="float")
         r = arr[..., 0]
         g = arr[..., 1]
         b = arr[..., 2]
-        if bool(radial):
+        if self.radial:
             xx, yy, nx, ny = art_kit.centered_grid(canvas.size)
             length = np.sqrt(nx * nx + ny * ny) + 1e-6
             ux = nx / length
@@ -37,7 +33,7 @@ class ChromaticAberrationSkill(BaseSkill):
             b_new = art_kit.bilinear_sample(b, xx - ux * amt, yy - uy * amt)
             out = np.stack([r_new, g, b_new], axis=-1)
         else:
-            a = math.radians(float(art_kit.clamp(angle, 0, 360)))
+            a = math.radians(float(self.angle))
             dx = int(round(math.cos(a) * amt))
             dy = int(round(math.sin(a) * amt))
             r_new = np.roll(r, shift=(dy, dx), axis=(0, 1))

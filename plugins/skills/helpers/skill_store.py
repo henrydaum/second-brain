@@ -3,7 +3,8 @@
 A skill is one Python file under ``plugins/skills/skill_<slug>.py`` (baked-in)
 or ``DATA_DIR/sandbox_skills/skill_<slug>.py`` (sandbox) that defines a
 ``class <X>(BaseSkill)`` with metadata as class attributes and a
-``def run(self, canvas, **params)`` method.
+``def run(self, canvas, **params)`` method, or descriptor-style controls with
+``def run(self, canvas)``.
 
 This module owns:
 - AST validation (which imports + attribute accesses are safe, structural
@@ -143,7 +144,7 @@ def validate_skill_code(source: str) -> list[str]:
     if cls_node is None:
         errors.append("no class inheriting from BaseSkill found — every skill must define `class <Name>(BaseSkill):`")
     elif _find_run_method(cls_node) is None:
-        errors.append(f"class '{cls_node.name}' must define `def run(self, canvas, **params)`")
+        errors.append(f"class '{cls_node.name}' must define `def run(self, canvas)`")
 
     return errors
 

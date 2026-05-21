@@ -28,36 +28,44 @@ Clone-and-adjust beats freehand every time.
 
 ## 1. Skill file template
 
-Every skill is one Python file with five metadata constants followed by a
-`run(canvas, **params)` function:
+Built-in/reference skills use descriptor controls on the `BaseSkill` class.
+Each parameter is declared once, then read as `self.<name>` inside `run()`.
+Slider values are defaulted and clamped by the runtime before `run()` starts.
 
 ```python
-SKILL_NAME = "Sunflower Field"
-SKILL_DESCRIPTION = "Vogel-spiral sunflower seed pattern with palette-graded petals."
-SKILL_KIND = "creation"   # or "transform"
-SKILL_OWNER = "library"   # set automatically when the agent creates a skill
-SKILL_CREATED_AT = 0.0    # set automatically
+import random
+from PIL import ImageDraw
+from plugins.BaseSkill import BaseSkill, Slider, Palette
 
-import math, random
-from PIL import Image, ImageDraw
 
-def run(canvas, count=900, petal_size=0.018):
-    rng = random.Random(canvas.seed)              # seed every random source
-    img = canvas.create_image()                   # palette.background fill
-    draw = ImageDraw.Draw(img, "RGBA")
-    s = canvas.size
-    for i, (nx, ny) in enumerate(art_kit.vogel_spiral(int(count))):
-        x = s * (0.5 + nx * 0.45)
-        y = s * (0.5 + ny * 0.45)
-        t = i / max(1, int(count) - 1)
-        color = art_kit.palette_color(t)
-        r = s * float(petal_size) * (1 - 0.4 * t)
-        draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
-    canvas.commit(img)
+class SunflowerFieldSkill(BaseSkill):
+    name = "Sunflower Field"
+    description = "Vogel-spiral sunflower seed pattern with palette-graded petals."
+    kind = "creation"
+
+    palette = Palette()
+    count = Slider(200, 1800, default=900, step=50)
+    petal_size = Slider(0.006, 0.04, default=0.018, step=0.002)
+
+    def run(self, canvas):
+        rng = random.Random(canvas.seed)              # seed every random source
+        img = canvas.create_image()                   # palette.background fill
+        draw = ImageDraw.Draw(img, "RGBA")
+        s = canvas.size
+        count = int(self.count)
+        for i, (nx, ny) in enumerate(art_kit.vogel_spiral(count)):
+            x = s * (0.5 + nx * 0.45)
+            y = s * (0.5 + ny * 0.45)
+            t = i / max(1, count - 1)
+            color = art_kit.palette_color(t)
+            r = s * self.petal_size * (1 - 0.4 * t)
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
+        canvas.commit(img)
 ```
 
-The agent fills `SKILL_OWNER` and `SKILL_CREATED_AT` via `create_skill`; you
-don't write them yourself.
+The `create_skill` tool still accepts module-level `def run(canvas, **params)`
+plus a `controls=[...]` schema and wraps it for sandbox use. Use the descriptor
+form when editing built-in skills directly.
 
 ### Transform skill template (numpy + warp)
 
@@ -66,15 +74,25 @@ For lens / warp / glitch transforms, build a coordinate map and resample. The
 remove almost all of the boilerplate:
 
 ```python
-def run(self, canvas, strength=0.6):
-    arr = canvas.image_array(mode="RGB", dtype="float")   # float32 in [0,1]
-    xx, yy, nx, ny = art_kit.centered_grid(canvas.size)   # pixel + normalized coords
-    r2 = nx * nx + ny * ny
-    scale = 1.0 + strength * r2                           # barrel distortion
-    cx = (canvas.size - 1) / 2.0
-    sx = cx + nx * scale * cx
-    sy = cx + ny * scale * cx
-    canvas.commit_array(art_kit.bilinear_sample(arr, sx, sy))
+from plugins.BaseSkill import BaseSkill, Slider
+
+
+class BarrelWarpSkill(BaseSkill):
+    name = "Barrel Warp"
+    description = "A radial barrel distortion."
+    kind = "transform"
+    strength = Slider(-1.0, 1.0, default=0.6, step=0.05)
+
+    def run(self, canvas):
+        strength = self.strength
+        arr = canvas.image_array(mode="RGB", dtype="float")   # float32 in [0,1]
+        xx, yy, nx, ny = art_kit.centered_grid(canvas.size)   # pixel + normalized coords
+        r2 = nx * nx + ny * ny
+        scale = 1.0 + strength * r2
+        cx = (canvas.size - 1) / 2.0
+        sx = cx + nx * scale * cx
+        sy = cx + ny * scale * cx
+        canvas.commit_array(art_kit.bilinear_sample(arr, sx, sy))
 ```
 
 For PIL-only transforms (blur, solarize, enhance), use `canvas.image` →
@@ -224,39 +242,58 @@ and re-run the skill chain whenever the user adjusts one.
 Used well, controls turn near-miss completions into successes without another
 agent turn.
 
-Pass `controls` to `create_skill`. Every control name (except `palette`) must
-correspond to a keyword parameter of your `run(canvas, ...)` function.
+For built-in skills, declare controls as class attributes:
 
 ```python
-controls = [
-    {"type": "slider", "name": "zoom", "label": "Zoom",
-     "min": 0.1, "max": 20.0, "step": 0.1, "default": 1.0},
-    {"type": "pan", "name": "center", "label": "Pan",
-     "x_param": "cx", "y_param": "cy", "step": 0.1,
-     "x_default": -0.5, "y_default": 0.0},
-    {"type": "palette"},
-]
+from plugins.BaseSkill import BaseSkill, Slider, Bool, Enum, Pan, Palette
+
+
+class ExampleSkill(BaseSkill):
+    name = "Example"
+    description = "A controllable example."
+    kind = "transform"
+
+    palette = Palette()
+    zoom = Slider(0.1, 20.0, default=1.0, step=0.1)
+    wrap = Bool(default=False)
+    mode = Enum([("soft", "Soft"), ("crisp", "Crisp")], default="soft")
+    cx = Slider(0.0, 1.0, default=0.5, step=0.05)
+    cy = Slider(0.0, 1.0, default=0.5, step=0.05)
+    center = Pan(x="cx", y="cy")
+
+    def run(self, canvas):
+        # self.zoom/self.wrap/self.mode/self.cx/self.cy are ready to use.
+        ...
 ```
 
-Control types — keep things general-purpose; one widget should map cleanly to
-one knob the user wants to turn:
+`Pan` is only a UI grouping over two slider values; read `self.cx` and
+`self.cy`, not `self.center`. `Palette` declares a layer-specific palette
+override and should only be used by skills that actually read palette colors.
 
-| type     | Schema                                                          | Notes |
-|----------|-----------------------------------------------------------------|-------|
-| `slider` | `name, label, min, max, step, default` (numeric)                | Sets one numeric run param. |
-| `enum`   | `name, label, options:[{value,label}], default`                 | Sets one param to a discrete value. |
-| `bool`   | `name, label, default`                                          | Sets one boolean run param. |
-| `pan`    | `name, label, x_param, y_param, step, x_default, y_default`     | Two-axis arrow pad; updates both params together. |
-| `palette`| no extras                                                       | Lets the user swap the canvas palette for this entry. Doesn't count toward the cap. |
+For sandbox skills created through `create_skill`, pass the old dict schema to
+the tool. Every non-palette control name must still correspond to a keyword
+parameter of the module-level `run(canvas, ...)` function.
+
+Descriptor controls — keep things general-purpose; one widget should map
+cleanly to one knob the user wants to turn:
+
+| descriptor | Example | Notes |
+|------------|---------|-------|
+| `Slider` | `zoom = Slider(0.1, 20.0, default=1.0, step=0.1)` | Numeric value; auto-clamped. |
+| `Enum` | `mode = Enum([("soft", "Soft")], default="soft")` | Discrete string/value choice. |
+| `Bool` | `wrap = Bool(default=False)` | Boolean toggle. |
+| `Pan` | `center = Pan(x="cx", y="cy")` | UI arrow pad over two Slider values. |
+| `Palette` | `palette = Palette()` | Layer-specific palette override; does not count toward the cap. |
 
 **Pick controls that generalize.** A `zoom` slider works for fractals, tilings,
 spirals — anything where a scale matters. A `density` slider works for fields
 of dots, lines, or strokes. Reach for these abstract dials before you reach
 for skill-specific ones.
 
-Prefer to include a `palette` control on creation skills — it lets users
+Prefer to include `Palette()` on palette-aware creation skills — it lets users
 explore color choices freely instead of being locked into whatever palette the
 agent picked.
+
 ## 9. Common pitfalls
 
 - Forgetting `canvas.commit(image)` → the runtime errors. Always commit.

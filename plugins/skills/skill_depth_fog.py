@@ -1,48 +1,40 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Slider, Enum, Palette
 
 import numpy as np
-from PIL import Image
 
 try:
-    art_kit  # injected by sandbox at exec time
+    art_kit
 except NameError:
     art_kit = None
 
 
 class DepthFogSkill(BaseSkill):
     name = 'Depth Fog'
-    description = 'Blend the current canvas toward the palette background by a depth mask: linear top-fade (skies blend into the background atmosphere), bottom-fade (foregrounds dissolve), or radial edge-fade (a circular subject in center stays sharp, edges blur into background). Pseudo-atmospheric perspective from §11 of the encyclopedia. Strength slider, gentle by default.'
+    description = 'Blend the current canvas toward the palette background by a depth mask: linear top-fade, bottom-fade, or radial edge-fade.'
     kind = 'transform'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'palette', 'name': 'palette', 'label': 'Palette'}, {'type': 'enum', 'name': 'direction', 'label': 'Direction', 'options': [{'value': 'top', 'label': 'Top Fade'}, {'value': 'bottom', 'label': 'Bottom Fade'}, {'value': 'radial', 'label': 'Radial Edge'}], 'default': 'top'}, {'type': 'slider', 'name': 'strength', 'label': 'Strength', 'min': 0.0, 'max': 1.0, 'step': 0.05, 'default': 0.55}]
 
-    def run(self, canvas, direction="top", strength=0.55, **_):
-        img = canvas.image.convert("RGB")
-        s = img.size[0]
-        strength = float(art_kit.clamp(strength, 0.0, 1.0))
-        direction = str(direction)
+    palette   = Palette()
+    direction = Enum([
+        ('top',    'Top Fade'),
+        ('bottom', 'Bottom Fade'),
+        ('radial', 'Radial Edge'),
+    ], default='top')
+    strength  = Slider(0.0, 1.0, default=0.55, step=0.05)
 
-        arr = np.asarray(img, dtype=np.float32)
+    def run(self, canvas):
+        s = canvas.size
+        arr = canvas.image_array(mode="RGB", dtype="float") * 255.0
         bg = np.array(art_kit.hex_to_rgb(canvas.palette.background), dtype=np.float32)
-
         ys, xs = np.mgrid[0:s, 0:s].astype(np.float32)
-        if direction == "top":
+        if self.direction == "top":
             mask = 1.0 - (ys / max(s - 1, 1))
-        elif direction == "bottom":
+        elif self.direction == "bottom":
             mask = ys / max(s - 1, 1)
-        else:  # radial -- 0 at center, 1 at corners
-            cx = s / 2.0
-            cy = s / 2.0
+        else:
+            cx = cy = s / 2.0
             d = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
             d_max = np.sqrt(2.0) * cx
             mask = np.clip(d / d_max, 0.0, 1.0)
-
-        # Smoothstep so the fade isn't a hard linear ramp.
-        mask = mask * mask * (3.0 - 2.0 * mask)
-        mask = mask * strength
+        mask = mask * mask * (3.0 - 2.0 * mask) * float(self.strength)
         mask = mask[..., None]
-        out = arr * (1.0 - mask) + bg[None, None, :] * mask
-        out = np.clip(out, 0, 255).astype(np.uint8)
-        canvas.commit(Image.fromarray(out, "RGB").convert("RGBA"))
+        canvas.commit_array((arr * (1.0 - mask) + bg[None, None, :] * mask) / 255.0)

@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import numpy as np
@@ -45,14 +45,12 @@ class RaymarchSdfSkill(BaseSkill):
     name = 'Raymarch SDF'
     description = '2D raymarching of a signed distance function: for each pixel, march along a ray taking step sizes equal to the SDF value at the current point. The number of steps to hit (or near-miss) the surface becomes the palette ramp coordinate; the final distance modulates atmosphere fog. Three SDF presets -- three overlapping circles smin\'d together, a torus annulus, and a rounded box + circle composition. Rendered at half resolution then upscaled to stay in the 30s budget. Good for "raymarching", "sdf", "shapes", "sphere", "torus", "glow", or any implicit-geometry algorithmic motif.'
     kind = 'creation'
-    owner = 'library'
-    created_at = 1779667200.0
-    hidden = False
-    controls = [{'type': 'enum', 'name': 'scene', 'label': 'Scene', 'options': [{'value': 'spheres', 'label': 'Three Spheres'}, {'value': 'torus', 'label': 'Torus'}, {'value': 'shapes', 'label': 'Mixed Shapes'}], 'default': 'spheres'}, {'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    palette = Palette()
+    scene = Enum([('spheres', 'Three Spheres'), ('torus', 'Torus'), ('shapes', 'Mixed Shapes')], default='spheres')
 
-    def run(self, canvas, scene="spheres", **_):
+    def run(self, canvas):
         s = int(canvas.size)
-        scene = str(scene)
+        self.scene = str(self.scene)
 
         # Render at half-res for speed, then upscale.
         R = 512
@@ -62,7 +60,7 @@ class RaymarchSdfSkill(BaseSkill):
         ny = (ys - R / 2.0) / (R / 2.0)
 
         sdf_fns = {"spheres": _sdf_spheres, "torus": _sdf_torus, "shapes": _sdf_shapes}
-        sdf = sdf_fns.get(scene, _sdf_spheres)
+        sdf = sdf_fns.get(self.scene, _sdf_spheres)
 
         # Direct 2D SDF visualization. The "raymarch" geometry is realized
         # vectorially: at each pixel, compute the signed distance, then march
