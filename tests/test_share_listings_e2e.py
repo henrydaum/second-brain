@@ -309,6 +309,23 @@ def test_share_route_redirects_to_landing_with_share_loaded(monkeypatch, renders
 		_cleanup_db(db, dbpath)
 
 
+def test_broken_share_route_redirects_home():
+	"""Invalid /share/{pool_hash} page links fall back to the main app."""
+	fe = SimpleNamespace(pool_share_payload=lambda _share_id: None)
+	redirects = []
+	handler = fw._Handler.__new__(fw._Handler)
+	handler.path = "/share/not-real"
+	handler.server = SimpleNamespace(frontend=fe)
+	handler.client_address = ("127.0.0.1", 12345)
+	handler.headers = {}
+	handler._redirect = lambda location, extra_headers=(): redirects.append(location)
+	handler.send_error = lambda code: pytest.fail(f"unexpected send_error({code})")
+
+	handler.do_GET()
+
+	assert redirects == ["/"]
+
+
 def test_share_deep_link_boot_does_not_race_initial_canvas_load():
 	"""Share boot should remix instead of also firing the normal loadCanvas path."""
 	app_js = Path("plugins/frontends/web/app.js").read_text(encoding="utf-8")

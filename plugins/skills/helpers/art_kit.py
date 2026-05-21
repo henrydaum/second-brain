@@ -209,6 +209,71 @@ def radial_falloff(w, h, cx=None, cy=None):
 
 
 # ---------------------------------------------------------------------------
+# Numpy primitives for transform skills.
+#
+# These let lens / warp / glitch transforms skip the most-repeated boilerplate:
+# building a centered coordinate grid and resampling an array at fractional
+# coordinates. Numpy is imported lazily so first-party skills that don't use
+# these (creation skills, PIL-only transforms) pay no import cost.
+# ---------------------------------------------------------------------------
+
+def centered_grid(size):
+    """Return (xx, yy, nx, ny) for an ``size x size`` canvas.
+
+    xx, yy: float32 pixel coordinates (0..size-1).
+    nx, ny: normalized to [-1, +1] from the canvas center — what every radial
+            distortion (fisheye, CA, vignette) actually wants.
+
+    Skills that want a custom center can compute their own normalization off
+    of xx/yy; this helper covers the 95% case.
+    """
+    import numpy as _np
+    s = int(size)
+    yy, xx = _np.mgrid[0:s, 0:s].astype(_np.float32)
+    c = (s - 1) / 2.0
+    half = max(c, 1.0)
+    nx = (xx - c) / half
+    ny = (yy - c) / half
+    return xx, yy, nx, ny
+
+
+def bilinear_sample(arr, fx, fy):
+    """Bilinear resample ``arr`` at fractional coordinates ``(fx, fy)``.
+
+    ``arr`` may be 2D (H, W) for a single channel or 3D (H, W, C) for color.
+    ``fx`` and ``fy`` are float arrays of the same shape as the output you
+    want — typically the same shape as ``arr``'s first two dimensions.
+    Coordinates outside the array are clamped to the edge.
+
+    This is the workhorse for fisheye, polar coordinates, kaleidoscope,
+    chromatic aberration, and any other warp transform.
+    """
+    import numpy as _np
+    a = _np.asarray(arr)
+    if a.ndim not in (2, 3):
+        raise ValueError(f"bilinear_sample expects a 2D or 3D array, got shape {a.shape}")
+    h, w = a.shape[:2]
+    fx = _np.clip(_np.asarray(fx, dtype=_np.float32), 0, w - 1)
+    fy = _np.clip(_np.asarray(fy, dtype=_np.float32), 0, h - 1)
+    x0 = _np.floor(fx).astype(_np.int32)
+    y0 = _np.floor(fy).astype(_np.int32)
+    x1 = _np.clip(x0 + 1, 0, w - 1)
+    y1 = _np.clip(y0 + 1, 0, h - 1)
+    wx = fx - x0
+    wy = fy - y0
+    if a.ndim == 3:
+        wx = wx[..., None]
+        wy = wy[..., None]
+    p00 = a[y0, x0]
+    p10 = a[y0, x1]
+    p01 = a[y1, x0]
+    p11 = a[y1, x1]
+    top = p00 * (1.0 - wx) + p10 * wx
+    bot = p01 * (1.0 - wx) + p11 * wx
+    return top * (1.0 - wy) + bot * wy
+
+
+# ---------------------------------------------------------------------------
 # Voronoi.
 # ---------------------------------------------------------------------------
 
@@ -402,6 +467,9 @@ def build_namespace(canvas_palette):
         fbm=fbm,
         # masks
         radial_falloff=radial_falloff,
+        # numpy primitives for transforms
+        centered_grid=centered_grid,
+        bilinear_sample=bilinear_sample,
         # voronoi
         voronoi_nearest=voronoi_nearest,
         # flow

@@ -1,7 +1,6 @@
 from plugins.BaseSkill import BaseSkill
 
 import numpy as np
-from PIL import Image
 
 try:
     art_kit  # injected by sandbox at exec time
@@ -28,8 +27,7 @@ class Anaglyph3dSkill(BaseSkill):
     def run(self, canvas, offset=10, mode='red_cyan'):
         d = int(art_kit.clamp(offset, 0, 80))
         mode = str(mode)
-        img = canvas.image.convert("RGB")
-        arr = np.asarray(img, dtype=np.float32)
+        arr = canvas.image_array(mode="RGB", dtype="float")
         left = np.roll(arr, shift=-d, axis=1)
         right = np.roll(arr, shift=d, axis=1)
         out = np.zeros_like(arr)
@@ -45,5 +43,4 @@ class Anaglyph3dSkill(BaseSkill):
             out[..., 0] = right[..., 0]
             out[..., 1] = left[..., 1]
             out[..., 2] = right[..., 2]
-        out = np.clip(out, 0, 255).astype(np.uint8)
-        canvas.commit(Image.fromarray(out, "RGB").convert("RGBA"))
+        canvas.commit_array(out)

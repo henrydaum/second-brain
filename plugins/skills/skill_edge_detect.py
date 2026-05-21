@@ -1,7 +1,6 @@
 from plugins.BaseSkill import BaseSkill
 
 import numpy as np
-from PIL import Image
 
 try:
     art_kit  # injected by sandbox at exec time
@@ -24,8 +23,7 @@ class EdgeDetectSkill(BaseSkill):
 
     def run(self, canvas, strength=2.0, invert=False):
         k = float(art_kit.clamp(strength, 0.1, 10.0))
-        img = canvas.image.convert("RGB")
-        arr = np.asarray(img, dtype=np.float32) / 255.0
+        arr = canvas.image_array(mode="RGB", dtype="float")
         lum = arr[..., 0] * 0.2126 + arr[..., 1] * 0.7152 + arr[..., 2] * 0.0722
         # Sobel via slicing.
         gx = np.zeros_like(lum)
@@ -48,5 +46,4 @@ class EdgeDetectSkill(BaseSkill):
         fg = np.array(art_kit.hex_to_rgb(canvas.palette.primary), dtype=np.float32) / 255.0
         m = mag[..., None]
         out = bg[None, None, :] * (1.0 - m) + fg[None, None, :] * m
-        out = np.clip(out * 255.0, 0, 255).astype(np.uint8)
-        canvas.commit(Image.fromarray(out, "RGB").convert("RGBA"))
+        canvas.commit_array(out)

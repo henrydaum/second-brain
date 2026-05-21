@@ -59,6 +59,27 @@ def run(canvas, count=900, petal_size=0.018):
 The agent fills `SKILL_OWNER` and `SKILL_CREATED_AT` via `create_skill`; you
 don't write them yourself.
 
+### Transform skill template (numpy + warp)
+
+For lens / warp / glitch transforms, build a coordinate map and resample. The
+`centered_grid`, `bilinear_sample`, `image_array`, and `commit_array` helpers
+remove almost all of the boilerplate:
+
+```python
+def run(self, canvas, strength=0.6):
+    arr = canvas.image_array(mode="RGB", dtype="float")   # float32 in [0,1]
+    xx, yy, nx, ny = art_kit.centered_grid(canvas.size)   # pixel + normalized coords
+    r2 = nx * nx + ny * ny
+    scale = 1.0 + strength * r2                           # barrel distortion
+    cx = (canvas.size - 1) / 2.0
+    sx = cx + nx * scale * cx
+    sy = cx + ny * scale * cx
+    canvas.commit_array(art_kit.bilinear_sample(arr, sx, sy))
+```
+
+For PIL-only transforms (blur, solarize, enhance), use `canvas.image` →
+filter → `canvas.commit(...)` as usual.
+
 ---
 
 ## 2. Canvas + art_kit reference
@@ -72,9 +93,11 @@ don't write them yourself.
 | `canvas.size` / `.width` / `.height` | Square dimension in pixels.                 |
 | `canvas.seed`             | Integer; seed every RNG with this.                      |
 | `canvas.image`            | (transform only) A copy of the current canvas image.    |
+| `canvas.image_array(mode="RGB", dtype="float")` | (transform only) The current image as a numpy array. `dtype="float"` → float32 in [0,1]; `dtype="uint8"` → raw bytes. Saves the asarray/divide step. |
 | `canvas.new(color=...)`   | Returns a fresh RGBA image at canvas size.              |
 | `canvas.create_image()`   | Shorthand for `new(color=palette.background)`.          |
-| `canvas.commit(image)`    | **Required.** Hands the finished image to the runtime.  |
+| `canvas.commit(image)`    | **Required.** Hands the finished PIL image to the runtime. |
+| `canvas.commit_array(arr)`| Same as `commit`, but accepts a numpy HxWxC array (float in [0,1] or uint8; C=3 or 4). Handles clip + dtype + Image.fromarray + RGBA convert for you. Prefer this in numpy-heavy transforms. |
 
 `art_kit` is injected too (no import needed):
 
@@ -93,6 +116,8 @@ don't write them yourself.
 | `art_kit.value_noise(seed, x, y)`   | Smooth 2D value noise in [0,1].                      |
 | `art_kit.fbm(seed, x, y, octaves)`  | Fractal Brownian motion over value_noise.            |
 | `art_kit.radial_falloff(w, h)`      | Closure: 1 at center → 0 at corner.                  |
+| `art_kit.centered_grid(size)`       | `(xx, yy, nx, ny)` — pixel coords + normalized [-1,+1] coords. The standard opener for any radial / warp transform. |
+| `art_kit.bilinear_sample(arr, fx, fy)` | Bilinear resample at fractional coords. `arr` is 2D (H,W) or 3D (H,W,C); `fx/fy` are float arrays. Coords outside the array clamp to the edge. |
 
 Allowed imports (the sandbox blocks everything else): `math`, `random`,
 `colorsys`, `numpy`, `numpy.random`, `PIL.Image`, `PIL.ImageDraw`,

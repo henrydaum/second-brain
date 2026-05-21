@@ -123,6 +123,39 @@ class Canvas:
     def commit(self, image):
         self._committed = image.convert("RGBA")
 
+    def commit_array(self, arr):
+        """Commit a numpy HxWxC array. Accepts float in [0, 1] or uint8 in [0, 255];
+        C may be 3 (RGB) or 4 (RGBA). Saves the numpy round-trip boilerplate that
+        every numeric transform would otherwise repeat: clip, scale, dtype convert,
+        Image.fromarray, convert to RGBA, then commit."""
+        import numpy as _np
+        a = _np.asarray(arr)
+        if a.ndim != 3 or a.shape[-1] not in (3, 4):
+            raise ValueError(
+                f"commit_array expected an HxWx3 or HxWx4 array, got shape {a.shape}"
+            )
+        if a.dtype.kind == "f":
+            a = _np.clip(a * 255.0, 0.0, 255.0).astype(_np.uint8)
+        elif a.dtype != _np.uint8:
+            a = _np.clip(a, 0, 255).astype(_np.uint8)
+        mode = "RGB" if a.shape[-1] == 3 else "RGBA"
+        self._committed = Image.fromarray(a, mode).convert("RGBA")
+
+    def image_array(self, mode="RGB", dtype="float"):
+        """Return the current image as a numpy array. ``mode`` is "RGB" or "RGBA"
+        (passed through to PIL). ``dtype="float"`` yields float32 in [0, 1];
+        ``dtype="uint8"`` yields the raw bytes. Transform skills only."""
+        import numpy as _np
+        if self._image is None:
+            raise ValueError("canvas.image_array is only available to transform skills")
+        img = self._image.convert(str(mode))
+        arr = _np.asarray(img)
+        if str(dtype) == "float":
+            return arr.astype(_np.float32) / 255.0
+        if str(dtype) == "uint8":
+            return arr.copy()
+        raise ValueError(f"dtype must be 'float' or 'uint8', got {dtype!r}")
+
 
 def _hint_for(error_type: str, message: str, skill_line: str) -> str | None:
     """Pattern-match common skill bugs to a one-line corrective hint."""

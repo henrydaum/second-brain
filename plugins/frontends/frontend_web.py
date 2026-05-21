@@ -1458,7 +1458,7 @@ class _Handler(BaseHTTPRequestHandler):
             share_id, _, sub = tail.partition("/")
             pool_payload = self.server.frontend.pool_share_payload(share_id) if share_id else None
             if pool_payload is None:
-                return self.send_error(404)
+                return self._redirect("/") if sub == "" else self.send_error(404)
             if sub == "":
                 self.server.frontend.record_link_open(share_id, self.client_address[0], self._cookie_uid(), pool_payload)
                 return self._redirect(f"/?share={quote(share_id, safe='')}")

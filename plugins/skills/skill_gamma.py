@@ -1,7 +1,6 @@
 from plugins.BaseSkill import BaseSkill
 
 import numpy as np
-from PIL import Image
 
 try:
     art_kit  # injected by sandbox at exec time
@@ -22,8 +21,5 @@ class GammaSkill(BaseSkill):
 
     def run(self, canvas, gamma=1.0):
         g = float(art_kit.clamp(gamma, 0.1, 5.0))
-        img = canvas.image.convert("RGB")
-        arr = np.asarray(img, dtype=np.float32) / 255.0
-        out = np.power(arr, 1.0 / g)
-        out = np.clip(out * 255.0, 0, 255).astype(np.uint8)
-        canvas.commit(Image.fromarray(out, "RGB").convert("RGBA"))
+        arr = canvas.image_array(mode="RGB", dtype="float")
+        canvas.commit_array(np.power(arr, 1.0 / g))
