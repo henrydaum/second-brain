@@ -16,6 +16,10 @@ class FilmGrainSkill(BaseSkill):
     owner = 'library'
     created_at = 1730000000.0
     hidden = False
+    controls = [
+        {'type': 'slider', 'name': 'intensity', 'label': 'Intensity', 'min': 0.0, 'max': 0.4, 'step': 0.005, 'default': 0.07},
+        {'type': 'bool', 'name': 'monochrome', 'label': 'Monochrome', 'default': True},
+    ]
 
     def run(self, canvas, intensity=0.07, monochrome=True):
         img = canvas.image.convert("RGB")

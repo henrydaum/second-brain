@@ -15,6 +15,11 @@ class SharpenSkill(BaseSkill):
     owner = 'library'
     created_at = 1730000000.0
     hidden = False
+    controls = [
+        {'type': 'slider', 'name': 'radius', 'label': 'Radius', 'min': 0.2, 'max': 6.0, 'step': 0.1, 'default': 1.5},
+        {'type': 'slider', 'name': 'percent', 'label': 'Amount', 'min': 0, 'max': 400, 'step': 5, 'default': 140},
+        {'type': 'slider', 'name': 'threshold', 'label': 'Threshold', 'min': 0, 'max': 20, 'step': 1, 'default': 2},
+    ]
 
     def run(self, canvas, radius=1.5, percent=140, threshold=2):
         radius = float(art_kit.clamp(radius, 0.2, 6.0))

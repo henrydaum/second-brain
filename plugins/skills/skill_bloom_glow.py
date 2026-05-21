@@ -15,6 +15,11 @@ class BloomGlowSkill(BaseSkill):
     owner = 'library'
     created_at = 1730000000.0
     hidden = False
+    controls = [
+        {'type': 'slider', 'name': 'radius', 'label': 'Radius', 'min': 1, 'max': 80, 'step': 1, 'default': 18},
+        {'type': 'slider', 'name': 'strength', 'label': 'Strength', 'min': 0.0, 'max': 1.5, 'step': 0.05, 'default': 0.75},
+        {'type': 'slider', 'name': 'threshold', 'label': 'Threshold', 'min': 0, 'max': 255, 'step': 5, 'default': 165},
+    ]
 
     def run(self, canvas, radius=18, strength=0.75, threshold=165):
         img = canvas.image.convert("RGB")

@@ -16,7 +16,11 @@ class VignetteSkill(BaseSkill):
     owner = 'library'
     created_at = 1730000000.0
     hidden = False
-    controls = [{'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    controls = [
+        {'type': 'palette', 'name': 'palette', 'label': 'Palette'},
+        {'type': 'slider', 'name': 'strength', 'label': 'Strength', 'min': 0.0, 'max': 1.0, 'step': 0.05, 'default': 0.6},
+        {'type': 'slider', 'name': 'softness', 'label': 'Softness', 'min': 0.05, 'max': 0.95, 'step': 0.05, 'default': 0.55},
+    ]
 
     def run(self, canvas, strength=0.6, softness=0.55):
         img = canvas.image.convert("RGB")

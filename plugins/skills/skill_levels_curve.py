@@ -15,6 +15,11 @@ class LevelsCurveSkill(BaseSkill):
     owner = 'library'
     created_at = 1730000000.0
     hidden = False
+    controls = [
+        {'type': 'slider', 'name': 'contrast', 'label': 'Contrast', 'min': 0.2, 'max': 3.0, 'step': 0.05, 'default': 1.10},
+        {'type': 'slider', 'name': 'brightness', 'label': 'Brightness', 'min': 0.2, 'max': 3.0, 'step': 0.05, 'default': 1.0},
+        {'type': 'slider', 'name': 'saturation', 'label': 'Saturation', 'min': 0.0, 'max': 3.0, 'step': 0.05, 'default': 1.18},
+    ]
 
     def run(self, canvas, contrast=1.10, brightness=1.0, saturation=1.18):
         img = canvas.image.convert("RGB")

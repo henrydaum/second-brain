@@ -16,6 +16,11 @@ class TiltShiftSkill(BaseSkill):
     owner = 'library'
     created_at = 1730000000.0
     hidden = False
+    controls = [
+        {'type': 'slider', 'name': 'focus_y', 'label': 'Focus Y', 'min': 0.05, 'max': 0.95, 'step': 0.05, 'default': 0.55},
+        {'type': 'slider', 'name': 'focus_band', 'label': 'Band', 'min': 0.05, 'max': 0.6, 'step': 0.05, 'default': 0.22},
+        {'type': 'slider', 'name': 'max_blur', 'label': 'Blur', 'min': 1, 'max': 40, 'step': 1, 'default': 12},
+    ]
 
     def run(self, canvas, focus_y=0.55, focus_band=0.22, max_blur=12):
         img = canvas.image.convert("RGB")

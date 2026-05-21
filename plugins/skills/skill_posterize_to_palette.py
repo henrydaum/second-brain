@@ -16,7 +16,10 @@ class PosterizeToPaletteSkill(BaseSkill):
     owner = 'library'
     created_at = 1730000000.0
     hidden = False
-    controls = [{'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    controls = [
+        {'type': 'palette', 'name': 'palette', 'label': 'Palette'},
+        {'type': 'slider', 'name': 'anchors', 'label': 'Anchors', 'min': 3, 'max': 14, 'step': 1, 'default': 6},
+    ]
 
     def run(self, canvas, anchors=6):
         img = canvas.image.convert("RGB")

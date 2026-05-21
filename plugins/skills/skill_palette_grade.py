@@ -16,7 +16,10 @@ class PaletteGradeSkill(BaseSkill):
     owner = 'library'
     created_at = 1730000000.0
     hidden = False
-    controls = [{'type': 'palette', 'name': 'palette', 'label': 'Palette'}]
+    controls = [
+        {'type': 'palette', 'name': 'palette', 'label': 'Palette'},
+        {'type': 'slider', 'name': 'mix', 'label': 'Mix', 'min': 0.0, 'max': 1.0, 'step': 0.05, 'default': 0.66},
+    ]
 
     def run(self, canvas, mix=0.66):
         mix = float(art_kit.clamp(mix, 0.0, 1.0))
