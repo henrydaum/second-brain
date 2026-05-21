@@ -3,15 +3,17 @@
 A skill is a Python file under plugins/skills/ (baked-in) or
 DATA_DIR/sandbox_skills/ (agent/user authored) that defines a class
 subclassing BaseSkill. The class declares metadata as class attributes and
-implements `run(canvas, **params)` to either create or transform an image.
+implements `run(canvas)` or legacy `run(canvas, **params)` to either create
+or transform an image.
 
 Skill code is executed in a subprocess sandbox (plugins/skills/helpers/
 skill_sandbox_entry.py) with restricted imports and resource limits. The
 sandbox imports the file, finds the BaseSkill subclass, instantiates it,
-and calls instance.run(canvas, **params).
+and calls instance.run(...) through the compatibility dispatcher.
 
 Allowed imports inside a skill: math, random, colorsys, numpy, PIL.*, and
-``from plugins.BaseSkill import BaseSkill`` itself. Everything else is
+``from plugins.BaseSkill import BaseSkill, Slider, Bool, Enum, Pan, Palette``.
+Everything else is
 blocked by AST validation and by the child process import gate.
 
 Every code path through run() must end with ``canvas.commit(image)``.

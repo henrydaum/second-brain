@@ -86,7 +86,14 @@ blocked at AST validation time. There is no escape hatch.
 
 CONTROLS
 --------
-Built-in skills declare up to 3 non-palette controls as BaseSkill descriptors:
+There are two authoring modes:
+
+1. create_skill sandbox mode: provide a module-level `def run(canvas, **params)`
+   plus the tool's dict-form `controls` argument. This is the normal agent path.
+2. built-in/reference mode: write a full BaseSkill class and declare controls as
+   descriptors. Use this when editing files under plugins/skills directly.
+
+Built-in descriptor controls look like this:
 
   intensity = Slider(0.0, 1.0, default=0.5, step=0.01)
   mode      = Enum([("soft", "Soft"), ("crisp", "Crisp")], default="soft")
@@ -125,7 +132,7 @@ class BaseSkill:
 
 
 # =====================================================================
-# EXAMPLE — a creation skill (full file shape; create_skill emits this)
+# EXAMPLE — a built-in/reference creation skill (full file shape)
 # =====================================================================
 #
 # from plugins.BaseSkill import BaseSkill, Slider, Palette
@@ -158,7 +165,7 @@ class BaseSkill:
 
 
 # =====================================================================
-# EXAMPLE — a transform skill (reads canvas.image, returns reshaped)
+# EXAMPLE — a built-in/reference transform skill
 # =====================================================================
 #
 # from plugins.BaseSkill import BaseSkill, Slider
