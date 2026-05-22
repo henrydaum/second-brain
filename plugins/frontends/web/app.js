@@ -640,7 +640,10 @@ controlsPanel.addEventListener("click", async e => {
     else if (arrow.dataset.dir === "down") y += step;
     pan.dataset.x = x; pan.dataset.y = y;
     const cc = pan.querySelector(".ctl-pan-c"); if (cc) cc.textContent = `${fmtNum(x)}, ${fmtNum(y)}`;
-    postControl({chain_index: +pan.dataset.chain, name: pan.dataset.name, value: {x, y}});
+    const ci = +pan.dataset.chain;
+    const xp = pan.dataset.xparam, yp = pan.dataset.yparam;
+    if (arrow.dataset.dir === "left" || arrow.dataset.dir === "right") postControl({chain_index: ci, name: xp, value: x});
+    else postControl({chain_index: ci, name: yp, value: y});
     return;
   }
 });
@@ -724,7 +727,7 @@ function renderWidget(panel, spec) {
     const xp = spec.x_param, yp = spec.y_param;
     const xv = v[xp] ?? spec.x_default ?? 0;
     const yv = v[yp] ?? spec.y_default ?? 0;
-    return `<div class="ctl-row"><span>${esc(spec.label)}</span><div class="ctl-pan" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-step="${spec.step}" data-x="${xv}" data-y="${yv}"><button type="button" class="ctl-pan-up" data-dir="up">↑</button><button type="button" class="ctl-pan-left" data-dir="left">←</button><span class="ctl-pan-c">${fmtNum(xv)}, ${fmtNum(yv)}</span><button type="button" class="ctl-pan-right" data-dir="right">→</button><button type="button" class="ctl-pan-down" data-dir="down">↓</button></div></div>`;
+    return `<div class="ctl-row"><span>${esc(spec.label)}</span><div class="ctl-pan" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-xparam="${esc(xp)}" data-yparam="${esc(yp)}" data-step="${spec.step}" data-x="${xv}" data-y="${yv}"><button type="button" class="ctl-pan-up" data-dir="up">↑</button><button type="button" class="ctl-pan-left" data-dir="left">←</button><span class="ctl-pan-c">${fmtNum(xv)}, ${fmtNum(yv)}</span><button type="button" class="ctl-pan-right" data-dir="right">→</button><button type="button" class="ctl-pan-down" data-dir="down">↓</button></div></div>`;
   }
   if (spec.type === "text") {
     const cur = v[spec.name] ?? spec.default ?? "";
