@@ -53,7 +53,7 @@ SETTINGS_DATA = [
     # --- Services ---
     ("Auto-load Services", "autoload_services",
      "Service names to load automatically on startup.",
-     ["web_search_provider", "llm", "parser", "text_embedder", "image_embedder", "gmail"],
+     ["web_search_provider", "llm", "parser", "text_embedder", "image_embedder", "gmail", "skill_worker_pool"],
      {"type": "json_list"}),
 
     # --- Frontends ---

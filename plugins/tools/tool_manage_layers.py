@@ -63,6 +63,7 @@ def _enact_and_render(context, action_type: str, payload: dict) -> ToolResult:
 			skill_loader=skill_registry.get_record,
 			db=getattr(context, "db", None),
 			on_event=bus_progress(getattr(context, "session_key", None), float((getattr(context, "config", {}) or {}).get("skill_timeout_s") or 30)),
+			worker_pool=(getattr(context, "services", None) or {}).get("skill_worker_pool"),
 		)
 	except Exception as e:
 		logger.exception("manage_layers render crashed: action=%s", action_type)

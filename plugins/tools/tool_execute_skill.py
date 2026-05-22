@@ -91,6 +91,7 @@ class ExecuteSkill(BaseTool):
 				skill_loader=skill_registry.get_record,
 				db=getattr(context, "db", None),
 				on_event=bus_progress(getattr(context, "session_key", None), float((getattr(context, "config", {}) or {}).get("skill_timeout_s") or 30)),
+				worker_pool=(getattr(context, "services", None) or {}).get("skill_worker_pool"),
 			)
 		except SkillRunError as e:
 			canvas_rt.handle_action(cs.canvas_id, "remove_layer", {"chain_index": len(cs.canvas.layers) - 1})

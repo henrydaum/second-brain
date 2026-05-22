@@ -1258,6 +1258,7 @@ class WebFrontend(BaseFrontend):
                 force_new_seed=force_new_seed,
                 db=getattr(self.runtime, "db", None),
                 on_event=lambda ev: self.render_canvas_status(session_key, {"timeout_s": _int(self.config.get("skill_timeout_s"), 30), **ev}),
+                worker_pool=(getattr(self.runtime, "services", None) or {}).get("skill_worker_pool"),
             )
         except Exception as e:
             logger.exception("new canvas render failed for session=%s", session_key)

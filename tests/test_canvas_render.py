@@ -46,6 +46,7 @@ def _install_fake_run_skill(monkeypatch):
 			"seed": seed,
 			"input_image_path": str(input_image_path) if input_image_path else None,
 			"output_image_path": str(output_image_path),
+			"worker_pool": kwargs.get("worker_pool"),
 		})
 		# Vary the color a touch so successive renders differ if needed.
 		_write_fake_png(Path(output_image_path), color=(seed % 200, (seed // 7) % 200, 96, 255))
@@ -276,6 +277,21 @@ def test_appending_layer_reuses_cached_prefix(monkeypatch, renders_dir):
 	assert r.seed == 42
 	assert [c["slug"] for c in calls] == ["grain"]
 	assert calls[0]["input_image_path"] is not None
+
+
+def test_cached_prefix_skips_worker_pool_for_cached_layers(monkeypatch, renders_dir):
+	calls = _install_fake_run_skill(monkeypatch)
+	pool = object()
+	cs = _state_with_background("fractal")
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter"), "grain": _skill("grain", "filter")})
+	canvas_render.render_canvas(cs, skill_loader=loader, seed=42, worker_pool=pool)
+	assert all(c["worker_pool"] is pool for c in calls)
+	calls.clear()
+	cs.enact("add_layer", {"skill_slug": "grain", "kind": "filter"})
+	canvas_render.render_canvas(cs, skill_loader=loader, worker_pool=pool)
+	assert [c["slug"] for c in calls] == ["grain"]
+	assert calls[0]["worker_pool"] is pool
 
 
 def test_render_progress_reports_cached_prefix(monkeypatch, renders_dir):

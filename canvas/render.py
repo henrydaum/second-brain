@@ -132,6 +132,7 @@ def render_canvas(
 	force_new_seed: bool = False,
 	db: Any = None,
 	on_event: Callable[[dict], None] | None = None,
+	worker_pool: Any = None,
 ) -> RenderResult:
 	"""Render ``cs.canvas``'s chain to a WebP file and return the result.
 
@@ -239,6 +240,7 @@ def render_canvas(
 					seed=int(seed_val),
 					input_image_path=current_input,
 					output_image_path=step_png,
+					worker_pool=worker_pool,
 				)
 				# Only the final layer's warning matters for the user-visible result;
 				# overwrite as we go so the last iteration wins.

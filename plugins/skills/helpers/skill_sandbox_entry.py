@@ -439,9 +439,7 @@ def _dispatch_run(instance, canvas, params: dict):
     return instance.run(canvas)
 
 
-def main():
-    job_path = sys.argv[1]
-    job = json.loads(Path(job_path).read_text(encoding="utf-8"))
+def _run_job(job: dict) -> int:
     _limits(memory_mb=int(job.get("memory_mb", 768)))
     output_image_path = job["output_image_path"]
     code = job["code"]
@@ -496,7 +494,7 @@ def main():
         if diag.get("skill_lineno"):
             tail += f" (line {diag['skill_lineno']}: {diag['skill_line'].strip()!r})"
         print(tail, file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     # For object skills, validate the composited final (what the viewer
     # sees) rather than the pre-composite sparse-alpha layer.
@@ -504,6 +502,25 @@ def main():
     warning = _validate_output(to_validate, canvas)
     if warning is not None:
         _write_sidecar(output_image_path, warning)
+    return 0
+
+
+def _run_job_path(job_path: str) -> int:
+    return _run_job(json.loads(Path(job_path).read_text(encoding="utf-8")))
+
+
+def _prewarm() -> None:
+    import numpy  # noqa: F401
+    from PIL import ImageChops, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageOps  # noqa: F401
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--worker":
+        _prewarm()
+        print("READY", flush=True)
+        job_path = sys.stdin.readline().strip()
+        sys.exit(_run_job_path(job_path) if job_path else 1)
+    sys.exit(_run_job_path(sys.argv[1]))
 
 
 if __name__ == "__main__":
