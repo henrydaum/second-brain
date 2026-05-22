@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from PIL import Image
 
 from plugins.helpers.palettes import get_palette
@@ -65,3 +66,31 @@ class SandboxCubeSkill(BaseSkill):
 		assert len(set(Image.open(out).convert("RGBA").getdata())) > 1
 	finally:
 		out.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("path", [
+	Path("plugins/skills/skill_3d_cube_stack.py"),
+	Path("plugins/skills/skill_3d_crystal_cluster.py"),
+	Path("plugins/skills/skill_3d_prism_halo.py"),
+])
+def test_builtin_3d_object_skills_render_over_prior_canvas(path):
+	palette = get_palette("japandi")
+	target = Path(".canvas_3d_object_test")
+	target.mkdir(exist_ok=True)
+	prior = target / "prior.png"
+	out = target / f"{path.stem}.png"
+	try:
+		Image.new("RGBA", (96, 96), palette.background).save(prior, "PNG")
+		run_skill(
+			SimpleNamespace(slug=path.stem, kind="object", code=path.read_text(encoding="utf-8")),
+			params={}, palette=palette, size=96, seed=3,
+			input_image_path=prior, output_image_path=out, timeout_s=20.0,
+		)
+		assert len(set(Image.open(out).convert("RGBA").getdata())) > 1
+	finally:
+		prior.unlink(missing_ok=True)
+		out.unlink(missing_ok=True)
+		try:
+			target.rmdir()
+		except OSError:
+			pass
