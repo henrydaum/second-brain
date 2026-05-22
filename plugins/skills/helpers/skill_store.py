@@ -124,7 +124,7 @@ _DESCRIPTOR_KWARGS = {
     "Slider": {"default", "step", "label"},
     "Bool": {"default", "label"},
     "Enum": {"default", "label"},
-    "Pan": {"label", "step"},
+    "Pan": {"x", "y", "label", "step"},
     "Text": {"default", "max_length", "placeholder", "label"},
     "Palette": {"label"},
 }
@@ -156,6 +156,189 @@ def _descriptor_call_errors(cls_node: ast.ClassDef) -> list[str]:
             errors.append(f"{attr}: {name} got unsupported keyword(s): {', '.join(unknown)}")
         if name == "Palette" and item.value.args:
             errors.append(f"{attr}: Palette() only exposes a layer palette override; use Enum([...], label='Slot') to choose a palette slot")
+    return errors
+
+
+# Class-attribute names that BaseSkill metadata reserves; literal class-level
+# assignments to these are NOT misnamed control attempts.
+_METADATA_NAMES = frozenset({
+    "name", "description", "kind", "owner", "created_at", "hidden",
+    "auto_register", "requires_services", "config_settings", "controls",
+})
+
+_PALETTE_SLOT_VALUES = frozenset({
+    "primary", "secondary", "tertiary", "accent", "background",
+})
+
+
+def _literal_kwarg(call: ast.Call, key: str):
+    """Return the literal-eval'd value for ``key`` if present, else MISSING."""
+    for kw in call.keywords:
+        if kw.arg == key:
+            try:
+                return ast.literal_eval(kw.value)
+            except Exception:
+                return _MISSING
+    return _MISSING
+
+
+def _literal_arg(call: ast.Call, index: int):
+    if index >= len(call.args):
+        return _MISSING
+    try:
+        return ast.literal_eval(call.args[index])
+    except Exception:
+        return _MISSING
+
+
+_MISSING = object()
+
+
+def _enum_option_values(options) -> list | None:
+    """Mirror Enum.__init__'s option-normalization to extract value keys.
+
+    Returns None if any option is in a form we can't normalize statically
+    (skip the default-in-options check in that case rather than false-alarm).
+    """
+    if not isinstance(options, (list, tuple)) or not options:
+        return None
+    values: list = []
+    for o in options:
+        if isinstance(o, str):
+            values.append(o)
+        elif isinstance(o, dict):
+            if "value" not in o:
+                return None
+            values.append(o["value"])
+        elif isinstance(o, (list, tuple)) and o:
+            values.append(o[0])
+        else:
+            return None
+    return values
+
+
+def _descriptor_semantic_errors(cls_node: ast.ClassDef) -> list[str]:
+    """Catch control bugs at AST time that would otherwise only surface
+    inside the subprocess: Enum default ∉ options, Slider max ≤ min,
+    Pan referencing non-Slider attrs, > 3 non-palette controls, ``palette``
+    as a non-Palette control, palette-slot strings assigned as bare class
+    attributes (a common misattempt at a control default).
+    """
+    errors: list[str] = []
+    sliders: dict[str, dict] = {}        # attr_name -> {min, max, default}
+    pans: list[tuple[str, str, str]] = []  # (attr_name, x_param, y_param)
+    descriptor_kinds: list[tuple[str, str]] = []  # (attr_name, descriptor_name)
+    pan_consumed: set[str] = set()
+
+    for item in cls_node.body:
+        # Heuristic: catch `slot = "primary"` style class-attribute defaults
+        # — they look like a control attempt but produce no UI and read as
+        # a plain string from self.slot. Flag literal-string assignments
+        # whose value matches a palette slot name.
+        if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name):
+            attr = item.targets[0].id
+            if attr not in _METADATA_NAMES and isinstance(item.value, ast.Constant) and isinstance(item.value.value, str):
+                if item.value.value in _PALETTE_SLOT_VALUES:
+                    errors.append(
+                        f"class '{cls_node.name}': '{attr} = {item.value.value!r}' is not a control — "
+                        f"it just sets a plain class attribute. To let the user pick a palette slot, "
+                        f"declare it as Enum: `{attr} = Enum(['background','primary','secondary','tertiary','accent'], "
+                        f"default='{item.value.value}', label='...')`"
+                    )
+
+        if not isinstance(item, (ast.Assign, ast.AnnAssign)) or not isinstance(item.value, ast.Call):
+            continue
+        descriptor_name = _call_name(item.value.func)
+        if descriptor_name not in _DESCRIPTOR_KWARGS:
+            continue
+        target = item.target if isinstance(item, ast.AnnAssign) else item.targets[0]
+        attr_name = target.id if isinstance(target, ast.Name) else "control"
+        call = item.value
+        descriptor_kinds.append((attr_name, descriptor_name))
+
+        # Block accidental override of the framework's `palette` pop hook.
+        if attr_name == "palette" and descriptor_name != "Palette":
+            errors.append(
+                f"control name 'palette' is reserved for the Palette() descriptor; "
+                f"rename '{attr_name}' (e.g. 'palette_slot', 'color_role') or switch to Palette()"
+            )
+
+        if descriptor_name == "Slider":
+            lo = _literal_arg(call, 0)
+            hi = _literal_arg(call, 1)
+            default = _literal_kwarg(call, "default")
+            if lo is _MISSING:
+                lo = _literal_kwarg(call, "min")
+            if hi is _MISSING:
+                hi = _literal_kwarg(call, "max")
+            if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
+                if hi <= lo:
+                    errors.append(
+                        f"{attr_name}: Slider needs max > min (got min={lo}, max={hi}); "
+                        f"swap them or widen the range"
+                    )
+                if isinstance(default, (int, float)) and not (lo <= default <= hi):
+                    errors.append(
+                        f"{attr_name}: Slider default={default} is outside [min={lo}, max={hi}]; "
+                        f"pick a default inside the declared range"
+                    )
+                sliders[attr_name] = {"min": lo, "max": hi, "default": default}
+
+        elif descriptor_name == "Enum":
+            options = _literal_arg(call, 0)
+            if options is _MISSING:
+                options = _literal_kwarg(call, "options")
+            default = _literal_kwarg(call, "default")
+            if options is not _MISSING:
+                if not options:
+                    errors.append(f"{attr_name}: Enum needs at least one option")
+                else:
+                    values = _enum_option_values(options)
+                    if values is not None and default is not _MISSING and default not in values:
+                        errors.append(
+                            f"{attr_name}: Enum default={default!r} is not in options "
+                            f"{values!r}; pick one of the declared option values"
+                        )
+
+        elif descriptor_name == "Pan":
+            x = _literal_kwarg(call, "x")
+            y = _literal_kwarg(call, "y")
+            if x is _MISSING and len(call.args) >= 1:
+                x = _literal_arg(call, 0)
+            if y is _MISSING and len(call.args) >= 2:
+                y = _literal_arg(call, 1)
+            if isinstance(x, str) and isinstance(y, str):
+                pans.append((attr_name, x, y))
+
+    # Pan references resolve only after we've seen every slider in the class.
+    for pan_attr, x_param, y_param in pans:
+        missing = [p for p in (x_param, y_param) if p not in sliders]
+        if missing:
+            errors.append(
+                f"{pan_attr}: Pan(x={x_param!r}, y={y_param!r}) — "
+                f"{', '.join(repr(m) for m in missing)} not declared as Slider on the same class. "
+                f"Add the Sliders first, then point Pan at their names."
+            )
+            continue
+        pan_consumed.add(x_param)
+        pan_consumed.add(y_param)
+
+    # Count user-facing controls. Palette doesn't count toward the cap;
+    # Sliders absorbed by a Pan share their widget with that Pan, so they
+    # count once (via the Pan), not twice.
+    visible = 0
+    for attr_name, descriptor_name in descriptor_kinds:
+        if descriptor_name == "Palette":
+            continue
+        if descriptor_name == "Slider" and attr_name in pan_consumed:
+            continue
+        visible += 1
+    if visible > 3:
+        errors.append(
+            f"class '{cls_node.name}': {visible} non-palette controls declared, cap is 3. "
+            f"Drop the least-useful ones or fold two scalars into a Pan (which counts as one widget)."
+        )
+
     return errors
 
 
@@ -214,6 +397,7 @@ def validate_skill_code(source: str) -> list[str]:
         for lineno in _literal_control_attrs(cls_node):
             errors.append(f"class '{cls_node.name}' declares literal controls at line {lineno}; use Slider/Enum/Bool/Pan/Text/Palette descriptors")
         errors.extend(_descriptor_call_errors(cls_node))
+        errors.extend(_descriptor_semantic_errors(cls_node))
         errors.extend(_unsupported_control_api_errors(cls_node))
         run = _find_run_method(cls_node)
         if run is None:

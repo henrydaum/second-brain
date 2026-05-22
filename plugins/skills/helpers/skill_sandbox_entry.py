@@ -213,6 +213,11 @@ def _hint_for(error_type: str, message: str, skill_line: str) -> str | None:
             return "You used `math` but didn't import it. Add `import math` at the top of the skill."
         if name == "BaseSkill":
             return "You used `BaseSkill` but didn't import it. Add `from plugins.BaseSkill import BaseSkill` at the top of the skill."
+        if name in {"Slider", "Enum", "Bool", "Pan", "Text", "Palette"}:
+            return (
+                f"You used `{name}` but didn't import it. Descriptor classes live alongside BaseSkill: "
+                f"`from plugins.BaseSkill import BaseSkill, {name}` (combine with whatever else you already import)."
+            )
 
     return None
 
