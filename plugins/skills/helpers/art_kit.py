@@ -13,7 +13,10 @@ from __future__ import annotations
 import colorsys
 import math
 import random
+from pathlib import Path
 from types import SimpleNamespace
+
+from PIL import ImageDraw, ImageFont
 
 from plugins.tools.helpers.color_theory import oklch_to_rgb as _oklch_to_rgb
 
@@ -436,6 +439,103 @@ def attractor_points(name, n, seed, params=None):
 
 
 # ---------------------------------------------------------------------------
+# Text rendering (Jost).
+# ---------------------------------------------------------------------------
+
+_FONTS_DIR = Path(__file__).resolve().parents[3] / "fonts"
+
+_FONT_FILES = {
+    ("light", False):   "Jost-300-Light.ttf",
+    ("light", True):    "Jost-300-LightItalic.ttf",
+    ("regular", False): "Jost-400-Book.ttf",
+    ("regular", True):  "Jost-400-BookItalic.ttf",
+    ("bold", False):    "Jost-700-Bold.ttf",
+    ("bold", True):     "Jost-700-BoldItalic.ttf",
+    ("black", False):   "Jost-900-Black.ttf",
+    ("black", True):    "Jost-900-BlackItalic.ttf",
+}
+
+_FONT_CACHE: dict[tuple[str, bool, int], ImageFont.FreeTypeFont] = {}
+
+
+def _load_font(weight: str, italic: bool, size: int) -> ImageFont.FreeTypeFont:
+    key = (weight, bool(italic), int(size))
+    cached = _FONT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    filename = _FONT_FILES.get((weight, bool(italic)))
+    if filename is None:
+        raise ValueError(
+            f"unknown font variant: weight={weight!r}, italic={italic!r}. "
+            f"weight must be one of: light, regular, bold, black"
+        )
+    font = ImageFont.truetype(str(_FONTS_DIR / filename), int(size))
+    _FONT_CACHE[key] = font
+    return font
+
+
+def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: float) -> list[str]:
+    """Greedy word-wrap on whitespace. Preserves explicit \\n line breaks."""
+    lines: list[str] = []
+    for paragraph in str(text).split("\n"):
+        words = paragraph.split(" ")
+        if not words:
+            lines.append("")
+            continue
+        current = words[0]
+        for word in words[1:]:
+            trial = current + " " + word
+            bbox = font.getbbox(trial)
+            if (bbox[2] - bbox[0]) <= max_width:
+                current = trial
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+    return lines
+
+
+def text(image, xy, content, size=48, weight="regular", italic=False,
+         color=None, anchor="lt", align="left", max_width=None, line_spacing=1.15):
+    """Draw `content` onto `image` in Jost at the given position.
+
+    Args:
+      image:       PIL Image (RGBA recommended). Drawn into in place.
+      xy:          (x, y) anchor point. Meaning depends on `anchor`.
+      content:     str. `\\n` introduces a hard line break.
+      size:        Font size in pixels.
+      weight:      "light" | "regular" | "bold" | "black".
+      italic:      Bool.
+      color:       Hex string or RGB(A) tuple. Defaults to black.
+      anchor:      PIL text anchor (e.g. "lt", "mm", "rb"). See PIL docs.
+      align:       "left" | "center" | "right". Only matters with multi-line.
+      max_width:   If set, word-wrap to this pixel width.
+      line_spacing: Multiplier on font size between lines.
+    """
+    font = _load_font(weight, italic, size)
+    draw = ImageDraw.Draw(image)
+    body = _wrap_text(content, font, max_width) if max_width else str(content).split("\n")
+    rendered = "\n".join(body)
+    draw.multiline_text(
+        xy, rendered, font=font, fill=color or "#000000",
+        anchor=anchor, align=align,
+        spacing=int(size * (line_spacing - 1.0)),
+    )
+
+
+def text_bbox(content, size=48, weight="regular", italic=False,
+              max_width=None, line_spacing=1.15):
+    """Return (width, height) the text will occupy when drawn with the same args."""
+    font = _load_font(weight, italic, size)
+    body = _wrap_text(content, font, max_width) if max_width else str(content).split("\n")
+    if not body:
+        return (0, 0)
+    widths = [font.getbbox(line)[2] - font.getbbox(line)[0] for line in body]
+    line_h = int(size * line_spacing)
+    return (max(widths), line_h * (len(body) - 1) + size)
+
+
+# ---------------------------------------------------------------------------
 # Namespace factory used by the sandbox.
 # ---------------------------------------------------------------------------
 
@@ -481,6 +581,9 @@ def build_namespace(canvas_palette):
         wave_field=wave_field,
         # attractors
         attractor_points=attractor_points,
+        # text
+        text=text,
+        text_bbox=text_bbox,
         # stdlib re-exports for convenience
         pi=math.pi,
         tau=math.tau,
