@@ -27,19 +27,29 @@ from plugins.tools.helpers.color_theory import oklch_to_rgb as _oklch_to_rgb
 # ---------------------------------------------------------------------------
 
 def lerp(a, b, t):
+    """Linear interpolation: returns ``a`` at t=0, ``b`` at t=1, beyond either
+    bound if ``t`` is outside [0, 1]. Works on scalars or numpy arrays."""
     return a + (b - a) * t
 
 
 def clamp(x, lo=0.0, hi=1.0):
+    """Clamp ``x`` to the [``lo``, ``hi``] range. Scalar only — for numpy
+    arrays use ``numpy.clip``."""
     return lo if x < lo else hi if x > hi else x
 
 
 def smoothstep(t, edge0=0.0, edge1=1.0):
+    """Smooth Hermite ramp: 0 below ``edge0``, 1 above ``edge1``, with a
+    smoothed S-curve in between. Use instead of ``lerp`` when you want
+    transitions that ease in and out rather than snap linearly."""
     x = clamp((t - edge0) / ((edge1 - edge0) or 1e-9), 0.0, 1.0)
     return x * x * (3 - 2 * x)
 
 
 def remap(x, in_lo, in_hi, out_lo, out_hi):
+    """Linearly re-range ``x`` from [in_lo, in_hi] to [out_lo, out_hi]. Does
+    not clamp — values outside the input range extrapolate. Wrap with
+    ``clamp`` if you need a bounded result."""
     t = (x - in_lo) / ((in_hi - in_lo) or 1e-9)
     return out_lo + (out_hi - out_lo) * t
 
@@ -49,17 +59,23 @@ def remap(x, in_lo, in_hi, out_lo, out_hi):
 # ---------------------------------------------------------------------------
 
 def hex_to_rgb(h):
+    """Parse a ``"#rrggbb"`` (or ``"rrggbb"``) string to a ``(r, g, b)``
+    tuple of ints in [0, 255]. The inverse of ``rgb_to_hex``."""
     h = str(h).lstrip("#")
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 
 def rgb_to_hex(rgb):
+    """Format an ``(r, g, b)`` tuple as a ``"#rrggbb"`` string. Channels are
+    clamped to [0, 255] and rounded, so float intermediates are safe."""
     r, g, b = (int(round(clamp(c, 0, 255))) for c in rgb)
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def mix_hex(a, b, t):
-    """Linear RGB mix of two hex colors. t=0 -> a, t=1 -> b."""
+    """Linear RGB mix of two hex colors: t=0 returns ``a``, t=1 returns ``b``.
+    For palette-aware gradients, prefer ``palette_color(t)`` — it interpolates
+    along the canvas's luminance-sorted ramp instead of two arbitrary hexes."""
     ar, ag, ab = hex_to_rgb(a)
     br, bg, bb = hex_to_rgb(b)
     return rgb_to_hex((lerp(ar, br, t), lerp(ag, bg, t), lerp(ab, bb, t)))
@@ -89,7 +105,17 @@ def _palette_color_fn(canvas_palette):
     n = len(ramp)
 
     def palette_color(t, value=1.0):
-        """Sample the luminance-sorted palette ramp at t∈[0,1]. Returns hex."""
+        """Sample the canvas palette's luminance-sorted ramp at ``t`` ∈ [0, 1].
+
+        Returns a hex string. ``t=0`` is the darkest palette slot, ``t=1`` the
+        brightest, with linear RGB interpolation between adjacent slots.
+        ``value`` ∈ [0, 1.5] scales brightness multiplicatively (use sparingly
+        — ``palette_color(t)`` alone keeps the palette pure).
+
+        **This is the preferred color source for every fill and stroke.**
+        Hardcoded hexes or RGB tuples break palette swapping; always reach for
+        ``palette_color`` (or ``canvas.palette.<slot>``) instead.
+        """
         t = clamp(float(t), 0.0, 1.0)
         if n == 1:
             return ramp[0]
@@ -107,7 +133,15 @@ def _palette_color_fn(canvas_palette):
 
 
 def oklch_to_rgb(l, c, h):
-    """Re-export of color_theory.oklch_to_rgb. Hue h is in turns (0..1)."""
+    """Convert OKLch (lightness, chroma, hue) to an sRGB ``(r, g, b)`` tuple
+    in [0, 255]. Hue ``h`` is in turns (0..1), not degrees or radians.
+
+    OKLch is perceptually uniform — equal steps in ``l`` look like equal
+    steps to the eye — so it's the right space for procedural color ramps
+    that need to read evenly. For palette-bound gradients prefer
+    ``palette_color(t)`` instead; reach for ``oklch_to_rgb`` when you need
+    a color genuinely outside the palette (rare; ask the user first).
+    """
     return _oklch_to_rgb(l, c, h)
 
 
@@ -149,7 +183,16 @@ def vogel_spiral(n, scale=1.0):
 
 
 def jittered_grid(rng, cols, rows, jitter=0.4):
-    """Centers of a cols×rows grid in [0,1]², each jittered within its cell."""
+    """Centers of a ``cols × rows`` grid in [0, 1]², each jittered within
+    its own cell. Returns a list of ``(x, y)`` tuples in row-major order.
+
+    ``jitter=0`` gives a perfect lattice; ``jitter=1`` lets points wander
+    across cell boundaries. ``rng`` must be a seeded ``random.Random`` so
+    palette replays produce identical points.
+
+    The standard way to seed Voronoi tilings, scattered marks, or any
+    "evenly distributed but not gridlike" point set.
+    """
     out = []
     cw, ch = 1.0 / max(1, cols), 1.0 / max(1, rows)
     for r in range(rows):
@@ -196,8 +239,19 @@ def _hash01_np(seed, ix, iy):
 
 
 def value_noise(seed, x, y):
-    """Smooth 2D value noise in [0,1]. Inputs are continuous; integer steps are
-    one lattice cell. Cheap drop-in alternative to perlin."""
+    """Smooth 2D value noise in [0, 1] at a single point.
+
+    Inputs are continuous floats; an integer step in ``x`` or ``y`` crosses
+    one lattice cell. Cheap drop-in alternative to perlin for organic
+    texture, terrain, clouds.
+
+    **Use the scalar form for sparse or sequential sampling** — particle
+    advection, 1D sweeps, one-off lookups inside a drawing loop.
+    **To fill a whole lattice, use ``value_noise_grid`` instead** — it's
+    typically 30-80× faster on a 160² grid. Note the two paths use
+    different hash sequences, so they produce different fields at the
+    same ``(seed, x, y)``.
+    """
     x0, y0 = math.floor(x), math.floor(y)
     fx, fy = x - x0, y - y0
     sx, sy = smoothstep(fx), smoothstep(fy)
@@ -209,7 +263,19 @@ def value_noise(seed, x, y):
 
 
 def fbm(seed, x, y, octaves=4, lacunarity=2.0, gain=0.5):
-    """Fractional Brownian motion over value_noise. Returns ~[0,1]."""
+    """Fractional Brownian motion over ``value_noise`` at a single point.
+
+    Sums ``octaves`` layers of value_noise at progressively higher frequency
+    (``lacunarity``) and lower amplitude (``gain``). Returns ~[0, 1].
+    Output is richer-looking than raw ``value_noise`` — natural choice for
+    clouds, terrain heightfields, smoke, organic texture.
+
+    **Use the scalar form for sparse/sequential sampling** (flow-field
+    particle advection, 1D angle sweeps, fbm interleaved with drawing).
+    **To fill a 2D lattice, use ``fbm_grid`` instead** — ~30-80× faster on
+    a 160² grid. The two paths use different hash sequences, so outputs at
+    the same seed differ visually.
+    """
     total = 0.0
     amp = 1.0
     freq = 1.0
@@ -223,13 +289,18 @@ def fbm(seed, x, y, octaves=4, lacunarity=2.0, gain=0.5):
 
 
 def value_noise_grid(seed, xx, yy):
-    """Vectorized 2D value noise. ``xx`` and ``yy`` are numpy float arrays
-    of the same shape; returns a float64 array of the same shape in [0,1].
+    """Vectorized 2D value noise over numpy coordinate arrays.
 
-    Uses a SplitMix64-style bit-mix hash (different sequence from the scalar
-    ``value_noise``), so output values for the same (seed, x, y) will not
-    match the scalar path. Use this when you need to fill a whole grid in one
-    numpy call instead of looping in Python.
+    ``xx`` and ``yy`` are float arrays of identical shape; returns a float64
+    array of the same shape in [0, 1]. Typical setup:
+
+        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+        field = art_kit.value_noise_grid(seed, xx * freq, yy * freq)
+
+    **Preferred over scalar ``value_noise`` whenever you need a whole grid
+    of samples.** Uses a SplitMix64-style hash (different sequence from the
+    scalar path), so the same ``(seed, x, y)`` produces a different value
+    here than in ``value_noise``.
     """
     import numpy as _np
     xx = _np.asarray(xx, dtype=_np.float64)
@@ -250,13 +321,25 @@ def value_noise_grid(seed, xx, yy):
 
 
 def fbm_grid(seed, xx, yy, octaves=4, lacunarity=2.0, gain=0.5):
-    """Vectorized fbm over ``value_noise_grid``. Returns a float64 numpy
-    array of the same shape as ``xx`` / ``yy`` in ~[0,1].
+    """Vectorized fbm over numpy coordinate arrays. Returns a float64 array
+    matching the shape of ``xx`` / ``yy``, values in ~[0, 1].
 
-    Drop-in replacement for nested-Python loops calling ``fbm``: on a
-    160×160 grid with 5 octaves this is roughly 30-80× faster than the
-    scalar path. Different hash sequence than the scalar ``fbm``, so
-    outputs at identical seeds will differ visually.
+    **Preferred for any noise field big enough to want at once** — terrain
+    heightmaps, cloud layers, nebula warps, ridged turbulence. Replaces the
+    nested-Python pattern::
+
+        for r in range(N):                                # SLOW
+            for c in range(N):
+                h[r, c] = art_kit.fbm(seed, c * freq, r * freq, octaves=k)
+
+    with one call::
+
+        yy, xx = np.mgrid[0:N, 0:N].astype(np.float32)    # FAST
+        h = art_kit.fbm_grid(seed, xx * freq, yy * freq, octaves=k)
+
+    Roughly 30-80× faster on a 160² grid with 5 octaves. Different hash
+    sequence than the scalar ``fbm``, so outputs at the same seed differ
+    visually — pick one and stay with it inside a skill.
     """
     import numpy as _np
     xx = _np.asarray(xx, dtype=_np.float64)
@@ -279,7 +362,17 @@ def fbm_grid(seed, xx, yy, octaves=4, lacunarity=2.0, gain=0.5):
 # ---------------------------------------------------------------------------
 
 def radial_falloff(w, h, cx=None, cy=None):
-    """Return a closure f(x, y) -> 1 at center, 0 at the canvas corner."""
+    """Return a closure ``f(x, y)`` giving 1 at the center and 0 at the
+    farthest canvas corner, with a linear falloff in between.
+
+    ``cx`` / ``cy`` default to the canvas center. The closure is pure
+    Python — use it for vignette masks, sun glows, lens flares.
+
+    **For a full per-pixel mask, build it with numpy instead** (one
+    ``np.hypot`` over a coordinate grid is ~100× faster than calling this
+    closure in a loop). Reach for the closure form when you only need
+    sparse samples, or when you're already inside a per-element loop.
+    """
     cx = (w / 2.0) if cx is None else float(cx)
     cy = (h / 2.0) if cy is None else float(cy)
     max_d = math.hypot(max(cx, w - cx), max(cy, h - cy)) or 1.0
@@ -360,12 +453,16 @@ def bilinear_sample(arr, fx, fy):
 # ---------------------------------------------------------------------------
 
 def voronoi_nearest(points):
-    """Return a closure f(x, y) -> (index, distance) of the nearest seed.
+    """Return a closure ``f(x, y) -> (index, distance)`` of the nearest
+    seed point. Useful for sparse sampling (which seed owns this random
+    spot?) or for caller-driven decisions like shading edges when the
+    second-nearest distance is small.
 
-    Pure Python; skills that want a full per-pixel map and care about speed
-    should implement Voronoi inline with numpy broadcasting. This form is
-    useful for sparse sampling or for caller-driven decisions (e.g. shade
-    edges when distance to second-nearest is small).
+    **For a full per-pixel Voronoi map, do it inline with numpy** —
+    broadcast ``(xx - sx[None, None, :])²+(yy - sy[None, None, :])²`` and
+    take ``argmin`` along the seed axis. That's tens to hundreds of times
+    faster than calling this closure per pixel. Reach for ``voronoi_nearest``
+    only for sparse / caller-driven lookups.
     """
     pts = [(float(px), float(py)) for (px, py) in points]
 
@@ -386,10 +483,17 @@ def voronoi_nearest(points):
 # ---------------------------------------------------------------------------
 
 def flow_field(seed, scale=0.005, octaves=4):
-    """Return a closure f(x, y) -> angle_radians driven by fbm noise.
+    """Return a closure ``f(x, y) -> angle_radians`` driven by ``fbm`` noise.
 
-    Skills can advect particles or draw streamlines through it. `scale` controls
-    how tightly the field swirls; smaller -> broader, smoother swirls.
+    The standard scaffold for streamline, wind, hair, and ribbon skills:
+    seed particles, repeatedly step them by ``(cos(angle), sin(angle))``,
+    draw each path with a palette color. ``scale`` controls swirl tightness
+    — smaller is broader and smoother.
+
+    Built on the scalar ``fbm``, which fits its access pattern (each
+    particle samples a different point sequentially — you can't batch it
+    into a grid). For per-pixel flow fields, sample ``fbm_grid`` once and
+    take ``arctan2`` of gradients.
     """
 
     def f(x, y):
@@ -403,7 +507,17 @@ def flow_field(seed, scale=0.005, octaves=4):
 # ---------------------------------------------------------------------------
 
 def lindenmayer(axiom, rules, iterations):
-    """Iteratively rewrite `axiom` using a {char: replacement} dict."""
+    """Iteratively rewrite ``axiom`` using a ``{char: replacement}`` dict.
+
+    Classic L-system string production: each iteration replaces every
+    matching character with its rule's right-hand side; non-matching chars
+    pass through. Pipe the result into ``turtle_segments`` to get drawable
+    line segments — together they cover trees, lightning, dragon curves,
+    Koch snowflakes, Sierpinski variants, plant skeletons.
+
+    Keep iterations modest (``≤ 6-9`` for branching grammars) — strings
+    grow exponentially and turtle interpretation slows accordingly.
+    """
     s = str(axiom)
     rules = dict(rules)
     for _ in range(int(iterations)):
@@ -460,11 +574,18 @@ def turtle_segments(sentence, start=(0.0, 0.0), heading=None, step=10.0, turn=No
 # ---------------------------------------------------------------------------
 
 def wave_field(sources):
-    """Return a closure f(x, y) -> summed wave intensity.
+    """Return a closure ``f(x, y) -> summed wave intensity``.
 
-    `sources` is a list of (cx, cy, wavelength, phase). Each contributes
-    sin(2π * (dist/wavelength + phase)). The sum is roughly in [-N, +N] for N
-    sources -- callers should normalize or pass through tanh / smoothstep.
+    ``sources`` is a list of ``(cx, cy, wavelength, phase)``. Each source
+    contributes ``sin(2π * (dist/wavelength + phase))``; the closure returns
+    their sum. The combined value lies in roughly [-N, +N] for N sources —
+    normalize with ``/N`` or pass through ``tanh`` / ``smoothstep`` before
+    mapping to color.
+
+    Good for ripples, moiré, interference patterns, water surfaces. For a
+    full per-pixel field, call the closure inside a vectorized numpy loop
+    or rewrite the math inline — pure-Python evaluation at 1024² is too
+    slow.
     """
     srcs = [(float(cx), float(cy), float(wl) or 1e-9, float(ph)) for (cx, cy, wl, ph) in sources]
 
@@ -483,10 +604,18 @@ def wave_field(sources):
 # ---------------------------------------------------------------------------
 
 def attractor_points(name, n, seed, params=None):
-    """Return n (x, y) points from a 2D strange attractor, normalized to ~[-1, 1].
+    """Generate ``n`` ``(x, y)`` points from a 2D strange attractor, each
+    coordinate normalized to ~[-1, 1].
 
-    Supported names: "de_jong", "clifford". If `params` is None, the (a, b, c, d)
-    constants are drawn from `seed` in a known-interesting range.
+    Supported ``name`` values: ``"de_jong"``, ``"clifford"``. If ``params``
+    is ``None``, the ``(a, b, c, d)`` constants are drawn from ``seed`` in
+    a known-interesting range — different seeds produce visually distinct
+    attractors. A 100-step burn-in is done before any points are emitted.
+
+    Wispy, ribbon-like point clouds; the standard recipe is to accumulate
+    the points into a density buffer (numpy histogram2d) and color-map by
+    density. For dense outputs you typically want ``n`` in the hundreds of
+    thousands.
     """
     n = max(0, int(n))
     rng = random.Random(f"art_kit.attractor:{seed}")
@@ -604,7 +733,15 @@ def text(image, xy, content, size=48, weight="regular", italic=False,
 
 def text_bbox(content, size=48, weight="regular", italic=False,
               max_width=None, line_spacing=1.15):
-    """Return (width, height) the text will occupy when drawn with the same args."""
+    """Return the ``(width, height)`` in pixels that ``content`` will occupy
+    when drawn with the same arguments via ``text``.
+
+    Pass the same ``size``, ``weight``, ``italic``, ``max_width``, and
+    ``line_spacing`` you'll use in the actual ``text`` call. Use the
+    measurement to align labels, reserve space for chips/badges, or pick
+    a font size that fits a target box (binary search ``size`` against a
+    target width).
+    """
     font = _load_font(weight, italic, size)
     body = _wrap_text(content, font, max_width) if max_width else str(content).split("\n")
     if not body:
