@@ -1,77 +1,20 @@
 ## Generative art encyclopedia
 
-This is reference, not tutorial. Each entry: the bare formula, a minimal
-Python snippet, and the trade-off that decides when to use it. Adapt
-freely; do not copy verbatim without thinking about palette, composition,
-and the canvas size you're rendering into.
+This is a math/philosophy reference for established generative methods —
+fractals, L-systems, attractors, noise, tilings, and the rest. Each entry:
+the bare formula, a minimal Python snippet showing the math, and the
+trade-off that decides when to reach for it.
 
-### §1 Sandbox rules (these are tattoos — not opinions)
+The implementation contract (sandbox rules, the `canvas` surface, every
+`art_kit` helper) lives in `templates/skill_template.py`. Read it via
+`read_skill_guide` before authoring — this file assumes you already know
+the contract and just need the math.
 
-Every skill is a Python file containing a `class <Name>(BaseSkill):` that
-declares its metadata as class attributes (`name`, `description`,
-`kind` — "background", "filter", or "object" — `owner`, `created_at`,
-`hidden`) plus descriptor controls (`Slider`, `Enum`, `Bool`, `Pan`, `Text`,
-`Palette`) and defines `def run(self, canvas)`. The `create_skill` tool accepts
-that complete class source and fills in managed metadata like `owner` and
-`created_at`.
+Do not copy snippets verbatim. Adapt for palette, composition, and the
+canvas size you're rendering into. Every color in the final skill must
+trace back to a palette slot or `art_kit.palette_color(t)`.
 
-- **Allowed imports only**: `math`, `random`, `colorsys`, `numpy`,
-  `numpy.random`, `PIL.Image`, `PIL.ImageDraw`, `PIL.ImageFilter`,
-  `PIL.ImageOps`, `PIL.ImageEnhance`, `PIL.ImageChops`, `PIL.ImageColor`,
-  and the literal `from plugins.BaseSkill import BaseSkill`.
-  Any other import is rejected at AST validation time *before* the skill
-  ever runs. No `os`, `sys`, `subprocess`, `socket`, `requests`,
-  `matplotlib`, `cv2`, `torch`, `scipy`. Reach for numpy if a math function
-  is missing.
-- **Must call `canvas.commit(image)`**. The runtime detects a missing
-  commit and errors. Every code path through `run()` must commit exactly
-  one RGBA `PIL.Image.Image`.
-- **No wall clock, no filesystem, no env vars, no network**. The sandbox
-  blocks them. Determinism is the whole point: the palette buttons
-  re-render by replaying the skill with a different palette and the same
-  seed.
-- **Hard 30-second subprocess timeout**. Beyond that, the skill is killed
-  and the agent gets an error. Vectorize with numpy; nested per-pixel
-  Python loops at 1024×1024 will time out. See §12.
-- **Hard 4-layer chain cap**: 1 background + up to 3 filters/objects.
-  Past that, `execute_skill` errors and the user must delete a layer.
-- **Three kinds**:
-  - `background` starts a new chain from `canvas.create_image()`. Layer 0
-    only.
-  - `filter` reads the current canvas via `canvas.image`, returns a
-    same-shape opaque image that replaces it. Requires a background first.
-  - `object` reads the current canvas via `canvas.image` *or* paints onto
-    a fresh transparent base via `canvas.new_layer()`, returns RGBA, and
-    the framework alpha-composites the result onto the prior canvas.
-    Use for overlays — text, badges, stickers. Paint only what you want
-    visible; leave the rest transparent. Requires a background first.
-  Calling `canvas.image` in a background skill raises `ValueError`.
-
-### §2 Canvas + color primitives
-
-```python
-canvas.size            # square pixel dimension (also canvas.width, canvas.height)
-canvas.seed            # int — seed every RNG with this
-canvas.palette.background / primary / secondary / tertiary / accent
-                       # hex strings; also unpack as RGB tuples
-canvas.image           # filter/object only: a copy of the current canvas
-canvas.new(color=...)  # fresh RGBA image at canvas size
-canvas.create_image()  # shorthand for new(color=palette.background) — backgrounds
-canvas.new_layer()     # fully-transparent RGBA at canvas size — objects
-canvas.commit(image)   # REQUIRED hand-off
-
-art_kit.palette_color(t)        # palette ramp sample at t∈[0,1]
-art_kit.hex_to_rgb(h)           # "#aabbcc" -> (170,187,204)
-art_kit.mix_hex(a, b, t)        # palette-aware interpolation
-art_kit.oklch_to_rgb(l, c, h)   # perceptual color (h in turns 0..1)
-art_kit.lerp(a,b,t) / smoothstep(t) / clamp(x,lo,hi) / remap(x,a,b,c,d)
-```
-
-**Every color must trace back to a palette slot or `palette_color(t)`.**
-Hardcoded hex / RGB literals defeat palette swapping. The post-render
-validator detects palette drift > 15% of pixels and surfaces a warning.
-
-### §3 Fractals
+### §1 Fractals
 
 **Mandelbrot** — escape-time for `z² + c` over the complex plane.
 ```python
@@ -98,7 +41,7 @@ the plane into three basins. Color by basin index + iteration count.
 Always render with numpy meshgrid + boolean masks. Never iterate per-pixel
 in Python.
 
-### §4 L-systems
+### §2 L-systems
 
 ```python
 def expand(axiom, rules, depth):
@@ -122,7 +65,7 @@ length. Narrow stroke width toward leaves; shift palette ramp toward
 and `art_kit.turtle_segments(string, start, angle, step, angle_deg)`
 helpers do this for you.
 
-### §5 Cellular automata
+### §3 Cellular automata
 
 **Elementary CA** — 1D, 2-state, 3-cell neighborhood. Rule N's bit `i`
 gives the next state for neighborhood `i`. Famous: 30 (chaos), 90
@@ -157,7 +100,7 @@ B' = B + (Dv·∇²B + A·B² - (k+f)·B) · dt
 ```
 Coarse grid (≤256) and ≤200 steps to fit the 30s budget.
 
-### §6 Strange attractors
+### §4 Strange attractors
 
 Iterate a map for ~200k steps, accumulate into a 2D density buffer, color
 by `log(1 + density)` and map via the palette ramp.
@@ -185,7 +128,7 @@ H, _, _ = np.histogram2d(ys, xs, bins=size, range=[[-2.5,2.5],[-2.5,2.5]])
 H = np.log1p(H); H = H / max(H.max(), 1e-9)   # t∈[0,1]
 ```
 
-### §7 Noise & flow fields
+### §5 Noise & flow fields
 
 **Value noise** — interpolate random values at integer lattice points
 with smoothstep. **Perlin noise** — gradient noise; smoother high
@@ -207,7 +150,7 @@ y += math.sin(angle) * step
 Draw short segments per particle; tens of thousands of particles each
 walked for ~100 steps fills the canvas.
 
-### §8 Tilings & subdivision
+### §6 Tilings & subdivision
 
 **Voronoi assignment**: generate N seed points via `art_kit.jittered_grid(rng, cols, rows)`; for each pixel, assign the nearest seed; fill the cell with `palette_color(i / N)`.
 
@@ -236,7 +179,7 @@ def split(rect, depth, rng):
 **Hex grid** — column-offset coordinates: `x = c·1.5·r`,
 `y = (r + (c%2)·0.5)·√3·radius`.
 
-### §9 Wave & interference
+### §7 Wave & interference
 
 ```
 field(x,y) = Σ_i A_i · sin(k_i · (x·cos(θ_i) + y·sin(θ_i)) + φ_i)
@@ -246,7 +189,7 @@ field to [0,1], color by palette ramp. Two close frequencies produce
 moiré beats; same wave family in radial form (`k·r`) gives concentric
 ripples.
 
-### §10 Composition primitives
+### §8 Composition primitives
 
 - **Vogel golden-angle spiral**: `θ = i · 137.50776°`, `r = sqrt(i/N)`.
   `art_kit.vogel_spiral(n)` returns n unit-disc points. Sunflowers, star
@@ -263,7 +206,7 @@ ripples.
 Leave 30–50% of the canvas as `palette.background`. Density without focus
 reads as noise.
 
-### §11 Pseudo-3D without a 3D engine
+### §9 Pseudo-3D without a 3D engine
 
 There is no GL, no real depth buffer. Fake it in 2D:
 
@@ -278,7 +221,7 @@ There is no GL, no real depth buffer. Fake it in 2D:
 - **Atmospheric perspective**: shift hue toward background palette slot
   as `y` (height) decreases or `z` (depth) increases.
 
-### §12 Performance budget
+### §10 Performance budget
 
 The hard timeout is 30 seconds. At 1024×1024, that's ~1 ns/pixel — Python
 loops cannot meet this. Vectorize.
@@ -300,7 +243,7 @@ Drawing N shapes with `ImageDraw` is fine up to ~50k items. Past that,
 build a numpy buffer and convert once. Heavy convolutions: use
 `PIL.ImageFilter.GaussianBlur` rather than rolling your own — it's C.
 
-### §13 Common pitfalls (pain signals)
+### §11 Common pitfalls (pain signals)
 
 Seeded from known issues. The agent should treat each as a precondition
 to check before submitting code:
