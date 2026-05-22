@@ -261,7 +261,19 @@ execute_skill errors and the user must delete a layer first.
 PERFORMANCE — STAY UNDER THE 30s TIMEOUT
 ----------------------------------------
 Skills run in a subprocess with a hard 30-second wall-clock timeout and
-a 768 MB memory cap. Per-pixel Python loops at 1024² always time out.
+a 768 MB memory cap. At 1024×1024 that's ~1 ns/pixel — Python loops
+cannot meet this. Vectorize.
+
+  # WRONG — minutes:
+  for y in range(size):
+      for x in range(size):
+          img.putpixel((x, y), color_for(x, y))
+
+  # RIGHT — milliseconds:
+  ys, xs = np.mgrid[0:size, 0:size]
+  r = np.sqrt((xs - size/2)**2 + (ys - size/2)**2)
+  arr = (np.stack([r, r*0.5, r*0.2], axis=-1) * 255).astype(np.uint8)
+  img = Image.fromarray(arr, "RGB").convert("RGBA")
 
 - Vectorize with numpy. Use `art_kit.centered_grid(size)` to build
   coordinate arrays once; `bilinear_sample` to warp.
@@ -272,19 +284,39 @@ a 768 MB memory cap. Per-pixel Python loops at 1024² always time out.
 - For very dense work, sample on a coarse grid (e.g. 160² or 256²) and
   upscale with PIL `BICUBIC` — the eye can't tell, and it's an order of
   magnitude cheaper.
+- Drawing N shapes with `ImageDraw` is fine up to ~50k items. Past that,
+  build a numpy buffer and convert once.
+- Heavy convolutions: use `PIL.ImageFilter.GaussianBlur` rather than
+  rolling your own — it's in C.
 
 
-COMMON PITFALLS
----------------
-- Forgetting `canvas.commit(image)` → the runtime errors. Always commit.
-- Calling `canvas.image` in a background skill → ValueError. Use
+COMMON PITFALLS (pain signals)
+------------------------------
+Treat each as a precondition to check before submitting code.
+
+- **No `canvas.commit(image)`** → runtime errors. Every path through
+  `run()` must end with one commit.
+- **`canvas.image` in a background skill** → ValueError. Use
   `canvas.create_image()` or `canvas.new(...)`.
-- Using `random.random()` without seeding → palette replay produces a
-  different image. Always go through `random.Random(canvas.seed)`.
-- Drawing everything edge-to-edge → no focal point. Leave breathing room.
-- Hex literals like `"#ff00aa"` → ignores the palette. Use slots or
-  `palette_color`.
-- Nested Python per-pixel loops at full resolution → 30s timeout.
+- **Unseeded `random.random()` or `numpy.random`** → palette replay
+  produces a different image. Always:
+    rng    = random.Random(canvas.seed)
+    rng_np = numpy.random.default_rng(canvas.seed)
+- **Hardcoded hex / RGB literals** → palette drift validator fires; user
+  palette swaps stop working. Pull every color from a slot or
+  `palette_color(t)`.
+- **Disallowed imports** (`os`, `scipy`, `cv2`, `matplotlib`, `requests`,
+  …) → AST rejection before run. The skill never executes.
+- **`Image.fromarray` with wrong shape/dtype** → ValueError. Arrays must
+  be `(H, W, 3)` or `(H, W, 4)` with `dtype=np.uint8`.
+- **Per-pixel Python loops at full size** → 30s timeout kill. Vectorize
+  with numpy, or sample on a coarse grid and upscale.
+- **Drawing edge-to-edge** → no focal point. Leave background.
+- **Transparent canvas** (alpha-composite bug) → validator warns. Start
+  from an opaque base; both `alpha_composite` operands must be RGBA.
+- **Numpy shape mismatch on broadcast** → check `.shape` of each array
+  just before the failing op; usually a missing `[:, None]` or
+  `[None, :]`.
 """
 
 # =====================================================================
