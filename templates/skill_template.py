@@ -1,4 +1,4 @@
-﻿"""
+"""
 SKILL TEMPLATE
 ==============
 This file is a self-contained reference for creating new canvas skills.

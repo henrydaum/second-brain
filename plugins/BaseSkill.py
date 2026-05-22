@@ -1,4 +1,4 @@
-﻿"""Base class for canvas skills.
+"""Base class for canvas skills.
 
 A skill is a Python file under plugins/skills/ (baked-in) or
 DATA_DIR/sandbox_skills/ (agent/user authored) that defines a class

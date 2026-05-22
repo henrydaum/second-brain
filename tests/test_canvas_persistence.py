@@ -1,4 +1,4 @@
-﻿"""Persistence + db-backed CanvasRuntime tests.
+"""Persistence + db-backed CanvasRuntime tests.
 
 Covers the canvas_persistence module directly (save / load / list_ids /
 delete) and the CanvasRuntime integration: autosave on action, lazy load

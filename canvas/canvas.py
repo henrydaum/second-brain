@@ -1,4 +1,4 @@
-﻿"""Canvas dataclass — pure data + pure mutations.
+"""Canvas dataclass — pure data + pure mutations.
 
 Backs ``CanvasState``. No frontend, no PIL, no subprocess, no disk I/O,
 no rendering, no seed handling. The state-machine wrapper in

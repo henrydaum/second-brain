@@ -1,4 +1,4 @@
-﻿# Canvas skill authoring guide
+# Canvas skill authoring guide
 
 You are building one skill: a small, deterministic Python function that either
 paints a **background**, applies an **filter** to the current canvas, or

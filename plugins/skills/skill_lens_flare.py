@@ -1,4 +1,4 @@
-﻿from plugins.BaseSkill import BaseSkill, Slider, Pan, Palette
+from plugins.BaseSkill import BaseSkill, Slider, Pan, Palette
 
 from PIL import Image, ImageDraw, ImageFilter
 

@@ -1,4 +1,4 @@
-﻿"""execute_skill: run a canvas skill (agent-facing adapter onto the new CanvasRuntime).
+"""execute_skill: run a canvas skill (agent-facing adapter onto the new CanvasRuntime).
 
 Routes the agent's "add a layer + render" request through the new canvas
 state machine: ``context.canvas.for_session(...)`` → ``handle_action("add_layer", ...)``

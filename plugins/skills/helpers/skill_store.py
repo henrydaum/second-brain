@@ -1,4 +1,4 @@
-﻿"""Skill persistence + AST validation for the class-based plugin format.
+"""Skill persistence + AST validation for the class-based plugin format.
 
 A skill is one Python file under ``plugins/skills/skill_<slug>.py`` (baked-in)
 or ``DATA_DIR/sandbox_skills/skill_<slug>.py`` (sandbox) that defines a

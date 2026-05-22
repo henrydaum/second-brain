@@ -1,4 +1,4 @@
-﻿"""End-to-end tests for the `object` skill kind.
+"""End-to-end tests for the `object` skill kind.
 
 Drives the real sandbox subprocess so we exercise the full composite path
 (prior-canvas RGBA → object commits sparse-alpha → framework

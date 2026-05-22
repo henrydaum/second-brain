@@ -1,4 +1,4 @@
-﻿from plugins.BaseSkill import BaseSkill, Slider
+from plugins.BaseSkill import BaseSkill, Slider
 
 import numpy as np
 from PIL import Image, ImageFilter

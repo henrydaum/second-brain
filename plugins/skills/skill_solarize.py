@@ -1,4 +1,4 @@
-﻿from plugins.BaseSkill import BaseSkill, Slider
+from plugins.BaseSkill import BaseSkill, Slider
 
 from PIL import ImageOps
 

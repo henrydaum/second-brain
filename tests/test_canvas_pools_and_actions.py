@@ -1,4 +1,4 @@
-﻿"""Tests for the pool-hash design.
+"""Tests for the pool-hash design.
 
 Covers:
   - canvas_pools save/load round-trip (canvas/persistence.py).

@@ -1,4 +1,4 @@
-﻿"""Subprocess sandbox for executing skill code.
+"""Subprocess sandbox for executing skill code.
 
 Spawns a child python interpreter in isolated mode (-I), pipes a JSON job
 description over stdin, and waits for the child to write a result image to

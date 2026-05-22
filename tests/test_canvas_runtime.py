@@ -1,4 +1,4 @@
-﻿"""End-to-end tests for canvas.runtime.CanvasRuntime.
+"""End-to-end tests for canvas.runtime.CanvasRuntime.
 
 Exercises the public API: create_canvas, get, delete, snapshot,
 handle_action — including the labeled enact site that wraps cs.enact.

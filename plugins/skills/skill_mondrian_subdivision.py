@@ -1,4 +1,4 @@
-﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
+from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import random
 from PIL import Image, ImageDraw

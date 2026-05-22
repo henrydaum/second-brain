@@ -1,4 +1,4 @@
-﻿## Generative art encyclopedia
+## Generative art encyclopedia
 
 This is reference, not tutorial. Each entry: the bare formula, a minimal
 Python snippet, and the trade-off that decides when to use it. Adapt

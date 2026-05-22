@@ -1,4 +1,4 @@
-﻿"""Tests for skill metadata embeddings and semantic search."""
+"""Tests for skill metadata embeddings and semantic search."""
 
 from __future__ import annotations
 

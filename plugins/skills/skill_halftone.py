@@ -1,4 +1,4 @@
-﻿from plugins.BaseSkill import BaseSkill, Slider, Palette
+from plugins.BaseSkill import BaseSkill, Slider, Palette
 
 import math
 import numpy as np

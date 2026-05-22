@@ -1,4 +1,4 @@
-﻿"""Cache-friendly system prompt assembly.
+"""Cache-friendly system prompt assembly.
 
 The prompt is split into static, semi-stable, and dynamic system messages.
 ConversationLoop places the dynamic message after prior history and before

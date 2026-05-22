@@ -1,4 +1,4 @@
-﻿from plugins.BaseSkill import BaseSkill, Slider, Enum
+from plugins.BaseSkill import BaseSkill, Slider, Enum
 
 import numpy as np
 

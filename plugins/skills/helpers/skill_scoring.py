@@ -1,4 +1,4 @@
-﻿"""Skill scoring from implicit signals (share, download, remix).
+"""Skill scoring from implicit signals (share, download, remix).
 
 Attribution: when an image earns a signal, the score is distributed across
 the chain that produced it. Background gets 0.6, the remaining 0.4 splits

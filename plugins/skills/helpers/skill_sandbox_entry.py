@@ -1,4 +1,4 @@
-﻿"""Child process for skill execution.
+"""Child process for skill execution.
 
 The parent (skill_runner.py) spawns this with ``python -I -B`` and hands it
 a JSON job over a temp file. We re-validate the source via AST, exec the

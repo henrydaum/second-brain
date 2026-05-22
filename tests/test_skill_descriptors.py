@@ -1,4 +1,4 @@
-﻿"""Tests for the descriptor-style control declaration (Tier 3).
+"""Tests for the descriptor-style control declaration (Tier 3).
 
 Covers: descriptors compile to the existing dict-form ``controls`` list,
 defaults are honoured, auto-clamping happens at dispatch time, Pan-consumed

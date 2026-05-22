@@ -1,4 +1,4 @@
-﻿"""Verify CanvasRuntime is reachable from a SecondBrainContext.
+"""Verify CanvasRuntime is reachable from a SecondBrainContext.
 
 Confirms the two paths a tool/task might find it: explicit ``canvas=`` arg
 to build_context, and the ``services["canvas"]`` fallback used by callers

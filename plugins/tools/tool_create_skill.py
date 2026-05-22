@@ -1,4 +1,4 @@
-﻿"""create_skill: persist a new canvas skill."""
+"""create_skill: persist a new canvas skill."""
 
 from __future__ import annotations
 

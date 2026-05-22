@@ -1,4 +1,4 @@
-﻿from plugins.BaseSkill import BaseSkill, Enum
+from plugins.BaseSkill import BaseSkill, Enum
 
 from PIL import Image, ImageOps
 

@@ -1,4 +1,4 @@
-﻿"""End-to-end test for the share → gallery / archive listing flow.
+"""End-to-end test for the share → gallery / archive listing flow.
 
 The bug this guards against: render_canvas was upgraded to accept ``db=``
 but no frontend / tool caller passed it, so ``canvas_pools`` stayed

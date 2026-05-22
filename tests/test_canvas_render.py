@@ -1,4 +1,4 @@
-﻿"""Tests for canvas.render.
+"""Tests for canvas.render.
 
 We don't run the real skill subprocess sandbox here — we monkeypatch
 ``canvas.render.run_skill`` with a stub that writes a tiny PNG to the

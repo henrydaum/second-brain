@@ -1,4 +1,4 @@
-﻿"""Canvas actions — parallel Action base + concrete subclasses.
+"""Canvas actions — parallel Action base + concrete subclasses.
 
 Mirrors state_machine/action.py's contract (is_legal / execute / enact /
 ActionResult) but drops the conversation-specific bits (participants,

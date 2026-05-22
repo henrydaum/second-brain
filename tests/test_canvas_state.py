@@ -1,4 +1,4 @@
-﻿"""Unit tests for canvas.state.CanvasState and its action subclasses.
+"""Unit tests for canvas.state.CanvasState and its action subclasses.
 
 Exercises the dispatch loop directly through cs.enact(...). The
 CanvasRuntime layer is tested separately in test_canvas_runtime.py.
