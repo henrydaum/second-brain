@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import random
@@ -13,7 +13,7 @@ except NameError:
 class FlowStreamlinesSkill(BaseSkill):
     name = 'Flow Streamlines'
     description = 'Particles advected through an fbm-driven flow field, leaving palette-graded streamlines. The field swirls smoothly across the canvas -- streamlines bend with it. Good for any "wind", "hair", "current", "smoke", "weather", "motion", or "abstract" request. Also a strong default when the subject doesn\'t fit any other technique.'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     swirl = Enum([('loose', 'Loose'), ('tight', 'Tight'), ('turbulent', 'Turbulent')], default='loose')
 

@@ -9,7 +9,7 @@ and the canvas size you're rendering into.
 
 Every skill is a Python file containing a `class <Name>(BaseSkill):` that
 declares its metadata as class attributes (`name`, `description`,
-`kind` — "creation", "transform", or "object" — `owner`, `created_at`, `controls`,
+`kind` — "background", "effect", or "object" — `owner`, `created_at`, `controls`,
 `hidden`) and defines `def run(self, canvas, **params)`. The `create_skill`
 tool wraps the module-level body you give it (imports + `def run(canvas, ...)`)
 in that class shell automatically and fills in `owner` and `created_at`.
@@ -32,19 +32,19 @@ in that class shell automatically and fills in `owner` and `created_at`.
 - **Hard 30-second subprocess timeout**. Beyond that, the skill is killed
   and the agent gets an error. Vectorize with numpy; nested per-pixel
   Python loops at 1024×1024 will time out. See §12.
-- **Hard 4-layer chain cap**: 1 creation + up to 3 transforms/objects.
+- **Hard 4-layer chain cap**: 1 background + up to 3 effects/objects.
   Past that, `execute_skill` errors and the user must delete a layer.
 - **Three kinds**:
-  - `creation` starts a new chain from `canvas.create_image()`. Layer 0
+  - `background` starts a new chain from `canvas.create_image()`. Layer 0
     only.
-  - `transform` reads the current canvas via `canvas.image`, returns a
-    same-shape opaque image that replaces it. Requires a creation first.
+  - `effect` reads the current canvas via `canvas.image`, returns a
+    same-shape opaque image that replaces it. Requires a background first.
   - `object` reads the current canvas via `canvas.image` *or* paints onto
     a fresh transparent base via `canvas.new_layer()`, returns RGBA, and
     the framework alpha-composites the result onto the prior canvas.
     Use for overlays — text, badges, stickers. Paint only what you want
-    visible; leave the rest transparent. Requires a creation first.
-  Calling `canvas.image` in a creation skill raises `ValueError`.
+    visible; leave the rest transparent. Requires a background first.
+  Calling `canvas.image` in a background skill raises `ValueError`.
 
 ### §2 Canvas + color primitives
 
@@ -53,9 +53,9 @@ canvas.size            # square pixel dimension (also canvas.width, canvas.heigh
 canvas.seed            # int — seed every RNG with this
 canvas.palette.background / primary / secondary / tertiary / accent
                        # hex strings; also unpack as RGB tuples
-canvas.image           # transform/object only: a copy of the current canvas
+canvas.image           # effect/object only: a copy of the current canvas
 canvas.new(color=...)  # fresh RGBA image at canvas size
-canvas.create_image()  # shorthand for new(color=palette.background) — creations
+canvas.create_image()  # shorthand for new(color=palette.background) — backgrounds
 canvas.new_layer()     # fully-transparent RGBA at canvas size — objects
 canvas.commit(image)   # REQUIRED hand-off
 
@@ -306,7 +306,7 @@ to check before submitting code:
 
 - **No `canvas.commit(image)`** → runtime errors. Every path through
   `run()` must end with one commit.
-- **`canvas.image` in a creation skill** → `ValueError`. Use
+- **`canvas.image` in a background skill** → `ValueError`. Use
   `canvas.create_image()` or `canvas.new(...)`.
 - **Unseeded `random.random()` or `np.random`** → palette replay produces
   a different image. Always:

@@ -20,7 +20,7 @@ class CreateSkill(BaseTool):
         "properties": {
             "name": {"type": "string"},
             "description": {"type": "string"},
-            "kind": {"type": "string", "enum": ["creation", "transform", "object"], "description": "creation = produces a fresh image from scratch (layer 0); transform = reads the current canvas and replaces it with a same-shape opaque image; object = reads the current canvas, returns RGBA, framework alpha-composites onto the prior canvas (overlays like typography). Transforms/objects require a creation already in the chain."},
+            "kind": {"type": "string", "enum": ["background", "effect", "object"], "description": "background = produces a fresh image from scratch (layer 0); effect = reads the current canvas and replaces it with a same-shape opaque image; object = reads the current canvas, returns RGBA, framework alpha-composites onto the prior canvas (overlays like typography). Effects/objects require a background already in the chain."},
             "code": {"type": "string", "description": "Module-level body: any needed imports plus `def run(canvas, **params):`. Will be wrapped in a BaseSkill class automatically."},
             "controls": {
                 "type": "array",
@@ -37,7 +37,7 @@ class CreateSkill(BaseTool):
             skill, path = skill_store.write_skill(
                 name=str(kwargs.get("name") or ""),
                 description=str(kwargs.get("description") or ""),
-                kind=str(kwargs.get("kind") or "creation"),
+                kind=str(kwargs.get("kind") or "background"),
                 owner=_owner(context),
                 code=str(kwargs.get("code") or ""),
                 controls=list(kwargs.get("controls") or []),

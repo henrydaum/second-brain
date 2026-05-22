@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Bool
+﻿from plugins.BaseSkill import BaseSkill, Slider, Bool
 
 import numpy as np
 from PIL import Image
@@ -12,7 +12,7 @@ except NameError:
 class FilmGrainSkill(BaseSkill):
     name = 'Film Grain'
     description = 'Deterministic per-pixel noise overlay seeded from canvas.seed. Adds tactile texture; great over flat palette grades.'
-    kind = 'transform'
+    kind = "effect"
 
     intensity  = Slider(0.0, 0.4, default=0.07, step=0.005)
     monochrome = Bool(default=True)

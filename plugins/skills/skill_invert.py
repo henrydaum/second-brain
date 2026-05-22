@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider
+﻿from plugins.BaseSkill import BaseSkill, Slider
 
 from PIL import Image, ImageOps
 
@@ -11,7 +11,7 @@ except NameError:
 class InvertSkill(BaseSkill):
     name = 'Invert'
     description = 'Photographic negative — invert RGB channels. Blend amount controls how far toward the negative we go (full=true negative, half=ghostly mid-tone).'
-    kind = 'transform'
+    kind = "effect"
 
     amount = Slider(0.0, 1.0, default=1.0)
 

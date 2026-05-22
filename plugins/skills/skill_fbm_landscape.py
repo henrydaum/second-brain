@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
@@ -20,7 +20,7 @@ def _fbm_grid(seed, grid_size, freq, octaves):
 class FbmLandscapeSkill(BaseSkill):
     name = 'fBm Landscape'
     description = 'A pure noise field rendered straight to canvas: fractional Brownian motion sampled at a coarse grid, smoothed back up to full resolution, then mapped through the palette ramp. Five regimes shift the personality completely -- soft cloud strata, rolling terrain with a warmer horizon, high-contrast magma, a layered nebula with secondary color modulation, and ridged turbulence. The universal fallback creation: looks composed on every palette. Good for "clouds", "terrain", "mist", "fog", "atmosphere", "magma", "nebula", "texture", or any abstract organic background.'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     regime = Enum([('clouds', 'Clouds'), ('terrain', 'Terrain'), ('magma', 'Magma'), ('nebula', 'Nebula'), ('ridges', 'Ridged Turbulence')], default='nebula')
 

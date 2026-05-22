@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider
+﻿from plugins.BaseSkill import BaseSkill, Slider
 
 from PIL import Image, ImageChops, ImageFilter, ImageOps
 
@@ -11,7 +11,7 @@ except NameError:
 class BloomGlowSkill(BaseSkill):
     name = 'Bloom Glow'
     description = 'Highlight bloom: extract bright pixels, blur them, screen-blend back over the image. Adds atmosphere to suns, lights, glowing edges.'
-    kind = 'transform'
+    kind = "effect"
 
     radius    = Slider(1, 80, default=18, step=1)
     strength  = Slider(0.0, 1.5, default=0.75, step=0.05)

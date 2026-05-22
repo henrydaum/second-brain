@@ -1,4 +1,4 @@
-"""Tests for the descriptor-style control declaration (Tier 3).
+﻿"""Tests for the descriptor-style control declaration (Tier 3).
 
 Covers: descriptors compile to the existing dict-form ``controls`` list,
 defaults are honoured, auto-clamping happens at dispatch time, Pan-consumed
@@ -23,7 +23,7 @@ from plugins.skills.helpers.skill_store import validate_controls
 def test_slider_descriptor_compiles_to_dict_control():
     class S(BaseSkill):
         name = "S"
-        kind = "transform"
+        kind = "effect"
         amount = Slider(0.0, 1.0, default=0.5)
 
     assert len(S.controls) == 1
@@ -39,7 +39,7 @@ def test_slider_descriptor_compiles_to_dict_control():
 def test_bool_and_enum_descriptors_compile():
     class S(BaseSkill):
         name = "S"
-        kind = "transform"
+        kind = "effect"
         flag = Bool(default=True)
         mode = Enum(["radial", "uniform"], default="uniform")
 
@@ -52,7 +52,7 @@ def test_bool_and_enum_descriptors_compile():
 def test_pan_absorbs_underlying_sliders_from_ui():
     class S(BaseSkill):
         name = "S"
-        kind = "transform"
+        kind = "effect"
         strength = Slider(-1.0, 1.0, default=0.6)
         cx = Slider(0, 1, default=0.5)
         cy = Slider(0, 1, default=0.5)
@@ -82,7 +82,7 @@ def test_pan_with_missing_slider_raises():
 def test_literal_controls_preserved_when_descriptors_absent():
     class S(BaseSkill):
         name = "S"
-        kind = "transform"
+        kind = "effect"
         controls = [{"type": "slider", "name": "x", "label": "X", "min": 0, "max": 1, "default": 0.5, "step": 0.05}]
 
     assert S.controls[0]["name"] == "x"
@@ -92,7 +92,7 @@ def test_literal_controls_preserved_when_descriptors_absent():
 def test_compiled_controls_pass_existing_validator():
     class S(BaseSkill):
         name = "S"
-        kind = "transform"
+        kind = "effect"
         strength = Slider(-1.0, 1.0, default=0.6)
         cx = Slider(0, 1, default=0.5)
         cy = Slider(0, 1, default=0.5)
@@ -135,7 +135,7 @@ def _make_canvas() -> Canvas:
 def test_dispatch_sets_attributes_and_clamps():
     class S(BaseSkill):
         name = "S"
-        kind = "transform"
+        kind = "effect"
         gamma = Slider(0.2, 3.0, default=1.0)
 
         def run(self, canvas):
@@ -157,7 +157,7 @@ def test_dispatch_calls_run_without_kwargs_when_signature_is_clean():
 
     class S(BaseSkill):
         name = "S"
-        kind = "transform"
+        kind = "effect"
         gamma = Slider(0.2, 3.0, default=1.0)
 
         def run(self, canvas):
@@ -173,7 +173,7 @@ def test_dispatch_falls_back_to_kwargs_for_legacy_signature():
 
     class S(BaseSkill):
         name = "S"
-        kind = "transform"
+        kind = "effect"
         controls = [{"type": "slider", "name": "x", "label": "X",
                      "min": 0, "max": 1, "default": 0.5, "step": 0.05}]
 
@@ -188,7 +188,7 @@ def test_dispatch_falls_back_to_kwargs_for_legacy_signature():
 def test_enum_dispatch_snaps_to_allowed():
     class S(BaseSkill):
         name = "S"
-        kind = "transform"
+        kind = "effect"
         mode = Enum(["radial", "uniform"], default="radial")
 
         def run(self, canvas):
@@ -205,7 +205,7 @@ def test_enum_dispatch_snaps_to_allowed():
 def test_pan_underlying_sliders_clamped_at_dispatch():
     class S(BaseSkill):
         name = "S"
-        kind = "transform"
+        kind = "effect"
         cx = Slider(0, 1, default=0.5)
         cy = Slider(0, 1, default=0.5)
         center = Pan(x="cx", y="cy")
@@ -226,7 +226,7 @@ def test_pan_underlying_sliders_clamped_at_dispatch():
 def test_text_descriptor_compiles_to_dict_control():
     class S(BaseSkill):
         name = "S"
-        kind = "creation"
+        kind = "background"
         phrase = Text(default="hi", max_length=50, placeholder="say something")
 
     c = [x for x in S.controls if x["type"] == "text"][0]
@@ -240,7 +240,7 @@ def test_text_descriptor_compiles_to_dict_control():
 def test_text_dispatch_clamps_and_coerces():
     class S(BaseSkill):
         name = "S"
-        kind = "creation"
+        kind = "background"
         phrase = Text(default="d", max_length=5)
 
         def run(self, canvas):

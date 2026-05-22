@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider
+﻿from plugins.BaseSkill import BaseSkill, Slider
 
 import numpy as np
 from PIL import Image, ImageFilter
@@ -12,7 +12,7 @@ except NameError:
 class TiltShiftSkill(BaseSkill):
     name = 'Tilt Shift'
     description = "Blur the top and bottom of the image while keeping a horizontal focus band sharp — the 'miniature' look."
-    kind = 'transform'
+    kind = "effect"
 
     focus_y    = Slider(0.05, 0.95, default=0.55, step=0.05)
     focus_band = Slider(0.05, 0.6, default=0.22, step=0.05)

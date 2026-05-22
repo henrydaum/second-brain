@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Palette
+﻿from plugins.BaseSkill import BaseSkill, Slider, Palette
 
 import numpy as np
 
@@ -11,7 +11,7 @@ except NameError:
 class DotScreenSkill(BaseSkill):
     name = 'Dot Screen'
     description = 'Overlay a regular dot pattern at canvas resolution, with dot alpha controlled by local luminance — keeps original colors but adds a printed-screen texture.'
-    kind = 'transform'
+    kind = "effect"
 
     palette   = Palette()
     cell_size = Slider(4, 30, default=10, step=1)

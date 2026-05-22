@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Pan
+﻿from plugins.BaseSkill import BaseSkill, Slider, Pan
 
 import numpy as np
 
@@ -11,7 +11,7 @@ except NameError:
 class FisheyeSkill(BaseSkill):
     name = 'Fisheye'
     description = 'Lens distortion sample. Positive strength gives a fisheye bulge; negative gives pincushion (edges stretch). Pan moves the lens center.'
-    kind = 'transform'
+    kind = "effect"
 
     strength = Slider(-1.0, 1.0, default=0.6, step=0.05)
     zoom     = Slider(0.5, 2.0, default=1.0, step=0.05)

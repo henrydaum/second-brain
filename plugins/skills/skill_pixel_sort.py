@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Enum
+﻿from plugins.BaseSkill import BaseSkill, Slider, Enum
 
 import numpy as np
 from PIL import Image
@@ -12,7 +12,7 @@ except NameError:
 class PixelSortSkill(BaseSkill):
     name = 'Pixel Sort'
     description = 'Sort pixels by luminance along rows or columns within luminance-threshold bands — the iconic Kim-Asendorf glitch.'
-    kind = 'transform'
+    kind = "effect"
 
     threshold = Slider(0.0, 1.0, default=0.45, step=0.05)
     direction = Enum([('row', 'Rows'), ('col', 'Columns')], default='row')

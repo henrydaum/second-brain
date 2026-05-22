@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Palette
+﻿from plugins.BaseSkill import BaseSkill, Slider, Palette
 
 import numpy as np
 
@@ -11,7 +11,7 @@ except NameError:
 class ThresholdSkill(BaseSkill):
     name = 'Threshold'
     description = 'Palette-aware two-tone threshold. Pixels above the luminance cutoff are painted palette.primary, below get palette.background. Softness adds a smooth ramp between the two.'
-    kind = 'transform'
+    kind = "effect"
 
     palette  = Palette()
     level    = Slider(0, 255, default=128, step=1)

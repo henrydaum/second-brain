@@ -104,14 +104,14 @@ class Canvas:
         self.palette = SimpleNamespace(**colors, id=p["id"], name=p["name"], kind=p["kind"], colors=colors)
         self.size = self.width = self.height = int(job["size"])
         self.seed = int(job["seed"])
-        self.kind = str(job.get("kind") or "creation")
+        self.kind = str(job.get("kind") or "background")
         self._image = Image.open(job["input_image_path"]).convert("RGBA") if job.get("input_image_path") else None
         self._committed = None
 
     @property
     def image(self):
         if self._image is None:
-            raise ValueError("canvas.image is only available to transform and object skills")
+            raise ValueError("canvas.image is only available to effect and object skills")
         return self._image.copy()
 
     def new(self, w=None, h=None, color=None):
@@ -156,7 +156,7 @@ class Canvas:
         ``dtype="uint8"`` yields the raw bytes. Transform skills only."""
         import numpy as _np
         if self._image is None:
-            raise ValueError("canvas.image_array is only available to transform and object skills")
+            raise ValueError("canvas.image_array is only available to effect and object skills")
         img = self._image.convert(str(mode))
         arr = _np.asarray(img)
         if str(dtype) == "float":
@@ -172,7 +172,7 @@ def _hint_for(error_type: str, message: str, skill_line: str) -> str | None:
     line = skill_line or ""
 
     if error_type == "PermissionError" and "assigned canvas paths" in msg:
-        return "Skills can't open or save arbitrary file paths. Read the input through `canvas.image` (transform skills only) and commit your result with `canvas.commit(image)`. The parent saves it."
+        return "Skills can't open or save arbitrary file paths. Read the input through `canvas.image` (effect/object skills only) and commit your result with `canvas.commit(image)`. The parent saves it."
 
     if "import not allowed" in msg:
         m = re.search(r"import not allowed:\s*(\S+)", msg)
@@ -182,8 +182,8 @@ def _hint_for(error_type: str, message: str, skill_line: str) -> str | None:
     if "did not call canvas.commit" in msg:
         return "Your run() finished without calling canvas.commit(image). Every code path must end with canvas.commit(img). If you built a numpy array, wrap it: canvas.commit(Image.fromarray(arr, 'RGB').convert('RGBA'))."
 
-    if "canvas.image is only available to transform" in msg:
-        return "This is a creation skill — canvas.image only exists for transform and object skills. Start a fresh image with canvas.new(color=canvas.palette.background) or canvas.create_image()."
+    if "canvas.image is only available to effect" in msg:
+        return "This is a background skill — canvas.image only exists for effect and object skills. Start a fresh image with canvas.new(color=canvas.palette.background) or canvas.create_image()."
 
     if "no BaseSkill subclass found" in msg or "must define" in msg:
         return "Every skill must define `class <Name>(BaseSkill):` with a `def run(self, canvas):` method. Wrap your code accordingly."

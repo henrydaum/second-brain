@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import numpy as np
@@ -71,7 +71,7 @@ def _pickover_trajectory(n, seed):
 class ContinuousAttractorSkill(BaseSkill):
     name = 'Continuous Attractor'
     description = 'Strange attractors beyond Lorenz: the Rossler system (dx=-y-z, dy=x+a*y, dz=b+z*(x-c)) which folds into a single ribbon, and the 3D Pickover map projected to a woven cloud. 200,000 integration steps, log-compressed density, palette-graded by depth (z) so the structure reads three-dimensional. Distinct from the Lorenz butterfly and the discrete de Jong / Clifford clouds. Good for "rossler", "pickover", "strange attractor", "chaos", "ribbon", or "woven".'
-    kind = 'creation'
+    kind = "background"
 
     palette = Palette()
     system  = Enum([('rossler', 'Rossler'), ('pickover', 'Pickover')], default='rossler')

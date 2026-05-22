@@ -1,4 +1,4 @@
-"""Tests for skill metadata embeddings and semantic search."""
+﻿"""Tests for skill metadata embeddings and semantic search."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ from plugins.BaseSkill import BaseSkill
 class WaveSkill(BaseSkill):
     name = "Ocean Wave"
     description = "Water interference and coastal waves."
-    kind = "creation"
+    kind = "background"
     hidden = {hidden}
 
     def run(self, canvas):
@@ -219,7 +219,7 @@ def _row(path, slug, name, desc, vec, hidden=0):
     arr = arr / (np.linalg.norm(arr) or 1.0)
     return {
         "path": path, "slug": slug, "name": name, "description": desc,
-        "kind": "creation", "hidden": hidden, "embedding": arr.astype("<f4").tobytes(),
+        "kind": "background", "hidden": hidden, "embedding": arr.astype("<f4").tobytes(),
         "dim": int(arr.size), "model": "fake", "updated_at": 1.0,
     }
 

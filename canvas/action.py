@@ -131,8 +131,8 @@ class CanvasAddLayer(CanvasAction):
 		kind = self.content.get("kind")
 		if not slug:
 			raise self.error(ERROR_INVALID_INPUT, "add_layer requires 'skill_slug'.")
-		if kind not in ("creation", "transform", "object"):
-			raise self.error(ERROR_INVALID_INPUT, f"add_layer 'kind' must be 'creation', 'transform', or 'object' (got {kind!r}).")
+		if kind not in ("background", "effect", "object"):
+			raise self.error(ERROR_INVALID_INPUT, f"add_layer 'kind' must be 'background', 'effect', or 'object' (got {kind!r}).")
 		entry = {
 			"slug": slug,
 			"kind": kind,

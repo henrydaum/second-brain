@@ -1,4 +1,4 @@
-"""Tests for canvas.render.
+﻿"""Tests for canvas.render.
 
 We don't run the real skill subprocess sandbox here — we monkeypatch
 ``canvas.render.run_skill`` with a stub that writes a tiny PNG to the
@@ -74,7 +74,7 @@ def renders_dir(request, monkeypatch):
 	shutil.rmtree(canvas_render.PREFIX_CACHE_DIR, ignore_errors=True)
 
 
-def _skill(slug: str, kind: str = "creation"):
+def _skill(slug: str, kind: str = "background"):
 	"""Build a minimal Skill stand-in matching what render.py reads (slug + kind)."""
 	return SimpleNamespace(slug=slug, kind=kind, code="")
 
@@ -84,10 +84,10 @@ def _loader(skills: dict):
 	return lambda slug: skills.get(slug)
 
 
-def _state_with_creation(slug: str = "fractal", **controls) -> CanvasState:
-	"""Helper: CanvasState with a single creation layer."""
+def _state_with_background(slug: str = "fractal", **controls) -> CanvasState:
+	"""Helper: CanvasState with a single background layer."""
 	cs = CanvasState()
-	cs.enact("add_layer", {"skill_slug": slug, "kind": "creation", "controls": controls})
+	cs.enact("add_layer", {"skill_slug": slug, "kind": "background", "controls": controls})
 	return cs
 
 
@@ -97,14 +97,14 @@ def _state_with_creation(slug: str = "fractal", **controls) -> CanvasState:
 
 def test_pool_hash_is_deterministic():
 	"""Same canvas state → same hash, twice in a row."""
-	cs = _state_with_creation("fractal", zoom=1.0)
+	cs = _state_with_background("fractal", zoom=1.0)
 	assert canvas_render.pool_hash(cs.canvas) == canvas_render.pool_hash(cs.canvas)
 
 
 def test_pool_hash_changes_when_controls_change():
 	"""A different control value produces a different hash."""
-	a = _state_with_creation("fractal", zoom=1.0)
-	b = _state_with_creation("fractal", zoom=2.0)
+	a = _state_with_background("fractal", zoom=1.0)
+	b = _state_with_background("fractal", zoom=2.0)
 	assert canvas_render.pool_hash(a.canvas) != canvas_render.pool_hash(b.canvas)
 
 
@@ -112,21 +112,21 @@ def test_pool_hash_ignores_canvas_id():
 	"""Two canvases with identical configs share a folder regardless of id."""
 	a = CanvasState(canvas_id="aaa")
 	b = CanvasState(canvas_id="bbb")
-	a.enact("add_layer", {"skill_slug": "fractal", "kind": "creation", "controls": {"z": 1}})
-	b.enact("add_layer", {"skill_slug": "fractal", "kind": "creation", "controls": {"z": 1}})
+	a.enact("add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {"z": 1}})
+	b.enact("add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {"z": 1}})
 	assert canvas_render.pool_hash(a.canvas) == canvas_render.pool_hash(b.canvas)
 
 
 def test_pool_hash_is_control_order_independent():
 	"""Same controls in a different dict-insertion order still hash the same."""
-	a = _state_with_creation("fractal", zoom=1.0, angle=30)
-	b = _state_with_creation("fractal", angle=30, zoom=1.0)
+	a = _state_with_background("fractal", zoom=1.0, angle=30)
+	b = _state_with_background("fractal", angle=30, zoom=1.0)
 	assert canvas_render.pool_hash(a.canvas) == canvas_render.pool_hash(b.canvas)
 
 
 def test_pool_hash_changes_when_palette_changes():
 	"""Palette is part of the render-determining state."""
-	cs = _state_with_creation("fractal")
+	cs = _state_with_background("fractal")
 	h0 = canvas_render.pool_hash(cs.canvas)
 	cs.enact("set_palette", {"palette_id": "obsidian"})
 	assert canvas_render.pool_hash(cs.canvas) != h0
@@ -139,7 +139,7 @@ def test_pool_hash_changes_when_palette_changes():
 def test_render_writes_to_pool_hash_folder(monkeypatch, renders_dir):
 	"""Output file lives at {pool_hash}/{seed}.webp under RENDERS_DIR."""
 	_install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal")
+	cs = _state_with_background("fractal")
 	skills = {"fractal": _skill("fractal")}
 
 	result = canvas_render.render_canvas(cs, skill_loader=_loader(skills), seed=42)
@@ -154,9 +154,9 @@ def test_render_writes_to_pool_hash_folder(monkeypatch, renders_dir):
 def test_render_chains_input_through_layers(monkeypatch, renders_dir):
 	"""Layer N gets layer N-1's output as its input."""
 	calls = _install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "transform", "controls": {"angle": 30}})
-	skills = {"fractal": _skill("fractal"), "swirl": _skill("swirl", "transform")}
+	cs = _state_with_background("fractal")
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect", "controls": {"angle": 30}})
+	skills = {"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect")}
 
 	canvas_render.render_canvas(cs, skill_loader=_loader(skills), seed=7)
 
@@ -164,7 +164,7 @@ def test_render_chains_input_through_layers(monkeypatch, renders_dir):
 	# Creation has no input.
 	assert calls[0]["slug"] == "fractal"
 	assert calls[0]["input_image_path"] is None
-	# Transform sees the creation's output path as input.
+	# Effect sees the background's output path as input.
 	assert calls[1]["slug"] == "swirl"
 	assert calls[1]["input_image_path"] == calls[0]["output_image_path"]
 
@@ -172,10 +172,10 @@ def test_render_chains_input_through_layers(monkeypatch, renders_dir):
 def test_render_passes_seed_and_size_to_skills(monkeypatch, renders_dir):
 	"""Every layer is invoked with the same resolved seed and the canvas size."""
 	calls = _install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "transform"})
+	cs = _state_with_background("fractal")
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
 	cs.enact("set_size", {"size": 768})
-	skills = {"fractal": _skill("fractal"), "swirl": _skill("swirl", "transform")}
+	skills = {"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect")}
 
 	canvas_render.render_canvas(cs, skill_loader=_loader(skills), seed=99)
 
@@ -186,7 +186,7 @@ def test_render_passes_seed_and_size_to_skills(monkeypatch, renders_dir):
 def test_render_resolves_palette_control_out_of_params(monkeypatch, renders_dir):
 	"""Palette swatches change the palette object, not the skill kwargs."""
 	calls = _install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal", palette="frost", zoom=2)
+	cs = _state_with_background("fractal", palette="frost", zoom=2)
 
 	canvas_render.render_canvas(cs, skill_loader=_loader({"fractal": _skill("fractal")}), seed=4)
 
@@ -205,7 +205,7 @@ def test_render_raises_on_empty_chain(monkeypatch, renders_dir):
 def test_render_raises_on_unknown_skill(monkeypatch, renders_dir):
 	"""Chain referencing a slug the loader can't resolve fails clearly."""
 	_install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("ghost")
+	cs = _state_with_background("ghost")
 	with pytest.raises(ValueError, match="ghost"):
 		canvas_render.render_canvas(cs, skill_loader=_loader({}))
 
@@ -217,7 +217,7 @@ def test_render_raises_on_unknown_skill(monkeypatch, renders_dir):
 def test_explicit_seed_is_honored(monkeypatch, renders_dir):
 	"""Passing seed=N writes exactly N.webp."""
 	_install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal")
+	cs = _state_with_background("fractal")
 	r = canvas_render.render_canvas(cs, skill_loader=_loader({"fractal": _skill("fractal")}), seed=123)
 	assert r.seed == 123
 	assert r.image_path.name == "123.webp"
@@ -226,7 +226,7 @@ def test_explicit_seed_is_honored(monkeypatch, renders_dir):
 def test_force_new_seed_mints_fresh_each_call(monkeypatch, renders_dir):
 	"""force_new_seed=True bypasses any pool cache and writes a new file."""
 	_install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal")
+	cs = _state_with_background("fractal")
 	loader = _loader({"fractal": _skill("fractal")})
 	r1 = canvas_render.render_canvas(cs, skill_loader=loader, force_new_seed=True)
 	r2 = canvas_render.render_canvas(cs, skill_loader=loader, force_new_seed=True)
@@ -239,7 +239,7 @@ def test_force_new_seed_mints_fresh_each_call(monkeypatch, renders_dir):
 def test_render_returns_cached_when_pool_has_files(monkeypatch, renders_dir):
 	"""Second call with no explicit seed reuses an existing file (cache hit)."""
 	calls = _install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal")
+	cs = _state_with_background("fractal")
 	loader = _loader({"fractal": _skill("fractal")})
 
 	r1 = canvas_render.render_canvas(cs, skill_loader=loader, seed=10)
@@ -254,10 +254,10 @@ def test_render_returns_cached_when_pool_has_files(monkeypatch, renders_dir):
 def test_first_render_locks_existing_pool_seed(monkeypatch, renders_dir):
 	"""A new session adopts an existing pool seed instead of minting another."""
 	_install_fake_run_skill(monkeypatch)
-	cs1 = _state_with_creation("fractal")
+	cs1 = _state_with_background("fractal")
 	loader = _loader({"fractal": _skill("fractal")})
 	r1 = canvas_render.render_canvas(cs1, skill_loader=loader, seed=77)
-	cs2 = _state_with_creation("fractal")
+	cs2 = _state_with_background("fractal")
 	r2 = canvas_render.render_canvas(cs2, skill_loader=loader)
 	assert r2.cache_hit is True
 	assert r2.seed == r1.seed == cs2.render_seed
@@ -266,12 +266,12 @@ def test_first_render_locks_existing_pool_seed(monkeypatch, renders_dir):
 def test_appending_layer_reuses_cached_prefix(monkeypatch, renders_dir):
 	"""After rendering two layers, appending a third only runs the third."""
 	calls = _install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "transform"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "transform"), "grain": _skill("grain", "transform")})
+	cs = _state_with_background("fractal")
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect"), "grain": _skill("grain", "effect")})
 	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
 	calls.clear()
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "transform"})
+	cs.enact("add_layer", {"skill_slug": "grain", "kind": "effect"})
 	r = canvas_render.render_canvas(cs, skill_loader=loader)
 	assert r.seed == 42
 	assert [c["slug"] for c in calls] == ["grain"]
@@ -282,11 +282,11 @@ def test_render_progress_reports_cached_prefix(monkeypatch, renders_dir):
 	"""Progress events expose cached prefix count so the UI can show reuse."""
 	_install_fake_run_skill(monkeypatch)
 	events: list[dict] = []
-	cs = _state_with_creation("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "transform"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "transform"), "grain": _skill("grain", "transform")})
+	cs = _state_with_background("fractal")
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect"), "grain": _skill("grain", "effect")})
 	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "transform"})
+	cs.enact("add_layer", {"skill_slug": "grain", "kind": "effect"})
 	canvas_render.render_canvas(cs, skill_loader=loader, on_event=events.append)
 	assert ("started", 2) in [(e["status"], e.get("cached_layers")) for e in events]
 	assert [e.get("skill_slug") for e in events if e["status"] == "layer_started"] == ["grain"]
@@ -295,10 +295,10 @@ def test_render_progress_reports_cached_prefix(monkeypatch, renders_dir):
 def test_editing_last_layer_reuses_earlier_prefix(monkeypatch, renders_dir):
 	"""Changing layer 3 keeps layers 1-2 cached and reruns only layer 3."""
 	calls = _install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "transform"})
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "transform", "controls": {"a": 1}})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "transform"), "grain": _skill("grain", "transform")})
+	cs = _state_with_background("fractal")
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
+	cs.enact("add_layer", {"skill_slug": "grain", "kind": "effect", "controls": {"a": 1}})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect"), "grain": _skill("grain", "effect")})
 	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
 	calls.clear()
 	cs.enact("set_control", {"chain_index": 2, "name": "a", "value": 2})
@@ -309,10 +309,10 @@ def test_editing_last_layer_reuses_earlier_prefix(monkeypatch, renders_dir):
 def test_editing_first_layer_invalidates_suffix(monkeypatch, renders_dir):
 	"""Changing layer 1 changes every prefix, so the full chain reruns."""
 	calls = _install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal", zoom=1)
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "transform"})
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "transform"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "transform"), "grain": _skill("grain", "transform")})
+	cs = _state_with_background("fractal", zoom=1)
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
+	cs.enact("add_layer", {"skill_slug": "grain", "kind": "effect"})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect"), "grain": _skill("grain", "effect")})
 	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
 	calls.clear()
 	cs.enact("set_control", {"chain_index": 0, "name": "zoom", "value": 2})
@@ -323,9 +323,9 @@ def test_editing_first_layer_invalidates_suffix(monkeypatch, renders_dir):
 def test_force_new_seed_does_not_reuse_old_prefix(monkeypatch, renders_dir):
 	"""Regenerate-style renders use a fresh seed and therefore rerun all layers."""
 	calls = _install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "transform"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "transform")})
+	cs = _state_with_background("fractal")
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect")})
 	r1 = canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
 	calls.clear()
 	r2 = canvas_render.render_canvas(cs, skill_loader=loader, force_new_seed=True)
@@ -336,7 +336,7 @@ def test_force_new_seed_does_not_reuse_old_prefix(monkeypatch, renders_dir):
 def test_explicit_seed_with_existing_file_is_a_cache_hit(monkeypatch, renders_dir):
 	"""Passing the same explicit seed twice doesn't re-render."""
 	calls = _install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal")
+	cs = _state_with_background("fractal")
 	loader = _loader({"fractal": _skill("fractal")})
 	canvas_render.render_canvas(cs, skill_loader=loader, seed=55)
 	calls_after_first = len(calls)
@@ -348,7 +348,7 @@ def test_explicit_seed_with_existing_file_is_a_cache_hit(monkeypatch, renders_di
 def test_existing_seeds_lists_pool(monkeypatch, renders_dir):
 	"""existing_seeds returns every seed in the pool folder, sorted."""
 	_install_fake_run_skill(monkeypatch)
-	cs = _state_with_creation("fractal")
+	cs = _state_with_background("fractal")
 	loader = _loader({"fractal": _skill("fractal")})
 	canvas_render.render_canvas(cs, skill_loader=loader, seed=3)
 	canvas_render.render_canvas(cs, skill_loader=loader, seed=1)
@@ -358,5 +358,5 @@ def test_existing_seeds_lists_pool(monkeypatch, renders_dir):
 
 def test_existing_seeds_empty_when_folder_absent(renders_dir):
 	"""No folder yet → no seeds (and no exception)."""
-	cs = _state_with_creation("fractal")
+	cs = _state_with_background("fractal")
 	assert canvas_render.existing_seeds(cs.canvas) == []

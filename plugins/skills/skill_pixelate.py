@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider
+﻿from plugins.BaseSkill import BaseSkill, Slider
 
 from PIL import Image
 
@@ -11,7 +11,7 @@ except NameError:
 class PixelateSkill(BaseSkill):
     name = 'Pixelate'
     description = 'Block-mean downsample then nearest-neighbour upsample. Classic chunky-pixel look. Bigger block_size = bigger pixels.'
-    kind = 'transform'
+    kind = "effect"
 
     block_size = Slider(2, 80, default=12, step=1)
 

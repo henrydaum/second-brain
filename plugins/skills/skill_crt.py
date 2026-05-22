@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Palette
+﻿from plugins.BaseSkill import BaseSkill, Slider, Palette
 
 import numpy as np
 
@@ -11,7 +11,7 @@ except NameError:
 class CrtSkill(BaseSkill):
     name = 'Crt'
     description = 'Combo CRT-monitor effect: gentle barrel distortion + chromatic aberration + scanlines + vignette toward palette.background. One-click "old TV" look.'
-    kind = 'transform'
+    kind = "effect"
 
     palette            = Palette()
     amount             = Slider(0.0, 1.5, default=0.7, step=0.05)

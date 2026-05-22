@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import random
@@ -25,7 +25,7 @@ def _segments_bbox(segs):
 class KochSnowflakeSkill(BaseSkill):
     name = 'Koch Snowflake'
     description = 'The Koch curve as a Lindenmayer system: F -> F+F--F+F rewritten to depth 5-6, traced by a turtle into a single closed polyline. Three flavors -- the classic snowflake, the inverted anti-snowflake, and an island variant with thicker arms. Rendered as a palette-graded outline with soft glow. Good for "snowflake", "koch", "frost", "crystal", "winter", "ornament", or "lace".'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     shape = Enum([('snowflake', 'Snowflake'), ('anti_snowflake', 'Anti-Snowflake'), ('island', 'Koch Island')], default='snowflake')
 

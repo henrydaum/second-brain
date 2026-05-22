@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Palette
+﻿from plugins.BaseSkill import BaseSkill, Slider, Palette
 
 import numpy as np
 
@@ -11,7 +11,7 @@ except NameError:
 class PosterizeToPaletteSkill(BaseSkill):
     name = 'Posterize To Palette'
     description = 'Quantize the image to N palette anchors via nearest-color in RGB. Produces a flat, screen-printed look strongly tied to the palette.'
-    kind = 'transform'
+    kind = "effect"
 
     palette = Palette()
     anchors = Slider(3, 14, default=6, step=1)

@@ -1,4 +1,4 @@
-"""Tests for the pool-hash design.
+﻿"""Tests for the pool-hash design.
 
 Covers:
   - canvas_pools save/load round-trip (canvas/persistence.py).
@@ -46,9 +46,9 @@ def _cleanup(db: Database, path: Path) -> None:
 
 
 def _seed_state(slug: str = "fractal", **controls) -> CanvasState:
-	"""One-layer creation, populated and ready to render."""
+	"""One-layer background, populated and ready to render."""
 	cs = CanvasState()
-	cs.enact("add_layer", {"skill_slug": slug, "kind": "creation", "controls": controls})
+	cs.enact("add_layer", {"skill_slug": slug, "kind": "background", "controls": controls})
 	return cs
 
 
@@ -73,7 +73,7 @@ def renders_dir(request, monkeypatch):
 	shutil.rmtree(target, ignore_errors=True)
 
 
-def _skill(slug: str, kind: str = "creation"):
+def _skill(slug: str, kind: str = "background"):
 	return SimpleNamespace(slug=slug, kind=kind, code="")
 
 
@@ -234,7 +234,7 @@ def test_remix_does_not_disturb_original_canvas():
 		rt = CanvasRuntime(db=db)
 		fresh = rt.remix(ph)
 		assert fresh is not None
-		rt.handle_action(fresh.canvas_id, "add_layer", {"skill_slug": "swirl", "kind": "transform"})
+		rt.handle_action(fresh.canvas_id, "add_layer", {"skill_slug": "swirl", "kind": "effect"})
 		# Source's persisted pool still has only the one layer.
 		reloaded = canvas_persistence.load_pool(db, ph)
 		assert len(reloaded["layers"]) == 1
@@ -252,7 +252,7 @@ def test_record_user_action_writes_row():
 	try:
 		canvas_actions.record_user_action(
 			db, user_id="u1", pool_hash="abc123",
-			action="save", layers=[{"slug": "fractal", "kind": "creation"}],
+			action="save", layers=[{"slug": "fractal", "kind": "background"}],
 		)
 		rows = db.conn.execute(
 			"SELECT user_id, pool_hash, action FROM user_canvas_actions"
@@ -272,14 +272,14 @@ def test_record_user_action_bumps_skill_scores():
 		canvas_actions.record_user_action(
 			db, user_id="u1", pool_hash="ph1",
 			action="share",
-			layers=[{"slug": "fractal", "kind": "creation"},
-			        {"slug": "swirl", "kind": "transform"}],
+			layers=[{"slug": "fractal", "kind": "background"},
+			        {"slug": "swirl", "kind": "effect"}],
 		)
 		scores = {
 			r["slug"]: r["shares"]
 			for r in db.conn.execute("SELECT slug, shares FROM skill_scores").fetchall()
 		}
-		# Default weights: 0.6 to creation, 0.4 to the single transform.
+		# Default weights: 0.6 to background, 0.4 to the single effect.
 		assert scores["fractal"] == 0.6
 		assert scores["swirl"] == 0.4
 	finally:
@@ -292,7 +292,7 @@ def test_record_user_action_stores_meta_json():
 	try:
 		canvas_actions.record_user_action(
 			db, user_id="u1", pool_hash="ph1", action="share",
-			layers=[{"slug": "fractal", "kind": "creation"}],
+			layers=[{"slug": "fractal", "kind": "background"}],
 			meta={"title": "Sunset", "artist": "anon"},
 		)
 		row = db.conn.execute(
@@ -311,12 +311,12 @@ def test_list_user_canvases_returns_pool_hashes_newest_first():
 	db, path = _fresh_db("ucactions_list")
 	try:
 		canvas_actions.record_user_action(db, user_id="u1", pool_hash="A", action="save",
-		                                    layers=[{"slug": "fractal", "kind": "creation"}])
+		                                    layers=[{"slug": "fractal", "kind": "background"}])
 		canvas_actions.record_user_action(db, user_id="u1", pool_hash="B", action="save",
-		                                    layers=[{"slug": "fractal", "kind": "creation"}])
+		                                    layers=[{"slug": "fractal", "kind": "background"}])
 		# Re-save A so it becomes most recent.
 		canvas_actions.record_user_action(db, user_id="u1", pool_hash="A", action="save",
-		                                    layers=[{"slug": "fractal", "kind": "creation"}])
+		                                    layers=[{"slug": "fractal", "kind": "background"}])
 
 		saved = canvas_actions.list_user_canvases(db, user_id="u1", action="save")
 		assert [r["pool_hash"] for r in saved] == ["A", "B"]
@@ -328,7 +328,7 @@ def test_count_action_counts_distinct_users():
 	"""Two users both saving the same pool counts as 2."""
 	db, path = _fresh_db("ucactions_count")
 	try:
-		layers = [{"slug": "fractal", "kind": "creation"}]
+		layers = [{"slug": "fractal", "kind": "background"}]
 		canvas_actions.record_user_action(db, user_id="u1", pool_hash="ph", action="save", layers=layers)
 		canvas_actions.record_user_action(db, user_id="u2", pool_hash="ph", action="save", layers=layers)
 		canvas_actions.record_user_action(db, user_id="u1", pool_hash="ph", action="save", layers=layers)

@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Bool
+﻿from plugins.BaseSkill import BaseSkill, Slider, Bool
 
 import math
 import numpy as np
@@ -12,7 +12,7 @@ except NameError:
 class ChromaticAberrationSkill(BaseSkill):
     name = 'Chromatic Aberration'
     description = 'Lens-fringe color separation — split R/G/B and offset each. Radial mode pushes channels outward from the center; uniform mode offsets along a fixed direction.'
-    kind = 'transform'
+    kind = "effect"
 
     strength = Slider(0, 30, default=6, step=1)
     radial   = Bool(default=True)

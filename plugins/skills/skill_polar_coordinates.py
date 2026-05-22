@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Enum
+﻿from plugins.BaseSkill import BaseSkill, Slider, Enum
 
 import math
 import numpy as np
@@ -12,7 +12,7 @@ except NameError:
 class PolarCoordinatesSkill(BaseSkill):
     name = 'Polar Coordinates'
     description = 'Remap rectangular ↔ polar coordinates. "to_polar" wraps the image as a circle; "from_polar" unrolls it into a strip.'
-    kind = 'transform'
+    kind = "effect"
 
     mode     = Enum([('to_polar', 'To Polar'), ('from_polar', 'From Polar')], default='to_polar')
     rotation = Slider(0, 360, default=0, step=5)

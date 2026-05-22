@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
@@ -73,7 +73,7 @@ def _step(g):
 class ConwayLifeSkill(BaseSkill):
     name = 'Conway Life'
     description = 'Conway\'s Game of Life, rendered with a decay trail so the final frame shows where life recently lived as well as where it lives now. Born on 3 neighbors, survives on 2 or 3 -- the same B3/S23 rule, fed by five named initial conditions: random soup, R-pentomino (chaotic for 1103 generations), Gosper glider gun, acorn (a 5-cell methuselah), and replicator. Palette gradient runs from background (long dead) through warm tones (recently active) to accent (currently alive). Good for "cellular automata", "conway", "life", "gliders", "emergence", or any organic-grid algorithmic motif.'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     seed_pattern = Enum([('soup', 'Random Soup'), ('r_pentomino', 'R-pentomino'), ('glider_gun', 'Glider Gun'), ('acorn', 'Acorn'), ('replicator', 'Replicator')], default='soup', label='Seed')
 

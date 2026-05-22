@@ -1,4 +1,4 @@
-"""End-to-end tests for the `object` skill kind.
+﻿"""End-to-end tests for the `object` skill kind.
 
 Drives the real sandbox subprocess so we exercise the full composite path
 (prior-canvas RGBA → object commits sparse-alpha → framework
@@ -30,12 +30,12 @@ def test_object_is_an_accepted_kind():
 
 
 def test_canvas_state_rejects_object_at_layer_zero():
-	"""push_chain_entry handles object like transform — append, not replace —
+	"""push_chain_entry handles object like effect — append, not replace —
 	and the canvas starts empty, so the tool layer is what refuses it.
 	Here we cover the canvas-level invariant: layer 0 reorder still requires
-	a creation."""
+	a background."""
 	cs = CanvasState()
-	cs.enact("add_layer", {"skill_slug": "bg", "kind": "creation"})
+	cs.enact("add_layer", {"skill_slug": "bg", "kind": "background"})
 	cs.enact("add_layer", {"skill_slug": "overlay", "kind": "object"})
 	r = cs.enact("move_layer", {"from_index": 1, "to_index": 0})
 	assert not r.ok

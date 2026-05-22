@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import numpy as np
@@ -13,7 +13,7 @@ except NameError:
 class MoireInterferenceSkill(BaseSkill):
     name = 'Moire Interference'
     description = 'Sum of plane waves: field(x,y) = sum_i A_i * sin(k_i * (x*cos(theta_i) + y*sin(theta_i)) + phi_i). Two waves with nearly the same theta produce slow moire beats; orthogonal waves give crosshatch; mixing in a radial wave bends the linear interference into rosettes. Four named presets dial in distinct interference geometries; the summed field is normalized and pushed through a palette ramp. Good for "interference", "moire", "waves", "beats", "crosshatch", "rosette", or any optical-pattern algorithmic motif.'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     pattern = Enum([('beats', 'Parallel Beats'), ('crosshatch', 'Crosshatch'), ('rosette', 'Radial Rosette'), ('turbulent', 'Turbulent')], default='beats')
 

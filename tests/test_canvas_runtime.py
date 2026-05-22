@@ -1,4 +1,4 @@
-"""End-to-end tests for canvas.runtime.CanvasRuntime.
+﻿"""End-to-end tests for canvas.runtime.CanvasRuntime.
 
 Exercises the public API: create_canvas, get, delete, snapshot,
 handle_action — including the labeled enact site that wraps cs.enact.
@@ -32,9 +32,9 @@ def test_full_sequence_through_runtime():
 	rt = CanvasRuntime()
 	cid = rt.create_canvas()
 
-	r = rt.handle_action(cid, "add_layer", {"skill_slug": "fractal", "kind": "creation", "controls": {"zoom": 1.0}})
+	r = rt.handle_action(cid, "add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {"zoom": 1.0}})
 	assert r.ok
-	r = rt.handle_action(cid, "add_layer", {"skill_slug": "swirl", "kind": "transform", "controls": {"angle": 30}})
+	r = rt.handle_action(cid, "add_layer", {"skill_slug": "swirl", "kind": "effect", "controls": {"angle": 30}})
 	assert r.ok
 	r = rt.handle_action(cid, "set_control", {"chain_index": 1, "name": "angle", "value": 90})
 	assert r.ok
@@ -58,7 +58,7 @@ def test_two_canvases_are_isolated():
 	rt = CanvasRuntime()
 	a = rt.create_canvas()
 	b = rt.create_canvas()
-	rt.handle_action(a, "add_layer", {"skill_slug": "fractal", "kind": "creation"})
+	rt.handle_action(a, "add_layer", {"skill_slug": "fractal", "kind": "background"})
 	rt.handle_action(b, "set_palette", {"palette_id": "obsidian"})
 
 	cs_a = rt.get(a)

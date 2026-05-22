@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider
+﻿from plugins.BaseSkill import BaseSkill, Slider
 
 from PIL import ImageFilter
 
@@ -11,7 +11,7 @@ except NameError:
 class GaussianBlurSkill(BaseSkill):
     name = 'Gaussian Blur'
     description = 'Standard Gaussian blur. The workhorse softening pass — use before sharpen for a "dreamy" look or to smooth high-frequency noise.'
-    kind = 'transform'
+    kind = "effect"
 
     radius = Slider(0.5, 40.0, default=3.0, step=0.5)
 

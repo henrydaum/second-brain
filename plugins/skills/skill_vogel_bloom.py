@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import random
@@ -13,7 +13,7 @@ except NameError:
 class VogelBloomSkill(BaseSkill):
     name = 'Vogel Bloom'
     description = 'A flower as a Vogel sunflower spiral: cells laid out by the golden angle, sized by their seed index, colored by palette ramp position. No stacked petals, no center circle -- the bloom emerges from the spiral itself. Good for "flower", "sunflower", "bloom", "seed pod", or "mandala".'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     density = Enum([('sparse', 'Sparse'), ('full', 'Full'), ('packed', 'Packed')], default='full')
 

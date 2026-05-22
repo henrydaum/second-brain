@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Pan, Palette
+﻿from plugins.BaseSkill import BaseSkill, Slider, Pan, Palette
 
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -11,7 +11,7 @@ except NameError:
 class LensFlareSkill(BaseSkill):
     name = 'Lens Flare'
     description = 'Palette-tinted lens flare: a glowing source point with a string of secondary ghost discs along the line from the source through the canvas center.'
-    kind = 'transform'
+    kind = "effect"
 
     palette    = Palette()
     brightness = Slider(0.0, 1.5, default=0.85, step=0.05)

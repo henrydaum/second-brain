@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Slider, Enum, Palette
 
 import numpy as np
 
@@ -17,7 +17,7 @@ def _desaturate(rgb, amount):
 class AtmosphericHazeSkill(BaseSkill):
     name = 'Atmospheric Haze'
     description = 'Shift hue and reduce saturation toward the palette background as a function of vertical position, mimicking the way distant landscapes lose contrast and cool toward sky.'
-    kind = 'transform'
+    kind = "effect"
 
     palette   = Palette()
     direction = Enum([

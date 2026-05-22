@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import random
 from PIL import Image, ImageDraw
@@ -43,7 +43,7 @@ def _pick_color(rng, accent_quota):
 class MondrianSubdivisionSkill(BaseSkill):
     name = 'Mondrian Subdivision'
     description = 'Recursive rectangular subdivision: at each step pick the longer axis, cut between 30% and 70% across, recurse with a 15% chance of stopping early. The canvas fills with axis-aligned cells whose colors come from a weighted palette draw -- background and secondary slots dominate, accent gets a tight quota. Three flavors: classic Mondrian with thick black gutters, stained-glass with thin dark seams, and low-poly which jitters each rect\'s corners into a pair of triangles. Good for "mondrian", "abstract", "modernist", "grid", "stained glass", "low poly", or any flat geometric composition.'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     style = Enum([('mondrian', 'Classic Mondrian'), ('stained_glass', 'Stained Glass'), ('low_poly', 'Low Poly')], default='mondrian')
 

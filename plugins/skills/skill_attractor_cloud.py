@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Slider, Enum, Palette
 
 import math
 import numpy as np
@@ -13,7 +13,7 @@ except NameError:
 class AttractorCloudSkill(BaseSkill):
     name = 'Attractor Cloud'
     description = 'Strange-attractor point cloud (de Jong or Clifford) accumulated into a palette-graded density image.'
-    kind = 'creation'
+    kind = "background"
     owner = 'web:0e0c7c0c-92af-46ef-bb48-69154d2c9f44'
     created_at = 1779071212.705876
 

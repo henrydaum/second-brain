@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum
+﻿from plugins.BaseSkill import BaseSkill, Enum
 
 from PIL import Image, ImageOps
 
@@ -11,7 +11,7 @@ except NameError:
 class MirrorSkill(BaseSkill):
     name = 'Mirror'
     description = 'Symmetry transform. Reflects halves or makes a 4-way kaleidoscopic symmetry from the top-left quadrant. Adds instant order.'
-    kind = 'transform'
+    kind = "effect"
 
     mode = Enum([
         ('horizontal_lr', 'Left → Right'),

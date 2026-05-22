@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider
+﻿from plugins.BaseSkill import BaseSkill, Slider
 
 import numpy as np
 from PIL import Image
@@ -12,7 +12,7 @@ except NameError:
 class VoronoiCrystallizeSkill(BaseSkill):
     name = 'Voronoi Crystallize'
     description = 'Replace the image with a Voronoi tiling where each cell takes the color of its seed pixel — like seeing the canvas through cracked glass. Determinism comes from canvas.seed.'
-    kind = 'transform'
+    kind = "effect"
 
     cells = Slider(20, 1500, default=300, step=10)
 

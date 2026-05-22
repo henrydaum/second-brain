@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
@@ -21,7 +21,7 @@ _SPOTS = {
 class BurningShipExplorerSkill(BaseSkill):
     name = 'Burning Ship Explorer'
     description = 'A guided tour of the Burning Ship fractal -- the inferno cousin of the Mandelbrot set. Jagged, ship-like silhouettes with antennas, masts, and embedded mini-ships.'
-    kind = 'creation'
+    kind = "background"
 
     palette = Palette()
     spot    = Enum([

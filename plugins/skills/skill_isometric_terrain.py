@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import numpy as np
@@ -49,7 +49,7 @@ def _heightmap(seed, N, mode):
 class IsometricTerrainSkill(BaseSkill):
     name = 'Isometric Terrain'
     description = 'Fake 3D from pure 2D primitives: a small fbm heightmap rasterized cell by cell in back-to-front order, each cell drawn as a footprint hex base plus a top and two shaded side panels. Three palette shades per cell -- top (brightest), left (mid), right (darkest) -- give consistent diagonal lighting without any real depth buffer. Presets: rolling hills, islands above sea level, blocky city, stepped mesa, and a village of quantized towers. Good for "terrain", "voxel", "isometric", "village", "island", "hill", or any tilted-grid worldbuilding.'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     scene = Enum([('hills', 'Rolling Hills'), ('islands', 'Islands'), ('city', 'City Blocks'), ('mesa', 'Stepped Mesa'), ('village', 'Tower Village')], default='hills')
 

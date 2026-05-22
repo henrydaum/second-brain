@@ -1,22 +1,22 @@
 # Canvas skill authoring guide
 
 You are building one skill: a small, deterministic Python function that either
-**creates** a new image on the canvas, **transforms** the current one, or
+paints a **background**, applies an **effect** to the current canvas, or
 overlays an **object** on top of it. This guide is the single source of
 truth for how to do that well.
 
 The three kinds:
 
-- `creation` — produces a fresh image from scratch using
+- `background` — produces a fresh image from scratch using
   `canvas.create_image()`. Always layer 0.
-- `transform` — reads the current canvas via `canvas.image`, returns a
-  same-shape opaque image that replaces it. Requires a creation first.
+- `effect` — reads the current canvas via `canvas.image`, returns a
+  same-shape opaque image that replaces it. Requires a background first.
 - `object` — paints onto a transparent base from `canvas.new_layer()`
   (or onto `canvas.image` if you want to read the prior pixels), commits
   RGBA, and the framework alpha-composites the result onto the prior
   canvas. Use for overlays — typography, badges, icons. Paint only what
   you want visible; leave the rest fully transparent. Requires a
-  creation first.
+  background first.
 
 ## Palette: non-negotiable
 
@@ -55,7 +55,7 @@ from plugins.BaseSkill import BaseSkill, Slider, Palette
 class SunflowerFieldSkill(BaseSkill):
     name = "Sunflower Field"
     description = "Vogel-spiral sunflower seed pattern with palette-graded petals."
-    kind = "creation"
+    kind = "background"
 
     palette = Palette()
     count = Slider(200, 1800, default=900, step=50)
@@ -81,9 +81,9 @@ The `create_skill` tool still accepts module-level `def run(canvas, **params)`
 plus a `controls=[...]` schema and wraps it for sandbox use. Use the descriptor
 form when editing built-in skills directly.
 
-### Transform skill template (numpy + warp)
+### Effect skill template (numpy + warp)
 
-For lens / warp / glitch transforms, build a coordinate map and resample. The
+For lens / warp / glitch effects, build a coordinate map and resample. The
 `centered_grid`, `bilinear_sample`, `image_array`, and `commit_array` helpers
 remove almost all of the boilerplate:
 
@@ -94,7 +94,7 @@ from plugins.BaseSkill import BaseSkill, Slider
 class BarrelWarpSkill(BaseSkill):
     name = "Barrel Warp"
     description = "A radial barrel distortion."
-    kind = "transform"
+    kind = "effect"
     strength = Slider(-1.0, 1.0, default=0.6, step=0.05)
 
     def run(self, canvas):
@@ -109,7 +109,7 @@ class BarrelWarpSkill(BaseSkill):
         canvas.commit_array(art_kit.bilinear_sample(arr, sx, sy))
 ```
 
-For PIL-only transforms (blur, solarize, enhance), use `canvas.image` →
+For PIL-only effects (blur, solarize, enhance), use `canvas.image` →
 filter → `canvas.commit(...)` as usual.
 
 ### Object skill template (overlay)
@@ -158,13 +158,13 @@ overlay), `canvas.image` is also available to object skills.
 | `canvas.palette.colors`   | Dict of all five slots.                                 |
 | `canvas.size` / `.width` / `.height` | Square dimension in pixels.                 |
 | `canvas.seed`             | Integer; seed every RNG with this.                      |
-| `canvas.image`            | (transform/object only) A copy of the current canvas image. |
-| `canvas.image_array(mode="RGB", dtype="float")` | (transform/object only) The current image as a numpy array. `dtype="float"` → float32 in [0,1]; `dtype="uint8"` → raw bytes. Saves the asarray/divide step. |
+| `canvas.image`            | (effect/object only) A copy of the current canvas image. |
+| `canvas.image_array(mode="RGB", dtype="float")` | (effect/object only) The current image as a numpy array. `dtype="float"` → float32 in [0,1]; `dtype="uint8"` → raw bytes. Saves the asarray/divide step. |
 | `canvas.new(color=...)`   | Returns a fresh RGBA image at canvas size.              |
 | `canvas.create_image()`   | Shorthand for `new(color=palette.background)`. Creations. |
 | `canvas.new_layer()`      | Fully-transparent RGBA at canvas size. Objects.         |
 | `canvas.commit(image)`    | **Required.** Hands the finished PIL image to the runtime. |
-| `canvas.commit_array(arr)`| Same as `commit`, but accepts a numpy HxWxC array (float in [0,1] or uint8; C=3 or 4). Handles clip + dtype + Image.fromarray + RGBA convert for you. Prefer this in numpy-heavy transforms. |
+| `canvas.commit_array(arr)`| Same as `commit`, but accepts a numpy HxWxC array (float in [0,1] or uint8; C=3 or 4). Handles clip + dtype + Image.fromarray + RGBA convert for you. Prefer this in numpy-heavy effects. |
 
 `art_kit` is injected too (no import needed):
 
@@ -183,7 +183,7 @@ overlay), `canvas.image` is also available to object skills.
 | `art_kit.value_noise(seed, x, y)`   | Smooth 2D value noise in [0,1].                      |
 | `art_kit.fbm(seed, x, y, octaves)`  | Fractal Brownian motion over value_noise.            |
 | `art_kit.radial_falloff(w, h)`      | Closure: 1 at center → 0 at corner.                  |
-| `art_kit.centered_grid(size)`       | `(xx, yy, nx, ny)` — pixel coords + normalized [-1,+1] coords. The standard opener for any radial / warp transform. |
+| `art_kit.centered_grid(size)`       | `(xx, yy, nx, ny)` — pixel coords + normalized [-1,+1] coords. The standard opener for any radial / warp effect. |
 | `art_kit.bilinear_sample(arr, fx, fy)` | Bilinear resample at fractional coords. `arr` is 2D (H,W) or 3D (H,W,C); `fx/fy` are float arrays. Coords outside the array clamp to the edge. |
 
 Allowed imports (the sandbox blocks everything else): `math`, `random`,
@@ -269,15 +269,15 @@ different image — bad.
 
 ## 7. When to chain skills
 
-A single creation rarely produces a finished image. The high-quality pattern is:
+A single background rarely produces a finished image. The high-quality pattern is:
 
-1. **Creation skill** — establishes geometry and base palette.
+1. **Background skill** — establishes geometry and base palette.
 2. **`palette_grade`** — re-maps luminance to the palette for a cohesive feel.
 3. **One of `bloom_glow`, `vignette`, `film_grain`, or `sharpen`** — adds
    atmosphere or finishes detail.
 
-Keep transform chains ≤3 deep so palette re-render stays snappy. The runtime
-enforces a hard cap of 4 total chain entries (1 creation + 3 transforms or
+Keep effect chains ≤3 deep so palette re-render stays snappy. The runtime
+enforces a hard cap of 4 total chain entries (1 background + 3 effects or
 objects); past that, `execute_skill` errors and the user must delete a layer
 first.
 
@@ -301,7 +301,7 @@ from plugins.BaseSkill import BaseSkill, Slider, Bool, Enum, Pan, Palette
 class ExampleSkill(BaseSkill):
     name = "Example"
     description = "A controllable example."
-    kind = "transform"
+    kind = "effect"
 
     palette = Palette()
     zoom = Slider(0.1, 20.0, default=1.0, step=0.1)
@@ -340,14 +340,14 @@ spirals — anything where a scale matters. A `density` slider works for fields
 of dots, lines, or strokes. Reach for these abstract dials before you reach
 for skill-specific ones.
 
-Prefer to include `Palette()` on palette-aware creation skills — it lets users
+Prefer to include `Palette()` on palette-aware background skills — it lets users
 explore color choices freely instead of being locked into whatever palette the
 agent picked.
 
 ## 9. Common pitfalls
 
 - Forgetting `canvas.commit(image)` → the runtime errors. Always commit.
-- Calling `canvas.image` in a creation skill → raises ValueError. Use
+- Calling `canvas.image` in a background skill → raises ValueError. Use
   `canvas.create_image()` or `canvas.new(...)` instead.
 - Using `random.random()` without seeding → palette replay produces a
   different image. Always go through a seeded `random.Random(canvas.seed)`.

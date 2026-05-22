@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Palette
+﻿from plugins.BaseSkill import BaseSkill, Slider, Palette
 
 import numpy as np
 from PIL import ImageFilter
@@ -12,7 +12,7 @@ except NameError:
 class WatercolorSkill(BaseSkill):
     name = 'Watercolor'
     description = 'Watercolor stylization: median-blur to soften details into pooled regions, posterize for flat washes, then re-darken at edges with palette.accent.'
-    kind = 'transform'
+    kind = "effect"
 
     palette = Palette()
     pool    = Slider(1, 8, default=4, step=1)

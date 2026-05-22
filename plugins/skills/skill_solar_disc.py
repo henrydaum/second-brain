@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import numpy as np
@@ -13,7 +13,7 @@ except NameError:
 class SolarDiscSkill(BaseSkill):
     name = 'Solar Disc'
     description = 'An abstract sun -- a radial-falloff core over an fbm field of palette-warmed rays. No literal circle, no line rays: a luminous gradient in the palette\'s brightest tones. Good for any "sun", "star", "radiant", "dawn", or "sunset" request.'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     mood = Enum([('calm', 'Calm'), ('fierce', 'Fierce'), ('eclipse', 'Eclipse')], default='calm')
 

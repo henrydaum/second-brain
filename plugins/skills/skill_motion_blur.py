@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider
+﻿from plugins.BaseSkill import BaseSkill, Slider
 
 import math
 import numpy as np
@@ -12,7 +12,7 @@ except NameError:
 class MotionBlurSkill(BaseSkill):
     name = 'Motion Blur'
     description = 'Directional blur along an angle — fakes camera shake or fast motion.'
-    kind = 'transform'
+    kind = "effect"
 
     length = Slider(3, 60, default=18, step=1)
     angle  = Slider(0, 360, default=0, step=5)

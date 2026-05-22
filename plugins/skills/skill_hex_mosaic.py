@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 from PIL import Image, ImageDraw
@@ -24,7 +24,7 @@ def _hex_top_face(cx, cy, r):
 class HexMosaicSkill(BaseSkill):
     name = 'Hex Mosaic'
     description = 'Pointy-top hexagonal tiling with column-offset coordinates. Each hex is drawn as a filled polygon, colored by one of three rules: a radial palette gradient outward from center, an fbm-perturbed mosaic so soft regions of related hue emerge across the grid, or an isometric extrusion that treats each hex\'s height as a three-shade column. Hex outlines are anti-aliased and flush so the mosaic reads clean. Good for "hex", "hexagons", "tiling", "mosaic", "honeycomb", "cells", or any modular-grid algorithmic motif.'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     style = Enum([('gradient', 'Radial Gradient'), ('fbm', 'fBm Regions'), ('iso_towers', 'Iso Towers')], default='fbm')
 

@@ -192,7 +192,7 @@ def _coerce_number(value, *, field: str) -> float:
 
 MAX_NON_PALETTE_CONTROLS = 3
 _CONTROL_TYPES = {"slider", "enum", "bool", "pan", "palette", "text"}
-_KINDS = ("creation", "transform", "object")
+_KINDS = ("background", "object", "effect")
 
 
 def source_uses_palette(source: str | None) -> bool:
@@ -395,7 +395,7 @@ def to_skill_record(instance) -> Skill:
         path=str(source_path.resolve()) if source_path else "",
         name=str(getattr(instance, "name", "") or slug),
         description=str(getattr(instance, "description", "") or ""),
-        kind=str(getattr(instance, "kind", "") or "creation"),
+        kind=str(getattr(instance, "kind", "") or "background"),
         owner=str(getattr(instance, "owner", "") or ""),
         code=code,
         created_at=float(getattr(instance, "created_at", 0.0) or _coerce_created_at(None, source_path)),
@@ -618,7 +618,7 @@ def rewrite_skill(
     new_name = (name if name is not None else existing.get("name") or "").strip()
     new_desc = (description if description is not None else existing.get("description") or "").strip()
     new_code = code  # user-supplied body, or None to keep current
-    new_kind = existing.get("kind") or "creation"
+    new_kind = existing.get("kind") or "background"
     new_owner = existing.get("owner") or owner_session_key
     new_created_at = float(existing.get("created_at") or time.time())
     new_hidden = bool(existing.get("hidden", False))

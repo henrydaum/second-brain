@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Bool, Palette
+﻿from plugins.BaseSkill import BaseSkill, Slider, Bool, Palette
 
 import numpy as np
 
@@ -11,7 +11,7 @@ except NameError:
 class EdgeDetectSkill(BaseSkill):
     name = 'Edge Detect'
     description = 'Sobel edge map rendered in palette colors: edges painted with palette.primary on a palette.background field.'
-    kind = 'transform'
+    kind = "effect"
 
     palette  = Palette()
     strength = Slider(0.5, 6.0, default=2.0, step=0.1)

@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Palette
+﻿from plugins.BaseSkill import BaseSkill, Slider, Palette
 
 import math
 import numpy as np
@@ -13,7 +13,7 @@ except NameError:
 class HalftoneSkill(BaseSkill):
     name = 'Halftone'
     description = 'Newspaper-style halftone dot screen. The image is replaced by a regular grid of palette-tinted dots whose radius scales with local luminance.'
-    kind = 'transform'
+    kind = "effect"
 
     palette   = Palette()
     cell_size = Slider(6, 40, default=12, step=1)

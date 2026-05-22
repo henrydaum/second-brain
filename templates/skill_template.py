@@ -46,8 +46,8 @@ Skills run in an isolated subprocess. Inside run(), you get:
   canvas.width      Alias of canvas.size.
   canvas.height     Alias of canvas.size.
   canvas.seed       Integer for seeding RNGs (random.Random(canvas.seed) etc).
-  canvas.image      The current image (transform skills only); raises for
-                    creation skills.
+  canvas.image      The current image (effect/object skills only); raises for
+                    background skills.
   canvas.new(w, h, color=...)         Fresh RGBA image.
   canvas.create_image(color=...)      Fresh RGBA image filled with the
                                        palette background by default.
@@ -118,7 +118,7 @@ class BaseSkill:
     """The contract every skill implements. See plugins/BaseSkill.py."""
     name: str = ""
     description: str = ""
-    kind: str = "creation"          # "creation" | "transform" | "object"
+    kind: str = "background"        # "background" | "effect" | "object"
     owner: str = "library"
     created_at: float = 0.0
     controls: list = []
@@ -132,7 +132,7 @@ class BaseSkill:
 
 
 # =====================================================================
-# EXAMPLE — a built-in/reference creation skill (full file shape)
+# EXAMPLE — a built-in/reference background skill (full file shape)
 # =====================================================================
 #
 # from plugins.BaseSkill import BaseSkill, Slider, Palette
@@ -144,7 +144,7 @@ class BaseSkill:
 # class VogelBloomSkill(BaseSkill):
 #     name = "Vogel Bloom"
 #     description = "A sunflower-style bloom of palette-blended cells."
-#     kind = "creation"
+#     kind = "background"
 #     palette = Palette()
 #     density = Slider(200, 1500, default=600, step=50)
 #
@@ -165,7 +165,7 @@ class BaseSkill:
 
 
 # =====================================================================
-# EXAMPLE — a built-in/reference transform skill
+# EXAMPLE — a built-in/reference effect skill
 # =====================================================================
 #
 # from plugins.BaseSkill import BaseSkill, Slider
@@ -175,7 +175,7 @@ class BaseSkill:
 # class BloomGlowSkill(BaseSkill):
 #     name = "Bloom Glow"
 #     description = "A soft luminous bloom over the current canvas."
-#     kind = "transform"
+#     kind = "effect"
 #     radius = Slider(1.0, 24.0, default=8.0, step=0.5)
 #
 #     def run(self, canvas):

@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Palette
+﻿from plugins.BaseSkill import BaseSkill, Slider, Palette
 
 import numpy as np
 
@@ -11,7 +11,7 @@ except NameError:
 class ScanlinesSkill(BaseSkill):
     name = 'Scanlines'
     description = 'CRT-style horizontal scanlines: darken every Nth row toward palette.background. Tactile retro overlay.'
-    kind = 'transform'
+    kind = "effect"
 
     palette   = Palette()
     intensity = Slider(0.0, 1.0, default=0.45, step=0.05)

@@ -1,4 +1,4 @@
-"""End-to-end test for the share → gallery / archive listing flow.
+﻿"""End-to-end test for the share → gallery / archive listing flow.
 
 The bug this guards against: render_canvas was upgraded to accept ``db=``
 but no frontend / tool caller passed it, so ``canvas_pools`` stayed
@@ -56,7 +56,7 @@ def _make_frontend(db, skills=None):
 
 	class _SkillReg:
 		def get(self, slug):
-			return skills.get(slug) or SimpleNamespace(slug=slug, name=slug, kind="creation", controls=[], code="")
+			return skills.get(slug) or SimpleNamespace(slug=slug, name=slug, kind="background", controls=[], code="")
 		def get_record(self, slug):
 			return self.get(slug)
 
@@ -80,12 +80,12 @@ def _make_frontend(db, skills=None):
 
 
 def _seed_canvas(fe, session_id="sess1"):
-	"""Drop a single creation layer on the session's canvas so it has something to share."""
+	"""Drop a single background layer on the session's canvas so it has something to share."""
 	key = fe.session_key(session_id) if hasattr(fe, "session_key") else f"web:{session_id}"
 	cr = fe.runtime.services["canvas"]
 	cs = cr.for_session(key)
 	cr.handle_action(cs.canvas_id, "add_layer", {
-		"skill_slug": "fractal", "kind": "creation", "controls": {},
+		"skill_slug": "fractal", "kind": "background", "controls": {},
 	})
 	return key, cs
 
@@ -93,11 +93,11 @@ def _seed_canvas(fe, session_id="sess1"):
 def test_canvas_payload_keeps_palette_controls_per_layer():
 	palette = {"type": "palette", "label": "Palette"}
 	runtime = SimpleNamespace(skill_registry=SimpleNamespace(
-		get_record=lambda slug: SimpleNamespace(slug=slug, name=slug.title(), kind="creation", controls=[palette]),
+		get_record=lambda slug: SimpleNamespace(slug=slug, name=slug.title(), kind="background", controls=[palette]),
 	))
 	payload = fw._canvas_payload_full(runtime, "web:s", {"chain": [
-		{"slug": "a", "kind": "creation", "controls": {"palette": "frost"}},
-		{"slug": "b", "kind": "transform", "controls": {"palette": "ember"}},
+		{"slug": "a", "kind": "background", "controls": {"palette": "frost"}},
+		{"slug": "b", "kind": "effect", "controls": {"palette": "ember"}},
 	]})
 	assert len(payload["controls_panels"]) == 2
 	assert [p["values"]["palette"] for p in payload["controls_panels"]] == ["frost", "ember"]
@@ -106,29 +106,29 @@ def test_canvas_payload_keeps_palette_controls_per_layer():
 
 def test_canvas_payload_includes_layers_without_controls():
 	runtime = SimpleNamespace(skill_registry=SimpleNamespace(
-		get_record=lambda slug: SimpleNamespace(slug=slug, name=slug.title(), kind="creation", controls=[]),
+		get_record=lambda slug: SimpleNamespace(slug=slug, name=slug.title(), kind="background", controls=[]),
 	))
-	payload = fw._canvas_payload_full(runtime, "web:s", {"chain": [{"slug": "plain", "kind": "creation", "controls": {}}]})
+	payload = fw._canvas_payload_full(runtime, "web:s", {"chain": [{"slug": "plain", "kind": "background", "controls": {}}]})
 	assert payload["controls_panels"][0]["slug"] == "plain"
 	assert payload["controls_panels"][0]["schema"] == []
 
 
-def test_move_layer_reorders_and_rejects_creation_displacement(monkeypatch, renders_dir):
+def test_move_layer_reorders_and_rejects_background_displacement(monkeypatch, renders_dir):
 	_install_fake_run_skill(monkeypatch)
 	db, dbpath = _fresh_db("move_layer")
 	try:
 		skills = {
-			"base": SimpleNamespace(slug="base", name="Base", kind="creation", controls=[], code=""),
-			"a": SimpleNamespace(slug="a", name="A", kind="transform", controls=[], code=""),
-			"b": SimpleNamespace(slug="b", name="B", kind="transform", controls=[], code=""),
+			"base": SimpleNamespace(slug="base", name="Base", kind="background", controls=[], code=""),
+			"a": SimpleNamespace(slug="a", name="A", kind="effect", controls=[], code=""),
+			"b": SimpleNamespace(slug="b", name="B", kind="effect", controls=[], code=""),
 		}
 		fe = _make_frontend(db, skills=skills)
 		key, cs = _seed_canvas(fe)
 		cr = fe.runtime.services["canvas"]
 		cs.canvas.layers[0]["slug"] = "base"
-		cs.canvas.layers[0]["kind"] = "creation"
-		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "a", "kind": "transform"})
-		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "b", "kind": "transform"})
+		cs.canvas.layers[0]["kind"] = "background"
+		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "a", "kind": "effect"})
+		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "b", "kind": "effect"})
 
 		events = fe.move_layer("sess1", 2, 1)
 		assert events[0]["type"] == "hero_image"

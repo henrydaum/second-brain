@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import random
@@ -14,7 +14,7 @@ except NameError:
 class WaveSeaSkill(BaseSkill):
     name = 'Wave Sea'
     description = 'Water as interference: several point sources sum into a wave field, palette-mapped from troughs to crests. No literal waves drawn -- the surface emerges from sin(2*pi*d/lambda) sums. Good for "ocean", "water", "ripples", "pond", "reflection", or "sound".'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     weather = Enum([('calm', 'Calm'), ('choppy', 'Choppy'), ('storm', 'Storm')], default='calm')
 

@@ -1,9 +1,9 @@
 """Skill scoring from implicit signals (share, download, remix).
 
 Attribution: when an image earns a signal, the score is distributed across
-the chain that produced it. Creation gets 0.6, the remaining 0.4 splits
-across transforms. Creation-only chains get 1.0. The `generate` kind is
-tracked as a per-skill denominator (counter only, no weight).
+the chain that produced it. Background gets 0.6, the remaining 0.4 splits
+across effects/objects. Background-only chains get 1.0. The `generate`
+kind is tracked as a per-skill denominator (counter only, no weight).
 
 The store is two SQLite tables: append-only `skill_events` and rolled-up
 `skill_scores`. Aggregates are kept in sync at insert time so search-time
@@ -45,21 +45,21 @@ def _attribution(chain: list[dict]) -> list[tuple[str, str, float]]:
     steps = [(str(s.get("slug") or ""), str(s.get("kind") or "")) for s in chain if s.get("slug")]
     if not steps:
         return []
-    creations = [(slug, kind) for slug, kind in steps if kind == "creation"]
-    overlays = [(slug, kind) for slug, kind in steps if kind in ("transform", "object")]
+    backgrounds = [(slug, kind) for slug, kind in steps if kind == "background"]
+    overlays = [(slug, kind) for slug, kind in steps if kind in ("effect", "object")]
     out: list[tuple[str, str, float]] = []
-    if creations and overlays:
-        cw = 0.6 / len(creations)
+    if backgrounds and overlays:
+        cw = 0.6 / len(backgrounds)
         tw = 0.4 / len(overlays)
-        for slug, _ in creations:
-            out.append((slug, "creation", cw))
+        for slug, _ in backgrounds:
+            out.append((slug, "background", cw))
         for slug, kind in overlays:
             out.append((slug, kind, tw))
     else:
-        # Creation-only or transform-only: split 1.0 equally.
+        # Background-only or overlay-only: split 1.0 equally.
         eq = 1.0 / len(steps)
         for slug, kind in steps:
-            out.append((slug, kind or "creation", eq))
+            out.append((slug, kind or "background", eq))
     return out
 
 
@@ -75,7 +75,7 @@ def record_event(db, kind: str, chain: list[dict], image_path: str | None) -> No
     now = time.time()
     if kind == "generate":
         # One generation row per skill in the supplied chain (usually one).
-        rows = [(str(s.get("slug") or ""), str(s.get("kind") or "creation"), 1.0)
+        rows = [(str(s.get("slug") or ""), str(s.get("kind") or "background"), 1.0)
                 for s in chain if s.get("slug")]
         if not rows:
             return

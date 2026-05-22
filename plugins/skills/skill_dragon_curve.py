@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import numpy as np
@@ -42,7 +42,7 @@ def _bbox(segs):
 class DragonCurveSkill(BaseSkill):
     name = 'Dragon Curve'
     description = 'The Heighway dragon as a Lindenmayer system: X -> X+YF+, Y -> -FX-Y at 90 degrees, rewritten 10-13 times. The walk folds back on itself again and again until it tiles its own footprint. Presets render one dragon, a twin dragon (two copies rotated 180), or a terdragon (three at 120). Palette gradient runs from the start of the walk to the end so you can see the fold order. Good for "dragon", "curve", "fold", "fractal", "path", or "labyrinth".'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     variant = Enum([('dragon', 'Dragon'), ('twin', 'Twin Dragon'), ('terdragon', 'Terdragon (3-fold)')], default='dragon')
 

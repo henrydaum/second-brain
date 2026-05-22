@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
@@ -23,7 +23,7 @@ _SPOTS = {
 class JuliaExplorerSkill(BaseSkill):
     name = 'Julia Explorer'
     description = 'A guided tour of the most beloved filled Julia sets. Pick a constant -- the spindly Dendrite, the Douady Rabbit, the curling Dragon, the Siegel Disk, the cantor-dust airplane -- and the right framing and iteration depth come along for free. Pair with any palette. Optimized for M1: complex64 working set, |z0| pre-escape filter, and live-buffer compaction every 3 iterations.'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     spot = Enum([('dendrite', 'Dendrite'), ('rabbit', 'Douady Rabbit'), ('san_marco', 'San Marco'), ('siegel', 'Siegel Disk'), ('dragon', 'Dragon'), ('spiral', 'Spiral'), ('airplane', 'Airplane'), ('dust', 'Cantor Dust')], default='dragon')
 

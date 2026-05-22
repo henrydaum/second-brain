@@ -76,21 +76,21 @@ class Canvas:
 		del self.layers[chain_index]
 
 	def move_entry(self, from_index: int, to_index: int) -> None:
-		"""Reorder layers. Layer 0 must remain a creation."""
+		"""Reorder layers. Layer 0 must remain a background."""
 		n = len(self.layers)
 		if not (0 <= from_index < n) or not (0 <= to_index < n):
 			raise ValueError(f"index out of range (len={n})")
 		if from_index != to_index and (from_index == 0 or to_index == 0):
-			raise ValueError("layer 0 must be a creation; reorder rejected")
+			raise ValueError("layer 0 must be a background; reorder rejected")
 		step = self.layers.pop(from_index)
 		self.layers.insert(to_index, step)
 
 	def push_chain_entry(self, entry: dict) -> None:
-		"""Append a transform, or replace the chain with a new creation."""
+		"""Append an effect/object, or replace the chain with a new background."""
 		kind = entry.get("kind")
-		if kind == "creation":
+		if kind == "background":
 			self.layers = [dict(entry)]
-		elif kind in ("transform", "object"):
+		elif kind in ("effect", "object"):
 			self.layers = list(self.layers) + [dict(entry)]
 		else:
 			raise ValueError(f"unknown chain entry kind: {kind!r}")

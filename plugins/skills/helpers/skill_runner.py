@@ -73,13 +73,13 @@ def run_skill(
             f"skill '{skill.slug}' failed validation: {msg}",
             diagnostic={"error_type": "ValidationError", "message": msg},
         )
-    if skill.kind in ("transform", "object") and (input_image_path is None or not Path(input_image_path).is_file()):
+    if skill.kind in ("effect", "object") and (input_image_path is None or not Path(input_image_path).is_file()):
         raise SkillRunError(
-            f"{skill.kind} skills require a current canvas image; create one first",
+            f"{skill.kind} skills require a current canvas image; run a background first",
             diagnostic={
                 "error_type": "MissingPriorCanvas",
-                "message": f"{skill.kind} skills require a current canvas image; create one first",
-                "hint": f"Run a creation skill first, then chain this {skill.kind}.",
+                "message": f"{skill.kind} skills require a current canvas image; run a background first",
+                "hint": f"Run a background skill first, then chain this {skill.kind}.",
             },
         )
 

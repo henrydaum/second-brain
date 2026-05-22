@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider
+﻿from plugins.BaseSkill import BaseSkill, Slider
 
 import numpy as np
 from PIL import Image
@@ -12,7 +12,7 @@ except NameError:
 class GlitchSliceSkill(BaseSkill):
     name = 'Glitch Slice'
     description = 'Split the image into horizontal bands and shift each by a random offset — the classic data-mosh glitch. Deterministic from canvas.seed.'
-    kind = 'transform'
+    kind = "effect"
 
     intensity = Slider(0.0, 1.0, default=0.4, step=0.05)
     bands     = Slider(4, 80, default=24, step=1)

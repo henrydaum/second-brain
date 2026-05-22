@@ -1,4 +1,4 @@
-"""Persistence + db-backed CanvasRuntime tests.
+﻿"""Persistence + db-backed CanvasRuntime tests.
 
 Covers the canvas_persistence module directly (save / load / list_ids /
 delete) and the CanvasRuntime integration: autosave on action, lazy load
@@ -47,7 +47,7 @@ def test_save_and_load_round_trip():
 	try:
 		cs = CanvasState(canvas_id="abc")
 		cs.enact("set_palette", {"palette_id": "obsidian"})
-		cs.enact("add_layer", {"skill_slug": "fractal", "kind": "creation", "controls": {"z": 2}})
+		cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {"z": 2}})
 		cs.render_seed = 123
 		canvas_persistence.save(db, cs)
 

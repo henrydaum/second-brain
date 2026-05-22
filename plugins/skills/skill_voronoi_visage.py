@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import random
@@ -14,7 +14,7 @@ except NameError:
 class VoronoiVisageSkill(BaseSkill):
     name = 'Voronoi Visage'
     description = 'An abstract portrait: a head-shaped mask filled with Voronoi cells in palette tones. No eyes, no nose, no mouth -- the face is implied by the silhouette. The cell boundaries read as fragmentation or stained glass. Good for "portrait", "face", "head", "abstract figure", or "stained glass".'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     density = Enum([('few', 'Few'), ('many', 'Many'), ('dense', 'Dense')], default='many')
 

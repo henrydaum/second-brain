@@ -292,13 +292,13 @@ class BaseSkill:
             Short searchable description shown in the catalog and used for
             semantic search.
         kind:
-            One of "creation" (produces a new image from scratch),
-            "transform" (takes the current canvas and reshapes it, returning
+            One of "background" (produces a new image from scratch),
+            "effect" (takes the current canvas and reshapes it, returning
             a same-shape opaque image that replaces it), or "object" (reads
             the current canvas, returns an RGBA image that the framework
             alpha-composites onto the prior canvas — used for overlays like
-            typography). Objects and transforms both require a prior layer;
-            only creations may sit at layer 0.
+            typography). Objects and effects both require a prior layer;
+            only backgrounds may sit at layer 0.
         owner:
             Session key of the author. Defaults to "library" for skills
             shipped in plugins/skills/; sandbox-authored skills set it to
@@ -329,7 +329,7 @@ class BaseSkill:
     # --- Identity ---
     name: str = ""
     description: str = ""
-    kind: str = "creation"          # "creation" | "transform" | "object"
+    kind: str = "background"        # "background" | "effect" | "object"
     owner: str = "library"          # library skills can omit this entirely
     created_at: float = 0.0
 

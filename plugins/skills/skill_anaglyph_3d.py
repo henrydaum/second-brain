@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Enum
+﻿from plugins.BaseSkill import BaseSkill, Slider, Enum
 
 import numpy as np
 
@@ -11,7 +11,7 @@ except NameError:
 class Anaglyph3dSkill(BaseSkill):
     name = 'Anaglyph 3d'
     description = '3D-glasses look. Takes two horizontally shifted copies of the image and combines them into one anaglyph — wear red/cyan glasses to see (pseudo-)depth.'
-    kind = 'transform'
+    kind = "effect"
 
     offset = Slider(1, 40, default=10, step=1)
     mode   = Enum([

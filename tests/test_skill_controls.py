@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,7 +27,7 @@ def test_stale_palette_control_is_filtered_from_skill_record():
 	path = d / f"skill_blur_{uuid.uuid4().hex}.py"
 	try:
 		path.write_text("def run(self, canvas):\n    # palette mentioned in a comment only\n    canvas.commit(canvas.image)\n", encoding="utf-8")
-		inst = SimpleNamespace(_source_path=path, name="Blur", description="", kind="transform", controls=[{"type": "palette"}])
+		inst = SimpleNamespace(_source_path=path, name="Blur", description="", kind="effect", controls=[{"type": "palette"}])
 		assert source_uses_palette(path.read_text(encoding="utf-8")) is False
 		assert to_skill_record(inst).controls == []
 	finally:

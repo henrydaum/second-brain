@@ -1,4 +1,4 @@
-"""Verify CanvasRuntime is reachable from a SecondBrainContext.
+﻿"""Verify CanvasRuntime is reachable from a SecondBrainContext.
 
 Confirms the two paths a tool/task might find it: explicit ``canvas=`` arg
 to build_context, and the ``services["canvas"]`` fallback used by callers
@@ -67,7 +67,7 @@ def test_canvas_runtime_drives_through_context():
 	try:
 		ctx = build_context(db, {}, {"canvas": CanvasRuntime(db=db)})
 		cid = ctx.canvas.create_canvas()
-		r = ctx.canvas.handle_action(cid, "add_layer", {"skill_slug": "fractal", "kind": "creation"})
+		r = ctx.canvas.handle_action(cid, "add_layer", {"skill_slug": "fractal", "kind": "background"})
 		assert r.ok
 		assert ctx.canvas.get(cid).canvas.layers[0]["slug"] == "fractal"
 	finally:

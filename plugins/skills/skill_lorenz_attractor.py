@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
@@ -12,7 +12,7 @@ except NameError:
 class LorenzAttractorSkill(BaseSkill):
     name = 'Lorenz Attractor'
     description = 'The Lorenz system integrated with explicit Euler -- dx=sigma*(y-x), dy=x*(rho-z)-y, dz=x*y-beta*z with sigma=10, rho=28, beta=8/3 -- traced for 200,000 steps. Project the 3D trajectory onto xy, xz (the canonical butterfly), or yz and accumulate into a 2D density buffer, log-compress, palette-map. The time-ordered palette gradient lets you read the flow direction around the two lobes. Good for "lorenz", "butterfly", "strange attractor", "chaos", or any continuous-dynamical-systems motif.'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     projection = Enum([('xz', 'XZ (butterfly)'), ('xy', 'XY (front)'), ('yz', 'YZ (side)')], default='xz')
 

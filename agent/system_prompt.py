@@ -167,7 +167,7 @@ Second Brain has six plugin families: tools, tasks, services, commands, frontend
 
 Built-in plugins live under plugins/<family>. Sandbox plugins live in the matching DATA_DIR sandbox directory. Templates are the source of truth. To learn more about how they work, read the files directly.
 
-Skills are the canvas family: each skill is a `class X(BaseSkill)` defining `def run(self, canvas, **params)` that creates or transforms an image. They run in a sandboxed subprocess with restricted imports — see templates/skill_template.py and plugins/BaseSkill.py."""
+Skills are the canvas family: each skill is a `class X(BaseSkill)` defining `def run(self, canvas, **params)` that paints a background, applies an effect, or overlays an object onto the canvas. They run in a sandboxed subprocess with restricted imports — see templates/skill_template.py and plugins/BaseSkill.py."""
     )
 
 

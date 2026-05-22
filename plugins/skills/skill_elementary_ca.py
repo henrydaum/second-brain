@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import numpy as np
 from PIL import Image
@@ -12,7 +12,7 @@ except NameError:
 class ElementaryCaSkill(BaseSkill):
     name = 'Elementary CA'
     description = 'Wolfram\'s 1D cellular automata: each row is the next time step of the row above, computed from a 2-state, 3-cell neighborhood according to a numbered rule. Rule 30 is chaos; rule 90 grows the Sierpinski triangle from a single cell; rule 110 is Turing-complete and weaves tangled gliders; rule 184 models traffic flow. The full evolution is rendered as a palette-graded image -- live cells warm, dead cells background. Good for "cellular automata", "wolfram", "rule 30", "rule 90", "emergence", or any algorithmic-evolution motif.'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     rule = Enum([('30', 'Rule 30 (chaos)'), ('90', 'Rule 90 (Sierpinski)'), ('110', 'Rule 110 (complex)'), ('73', 'Rule 73 (crystal)'), ('184', 'Rule 184 (traffic)'), ('150', 'Rule 150 (XOR weave)')], default='110')
 

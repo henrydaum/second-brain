@@ -88,7 +88,7 @@ def _skill_meta(path: Path) -> dict:
         "slug": slugify(name) or path.stem.removeprefix("skill_"),
         "name": name,
         "description": desc,
-        "kind": str(vals.get("kind") or "creation"),
+        "kind": str(vals.get("kind") or "background"),
         "hidden": int(bool(vals.get("hidden", False))),
     }
 

@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Enum, Palette
 
 import math
 import numpy as np
@@ -26,7 +26,7 @@ def _polys():
 class NewtonBasinsSkill(BaseSkill):
     name = 'Newton Basins'
     description = 'Newton\'s method on a complex polynomial, colored by basin of attraction. Each pixel iterates z = z - f(z)/f\'(z); the root it converges to picks the palette band, the iteration count modulates brightness within the band. Produces lacy, intricate boundaries between basins -- a different geometry than escape-time fractals. Good for "fractal", "newton", "basins", "lace", "stained glass", or any mathematically-elaborate algorithmic motif.'
-    kind = 'creation'
+    kind = "background"
     palette = Palette()
     polynomial = Enum([('cubic', 'z^3 - 1 (three roots)'), ('perturbed', 'z^3 - 2z + 2 (cycles)'), ('quartic', 'z^4 - 1 (four roots)'), ('quintic', 'z^5 - 1 (five roots)'), ('sextic', 'z^6 - 1 (six roots)'), ('octic', 'z^8 - 1 (eight roots)')], default='cubic')
 

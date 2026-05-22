@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Enum, Palette
+﻿from plugins.BaseSkill import BaseSkill, Slider, Enum, Palette
 
 import numpy as np
 
@@ -11,7 +11,7 @@ except NameError:
 class DepthFogSkill(BaseSkill):
     name = 'Depth Fog'
     description = 'Blend the current canvas toward the palette background by a depth mask: linear top-fade, bottom-fade, or radial edge-fade.'
-    kind = 'transform'
+    kind = "effect"
 
     palette   = Palette()
     direction = Enum([
