@@ -15,11 +15,12 @@ Skill authoring flow:
   2. Call search_skills with the subject — if a strong match exists, use it.
   3. If you must author, prefer cloning via read_skill(slug) + create_skill
      rather than writing from scratch.
-  4. Provide a module-level body to create_skill:
-       - any needed imports (math, random, colorsys, numpy, PIL.*)
-       - one `def run(canvas, **params):` function
-     create_skill wraps that body in a BaseSkill class automatically and
-     writes the file into the sandbox skills folder.
+  4. Provide a complete BaseSkill class file to create_skill:
+       - imports (math, random, colorsys, numpy, PIL.*, plugins.BaseSkill)
+       - metadata as class attributes
+       - descriptor controls as class attributes
+       - one `def run(self, canvas):` method
+     create_skill writes it into the sandbox skills folder.
   5. Call execute_skill(slug=<returned-slug>) to render it.
   6. If execution returns an error with a hint line, read the hint and
      iterate via update_skill on the same slug.
@@ -30,8 +31,7 @@ AUTO-DISCOVERY RULES
 - File must be in plugins/skills/ (baked-in) or the sandbox skills dir
 - File name must start with "skill_"
 - Class must inherit from BaseSkill
-- Class must define `def run(self, canvas)` for descriptor-style built-ins
-  or `def run(self, canvas, **params)` for wrapped sandbox skills
+- Class must define `def run(self, canvas)`
 - One skill class per file
 
 
@@ -86,14 +86,7 @@ blocked at AST validation time. There is no escape hatch.
 
 CONTROLS
 --------
-There are two authoring modes:
-
-1. create_skill sandbox mode: provide a module-level `def run(canvas, **params)`
-   plus the tool's dict-form `controls` argument. This is the normal agent path.
-2. built-in/reference mode: write a full BaseSkill class and declare controls as
-   descriptors. Use this when editing files under plugins/skills directly.
-
-Built-in descriptor controls look like this:
+Declare controls as BaseSkill class attributes:
 
   intensity = Slider(0.0, 1.0, default=0.5, step=0.01)
   mode      = Enum([("soft", "Soft"), ("crisp", "Crisp")], default="soft")
@@ -105,8 +98,6 @@ Built-in descriptor controls look like this:
 
 Read values as self.intensity/self.mode/etc. Slider values are clamped before
 run() starts. Pan is only a UI grouping over two sliders; read self.cx/self.cy.
-Sandbox skills created through create_skill still use the dict-form controls
-schema because the tool wraps a module-level run(canvas, **params) function.
 """
 
 # =====================================================================
@@ -121,7 +112,6 @@ class BaseSkill:
     kind: str = "background"        # "background" | "filter" | "object"
     owner: str = "library"
     created_at: float = 0.0
-    controls: list = []
     hidden: bool = False
     auto_register: bool = True
     requires_services: list[str] = []

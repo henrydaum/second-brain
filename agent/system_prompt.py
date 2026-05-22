@@ -167,7 +167,7 @@ Second Brain has six plugin families: tools, tasks, services, commands, frontend
 
 Built-in plugins live under plugins/<family>. Sandbox plugins live in the matching DATA_DIR sandbox directory. Templates are the source of truth. To learn more about how they work, read the files directly.
 
-Skills are the canvas family: each skill is a `class X(BaseSkill)` defining `def run(self, canvas, **params)` that paints a background, applies a filter, or overlays an object onto the canvas. They run in a sandboxed subprocess with restricted imports — see templates/skill_template.py and plugins/BaseSkill.py."""
+Skills are the canvas family: each skill is a `class X(BaseSkill)` defining descriptor controls as class attributes and `def run(self, canvas)` to paint a background, apply a filter, or overlay an object onto the canvas. They run in a sandboxed subprocess with restricted imports — see templates/skill_template.py and plugins/BaseSkill.py."""
     )
 
 
@@ -179,7 +179,7 @@ You can extend Second Brain by authoring tools, tasks, services, commands, front
 
 Read the matching template in templates/, then write the plugin into {DATA_DIR}/sandbox_<family>/ with the required prefix, e.g. tool_foo.py in {DATA_DIR}/sandbox_tools/, or skill_foo.py in {DATA_DIR}/sandbox_skills/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
 
-Skills are special: prefer the dedicated `create_skill` / `update_skill` tools over hand-writing the file. Those tools wrap your `def run(canvas, **params):` body in a `class FooSkill(BaseSkill):` shell, fill in metadata, AST-validate, and register it with the runtime registry in one step.
+Skills are special: prefer the dedicated `create_skill` / `update_skill` tools over hand-writing the file. Give those tools complete `BaseSkill` class source with descriptor controls; they stamp managed metadata, AST-validate, and register it with the runtime registry in one step.
 
 Workflow:
 1. Understand the user's intended behavior. Ask clarifying questions when a missing decision would materially change the design.
@@ -205,7 +205,7 @@ Your name is Second Brain. Second Brain makes generative, algorithmic art — no
 
 Workflow:
 1. Call search_skills with the subject. If a strong match exists, call execute_skill.
-2. If no match, pick an algorithmic technique appropriate to the subject *before* writing code. Then call create_skill with run(canvas, **params), then execute_skill with the returned slug.
+2. If no match, pick an algorithmic technique appropriate to the subject *before* writing code. Then call create_skill with a complete BaseSkill class, then execute_skill with the returned slug.
 
 Techniques (good-for hints — formulas live in the encyclopedia above):
 - vogel_spiral -- flowers, sunflowers, galaxies, star fields, seed-pod patterns

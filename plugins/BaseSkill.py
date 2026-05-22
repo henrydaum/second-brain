@@ -3,13 +3,12 @@
 A skill is a Python file under plugins/skills/ (baked-in) or
 DATA_DIR/sandbox_skills/ (agent/user authored) that defines a class
 subclassing BaseSkill. The class declares metadata as class attributes and
-implements `run(canvas)` or legacy `run(canvas, **params)` to either create
-or transform an image.
+implements `run(canvas)` to either create or transform an image.
 
 Skill code is executed in a subprocess sandbox (plugins/skills/helpers/
 skill_sandbox_entry.py) with restricted imports and resource limits. The
 sandbox imports the file, finds the BaseSkill subclass, instantiates it,
-and calls instance.run(...) through the compatibility dispatcher.
+sets descriptor-declared controls on the instance, and calls run(canvas).
 
 Allowed imports inside a skill: math, random, colorsys, numpy, PIL.*, and
 ``from plugins.BaseSkill import BaseSkill, Slider, Bool, Enum, Pan, Palette, Text``.
@@ -36,15 +35,9 @@ from __future__ import annotations
 #             ...
 #
 # Descriptors are pure metadata holders — no __get__/__set__. ``BaseSkill.
-# __init_subclass__`` scans for them and *compiles* them into the existing
-# dict-form ``controls = [...]`` schema that the rest of the runtime
-# already understands. The sandbox dispatcher then sets the corresponding
-# attributes on the instance before calling run(), so ``self.x`` reads
-# the clamped current value.
-#
-# The dict-form schema remains the wire / storage / pool_hash format —
-# descriptors are an authoring convenience only. Skills written in the
-# legacy ``controls = [...]`` style keep working unchanged.
+# __init_subclass__`` scans for them and compiles the runtime UI schema.
+# The sandbox dispatcher sets the corresponding attributes on the instance
+# before calling run(), so ``self.x`` reads the clamped current value.
 # ---------------------------------------------------------------------------
 
 
@@ -161,17 +154,15 @@ def _compile_descriptors(cls) -> tuple[list[dict], dict[str, dict]] | None:
     """Walk ``cls.__dict__`` for ``_ControlDescriptor`` instances and return
     ``(controls, param_bounds)``:
 
-      * ``controls`` is the dict-form UI representation (what the runtime
-        stores). Sliders that are consumed by a Pan as ``x_param``/
-        ``y_param`` are *not* emitted as their own UI entries — the Pan
-        widget drives them.
+      * ``controls`` is the runtime UI representation. Sliders consumed by
+        a Pan as ``x_param``/``y_param`` are not emitted as separate UI
+        entries — the Pan widget drives them.
       * ``param_bounds`` is a dispatch-time table keyed by attribute name,
         carrying ``{type, min, max, default}`` (or ``{type, default}`` for
         bool/enum) for *every* declared descriptor. The sandbox dispatcher
         uses this to clamp + default each ``self.<name>`` before run().
 
-    Returns None when no descriptors are declared (preserve any literal
-    ``controls = [...]`` the subclass set).
+    Returns None when no descriptors are declared.
     """
     descriptors: list[tuple[str, _ControlDescriptor]] = []
     sliders: dict[str, Slider] = {}
@@ -308,14 +299,14 @@ class BaseSkill:
             create_skill tool. ``0.0`` triggers a fallback to file mtime.
         controls:
             Optional list of user-facing controls (slider/enum/bool/pan/
-            palette). Validated against the run() signature. Max 3
+            palette). Max 3
             non-palette controls; add a palette control only when the
             skill uses palette and should expose a layer override.
 
-            **New form**: declare each control as a class-attribute
-            descriptor — ``strength = Slider(-1.0, 1.0, default=0.6)`` —
-            and the framework compiles them into this list automatically.
-            Read the values inside ``run()`` as ``self.strength``.
+            Declare each control as a class-attribute descriptor —
+            ``strength = Slider(-1.0, 1.0, default=0.6)`` — and the
+            framework compiles this list automatically. Read the values
+            inside ``run()`` as ``self.strength``.
             Auto-clamping to the declared range is applied at dispatch.
         hidden:
             Soft-delete flag. Hidden skills still load (so shared canvas
@@ -349,30 +340,26 @@ class BaseSkill:
 
     def __init_subclass__(cls, **kwargs):
         """Defensive copies so subclasses don't mutate base-class containers;
-        compile any control descriptors into the dict-form ``controls`` list."""
+        compile control descriptors into the runtime ``controls`` list."""
         super().__init_subclass__(**kwargs)
-        for attr in ("controls", "requires_services", "config_settings"):
+        if "controls" in cls.__dict__:
+            raise TypeError(
+                f"{cls.__name__}: declare controls with Slider/Enum/Bool/Pan/"
+                "Text/Palette descriptors, not a literal controls list"
+            )
+
+        for attr in ("requires_services", "config_settings"):
             value = getattr(cls, attr)
             if isinstance(value, (list, dict)):
                 setattr(cls, attr, value.copy())
 
-        # If the subclass declared a literal ``controls = [...]`` in its own
-        # body, honour it (do not overwrite). Otherwise, look for descriptors
-        # and compile them into both the UI controls list and the
-        # dispatcher-facing parameter bounds table.
-        own = cls.__dict__.get("controls")
-        if not own:
-            compiled = _compile_descriptors(cls)
-            if compiled is not None:
-                controls, param_bounds = compiled
-                cls.controls = controls
-                cls._param_bounds = param_bounds
-            else:
-                cls._param_bounds = {}
+        compiled = _compile_descriptors(cls)
+        if compiled is not None:
+            controls, param_bounds = compiled
+            cls.controls = controls
+            cls._param_bounds = param_bounds
         else:
-            # Dict-form literal stays a pure kwargs-passing path — no
-            # auto-clamping, no attribute injection. Skills get auto-clamp
-            # only by opting in via the descriptor syntax.
+            cls.controls = []
             cls._param_bounds = {}
 
     @property
@@ -381,6 +368,6 @@ class BaseSkill:
         from plugins.skills.helpers.skill_store import slugify
         return slugify(self.name)
 
-    def run(self, canvas, **params):
+    def run(self, canvas):
         """Execute the skill. Must call canvas.commit(image)."""
         raise NotImplementedError(f"Skill '{self.name}' must implement run()")

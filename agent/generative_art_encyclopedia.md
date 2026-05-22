@@ -9,10 +9,11 @@ and the canvas size you're rendering into.
 
 Every skill is a Python file containing a `class <Name>(BaseSkill):` that
 declares its metadata as class attributes (`name`, `description`,
-`kind` — "background", "filter", or "object" — `owner`, `created_at`, `controls`,
-`hidden`) and defines `def run(self, canvas, **params)`. The `create_skill`
-tool wraps the module-level body you give it (imports + `def run(canvas, ...)`)
-in that class shell automatically and fills in `owner` and `created_at`.
+`kind` — "background", "filter", or "object" — `owner`, `created_at`,
+`hidden`) plus descriptor controls (`Slider`, `Enum`, `Bool`, `Pan`, `Text`,
+`Palette`) and defines `def run(self, canvas)`. The `create_skill` tool accepts
+that complete class source and fills in managed metadata like `owner` and
+`created_at`.
 
 - **Allowed imports only**: `math`, `random`, `colorsys`, `numpy`,
   `numpy.random`, `PIL.Image`, `PIL.ImageDraw`, `PIL.ImageFilter`,

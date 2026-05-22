@@ -13,7 +13,7 @@ logger = logging.getLogger("SkillTools")
 
 class CreateSkill(BaseTool):
     name = "create_skill"
-    description = "Author a new canvas skill — supply the module-level body (imports + `def run(canvas, **params)`) and Second Brain wraps it in a BaseSkill subclass and writes it to the sandbox skills folder. Only use when search_skills + read_skill cannot supply a close enough starting point. Prefer colors from canvas.palette slots (or art_kit.palette_color(t)), seed RNGs from canvas.seed, and call canvas.commit(image) on every path. Allowed imports only: math, random, colorsys, numpy, PIL.*, and `from plugins.BaseSkill import BaseSkill`. Optionally declare up to 3 user-facing controls (slider/enum/bool/pan) plus a palette control when the skill actually uses palette and should show a layer-specific override. Built-in skills may use BaseSkill descriptors directly; this tool still uses the dict control schema."
+    description = "Author a new canvas skill by supplying a complete BaseSkill class file. Declare controls as class attributes with Slider/Enum/Bool/Pan/Text/Palette descriptors and read them as self.<name> inside run(self, canvas). Only use when search_skills + read_skill cannot supply a close enough starting point. Prefer colors from canvas.palette slots or art_kit.palette_color(t), seed RNGs from canvas.seed, and call canvas.commit(image) on every path. Allowed imports only: math, random, colorsys, numpy, PIL.*, and plugins.BaseSkill."
     max_calls = 4
     parameters = {
         "type": "object",
@@ -21,13 +21,7 @@ class CreateSkill(BaseTool):
             "name": {"type": "string"},
             "description": {"type": "string"},
             "kind": {"type": "string", "enum": ["background", "filter", "object"], "description": "background = produces a fresh image from scratch (layer 0); filter = reads the current canvas and replaces it with a same-shape opaque image; object = reads the current canvas, returns RGBA, framework alpha-composites onto the prior canvas (overlays like typography). filters/objects require a background already in the chain."},
-            "code": {"type": "string", "description": "Module-level body: any needed imports plus `def run(canvas, **params):`. Will be wrapped in a BaseSkill class automatically."},
-            "controls": {
-                "type": "array",
-                "default": [],
-                "description": "Optional user-facing controls. Each item is {type, name, label, ...type-specific fields}. Types: slider {min,max,step,default}; enum {options:[{value,label}],default}; bool {default}; pan {x_param,y_param,step,x_default,y_default}; palette (no extras, shown only for skills that use canvas.palette/art_kit.palette_color). Max 3 non-palette + 1 palette. Names must match run() params except palette.",
-                "items": {"type": "object"},
-            },
+            "code": {"type": "string", "description": "Complete Python source for one BaseSkill subclass with `def run(self, canvas)`. Use descriptor controls as class attributes."},
         },
         "required": ["name", "description", "kind", "code"],
     }
@@ -40,9 +34,11 @@ class CreateSkill(BaseTool):
                 kind=str(kwargs.get("kind") or "background"),
                 owner=_owner(context),
                 code=str(kwargs.get("code") or ""),
-                controls=list(kwargs.get("controls") or []),
             )
             _register(context, path)
+            live = _live_record(context, skill.slug)
+            if live is not None:
+                skill = live
             _notify(context, str(path))
             return ToolResult(
                 data=skill.to_dict(),
@@ -68,6 +64,11 @@ def _register(context, path: Path) -> None:
         load_single_plugin("skill", path, skill_registry=registry)
     except Exception:
         logger.exception("create_skill: failed to register %s with SkillRegistry", path)
+
+
+def _live_record(context, slug: str):
+    registry = getattr(context, "skill_registry", None)
+    return registry.get_record(slug) if registry is not None else None
 
 
 def _notify(context, path: str) -> None:

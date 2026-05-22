@@ -2,17 +2,14 @@
 
 A skill is one Python file under ``plugins/skills/skill_<slug>.py`` (baked-in)
 or ``DATA_DIR/sandbox_skills/skill_<slug>.py`` (sandbox) that defines a
-``class <X>(BaseSkill)`` with metadata as class attributes and a
-``def run(self, canvas, **params)`` method, or descriptor-style controls with
-``def run(self, canvas)``.
+``class <X>(BaseSkill)`` with metadata/descriptor controls as class
+attributes and a ``def run(self, canvas)`` method.
 
 This module owns:
 - AST validation (which imports + attribute accesses are safe, structural
   requirements for the BaseSkill class).
-- Control schema validation.
-- File formatting: wrapping a user-authored ``def run(canvas, ...)`` body
-  inside a generated BaseSkill class, plus targeted in-place rewrites for
-  soft-delete (``hidden``) and ownership transfer.
+- File formatting: targeted in-place rewrites for managed metadata
+  (``owner``, ``created_at``, ``hidden``) and ownership transfer.
 - Filesystem-level write/update/delete operations.
 
 Runtime lookup, search, and embedding cache live in
@@ -25,7 +22,6 @@ from __future__ import annotations
 
 import ast
 import re
-import textwrap
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -103,6 +99,27 @@ def _find_run_method(cls_node: ast.ClassDef) -> ast.FunctionDef | None:
     return None
 
 
+def _literal_control_attrs(cls_node: ast.ClassDef) -> list[int]:
+    lines: list[int] = []
+    for item in cls_node.body:
+        if isinstance(item, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id == "controls" for t in item.targets):
+                lines.append(item.lineno)
+        elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and item.target.id == "controls":
+            lines.append(item.lineno)
+    return lines
+
+
+def _run_signature_error(run: ast.FunctionDef) -> str | None:
+    args = run.args
+    if args.vararg or args.kwarg or args.kwonlyargs or args.posonlyargs:
+        return "run must be declared exactly as `def run(self, canvas)`"
+    names = [a.arg for a in args.args]
+    if names != ["self", "canvas"]:
+        return "run must be declared exactly as `def run(self, canvas)`"
+    return None
+
+
 def validate_skill_code(source: str) -> list[str]:
     """Return a list of violations. Empty list means the code is acceptable.
 
@@ -143,8 +160,16 @@ def validate_skill_code(source: str) -> list[str]:
     cls_node = _find_base_skill_class(tree)
     if cls_node is None:
         errors.append("no class inheriting from BaseSkill found — every skill must define `class <Name>(BaseSkill):`")
-    elif _find_run_method(cls_node) is None:
-        errors.append(f"class '{cls_node.name}' must define `def run(self, canvas)`")
+    else:
+        for lineno in _literal_control_attrs(cls_node):
+            errors.append(f"class '{cls_node.name}' declares literal controls at line {lineno}; use Slider/Enum/Bool/Pan/Text/Palette descriptors")
+        run = _find_run_method(cls_node)
+        if run is None:
+            errors.append(f"class '{cls_node.name}' must define `def run(self, canvas)`")
+        else:
+            err = _run_signature_error(run)
+            if err:
+                errors.append(f"class '{cls_node.name}': {err}")
 
     return errors
 
@@ -155,43 +180,6 @@ def assert_valid(source: str) -> None:
         raise SkillValidationError("; ".join(errors))
 
 
-# ---------------------------------------------------------------------------
-# AST helpers for control-schema validation.
-# ---------------------------------------------------------------------------
-
-def _run_param_names_from_tree(tree: ast.Module) -> set[str]:
-    """Extract keyword parameter names from the BaseSkill subclass's run method."""
-    cls = _find_base_skill_class(tree)
-    if cls is None:
-        return set()
-    run = _find_run_method(cls)
-    if run is None:
-        return set()
-    args = run.args
-    all_args = list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
-    names = {a.arg for a in all_args}
-    names.discard("self")
-    names.discard("canvas")
-    return names
-
-
-def extract_run_params(source: str) -> set[str]:
-    """Return the keyword-param names of the BaseSkill subclass's run method."""
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return set()
-    return _run_param_names_from_tree(tree)
-
-
-def _coerce_number(value, *, field: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise SkillValidationError(f"control field '{field}' must be a number, got {type(value).__name__}")
-    return float(value)
-
-
-MAX_NON_PALETTE_CONTROLS = 3
-_CONTROL_TYPES = {"slider", "enum", "bool", "pan", "palette", "text"}
 _KINDS = ("background", "object", "filter")
 
 
@@ -211,88 +199,6 @@ def source_uses_palette(source: str | None) -> bool:
     )
 
 
-def validate_controls(controls, run_param_names: set[str], code: str | None = None) -> list[dict]:
-    """Validate and normalize a list of control entries. Same contract as
-    before the refactor — see plan / earlier docstring."""
-    if controls is None:
-        controls = []
-    if not isinstance(controls, list):
-        raise SkillValidationError("controls must be a list")
-    valid_params = set(run_param_names) | {"palette"}
-    seen_names: set[str] = set()
-    non_palette = 0
-    out: list[dict] = []
-    for i, raw in enumerate(controls):
-        if not isinstance(raw, dict):
-            raise SkillValidationError(f"control #{i} must be a dict")
-        c = dict(raw)
-        ctype = c.get("type")
-        if ctype not in _CONTROL_TYPES:
-            raise SkillValidationError(f"control #{i} has invalid type {ctype!r}; allowed: {sorted(_CONTROL_TYPES)}")
-
-        if ctype == "palette":
-            c.setdefault("name", "palette")
-            c.setdefault("label", "Palette")
-        else:
-            non_palette += 1
-            name = c.get("name")
-            if not isinstance(name, str) or not name:
-                raise SkillValidationError(f"control #{i} ({ctype}) missing 'name'")
-            if ctype != "pan" and name not in valid_params:
-                raise SkillValidationError(
-                    f"control '{name}' is not a parameter of run(); add it to the run signature"
-                )
-            c.setdefault("label", name.replace("_", " ").title())
-
-        if c["name"] in seen_names:
-            raise SkillValidationError(f"duplicate control name '{c['name']}'")
-        seen_names.add(c["name"])
-
-        if ctype == "slider":
-            lo = _coerce_number(c.get("min"), field="min")
-            hi = _coerce_number(c.get("max"), field="max")
-            if hi <= lo:
-                raise SkillValidationError(f"slider '{c['name']}' needs max > min")
-            c["min"], c["max"] = lo, hi
-            c["step"] = _coerce_number(c.get("step", (hi - lo) / 100.0), field="step")
-            c["default"] = _coerce_number(c.get("default", lo), field="default")
-        elif ctype == "bool":
-            c["default"] = bool(c.get("default", False))
-        elif ctype == "enum":
-            options = c.get("options")
-            if not isinstance(options, list) or not options:
-                raise SkillValidationError(f"enum '{c['name']}' needs a non-empty 'options' list")
-            norm_opts = []
-            for j, opt in enumerate(options):
-                if not isinstance(opt, dict) or "value" not in opt:
-                    raise SkillValidationError(f"enum '{c['name']}' option #{j} must be a dict with 'value'")
-                norm_opts.append({"value": opt["value"], "label": str(opt.get("label", opt["value"]))})
-            c["options"] = norm_opts
-            c.setdefault("default", norm_opts[0]["value"])
-        elif ctype == "pan":
-            xp, yp = c.get("x_param"), c.get("y_param")
-            if not (isinstance(xp, str) and isinstance(yp, str)):
-                raise SkillValidationError(f"pan '{c['name']}' needs string x_param and y_param")
-            if xp not in valid_params or yp not in valid_params:
-                raise SkillValidationError(f"pan '{c['name']}' references unknown run() params")
-            c["step"] = _coerce_number(c.get("step", 0.1), field="step")
-            xd = _coerce_number(c.get("x_default", 0.0), field="x_default")
-            yd = _coerce_number(c.get("y_default", 0.0), field="y_default")
-            c["x_default"], c["y_default"] = xd, yd
-            c["default"] = {xp: xd, yp: yd}
-        elif ctype == "text":
-            c["default"] = str(c.get("default", ""))
-            c["max_length"] = int(c.get("max_length", 120))
-            c["placeholder"] = c.get("placeholder")
-        out.append(c)
-
-    if non_palette > MAX_NON_PALETTE_CONTROLS:
-        raise SkillValidationError(
-            f"a skill may declare at most {MAX_NON_PALETTE_CONTROLS} non-palette controls (got {non_palette})"
-        )
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Skill dataclass — runner-facing DTO.
 # ---------------------------------------------------------------------------
@@ -303,13 +209,6 @@ _SLUG_RE = re.compile(r"[^a-z0-9_]+")
 def slugify(name: str) -> str:
     slug = _SLUG_RE.sub("_", (name or "").strip().lower()).strip("_")
     return slug or "untitled"
-
-
-def class_name_for_slug(slug: str) -> str:
-    """PascalCase + 'Skill' suffix. Matches naming used by build_plugin tools."""
-    parts = [p for p in slug.split("_") if p]
-    body = "".join(p[:1].upper() + p[1:] for p in parts) or "Untitled"
-    return body + "Skill"
 
 
 @dataclass
@@ -405,83 +304,6 @@ def to_skill_record(instance) -> Skill:
 
 
 # ---------------------------------------------------------------------------
-# File formatting — wrap user-authored body in a BaseSkill class.
-# ---------------------------------------------------------------------------
-
-_DEF_RUN_RE = re.compile(r"\bdef\s+run\s*\(")
-
-
-def _split_imports_and_body(user_code: str) -> tuple[list[str], list[str]]:
-    """Walk the user's source AST. Return (import_blocks, body_blocks).
-
-    Imports stay at module level. Everything else becomes part of the class
-    body (after the metadata block). The `def run(canvas, ...)` function is
-    rewritten to `def run(self, canvas, ...)` and indented one level.
-    """
-    tree = ast.parse(user_code)
-    imports: list[str] = []
-    body: list[str] = []
-    for node in tree.body:
-        seg = ast.get_source_segment(user_code, node)
-        if seg is None:
-            continue
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            imports.append(seg)
-        elif isinstance(node, ast.FunctionDef) and node.name == "run":
-            indented = textwrap.indent(seg, "    ")
-            indented = _DEF_RUN_RE.sub("def run(self, ", indented, count=1)
-            body.append(indented)
-        else:
-            body.append(textwrap.indent(seg, "    "))
-    return imports, body
-
-
-def wrap_user_code_in_class(*, class_name: str, name: str, description: str,
-                             kind: str, owner: str, created_at: float,
-                             controls: list, hidden: bool, user_code: str) -> str:
-    """Generate the file source for a new skill.
-
-    Takes the user-supplied module-level ``def run(canvas, ...)`` (plus any
-    imports the user added) and wraps it inside a generated BaseSkill
-    subclass with metadata as class attributes.
-    """
-    imports, body = _split_imports_and_body(user_code)
-    if not any(_DEF_RUN_RE.search(b) for b in body):
-        raise SkillValidationError("user code must contain `def run(canvas, ...)`")
-
-    # `art_kit` is injected into the skill's globals by the sandbox at exec
-    # time (see skill_sandbox_entry.py). The try/except below is a no-op in
-    # the sandbox (the name resolves) and binds `art_kit = None` outside it
-    # (in editors / plugin_discovery's parent-process import). The point is
-    # to give Pylance / Pyright a module-level definition so sandbox skill
-    # files don't light up with "undefined" squiggles.
-    art_kit_shim = (
-        "try:\n"
-        "    art_kit  # injected by sandbox at exec time\n"
-        "except NameError:\n"
-        "    art_kit = None"
-    )
-    parts: list[str] = ["from plugins.BaseSkill import BaseSkill"]
-    if imports:
-        parts.append("\n".join(imports))
-    parts.append(art_kit_shim)
-    header = "\n\n".join(parts) + "\n\n\n"
-
-    attrs = (
-        f"    name = {name!r}\n"
-        f"    description = {description!r}\n"
-        f"    kind = {kind!r}\n"
-        f"    owner = {owner!r}\n"
-        f"    created_at = {float(created_at)!r}\n"
-        f"    hidden = {bool(hidden)!r}\n"
-    )
-    if controls:
-        attrs += f"    controls = {controls!r}\n"
-
-    return f"{header}class {class_name}(BaseSkill):\n{attrs}\n" + "\n\n".join(body) + "\n"
-
-
-# ---------------------------------------------------------------------------
 # In-place class-body rewrites for soft-delete + ownership transfer.
 # ---------------------------------------------------------------------------
 
@@ -532,13 +354,12 @@ def set_owner_in_source(source: str, owner: str) -> str:
 
 def write_skill(
     *, name: str, description: str, kind: str, owner: str, code: str,
-    controls: list | None = None,
 ) -> tuple[Skill, Path]:
     """Create a new sandbox skill. Returns (skill_dto, file_path).
 
-    Validates the user's code (which must contain ``def run(canvas, ...)``),
-    wraps it in a generated BaseSkill subclass, and writes the file. The
-    caller is responsible for asking the registry to load it.
+    Validates the user's full BaseSkill class source, stamps managed
+    metadata, and writes the file. The caller is responsible for asking the
+    registry to load it.
     """
     if kind not in _KINDS:
         raise ValueError(f"kind must be one of {_KINDS}, got {kind!r}")
@@ -554,15 +375,12 @@ def write_skill(
     if sandbox_path.exists() or _built_in_path_for(slug).exists():
         raise FileExistsError(f"a skill named '{slug}' already exists")
 
-    normalized_controls = validate_controls(controls, extract_run_params(code) or _run_param_names_in_body(code), code=code)
-    cls_name = class_name_for_slug(slug)
     created_at = time.time()
-    file_source = wrap_user_code_in_class(
-        class_name=cls_name, name=name, description=description, kind=kind,
-        owner=owner or "", created_at=created_at,
-        controls=normalized_controls, hidden=False, user_code=code,
+    assert_valid(code)
+    file_source = _rewrite_metadata_only(
+        code, name=name, description=description, kind=kind,
+        owner=owner or "", created_at=created_at, hidden=False,
     )
-    # Validate the final generated file (not just the user's body).
     assert_valid(file_source)
 
     SANDBOX_SKILLS.mkdir(parents=True, exist_ok=True)
@@ -572,36 +390,17 @@ def write_skill(
         slug=slug, path=str(sandbox_path.resolve()),
         name=name, description=description,
         kind=kind, owner=owner or "", code=file_source,
-        created_at=created_at, controls=normalized_controls,
+        created_at=created_at, controls=[],
     )
     return skill, sandbox_path
-
-
-def _run_param_names_in_body(user_code: str) -> set[str]:
-    """Extract `def run(canvas, ...)` params from the user's pre-wrap body."""
-    try:
-        tree = ast.parse(user_code)
-    except SyntaxError:
-        return set()
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "run":
-            args = node.args
-            all_args = list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
-            names = {a.arg for a in all_args}
-            names.discard("canvas")
-            return names
-    return set()
 
 
 def rewrite_skill(
     path: Path, *, owner_session_key: str,
     name: str | None = None, description: str | None = None,
-    code: str | None = None, controls: list | None = None,
+    code: str | None = None,
 ) -> Skill:
-    """Update an existing sandbox skill in place. Re-wraps the user's body
-    when ``code`` is provided. Built-in skills are read-only; raises
-    PermissionError if the target is built-in or owner-mismatched.
-    """
+    """Update an existing sandbox skill in place. ``code`` is full skill source."""
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"no skill file at {path}")
@@ -623,29 +422,13 @@ def rewrite_skill(
     new_created_at = float(existing.get("created_at") or time.time())
     new_hidden = bool(existing.get("hidden", False))
 
-    if new_code is None:
-        # Keep the existing run-method body. Re-emit attrs only.
-        new_controls = validate_controls(
-            controls if controls is not None else existing.get("controls") or [],
-            extract_run_params(existing_src), code=existing_src,
-        )
-        out_source = _rewrite_metadata_only(
-            existing_src,
-            name=new_name, description=new_desc, kind=new_kind,
-            owner=new_owner, created_at=new_created_at,
-            controls=new_controls, hidden=new_hidden,
-        )
-    else:
-        new_controls = validate_controls(
-            controls if controls is not None else existing.get("controls") or [],
-            _run_param_names_in_body(new_code), code=new_code,
-        )
-        cls_name = class_name_for_slug(path.stem.removeprefix("skill_"))
-        out_source = wrap_user_code_in_class(
-            class_name=cls_name, name=new_name, description=new_desc, kind=new_kind,
-            owner=new_owner, created_at=new_created_at,
-            controls=new_controls, hidden=new_hidden, user_code=new_code,
-        )
+    src = existing_src if new_code is None else new_code
+    assert_valid(src)
+    out_source = _rewrite_metadata_only(
+        src,
+        name=new_name, description=new_desc, kind=new_kind,
+        owner=new_owner, created_at=new_created_at, hidden=new_hidden,
+    )
 
     assert_valid(out_source)
     path.write_text(out_source, encoding="utf-8")
@@ -655,7 +438,7 @@ def rewrite_skill(
         slug=slug, path=str(path.resolve()),
         name=new_name, description=new_desc,
         kind=new_kind, owner=new_owner, code=out_source,
-        created_at=new_created_at, controls=new_controls, hidden=new_hidden,
+        created_at=new_created_at, controls=[], hidden=new_hidden,
     )
 
 
@@ -705,7 +488,7 @@ def anonymize_owner_in_dir(directory: Path, owner_values) -> int:
 # Class-attribute extraction via AST literal_eval (no exec).
 # ---------------------------------------------------------------------------
 
-_META_FIELDS = {"name", "description", "kind", "owner", "created_at", "controls", "hidden"}
+_META_FIELDS = {"name", "description", "kind", "owner", "created_at", "hidden"}
 
 
 def _read_class_metadata(source: str) -> dict:
@@ -730,7 +513,7 @@ def _read_class_metadata(source: str) -> dict:
 
 
 def _rewrite_metadata_only(source: str, *, name: str, description: str, kind: str,
-                            owner: str, created_at: float, controls: list, hidden: bool) -> str:
+                            owner: str, created_at: float, hidden: bool) -> str:
     """Replace each metadata attr in place; leaves body code untouched."""
     out = source
     out = _replace_class_attr(out, "name", repr(name))
@@ -739,6 +522,4 @@ def _rewrite_metadata_only(source: str, *, name: str, description: str, kind: st
     out = _replace_class_attr(out, "owner", repr(owner))
     out = _replace_class_attr(out, "created_at", repr(float(created_at)))
     out = _replace_class_attr(out, "hidden", repr(bool(hidden)))
-    if controls:
-        out = _replace_class_attr(out, "controls", repr(controls))
     return out

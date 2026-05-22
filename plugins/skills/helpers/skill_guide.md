@@ -42,7 +42,7 @@ Clone-and-adjust beats freehand every time.
 
 ## 1. Skill file template
 
-Built-in/reference skills use descriptor controls on the `BaseSkill` class.
+Skills use descriptor controls on the `BaseSkill` class.
 Each parameter is declared once, then read as `self.<name>` inside `run()`.
 Slider values are defaulted and clamped by the runtime before `run()` starts.
 
@@ -76,10 +76,6 @@ class SunflowerFieldSkill(BaseSkill):
             draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
         canvas.commit(img)
 ```
-
-The `create_skill` tool still accepts module-level `def run(canvas, **params)`
-plus a `controls=[...]` schema and wraps it for sandbox use. Use the descriptor
-form when editing built-in skills directly.
 
 ### filter skill template (numpy + warp)
 
@@ -292,7 +288,7 @@ and re-run the skill chain whenever the user adjusts one.
 Used well, controls turn near-miss completions into successes without another
 agent turn.
 
-For built-in skills, declare controls as class attributes:
+Declare controls as class attributes:
 
 ```python
 from plugins.BaseSkill import BaseSkill, Slider, Bool, Enum, Pan, Palette
@@ -319,10 +315,6 @@ class ExampleSkill(BaseSkill):
 `Pan` is only a UI grouping over two slider values; read `self.cx` and
 `self.cy`, not `self.center`. `Palette` declares a layer-specific palette
 override and should only be used by skills that actually read palette colors.
-
-For sandbox skills created through `create_skill`, pass the old dict schema to
-the tool. Every non-palette control name must still correspond to a keyword
-parameter of the module-level `run(canvas, ...)` function.
 
 Descriptor controls — keep things general-purpose; one widget should map
 cleanly to one knob the user wants to turn:

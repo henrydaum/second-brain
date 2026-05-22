@@ -1,9 +1,8 @@
 """Tests for the descriptor-style control declaration (Tier 3).
 
-Covers: descriptors compile to the existing dict-form ``controls`` list,
-defaults are honoured, auto-clamping happens at dispatch time, Pan-consumed
-sliders are suppressed from the UI control list but still tracked for
-clamping, and legacy dict-form ``controls = [...]`` literals coexist.
+Covers: descriptors compile to the runtime controls list, defaults are
+honoured, auto-clamping happens at dispatch time, and Pan-consumed sliders
+are suppressed from the UI control list but still tracked for clamping.
 """
 
 import pytest
@@ -13,11 +12,10 @@ from PIL import Image
 
 from plugins.BaseSkill import BaseSkill, Slider, Bool, Enum, Pan, Text
 from plugins.skills.helpers.skill_sandbox_entry import Canvas, _dispatch_run, _apply_param_bounds
-from plugins.skills.helpers.skill_store import validate_controls
 
 
 # ---------------------------------------------------------------------------
-# Compilation: descriptors → dict-form controls
+# Compilation: descriptors to runtime controls
 # ---------------------------------------------------------------------------
 
 def test_slider_descriptor_compiles_to_dict_control():
@@ -79,28 +77,12 @@ def test_pan_with_missing_slider_raises():
             center = Pan(x="cx", y="cy")  # neither cx nor cy declared
 
 
-def test_literal_controls_preserved_when_descriptors_absent():
-    class S(BaseSkill):
-        name = "S"
-        kind = "filter"
-        controls = [{"type": "slider", "name": "x", "label": "X", "min": 0, "max": 1, "default": 0.5, "step": 0.05}]
-
-    assert S.controls[0]["name"] == "x"
-    assert S._param_bounds == {}
-
-
-def test_compiled_controls_pass_existing_validator():
-    class S(BaseSkill):
-        name = "S"
-        kind = "filter"
-        strength = Slider(-1.0, 1.0, default=0.6)
-        cx = Slider(0, 1, default=0.5)
-        cy = Slider(0, 1, default=0.5)
-        center = Pan(x="cx", y="cy")
-
-    run_params = set(S._param_bounds.keys())
-    normalized = validate_controls(S.controls, run_params)
-    assert len(normalized) == 2  # strength + center (cx, cy absorbed)
+def test_literal_controls_rejected():
+    with pytest.raises(TypeError, match="literal controls"):
+        class S(BaseSkill):
+            name = "S"
+            kind = "filter"
+            controls = []
 
 
 def test_relaxed_owner_default():
@@ -168,21 +150,16 @@ def test_dispatch_calls_run_without_kwargs_when_signature_is_clean():
     assert captured["gamma"] == 0.5
 
 
-def test_dispatch_falls_back_to_kwargs_for_legacy_signature():
-    captured = {}
-
+def test_dispatch_rejects_unknown_params():
     class S(BaseSkill):
         name = "S"
         kind = "filter"
-        controls = [{"type": "slider", "name": "x", "label": "X",
-                     "min": 0, "max": 1, "default": 0.5, "step": 0.05}]
 
-        def run(self, canvas, x=0.5):
-            captured["x"] = x
+        def run(self, canvas):
             canvas.commit(canvas.image)
 
-    _dispatch_run(S(), _make_canvas(), {"x": 0.8})
-    assert captured["x"] == 0.8
+    with pytest.raises(ValueError, match="unknown control"):
+        _dispatch_run(S(), _make_canvas(), {"x": 0.8})
 
 
 def test_enum_dispatch_snaps_to_allowed():

@@ -21,8 +21,7 @@ class UpdateSkill(BaseTool):
             "slug": {"type": "string"},
             "name": {"type": "string"},
             "description": {"type": "string"},
-            "code": {"type": "string", "description": "New module-level body (imports + `def run(canvas, **params):`). Omit to keep current code. When provided, replaces the entire run-method body."},
-            "controls": {"type": "array", "items": {"type": "object"}, "description": "Replace the skill's controls list (same shape as create_skill). Omit to leave unchanged."},
+            "code": {"type": "string", "description": "Complete replacement Python source for one BaseSkill subclass with `def run(self, canvas)`. Declare controls with descriptors. Omit to keep current code."},
         },
         "required": ["slug"],
     }
@@ -42,9 +41,12 @@ class UpdateSkill(BaseTool):
             skill = skill_store.rewrite_skill(
                 path, owner_session_key=_owner(context),
                 name=kwargs.get("name"), description=kwargs.get("description"),
-                code=kwargs.get("code"), controls=kwargs.get("controls"),
+                code=kwargs.get("code"),
             )
             _reload(context, path)
+            live = _live_record(context, skill.slug)
+            if live is not None:
+                skill = live
             _notify(context, skill.path)
             return ToolResult(data=skill.to_dict(), llm_summary=f"Updated skill '{skill.slug}'.")
         except Exception as e:
@@ -65,6 +67,11 @@ def _reload(context, path: Path) -> None:
         load_single_plugin("skill", path, skill_registry=registry)
     except Exception:
         logger.exception("update_skill: failed to reload %s", path)
+
+
+def _live_record(context, slug: str):
+    registry = getattr(context, "skill_registry", None)
+    return registry.get_record(slug) if registry is not None else None
 
 
 def _notify(context, path: str) -> None:

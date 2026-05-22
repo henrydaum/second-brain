@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import importlib
 import builtins as _builtins
-import inspect
 import json
 import platform
 import re
@@ -390,12 +389,7 @@ def _find_skill_instance(ns: dict) -> object:
 
 
 def _apply_param_bounds(instance, params: dict) -> dict:
-    """For each entry in the instance's ``_param_bounds`` table, set
-    ``instance.<name>`` to the clamped/defaulted value drawn from
-    ``params``. Returns the residual params dict (values that don't
-    correspond to a declared bound — these are still passed through as
-    kwargs to ``run()`` so the legacy calling convention keeps working).
-    """
+    """Set descriptor-backed ``instance.<name>`` values and return leftovers."""
     bounds = getattr(instance, "_param_bounds", None) or {}
     if not bounds:
         return params
@@ -428,32 +422,16 @@ def _apply_param_bounds(instance, params: dict) -> dict:
 
 
 def _dispatch_run(instance, canvas, params: dict):
-    """Call ``instance.run(canvas, ...)``. If the run() signature accepts
-    only ``(self, canvas)`` (the new descriptor style), no kwargs are
-    passed. Otherwise, residual params are forwarded for backwards
-    compatibility with the legacy ``def run(self, canvas, **params)``
-    style.
-    """
+    """Apply descriptor params, reject stray controls, then call run(canvas)."""
     residual = _apply_param_bounds(instance, params)
-    try:
-        sig = inspect.signature(instance.run)
-        non_self = [p for p in sig.parameters.values()]
-        accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in non_self)
-        named = {p.name for p in non_self if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)}
-        # Drop 'canvas' from the named set — it's the positional arg.
-        named.discard("canvas")
-        # Drop names already handled via descriptors (set via setattr above).
-        bound_names = set(getattr(instance, "_param_bounds", {}) or {})
-        named -= bound_names
-        if accepts_kwargs:
-            return instance.run(canvas, **residual)
-        if named:
-            kwargs = {k: residual[k] for k in named if k in residual}
-            return instance.run(canvas, **kwargs)
-        return instance.run(canvas)
-    except (TypeError, ValueError):
-        # Fall back to the legacy call shape if introspection misfires.
-        return instance.run(canvas, **residual)
+    unknown = sorted(k for k in residual if k != "palette")
+    if unknown:
+        raise ValueError(
+            "unknown control parameter(s): "
+            + ", ".join(unknown)
+            + "; declare controls with BaseSkill descriptors"
+        )
+    return instance.run(canvas)
 
 
 def main():
