@@ -11,7 +11,7 @@ except NameError:
 class VignetteSkill(BaseSkill):
     name = 'Vignette'
     description = 'Radial darken tinted with palette.background. Pulls the eye toward the center; pairs well with palette_grade.'
-    kind = "effect"
+    kind = "filter"
 
     palette  = Palette()
     strength = Slider(0.0, 1.0, default=0.6, step=0.05)

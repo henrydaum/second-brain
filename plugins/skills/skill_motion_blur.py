@@ -12,7 +12,7 @@ except NameError:
 class MotionBlurSkill(BaseSkill):
     name = 'Motion Blur'
     description = 'Directional blur along an angle — fakes camera shake or fast motion.'
-    kind = "effect"
+    kind = "filter"
 
     length = Slider(3, 60, default=18, step=1)
     angle  = Slider(0, 360, default=0, step=5)

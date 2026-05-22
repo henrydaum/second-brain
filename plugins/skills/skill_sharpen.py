@@ -11,7 +11,7 @@ except NameError:
 class SharpenSkill(BaseSkill):
     name = 'Sharpen'
     description = 'Crisp up edge detail with an unsharp mask. Good final-pass after a creation skill or any softening transform.'
-    kind = "effect"
+    kind = "filter"
 
     radius    = Slider(0.2, 6.0, default=1.5, step=0.1)
     percent   = Slider(0, 400, default=140, step=5)

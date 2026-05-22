@@ -11,7 +11,7 @@ except NameError:
 class DotScreenSkill(BaseSkill):
     name = 'Dot Screen'
     description = 'Overlay a regular dot pattern at canvas resolution, with dot alpha controlled by local luminance — keeps original colors but adds a printed-screen texture.'
-    kind = "effect"
+    kind = "filter"
 
     palette   = Palette()
     cell_size = Slider(4, 30, default=10, step=1)

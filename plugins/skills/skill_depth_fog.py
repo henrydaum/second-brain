@@ -11,7 +11,7 @@ except NameError:
 class DepthFogSkill(BaseSkill):
     name = 'Depth Fog'
     description = 'Blend the current canvas toward the palette background by a depth mask: linear top-fade, bottom-fade, or radial edge-fade.'
-    kind = "effect"
+    kind = "filter"
 
     palette   = Palette()
     direction = Enum([

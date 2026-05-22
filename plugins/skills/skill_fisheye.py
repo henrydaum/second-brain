@@ -11,7 +11,7 @@ except NameError:
 class FisheyeSkill(BaseSkill):
     name = 'Fisheye'
     description = 'Lens distortion sample. Positive strength gives a fisheye bulge; negative gives pincushion (edges stretch). Pan moves the lens center.'
-    kind = "effect"
+    kind = "filter"
 
     strength = Slider(-1.0, 1.0, default=0.6, step=0.05)
     zoom     = Slider(0.5, 2.0, default=1.0, step=0.05)

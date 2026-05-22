@@ -11,7 +11,7 @@ except NameError:
 class MirrorSkill(BaseSkill):
     name = 'Mirror'
     description = 'Symmetry transform. Reflects halves or makes a 4-way kaleidoscopic symmetry from the top-left quadrant. Adds instant order.'
-    kind = "effect"
+    kind = "filter"
 
     mode = Enum([
         ('horizontal_lr', 'Left → Right'),

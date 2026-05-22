@@ -11,7 +11,7 @@ except NameError:
 class PixelateSkill(BaseSkill):
     name = 'Pixelate'
     description = 'Block-mean downsample then nearest-neighbour upsample. Classic chunky-pixel look. Bigger block_size = bigger pixels.'
-    kind = "effect"
+    kind = "filter"
 
     block_size = Slider(2, 80, default=12, step=1)
 

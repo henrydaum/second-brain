@@ -1,4 +1,4 @@
-"""Skill persistence + AST validation for the class-based plugin format.
+﻿"""Skill persistence + AST validation for the class-based plugin format.
 
 A skill is one Python file under ``plugins/skills/skill_<slug>.py`` (baked-in)
 or ``DATA_DIR/sandbox_skills/skill_<slug>.py`` (sandbox) that defines a
@@ -192,7 +192,7 @@ def _coerce_number(value, *, field: str) -> float:
 
 MAX_NON_PALETTE_CONTROLS = 3
 _CONTROL_TYPES = {"slider", "enum", "bool", "pan", "palette", "text"}
-_KINDS = ("background", "object", "effect")
+_KINDS = ("background", "object", "filter")
 
 
 def source_uses_palette(source: str | None) -> bool:

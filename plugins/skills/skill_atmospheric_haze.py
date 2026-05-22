@@ -17,7 +17,7 @@ def _desaturate(rgb, amount):
 class AtmosphericHazeSkill(BaseSkill):
     name = 'Atmospheric Haze'
     description = 'Shift hue and reduce saturation toward the palette background as a function of vertical position, mimicking the way distant landscapes lose contrast and cool toward sky.'
-    kind = "effect"
+    kind = "filter"
 
     palette   = Palette()
     direction = Enum([

@@ -1,4 +1,4 @@
-"""create_skill: persist a new canvas skill."""
+﻿"""create_skill: persist a new canvas skill."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class CreateSkill(BaseTool):
         "properties": {
             "name": {"type": "string"},
             "description": {"type": "string"},
-            "kind": {"type": "string", "enum": ["background", "effect", "object"], "description": "background = produces a fresh image from scratch (layer 0); effect = reads the current canvas and replaces it with a same-shape opaque image; object = reads the current canvas, returns RGBA, framework alpha-composites onto the prior canvas (overlays like typography). Effects/objects require a background already in the chain."},
+            "kind": {"type": "string", "enum": ["background", "filter", "object"], "description": "background = produces a fresh image from scratch (layer 0); filter = reads the current canvas and replaces it with a same-shape opaque image; object = reads the current canvas, returns RGBA, framework alpha-composites onto the prior canvas (overlays like typography). filters/objects require a background already in the chain."},
             "code": {"type": "string", "description": "Module-level body: any needed imports plus `def run(canvas, **params):`. Will be wrapped in a BaseSkill class automatically."},
             "controls": {
                 "type": "array",

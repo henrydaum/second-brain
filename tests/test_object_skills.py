@@ -30,7 +30,7 @@ def test_object_is_an_accepted_kind():
 
 
 def test_canvas_state_rejects_object_at_layer_zero():
-	"""push_chain_entry handles object like effect — append, not replace —
+	"""push_chain_entry handles object like filter — append, not replace —
 	and the canvas starts empty, so the tool layer is what refuses it.
 	Here we cover the canvas-level invariant: layer 0 reorder still requires
 	a background."""

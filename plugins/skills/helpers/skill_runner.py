@@ -1,4 +1,4 @@
-"""Subprocess sandbox for executing skill code.
+﻿"""Subprocess sandbox for executing skill code.
 
 Spawns a child python interpreter in isolated mode (-I), pipes a JSON job
 description over stdin, and waits for the child to write a result image to
@@ -73,7 +73,7 @@ def run_skill(
             f"skill '{skill.slug}' failed validation: {msg}",
             diagnostic={"error_type": "ValidationError", "message": msg},
         )
-    if skill.kind in ("effect", "object") and (input_image_path is None or not Path(input_image_path).is_file()):
+    if skill.kind in ("filter", "object") and (input_image_path is None or not Path(input_image_path).is_file()):
         raise SkillRunError(
             f"{skill.kind} skills require a current canvas image; run a background first",
             diagnostic={

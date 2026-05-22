@@ -234,7 +234,7 @@ def test_remix_does_not_disturb_original_canvas():
 		rt = CanvasRuntime(db=db)
 		fresh = rt.remix(ph)
 		assert fresh is not None
-		rt.handle_action(fresh.canvas_id, "add_layer", {"skill_slug": "swirl", "kind": "effect"})
+		rt.handle_action(fresh.canvas_id, "add_layer", {"skill_slug": "swirl", "kind": "filter"})
 		# Source's persisted pool still has only the one layer.
 		reloaded = canvas_persistence.load_pool(db, ph)
 		assert len(reloaded["layers"]) == 1
@@ -273,13 +273,13 @@ def test_record_user_action_bumps_skill_scores():
 			db, user_id="u1", pool_hash="ph1",
 			action="share",
 			layers=[{"slug": "fractal", "kind": "background"},
-			        {"slug": "swirl", "kind": "effect"}],
+			        {"slug": "swirl", "kind": "filter"}],
 		)
 		scores = {
 			r["slug"]: r["shares"]
 			for r in db.conn.execute("SELECT slug, shares FROM skill_scores").fetchall()
 		}
-		# Default weights: 0.6 to background, 0.4 to the single effect.
+		# Default weights: 0.6 to background, 0.4 to the single filter.
 		assert scores["fractal"] == 0.6
 		assert scores["swirl"] == 0.4
 	finally:

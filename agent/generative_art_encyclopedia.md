@@ -1,4 +1,4 @@
-## Generative art encyclopedia
+﻿## Generative art encyclopedia
 
 This is reference, not tutorial. Each entry: the bare formula, a minimal
 Python snippet, and the trade-off that decides when to use it. Adapt
@@ -9,7 +9,7 @@ and the canvas size you're rendering into.
 
 Every skill is a Python file containing a `class <Name>(BaseSkill):` that
 declares its metadata as class attributes (`name`, `description`,
-`kind` — "background", "effect", or "object" — `owner`, `created_at`, `controls`,
+`kind` — "background", "filter", or "object" — `owner`, `created_at`, `controls`,
 `hidden`) and defines `def run(self, canvas, **params)`. The `create_skill`
 tool wraps the module-level body you give it (imports + `def run(canvas, ...)`)
 in that class shell automatically and fills in `owner` and `created_at`.
@@ -32,12 +32,12 @@ in that class shell automatically and fills in `owner` and `created_at`.
 - **Hard 30-second subprocess timeout**. Beyond that, the skill is killed
   and the agent gets an error. Vectorize with numpy; nested per-pixel
   Python loops at 1024×1024 will time out. See §12.
-- **Hard 4-layer chain cap**: 1 background + up to 3 effects/objects.
+- **Hard 4-layer chain cap**: 1 background + up to 3 filters/objects.
   Past that, `execute_skill` errors and the user must delete a layer.
 - **Three kinds**:
   - `background` starts a new chain from `canvas.create_image()`. Layer 0
     only.
-  - `effect` reads the current canvas via `canvas.image`, returns a
+  - `filter` reads the current canvas via `canvas.image`, returns a
     same-shape opaque image that replaces it. Requires a background first.
   - `object` reads the current canvas via `canvas.image` *or* paints onto
     a fresh transparent base via `canvas.new_layer()`, returns RGBA, and
@@ -53,7 +53,7 @@ canvas.size            # square pixel dimension (also canvas.width, canvas.heigh
 canvas.seed            # int — seed every RNG with this
 canvas.palette.background / primary / secondary / tertiary / accent
                        # hex strings; also unpack as RGB tuples
-canvas.image           # effect/object only: a copy of the current canvas
+canvas.image           # filter/object only: a copy of the current canvas
 canvas.new(color=...)  # fresh RGBA image at canvas size
 canvas.create_image()  # shorthand for new(color=palette.background) — backgrounds
 canvas.new_layer()     # fully-transparent RGBA at canvas size — objects

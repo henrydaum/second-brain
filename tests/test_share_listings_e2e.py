@@ -97,7 +97,7 @@ def test_canvas_payload_keeps_palette_controls_per_layer():
 	))
 	payload = fw._canvas_payload_full(runtime, "web:s", {"chain": [
 		{"slug": "a", "kind": "background", "controls": {"palette": "frost"}},
-		{"slug": "b", "kind": "effect", "controls": {"palette": "ember"}},
+		{"slug": "b", "kind": "filter", "controls": {"palette": "ember"}},
 	]})
 	assert len(payload["controls_panels"]) == 2
 	assert [p["values"]["palette"] for p in payload["controls_panels"]] == ["frost", "ember"]
@@ -119,16 +119,16 @@ def test_move_layer_reorders_and_rejects_background_displacement(monkeypatch, re
 	try:
 		skills = {
 			"base": SimpleNamespace(slug="base", name="Base", kind="background", controls=[], code=""),
-			"a": SimpleNamespace(slug="a", name="A", kind="effect", controls=[], code=""),
-			"b": SimpleNamespace(slug="b", name="B", kind="effect", controls=[], code=""),
+			"a": SimpleNamespace(slug="a", name="A", kind="filter", controls=[], code=""),
+			"b": SimpleNamespace(slug="b", name="B", kind="filter", controls=[], code=""),
 		}
 		fe = _make_frontend(db, skills=skills)
 		key, cs = _seed_canvas(fe)
 		cr = fe.runtime.services["canvas"]
 		cs.canvas.layers[0]["slug"] = "base"
 		cs.canvas.layers[0]["kind"] = "background"
-		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "a", "kind": "effect"})
-		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "b", "kind": "effect"})
+		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "a", "kind": "filter"})
+		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "b", "kind": "filter"})
 
 		events = fe.move_layer("sess1", 2, 1)
 		assert events[0]["type"] == "hero_image"

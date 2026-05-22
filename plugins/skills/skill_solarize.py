@@ -11,7 +11,7 @@ except NameError:
 class SolarizeSkill(BaseSkill):
     name = 'Solarize'
     description = 'Invert all pixel values above a threshold — the classic darkroom solarization look. Bright regions flip to dark, midtones get weird.'
-    kind = "effect"
+    kind = "filter"
 
     threshold = Slider(0, 255, default=128, step=1)
 

@@ -155,8 +155,8 @@ def test_render_chains_input_through_layers(monkeypatch, renders_dir):
 	"""Layer N gets layer N-1's output as its input."""
 	calls = _install_fake_run_skill(monkeypatch)
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect", "controls": {"angle": 30}})
-	skills = {"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect")}
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter", "controls": {"angle": 30}})
+	skills = {"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter")}
 
 	canvas_render.render_canvas(cs, skill_loader=_loader(skills), seed=7)
 
@@ -173,9 +173,9 @@ def test_render_passes_seed_and_size_to_skills(monkeypatch, renders_dir):
 	"""Every layer is invoked with the same resolved seed and the canvas size."""
 	calls = _install_fake_run_skill(monkeypatch)
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
 	cs.enact("set_size", {"size": 768})
-	skills = {"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect")}
+	skills = {"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter")}
 
 	canvas_render.render_canvas(cs, skill_loader=_loader(skills), seed=99)
 
@@ -267,11 +267,11 @@ def test_appending_layer_reuses_cached_prefix(monkeypatch, renders_dir):
 	"""After rendering two layers, appending a third only runs the third."""
 	calls = _install_fake_run_skill(monkeypatch)
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect"), "grain": _skill("grain", "effect")})
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter"), "grain": _skill("grain", "filter")})
 	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
 	calls.clear()
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "effect"})
+	cs.enact("add_layer", {"skill_slug": "grain", "kind": "filter"})
 	r = canvas_render.render_canvas(cs, skill_loader=loader)
 	assert r.seed == 42
 	assert [c["slug"] for c in calls] == ["grain"]
@@ -283,10 +283,10 @@ def test_render_progress_reports_cached_prefix(monkeypatch, renders_dir):
 	_install_fake_run_skill(monkeypatch)
 	events: list[dict] = []
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect"), "grain": _skill("grain", "effect")})
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter"), "grain": _skill("grain", "filter")})
 	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "effect"})
+	cs.enact("add_layer", {"skill_slug": "grain", "kind": "filter"})
 	canvas_render.render_canvas(cs, skill_loader=loader, on_event=events.append)
 	assert ("started", 2) in [(e["status"], e.get("cached_layers")) for e in events]
 	assert [e.get("skill_slug") for e in events if e["status"] == "layer_started"] == ["grain"]
@@ -296,9 +296,9 @@ def test_editing_last_layer_reuses_earlier_prefix(monkeypatch, renders_dir):
 	"""Changing layer 3 keeps layers 1-2 cached and reruns only layer 3."""
 	calls = _install_fake_run_skill(monkeypatch)
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "effect", "controls": {"a": 1}})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect"), "grain": _skill("grain", "effect")})
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
+	cs.enact("add_layer", {"skill_slug": "grain", "kind": "filter", "controls": {"a": 1}})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter"), "grain": _skill("grain", "filter")})
 	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
 	calls.clear()
 	cs.enact("set_control", {"chain_index": 2, "name": "a", "value": 2})
@@ -310,9 +310,9 @@ def test_editing_first_layer_invalidates_suffix(monkeypatch, renders_dir):
 	"""Changing layer 1 changes every prefix, so the full chain reruns."""
 	calls = _install_fake_run_skill(monkeypatch)
 	cs = _state_with_background("fractal", zoom=1)
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "effect"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect"), "grain": _skill("grain", "effect")})
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
+	cs.enact("add_layer", {"skill_slug": "grain", "kind": "filter"})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter"), "grain": _skill("grain", "filter")})
 	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
 	calls.clear()
 	cs.enact("set_control", {"chain_index": 0, "name": "zoom", "value": 2})
@@ -324,8 +324,8 @@ def test_force_new_seed_does_not_reuse_old_prefix(monkeypatch, renders_dir):
 	"""Regenerate-style renders use a fresh seed and therefore rerun all layers."""
 	calls = _install_fake_run_skill(monkeypatch)
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "effect")})
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter")})
 	r1 = canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
 	calls.clear()
 	r2 = canvas_render.render_canvas(cs, skill_loader=loader, force_new_seed=True)

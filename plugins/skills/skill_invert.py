@@ -11,7 +11,7 @@ except NameError:
 class InvertSkill(BaseSkill):
     name = 'Invert'
     description = 'Photographic negative — invert RGB channels. Blend amount controls how far toward the negative we go (full=true negative, half=ghostly mid-tone).'
-    kind = "effect"
+    kind = "filter"
 
     amount = Slider(0.0, 1.0, default=1.0)
 

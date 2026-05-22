@@ -12,7 +12,7 @@ except NameError:
 class KaleidoscopeSkill(BaseSkill):
     name = 'Kaleidoscope'
     description = 'Fold N angular wedges around the center; the result is N-fold rotational symmetry from a single source slice.'
-    kind = "effect"
+    kind = "filter"
 
     segments = Slider(3, 24, default=8, step=1)
     rotation = Slider(0, 360, default=0, step=5)

@@ -34,7 +34,7 @@ def test_full_sequence_through_runtime():
 
 	r = rt.handle_action(cid, "add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {"zoom": 1.0}})
 	assert r.ok
-	r = rt.handle_action(cid, "add_layer", {"skill_slug": "swirl", "kind": "effect", "controls": {"angle": 30}})
+	r = rt.handle_action(cid, "add_layer", {"skill_slug": "swirl", "kind": "filter", "controls": {"angle": 30}})
 	assert r.ok
 	r = rt.handle_action(cid, "set_control", {"chain_index": 1, "name": "angle", "value": 90})
 	assert r.ok

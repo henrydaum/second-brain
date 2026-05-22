@@ -45,18 +45,18 @@ def test_set_palette_changes_palette_and_emits_event():
 	assert cs.history[-1]["type"] == "set_palette"
 
 
-def test_add_layer_background_then_effect():
-	"""add_layer background starts the chain; effect appends."""
+def test_add_layer_background_then_filter():
+	"""add_layer background starts the chain; filter appends."""
 	cs = CanvasState()
 	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background"})
 	assert len(cs.canvas.layers) == 1
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect", "controls": {"angle": 30}})
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter", "controls": {"angle": 30}})
 	assert len(cs.canvas.layers) == 2
 	assert cs.canvas.layers[1]["controls"] == {"angle": 30}
 
 
 def test_add_layer_rejects_unknown_kind():
-	"""kind must be 'background', 'effect', or 'object'."""
+	"""kind must be 'background', 'filter', or 'object'."""
 	cs = CanvasState()
 	r = cs.enact("add_layer", {"skill_slug": "fractal", "kind": "bogus"})
 	assert not r.ok
@@ -65,7 +65,7 @@ def test_add_layer_rejects_unknown_kind():
 
 
 def test_add_layer_accepts_object_kind_after_background():
-	"""object layers append onto an existing chain like effects."""
+	"""object layers append onto an existing chain like filters."""
 	cs = CanvasState()
 	r1 = cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background"})
 	assert r1.ok
@@ -98,7 +98,7 @@ def test_move_layer_rejects_background_displacement():
 	"""Moving the background off layer 0 must fail (Canvas.move_entry rule)."""
 	cs = CanvasState()
 	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background"})
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "effect"})
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
 	before = list(cs.canvas.layers)
 	r = cs.enact("move_layer", {"from_index": 1, "to_index": 0})
 	assert not r.ok

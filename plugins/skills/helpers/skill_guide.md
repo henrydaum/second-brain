@@ -1,7 +1,7 @@
-# Canvas skill authoring guide
+﻿# Canvas skill authoring guide
 
 You are building one skill: a small, deterministic Python function that either
-paints a **background**, applies an **effect** to the current canvas, or
+paints a **background**, applies an **filter** to the current canvas, or
 overlays an **object** on top of it. This guide is the single source of
 truth for how to do that well.
 
@@ -9,7 +9,7 @@ The three kinds:
 
 - `background` — produces a fresh image from scratch using
   `canvas.create_image()`. Always layer 0.
-- `effect` — reads the current canvas via `canvas.image`, returns a
+- `filter` — reads the current canvas via `canvas.image`, returns a
   same-shape opaque image that replaces it. Requires a background first.
 - `object` — paints onto a transparent base from `canvas.new_layer()`
   (or onto `canvas.image` if you want to read the prior pixels), commits
@@ -81,9 +81,9 @@ The `create_skill` tool still accepts module-level `def run(canvas, **params)`
 plus a `controls=[...]` schema and wraps it for sandbox use. Use the descriptor
 form when editing built-in skills directly.
 
-### Effect skill template (numpy + warp)
+### filter skill template (numpy + warp)
 
-For lens / warp / glitch effects, build a coordinate map and resample. The
+For lens / warp / glitch filters, build a coordinate map and resample. The
 `centered_grid`, `bilinear_sample`, `image_array`, and `commit_array` helpers
 remove almost all of the boilerplate:
 
@@ -94,7 +94,7 @@ from plugins.BaseSkill import BaseSkill, Slider
 class BarrelWarpSkill(BaseSkill):
     name = "Barrel Warp"
     description = "A radial barrel distortion."
-    kind = "effect"
+    kind = "filter"
     strength = Slider(-1.0, 1.0, default=0.6, step=0.05)
 
     def run(self, canvas):
@@ -109,7 +109,7 @@ class BarrelWarpSkill(BaseSkill):
         canvas.commit_array(art_kit.bilinear_sample(arr, sx, sy))
 ```
 
-For PIL-only effects (blur, solarize, enhance), use `canvas.image` →
+For PIL-only filters (blur, solarize, enhance), use `canvas.image` →
 filter → `canvas.commit(...)` as usual.
 
 ### Object skill template (overlay)
@@ -158,13 +158,13 @@ overlay), `canvas.image` is also available to object skills.
 | `canvas.palette.colors`   | Dict of all five slots.                                 |
 | `canvas.size` / `.width` / `.height` | Square dimension in pixels.                 |
 | `canvas.seed`             | Integer; seed every RNG with this.                      |
-| `canvas.image`            | (effect/object only) A copy of the current canvas image. |
-| `canvas.image_array(mode="RGB", dtype="float")` | (effect/object only) The current image as a numpy array. `dtype="float"` → float32 in [0,1]; `dtype="uint8"` → raw bytes. Saves the asarray/divide step. |
+| `canvas.image`            | (filter/object only) A copy of the current canvas image. |
+| `canvas.image_array(mode="RGB", dtype="float")` | (filter/object only) The current image as a numpy array. `dtype="float"` → float32 in [0,1]; `dtype="uint8"` → raw bytes. Saves the asarray/divide step. |
 | `canvas.new(color=...)`   | Returns a fresh RGBA image at canvas size.              |
 | `canvas.create_image()`   | Shorthand for `new(color=palette.background)`. Creations. |
 | `canvas.new_layer()`      | Fully-transparent RGBA at canvas size. Objects.         |
 | `canvas.commit(image)`    | **Required.** Hands the finished PIL image to the runtime. |
-| `canvas.commit_array(arr)`| Same as `commit`, but accepts a numpy HxWxC array (float in [0,1] or uint8; C=3 or 4). Handles clip + dtype + Image.fromarray + RGBA convert for you. Prefer this in numpy-heavy effects. |
+| `canvas.commit_array(arr)`| Same as `commit`, but accepts a numpy HxWxC array (float in [0,1] or uint8; C=3 or 4). Handles clip + dtype + Image.fromarray + RGBA convert for you. Prefer this in numpy-heavy filters. |
 
 `art_kit` is injected too (no import needed):
 
@@ -183,7 +183,7 @@ overlay), `canvas.image` is also available to object skills.
 | `art_kit.value_noise(seed, x, y)`   | Smooth 2D value noise in [0,1].                      |
 | `art_kit.fbm(seed, x, y, octaves)`  | Fractal Brownian motion over value_noise.            |
 | `art_kit.radial_falloff(w, h)`      | Closure: 1 at center → 0 at corner.                  |
-| `art_kit.centered_grid(size)`       | `(xx, yy, nx, ny)` — pixel coords + normalized [-1,+1] coords. The standard opener for any radial / warp effect. |
+| `art_kit.centered_grid(size)`       | `(xx, yy, nx, ny)` — pixel coords + normalized [-1,+1] coords. The standard opener for any radial / warp filter. |
 | `art_kit.bilinear_sample(arr, fx, fy)` | Bilinear resample at fractional coords. `arr` is 2D (H,W) or 3D (H,W,C); `fx/fy` are float arrays. Coords outside the array clamp to the edge. |
 
 Allowed imports (the sandbox blocks everything else): `math`, `random`,
@@ -276,8 +276,8 @@ A single background rarely produces a finished image. The high-quality pattern i
 3. **One of `bloom_glow`, `vignette`, `film_grain`, or `sharpen`** — adds
    atmosphere or finishes detail.
 
-Keep effect chains ≤3 deep so palette re-render stays snappy. The runtime
-enforces a hard cap of 4 total chain entries (1 background + 3 effects or
+Keep filter chains ≤3 deep so palette re-render stays snappy. The runtime
+enforces a hard cap of 4 total chain entries (1 background + 3 filters or
 objects); past that, `execute_skill` errors and the user must delete a layer
 first.
 
@@ -301,7 +301,7 @@ from plugins.BaseSkill import BaseSkill, Slider, Bool, Enum, Pan, Palette
 class ExampleSkill(BaseSkill):
     name = "Example"
     description = "A controllable example."
-    kind = "effect"
+    kind = "filter"
 
     palette = Palette()
     zoom = Slider(0.1, 20.0, default=1.0, step=0.1)

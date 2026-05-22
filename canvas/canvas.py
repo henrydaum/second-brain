@@ -1,4 +1,4 @@
-"""Canvas dataclass — pure data + pure mutations.
+﻿"""Canvas dataclass — pure data + pure mutations.
 
 Backs ``CanvasState``. No frontend, no PIL, no subprocess, no disk I/O,
 no rendering, no seed handling. The state-machine wrapper in
@@ -86,11 +86,11 @@ class Canvas:
 		self.layers.insert(to_index, step)
 
 	def push_chain_entry(self, entry: dict) -> None:
-		"""Append an effect/object, or replace the chain with a new background."""
+		"""Append a filter/object, or replace the chain with a new background."""
 		kind = entry.get("kind")
 		if kind == "background":
 			self.layers = [dict(entry)]
-		elif kind in ("effect", "object"):
+		elif kind in ("filter", "object"):
 			self.layers = list(self.layers) + [dict(entry)]
 		else:
 			raise ValueError(f"unknown chain entry kind: {kind!r}")

@@ -1,4 +1,4 @@
-"""execute_skill: run a canvas skill (agent-facing adapter onto the new CanvasRuntime).
+﻿"""execute_skill: run a canvas skill (agent-facing adapter onto the new CanvasRuntime).
 
 Routes the agent's "add a layer + render" request through the new canvas
 state machine: ``context.canvas.for_session(...)`` → ``handle_action("add_layer", ...)``
@@ -21,7 +21,7 @@ logger = logging.getLogger("SkillTools")
 
 class ExecuteSkill(BaseTool):
 	name = "execute_skill"
-	description = "Run a stored skill on the canvas by slug. Backgrounds start a new chain from a blank palette-background image; effects read the current canvas and replace it; objects read the current canvas and alpha-composite an overlay onto it. Effects and objects both require something already on the canvas. Chain cap is 4 layers (1 background + up to 3 effects/objects). Errors include a hint line — read it and adjust before retrying."
+	description = "Run a stored skill on the canvas by slug. Backgrounds start a new chain from a blank palette-background image; filters read the current canvas and replace it; objects read the current canvas and alpha-composite an overlay onto it. filters and objects both require something already on the canvas. Chain cap is 4 layers (1 background + up to 3 filters/objects). Errors include a hint line — read it and adjust before retrying."
 	max_calls = 6
 	parameters = {
 		"type": "object",
@@ -63,7 +63,7 @@ class ExecuteSkill(BaseTool):
 		# A transform with an empty chain has nothing to read — refuse
 		# before we corrupt state. Mirrors the SkillRunError the renderer
 		# would raise, but at the action layer.
-		if kind in ("effect", "object") and not cs.canvas.layers:
+		if kind in ("filter", "object") and not cs.canvas.layers:
 			return ToolResult.failed(
 				f"{kind.title()} skills require a background first. "
 				f"Run a background skill before this {kind}."

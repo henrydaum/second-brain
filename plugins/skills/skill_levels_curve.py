@@ -11,7 +11,7 @@ except NameError:
 class LevelsCurveSkill(BaseSkill):
     name = 'Levels Curve'
     description = 'Tune contrast, brightness, and saturation in one pass. Good for rescuing a flat or muted output.'
-    kind = "effect"
+    kind = "filter"
 
     contrast   = Slider(0.2, 3.0, default=1.10, step=0.05)
     brightness = Slider(0.2, 3.0, default=1.0, step=0.05)

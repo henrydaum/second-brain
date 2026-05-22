@@ -1,8 +1,8 @@
-"""Skill scoring from implicit signals (share, download, remix).
+﻿"""Skill scoring from implicit signals (share, download, remix).
 
 Attribution: when an image earns a signal, the score is distributed across
 the chain that produced it. Background gets 0.6, the remaining 0.4 splits
-across effects/objects. Background-only chains get 1.0. The `generate`
+across filters/objects. Background-only chains get 1.0. The `generate`
 kind is tracked as a per-skill denominator (counter only, no weight).
 
 The store is two SQLite tables: append-only `skill_events` and rolled-up
@@ -46,7 +46,7 @@ def _attribution(chain: list[dict]) -> list[tuple[str, str, float]]:
     if not steps:
         return []
     backgrounds = [(slug, kind) for slug, kind in steps if kind == "background"]
-    overlays = [(slug, kind) for slug, kind in steps if kind in ("effect", "object")]
+    overlays = [(slug, kind) for slug, kind in steps if kind in ("filter", "object")]
     out: list[tuple[str, str, float]] = []
     if backgrounds and overlays:
         cw = 0.6 / len(backgrounds)

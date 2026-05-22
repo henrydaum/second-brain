@@ -11,7 +11,7 @@ except NameError:
 class LensFlareSkill(BaseSkill):
     name = 'Lens Flare'
     description = 'Palette-tinted lens flare: a glowing source point with a string of secondary ghost discs along the line from the source through the canvas center.'
-    kind = "effect"
+    kind = "filter"
 
     palette    = Palette()
     brightness = Slider(0.0, 1.5, default=0.85, step=0.05)

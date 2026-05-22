@@ -11,7 +11,7 @@ except NameError:
 class GammaSkill(BaseSkill):
     name = 'Gamma'
     description = 'Power-curve tone shift. gamma<1 lifts shadows (brighter midtones), gamma>1 crushes them (darker midtones). More musical than linear brightness.'
-    kind = "effect"
+    kind = "filter"
 
     gamma = Slider(0.2, 3.0, default=1.0)
 

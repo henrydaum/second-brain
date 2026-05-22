@@ -1,4 +1,4 @@
-"""Canvas actions — parallel Action base + concrete subclasses.
+﻿"""Canvas actions — parallel Action base + concrete subclasses.
 
 Mirrors state_machine/action.py's contract (is_legal / execute / enact /
 ActionResult) but drops the conversation-specific bits (participants,
@@ -131,8 +131,8 @@ class CanvasAddLayer(CanvasAction):
 		kind = self.content.get("kind")
 		if not slug:
 			raise self.error(ERROR_INVALID_INPUT, "add_layer requires 'skill_slug'.")
-		if kind not in ("background", "effect", "object"):
-			raise self.error(ERROR_INVALID_INPUT, f"add_layer 'kind' must be 'background', 'effect', or 'object' (got {kind!r}).")
+		if kind not in ("background", "filter", "object"):
+			raise self.error(ERROR_INVALID_INPUT, f"add_layer 'kind' must be 'background', 'filter', or 'object' (got {kind!r}).")
 		entry = {
 			"slug": slug,
 			"kind": kind,
