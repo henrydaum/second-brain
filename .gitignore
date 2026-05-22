@@ -12,3 +12,4 @@ database.db*
 .DS_Store
 .git
 .vscode
+_smoke_fix/
