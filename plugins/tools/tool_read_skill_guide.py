@@ -32,6 +32,7 @@ _GROUPS: list[tuple[str, list[str]]] = [
     ("Math",             ["lerp", "clamp", "smoothstep", "remap"]),
     ("Color",            ["hex_to_rgb", "rgb_to_hex", "mix_hex", "palette_color", "oklch_to_rgb"]),
     ("Composition",      ["rule_of_thirds", "vogel_spiral", "jittered_grid"]),
+    ("Tiny 3D",          ["mesh", "cube_mesh", "render_3d"]),
     ("Noise",            ["value_noise", "fbm", "value_noise_grid", "fbm_grid"]),
     ("Masks",            ["radial_falloff"]),
     ("Numpy transforms", ["centered_grid", "bilinear_sample"]),

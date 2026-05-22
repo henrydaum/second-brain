@@ -237,6 +237,9 @@ math; this is the short list of which method fits which subject:
   palette luminance ramp top-to-bottom.
 - **fbm fields** → clouds, terrain, nebulas, magma. `art_kit.fbm_grid`
   on a numpy lattice; map values through `palette_color`.
+- **Tiny 3D meshes** → cubes, low-poly objects, extruded icons, simple
+  scenes. Build with `art_kit.mesh(...)` or `art_kit.cube_mesh(...)`, then
+  draw into a PIL image with `art_kit.render_3d(img, meshes, ...)`.
 
 For suns / dawns / sunsets specifically: anchor the sun on a rule-of-thirds
 intersection, gradient the sky between `palette.background` and

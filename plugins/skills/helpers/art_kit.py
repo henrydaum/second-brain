@@ -204,6 +204,128 @@ def jittered_grid(rng, cols, rows, jitter=0.4):
 
 
 # ---------------------------------------------------------------------------
+# Tiny 3D renderer.
+# ---------------------------------------------------------------------------
+
+def _v3(p):
+    return (float(p[0]), float(p[1]), float(p[2]))
+
+
+def _dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _sub(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _norm(v):
+    d = math.sqrt(_dot(v, v)) or 1.0
+    return (v[0] / d, v[1] / d, v[2] / d)
+
+
+def mesh(vertices, faces, color=None, colors=None):
+    """Return a tiny mesh object for `render_3d`.
+
+    `vertices` are `(x, y, z)` triples. `faces` are index lists like
+    `(0, 1, 2)` or `(0, 1, 2, 3)`. Pass `color=canvas.palette.primary`
+    for one palette-bound material, or `colors=[...]` for per-face colors.
+    """
+    return SimpleNamespace(
+        vertices=[_v3(v) for v in vertices],
+        faces=[tuple(int(i) for i in f) for f in faces],
+        color=color,
+        colors=list(colors) if colors is not None else None,
+    )
+
+
+def cube_mesh(size=1.0, center=(0.0, 0.0, 0.0), color=None):
+    """Return a cube mesh centered at `center`, sized for `render_3d` scenes."""
+    s = float(size) / 2.0
+    cx, cy, cz = _v3(center)
+    v = [(cx + x * s, cy + y * s, cz + z * s) for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)]
+    return mesh(v, [(0, 2, 6, 4), (1, 5, 7, 3), (0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6)], color=color)
+
+
+def _shade_color(color, shade):
+    if isinstance(color, str):
+        r, g, b = hex_to_rgb(color)
+        return rgb_to_hex((r * shade, g * shade, b * shade))
+    r, g, b = color[:3]
+    a = color[3] if len(color) > 3 else 255
+    return (int(r * shade), int(g * shade), int(b * shade), a)
+
+
+def _mesh_get(m, name, default=None):
+    return m.get(name, default) if isinstance(m, dict) else getattr(m, name, default)
+
+
+def render_3d(image, meshes, camera=(2.8, 2.0, 3.2), target=(0, 0, 0), fov=42,
+              light=(-0.4, -0.6, 1.0), fill=None, outline=None, cull=True,
+              ambient=0.35, palette_color=None):
+    """Project simple 3D meshes onto a PIL image with filled polygons.
+
+    This is a dependency-free baby renderer: camera projection, face sorting,
+    optional backface culling, and Lambert-ish light. It is good for cubes,
+    low-poly objects, heightfields, and extruded shapes. It is not OpenGL:
+    no shaders, textures, clipping, or real z-buffer.
+    """
+    draw = ImageDraw.Draw(image, "RGBA")
+    w, h = image.size
+    eye, look = _v3(camera), _v3(target)
+    forward = _norm(_sub(look, eye))
+    right = _cross(forward, (0.0, 1.0, 0.0))
+    right = (1.0, 0.0, 0.0) if _dot(right, right) < 1e-9 else _norm(right)
+    up = _cross(right, forward)
+    focal = min(w, h) / (2.0 * math.tan(math.radians(float(fov)) / 2.0))
+    light = _norm(light)
+    items = []
+
+    def project(p):
+        rel = _sub(p, eye)
+        x, y, z = _dot(rel, right), _dot(rel, up), _dot(rel, forward)
+        if z <= 0.02:
+            return None
+        return (w * 0.5 + focal * x / z, h * 0.5 - focal * y / z, z)
+
+    if _mesh_get(meshes, "vertices") is not None:
+        meshes = [meshes]
+    for m in meshes:
+        verts, faces = _mesh_get(m, "vertices", []), _mesh_get(m, "faces", [])
+        colors, base = _mesh_get(m, "colors"), _mesh_get(m, "color", fill)
+        for i, face in enumerate(faces):
+            pts = [verts[j] for j in face]
+            normal = _norm(_cross(_sub(pts[1], pts[0]), _sub(pts[2], pts[0]))) if len(pts) >= 3 else (0, 0, 1)
+            center = tuple(sum(p[k] for p in pts) / len(pts) for k in range(3))
+            if cull and _dot(normal, _sub(eye, center)) <= 0:
+                continue
+            projected = [project(p) for p in pts]
+            if any(p is None for p in projected):
+                continue
+            shade = clamp(float(ambient) + (1.0 - float(ambient)) * max(0.0, _dot(normal, light)), 0.0, 1.0)
+            color = colors[i] if colors and i < len(colors) else base
+            color = (palette_color(0.2 + 0.7 * shade) if palette_color else "#cccccc") if color is None else _shade_color(color, shade)
+            items.append((sum(p[2] for p in projected) / len(projected), [(p[0], p[1]) for p in projected], color))
+    for _, poly, color in sorted(items, reverse=True):
+        draw.polygon(poly, fill=color, outline=outline)
+    return image
+
+
+def _render_3d_fn(canvas_palette):
+    palette_color = _palette_color_fn(canvas_palette)
+
+    def draw(image, meshes, **kwargs):
+        kwargs.setdefault("palette_color", palette_color)
+        return render_3d(image, meshes, **kwargs)
+
+    return draw
+
+
+# ---------------------------------------------------------------------------
 # Noise.
 # ---------------------------------------------------------------------------
 
@@ -778,6 +900,10 @@ def build_namespace(canvas_palette):
         rule_of_thirds=rule_of_thirds,
         vogel_spiral=vogel_spiral,
         jittered_grid=jittered_grid,
+        # tiny 3D renderer
+        mesh=mesh,
+        cube_mesh=cube_mesh,
+        render_3d=_render_3d_fn(canvas_palette),
         # noise
         value_noise=value_noise,
         fbm=fbm,
