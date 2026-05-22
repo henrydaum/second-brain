@@ -111,12 +111,26 @@ class ExecuteSkill(BaseTool):
 			"pool_hash": render_result.pool_hash,
 			"seed": render_result.seed,
 			"cache_hit": render_result.cache_hit,
+			"warning": render_result.warning,
+			"warning_message": render_result.warning_message,
 		}
 		skill_scoring.record_event(
 			getattr(context, "db", None), "generate", snap["chain"], snap["path"],
 		)
+		layer_index = len(cs.canvas.layers)  # newly-added layer's 1-based position
+		total = len(cs.canvas.layers)
+		cache_tag = ", cached" if render_result.cache_hit else ""
+		summary = (
+			f"Executed {kind} skill '{slug}' (layer {layer_index}/{total}, "
+			f"seed={render_result.seed}{cache_tag})."
+		)
+		if render_result.warning:
+			summary += (
+				f"\nWARNING ({render_result.warning}): "
+				f"{render_result.warning_message or 'post-render validator flagged this layer'}"
+			)
 		return ToolResult(
 			data={"canvas": snap, "chain": snap["chain"]},
-			llm_summary=f"Executed skill '{slug}' on the canvas.",
+			llm_summary=summary,
 			attachment_paths=[snap["path"]],
 		)

@@ -62,8 +62,14 @@ class SearchSkills(BaseTool):
         skills = [meta for meta, _ in scored[:limit]]
         if not skills:
             return ToolResult.failed(f"No skills found for query '{query}'.")
-        names = ", ".join(s["slug"] for s in skills)
-        return ToolResult(data={"skills": skills}, llm_summary=f"Top skill matches: {names}")
+        lines = [f"Top skill matches for '{query}':"]
+        for s in skills:
+            desc = (s.get("description") or "").strip().replace("\n", " ")
+            if len(desc) > 160:
+                desc = desc[:157].rstrip() + "..."
+            lines.append(f"- {s['slug']} ({s.get('kind') or '?'}) — {desc}" if desc else f"- {s['slug']} ({s.get('kind') or '?'})")
+        lines.append("Call read_skill(slug=...) to see the full source of any promising hit.")
+        return ToolResult(data={"skills": skills}, llm_summary="\n".join(lines))
 
 
 def _rows(db):

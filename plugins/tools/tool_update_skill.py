@@ -50,7 +50,10 @@ class UpdateSkill(BaseTool):
             if live is not None:
                 skill = live
             _notify(context, skill.path)
-            return ToolResult(data=skill.to_dict(), llm_summary=f"Updated skill '{skill.slug}'.")
+            return ToolResult(
+                data=skill.to_dict(),
+                llm_summary=f"Updated skill '{skill.slug}'. Call execute_skill with this slug to test the change.",
+            )
         except Exception as e:
             logger.exception("update_skill failed: slug=%r owner=%r", slug, _owner(context))
             return ToolResult.failed(str(e))

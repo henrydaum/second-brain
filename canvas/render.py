@@ -54,6 +54,11 @@ class RenderResult:
 	seed: int
 	pool_hash: str
 	cache_hit: bool
+	# Post-render validator warning from the LAST layer's run_skill, if any.
+	# Set to a short tag like "palette_drift" / "blank_canvas" / "transparent_canvas".
+	# Intermediate-layer warnings are not propagated — only the final pixels matter.
+	warning: str | None = None
+	warning_message: str | None = None
 
 
 # ── pool hash ────────────────────────────────────────────────────────
@@ -216,6 +221,7 @@ def render_canvas(
 		workdir_path = Path(workdir)
 		start_idx, current_input = _longest_prefix(canvas, seed_val, workdir_path)
 		_emit(on_event, status="started", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name)
+		last_warning: dict | None = None
 		try:
 			for idx, layer in enumerate(canvas.layers[start_idx:], start=start_idx):
 				slug = layer.get("slug")
@@ -225,7 +231,7 @@ def render_canvas(
 				step_png = workdir_path / f"step_{idx:02d}.png"
 				params, palette = resolve_entry(layer, fallback_palette=fallback_palette)
 				_emit(on_event, status="layer_started", layer_index=idx + 1, total_layers=len(canvas.layers), cached_layers=start_idx, skill_slug=str(slug), seed=seed_val, pool_hash=folder.name)
-				run_skill(
+				run_result = run_skill(
 					skill,
 					params=params,
 					palette=palette,
@@ -234,6 +240,9 @@ def render_canvas(
 					input_image_path=current_input,
 					output_image_path=step_png,
 				)
+				# Only the final layer's warning matters for the user-visible result;
+				# overwrite as we go so the last iteration wins.
+				last_warning = run_result if run_result and run_result.get("warning") else None
 				current_input = step_png
 				cache_path = _prefix_path(canvas, idx + 1, seed_val)
 				cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -256,7 +265,11 @@ def render_canvas(
 		"render canvas_id=%s pool=%s seed=%d layers=%d",
 		cs.canvas_id, folder.name, seed_val, len(canvas.layers),
 	)
-	return RenderResult(out_path, seed_val, folder.name, cache_hit=False)
+	return RenderResult(
+		out_path, seed_val, folder.name, cache_hit=False,
+		warning=(last_warning or {}).get("warning"),
+		warning_message=(last_warning or {}).get("warning_message"),
+	)
 
 
 def _persist_seed(db: Any, cs: CanvasState) -> None:
