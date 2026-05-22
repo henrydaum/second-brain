@@ -120,6 +120,45 @@ def _run_signature_error(run: ast.FunctionDef) -> str | None:
     return None
 
 
+_DESCRIPTOR_KWARGS = {
+    "Slider": {"default", "step", "label"},
+    "Bool": {"default", "label"},
+    "Enum": {"default", "label"},
+    "Pan": {"label", "step"},
+    "Text": {"default", "max_length", "placeholder", "label"},
+    "Palette": {"label"},
+}
+
+
+def _call_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _descriptor_call_errors(cls_node: ast.ClassDef) -> list[str]:
+    errors: list[str] = []
+    for item in cls_node.body:
+        if not isinstance(item, (ast.Assign, ast.AnnAssign)) or not isinstance(item.value, ast.Call):
+            continue
+        name = _call_name(item.value.func)
+        if name not in _DESCRIPTOR_KWARGS:
+            continue
+        attr = "control"
+        target = item.target if isinstance(item, ast.AnnAssign) else item.targets[0]
+        if isinstance(target, ast.Name):
+            attr = target.id
+        allowed = _DESCRIPTOR_KWARGS[name]
+        unknown = [kw.arg for kw in item.value.keywords if kw.arg and kw.arg not in allowed]
+        if unknown:
+            errors.append(f"{attr}: {name} got unsupported keyword(s): {', '.join(unknown)}")
+        if name == "Palette" and item.value.args:
+            errors.append(f"{attr}: Palette() only exposes a layer palette override; use Enum([...], label='Slot') to choose a palette slot")
+    return errors
+
+
 def validate_skill_code(source: str) -> list[str]:
     """Return a list of violations. Empty list means the code is acceptable.
 
@@ -163,6 +202,7 @@ def validate_skill_code(source: str) -> list[str]:
     else:
         for lineno in _literal_control_attrs(cls_node):
             errors.append(f"class '{cls_node.name}' declares literal controls at line {lineno}; use Slider/Enum/Bool/Pan/Text/Palette descriptors")
+        errors.extend(_descriptor_call_errors(cls_node))
         run = _find_run_method(cls_node)
         if run is None:
             errors.append(f"class '{cls_node.name}' must define `def run(self, canvas)`")

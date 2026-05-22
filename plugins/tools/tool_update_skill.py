@@ -43,7 +43,9 @@ class UpdateSkill(BaseTool):
                 name=kwargs.get("name"), description=kwargs.get("description"),
                 code=kwargs.get("code"),
             )
-            _reload(context, path)
+            err = _reload(context, path)
+            if err:
+                return ToolResult.failed(err)
             live = _live_record(context, skill.slug)
             if live is not None:
                 skill = live
@@ -58,15 +60,17 @@ def _owner(context) -> str:
     return str(getattr(context, "session_key", "") or "local")
 
 
-def _reload(context, path: Path) -> None:
+def _reload(context, path: Path) -> str | None:
     registry = getattr(context, "skill_registry", None)
     if registry is None:
-        return
+        return None
     try:
         from plugins.plugin_discovery import load_single_plugin
-        load_single_plugin("skill", path, skill_registry=registry)
+        _, err = load_single_plugin("skill", path, skill_registry=registry)
+        return err
     except Exception:
         logger.exception("update_skill: failed to reload %s", path)
+        return f"failed to reload {path.name}"
 
 
 def _live_record(context, slug: str):

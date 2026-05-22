@@ -38,6 +38,19 @@ def test_literal_controls_are_rejected_by_validation():
 		assert_valid(src)
 
 
+def test_palette_choices_points_to_enum_descriptor():
+	src = (
+		"from plugins.BaseSkill import BaseSkill, Palette\n\n"
+		"class BadSkill(BaseSkill):\n"
+		"    name = 'Bad'\n"
+		"    palette_slot = Palette('Slot', choices=['background'], default='background')\n"
+		"    def run(self, canvas):\n"
+		"        canvas.commit(canvas.new())\n"
+	)
+	with pytest.raises(SkillValidationError, match="use Enum"):
+		assert_valid(src)
+
+
 def test_stale_palette_control_is_filtered_from_skill_record():
 	d = Path(".test_tmp_skill_controls"); d.mkdir(exist_ok=True)
 	path = d / f"skill_blur_{uuid.uuid4().hex}.py"
