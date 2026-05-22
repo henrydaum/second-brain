@@ -177,6 +177,8 @@ body.share-landing.missing .share-landing-meta { text-align: center; }
 .ctl-row > span:first-child { color: var(--muted); }
 .ctl-row input[type=range] { width: 100%; accent-color: var(--accent); }
 .ctl-row input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); justify-self: start; }
+.ctl-row input[type=text] { grid-column: 2 / span 2; height: 30px; padding: 0 12px; background: #0b0d13; border: 1px solid var(--line); color: var(--text); outline: none; min-width: 0; }
+.ctl-row input[type=text]:focus { border-color: var(--accent); }
 .ctl-val { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted); min-width: 36px; text-align: right; }
 .ctl-segs { display: flex; flex-wrap: wrap; gap: 4px; }
 .ctl-seg { padding: 4px 8px; background: #11151d; color: var(--text); border: 1px solid var(--line); cursor: pointer; font-size: 11px; }

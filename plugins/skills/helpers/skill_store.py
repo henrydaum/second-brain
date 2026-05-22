@@ -191,7 +191,7 @@ def _coerce_number(value, *, field: str) -> float:
 
 
 MAX_NON_PALETTE_CONTROLS = 3
-_CONTROL_TYPES = {"slider", "enum", "bool", "pan", "palette"}
+_CONTROL_TYPES = {"slider", "enum", "bool", "pan", "palette", "text"}
 _KINDS = ("creation", "transform")
 
 
@@ -280,6 +280,10 @@ def validate_controls(controls, run_param_names: set[str], code: str | None = No
             yd = _coerce_number(c.get("y_default", 0.0), field="y_default")
             c["x_default"], c["y_default"] = xd, yd
             c["default"] = {xp: xd, yp: yd}
+        elif ctype == "text":
+            c["default"] = str(c.get("default", ""))
+            c["max_length"] = int(c.get("max_length", 120))
+            c["placeholder"] = c.get("placeholder")
         out.append(c)
 
     if non_palette > MAX_NON_PALETTE_CONTROLS:

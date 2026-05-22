@@ -411,6 +411,10 @@ def _apply_param_bounds(instance, params: dict) -> dict:
             allowed = spec.get("allowed") or []
             if value not in allowed:
                 value = spec.get("default")
+        elif kind == "text":
+            s = "" if value is None else str(value)
+            cap = int(spec.get("max_length", 120))
+            value = s[:cap]
         setattr(instance, name, value)
     return residual
 

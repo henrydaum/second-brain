@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 from PIL import Image
 
-from plugins.BaseSkill import BaseSkill, Slider, Bool, Enum, Pan
+from plugins.BaseSkill import BaseSkill, Slider, Bool, Enum, Pan, Text
 from plugins.skills.helpers.skill_sandbox_entry import Canvas, _dispatch_run, _apply_param_bounds
 from plugins.skills.helpers.skill_store import validate_controls
 
@@ -217,3 +217,44 @@ def test_pan_underlying_sliders_clamped_at_dispatch():
     _apply_param_bounds(s, {"cx": 1.5, "cy": -0.3})
     assert s.cx == 1.0
     assert s.cy == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Text descriptor
+# ---------------------------------------------------------------------------
+
+def test_text_descriptor_compiles_to_dict_control():
+    class S(BaseSkill):
+        name = "S"
+        kind = "creation"
+        phrase = Text(default="hi", max_length=50, placeholder="say something")
+
+    c = [x for x in S.controls if x["type"] == "text"][0]
+    assert c["name"] == "phrase"
+    assert c["default"] == "hi"
+    assert c["max_length"] == 50
+    assert c["placeholder"] == "say something"
+    assert S._param_bounds["phrase"] == {"type": "text", "default": "hi", "max_length": 50}
+
+
+def test_text_dispatch_clamps_and_coerces():
+    class S(BaseSkill):
+        name = "S"
+        kind = "creation"
+        phrase = Text(default="d", max_length=5)
+
+        def run(self, canvas):
+            canvas.commit(canvas.image)
+
+    s = S()
+    _apply_param_bounds(s, {"phrase": "abcdefghij"})
+    assert s.phrase == "abcde"
+    s2 = S()
+    _apply_param_bounds(s2, {"phrase": None})
+    assert s2.phrase == ""
+    s3 = S()
+    _apply_param_bounds(s3, {})
+    assert s3.phrase == "d"
+    s4 = S()
+    _apply_param_bounds(s4, {"phrase": 42})  # non-string coerced
+    assert s4.phrase == "42"

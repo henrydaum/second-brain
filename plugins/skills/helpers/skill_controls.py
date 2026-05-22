@@ -26,6 +26,10 @@ def coerce_control_value(spec: dict, value: Any) -> Any:
         return value
     if t == "palette":
         return str(value)
+    if t == "text":
+        s = "" if value is None else str(value)
+        cap = int(spec.get("max_length", 120))
+        return s[:cap]
     # pan controls deliver values via their underlying numeric param names; this
     # path only fires when the frontend sends {name: x_param, value: number}.
     return value

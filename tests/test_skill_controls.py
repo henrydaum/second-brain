@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from plugins.skills.helpers.skill_store import SkillValidationError, source_uses_palette, to_skill_record, validate_controls
+from plugins.skills.helpers.skill_controls import coerce_control_value
 
 
 def test_palette_use_does_not_auto_add_palette_control():
@@ -40,3 +41,34 @@ def test_stale_palette_control_is_filtered_from_skill_record():
 
 def test_palette_control_is_kept_when_source_uses_palette():
 	assert source_uses_palette("def run(self, canvas):\n    canvas.new()\n") is True
+
+
+def test_text_control_validates_and_normalizes_defaults():
+	out = validate_controls(
+		[{"type": "text", "name": "phrase"}],
+		{"phrase"},
+		code="def run(self, canvas, phrase=''):\n    canvas.commit(canvas.new())\n",
+	)
+	assert out[0]["type"] == "text"
+	assert out[0]["default"] == ""
+	assert out[0]["max_length"] == 120
+	assert out[0]["placeholder"] is None
+	assert out[0]["label"] == "Phrase"
+
+
+def test_text_control_honours_explicit_max_length_and_placeholder():
+	out = validate_controls(
+		[{"type": "text", "name": "phrase", "default": "hi", "max_length": 8, "placeholder": "p"}],
+		{"phrase"},
+		code="def run(self, canvas, phrase=''):\n    canvas.commit(canvas.new())\n",
+	)
+	assert out[0]["max_length"] == 8
+	assert out[0]["placeholder"] == "p"
+	assert out[0]["default"] == "hi"
+
+
+def test_coerce_text_truncates_and_handles_none():
+	spec = {"type": "text", "max_length": 5}
+	assert coerce_control_value(spec, "abcdefgh") == "abcde"
+	assert coerce_control_value(spec, None) == ""
+	assert coerce_control_value(spec, 42) == "42"

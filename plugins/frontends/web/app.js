@@ -687,6 +687,11 @@ controlsPanel.addEventListener("input", e => {
     if (valEl) valEl.textContent = fmtNum(+el.value);
     debounceControl(`${chain}.${el.dataset.name}`, () => postControl({chain_index: chain, name: el.dataset.name, value: +el.value}));
   }
+  if (el.dataset.kind === "text") {
+    debounceControl(`${chain}.${el.dataset.name}`,
+      () => postControl({chain_index: chain, name: el.dataset.name, value: el.value}),
+      350);
+  }
 });
 controlsPanel.addEventListener("change", e => {
   const el = e.target;
@@ -720,6 +725,11 @@ function renderWidget(panel, spec) {
     const xv = v[xp] ?? spec.x_default ?? 0;
     const yv = v[yp] ?? spec.y_default ?? 0;
     return `<div class="ctl-row"><span>${esc(spec.label)}</span><div class="ctl-pan" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-step="${spec.step}" data-x="${xv}" data-y="${yv}"><button type="button" class="ctl-pan-up" data-dir="up">↑</button><button type="button" class="ctl-pan-left" data-dir="left">←</button><span class="ctl-pan-c">${fmtNum(xv)}, ${fmtNum(yv)}</span><button type="button" class="ctl-pan-right" data-dir="right">→</button><button type="button" class="ctl-pan-down" data-dir="down">↓</button></div></div>`;
+  }
+  if (spec.type === "text") {
+    const cur = v[spec.name] ?? spec.default ?? "";
+    const ph = spec.placeholder ? ` placeholder="${esc(spec.placeholder)}"` : "";
+    return `<label class="ctl-row" for="${id}"><span>${esc(spec.label)}</span><input id="${id}" type="text" value="${esc(cur)}" maxlength="${spec.max_length || 120}"${ph} data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-kind="text"></label>`;
   }
   if (spec.type === "palette") {
     const cur = v.palette || "";

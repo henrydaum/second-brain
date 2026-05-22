@@ -12,7 +12,7 @@ sandbox imports the file, finds the BaseSkill subclass, instantiates it,
 and calls instance.run(...) through the compatibility dispatcher.
 
 Allowed imports inside a skill: math, random, colorsys, numpy, PIL.*, and
-``from plugins.BaseSkill import BaseSkill, Slider, Bool, Enum, Pan, Palette``.
+``from plugins.BaseSkill import BaseSkill, Slider, Bool, Enum, Pan, Palette, Text``.
 Everything else is
 blocked by AST validation and by the child process import gate.
 
@@ -126,6 +126,17 @@ class Pan(_ControlDescriptor):
         self.y_param = str(y)
         self.label = label
         self.step = step  # None → inherit from the underlying slider step
+
+
+class Text(_ControlDescriptor):
+    """Single-line free-text input. Clamped to ``max_length`` characters."""
+    control_type = "text"
+
+    def __init__(self, default="", *, max_length=120, placeholder=None, label=None):
+        self.default = str(default)
+        self.max_length = int(max_length)
+        self.placeholder = placeholder
+        self.label = label
 
 
 class Palette(_ControlDescriptor):
@@ -248,6 +259,18 @@ def _compile_descriptors(cls) -> tuple[list[dict], dict[str, dict]] | None:
                 "step": float(step),
                 "x_default": x_slider.default,
                 "y_default": y_slider.default,
+            })
+        elif isinstance(d, Text):
+            param_bounds[attr_name] = {
+                "type": "text", "default": d.default, "max_length": d.max_length,
+            }
+            controls.append({
+                "type": "text",
+                "name": attr_name,
+                "label": label,
+                "default": d.default,
+                "max_length": d.max_length,
+                "placeholder": d.placeholder,
             })
         elif isinstance(d, Palette):
             controls.append({
