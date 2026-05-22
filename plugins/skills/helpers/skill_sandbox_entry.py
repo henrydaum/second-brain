@@ -104,13 +104,14 @@ class Canvas:
         self.palette = SimpleNamespace(**colors, id=p["id"], name=p["name"], kind=p["kind"], colors=colors)
         self.size = self.width = self.height = int(job["size"])
         self.seed = int(job["seed"])
+        self.kind = str(job.get("kind") or "creation")
         self._image = Image.open(job["input_image_path"]).convert("RGBA") if job.get("input_image_path") else None
         self._committed = None
 
     @property
     def image(self):
         if self._image is None:
-            raise ValueError("canvas.image is only available to transform skills")
+            raise ValueError("canvas.image is only available to transform and object skills")
         return self._image.copy()
 
     def new(self, w=None, h=None, color=None):
@@ -120,6 +121,13 @@ class Canvas:
 
     def create_image(self, color=None):
         return self.new(color=color or self.palette.background)
+
+    def new_layer(self, w=None, h=None):
+        """Return a fully-transparent RGBA image at canvas size — the
+        starting point for an object skill. The framework alpha-composites
+        whatever you commit onto the prior canvas, so paint only what you
+        want visible."""
+        return Image.new("RGBA", (int(w or self.size), int(h or w or self.size)), (0, 0, 0, 0))
 
     def commit(self, image):
         self._committed = image.convert("RGBA")
@@ -148,7 +156,7 @@ class Canvas:
         ``dtype="uint8"`` yields the raw bytes. Transform skills only."""
         import numpy as _np
         if self._image is None:
-            raise ValueError("canvas.image_array is only available to transform skills")
+            raise ValueError("canvas.image_array is only available to transform and object skills")
         img = self._image.convert(str(mode))
         arr = _np.asarray(img)
         if str(dtype) == "float":
@@ -174,8 +182,8 @@ def _hint_for(error_type: str, message: str, skill_line: str) -> str | None:
     if "did not call canvas.commit" in msg:
         return "Your run() finished without calling canvas.commit(image). Every code path must end with canvas.commit(img). If you built a numpy array, wrap it: canvas.commit(Image.fromarray(arr, 'RGB').convert('RGBA'))."
 
-    if "canvas.image is only available to transform skills" in msg:
-        return "This is a creation skill — canvas.image only exists for transform skills. Start a fresh image with canvas.new(color=canvas.palette.background) or canvas.create_image()."
+    if "canvas.image is only available to transform" in msg:
+        return "This is a creation skill — canvas.image only exists for transform and object skills. Start a fresh image with canvas.new(color=canvas.palette.background) or canvas.create_image()."
 
     if "no BaseSkill subclass found" in msg or "must define" in msg:
         return "Every skill must define `class <Name>(BaseSkill):` with a `def run(self, canvas):` method. Wrap your code accordingly."
@@ -493,7 +501,11 @@ def main():
             canvas.commit(result)
         if canvas._committed is None:
             raise ValueError("skill did not call canvas.commit(image)")
-        canvas._committed.save(output_image_path, "PNG")
+        if canvas.kind == "object" and canvas._image is not None:
+            final_image = Image.alpha_composite(canvas._image, canvas._committed)
+        else:
+            final_image = canvas._committed
+        final_image.save(output_image_path, "PNG")
     except BaseException as exc:
         diag = _diagnose(exc, code)
         _write_sidecar(output_image_path, diag)
@@ -503,7 +515,10 @@ def main():
         print(tail, file=sys.stderr)
         sys.exit(1)
 
-    warning = _validate_output(canvas._committed, canvas)
+    # For object skills, validate the composited final (what the viewer
+    # sees) rather than the pre-composite sparse-alpha layer.
+    to_validate = final_image if canvas.kind == "object" else canvas._committed
+    warning = _validate_output(to_validate, canvas)
     if warning is not None:
         _write_sidecar(output_image_path, warning)
 

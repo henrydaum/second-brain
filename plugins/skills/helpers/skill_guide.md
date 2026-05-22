@@ -1,8 +1,22 @@
 # Canvas skill authoring guide
 
 You are building one skill: a small, deterministic Python function that either
-**creates** a new image on the canvas or **transforms** the current one. This
-guide is the single source of truth for how to do that well.
+**creates** a new image on the canvas, **transforms** the current one, or
+overlays an **object** on top of it. This guide is the single source of
+truth for how to do that well.
+
+The three kinds:
+
+- `creation` — produces a fresh image from scratch using
+  `canvas.create_image()`. Always layer 0.
+- `transform` — reads the current canvas via `canvas.image`, returns a
+  same-shape opaque image that replaces it. Requires a creation first.
+- `object` — paints onto a transparent base from `canvas.new_layer()`
+  (or onto `canvas.image` if you want to read the prior pixels), commits
+  RGBA, and the framework alpha-composites the result onto the prior
+  canvas. Use for overlays — typography, badges, icons. Paint only what
+  you want visible; leave the rest fully transparent. Requires a
+  creation first.
 
 ## Palette: non-negotiable
 
@@ -98,6 +112,40 @@ class BarrelWarpSkill(BaseSkill):
 For PIL-only transforms (blur, solarize, enhance), use `canvas.image` →
 filter → `canvas.commit(...)` as usual.
 
+### Object skill template (overlay)
+
+Object skills paint onto a transparent base; the framework composites
+your output onto the prior canvas. Only the pixels you paint show up,
+so don't bother filling the rest.
+
+```python
+from plugins.BaseSkill import BaseSkill, Text, Slider, Palette
+
+
+class CornerBadgeSkill(BaseSkill):
+    name = "Corner Badge"
+    description = "A small accent-colored chip in the top-left corner."
+    kind = "object"
+
+    palette = Palette()
+    label = Text(default="NEW", max_length=12)
+    size_pct = Slider(4, 20, default=8, step=0.5)
+
+    def run(self, canvas):
+        img = canvas.new_layer()                 # fully transparent RGBA
+        s = canvas.size
+        pad = int(s * 0.04)
+        h = int(s * float(self.size_pct) / 100.0)
+        art_kit.text(
+            img, (pad, pad), str(self.label),
+            size=h, color=canvas.palette.accent, anchor="lt",
+        )
+        canvas.commit(img)                       # framework composites
+```
+
+If you need to read the underlying canvas (e.g. to pick contrast for the
+overlay), `canvas.image` is also available to object skills.
+
 ---
 
 ## 2. Canvas + art_kit reference
@@ -110,10 +158,11 @@ filter → `canvas.commit(...)` as usual.
 | `canvas.palette.colors`   | Dict of all five slots.                                 |
 | `canvas.size` / `.width` / `.height` | Square dimension in pixels.                 |
 | `canvas.seed`             | Integer; seed every RNG with this.                      |
-| `canvas.image`            | (transform only) A copy of the current canvas image.    |
-| `canvas.image_array(mode="RGB", dtype="float")` | (transform only) The current image as a numpy array. `dtype="float"` → float32 in [0,1]; `dtype="uint8"` → raw bytes. Saves the asarray/divide step. |
+| `canvas.image`            | (transform/object only) A copy of the current canvas image. |
+| `canvas.image_array(mode="RGB", dtype="float")` | (transform/object only) The current image as a numpy array. `dtype="float"` → float32 in [0,1]; `dtype="uint8"` → raw bytes. Saves the asarray/divide step. |
 | `canvas.new(color=...)`   | Returns a fresh RGBA image at canvas size.              |
-| `canvas.create_image()`   | Shorthand for `new(color=palette.background)`.          |
+| `canvas.create_image()`   | Shorthand for `new(color=palette.background)`. Creations. |
+| `canvas.new_layer()`      | Fully-transparent RGBA at canvas size. Objects.         |
 | `canvas.commit(image)`    | **Required.** Hands the finished PIL image to the runtime. |
 | `canvas.commit_array(arr)`| Same as `commit`, but accepts a numpy HxWxC array (float in [0,1] or uint8; C=3 or 4). Handles clip + dtype + Image.fromarray + RGBA convert for you. Prefer this in numpy-heavy transforms. |
 
@@ -228,8 +277,9 @@ A single creation rarely produces a finished image. The high-quality pattern is:
    atmosphere or finishes detail.
 
 Keep transform chains ≤3 deep so palette re-render stays snappy. The runtime
-enforces a hard cap of 4 total chain entries (1 creation + 3 transforms); past
-that, `execute_skill` errors and the user must delete a layer first.
+enforces a hard cap of 4 total chain entries (1 creation + 3 transforms or
+objects); past that, `execute_skill` errors and the user must delete a layer
+first.
 
 ---
 

@@ -118,7 +118,7 @@ class BaseSkill:
     """The contract every skill implements. See plugins/BaseSkill.py."""
     name: str = ""
     description: str = ""
-    kind: str = "creation"          # "creation" | "transform"
+    kind: str = "creation"          # "creation" | "transform" | "object"
     owner: str = "library"
     created_at: float = 0.0
     controls: list = []
@@ -182,3 +182,34 @@ class BaseSkill:
 #         base = canvas.image
 #         glow = base.filter(ImageFilter.GaussianBlur(radius=float(self.radius)))
 #         canvas.commit(canvas.image.alpha_composite(glow) or glow)
+
+
+# =====================================================================
+# EXAMPLE — a built-in/reference object skill (overlay)
+# =====================================================================
+#
+# Object skills paint onto a transparent base. The framework
+# alpha-composites whatever you commit onto the prior canvas, so only
+# the pixels you actually paint will show — leave the rest transparent.
+#
+# from plugins.BaseSkill import BaseSkill, Text, Slider, Palette
+#
+#
+# class CornerBadgeSkill(BaseSkill):
+#     name = "Corner Badge"
+#     description = "A small accent-colored label in the top-left."
+#     kind = "object"
+#     palette = Palette()
+#     label = Text(default="NEW", max_length=12)
+#     size_pct = Slider(4, 20, default=8, step=0.5)
+#
+#     def run(self, canvas):
+#         img = canvas.new_layer()              # transparent RGBA
+#         s = canvas.size
+#         pad = int(s * 0.04)
+#         h = int(s * float(self.size_pct) / 100.0)
+#         art_kit.text(
+#             img, (pad, pad), str(self.label),
+#             size=h, color=canvas.palette.accent, anchor="lt",
+#         )
+#         canvas.commit(img)                    # framework composites

@@ -90,7 +90,7 @@ class Canvas:
 		kind = entry.get("kind")
 		if kind == "creation":
 			self.layers = [dict(entry)]
-		elif kind == "transform":
+		elif kind in ("transform", "object"):
 			self.layers = list(self.layers) + [dict(entry)]
 		else:
 			raise ValueError(f"unknown chain entry kind: {kind!r}")

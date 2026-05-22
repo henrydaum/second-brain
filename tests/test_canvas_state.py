@@ -56,12 +56,25 @@ def test_add_layer_creation_then_transform():
 
 
 def test_add_layer_rejects_unknown_kind():
-	"""kind must be 'creation' or 'transform'."""
+	"""kind must be 'creation', 'transform', or 'object'."""
 	cs = CanvasState()
 	r = cs.enact("add_layer", {"skill_slug": "fractal", "kind": "bogus"})
 	assert not r.ok
 	assert cs.last_error is not None
 	assert cs.canvas.layers == []
+
+
+def test_add_layer_accepts_object_kind_after_creation():
+	"""object layers append onto an existing chain like transforms."""
+	cs = CanvasState()
+	r1 = cs.enact("add_layer", {"skill_slug": "fractal", "kind": "creation"})
+	assert r1.ok
+	r2 = cs.enact("add_layer", {"skill_slug": "typography", "kind": "object",
+	                            "controls": {"phrase": "hi"}})
+	assert r2.ok
+	assert len(cs.canvas.layers) == 2
+	assert cs.canvas.layers[1]["kind"] == "object"
+	assert cs.canvas.layers[1]["controls"] == {"phrase": "hi"}
 
 
 def test_add_layer_requires_skill_slug():

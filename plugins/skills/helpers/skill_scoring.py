@@ -46,15 +46,15 @@ def _attribution(chain: list[dict]) -> list[tuple[str, str, float]]:
     if not steps:
         return []
     creations = [(slug, kind) for slug, kind in steps if kind == "creation"]
-    transforms = [(slug, kind) for slug, kind in steps if kind == "transform"]
+    overlays = [(slug, kind) for slug, kind in steps if kind in ("transform", "object")]
     out: list[tuple[str, str, float]] = []
-    if creations and transforms:
+    if creations and overlays:
         cw = 0.6 / len(creations)
-        tw = 0.4 / len(transforms)
+        tw = 0.4 / len(overlays)
         for slug, _ in creations:
             out.append((slug, "creation", cw))
-        for slug, _ in transforms:
-            out.append((slug, "transform", tw))
+        for slug, kind in overlays:
+            out.append((slug, kind, tw))
     else:
         # Creation-only or transform-only: split 1.0 equally.
         eq = 1.0 / len(steps)

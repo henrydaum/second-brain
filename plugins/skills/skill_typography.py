@@ -9,10 +9,11 @@ except NameError:
 class TypographySkill(BaseSkill):
     name = "Typography"
     description = (
-        "Render a phrase in Jost, centered on the canvas, in the palette's "
-        "accent color. Tweak the words, size, and style live."
+        "Overlay a phrase in Jost, centered on the canvas, in the palette's "
+        "accent color. Composites on top of the existing layer; tweak the "
+        "words, size, and style live."
     )
-    kind = "creation"
+    kind = "object"
     palette = Palette()
     phrase = Text(default="hello", max_length=120, placeholder="Type something…")
     size_pct = Slider(2, 30, default=12, step=0.5, label="Size (% of canvas)")
@@ -25,7 +26,7 @@ class TypographySkill(BaseSkill):
     )
 
     def run(self, canvas):
-        img = canvas.create_image()
+        img = canvas.new_layer()
         s = canvas.size
         size_px = max(8, int(s * float(self.size_pct) / 100.0))
         weight, italic = {

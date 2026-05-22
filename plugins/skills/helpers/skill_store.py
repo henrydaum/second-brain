@@ -192,7 +192,7 @@ def _coerce_number(value, *, field: str) -> float:
 
 MAX_NON_PALETTE_CONTROLS = 3
 _CONTROL_TYPES = {"slider", "enum", "bool", "pan", "palette", "text"}
-_KINDS = ("creation", "transform")
+_KINDS = ("creation", "transform", "object")
 
 
 def source_uses_palette(source: str | None) -> bool:

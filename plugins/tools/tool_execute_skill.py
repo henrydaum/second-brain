@@ -21,7 +21,7 @@ logger = logging.getLogger("SkillTools")
 
 class ExecuteSkill(BaseTool):
 	name = "execute_skill"
-	description = "Run a stored skill on the canvas by slug. Creations start a new chain from a blank palette-background image; transforms read the current canvas and require something already on it. Chain cap is 4 layers (1 creation + up to 3 transforms). Errors include a hint line — read it and adjust before retrying."
+	description = "Run a stored skill on the canvas by slug. Creations start a new chain from a blank palette-background image; transforms read the current canvas and replace it; objects read the current canvas and alpha-composite an overlay onto it. Transforms and objects both require something already on the canvas. Chain cap is 4 layers (1 creation + up to 3 transforms/objects). Errors include a hint line — read it and adjust before retrying."
 	max_calls = 6
 	parameters = {
 		"type": "object",
@@ -63,10 +63,10 @@ class ExecuteSkill(BaseTool):
 		# A transform with an empty chain has nothing to read — refuse
 		# before we corrupt state. Mirrors the SkillRunError the renderer
 		# would raise, but at the action layer.
-		if kind == "transform" and not cs.canvas.layers:
+		if kind in ("transform", "object") and not cs.canvas.layers:
 			return ToolResult.failed(
-				"Transform skills require a creation first. "
-				"Run a creation skill before this transform."
+				f"{kind.title()} skills require a creation first. "
+				f"Run a creation skill before this {kind}."
 			)
 
 		add_result = canvas_rt.handle_action(cs.canvas_id, "add_layer", {
