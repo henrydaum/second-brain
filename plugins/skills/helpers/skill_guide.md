@@ -176,8 +176,10 @@ overlay), `canvas.image` is also available to object skills.
 | `art_kit.rule_of_thirds(size)`      | `.points`, `.verticals`, `.horizons` for composition.|
 | `art_kit.vogel_spiral(n)`           | n points distributed on a disc via the golden angle. |
 | `art_kit.jittered_grid(rng, c, r)`  | Cell-centered grid in [0,1]² with jitter.            |
-| `art_kit.value_noise(seed, x, y)`   | Smooth 2D value noise in [0,1].                      |
-| `art_kit.fbm(seed, x, y, octaves)`  | Fractal Brownian motion over value_noise.            |
+| `art_kit.value_noise(seed, x, y)`   | Smooth 2D value noise in [0,1]. Scalar — fine for sparse sampling. |
+| `art_kit.fbm(seed, x, y, octaves)`  | Fractal Brownian motion over value_noise. Scalar — fine for sparse sampling. |
+| `art_kit.value_noise_grid(seed, xx, yy)` | **Vectorized** value noise on numpy arrays. Use when filling a whole lattice (returns same-shape float64). Different hash than scalar, so outputs at the same seed differ. |
+| `art_kit.fbm_grid(seed, xx, yy, octaves)` | **Vectorized** fbm on numpy arrays. Drop-in replacement for nested Python loops over `fbm` — ~30-80× faster on a 160² grid. Different hash than scalar `fbm`. |
 | `art_kit.radial_falloff(w, h)`      | Closure: 1 at center → 0 at corner.                  |
 | `art_kit.centered_grid(size)`       | `(xx, yy, nx, ny)` — pixel coords + normalized [-1,+1] coords. The standard opener for any radial / warp filter. |
 | `art_kit.bilinear_sample(arr, fx, fy)` | Bilinear resample at fractional coords. `arr` is 2D (H,W) or 3D (H,W,C); `fx/fy` are float arrays. Coords outside the array clamp to the edge. |

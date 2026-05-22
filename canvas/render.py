@@ -42,7 +42,7 @@ logger = logging.getLogger("CanvasRender")
 RENDERS_DIR = DATA_DIR / "canvas_renders"
 PREFIX_CACHE_DIR = DATA_DIR / "canvas_prefix_cache"
 WEBP_QUALITY = 90
-WEBP_METHOD = 6
+WEBP_METHOD = 4
 POOL_HASH_LEN = 16
 
 

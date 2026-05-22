@@ -9,12 +9,10 @@ except NameError:
     art_kit = None
 
 def _fbm_grid(seed, grid_size, freq, octaves):
-    """Sample art_kit.fbm on a `grid_size x grid_size` lattice. Scalar fbm; OK at 192-256."""
-    out = np.empty((grid_size, grid_size), dtype=np.float32)
-    for r in range(grid_size):
-        for c in range(grid_size):
-            out[r, c] = art_kit.fbm(seed, c * freq, r * freq, octaves=octaves)
-    return out
+    """Vectorized fbm field on a `grid_size x grid_size` lattice."""
+    yy, xx = np.mgrid[0:grid_size, 0:grid_size].astype(np.float32)
+    field = art_kit.fbm_grid(seed, xx * freq, yy * freq, octaves=octaves)
+    return field.astype(np.float32)
 
 
 class FbmLandscapeSkill(BaseSkill):
