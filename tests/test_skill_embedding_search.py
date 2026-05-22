@@ -85,7 +85,23 @@ def test_embed_skills_skips_non_skill_python(monkeypatch):
         _cleanup(db, dbpath)
 
 
-def test_embed_skills_fails_invalid_skill_file(monkeypatch):
+def test_embed_skills_skips_prefixed_helper_file(monkeypatch):
+    root = Path(".skill_embed_dir_helper")
+    helper = root / "helpers"
+    helper.mkdir(parents=True, exist_ok=True)
+    db, dbpath = _fresh_db("helper")
+    try:
+        monkeypatch.setattr(task_embed_skills, "SKILL_DIRS", (root.resolve(),))
+        path = helper / "skill_store.py"
+        path.write_text("def slugify(name):\n    return name\n", encoding="utf-8")
+        result = EmbedSkills().run([str(path)], SimpleNamespace(services={"text_embedder": FakeEmbedder()}))[0]
+        assert result.success and result.data == []
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+        _cleanup(db, dbpath)
+
+
+def test_embed_skills_skips_prefixed_non_skill_in_skill_dir(monkeypatch):
     root = Path(".skill_embed_dir_bad")
     root.mkdir(exist_ok=True)
     db, dbpath = _fresh_db("bad")
@@ -94,7 +110,7 @@ def test_embed_skills_fails_invalid_skill_file(monkeypatch):
         path = root / "skill_bad.py"
         path.write_text("class Bad: pass", encoding="utf-8")
         result = EmbedSkills().run([str(path)], SimpleNamespace(services={"text_embedder": FakeEmbedder()}))[0]
-        assert not result.success and "BaseSkill" in result.error
+        assert result.success and result.data == []
     finally:
         shutil.rmtree(root, ignore_errors=True)
         _cleanup(db, dbpath)

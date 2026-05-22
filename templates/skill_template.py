@@ -98,6 +98,9 @@ Declare controls as BaseSkill class attributes:
 
 Read values as self.intensity/self.mode/etc. Slider values are clamped before
 run() starts. Pan is only a UI grouping over two sliders; read self.cx/self.cy.
+Do not define get_controls(), controls = [...], or plain defaults like
+slot = "primary" for user controls; only descriptor instances assigned directly
+on the class become controls.
 """
 
 # =====================================================================

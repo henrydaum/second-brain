@@ -315,6 +315,9 @@ class ExampleSkill(BaseSkill):
 `Pan` is only a UI grouping over two slider values; read `self.cx` and
 `self.cy`, not `self.center`. `Palette` declares a layer-specific palette
 override and should only be used by skills that actually read palette colors.
+Do not define `get_controls()`, `controls = [...]`, or plain defaults like
+`slot = "primary"` for user controls; the runtime only scans descriptor
+instances assigned directly on the class.
 
 Descriptor controls — keep things general-purpose; one widget should map
 cleanly to one knob the user wants to turn:

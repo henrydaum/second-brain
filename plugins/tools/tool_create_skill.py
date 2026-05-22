@@ -13,7 +13,7 @@ logger = logging.getLogger("SkillTools")
 
 class CreateSkill(BaseTool):
     name = "create_skill"
-    description = "Author a new canvas skill by supplying a complete BaseSkill class file. Declare controls as class attributes with Slider/Enum/Bool/Pan/Text/Palette descriptors and read them as self.<name> inside run(self, canvas). Only use when search_skills + read_skill cannot supply a close enough starting point. Prefer colors from canvas.palette slots or art_kit.palette_color(t), seed RNGs from canvas.seed, and call canvas.commit(image) on every path. Allowed imports only: math, random, colorsys, numpy, PIL.*, and plugins.BaseSkill."
+    description = "Author a new canvas skill by supplying a complete BaseSkill class file. Declare controls directly as class attributes with Slider/Enum/Bool/Pan/Text/Palette descriptors, e.g. `slot = Enum(['background','primary'], default='primary', label='Palette Slot')`, and read them as self.<name> inside run(self, canvas). Do not define get_controls(), plain control defaults, or controls=[...]. Palette() is only a whole-layer palette override; use Enum for choosing a palette slot. Prefer colors from canvas.palette slots or art_kit.palette_color(t), seed RNGs from canvas.seed, and call canvas.commit(image) on every path."
     max_calls = 4
     parameters = {
         "type": "object",

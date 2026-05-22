@@ -159,6 +159,17 @@ def _descriptor_call_errors(cls_node: ast.ClassDef) -> list[str]:
     return errors
 
 
+def _unsupported_control_api_errors(cls_node: ast.ClassDef) -> list[str]:
+    errors: list[str] = []
+    for item in cls_node.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "get_controls":
+            errors.append(
+                f"class '{cls_node.name}' defines get_controls(); declare controls directly as class attributes, "
+                "e.g. `slot = Enum([...], default='primary', label='Palette Slot')`"
+            )
+    return errors
+
+
 def validate_skill_code(source: str) -> list[str]:
     """Return a list of violations. Empty list means the code is acceptable.
 
@@ -203,6 +214,7 @@ def validate_skill_code(source: str) -> list[str]:
         for lineno in _literal_control_attrs(cls_node):
             errors.append(f"class '{cls_node.name}' declares literal controls at line {lineno}; use Slider/Enum/Bool/Pan/Text/Palette descriptors")
         errors.extend(_descriptor_call_errors(cls_node))
+        errors.extend(_unsupported_control_api_errors(cls_node))
         run = _find_run_method(cls_node)
         if run is None:
             errors.append(f"class '{cls_node.name}' must define `def run(self, canvas)`")

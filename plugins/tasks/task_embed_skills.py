@@ -47,10 +47,12 @@ class EmbedSkills(BaseTask):
 
 def _embed_path(path: str, embedder) -> TaskResult:
     p = Path(path)
-    if p.suffix.lower() != ".py" or not p.name.startswith("skill_") or not _in_skill_dir(p):
+    if not _is_skill_module(p):
         return TaskResult()
     try:
         meta = _skill_meta(p)
+        if meta is None:
+            return TaskResult()
         vec = _norm(embedder.encode(meta["name"] + "\n\n" + meta["description"]))
         if vec is None:
             return TaskResult.failed("text_embedder returned no embedding")
@@ -71,14 +73,18 @@ def _in_skill_dir(path: Path) -> bool:
         return False
 
 
+def _is_skill_module(path: Path) -> bool:
+    return path.suffix.lower() == ".py" and path.name.startswith("skill_") and _in_skill_dir(path)
+
+
 def _skill_meta(path: Path) -> dict:
     code = path.read_text(encoding="utf-8")
     tree = ast.parse(code)
     if not any(isinstance(n, ast.ImportFrom) and n.module == "plugins.BaseSkill" and any(a.name == "BaseSkill" for a in n.names) for n in tree.body):
-        raise ValueError("skill file must import BaseSkill from plugins.BaseSkill")
+        return None
     cls = next((n for n in tree.body if isinstance(n, ast.ClassDef) and any(_base_name(b) == "BaseSkill" for b in n.bases)), None)
     if cls is None:
-        raise ValueError("skill file must define a BaseSkill subclass")
+        return None
     vals = {n.targets[0].id: ast.literal_eval(n.value) for n in cls.body if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) and n.targets[0].id in {"name", "description", "kind", "hidden"}}
     name = str(vals.get("name") or "").strip()
     desc = str(vals.get("description") or "").strip()

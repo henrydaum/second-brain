@@ -51,6 +51,21 @@ def test_palette_choices_points_to_enum_descriptor():
 		assert_valid(src)
 
 
+def test_get_controls_is_rejected():
+	src = (
+		"from plugins.BaseSkill import BaseSkill, Enum\n\n"
+		"class BadSkill(BaseSkill):\n"
+		"    name = 'Bad'\n"
+		"    @classmethod\n"
+		"    def get_controls(cls):\n"
+		"        return {'slot': Enum(['primary'], default='primary')}\n"
+		"    def run(self, canvas):\n"
+		"        canvas.commit(canvas.new())\n"
+	)
+	with pytest.raises(SkillValidationError, match="get_controls"):
+		assert_valid(src)
+
+
 def test_stale_palette_control_is_filtered_from_skill_record():
 	d = Path(".test_tmp_skill_controls"); d.mkdir(exist_ok=True)
 	path = d / f"skill_blur_{uuid.uuid4().hex}.py"
