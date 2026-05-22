@@ -85,6 +85,16 @@ def test_literal_controls_rejected():
             controls = []
 
 
+def test_kwargs_run_signature_rejected_by_base_class():
+    with pytest.raises(TypeError, match="exactly"):
+        class S(BaseSkill):
+            name = "S"
+            kind = "filter"
+
+            def run(self, canvas, **params):
+                canvas.commit(canvas.image)
+
+
 def test_relaxed_owner_default():
     class S(BaseSkill):
         name = "S"

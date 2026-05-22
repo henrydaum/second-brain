@@ -82,6 +82,18 @@ def test_config_load_normalizes_string_autoload_services(tmp_path):
     assert json.loads(path.read_text())["autoload_services"] == ["web_search_provider"]
 
 
+def test_config_load_recovers_empty_config_file(tmp_path):
+    """Verify an empty config file is replaced with defaults."""
+    path = tmp_path / "config.json"
+    path.write_text("")
+
+    config = config_manager.load(str(path))
+
+    assert config["enabled_frontends"] == config_manager.DEFAULTS["enabled_frontends"]
+    assert json.loads(path.read_text())["enabled_frontends"] == config_manager.DEFAULTS["enabled_frontends"]
+    assert (tmp_path / "config.json.bad").exists()
+
+
 def test_config_save_partial_update_preserves_existing_values(tmp_path):
     """Verify partial config saves do not clobber existing config."""
     path = tmp_path / "config.json"

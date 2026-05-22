@@ -347,6 +347,15 @@ class BaseSkill:
                 f"{cls.__name__}: declare controls with Slider/Enum/Bool/Pan/"
                 "Text/Palette descriptors, not a literal controls list"
             )
+        run = cls.__dict__.get("run")
+        code = getattr(run, "__code__", None)
+        if code and (
+            code.co_argcount != 2
+            or code.co_varnames[:2] != ("self", "canvas")
+            or code.co_kwonlyargcount
+            or code.co_flags & 0x0C
+        ):
+            raise TypeError(f"{cls.__name__}: run must be declared exactly as def run(self, canvas)")
 
         for attr in ("requires_services", "config_settings"):
             value = getattr(cls, attr)

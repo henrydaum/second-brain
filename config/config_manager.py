@@ -3,6 +3,7 @@
 import logging
 import json
 from pathlib import Path
+from json import JSONDecodeError
 
 from paths import DATA_DIR
 
@@ -60,9 +61,19 @@ def load(path: str = None) -> dict:
         save(DEFAULTS, path)
         return dict(DEFAULTS)
 
-    with open(p, "r") as f:
-        logger.info(f"Loading config from {p}")
-        user_config = json.load(f)
+    try:
+        with open(p, "r") as f:
+            logger.info(f"Loading config from {p}")
+            user_config = json.load(f)
+    except JSONDecodeError:
+        bad = p.with_suffix(p.suffix + ".bad")
+        try:
+            p.replace(bad)
+            logger.warning(f"Invalid config moved to {bad}; recreating defaults")
+        except OSError:
+            logger.warning(f"Invalid config at {p}; recreating defaults")
+        save(DEFAULTS, path)
+        return dict(DEFAULTS)
 
     # If new settings are added, this adds them to the existing config.json
     merged = dict(DEFAULTS)
@@ -99,8 +110,10 @@ def save(config: dict, path: str = None):
     merged = {**DEFAULTS, **existing, **(config or {})}
     to_save = {k: v for k, v in merged.items()
                 if k != "_root" and k not in plugin_keys}
-    with open(path, "w") as f:
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    with open(tmp, "w") as f:
         json.dump(to_save, f, indent=4)
+    tmp.replace(p)
     logger.info(f"Config saved to {path}")
 
 
@@ -122,8 +135,15 @@ def load_plugin_config(path: str = None) -> dict:
     p = Path(path)
     if not p.exists():
         return {}
-    with open(p, "r") as f:
-        return json.load(f)
+    try:
+        with open(p, "r") as f:
+            return json.load(f)
+    except JSONDecodeError:
+        try:
+            p.replace(p.with_suffix(p.suffix + ".bad"))
+        except OSError:
+            pass
+        return {}
 
 
 def save_plugin_config(plugin_values: dict, path: str = None):
@@ -132,8 +152,10 @@ def save_plugin_config(plugin_values: dict, path: str = None):
         path = _DEFAULT_PLUGIN_CONFIG_PATH
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "w") as f:
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    with open(tmp, "w") as f:
         json.dump(plugin_values, f, indent=4)
+    tmp.replace(p)
     logger.info(f"Plugin config saved to {p}")
 
 
