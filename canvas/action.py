@@ -148,7 +148,10 @@ class CanvasRemoveLayer(CanvasAction):
 		idx = self.content.get("chain_index")
 		if not isinstance(idx, int):
 			raise self.error(ERROR_INVALID_INPUT, "remove_layer requires integer 'chain_index'.")
-		self.cs.canvas.delete_entry(idx)
+		if idx == 0:
+			self.cs.canvas.reset()
+		else:
+			self.cs.canvas.delete_entry(idx)
 		ev = self.cs.event("remove_layer", chain_index=idx)
 		return ActionResult(True, self.action_type, events=[ev])
 

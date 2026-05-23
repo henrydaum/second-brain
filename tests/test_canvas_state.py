@@ -94,6 +94,16 @@ def test_remove_layer_out_of_range_fails_cleanly():
 	assert len(cs.canvas.layers) == 1
 
 
+def test_remove_background_clears_chain():
+	"""Removing layer 0 clears dependent layers too, avoiding invalid chains."""
+	cs = CanvasState()
+	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background"})
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
+	r = cs.enact("remove_layer", {"chain_index": 0})
+	assert r.ok
+	assert cs.canvas.layers == []
+
+
 def test_move_layer_rejects_background_displacement():
 	"""Moving the background off layer 0 must fail (Canvas.move_entry rule)."""
 	cs = CanvasState()

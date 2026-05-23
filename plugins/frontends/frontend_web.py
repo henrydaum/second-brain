@@ -22,6 +22,7 @@ from plugins.helpers import stripe_client, web_auth
 
 from canvas import actions as canvas_actions
 from canvas.render import pool_hash as _pool_hash, render_canvas as _new_render_canvas
+from canvas.state import CanvasState
 from config import config_manager
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
 from plugins.helpers.palettes import get_palette, list_palettes
@@ -1013,6 +1014,7 @@ class WebFrontend(BaseFrontend):
         cs = cr.for_session(key)
         if not cs.canvas.layers:
             return []
+        before = cs.to_dict()
         staged = []
         for item in controls or []:
             if not isinstance(item, dict):
@@ -1034,14 +1036,20 @@ class WebFrontend(BaseFrontend):
                 "value": item.get("value"),
             })
             if not getattr(result, "ok", True):
+                self._restore_canvas_state(cr, cs, before)
                 msg = result.error.message if getattr(result, "error", None) else (result.message or "control update failed")
                 return [{"type": "error", "content": f"Regenerate failed: {msg}"}]
         result = cr.handle_action(cs.canvas_id, "regenerate", {"force_new_seed": bool(force_new_seed)})
         if not getattr(result, "ok", True):
+            self._restore_canvas_state(cr, cs, before)
             msg = result.error.message if getattr(result, "error", None) else (result.message or "regenerate failed")
             return [{"type": "error", "content": f"Regenerate failed: {msg}"}]
         snap = self._new_canvas_snap(key, force_new_seed=bool(force_new_seed))
+        if snap and "error" in snap:
+            self._restore_canvas_state(cr, cs, before)
+            return [{"type": "error", "content": f"Regenerate failed: {snap['error']}"}]
         if not snap or not snap.get("path"):
+            self._restore_canvas_state(cr, cs, before)
             return [{"type": "error", "content": "Regenerate failed: render produced no image"}]
         return [{
             "type": "hero_image",
@@ -1288,6 +1296,7 @@ class WebFrontend(BaseFrontend):
         if cr is None:
             return [{"type": "error", "content": f"{fail_prefix}: canvas runtime not available"}]
         cs = cr.for_session(key)
+        before = cs.to_dict()
         try:
             result = cr.handle_action(cs.canvas_id, action_type, dict(payload))
         except Exception as e:
@@ -1299,6 +1308,7 @@ class WebFrontend(BaseFrontend):
             return [{"type": "error", "content": f"{fail_prefix}: {msg}"}]
         snap = self._new_canvas_snap(key) or {}
         if "error" in snap:
+            self._restore_canvas_state(cr, cs, before)
             return [{"type": "error", "content": f"{fail_prefix}: {snap['error']}"}]
         if not snap.get("path"):
             # Empty chain after the action (e.g. remove_layer on the last layer).
@@ -1314,6 +1324,17 @@ class WebFrontend(BaseFrontend):
             "name": Path(snap["path"]).name,
             "canvas": _canvas_payload_full(self.runtime, key, snap),
         }]
+
+    def _restore_canvas_state(self, cr, cs, state: dict) -> None:
+        restored = CanvasState.from_dict(state)
+        cs.canvas = restored.canvas
+        cs.phase = restored.phase
+        cs.history = restored.history
+        cs.render_seed = restored.render_seed
+        cs.last_error = None
+        persist = getattr(cr, "_persist", None)
+        if callable(persist):
+            persist(cs)
 
 class _Server(ThreadingHTTPServer):
     def __init__(self, addr, handler, frontend, *, max_global: int = DEFAULT_MAX_GLOBAL_CONNECTIONS, max_per_ip: int = DEFAULT_MAX_IP_CONNECTIONS):

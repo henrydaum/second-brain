@@ -206,6 +206,68 @@ def test_regenerate_invalid_staged_control_skips_render(monkeypatch, renders_dir
 		_cleanup_db(db, dbpath)
 
 
+def test_regenerate_render_failure_rolls_back_staged_controls(monkeypatch, renders_dir):
+	def fake_run_skill(skill, *, params, output_image_path, **_kwargs):
+		if params.get("bad"):
+			raise TypeError("bad control")
+		Path(output_image_path).parent.mkdir(parents=True, exist_ok=True)
+		Image.new("RGBA", (4, 4), (16, 32, 64, 255)).save(output_image_path, format="PNG")
+		return {"ok": True}
+	monkeypatch.setattr(canvas_render, "run_skill", fake_run_skill)
+	db, dbpath = _fresh_db("regen_render_rollback")
+	try:
+		fe = _make_frontend(db)
+		_, cs = _seed_canvas(fe)
+		assert fe.regenerate("sess1", force_new_seed=True)[0]["type"] == "hero_image"
+		before = cs.to_dict()
+
+		events = fe.regenerate("sess1", controls=[{"chain_index": 0, "name": "bad", "value": True}])
+
+		assert events[0]["type"] == "error"
+		assert "bad control" in events[0]["content"]
+		assert cs.to_dict() == before
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_delete_render_failure_rolls_back_layer_change(monkeypatch, renders_dir):
+	def fake_run_skill(*_args, **_kwargs):
+		raise RuntimeError("render exploded")
+	monkeypatch.setattr(canvas_render, "run_skill", fake_run_skill)
+	db, dbpath = _fresh_db("delete_render_rollback")
+	try:
+		fe = _make_frontend(db)
+		_, cs = _seed_canvas(fe)
+		cr = fe.runtime.services["canvas"]
+		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "swirl", "kind": "filter"})
+		before = cs.to_dict()
+
+		events = fe.delete_layer("sess1", 1)
+
+		assert events[0]["type"] == "error"
+		assert "render exploded" in events[0]["content"]
+		assert cs.to_dict() == before
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_delete_background_clears_canvas_in_web_frontend(monkeypatch, renders_dir):
+	_install_fake_run_skill(monkeypatch)
+	db, dbpath = _fresh_db("delete_background_clears")
+	try:
+		fe = _make_frontend(db)
+		_, cs = _seed_canvas(fe)
+		cr = fe.runtime.services["canvas"]
+		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "swirl", "kind": "filter"})
+
+		events = fe.delete_layer("sess1", 0)
+
+		assert events == [{"type": "canvas_reset"}]
+		assert cs.canvas.layers == []
+	finally:
+		_cleanup_db(db, dbpath)
+
+
 def test_prefix_cache_images_are_not_public(monkeypatch):
 	root = Path(".share_e2e_prefix_public_test")
 	shutil.rmtree(root, ignore_errors=True)
