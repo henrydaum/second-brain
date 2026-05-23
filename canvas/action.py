@@ -218,3 +218,47 @@ class CanvasSetSize(CanvasAction):
 		self.cs.canvas.set_size(size)
 		ev = self.cs.event("set_size", size=self.cs.canvas.size)
 		return ActionResult(True, self.action_type, events=[ev])
+
+
+# =================================================================
+# Undo / Redo
+# =================================================================
+# Snapshot-based: pop from one stack, push current state onto the other,
+# restore. CanvasState.enact populates undo_stack for the other action
+# classes; these two are excluded from UNDOABLE_ACTIONS so they never
+# snapshot themselves.
+
+class CanvasUndo(CanvasAction):
+	"""Restore the most recent prior canvas state."""
+
+	action_type = "undo"
+
+	def execute(self) -> ActionResult:
+		"""Pop undo_stack onto canvas, push current state to redo_stack."""
+		if not self.cs.undo_stack:
+			raise self.error(ERROR_INVALID_ACTION, "Nothing to undo.")
+		from canvas.canvas import Canvas
+		snapshot = self.cs.undo_stack.pop()
+		self.cs.redo_stack.append(self.cs._snapshot())
+		self.cs.canvas = Canvas.from_dict(snapshot.get("canvas"))
+		self.cs.render_seed = snapshot.get("render_seed")
+		ev = self.cs.event("undo")
+		return ActionResult(True, self.action_type, events=[ev])
+
+
+class CanvasRedo(CanvasAction):
+	"""Re-apply the most recently undone canvas state."""
+
+	action_type = "redo"
+
+	def execute(self) -> ActionResult:
+		"""Pop redo_stack onto canvas, push current state to undo_stack."""
+		if not self.cs.redo_stack:
+			raise self.error(ERROR_INVALID_ACTION, "Nothing to redo.")
+		from canvas.canvas import Canvas
+		snapshot = self.cs.redo_stack.pop()
+		self.cs.undo_stack.append(self.cs._snapshot())
+		self.cs.canvas = Canvas.from_dict(snapshot.get("canvas"))
+		self.cs.render_seed = snapshot.get("render_seed")
+		ev = self.cs.event("redo")
+		return ActionResult(True, self.action_type, events=[ev])

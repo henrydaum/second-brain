@@ -6,7 +6,7 @@ CanvasRuntime layer is tested separately in test_canvas_runtime.py.
 
 from __future__ import annotations
 
-from canvas.state import CANVAS_IDLE, HISTORY_LIMIT, CanvasState
+from canvas.state import CANVAS_IDLE, HISTORY_LIMIT, UNDO_LIMIT, CanvasState
 from canvas.canvas import DEFAULT_PALETTE_ID, DEFAULT_SIZE, MAX_SIZE, MIN_SIZE
 
 
@@ -191,3 +191,127 @@ def test_history_trims_to_limit():
 	for _ in range(HISTORY_LIMIT + 50):
 		cs.enact("set_palette", {"palette_id": "japandi"})
 	assert len(cs.history) == HISTORY_LIMIT
+
+
+# =================================================================
+# Undo / Redo
+# =================================================================
+
+def test_undo_restores_prior_palette():
+	"""Undo after set_palette restores the previous palette."""
+	cs = CanvasState()
+	original = cs.canvas.palette_id
+	cs.enact("set_palette", {"palette_id": "obsidian"})
+	assert cs.canvas.palette_id == "obsidian"
+	r = cs.enact("undo", None)
+	assert r.ok
+	assert cs.canvas.palette_id == original
+
+
+def test_redo_reapplies_undone_state():
+	"""Redo after undo replays the most recent state."""
+	cs = CanvasState()
+	cs.enact("set_palette", {"palette_id": "obsidian"})
+	cs.enact("undo", None)
+	r = cs.enact("redo", None)
+	assert r.ok
+	assert cs.canvas.palette_id == "obsidian"
+
+
+def test_undo_then_new_action_clears_redo_stack():
+	"""A new mutating action after undo discards the forward history."""
+	cs = CanvasState()
+	cs.enact("set_palette", {"palette_id": "obsidian"})
+	cs.enact("undo", None)
+	assert cs.redo_stack  # redo is available
+	# A different palette change (real state change, not a no-op) should
+	# clear the forward history.
+	cs.enact("set_palette", {"palette_id": "monochrome"})
+	assert cs.redo_stack == []
+
+
+def test_noop_after_undo_preserves_redo():
+	"""A no-op mutation after undo leaves redo intact (no path branched)."""
+	cs = CanvasState()
+	cs.enact("set_palette", {"palette_id": "obsidian"})
+	cs.enact("undo", None)
+	# Setting palette to the current (post-undo) value is a no-op.
+	current = cs.canvas.palette_id
+	cs.enact("set_palette", {"palette_id": current})
+	# Redo path should still be available — the user changed nothing.
+	assert cs.redo_stack
+	r = cs.enact("redo", None)
+	assert r.ok
+	assert cs.canvas.palette_id == "obsidian"
+
+
+def test_undo_empty_stack_fails():
+	"""Undo with nothing to undo returns a failed ActionResult."""
+	cs = CanvasState()
+	r = cs.enact("undo", None)
+	assert not r.ok
+	assert cs.canvas.layers == []  # unchanged
+
+
+def test_redo_empty_stack_fails():
+	"""Redo with nothing to redo returns a failed ActionResult."""
+	cs = CanvasState()
+	r = cs.enact("redo", None)
+	assert not r.ok
+
+
+def test_noop_action_does_not_push_undo_entry():
+	"""Setting the palette to its current value is a no-op for undo."""
+	cs = CanvasState()
+	current = cs.canvas.palette_id
+	cs.enact("set_palette", {"palette_id": current})
+	assert cs.undo_stack == []
+
+
+def test_undo_restores_render_seed():
+	"""Snapshot includes render_seed — undo brings it back."""
+	cs = CanvasState(render_seed=111)
+	cs.enact("set_palette", {"palette_id": "obsidian"})
+	cs.render_seed = 222  # simulate render minting a new seed
+	# Pretend that change went through a mutating action by manually pushing
+	# the snapshot — actually let's just check undo restores the snapshotted
+	# seed from the set_palette call.
+	cs.enact("undo", None)
+	assert cs.render_seed == 111
+
+
+def test_undo_redo_round_trip_via_dict():
+	"""Stacks survive to_dict / from_dict."""
+	cs = CanvasState()
+	cs.enact("set_palette", {"palette_id": "obsidian"})
+	cs.enact("undo", None)
+	# Now undo_stack is empty, redo_stack has one entry.
+	restored = CanvasState.from_dict(cs.to_dict())
+	assert restored.undo_stack == cs.undo_stack
+	assert restored.redo_stack == cs.redo_stack
+	# Redo on the restored state still works.
+	r = restored.enact("redo", None)
+	assert r.ok
+	assert restored.canvas.palette_id == "obsidian"
+
+
+def test_undo_stack_trims_to_limit():
+	"""undo_stack is bounded by UNDO_LIMIT."""
+	cs = CanvasState()
+	palettes = ["obsidian", "japandi"]
+	# Each set_palette to a different value pushes a snapshot.
+	for i in range(UNDO_LIMIT + 20):
+		cs.enact("set_palette", {"palette_id": palettes[i % 2]})
+	assert len(cs.undo_stack) == UNDO_LIMIT
+
+
+def test_undo_redo_themselves_not_undoable():
+	"""Undo/redo don't push snapshots of their own execution."""
+	cs = CanvasState()
+	cs.enact("set_palette", {"palette_id": "obsidian"})
+	cs.enact("set_palette", {"palette_id": "japandi"})
+	# undo_stack now has 2 entries.
+	cs.enact("undo", None)
+	# undo_stack should have 1 entry (the first set_palette's pre-state),
+	# not 3 (which would happen if undo pushed itself).
+	assert len(cs.undo_stack) == 1

@@ -963,6 +963,16 @@ async function loadHistory() {
     for (const m of msgs) add(m.role === "user" ? "user" : "assistant", m.content, m.role === "assistant");
   } catch {}
 }
+document.addEventListener("keydown", async (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod || (e.key !== "z" && e.key !== "Z")) return;
+  // Don't hijack native text undo inside editable fields.
+  const t = e.target;
+  if (t && t.matches && t.matches("input, textarea, [contenteditable=''], [contenteditable='true']")) return;
+  e.preventDefault();
+  const url = e.shiftKey ? "/api/redo" : "/api/undo";
+  try { render((await post(url, {})).events); } catch {}
+});
 setInterval(poll, 1200);
 const bootingShare = new URLSearchParams(location.search).has("share");
 loadHistory(); loadPalettes(); if (bootingShare) handleShareDeepLink(); else loadCanvas(); loadGallery(1); loadGalleryFor("archive", 1); refreshAccount();

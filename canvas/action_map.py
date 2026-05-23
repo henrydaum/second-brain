@@ -14,11 +14,13 @@ from canvas.action import (
 	CanvasClear,
 	CanvasInvalidAction,
 	CanvasMoveLayer,
+	CanvasRedo,
 	CanvasRegenerate,
 	CanvasRemoveLayer,
 	CanvasSetControl,
 	CanvasSetPalette,
 	CanvasSetSize,
+	CanvasUndo,
 )
 from canvas.state import CANVAS_IDLE
 
@@ -33,6 +35,8 @@ CANVAS_ACTION_MAP: dict[str, dict[str, type[CanvasAction]]] = {
 		CanvasSetControl.action_type: CanvasSetControl,
 		CanvasSetPalette.action_type: CanvasSetPalette,
 		CanvasSetSize.action_type: CanvasSetSize,
+		CanvasUndo.action_type: CanvasUndo,
+		CanvasRedo.action_type: CanvasRedo,
 	},
 }
 

@@ -910,6 +910,22 @@ class WebFrontend(BaseFrontend):
             fail_prefix="Move layer failed",
         )
 
+    def undo(self, session_id: str) -> list[dict]:
+        """Restore the prior canvas state and re-render (cache hit by design)."""
+        key = self.session_key(session_id)
+        events = self._new_canvas_action_events(key, "undo", {}, fail_prefix="Undo failed")
+        if events and events[0].get("type") == "hero_image" and not (events[0].get("canvas") or {}).get("path"):
+            return [{"type": "canvas_reset"}]
+        return events
+
+    def redo(self, session_id: str) -> list[dict]:
+        """Re-apply the most recently undone state and re-render."""
+        key = self.session_key(session_id)
+        events = self._new_canvas_action_events(key, "redo", {}, fail_prefix="Redo failed")
+        if events and events[0].get("type") == "hero_image" and not (events[0].get("canvas") or {}).get("path"):
+            return [{"type": "canvas_reset"}]
+        return events
+
     def share(self, session_id: str, title: str, artist: str, *, ip: str = "", account_id: str = "") -> list[dict]:
         """Share the user's current canvas.
 
@@ -1331,6 +1347,8 @@ class WebFrontend(BaseFrontend):
         cs.phase = restored.phase
         cs.history = restored.history
         cs.render_seed = restored.render_seed
+        cs.undo_stack = restored.undo_stack
+        cs.redo_stack = restored.redo_stack
         cs.last_error = None
         persist = getattr(cr, "_persist", None)
         if callable(persist):
@@ -1638,6 +1656,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "events": self.server.frontend.move_layer(
                     sid, int(body.get("from_index") or 0), int(body.get("to_index") or 0),
                 )})
+            if self.path == "/api/undo":
+                return self._json({"ok": True, "events": self.server.frontend.undo(sid)})
+            if self.path == "/api/redo":
+                return self._json({"ok": True, "events": self.server.frontend.redo(sid)})
         except Exception as e:
             logger.exception("Web request failed")
             return self._json({"ok": False, "events": [{"type": "error", "content": str(e)}]}, 500)
