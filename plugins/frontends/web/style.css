@@ -152,11 +152,11 @@ body.share-landing.missing .share-landing-meta { text-align: center; }
 .controls-toggle:disabled:hover { color: var(--muted); border-color: var(--line); background: #151923; }
 .controls-toggle svg { width: 20px; height: 20px; }
 
-.controls-drawer { min-height: 0; display: flex; flex-direction: column; background: rgba(8,9,13,.94); overflow: hidden; }
+.controls-drawer { min-height: 0; display: flex; flex-direction: column; background: rgba(8,9,13,.94); overflow-y: auto; }
 .chat.controls-open .messages { display: none; }
 .controls-drawer:not(.open) { display: none; }
 .controls-drawer[hidden] { display: none; }
-.controls-panel { padding: 14px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.controls-panel { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
 .controls-panel.loading { cursor: wait; opacity: .85; pointer-events: none; }
 
 .ctl-panel { display: grid; gap: 7px; padding: 8px 9px; border: 1px solid rgba(255,255,255,.14); background: rgba(13,17,25,.58); transition: border-color 160ms ease, background 160ms ease, opacity 160ms ease; }
@@ -340,3 +340,34 @@ body.account-body { background:
   #signedOut form { flex-direction: column; }
   #signedOut button.primary-btn { width: 100%; }
 }
+
+/* ----- Chat input wrapper (hosts the magnifier icon for search mode) ----- */
+.chat-input-wrap { position: relative; min-width: 0; display: flex; align-items: center; }
+.chat-input-wrap input { width: 100%; transition: padding-left 200ms ease, background 200ms ease, border-color 200ms ease; }
+.chat-input-search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--accent); pointer-events: none; opacity: 0; transition: opacity 200ms ease; }
+.composer.search-mode .chat-input-search-icon { opacity: 1; }
+.composer.search-mode .chat-input-wrap input { padding-left: 36px; background: rgba(127,200,212,.08); border-color: rgba(127,200,212,.45); }
+.composer.search-mode .chat-input-wrap input:focus { border-color: var(--accent); background: rgba(127,200,212,.14); }
+
+/* ----- Skill search results -----
+   Shares the drawer's scroll container with .controls-panel so a query
+   doesn't introduce a second scrollbar. The teal tint matches the
+   search-mode input fill, signaling "these belong to the search bar
+   above," and the bottom border becomes the divider between search
+   results and the layer controls below. */
+.skill-search-results { padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid rgba(127,200,212,.28); }
+.skill-search-results[hidden] { display: none; }
+.skill-search-empty { padding: 16px; text-align: center; color: var(--muted); font-size: 13px; }
+.skill-result-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid rgba(127,200,212,.28); background: rgba(127,200,212,.06); transition: border-color 160ms ease, background 160ms ease; }
+.skill-result-row:hover { border-color: rgba(127,200,212,.55); background: rgba(127,200,212,.12); }
+.skill-result-meta { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; min-width: 0; }
+.skill-result-kind { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; padding: 3px 7px; border: 1px solid var(--line); color: var(--muted); align-self: start; }
+.skill-result-kind.kind-background { color: #b5e0a8; border-color: rgba(181,224,168,.4); }
+.skill-result-kind.kind-filter { color: #e0d2a8; border-color: rgba(224,210,168,.4); }
+.skill-result-kind.kind-object { color: #c8a0d8; border-color: rgba(200,160,216,.4); }
+.skill-result-text { min-width: 0; }
+.skill-result-name { font-weight: 600; color: var(--text); font-size: 13px; }
+.skill-result-desc { font-size: 11px; color: var(--muted); line-height: 1.4; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skill-result-add { font-size: 12px; font-weight: 700; padding: 6px 12px; border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; transition: background 160ms ease, color 160ms ease; }
+.skill-result-add:hover { background: var(--accent); color: #08090d; }
+.skill-result-add:disabled { opacity: .5; cursor: default; }

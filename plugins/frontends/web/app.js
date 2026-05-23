@@ -48,6 +48,7 @@ const archivePanel = document.querySelector("#archivePanel");
 const controlsPanel = document.querySelector("#controlsPanel");
 const controlsDrawer = document.querySelector("#controlsDrawer");
 const controlsToggle = document.querySelector("#controlsToggle");
+const skillSearchResults = document.querySelector("#skillSearchResults");
 const emptyState = document.querySelector("#emptyState");
 const NEAR_BOTTOM_PX = 80;
 const GALLERY_PAGE = 18;
@@ -59,6 +60,30 @@ const pendingControls = new Map();
 let typingEl = null;
 let agentBusy = false;
 const sendBtn = form.querySelector("button:not(#controlsToggle)");
+
+// ----- Skill search (used when the controls drawer is open) -----
+let skillsCache = [];            // last /api/skills response
+let skillsLoading = null;        // in-flight fetch promise (dedup)
+let inSearchMode = false;        // drawer open → input is a skill picker
+const CHAT_PLACEHOLDER = input.placeholder;
+const SEARCH_PLACEHOLDER = "Search skills...";
+
+function refreshControlsToggleEnabled() {
+  // Single source of truth for the gear's disabled state. Two gates:
+  //   - no canvas yet → no controls to edit
+  //   - agent is busy with a chat turn → don't let user race against it
+  const hasImage = showcase.classList.contains("has-image");
+  if (!hasImage) {
+    controlsToggle.disabled = true;
+    controlsToggle.title = "Create a canvas before editing controls";
+  } else if (agentBusy) {
+    controlsToggle.disabled = true;
+    controlsToggle.title = "Wait for the current turn to finish";
+  } else {
+    controlsToggle.disabled = false;
+    controlsToggle.title = "Controls";
+  }
+}
 const atBottom = () => messages.scrollHeight - messages.scrollTop - messages.clientHeight < NEAR_BOTTOM_PX;
 const bottom = (force = false) => {
   const stick = force || atBottom();
@@ -210,10 +235,11 @@ function setBusy(on) {
     sendBtn.disabled = false;
   } else {
     sendBtn.type = "submit";
-    sendBtn.textContent = "Send";
+    sendBtn.textContent = inSearchMode ? "Search" : "Send";
     sendBtn.classList.remove("cancel");
-    sendBtn.disabled = false;
+    sendBtn.disabled = inSearchMode && !input.value.trim();
   }
+  refreshControlsToggleEnabled();
 }
 sendBtn.addEventListener("click", async e => {
   if (!agentBusy) return; // let submit handler run
@@ -560,16 +586,14 @@ function renderControlsPanel(panels) {
   const hasImage = showcase.classList.contains("has-image");
   if (!hasImage) {
     controlsToggle.hidden = false;
-    controlsToggle.disabled = true;
-    controlsToggle.title = "Create a canvas before editing controls";
+    refreshControlsToggleEnabled();
     controlsDrawer.hidden = true;
     setControlsOpen(false);
     controlsPanel.innerHTML = "";
     return;
   }
   controlsToggle.hidden = false;
-  controlsToggle.disabled = false;
-  controlsToggle.title = "Controls";
+  refreshControlsToggleEnabled();
   controlsDrawer.hidden = false;
   const movableLayers = currentControlsPanels.filter(p => Number(p.chain_index) > 0).length;
   const stack = [...currentControlsPanels].sort((a, b) => b.chain_index - a.chain_index).map(p => renderPanel(p, movableLayers)).join("");
@@ -584,7 +608,148 @@ function setControlsOpen(open) {
   controlsToggle.classList.toggle("open", open);
   chat.classList.toggle("controls-open", open);
   localStorage.sbDrawerOpen = open ? "1" : "0";
+  setSearchMode(!!open);
 }
+
+// ----- Skill search wiring -----
+async function loadSkills() {
+  if (skillsLoading) return skillsLoading;
+  skillsLoading = (async () => {
+    try {
+      const r = await get("/api/skills");
+      skillsCache = Array.isArray(r.skills) ? r.skills : [];
+    } catch { skillsCache = []; }
+    finally { skillsLoading = null; }
+  })();
+  return skillsLoading;
+}
+
+function tokenize(s) {
+  // Split on whitespace, underscores, and case boundaries (e.g. mandelbrotExplorer
+  // → ["mandelbrot", "explorer"]). Lowercase. Drops empties.
+  return String(s || "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[\s_\-./,]+/)
+    .filter(Boolean);
+}
+
+function rankSkills(query) {
+  const qTokens = tokenize(query);
+  if (!qTokens.length) return [];
+  const out = [];
+  for (const s of skillsCache) {
+    const nameTokens = new Set([...tokenize(s.slug), ...tokenize(s.name)]);
+    const descTokens = new Set(tokenize(s.description));
+    let score = 0;
+    let allMatched = true;
+    for (const qt of qTokens) {
+      let best = 0;
+      for (const ht of nameTokens) {
+        if (ht === qt) { best = 3; break; }
+        if (ht.startsWith(qt)) best = Math.max(best, 2);
+      }
+      if (best < 3) {
+        for (const ht of descTokens) {
+          if (ht.startsWith(qt)) { best = Math.max(best, 1); break; }
+        }
+      }
+      if (best === 0) { allMatched = false; break; }
+      score += best;
+    }
+    if (allMatched) out.push({ skill: s, score });
+  }
+  out.sort((a, b) => b.score - a.score || a.skill.slug.length - b.skill.slug.length || a.skill.slug.localeCompare(b.skill.slug));
+  // Cap kept tight (10) because results render inline with the controls
+  // panel in a shared scroll container — a long tail would push layer
+  // controls off-screen. Keep typing to narrow if 10 isn't enough.
+  return out.slice(0, 10).map(r => r.skill);
+}
+
+function renderSearchResults(rows, { semantic = false } = {}) {
+  if (!rows || !rows.length) {
+    skillSearchResults.innerHTML = `<div class="skill-search-empty">${semantic ? "No semantic matches." : "No matches. Click <strong>Search</strong> for a semantic lookup."}</div>`;
+    return;
+  }
+  const html = rows.map(s => {
+    const kind = esc(s.kind || "");
+    const name = esc(s.name || s.slug || "");
+    const slug = esc(s.slug || "");
+    const desc = esc((s.description || "").trim().split(/\s+/).slice(0, 28).join(" "));
+    return `<div class="skill-result-row" data-slug="${slug}">
+      <div class="skill-result-meta">
+        <span class="skill-result-kind kind-${kind}">${kind}</span>
+        <div class="skill-result-text">
+          <div class="skill-result-name">${name}</div>
+          <div class="skill-result-desc">${desc}</div>
+        </div>
+      </div>
+      <button type="button" class="skill-result-add" data-slug="${slug}" title="Add to canvas">+ Add</button>
+    </div>`;
+  }).join("");
+  skillSearchResults.innerHTML = html;
+}
+
+function showSearchResults(show) {
+  // Results coexist with the layer controls in one scroll zone — only the
+  // results visibility toggles. The controls stay visible underneath.
+  skillSearchResults.hidden = !show;
+}
+
+function updateSearch() {
+  if (!inSearchMode) return;
+  const q = input.value.trim();
+  // Enable the Search button only when the agent isn't busy and there's a query
+  if (!agentBusy) sendBtn.disabled = !q;
+  if (!q) { showSearchResults(false); return; }
+  renderSearchResults(rankSkills(q));
+  showSearchResults(true);
+}
+
+function setSearchMode(on) {
+  inSearchMode = !!on;
+  if (on) {
+    input.placeholder = SEARCH_PLACEHOLDER;
+    if (!agentBusy) {
+      sendBtn.textContent = "Search";
+      sendBtn.disabled = !input.value.trim();
+    }
+    loadSkills().then(() => updateSearch());
+  } else {
+    input.placeholder = CHAT_PLACEHOLDER;
+    if (!agentBusy) {
+      sendBtn.textContent = "Send";
+      sendBtn.disabled = false;
+    }
+    showSearchResults(false);
+  }
+  form.classList.toggle("search-mode", inSearchMode);
+}
+
+input.addEventListener("input", updateSearch);
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && inSearchMode) {
+    e.preventDefault();
+    input.value = "";
+    setControlsOpen(false);
+  }
+});
+
+skillSearchResults.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".skill-result-add");
+  if (!btn) return;
+  const slug = btn.dataset.slug;
+  if (!slug) return;
+  btn.disabled = true;
+  try {
+    const r = await post("/api/add_layer", { skill_slug: slug });
+    render(r.events || []);
+  } catch (err) {
+    add("error", err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
 function renderPanel(panel, movableLayers = 0) {
   const widgets = (panel.schema || []).map(spec => renderWidget(panel, spec)).join("");
   const empty = widgets || `<div class="ctl-empty">No controls for this layer.</div>`;
@@ -811,6 +976,21 @@ form.addEventListener("submit", async e => {
   if (agentBusy) return;
   const text = input.value.trim();
   if (!text) return;
+  if (inSearchMode) {
+    // Semantic fallback — call /api/search_skills and render its results
+    // alongside (in place of) the prefix-rank hits.
+    sendBtn.disabled = true;
+    try {
+      const r = await post("/api/search_skills", { query: text, limit: 10 });
+      renderSearchResults(r.skills || [], { semantic: true });
+      showSearchResults(true);
+    } catch (err) {
+      add("error", err.message);
+    } finally {
+      sendBtn.disabled = !input.value.trim();
+    }
+    return;
+  }
   input.value = "";
   add("user", text);
   bottom(true);

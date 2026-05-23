@@ -884,6 +884,54 @@ class WebFrontend(BaseFrontend):
     def palettes_payload(self) -> list[dict]:
         return [p.to_dict() for p in list_palettes()]
 
+    def skills_payload(self) -> list[dict]:
+        """All registered skills, lightweight shape for the search picker."""
+        registry = getattr(self.runtime, "skill_registry", None)
+        if registry is None:
+            return []
+        return [
+            {"slug": s.slug, "name": s.name, "description": s.description, "kind": s.kind}
+            for s in registry.list_records(include_hidden=False)
+        ]
+
+    def add_layer(self, session_id: str, skill_slug: str) -> list[dict]:
+        """Add a skill layer to the canvas. Background skills replace any existing background."""
+        skill_slug = (skill_slug or "").strip()
+        registry = getattr(self.runtime, "skill_registry", None)
+        skill = registry.get_record(skill_slug) if registry and skill_slug else None
+        if skill is None:
+            return [{"type": "error", "content": f"Unknown skill: {skill_slug!r}"}]
+        key = self.session_key(session_id)
+        events = self._new_canvas_action_events(
+            key, "add_layer",
+            {"skill_slug": skill_slug, "kind": skill.kind, "controls": {}},
+            fail_prefix="Add layer failed",
+        )
+        if events and events[0].get("type") == "hero_image" and not (events[0].get("canvas") or {}).get("path"):
+            return [{"type": "canvas_reset"}]
+        return events
+
+    def search_skills_semantic(self, query: str, limit: int = 30) -> list[dict]:
+        """Embedding-based skill search, used by the 'Search' button as a power-user fallback."""
+        from plugins.tools.tool_search_skills import search_skills_semantic as _semantic
+        query = (query or "").strip()
+        if not query:
+            return []
+        db = getattr(self.runtime, "db", None)
+        embedder = (getattr(self.runtime, "services", {}) or {}).get("text_embedder")
+        if db is None or embedder is None:
+            return []
+        try:
+            rows = _semantic(db, embedder, query, limit=limit, config=getattr(self.runtime, "config", {}) or {})
+        except Exception:
+            logger.exception("semantic skill search failed for query=%r", query)
+            return []
+        return [
+            {"slug": r.get("slug", ""), "name": r.get("name", ""),
+             "description": r.get("description", ""), "kind": r.get("kind", "")}
+            for r in rows
+        ]
+
     def set_palette(self, session_id: str, palette_id: str) -> list[dict]:
         key = self.session_key(session_id)
         return self._new_canvas_action_events(
@@ -1481,6 +1529,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "canvas": self.server.frontend.canvas_payload(sid)})
         if path == "/api/palettes":
             return self._json({"ok": True, "palettes": self.server.frontend.palettes_payload()})
+        if path == "/api/skills":
+            return self._json({"ok": True, "skills": self.server.frontend.skills_payload()})
         if path == "/api/gallery":
             qs = parse_qs(parsed.query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
             try: limit = max(1, min(96, int(qs.get("limit", ["24"])[0])))
@@ -1660,6 +1710,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "events": self.server.frontend.undo(sid)})
             if self.path == "/api/redo":
                 return self._json({"ok": True, "events": self.server.frontend.redo(sid)})
+            if self.path == "/api/add_layer":
+                return self._json({"ok": True, "events": self.server.frontend.add_layer(sid, str(body.get("skill_slug") or ""))})
+            if self.path == "/api/search_skills":
+                return self._json({"ok": True, "skills": self.server.frontend.search_skills_semantic(
+                    str(body.get("query") or ""), limit=int(body.get("limit") or 30),
+                )})
         except Exception as e:
             logger.exception("Web request failed")
             return self._json({"ok": False, "events": [{"type": "error", "content": str(e)}]}, 500)

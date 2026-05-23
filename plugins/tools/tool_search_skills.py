@@ -41,25 +41,18 @@ class SearchSkills(BaseTool):
             return ToolResult.failed("database not available")
         if embedder is None:
             return ToolResult.failed("text_embedder service unavailable")
-        q = _norm(embedder.encode(query))
-        if q is None:
-            return ToolResult.failed("text_embedder returned no embedding")
+        limit = max(1, min(10, int(kwargs.get("limit") or 5)))
         try:
-            rows = _rows(db)
+            skills = search_skills_semantic(
+                db, embedder, query,
+                limit=limit,
+                built_in_only=bool(kwargs.get("built_in_only")),
+                config=getattr(context, "config", {}) or {},
+            )
         except sqlite3.OperationalError:
             return ToolResult.failed("skill embeddings are not ready yet; let embed_skills run first")
-        limit = max(1, min(10, int(kwargs.get("limit") or 5)))
-        candidates = []
-        for row in rows:
-            if kwargs.get("built_in_only") and not _built_in(row.get("path")):
-                continue
-            vec = np.frombuffer(row["embedding"], dtype="<f4")
-            if vec.size == q.size:
-                pop = _popularity(row)
-                candidates.append(({k: row[k] for k in ("slug", "name", "description", "kind")}, float(np.dot(q, vec)), pop, dict(row)))
-        scored = _blend(candidates, getattr(context, "config", {}) or {})
-        scored.sort(key=lambda item: item[1], reverse=True)
-        skills = [meta for meta, _ in scored[:limit]]
+        except ValueError as e:
+            return ToolResult.failed(str(e))
         if not skills:
             return ToolResult.failed(f"No skills found for query '{query}'.")
         lines = [f"Top skill matches for '{query}':"]
@@ -70,6 +63,44 @@ class SearchSkills(BaseTool):
             lines.append(f"- {s['slug']} ({s.get('kind') or '?'}) — {desc}" if desc else f"- {s['slug']} ({s.get('kind') or '?'})")
         lines.append("Call read_skill(slug=...) to see the full source of any promising hit.")
         return ToolResult(data={"skills": skills}, llm_summary="\n".join(lines))
+
+
+def search_skills_semantic(db, embedder, query: str, *, limit: int = 5, built_in_only: bool = False, config: dict | None = None) -> list[dict]:
+    """Run the embedding-based skill search and return ranked skill dicts.
+
+    Shared by the agent tool above and the web frontend's manual 'Search'
+    button (plugins/frontends/frontend_web.py). Raises ``sqlite3.OperationalError``
+    if the embeddings table is missing, ``ValueError`` if the embedder
+    returns no vector.
+    """
+    q = _norm(embedder.encode(query))
+    if q is None:
+        raise ValueError("text_embedder returned no embedding")
+    rows = _rows(db)
+    # skill_embeddings is keyed on path, not slug — the same skill registered
+    # under two paths (e.g. a built-in + a sandbox override, or duplicates
+    # across plugin dirs) shows up twice. Keep one row per slug, preferring
+    # the highest cosine match so search quality isn't degraded.
+    best_by_slug: dict[str, tuple[dict, float, float, dict]] = {}
+    for row in rows:
+        if built_in_only and not _built_in(row.get("path")):
+            continue
+        vec = np.frombuffer(row["embedding"], dtype="<f4")
+        if vec.size != q.size:
+            continue
+        cos = float(np.dot(q, vec))
+        slug = row["slug"]
+        existing = best_by_slug.get(slug)
+        if existing is None or cos > existing[1]:
+            best_by_slug[slug] = (
+                {k: row[k] for k in ("slug", "name", "description", "kind")},
+                cos,
+                _popularity(row),
+                dict(row),
+            )
+    scored = _blend(list(best_by_slug.values()), config or {})
+    scored.sort(key=lambda item: item[1], reverse=True)
+    return [meta for meta, _ in scored[: max(1, int(limit))]]
 
 
 def _rows(db):

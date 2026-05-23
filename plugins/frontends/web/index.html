@@ -37,6 +37,7 @@
         </div>
       </div>
       <div id="controlsDrawer" class="controls-drawer" hidden>
+        <div id="skillSearchResults" class="skill-search-results" hidden></div>
         <div id="controlsPanel" class="controls-panel"></div>
       </div>
       <form id="chatForm" class="composer">
@@ -45,8 +46,13 @@
             <path fill="currentColor" d="M19.14,12.94a7.49,7.49,0,0,0,.05-.94,7.49,7.49,0,0,0-.05-.94l2.03-1.58a.5.5,0,0,0,.12-.64l-1.92-3.32a.5.5,0,0,0-.61-.22l-2.39,.96a7.03,7.03,0,0,0-1.62-.94l-.36-2.54A.5.5,0,0,0,13.9,2h-3.84a.5.5,0,0,0-.5.42L9.2,4.96a7.03,7.03,0,0,0-1.62.94l-2.39-.96a.5.5,0,0,0-.61.22L2.66,8.48a.5.5,0,0,0,.12.64L4.81,10.7a7.49,7.49,0,0,0,0,1.88L2.78,14.16a.5.5,0,0,0-.12.64l1.92,3.32a.5.5,0,0,0,.61.22l2.39-.96a7.03,7.03,0,0,0,1.62.94l.36,2.54a.5.5,0,0,0,.5.42h3.84a.5.5,0,0,0,.5-.42l.36-2.54a7.03,7.03,0,0,0,1.62-.94l2.39.96a.5.5,0,0,0,.61-.22l1.92-3.32a.5.5,0,0,0-.12-.64ZM12,15.5A3.5,3.5,0,1,1,15.5,12,3.5,3.5,0,0,1,12,15.5Z"/>
           </svg>
         </button>
-        <input id="chatInput" autocomplete="off" placeholder="Ask Second Brain..." />
-        <button>Send</button>
+        <div class="chat-input-wrap">
+          <svg class="chat-input-search-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path fill="currentColor" d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/>
+          </svg>
+          <input id="chatInput" autocomplete="off" placeholder="Ask Second Brain..." />
+        </div>
+        <button id="sendBtn">Send</button>
       </form>
       <div id="outOfMessages"
            style="position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(8,9,13,.55);backdrop-filter:blur(2px);z-index:5;padding:24px;">

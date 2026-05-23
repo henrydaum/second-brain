@@ -131,6 +131,24 @@ def test_search_skills_ranks_vectors_and_filters_hidden():
         _cleanup(db, path)
 
 
+def test_search_skills_dedupes_same_slug_across_paths():
+	"""skill_embeddings is keyed on path — two paths sharing one slug must collapse to one result."""
+	db, path = _fresh_db("dedup_slug")
+	try:
+		db.write_outputs("skill_embeddings", [
+			# Same slug, different paths — exactly what triggers the duplication bug.
+			_row("plugins/skills/skill_voronoi.py", "voronoi_visage", "Voronoi Visage", "An abstract portrait.", [1, 0]),
+			_row("art_kit/skill_voronoi.py", "voronoi_visage", "Voronoi Visage", "An abstract portrait.", [1, 0]),
+			_row("c.py", "flame", "Flame", "Fire sparks", [0, 1]),
+		])
+		result = SearchSkills().run(SimpleNamespace(db=db, services={"text_embedder": FakeEmbedder()}), query="ocean", limit=10)
+		assert result.success
+		slugs = [s["slug"] for s in result.data["skills"]]
+		assert slugs.count("voronoi_visage") == 1, f"expected 1 voronoi_visage, got {slugs}"
+	finally:
+		_cleanup(db, path)
+
+
 def test_search_skills_accepts_slug_alias():
     db, path = _fresh_db("alias")
     try:

@@ -266,6 +266,128 @@ def test_delete_background_clears_canvas_in_web_frontend(monkeypatch, renders_di
 		_cleanup_db(db, dbpath)
 
 
+# =================================================================
+# Skill search picker — backend endpoints
+# =================================================================
+
+def _make_frontend_with_skills(db, skill_specs):
+	"""Frontend with a registry whose list_records() returns the given specs."""
+	cr = CanvasRuntime(db=db)
+
+	class _SkillReg:
+		def __init__(self, specs):
+			self._by_slug = {s["slug"]: SimpleNamespace(**s) for s in specs}
+		def get(self, slug):
+			return self._by_slug.get(slug)
+		def get_record(self, slug):
+			return self._by_slug.get(slug)
+		def list_records(self, include_hidden=False):
+			return list(self._by_slug.values())
+
+	specs = [{**s, "controls": s.get("controls", []), "code": ""} for s in skill_specs]
+	runtime = SimpleNamespace(
+		services={"canvas": cr},
+		db=db,
+		skill_registry=_SkillReg(specs),
+		config={},
+		sessions={},
+		get_session=lambda key: None,
+	)
+	fe = fw.WebFrontend.__new__(fw.WebFrontend)
+	fe.runtime = runtime
+	fe.config = {}
+	import threading
+	fe._lock = threading.RLock()
+	fe._outbox = {}
+	return fe
+
+
+def test_skills_payload_returns_registered_skills():
+	"""skills_payload exposes the registry as a lightweight list."""
+	db, dbpath = _fresh_db("skills_payload")
+	try:
+		fe = _make_frontend_with_skills(db, [
+			{"slug": "mandelbrot_explorer", "name": "Mandelbrot Explorer", "description": "Zoomable fractal.", "kind": "background"},
+			{"slug": "generate_mandelbrot", "name": "Generate Mandelbrot", "description": "Static fractal.", "kind": "background"},
+			{"slug": "swirl", "name": "Swirl", "description": "Twists pixels.", "kind": "filter"},
+		])
+		out = fe.skills_payload()
+		assert {r["slug"] for r in out} == {"mandelbrot_explorer", "generate_mandelbrot", "swirl"}
+		row = next(r for r in out if r["slug"] == "swirl")
+		assert row == {"slug": "swirl", "name": "Swirl", "description": "Twists pixels.", "kind": "filter"}
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_add_layer_via_search_endpoint(monkeypatch, renders_dir):
+	"""POST /api/add_layer adds the chosen skill and re-renders."""
+	_install_fake_run_skill(monkeypatch)
+	db, dbpath = _fresh_db("add_layer_endpoint")
+	try:
+		fe = _make_frontend_with_skills(db, [
+			{"slug": "fractal", "name": "Fractal", "description": "", "kind": "background"},
+			{"slug": "grain", "name": "Grain", "description": "", "kind": "filter"},
+		])
+		# Establish a canvas via the runtime (matches _seed_canvas).
+		key = fe.session_key("sess1")
+		cr = fe.runtime.services["canvas"]
+		cs = cr.for_session(key)
+		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {}})
+
+		events = fe.add_layer("sess1", "grain")
+
+		assert events and events[0]["type"] == "hero_image"
+		assert [layer["slug"] for layer in cs.canvas.layers] == ["fractal", "grain"]
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_add_layer_unknown_slug_returns_error():
+	"""POST /api/add_layer with an unknown slug doesn't mutate canvas."""
+	db, dbpath = _fresh_db("add_layer_unknown")
+	try:
+		fe = _make_frontend_with_skills(db, [
+			{"slug": "fractal", "name": "Fractal", "description": "", "kind": "background"},
+		])
+		key = fe.session_key("sess1")
+		cr = fe.runtime.services["canvas"]
+		cs = cr.for_session(key)
+		before = list(cs.canvas.layers)
+
+		events = fe.add_layer("sess1", "nonexistent_skill")
+
+		assert events[0]["type"] == "error"
+		assert "nonexistent_skill" in events[0]["content"]
+		assert cs.canvas.layers == before
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_add_layer_background_replaces_existing(monkeypatch, renders_dir):
+	"""Adding a background skill replaces the existing background (Canvas.push_chain_entry semantics)."""
+	_install_fake_run_skill(monkeypatch)
+	db, dbpath = _fresh_db("add_layer_bg_replace")
+	try:
+		fe = _make_frontend_with_skills(db, [
+			{"slug": "fractal", "name": "Fractal", "description": "", "kind": "background"},
+			{"slug": "voronoi", "name": "Voronoi", "description": "", "kind": "background"},
+			{"slug": "grain", "name": "Grain", "description": "", "kind": "filter"},
+		])
+		key = fe.session_key("sess1")
+		cr = fe.runtime.services["canvas"]
+		cs = cr.for_session(key)
+		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {}})
+		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "grain", "kind": "filter", "controls": {}})
+
+		# Swapping background should drop the grain layer too (background reset clears chain).
+		events = fe.add_layer("sess1", "voronoi")
+
+		assert events and events[0]["type"] == "hero_image"
+		assert [layer["slug"] for layer in cs.canvas.layers] == ["voronoi"]
+	finally:
+		_cleanup_db(db, dbpath)
+
+
 def _fresh_db(name: str) -> tuple[Database, Path]:
 	"""Project-local DB."""
 	path = Path(f".share_e2e_db_{name}.sqlite")
