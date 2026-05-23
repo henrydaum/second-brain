@@ -69,14 +69,10 @@ const CHAT_PLACEHOLDER = input.placeholder;
 const SEARCH_PLACEHOLDER = "Search skills...";
 
 function refreshControlsToggleEnabled() {
-  // Single source of truth for the gear's disabled state. Two gates:
-  //   - no canvas yet → no controls to edit
-  //   - agent is busy with a chat turn → don't let user race against it
-  const hasImage = showcase.classList.contains("has-image");
-  if (!hasImage) {
-    controlsToggle.disabled = true;
-    controlsToggle.title = "Create a canvas before editing controls";
-  } else if (agentBusy) {
+  // Single source of truth for the gear's disabled state. The only gate is
+  // agentBusy — the drawer is useful even on a blank canvas because the
+  // search input adds a background skill directly.
+  if (agentBusy) {
     controlsToggle.disabled = true;
     controlsToggle.title = "Wait for the current turn to finish";
   } else {
@@ -584,17 +580,17 @@ function paletteSwatchHtml(p, activeId) {
 function renderControlsPanel(panels) {
   currentControlsPanels = panels || [];
   const hasImage = showcase.classList.contains("has-image");
-  if (!hasImage) {
-    controlsToggle.hidden = false;
-    refreshControlsToggleEnabled();
-    controlsDrawer.hidden = true;
-    setControlsOpen(false);
-    controlsPanel.innerHTML = "";
-    return;
-  }
   controlsToggle.hidden = false;
   refreshControlsToggleEnabled();
   controlsDrawer.hidden = false;
+  if (!hasImage) {
+    // Blank canvas: no layers to edit and no Regenerate button to offer,
+    // but the search input above is fully functional — let the user add
+    // their first background from here.
+    controlsPanel.innerHTML = `<div class="ctl-empty-canvas">No layers yet — search below to add skills to the canvas,\n or use the gear icon to go back.</div>`;
+    if (localStorage.sbDrawerOpen === "1") setControlsOpen(true);
+    return;
+  }
   const movableLayers = currentControlsPanels.filter(p => Number(p.chain_index) > 0).length;
   const stack = [...currentControlsPanels].sort((a, b) => b.chain_index - a.chain_index).map(p => renderPanel(p, movableLayers)).join("");
   const dirty = pendingControls.size ? " dirty" : "";

@@ -156,7 +156,7 @@ body.share-landing.missing .share-landing-meta { text-align: center; }
 .chat.controls-open .messages { display: none; }
 .controls-drawer:not(.open) { display: none; }
 .controls-drawer[hidden] { display: none; }
-.controls-panel { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.controls-panel { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
 .controls-panel.loading { cursor: wait; opacity: .85; pointer-events: none; }
 
 .ctl-panel { display: grid; gap: 7px; padding: 8px 9px; border: 1px solid rgba(255,255,255,.14); background: rgba(13,17,25,.58); transition: border-color 160ms ease, background 160ms ease, opacity 160ms ease; }
@@ -358,6 +358,7 @@ body.account-body { background:
 .skill-search-results { padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
 .skill-search-results[hidden] { display: none; }
 .skill-search-empty { padding: 16px; text-align: center; color: var(--muted); font-size: 13px; }
+.ctl-empty-canvas { padding: 14px 16px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.5; flex: 1; display: flex; align-items: center; justify-content: center; }
 .skill-result-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid rgba(127,200,212,.28); background: rgba(127,200,212,.06); transition: border-color 160ms ease, background 160ms ease; }
 .skill-result-row:hover { border-color: rgba(127,200,212,.55); background: rgba(127,200,212,.12); }
 .skill-result-meta { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; min-width: 0; }
