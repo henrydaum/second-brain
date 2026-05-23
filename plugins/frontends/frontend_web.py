@@ -889,22 +889,6 @@ class WebFrontend(BaseFrontend):
             key, "set_palette", {"palette_id": palette_id}, fail_prefix="Palette replay failed",
         )
 
-    def set_skill_control(self, session_id: str, chain_index: int, name: str, value, _action: str = "") -> list[dict]:
-        """Update one control on a chain entry, then re-render.
-
-        The legacy ``_action`` parameter (e.g. "randomize") is intentionally
-        unused under the new canvas system; reseed-on-control belongs in a
-        future renderer hook, not here. Kept in the signature so the HTTP
-        handler can keep passing it positionally without changes.
-        """
-        del _action  # intentionally unused; see docstring
-        key = self.session_key(session_id)
-        return self._new_canvas_action_events(
-            key, "set_control",
-            {"chain_index": chain_index, "name": name, "value": value},
-            fail_prefix="Control replay failed",
-        )
-
     def delete_layer(self, session_id: str, chain_index: int) -> list[dict]:
         """Remove one entry from the chain and re-render. Deleting index 0 clears the canvas."""
         key = self.session_key(session_id)
@@ -1020,20 +1004,43 @@ class WebFrontend(BaseFrontend):
         )
         return []
 
-    def regenerate(self, session_id: str) -> list[dict]:
-        """Re-render the current chain with a fresh seed."""
+    def regenerate(self, session_id: str, controls: list[dict] | None = None, force_new_seed: bool = False) -> list[dict]:
+        """Apply staged controls, then re-render the current chain."""
         key = self.session_key(session_id)
-        # Record the intent on the canvas state machine (history event), then
-        # render with force_new_seed=True so the renderer mints a fresh seed
-        # and writes a new file into the pool folder.
         cr = self._canvas_runtime()
         if cr is None:
             return [{"type": "error", "content": "Regenerate failed: canvas runtime not available"}]
         cs = cr.for_session(key)
         if not cs.canvas.layers:
             return []
-        cr.handle_action(cs.canvas_id, "regenerate", {})
-        snap = self._new_canvas_snap(key, force_new_seed=True)
+        staged = []
+        for item in controls or []:
+            if not isinstance(item, dict):
+                return [{"type": "error", "content": "Regenerate failed: staged control must be an object"}]
+            try:
+                chain_index = int(item.get("chain_index") or 0)
+            except (TypeError, ValueError):
+                return [{"type": "error", "content": "Regenerate failed: staged control chain_index must be an integer"}]
+            if not (0 <= chain_index < len(cs.canvas.layers)):
+                return [{"type": "error", "content": f"Regenerate failed: chain_index {chain_index} out of range"}]
+            name = str(item.get("name") or "")
+            if not name:
+                return [{"type": "error", "content": "Regenerate failed: staged control requires a name"}]
+            staged.append({"chain_index": chain_index, "name": name, "value": item.get("value")})
+        for item in staged:
+            result = cr.handle_action(cs.canvas_id, "set_control", {
+                "chain_index": item["chain_index"],
+                "name": item["name"],
+                "value": item.get("value"),
+            })
+            if not getattr(result, "ok", True):
+                msg = result.error.message if getattr(result, "error", None) else (result.message or "control update failed")
+                return [{"type": "error", "content": f"Regenerate failed: {msg}"}]
+        result = cr.handle_action(cs.canvas_id, "regenerate", {"force_new_seed": bool(force_new_seed)})
+        if not getattr(result, "ok", True):
+            msg = result.error.message if getattr(result, "error", None) else (result.message or "regenerate failed")
+            return [{"type": "error", "content": f"Regenerate failed: {msg}"}]
+        snap = self._new_canvas_snap(key, force_new_seed=bool(force_new_seed))
         if not snap or not snap.get("path"):
             return [{"type": "error", "content": "Regenerate failed: render produced no image"}]
         return [{
@@ -1599,14 +1606,10 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path == "/api/download":
                 return self._json({"ok": True, "events": self.server.frontend.download(sid)})
             if self.path == "/api/regenerate":
-                return self._json({"ok": True, "events": self.server.frontend.regenerate(sid)})
-            if self.path == "/api/skill_control":
-                return self._json({"ok": True, "events": self.server.frontend.set_skill_control(
+                return self._json({"ok": True, "events": self.server.frontend.regenerate(
                     sid,
-                    int(body.get("chain_index") or 0),
-                    str(body.get("name") or ""),
-                    body.get("value"),
-                    str(body.get("action") or ""),
+                    controls=list(body.get("controls") or []),
+                    force_new_seed=bool(body.get("force_new_seed")),
                 )})
             if self.path == "/api/layer_delete":
                 return self._json({"ok": True, "events": self.server.frontend.delete_layer(sid, int(body.get("chain_index") or 0))})

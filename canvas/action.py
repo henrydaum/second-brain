@@ -105,18 +105,13 @@ class CanvasClear(CanvasAction):
 
 
 class CanvasRegenerate(CanvasAction):
-	"""Mark the canvas as wanting fresh seeds on next render.
-
-	Bare bones: no actual reseed yet. The intent is recorded as a
-	structured event on ``CanvasState.history``; a future renderer will
-	scan for ``needs_new_seed=True`` events newer than its last render.
-	"""
+	"""Record a render request, optionally asking for a fresh seed."""
 
 	action_type = "regenerate"
 
 	def execute(self) -> ActionResult:
 		"""Record the regenerate intent."""
-		ev = self.cs.event("regenerate", needs_new_seed=True)
+		ev = self.cs.event("regenerate", needs_new_seed=bool(self.content.get("force_new_seed")))
 		return ActionResult(True, self.action_type, events=[ev])
 
 

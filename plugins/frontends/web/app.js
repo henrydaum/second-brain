@@ -13,6 +13,7 @@ const sid = localStorage.sbDemoSession || (localStorage.sbDemoSession = crypto.r
 // send cookies automatically). Tomorrow's real auth replaces this.
 document.cookie = `sb_sid=${encodeURIComponent(sid)}; path=/; SameSite=Strict; max-age=31536000`;
 const messages = document.querySelector("#messages");
+const chat = document.querySelector(".chat");
 const form = document.querySelector("#chatForm");
 const input = document.querySelector("#chatInput");
 const showcase = document.querySelector(".showcase");
@@ -54,10 +55,10 @@ let palettesCache = [];
 let currentControlsPanels = [];
 const galleryPages = {shared: 1, archive: 1};
 let activeTab = "shared";
-const controlDebounce = new Map();
+const pendingControls = new Map();
 let typingEl = null;
 let agentBusy = false;
-const sendBtn = form.querySelector("button");
+const sendBtn = form.querySelector("button:not(#controlsToggle)");
 const atBottom = () => messages.scrollHeight - messages.scrollTop - messages.clientHeight < NEAR_BOTTOM_PX;
 const bottom = (force = false) => {
   const stick = force || atBottom();
@@ -180,9 +181,10 @@ function render(events) {
     else if (ev.type === "paywall") openPaywall(ev);
     else if (ev.type === "account") setAccount(ev.account);
     else if (ev.type === "hero_image") {
+      clearPendingControls(false);
       setCanvas(ev.canvas || {url: ev.url, name: ev.name});
     }
-    else if (ev.type === "canvas_reset") { setCanvas(null); }
+    else if (ev.type === "canvas_reset") { clearPendingControls(false); setCanvas(null); }
     else if (ev.type === "shared") { loadGallery(1); }
     else if (ev.type === "share_link") {
       setShareLink(ev.url, ev.qr_url);
@@ -557,30 +559,38 @@ function renderControlsPanel(panels) {
   currentControlsPanels = panels || [];
   const hasImage = showcase.classList.contains("has-image");
   if (!hasImage) {
-    controlsToggle.hidden = true;
+    controlsToggle.hidden = false;
+    controlsToggle.disabled = true;
+    controlsToggle.title = "Create a canvas before editing controls";
     controlsDrawer.hidden = true;
-    controlsDrawer.classList.remove("open");
-    controlsToggle.classList.remove("open");
+    setControlsOpen(false);
     controlsPanel.innerHTML = "";
     return;
   }
   controlsToggle.hidden = false;
+  controlsToggle.disabled = false;
+  controlsToggle.title = "Controls";
   controlsDrawer.hidden = false;
   const movableLayers = currentControlsPanels.filter(p => Number(p.chain_index) > 0).length;
   const stack = [...currentControlsPanels].sort((a, b) => b.chain_index - a.chain_index).map(p => renderPanel(p, movableLayers)).join("");
-  const regen = `<section class="ctl-actions"><button type="button" class="ctl-global" id="globalRegenerate" title="Re-render the current chain with new seeds"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3Z"/></svg><span>Regenerate</span></button></section>`;
+  const dirty = pendingControls.size ? " dirty" : "";
+  const regen = `<section class="ctl-actions"><button type="button" class="ctl-global${dirty}" id="globalRegenerate" title="Apply staged controls with the current seed"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3Z"/></svg><span>Regenerate</span></button><button type="button" class="ctl-global${dirty}" id="globalRandomize" title="Apply staged controls with a fresh seed"><span>Randomize</span></button></section>`;
   controlsPanel.innerHTML = stack + regen;
+  if (localStorage.sbDrawerOpen === "1") setControlsOpen(true);
+  markDirtyControls();
 }
 function setControlsOpen(open) {
   controlsDrawer.classList.toggle("open", open);
   controlsToggle.classList.toggle("open", open);
+  chat.classList.toggle("controls-open", open);
   localStorage.sbDrawerOpen = open ? "1" : "0";
 }
 function renderPanel(panel, movableLayers = 0) {
   const widgets = (panel.schema || []).map(spec => renderWidget(panel, spec)).join("");
   const empty = widgets || `<div class="ctl-empty">No controls for this layer.</div>`;
   const draggable = Number(panel.chain_index) > 0 && movableLayers > 1;
-  return `<section class="ctl-panel" data-chain="${panel.chain_index}" data-kind="${esc(panel.kind || "")}" data-skill="${esc(panel.skill_name)}">
+  const dirty = [...pendingControls.keys()].some(k => k.startsWith(`${panel.chain_index}.`)) ? " dirty" : "";
+  return `<section class="ctl-panel${dirty}" data-chain="${panel.chain_index}" data-kind="${esc(panel.kind || "")}" data-skill="${esc(panel.skill_name)}">
     <header class="ctl-head ${draggable ? "" : "no-drag"}">
       ${draggable ? `<button type="button" class="ctl-drag" title="Drag to reorder" aria-label="Drag layer">⋮⋮</button>` : ""}
       <div><strong>${esc(panel.skill_name)}</strong><span>Layer ${panel.chain_index}${panel.kind ? ` · ${esc(panel.kind)}` : ""}</span></div>
@@ -590,20 +600,10 @@ function renderPanel(panel, movableLayers = 0) {
   </section>`;
 }
 controlsToggle.addEventListener("click", () => setControlsOpen(!controlsDrawer.classList.contains("open")));
-showcase.addEventListener("pointerdown", e => {
-  if (!controlsDrawer.classList.contains("open")) return;
-  if (controlsDrawer.contains(e.target) || controlsToggle.contains(e.target)) return;
-  setControlsOpen(false);
-});
 controlsPanel.addEventListener("click", async e => {
-  if (e.target.id === "globalRegenerate") {
-    const btn = e.target;
-    if (btn.disabled) return;
-    btn.disabled = true;
-    loaderTicketStart();
-    try { render((await post("/api/regenerate")).events); }
-    catch (err) { add("error", err.message); }
-    finally { btn.disabled = false; loaderTicketEnd(); }
+  const global = e.target.closest("#globalRegenerate,#globalRandomize");
+  if (global) {
+    applyControls(global.id === "globalRandomize", global);
     return;
   }
   const target = e.target;
@@ -622,11 +622,16 @@ controlsPanel.addEventListener("click", async e => {
   if (sw) {
     const row = sw.closest(".ctl-palette");
     const chain = +row.dataset.chain;
-    postControl({chain_index: chain, name: "palette", value: sw.dataset.palette});
+    row.querySelectorAll(".swatch").forEach(b => {
+      b.classList.toggle("active", b === sw);
+      b.setAttribute("aria-pressed", b === sw ? "true" : "false");
+    });
+    stageControl({chain_index: chain, name: "palette", value: sw.dataset.palette});
     return;
   }
   if (target.matches(".ctl-seg")) {
-    postControl({chain_index: +target.dataset.chain, name: target.dataset.name, value: JSON.parse(target.dataset.value)});
+    target.parentElement.querySelectorAll(".ctl-seg").forEach(b => b.classList.toggle("active", b === target));
+    stageControl({chain_index: +target.dataset.chain, name: target.dataset.name, value: JSON.parse(target.dataset.value)});
     return;
   }
   const pan = target.closest(".ctl-pan");
@@ -642,8 +647,8 @@ controlsPanel.addEventListener("click", async e => {
     const cc = pan.querySelector(".ctl-pan-c"); if (cc) cc.textContent = `${fmtNum(x)}, ${fmtNum(y)}`;
     const ci = +pan.dataset.chain;
     const xp = pan.dataset.xparam, yp = pan.dataset.yparam;
-    if (arrow.dataset.dir === "left" || arrow.dataset.dir === "right") postControl({chain_index: ci, name: xp, value: x});
-    else postControl({chain_index: ci, name: yp, value: y});
+    if (arrow.dataset.dir === "left" || arrow.dataset.dir === "right") stageControl({chain_index: ci, name: xp, value: x});
+    else stageControl({chain_index: ci, name: yp, value: y});
     return;
   }
 });
@@ -688,12 +693,10 @@ controlsPanel.addEventListener("input", e => {
   if (el.dataset.kind === "slider") {
     const valEl = el.parentElement.querySelector(".ctl-val");
     if (valEl) valEl.textContent = fmtNum(+el.value);
-    debounceControl(`${chain}.${el.dataset.name}`, () => postControl({chain_index: chain, name: el.dataset.name, value: +el.value}));
+    stageControl({chain_index: chain, name: el.dataset.name, value: +el.value});
   }
   if (el.dataset.kind === "text") {
-    debounceControl(`${chain}.${el.dataset.name}`,
-      () => postControl({chain_index: chain, name: el.dataset.name, value: el.value}),
-      350);
+    stageControl({chain_index: chain, name: el.dataset.name, value: el.value});
   }
 });
 controlsPanel.addEventListener("change", e => {
@@ -701,7 +704,7 @@ controlsPanel.addEventListener("change", e => {
   const chain = +el.dataset.chain;
   if (Number.isNaN(chain)) return;
   if (el.dataset.kind === "bool") {
-    postControl({chain_index: chain, name: el.dataset.name, value: el.checked});
+    stageControl({chain_index: chain, name: el.dataset.name, value: el.checked});
   }
 });
 
@@ -709,15 +712,15 @@ function renderWidget(panel, spec) {
   const v = panel.values || {};
   const id = `c${panel.chain_index}-${spec.name}`;
   if (spec.type === "slider") {
-    const cur = v[spec.name] ?? spec.default;
+    const cur = stagedValue(panel.chain_index, spec.name, v[spec.name] ?? spec.default);
     return `<label class="ctl-row" for="${id}"><span>${esc(spec.label)}</span><input id="${id}" type="range" min="${spec.min}" max="${spec.max}" step="${spec.step}" value="${cur}" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-kind="slider"><span class="ctl-val">${fmtNum(cur)}</span></label>`;
   }
   if (spec.type === "bool") {
-    const on = !!(v[spec.name] ?? spec.default);
+    const on = !!stagedValue(panel.chain_index, spec.name, v[spec.name] ?? spec.default);
     return `<label class="ctl-row"><span>${esc(spec.label)}</span><input type="checkbox" ${on?"checked":""} data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-kind="bool"></label>`;
   }
   if (spec.type === "enum") {
-    const cur = v[spec.name] ?? spec.default;
+    const cur = stagedValue(panel.chain_index, spec.name, v[spec.name] ?? spec.default);
     const opts = (spec.options || []).map(o =>
       `<button type="button" class="${JSON.stringify(o.value)===JSON.stringify(cur)?"ctl-seg active":"ctl-seg"}" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-kind="enum" data-value='${esc(JSON.stringify(o.value))}'>${esc(o.label)}</button>`
     ).join("");
@@ -725,17 +728,17 @@ function renderWidget(panel, spec) {
   }
   if (spec.type === "pan") {
     const xp = spec.x_param, yp = spec.y_param;
-    const xv = v[xp] ?? spec.x_default ?? 0;
-    const yv = v[yp] ?? spec.y_default ?? 0;
+    const xv = stagedValue(panel.chain_index, xp, v[xp] ?? spec.x_default ?? 0);
+    const yv = stagedValue(panel.chain_index, yp, v[yp] ?? spec.y_default ?? 0);
     return `<div class="ctl-row"><span>${esc(spec.label)}</span><div class="ctl-pan" data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-xparam="${esc(xp)}" data-yparam="${esc(yp)}" data-step="${spec.step}" data-x="${xv}" data-y="${yv}"><button type="button" class="ctl-pan-up" data-dir="up">↑</button><button type="button" class="ctl-pan-left" data-dir="left">←</button><span class="ctl-pan-c">${fmtNum(xv)}, ${fmtNum(yv)}</span><button type="button" class="ctl-pan-right" data-dir="right">→</button><button type="button" class="ctl-pan-down" data-dir="down">↓</button></div></div>`;
   }
   if (spec.type === "text") {
-    const cur = v[spec.name] ?? spec.default ?? "";
+    const cur = stagedValue(panel.chain_index, spec.name, v[spec.name] ?? spec.default ?? "");
     const ph = spec.placeholder ? ` placeholder="${esc(spec.placeholder)}"` : "";
     return `<label class="ctl-row" for="${id}"><span>${esc(spec.label)}</span><input id="${id}" type="text" value="${esc(cur)}" maxlength="${spec.max_length || 120}"${ph} data-chain="${panel.chain_index}" data-name="${esc(spec.name)}" data-kind="text"></label>`;
   }
   if (spec.type === "palette") {
-    const cur = v.palette || "";
+    const cur = stagedValue(panel.chain_index, "palette", v.palette || "");
     const swatches = palettesCache.map(p => paletteSwatchHtml(p, cur)).join("");
     return `<div class="ctl-row ctl-palette" data-chain="${panel.chain_index}" data-name="palette"><span>${esc(spec.label || "Palette")}</span><div class="ctl-palette-strip">${swatches}</div></div>`;
   }
@@ -746,17 +749,47 @@ function fmtNum(v) {
   const abs = Math.abs(v);
   return abs >= 100 ? v.toFixed(0) : abs >= 10 ? v.toFixed(1) : v.toFixed(2);
 }
-function debounceControl(key, fn, ms = 160) {
-  clearTimeout(controlDebounce.get(key));
-  controlDebounce.set(key, setTimeout(fn, ms));
+function controlKey(chain, name) { return `${chain}.${name}`; }
+function stagedValue(chain, name, fallback) {
+  return pendingControls.get(controlKey(chain, name))?.value ?? fallback;
 }
-async function postControl(body) {
+function currentControlValue(chain, name) {
+  const panel = currentControlsPanels.find(p => +p.chain_index === +chain);
+  return panel?.values ? panel.values[name] : undefined;
+}
+function stageControl(body) {
+  const key = controlKey(body.chain_index, body.name);
+  if (JSON.stringify(currentControlValue(body.chain_index, body.name)) === JSON.stringify(body.value)) pendingControls.delete(key);
+  else pendingControls.set(key, body);
+  markDirtyControls();
+}
+function markDirtyControls() {
+  controlsPanel.querySelectorAll(".ctl-panel").forEach(p =>
+    p.classList.toggle("dirty", [...pendingControls.keys()].some(k => k.startsWith(`${p.dataset.chain}.`))));
+  controlsPanel.querySelectorAll(".ctl-global").forEach(b => b.classList.toggle("dirty", pendingControls.size > 0));
+}
+function clearPendingControls(refresh = true) {
+  pendingControls.clear();
+  if (refresh) renderControlsPanel(currentControlsPanels);
+  else markDirtyControls();
+}
+async function applyControls(forceNewSeed, btn) {
   if (controlsPanel.classList.contains("loading")) return;
   controlsPanel.classList.add("loading");
+  controlsPanel.querySelectorAll(".ctl-global").forEach(b => b.disabled = true);
   loaderTicketStart();
-  try { render((await post("/api/skill_control", body)).events); }
+  try {
+    const r = await post("/api/regenerate", {controls: [...pendingControls.values()], force_new_seed: !!forceNewSeed});
+    if (!(r.events || []).some(ev => ev.type === "error")) clearPendingControls(false);
+    render(r.events);
+  }
   catch (err) { add("error", err.message); }
-  finally { controlsPanel.classList.remove("loading"); loaderTicketEnd(); }
+  finally {
+    controlsPanel.classList.remove("loading");
+    controlsPanel.querySelectorAll(".ctl-global").forEach(b => b.disabled = false);
+    if (btn) btn.disabled = false;
+    loaderTicketEnd();
+  }
 }
 function esc(x) { return String(x ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 

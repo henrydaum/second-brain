@@ -136,11 +136,14 @@ def test_clear_resets_chain_but_preserves_palette_and_size():
 
 
 def test_regenerate_records_intent_in_state_history():
-	"""regenerate emits an event with needs_new_seed=True on CanvasState.history."""
+	"""regenerate records whether the caller requested a fresh seed."""
 	cs = CanvasState()
 	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background"})
 	cs.enact("regenerate", {})
-	assert any(e.get("type") == "regenerate" and e.get("needs_new_seed") for e in cs.history)
+	assert cs.history[-1]["type"] == "regenerate"
+	assert cs.history[-1]["needs_new_seed"] is False
+	cs.enact("regenerate", {"force_new_seed": True})
+	assert cs.history[-1]["needs_new_seed"] is True
 
 
 def test_unknown_action_type_returns_failure_not_exception():

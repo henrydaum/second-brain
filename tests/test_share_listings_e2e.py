@@ -28,11 +28,14 @@ import plugins.frontends.frontend_web as fw
 
 def _install_fake_run_skill(monkeypatch):
 	"""Stub the skill subprocess: write a tiny PNG instead."""
+	calls = []
 	def fake_run_skill(skill, *, params, palette, size, seed, input_image_path, output_image_path, **kwargs):
+		calls.append({"slug": getattr(skill, "slug", ""), "params": params, "seed": seed})
 		Path(output_image_path).parent.mkdir(parents=True, exist_ok=True)
 		Image.new("RGBA", (4, 4), (16, 32, 64, 255)).save(output_image_path, format="PNG")
 		return {"ok": True}
 	monkeypatch.setattr(canvas_render, "run_skill", fake_run_skill)
+	return calls
 
 
 @pytest.fixture
@@ -135,6 +138,70 @@ def test_move_layer_reorders_and_rejects_background_displacement(monkeypatch, re
 		assert [l["slug"] for l in cr.for_session(key).canvas.layers] == ["base", "b", "a"]
 		bad = fe.move_layer("sess1", 1, 0)
 		assert bad[0]["type"] == "error"
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_regenerate_applies_staged_controls_without_new_seed(monkeypatch, renders_dir):
+	_install_fake_run_skill(monkeypatch)
+	seeds = iter([111, 222])
+	monkeypatch.setattr(canvas_render, "_mint_seed", lambda: next(seeds))
+	db, dbpath = _fresh_db("regen_staged")
+	try:
+		fe = _make_frontend(db)
+		key, cs = _seed_canvas(fe)
+		assert fe.regenerate("sess1", force_new_seed=True)[0]["type"] == "hero_image"
+		old_seed = cs.render_seed
+
+		events = fe.regenerate("sess1", controls=[
+			{"chain_index": 0, "name": "zoom", "value": 2.5},
+			{"chain_index": 0, "name": "label", "value": "kept"},
+		])
+
+		assert events[0]["type"] == "hero_image"
+		assert cs.canvas.layers[0]["controls"] == {"zoom": 2.5, "label": "kept"}
+		assert cs.render_seed == old_seed
+		assert fw._canvas_payload_full(fe.runtime, key, {"chain": cs.canvas.layers})["controls_panels"][0]["values"]["zoom"] == 2.5
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_randomize_forces_new_seed(monkeypatch, renders_dir):
+	_install_fake_run_skill(monkeypatch)
+	seeds = iter([111, 222])
+	monkeypatch.setattr(canvas_render, "_mint_seed", lambda: next(seeds))
+	db, dbpath = _fresh_db("regen_randomize")
+	try:
+		fe = _make_frontend(db)
+		_, cs = _seed_canvas(fe)
+		fe.regenerate("sess1", force_new_seed=True)
+		old_seed = cs.render_seed
+		events = fe.regenerate("sess1", force_new_seed=True)
+		assert events[0]["type"] == "hero_image"
+		assert cs.render_seed == 222
+		assert cs.render_seed != old_seed
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_regenerate_invalid_staged_control_skips_render(monkeypatch, renders_dir):
+	calls = _install_fake_run_skill(monkeypatch)
+	seeds = iter([111, 222])
+	monkeypatch.setattr(canvas_render, "_mint_seed", lambda: next(seeds))
+	db, dbpath = _fresh_db("regen_invalid_control")
+	try:
+		fe = _make_frontend(db)
+		_, cs = _seed_canvas(fe)
+		fe.regenerate("sess1", force_new_seed=True)
+		calls.clear()
+		old_seed = cs.render_seed
+
+		events = fe.regenerate("sess1", controls=[{"chain_index": 99, "name": "zoom", "value": 2}])
+
+		assert events[0]["type"] == "error"
+		assert calls == []
+		assert cs.render_seed == old_seed
+		assert "zoom" not in cs.canvas.layers[0].get("controls", {})
 	finally:
 		_cleanup_db(db, dbpath)
 
