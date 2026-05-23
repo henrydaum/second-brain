@@ -69,10 +69,8 @@ def renders_dir(request, monkeypatch):
 		shutil.rmtree(target, ignore_errors=True)
 	target.mkdir(parents=True, exist_ok=True)
 	monkeypatch.setattr(canvas_render, "RENDERS_DIR", target)
-	monkeypatch.setattr(canvas_render, "PREFIX_CACHE_DIR", target.with_name(target.name + "_prefix"))
 	yield target
 	shutil.rmtree(target, ignore_errors=True)
-	shutil.rmtree(canvas_render.PREFIX_CACHE_DIR, ignore_errors=True)
 
 
 def _skill(slug: str, kind: str = "background"):

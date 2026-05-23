@@ -46,10 +46,8 @@ def renders_dir(request, monkeypatch):
 		shutil.rmtree(target, ignore_errors=True)
 	target.mkdir(parents=True, exist_ok=True)
 	monkeypatch.setattr(canvas_render, "RENDERS_DIR", target)
-	monkeypatch.setattr(canvas_render, "PREFIX_CACHE_DIR", target.with_name(target.name + "_prefix"))
 	yield target
 	shutil.rmtree(target, ignore_errors=True)
-	shutil.rmtree(canvas_render.PREFIX_CACHE_DIR, ignore_errors=True)
 
 
 def _make_frontend(db, skills=None):
@@ -266,19 +264,6 @@ def test_delete_background_clears_canvas_in_web_frontend(monkeypatch, renders_di
 		assert cs.canvas.layers == []
 	finally:
 		_cleanup_db(db, dbpath)
-
-
-def test_prefix_cache_images_are_not_public(monkeypatch):
-	root = Path(".share_e2e_prefix_public_test")
-	shutil.rmtree(root, ignore_errors=True)
-	monkeypatch.setattr(fw, "DATA_DIR", root)
-	p = root / "canvas_prefix_cache" / "abc" / "1.png"
-	p.parent.mkdir(parents=True, exist_ok=True)
-	Image.new("RGBA", (1, 1), (0, 0, 0, 0)).save(p)
-	try:
-		assert not fw._is_public_image(p)
-	finally:
-		shutil.rmtree(root, ignore_errors=True)
 
 
 def _fresh_db(name: str) -> tuple[Database, Path]:

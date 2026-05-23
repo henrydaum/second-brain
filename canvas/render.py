@@ -13,9 +13,13 @@ identical configurations share a folder, so a directory listing IS the
 seed pool for that exact configuration. Edit a control → new pool_hash
 → new folder; prior renders are preserved untouched.
 
-Bare-bones today: stateless and final-composite-only. No intermediate
-layer cache, no per-session seed lock-in (that lives a layer above when
-we wire frontends/conversations to canvases).
+There is no separate prefix-cache folder. Each intermediate layer's
+output IS the canonical render of the canvas truncated at that layer,
+written to its own pool_hash folder and registered in canvas_pools.
+Rendering a long chain therefore warm-caches every shorter prefix at
+no extra cost — including for other users who construct an identical
+shorter chain later. All renders are public (content-addressed by
+deterministic inputs; no secret to leak).
 """
 
 from __future__ import annotations
@@ -40,7 +44,6 @@ from plugins.skills.helpers.skill_runner import resolve_entry, run_skill
 logger = logging.getLogger("CanvasRender")
 
 RENDERS_DIR = DATA_DIR / "canvas_renders"
-PREFIX_CACHE_DIR = DATA_DIR / "canvas_prefix_cache"
 WEBP_QUALITY = 90
 WEBP_METHOD = 4
 POOL_HASH_LEN = 16
@@ -108,13 +111,17 @@ def existing_seeds(canvas) -> list[int]:
 	return sorted(seeds)
 
 
+def _truncated(canvas, count: int) -> Canvas:
+	return Canvas(size=canvas.size, palette_id=canvas.palette_id, layers=list(canvas.layers[:count]))
+
+
 def _prefix_hash(canvas, count: int) -> str:
-	"""Hash the first ``count`` layers with the same render-determining inputs."""
-	return pool_hash(Canvas(size=canvas.size, palette_id=canvas.palette_id, layers=list(canvas.layers[:count])))
+	"""pool_hash of the canvas truncated to its first ``count`` layers."""
+	return pool_hash(_truncated(canvas, count))
 
 
 def _prefix_path(canvas, count: int, seed: int) -> Path:
-	return PREFIX_CACHE_DIR / _prefix_hash(canvas, count) / f"{int(seed)}.png"
+	return RENDERS_DIR / _prefix_hash(canvas, count) / f"{int(seed)}.webp"
 
 
 # ── render ───────────────────────────────────────────────────────────
@@ -246,21 +253,29 @@ def render_canvas(
 				# overwrite as we go so the last iteration wins.
 				last_warning = run_result if run_result and run_result.get("warning") else None
 				current_input = step_png
+				# Write this layer's output as the canonical render of the canvas
+				# truncated to (idx + 1) layers. Same folder structure as the full
+				# chain — the full chain is just the case where (idx + 1) == N.
+				# Register the truncated config so anyone authoring it directly
+				# gets an instant cache hit and the share/gallery routes resolve it.
 				cache_path = _prefix_path(canvas, idx + 1, seed_val)
 				cache_path.parent.mkdir(parents=True, exist_ok=True)
 				try:
 					with Image.open(step_png) as img:
-						img.save(cache_path, format="PNG")
+						img.save(cache_path, format="WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
 				except Exception:
-					logger.exception("prefix cache write failed prefix=%s seed=%s", cache_path.parent.name, seed_val)
+					logger.exception("render write failed prefix=%s seed=%s", cache_path.parent.name, seed_val)
+				if db is not None:
+					try:
+						from canvas.persistence import save_pool
+						save_pool(db, pool_hash=cache_path.parent.name, state=_truncated(canvas, idx + 1).to_dict())
+					except Exception:
+						logger.exception("save_pool failed for prefix pool=%s", cache_path.parent.name)
 				_emit(on_event, status="layer_finished", layer_index=idx + 1, total_layers=len(canvas.layers), cached_layers=start_idx, skill_slug=str(slug), seed=seed_val, pool_hash=folder.name)
 		except Exception as e:
 			_emit(on_event, status="error", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name, error=str(e))
 			raise
 
-		# current_input is the final PNG produced by the last layer.
-		with Image.open(current_input) as img:
-			img.save(out_path, format="WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
 		_emit(on_event, status="finished", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name)
 
 	logger.info(
@@ -304,12 +319,13 @@ def bus_progress(session_key: str | None, timeout_s: float = 30.0):
 def _longest_prefix(canvas, seed: int, workdir_path: Path) -> tuple[int, Path | None]:
 	for count in range(len(canvas.layers) - 1, 0, -1):
 		p = _prefix_path(canvas, count, seed)
-		if p.is_file():
-			local = workdir_path / f"prefix_{count:02d}.png"
-			try:
-				with Image.open(p) as img:
-					img.save(local, format="PNG")
-				return count, local
-			except Exception:
-				logger.exception("prefix cache read failed path=%s", p)
+		if not p.is_file():
+			continue
+		local = workdir_path / f"prefix_{count:02d}.png"
+		try:
+			with Image.open(p) as img:
+				img.save(local, format="PNG")
+			return count, local
+		except Exception:
+			logger.exception("prefix cache read failed path=%s", p)
 	return 0, None

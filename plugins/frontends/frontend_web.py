@@ -60,7 +60,7 @@ DEFAULT_MAX_IP_CONNECTIONS = 10
 HANDLER_TIMEOUT_S = 300
 
 # Pool-hash filename pattern for /files. Renders are written as
-# `<pool_hash>.png` (and a few legacy `.webp`) under canvas_renders/.
+# `<seed>.webp` under canvas_renders/<pool_hash>/.
 POOL_HASH_FILENAME_RE = re.compile(r"^[0-9a-f]{8,}\.(png|webp|jpg|jpeg)$", re.IGNORECASE)
 CSRF_COOKIE_NAME = "sb_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
