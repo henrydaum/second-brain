@@ -1,10 +1,10 @@
-"""Render a CanvasState's chain to a single WebP file.
+"""Render a CanvasState's chain to a single PNG file.
 
 Folder layout under DATA_DIR/canvas_renders/:
 
     {pool_hash}/
-        {seed}.webp
-        {seed}.webp
+        {seed}.png
+        {seed}.png
         ...
 
 ``pool_hash`` captures the render-determining canvas state — layers
@@ -20,6 +20,14 @@ Rendering a long chain therefore warm-caches every shorter prefix at
 no extra cost — including for other users who construct an identical
 shorter chain later. All renders are public (content-addressed by
 deterministic inputs; no secret to leak).
+
+Format is PNG end-to-end: the sandbox writes a PNG, the renderer
+copies it byte-for-byte into the pool cache (no re-encoding), and the
+next layer reads that same PNG as its input. Lossless throughout, so
+downloads can reuse cached prefixes without fidelity loss. PNG encode
+is faster than WebP for art content and PNG decode is faster than
+WebP — the only cost is ~4× the disk per cached pool, which is bounded
+by the eviction policy.
 """
 
 from __future__ import annotations
@@ -34,8 +42,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from PIL import Image
-
 from canvas.canvas import Canvas
 from canvas.state import CanvasState
 from paths import DATA_DIR
@@ -46,8 +52,10 @@ logger = logging.getLogger("CanvasRender")
 
 RENDERS_DIR = DATA_DIR / "canvas_renders"
 # Mutable so apply_render_config() can override from config.json at bootstrap.
-WEBP_QUALITY = 85
-WEBP_METHOD = 6
+# PIL zlib levels: 0 = no compression, 1 = fastest, 6 = default, 9 = smallest.
+# 1 is ~40% faster than 6 with ~5% larger files — the right default for an
+# interactive render path where wall time matters more than disk.
+PNG_COMPRESS_LEVEL = 1
 POOL_HASH_LEN = 16
 
 
@@ -104,7 +112,7 @@ def existing_seeds(canvas) -> list[int]:
 		return []
 	seeds: list[int] = []
 	for p in folder.iterdir():
-		if p.suffix.lower() != ".webp":
+		if p.suffix.lower() != ".png":
 			continue
 		try:
 			seeds.append(int(p.stem))
@@ -123,7 +131,7 @@ def _prefix_hash(canvas, count: int) -> str:
 
 
 def _prefix_path(canvas, count: int, seed: int) -> Path:
-	return RENDERS_DIR / _prefix_hash(canvas, count) / f"{int(seed)}.webp"
+	return RENDERS_DIR / _prefix_hash(canvas, count) / f"{int(seed)}.png"
 
 
 # ── render ───────────────────────────────────────────────────────────
@@ -156,15 +164,12 @@ def apply_render_config(config: dict | None) -> None:
 	don't need to thread these values through every signature. Missing or
 	out-of-range values fall through to the compiled-in defaults.
 	"""
-	global WEBP_QUALITY, WEBP_METHOD, MEMORY_MAX_MB
+	global PNG_COMPRESS_LEVEL, MEMORY_MAX_MB
 	if not config:
 		return
-	q = config.get("render_webp_quality")
-	if isinstance(q, (int, float)) and 0 <= int(q) <= 100:
-		WEBP_QUALITY = int(q)
-	m = config.get("render_webp_method")
-	if isinstance(m, (int, float)) and 0 <= int(m) <= 6:
-		WEBP_METHOD = int(m)
+	c = config.get("render_png_compress_level")
+	if isinstance(c, (int, float)) and 0 <= int(c) <= 9:
+		PNG_COMPRESS_LEVEL = int(c)
 	cap = config.get("render_memory_max_mb")
 	if isinstance(cap, (int, float)) and int(cap) >= MEMORY_MIN_MB:
 		MEMORY_MAX_MB = int(cap)
@@ -184,9 +189,8 @@ def render_canvas(
 	db: Any = None,
 	on_event: Callable[[dict], None] | None = None,
 	worker_pool: Any = None,
-	also_write_png: bool = False,
 ) -> RenderResult:
-	"""Render ``cs.canvas``'s chain to a WebP file and return the result.
+	"""Render ``cs.canvas``'s chain to a PNG file and return the result.
 
 	Seed selection:
 	  - explicit ``seed=N``: use it as-is.
@@ -235,7 +239,7 @@ def render_canvas(
 	else:
 		# Default path: reuse the most recently modified render in the pool.
 		existing = sorted(
-			(p for p in folder.iterdir() if p.suffix.lower() == ".webp"),
+			(p for p in folder.iterdir() if p.suffix.lower() == ".png"),
 			key=lambda p: p.stat().st_mtime,
 			reverse=True,
 		)
@@ -258,16 +262,8 @@ def render_canvas(
 
 	_persist_seed(db, cs)
 
-	out_path = folder / f"{seed_val}.webp"
-	png_path = folder / f"{seed_val}.png"
-	if also_write_png and png_path.is_file():
-		logger.debug(
-			"render cache HIT (PNG, exact seed) canvas_id=%s pool=%s seed=%d",
-			cs.canvas_id, folder.name, seed_val,
-		)
-		_emit(on_event, status="cached", total_layers=len(canvas.layers), cached_layers=len(canvas.layers), seed=seed_val, pool_hash=folder.name)
-		return RenderResult(png_path, seed_val, folder.name, cache_hit=True)
-	if not also_write_png and out_path.is_file():
+	out_path = folder / f"{seed_val}.png"
+	if out_path.is_file():
 		logger.debug(
 			"render cache HIT (exact seed) canvas_id=%s pool=%s seed=%d",
 			cs.canvas_id, folder.name, seed_val,
@@ -275,18 +271,14 @@ def render_canvas(
 		_emit(on_event, status="cached", total_layers=len(canvas.layers), cached_layers=len(canvas.layers), seed=seed_val, pool_hash=folder.name)
 		return RenderResult(out_path, seed_val, folder.name, cache_hit=True)
 
-	# Cache miss: walk the chain in a temp workdir, then re-encode the
-	# final PNG as WebP into the canonical path. When ``also_write_png``
-	# is set, prefix reuse is skipped so the chain runs end-to-end PNG→PNG
-	# with no WebP round-tripping; the final step PNG is copied to
-	# ``{folder}/{seed}.png`` for a true lossless download.
+	# Cache miss: walk the chain in a temp workdir. Each layer's step PNG
+	# is copied byte-for-byte into its prefix-cache pool — the sandbox
+	# already encoded the PNG, so no re-encoding happens here. Prefix
+	# reuse stays lossless, so download renders can hit the cache safely.
 	fallback_palette = _default_get_palette(canvas.palette_id)
 	with tempfile.TemporaryDirectory(prefix="canvas_render_") as workdir:
 		workdir_path = Path(workdir)
-		if also_write_png:
-			start_idx, current_input = 0, None
-		else:
-			start_idx, current_input = _longest_prefix(canvas, seed_val, workdir_path)
+		start_idx, current_input = _longest_prefix(canvas, seed_val, workdir_path)
 		_emit(on_event, status="started", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name)
 		last_warning: dict | None = None
 		try:
@@ -307,6 +299,7 @@ def render_canvas(
 					input_image_path=current_input,
 					output_image_path=step_png,
 					memory_mb=memory_cap_for_size(int(canvas.size)),
+					png_compress_level=PNG_COMPRESS_LEVEL,
 					worker_pool=worker_pool,
 				)
 				# Only the final layer's warning matters for the user-visible result;
@@ -321,8 +314,9 @@ def render_canvas(
 				cache_path = _prefix_path(canvas, idx + 1, seed_val)
 				cache_path.parent.mkdir(parents=True, exist_ok=True)
 				try:
-					with Image.open(step_png) as img:
-						img.save(cache_path, format="WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
+					# step_png is already a PNG produced by the sandbox; copying
+					# bytes is faster than decode+re-encode and is lossless.
+					shutil.copyfile(step_png, cache_path)
 				except Exception:
 					logger.exception("render write failed prefix=%s seed=%s", cache_path.parent.name, seed_val)
 				if db is not None:
@@ -338,22 +332,12 @@ def render_canvas(
 
 		_emit(on_event, status="finished", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name)
 
-		# Capture the final step PNG before tempdir cleanup. Sibling to the
-		# WebP in the same pool folder; lossless and served by /files like
-		# any other render artifact.
-		if also_write_png and current_input is not None:
-			try:
-				png_path.parent.mkdir(parents=True, exist_ok=True)
-				shutil.copyfile(current_input, png_path)
-			except Exception:
-				logger.exception("PNG copy failed pool=%s seed=%s", folder.name, seed_val)
-
 	logger.info(
 		"render canvas_id=%s pool=%s seed=%d layers=%d",
 		cs.canvas_id, folder.name, seed_val, len(canvas.layers),
 	)
 	return RenderResult(
-		(png_path if also_write_png else out_path), seed_val, folder.name, cache_hit=False,
+		out_path, seed_val, folder.name, cache_hit=False,
 		warning=(last_warning or {}).get("warning"),
 		warning_message=(last_warning or {}).get("warning_message"),
 	)
@@ -387,15 +371,15 @@ def bus_progress(session_key: str | None, timeout_s: float = 30.0):
 
 
 def _longest_prefix(canvas, seed: int, workdir_path: Path) -> tuple[int, Path | None]:
+	"""Return ``(layers_already_done, last_cached_png_path)``.
+
+	The cached prefix file is itself a PNG at the right pool location, so we
+	hand it directly to the next layer as input — no copy, no decode. Skills
+	open the input as read-only via PIL, so reusing the cache path is safe.
+	"""
+	del workdir_path  # kept for signature stability; no longer needed
 	for count in range(len(canvas.layers) - 1, 0, -1):
 		p = _prefix_path(canvas, count, seed)
-		if not p.is_file():
-			continue
-		local = workdir_path / f"prefix_{count:02d}.png"
-		try:
-			with Image.open(p) as img:
-				img.save(local, format="PNG")
-			return count, local
-		except Exception:
-			logger.exception("prefix cache read failed path=%s", p)
+		if p.is_file():
+			return count, p
 	return 0, None

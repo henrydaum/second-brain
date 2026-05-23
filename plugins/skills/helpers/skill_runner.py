@@ -58,6 +58,7 @@ def run_skill(
     output_image_path: Path,
     timeout_s: float = DEFAULT_TIMEOUT_S,
     memory_mb: int = DEFAULT_MEMORY_MB,
+    png_compress_level: int = 1,
     worker_pool=None,
 ) -> dict:
     """Execute a skill in a sandboxed subprocess. Returns a small status dict."""
@@ -103,6 +104,7 @@ def run_skill(
         "input_image_path": str(input_image_path) if input_image_path else None,
         "output_image_path": str(output_image_path),
         "memory_mb": int(memory_mb),
+        "png_compress_level": max(0, min(9, int(png_compress_level))),
     }
 
     entry = Path(__file__).with_name("skill_sandbox_entry.py")

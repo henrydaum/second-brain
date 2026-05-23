@@ -1071,14 +1071,12 @@ class WebFrontend(BaseFrontend):
         return []
 
     def render_for_download(self, session_id: str, scale: float) -> list[dict]:
-        """Render the current canvas at ``current_size * scale`` to PNG and
-        return a download URL. Same composition as the live canvas (seed is
-        reused); the only thing that changes is fidelity.
-
-        PNG bypasses the WebP cache by re-running the chain end-to-end with
-        no prefix reuse — the only path to a truly lossless export. The
-        resulting PNG is cached at ``canvas_renders/{pool_hash}/{seed}.png``,
-        sibling to the WebP, so repeat downloads of the same tier are fast.
+        """Render the current canvas at ``current_size * scale`` and return a
+        PNG download URL. Same composition as the live canvas (seed is
+        reused); the only thing that changes is fidelity. Cache, prefix
+        cache, and download artifact are all the same PNG file — so a
+        Medium-tier download of an already-rendered canvas is instant, and
+        Low/High share intermediate prefixes wherever the chain overlaps.
         """
         key = self.session_key(session_id)
         cr = self._canvas_runtime()
@@ -1111,7 +1109,6 @@ class WebFrontend(BaseFrontend):
                 seed=seed,
                 db=getattr(self.runtime, "db", None),
                 worker_pool=(getattr(self.runtime, "services", None) or {}).get("skill_worker_pool"),
-                also_write_png=True,
             )
         except Exception as e:
             logger.exception("render_for_download failed for session=%s", key)
@@ -1215,7 +1212,7 @@ class WebFrontend(BaseFrontend):
             return None
         # Pick the most-recently-rendered file (stable "current" thumbnail).
         folder = folder_for(snap_canvas)
-        files = sorted(folder.glob("*.webp"), key=lambda p: p.stat().st_mtime, reverse=True)
+        files = sorted(folder.glob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
         if not files:
             return None
         return {
@@ -1632,7 +1629,7 @@ class _Handler(BaseHTTPRequestHandler):
                 img = pool_payload.get("image_path")
                 if img is None:
                     return self.send_error(404)
-                return self._raw_file(Path(img), "image/webp")
+                return self._raw_file(Path(img), "image/png")
             if sub == "qr.png":
                 raw = self.server.frontend.share_qr_png(share_id)
                 if raw is None:

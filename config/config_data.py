@@ -57,15 +57,10 @@ SETTINGS_DATA = [
      {"type": "json_list"}),
 
     # --- Canvas rendering ---
-    ("WebP Quality", "render_webp_quality",
-     "WebP encoder quality (0–100) for cached canvas renders. ~85 is the perceptual sweet spot; lower values shrink files at the cost of subtle artifacts. Download exports always use lossless PNG regardless of this setting.",
-     85,
-     {"type": "slider", "range": (50, 100, 50), "is_float": False}),
-
-    ("WebP Compression Effort", "render_webp_method",
-     "WebP encoder method (0=fastest, 6=slowest/best compression). Renders are content-addressed and cached per pool_hash, so the encode cost is paid once per unique config. 6 typically saves another 5–10% over the default 4.",
-     6,
-     {"type": "slider", "range": (0, 6, 6), "is_float": False}),
+    ("PNG Compression Level", "render_png_compress_level",
+     "zlib compression level for cached canvas renders (0=no compression, 1=fastest, 6=PIL default, 9=smallest). 1 is the right choice for an interactive render path: ~40% faster encoding than 6 with only ~5% larger files. Everything in the render cache is PNG — there is no separate download format.",
+     1,
+     {"type": "slider", "range": (0, 9, 9), "is_float": False}),
 
     ("Render Memory Ceiling (MB)", "render_memory_max_mb",
      "Hard upper bound on memory granted to a single skill subprocess. The renderer scales the cap with canvas size automatically (~1.2 GB at 2048², ~3.8 GB at 4096²); this value clamps that scaling so a runaway High-resolution download can't swap the machine. On an 8 GB system, 3072 leaves headroom for the OS and a browser; raise on systems with more RAM.",

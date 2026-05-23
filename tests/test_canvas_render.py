@@ -136,13 +136,13 @@ def test_pool_hash_changes_when_palette_changes():
 # =================================================================
 
 def test_render_writes_to_pool_hash_folder(monkeypatch, renders_dir):
-	"""Output file lives at {pool_hash}/{seed}.webp under RENDERS_DIR."""
+	"""Output file lives at {pool_hash}/{seed}.png under RENDERS_DIR."""
 	_install_fake_run_skill(monkeypatch)
 	cs = _state_with_background("fractal")
 	skills = {"fractal": _skill("fractal")}
 
 	result = canvas_render.render_canvas(cs, skill_loader=_loader(skills), seed=42)
-	expected = renders_dir / canvas_render.pool_hash(cs.canvas) / "42.webp"
+	expected = renders_dir / canvas_render.pool_hash(cs.canvas) / "42.png"
 	assert result.image_path == expected
 	assert result.image_path.is_file()
 	assert result.seed == 42
@@ -214,12 +214,12 @@ def test_render_raises_on_unknown_skill(monkeypatch, renders_dir):
 # =================================================================
 
 def test_explicit_seed_is_honored(monkeypatch, renders_dir):
-	"""Passing seed=N writes exactly N.webp."""
+	"""Passing seed=N writes exactly N.png."""
 	_install_fake_run_skill(monkeypatch)
 	cs = _state_with_background("fractal")
 	r = canvas_render.render_canvas(cs, skill_loader=_loader({"fractal": _skill("fractal")}), seed=123)
 	assert r.seed == 123
-	assert r.image_path.name == "123.webp"
+	assert r.image_path.name == "123.png"
 
 
 def test_force_new_seed_mints_fresh_each_call(monkeypatch, renders_dir):
@@ -232,7 +232,7 @@ def test_force_new_seed_mints_fresh_each_call(monkeypatch, renders_dir):
 	assert r1.seed != r2.seed
 	assert r1.cache_hit is False and r2.cache_hit is False
 	folder = canvas_render.folder_for(cs.canvas)
-	assert sorted(folder.glob("*.webp")) == sorted({r1.image_path, r2.image_path})
+	assert sorted(folder.glob("*.png")) == sorted({r1.image_path, r2.image_path})
 
 
 def test_render_returns_cached_when_pool_has_files(monkeypatch, renders_dir):

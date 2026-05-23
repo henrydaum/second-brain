@@ -486,7 +486,7 @@ def _run_job(job: dict) -> int:
             final_image = Image.alpha_composite(canvas._image, canvas._committed)
         else:
             final_image = canvas._committed
-        final_image.save(output_image_path, "PNG")
+        final_image.save(output_image_path, "PNG", compress_level=int(job.get("png_compress_level", 1)))
     except BaseException as exc:
         diag = _diagnose(exc, code)
         _write_sidecar(output_image_path, diag)
