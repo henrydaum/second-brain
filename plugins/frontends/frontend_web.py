@@ -1004,7 +1004,7 @@ class WebFrontend(BaseFrontend):
         qr_url = f"/share/{ph}/qr.png"
         return [
             {"type": "share_link", "share_id": ph, "url": share_url, "qr_url": qr_url, "kind": "pool"},
-            {"type": "message", "role": "assistant",
+            {"type": "status",
              "content": f'Shared "{title}" by {artist}.' if title else "Shared."},
         ]
 

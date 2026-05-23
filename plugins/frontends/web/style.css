@@ -93,7 +93,8 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 /* Canvas-actions moved to top-left */
 .canvas-actions { display: none; position: absolute; left: 22px; top: 22px; z-index: 2; gap: 8px; }
 .showcase.has-image .canvas-actions { display: flex; }
-.canvas-actions a, .canvas-actions button { font-weight: 800; backdrop-filter: blur(8px); }
+.canvas-actions a, .canvas-actions button { font-weight: 800; backdrop-filter: blur(8px); width: 38px; height: 38px; padding: 0; display: inline-flex; align-items: center; justify-content: center; color: var(--text); background: rgba(0,0,0,.42); }
+.canvas-actions svg { display: block; }
 .share-panel { position: absolute; left: 22px; top: 72px; z-index: 3; display: grid; gap: 10px; width: min(320px, calc(100% - 44px)); padding: 14px; border: 1px solid rgba(255,255,255,.24); background: rgba(5,7,12,.92); backdrop-filter: blur(16px); }
 .share-panel[hidden] { display: none; }
 .share-panel input { height: 34px; min-width: 0; border: 1px solid var(--line); background: #10141e; color: var(--text); padding: 0 10px; box-sizing: border-box; }

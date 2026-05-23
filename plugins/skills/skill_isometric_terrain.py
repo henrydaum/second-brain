@@ -78,7 +78,7 @@ class IsometricTerrainSkill(BaseSkill):
         # top faces upward (by up to h_scale) and side panels extend down by
         # height, so this stays balanced for both flat and tall scenes.
         ox = s / 2.0
-        oy = s * 0.75
+        oy = s * 0.7
 
         # Sort cells back-to-front: greater r+c -> drawn later.
         cells = [(r, c) for r in range(N) for c in range(N)]
