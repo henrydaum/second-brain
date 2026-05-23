@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import random
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,8 +45,9 @@ from plugins.skills.helpers.skill_runner import resolve_entry, run_skill
 logger = logging.getLogger("CanvasRender")
 
 RENDERS_DIR = DATA_DIR / "canvas_renders"
-WEBP_QUALITY = 90
-WEBP_METHOD = 4
+# Mutable so apply_render_config() can override from config.json at bootstrap.
+WEBP_QUALITY = 85
+WEBP_METHOD = 6
 POOL_HASH_LEN = 16
 
 
@@ -126,6 +128,48 @@ def _prefix_path(canvas, count: int, seed: int) -> Path:
 
 # ── render ───────────────────────────────────────────────────────────
 
+# Skill memory is inherently O(N²) — every working array a skill allocates is
+# sized to the canvas. The subprocess cap in skill_runner is flat by default
+# (DEFAULT_MEMORY_MB = 768), so doubling the canvas (4× the pixels) reliably
+# blows the cap on anything beyond trivial skills. Scale the cap with size:
+# baseline covers the Python+numpy+PIL footprint, the quadratic term covers
+# per-pixel working arrays (sized for a skill carrying ~16 N² float arrays at
+# peak, e.g. fisheye). Clamped to a reasonable absolute ceiling.
+MEMORY_BASELINE_MB = 300
+MEMORY_PER_MEGAPIXEL_MB = 220
+MEMORY_MIN_MB = 768
+# Mutable so apply_render_config() can override from config.json at bootstrap.
+MEMORY_MAX_MB = 3072
+
+
+def memory_cap_for_size(size: int) -> int:
+	"""Recommended subprocess memory cap (MB) for rendering a size×size canvas."""
+	mp = (max(0, int(size)) / 1024.0) ** 2  # "megapixels" measured in 1024² units
+	scaled = MEMORY_BASELINE_MB + int(round(MEMORY_PER_MEGAPIXEL_MB * mp))
+	return max(MEMORY_MIN_MB, min(MEMORY_MAX_MB, scaled))
+
+
+def apply_render_config(config: dict | None) -> None:
+	"""Override the render-tuning module globals from a loaded config dict.
+
+	Called once during app bootstrap so that ``render_canvas`` and its callers
+	don't need to thread these values through every signature. Missing or
+	out-of-range values fall through to the compiled-in defaults.
+	"""
+	global WEBP_QUALITY, WEBP_METHOD, MEMORY_MAX_MB
+	if not config:
+		return
+	q = config.get("render_webp_quality")
+	if isinstance(q, (int, float)) and 0 <= int(q) <= 100:
+		WEBP_QUALITY = int(q)
+	m = config.get("render_webp_method")
+	if isinstance(m, (int, float)) and 0 <= int(m) <= 6:
+		WEBP_METHOD = int(m)
+	cap = config.get("render_memory_max_mb")
+	if isinstance(cap, (int, float)) and int(cap) >= MEMORY_MIN_MB:
+		MEMORY_MAX_MB = int(cap)
+
+
 def _mint_seed() -> int:
 	"""Random 31-bit seed (matches the existing convention in skill_cache)."""
 	return random.randint(1, 2_147_483_647)
@@ -140,6 +184,7 @@ def render_canvas(
 	db: Any = None,
 	on_event: Callable[[dict], None] | None = None,
 	worker_pool: Any = None,
+	also_write_png: bool = False,
 ) -> RenderResult:
 	"""Render ``cs.canvas``'s chain to a WebP file and return the result.
 
@@ -214,7 +259,15 @@ def render_canvas(
 	_persist_seed(db, cs)
 
 	out_path = folder / f"{seed_val}.webp"
-	if out_path.is_file():
+	png_path = folder / f"{seed_val}.png"
+	if also_write_png and png_path.is_file():
+		logger.debug(
+			"render cache HIT (PNG, exact seed) canvas_id=%s pool=%s seed=%d",
+			cs.canvas_id, folder.name, seed_val,
+		)
+		_emit(on_event, status="cached", total_layers=len(canvas.layers), cached_layers=len(canvas.layers), seed=seed_val, pool_hash=folder.name)
+		return RenderResult(png_path, seed_val, folder.name, cache_hit=True)
+	if not also_write_png and out_path.is_file():
 		logger.debug(
 			"render cache HIT (exact seed) canvas_id=%s pool=%s seed=%d",
 			cs.canvas_id, folder.name, seed_val,
@@ -223,11 +276,17 @@ def render_canvas(
 		return RenderResult(out_path, seed_val, folder.name, cache_hit=True)
 
 	# Cache miss: walk the chain in a temp workdir, then re-encode the
-	# final PNG as WebP into the canonical path.
+	# final PNG as WebP into the canonical path. When ``also_write_png``
+	# is set, prefix reuse is skipped so the chain runs end-to-end PNG→PNG
+	# with no WebP round-tripping; the final step PNG is copied to
+	# ``{folder}/{seed}.png`` for a true lossless download.
 	fallback_palette = _default_get_palette(canvas.palette_id)
 	with tempfile.TemporaryDirectory(prefix="canvas_render_") as workdir:
 		workdir_path = Path(workdir)
-		start_idx, current_input = _longest_prefix(canvas, seed_val, workdir_path)
+		if also_write_png:
+			start_idx, current_input = 0, None
+		else:
+			start_idx, current_input = _longest_prefix(canvas, seed_val, workdir_path)
 		_emit(on_event, status="started", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name)
 		last_warning: dict | None = None
 		try:
@@ -247,6 +306,7 @@ def render_canvas(
 					seed=int(seed_val),
 					input_image_path=current_input,
 					output_image_path=step_png,
+					memory_mb=memory_cap_for_size(int(canvas.size)),
 					worker_pool=worker_pool,
 				)
 				# Only the final layer's warning matters for the user-visible result;
@@ -278,12 +338,22 @@ def render_canvas(
 
 		_emit(on_event, status="finished", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name)
 
+		# Capture the final step PNG before tempdir cleanup. Sibling to the
+		# WebP in the same pool folder; lossless and served by /files like
+		# any other render artifact.
+		if also_write_png and current_input is not None:
+			try:
+				png_path.parent.mkdir(parents=True, exist_ok=True)
+				shutil.copyfile(current_input, png_path)
+			except Exception:
+				logger.exception("PNG copy failed pool=%s seed=%s", folder.name, seed_val)
+
 	logger.info(
 		"render canvas_id=%s pool=%s seed=%d layers=%d",
 		cs.canvas_id, folder.name, seed_val, len(canvas.layers),
 	)
 	return RenderResult(
-		out_path, seed_val, folder.name, cache_hit=False,
+		(png_path if also_write_png else out_path), seed_val, folder.name, cache_hit=False,
 		warning=(last_warning or {}).get("warning"),
 		warning_message=(last_warning or {}).get("warning_message"),
 	)

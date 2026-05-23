@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from plugins.helpers import stripe_client, web_auth
 
 from canvas import actions as canvas_actions
+from canvas.canvas import Canvas
 from canvas.render import pool_hash as _pool_hash, render_canvas as _new_render_canvas
 from canvas.state import CanvasState
 from config import config_manager
@@ -1069,6 +1070,74 @@ class WebFrontend(BaseFrontend):
         )
         return []
 
+    def render_for_download(self, session_id: str, scale: float) -> list[dict]:
+        """Render the current canvas at ``current_size * scale`` to PNG and
+        return a download URL. Same composition as the live canvas (seed is
+        reused); the only thing that changes is fidelity.
+
+        PNG bypasses the WebP cache by re-running the chain end-to-end with
+        no prefix reuse — the only path to a truly lossless export. The
+        resulting PNG is cached at ``canvas_renders/{pool_hash}/{seed}.png``,
+        sibling to the WebP, so repeat downloads of the same tier are fast.
+        """
+        key = self.session_key(session_id)
+        cr = self._canvas_runtime()
+        skill_registry = getattr(self.runtime, "skill_registry", None)
+        if cr is None or skill_registry is None:
+            return [{"type": "error", "content": "Download failed: canvas runtime not available"}]
+        cs = cr.for_session(key)
+        if not cs.canvas.layers:
+            return [{"type": "error", "content": "Nothing to download — canvas is empty."}]
+        try:
+            scale_f = float(scale)
+        except (TypeError, ValueError):
+            return [{"type": "error", "content": "Download failed: invalid scale"}]
+        if not (scale_f > 0):
+            return [{"type": "error", "content": "Download failed: invalid scale"}]
+        # Bypass Canvas.set_size's MIN/MAX bounds by constructing directly —
+        # download-time exports may exceed the interactive canvas cap.
+        target = max(64, min(4096, int(round(int(cs.canvas.size) * scale_f))))
+        scaled_canvas = Canvas(
+            size=target,
+            palette_id=cs.canvas.palette_id,
+            layers=list(cs.canvas.layers),
+        )
+        scaled_state = CanvasState(canvas=scaled_canvas)
+        seed = getattr(cs, "render_seed", None)
+        try:
+            rr = _new_render_canvas(
+                scaled_state,
+                skill_loader=skill_registry.get_record,
+                seed=seed,
+                db=getattr(self.runtime, "db", None),
+                worker_pool=(getattr(self.runtime, "services", None) or {}).get("skill_worker_pool"),
+                also_write_png=True,
+            )
+        except Exception as e:
+            logger.exception("render_for_download failed for session=%s", key)
+            return [{"type": "error", "content": f"Download failed: {e}"}]
+        png_path = Path(rr.image_path)
+        # Record the download against the scaled pool_hash (matches what was
+        # actually exported), reusing the existing user-action machinery.
+        db = getattr(self.runtime, "db", None)
+        if db is not None:
+            try:
+                owner = self._anon_user_id(session_id, "")
+                canvas_actions.record_user_action(
+                    db, user_id=owner, pool_hash=rr.pool_hash, action="download",
+                    layers=scaled_canvas.layers, image_path=str(png_path),
+                )
+            except Exception:
+                logger.exception("record download action failed")
+        return [{
+            "type": "download_ready",
+            "url": _file_url(png_path),
+            "name": png_path.name,
+            "width": target,
+            "height": target,
+            "pool_hash": rr.pool_hash,
+        }]
+
     def regenerate(self, session_id: str, controls: list[dict] | None = None, force_new_seed: bool = False) -> list[dict]:
         """Apply staged controls, then re-render the current chain."""
         key = self.session_key(session_id)
@@ -1694,6 +1763,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "events": self.server.frontend.set_palette(sid, str(body.get("palette_id") or ""))})
             if self.path == "/api/download":
                 return self._json({"ok": True, "events": self.server.frontend.download(sid)})
+            if self.path == "/api/render_for_download":
+                return self._json({"ok": True, "events": self.server.frontend.render_for_download(
+                    sid, float(body.get("scale") or 1.0),
+                )})
             if self.path == "/api/regenerate":
                 return self._json({"ok": True, "events": self.server.frontend.regenerate(
                     sid,

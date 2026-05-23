@@ -79,9 +79,9 @@
         <div id="renderMeterLabel" class="render-meter-label">Rendering...</div>
       </div>
       <div class="canvas-actions">
-        <a id="downloadImage" href="#" download title="Download current image" aria-label="Download">
+        <button id="downloadImage" type="button" title="Download current image" aria-label="Download">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4 V16"/><path d="M7 11 L12 16 L17 11"/><path d="M5 20 H19"/></svg>
-        </a>
+        </button>
         <button id="saveImage" type="button" title="Save to your private archive" aria-label="Save">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3 H18 V21 L12 16.5 L6 21 Z"/></svg>
         </button>
@@ -110,6 +110,21 @@
           <input id="shareArtist" placeholder="Your name">
           <button id="shareConfirm" type="button" class="sp-publish-btn">Publish</button>
         </div>
+      </div>
+      <div id="downloadPanel" class="download-panel" hidden>
+        <p class="dp-lead">Download as PNG</p>
+        <button type="button" class="dp-size-btn" data-scale="0.5">
+          <span class="dp-size-label">Low</span>
+          <span class="dp-size-dims">— × —</span>
+        </button>
+        <button type="button" class="dp-size-btn" data-scale="1">
+          <span class="dp-size-label">Medium</span>
+          <span class="dp-size-dims">— × —</span>
+        </button>
+        <button type="button" class="dp-size-btn" data-scale="2">
+          <span class="dp-size-label">High</span>
+          <span class="dp-size-dims">— × —</span>
+        </button>
       </div>
       <div id="linkModal" class="modal" hidden>
         <div class="modal-card link-modal-card">

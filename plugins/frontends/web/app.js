@@ -22,6 +22,7 @@ const renderMeter = document.querySelector("#renderMeter");
 const renderMeterFill = document.querySelector("#renderMeterFill");
 const renderMeterLabel = document.querySelector("#renderMeterLabel");
 const downloadImage = document.querySelector("#downloadImage");
+const downloadPanel = document.querySelector("#downloadPanel");
 const saveBtn = document.querySelector("#saveImage");
 const shareBtn = document.querySelector("#shareImage");
 const sharePanel = document.querySelector("#sharePanel");
@@ -395,19 +396,22 @@ promoForm.addEventListener("submit", async e => {
 })();
 
 // ----- Canvas + theming -----
+let currentCanvasSize = 0;     // tracks live canvas dimension for download tier labels
+let currentCanvasHasImage = false;
 function setCanvas(c) {
+  currentCanvasSize = Number(c?.size) || 0;
+  currentCanvasHasImage = !!c?.url;
   if (!c?.url) {
     showcase.classList.remove("has-image");
     renderControlsPanel([]);
     heroImage.removeAttribute("src");
-    downloadImage.href = "#";
+    setDownloadPanelOpen(false);
     resetAccents();
     return;
   }
   const newUrl = c.url, newName = c.name || "canvas.png";
   const apply = () => {
     heroImage.src = newUrl; heroImage.alt = newName;
-    downloadImage.href = newUrl; downloadImage.download = newName;
     showcase.classList.add("has-image");
     renderControlsPanel(c?.controls_panels || []);
   };
@@ -1011,10 +1015,76 @@ emptyState.addEventListener("click", e => {
   input.focus();
 });
 
-downloadImage.addEventListener("click", () => {
-  if (downloadImage.getAttribute("href") && downloadImage.getAttribute("href") !== "#") {
-    post("/api/download").catch(() => {});
+function refreshDownloadTierLabels() {
+  const s = currentCanvasSize > 0 ? currentCanvasSize : 1024;
+  downloadPanel.querySelectorAll(".dp-size-btn").forEach(btn => {
+    const scale = Number(btn.dataset.scale) || 1;
+    const px = Math.max(64, Math.min(4096, Math.round(s * scale)));
+    const dims = btn.querySelector(".dp-size-dims");
+    if (dims) dims.textContent = `${px} × ${px}`;
+  });
+}
+function setDownloadPanelOpen(open) {
+  const opening = open && downloadPanel.hidden;
+  downloadPanel.hidden = !open;
+  if (opening) {
+    if (!sharePanel.hidden) setSharePanelOpen(false);
+    refreshDownloadTierLabels();
   }
+}
+async function runDownloadTier(btn) {
+  if (btn.disabled) return;
+  const scale = Number(btn.dataset.scale) || 1;
+  const labelEl = btn.querySelector(".dp-size-label");
+  const dimsEl = btn.querySelector(".dp-size-dims");
+  const origLabel = labelEl ? labelEl.textContent : "";
+  const origDims = dimsEl ? dimsEl.textContent : "";
+  btn.disabled = true;
+  btn.classList.add("loading");
+  if (labelEl) labelEl.textContent = "Rendering…";
+  if (dimsEl) dimsEl.textContent = "";
+  try {
+    const r = await post("/api/render_for_download", {scale});
+    const ev = (r?.events || []).find(e => e.type === "download_ready");
+    if (!ev || !ev.url) {
+      const err = (r?.events || []).find(e => e.type === "error");
+      add("error", (err && err.content) || "Download failed.");
+      return;
+    }
+    // Trigger the actual file download via a hidden anchor.
+    const a = document.createElement("a");
+    a.href = ev.url;
+    const shortHash = (ev.pool_hash || "").slice(0, 8);
+    a.download = `secondbrain-${ev.width}x${ev.height}${shortHash ? "-" + shortHash : ""}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    post("/api/download").catch(() => {});
+    setDownloadPanelOpen(false);
+  } catch (err) {
+    add("error", err.message);
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove("loading");
+    if (labelEl) labelEl.textContent = origLabel;
+    if (dimsEl) dimsEl.textContent = origDims;
+  }
+}
+downloadImage.addEventListener("click", () => {
+  if (!currentCanvasHasImage) return;
+  setDownloadPanelOpen(downloadPanel.hidden);
+});
+downloadPanel.addEventListener("click", e => {
+  const btn = e.target.closest(".dp-size-btn");
+  if (btn) runDownloadTier(btn);
+});
+document.addEventListener("pointerdown", e => {
+  if (downloadPanel.hidden) return;
+  if (downloadPanel.contains(e.target) || downloadImage.contains(e.target)) return;
+  setDownloadPanelOpen(false);
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && !downloadPanel.hidden) setDownloadPanelOpen(false);
 });
 saveBtn.addEventListener("click", async () => {
   if (saveBtn.disabled) return;
@@ -1054,7 +1124,10 @@ async function copyToClipboard(text, btn) {
 function setSharePanelOpen(open) {
   const opening = open && sharePanel.hidden;
   sharePanel.hidden = !open;
-  if (opening) fetchCurrentShareLink();
+  if (opening) {
+    if (!downloadPanel.hidden) setDownloadPanelOpen(false);
+    fetchCurrentShareLink();
+  }
 }
 shareBtn.addEventListener("click", () => setSharePanelOpen(sharePanel.hidden));
 document.addEventListener("pointerdown", e => {

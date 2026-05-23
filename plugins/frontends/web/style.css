@@ -113,6 +113,15 @@ article.error { color: #ffb5c8; border-color: #7f3150; }
 .share-panel .sp-publish { display: grid; gap: 8px; }
 .share-panel .sp-publish-lead { font-size: 10.5px; color: var(--muted); margin: 0; text-transform: uppercase; letter-spacing: .08em; }
 .share-panel .sp-publish-btn { font-weight: 700; height: 36px; }
+.download-panel { position: absolute; left: 22px; top: 72px; z-index: 3; display: grid; gap: 8px; width: min(260px, calc(100% - 44px)); padding: 14px; border: 1px solid rgba(255,255,255,.24); background: rgba(5,7,12,.92); backdrop-filter: blur(16px); }
+.download-panel[hidden] { display: none; }
+.download-panel .dp-lead { font-size: 10.5px; color: var(--muted); margin: 0 0 2px; text-transform: uppercase; letter-spacing: .08em; }
+.download-panel .dp-size-btn { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; height: 36px; padding: 0 12px; border: 1px solid var(--line); background: #10141e; color: var(--text); cursor: pointer; transition: border-color 160ms ease, color 160ms ease; }
+.download-panel .dp-size-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.download-panel .dp-size-btn:disabled { opacity: .7; cursor: progress; }
+.download-panel .dp-size-btn .dp-size-label { font-weight: 700; letter-spacing: .01em; }
+.download-panel .dp-size-btn .dp-size-dims { font-size: 11px; color: var(--muted); font-family: ui-monospace, "Cascadia Code", "Consolas", monospace; }
+.download-panel .dp-size-btn:hover:not(:disabled) .dp-size-dims { color: var(--accent); }
 .gallery-card .gallery-card-actions { display: flex; flex-direction: row; gap: 6px; align-items: stretch; padding: 0; }
 .gallery-card .gallery-card-actions button { height: 34px; }
 .gallery-card .gallery-card-actions button[data-action="remix"] { flex: 1 1 auto; min-width: 0; }

@@ -132,6 +132,8 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
 
     runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir,
                                     skill_registry=skill_registry)
+    from canvas.render import apply_render_config
+    apply_render_config(config)
     classes = discover_frontends(root_dir, config)
     config_manager.reconcile_plugin_config(config, get_plugin_settings())
     manager = FrontendManager(runtime, runtime.command_registry, config)
