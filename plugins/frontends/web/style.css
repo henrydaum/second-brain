@@ -355,7 +355,7 @@ body.account-body { background:
    search-mode input fill, signaling "these belong to the search bar
    above," and the bottom border becomes the divider between search
    results and the layer controls below. */
-.skill-search-results { padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid rgba(127,200,212,.28); }
+.skill-search-results { padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
 .skill-search-results[hidden] { display: none; }
 .skill-search-empty { padding: 16px; text-align: center; color: var(--muted); font-size: 13px; }
 .skill-result-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid rgba(127,200,212,.28); background: rgba(127,200,212,.06); transition: border-color 160ms ease, background 160ms ease; }
