@@ -129,6 +129,11 @@ Payload:
     skill_slug:  str (optional)
     timeout_s:   float"""
 
+CANVAS_CACHE_EVICT_DUE = "canvas_cache_evict_due"
+"""Timekeeper-emitted heartbeat asking the cache_evict task to enforce the
+configured size cap on DATA_DIR/canvas_renders/. No payload fields are
+required — the task reads the cap and its policy from config."""
+
 COMMAND_CALL_STARTED = "command_call_started"
 """The runtime started a slash command.
 Payload:

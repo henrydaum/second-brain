@@ -1193,10 +1193,13 @@ class WebFrontend(BaseFrontend):
 
         Returns ``{"pool_hash", "state", "image_path", "layers"}`` or None
         if the pool_hash isn't in ``canvas_pools`` (i.e. nothing was ever
-        rendered for it).
+        rendered for it). If the pool is known but its rendered files have
+        been evicted, transparently re-renders with a fresh seed — the
+        composition (skills + controls + size + palette) is fully captured
+        by the pool's stored state, so the new render is equivalent.
         """
         from canvas import persistence as canvas_persistence
-        from canvas.render import existing_seeds, folder_for
+        from canvas.render import folder_for
         from canvas.canvas import Canvas
 
         db = getattr(self.runtime, "db", None)
@@ -1207,20 +1210,44 @@ class WebFrontend(BaseFrontend):
             return None
         # Build a transient Canvas just to ask the renderer for the folder.
         snap_canvas = Canvas.from_dict(state)
-        seeds = existing_seeds(snap_canvas)
-        if not seeds:
-            return None
-        # Pick the most-recently-rendered file (stable "current" thumbnail).
         folder = folder_for(snap_canvas)
-        files = sorted(folder.glob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not files:
+        image_path = self._pool_image_path(snap_canvas, folder, pool_hash, state)
+        if image_path is None:
             return None
         return {
             "pool_hash": pool_hash,
             "state": state,
-            "image_path": str(files[0]),
+            "image_path": str(image_path),
             "layers": list(state.get("layers") or []),
         }
+
+    def _pool_image_path(self, snap_canvas, folder, pool_hash: str, state: dict) -> Path | None:
+        """Newest cached render for this pool, or lazily re-render if evicted."""
+        if folder.is_dir():
+            files = sorted(folder.glob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if files:
+                return files[0]
+        # Cache miss (folder gone or empty). Re-render on demand — the
+        # canvas_pools row has the full state, so we can rebuild any pixel
+        # output deterministically from it. Seed is lost (it was the
+        # filename), so we mint a fresh one; same composition, different
+        # RNG draw, same pool_hash.
+        skill_registry = getattr(self.runtime, "skill_registry", None)
+        if skill_registry is None or not snap_canvas.layers:
+            return None
+        scratch_state = CanvasState(canvas=snap_canvas)
+        try:
+            rr = _new_render_canvas(
+                scratch_state,
+                skill_loader=skill_registry.get_record,
+                force_new_seed=True,
+                db=getattr(self.runtime, "db", None),
+                worker_pool=(getattr(self.runtime, "services", None) or {}).get("skill_worker_pool"),
+            )
+        except Exception:
+            logger.exception("lazy re-render failed for pool_hash=%s", pool_hash)
+            return None
+        return Path(rr.image_path)
 
     def record_link_open(self, pool_hash: str, ip: str = "", account_id: str = "", payload: dict | None = None) -> None:
         """Count a public share-page view as a pool-scored skill signal."""

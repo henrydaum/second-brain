@@ -175,8 +175,14 @@ class BaseTask:
 			if isinstance(value, (dict, list)):
 				setattr(cls, attr, value.copy())
 
-	def setup(self, config: dict):
-		"""Called once at registration time. Override for setup work."""
+	def setup(self, config: dict, services: dict | None = None):
+		"""Called once at registration time. Override for setup work.
+
+		``services`` is the shared service registry — present so tasks that
+		need to register schedules, subscribe to upstream services, or
+		coordinate at startup can do so without grabbing globals. Optional
+		for back-compat with legacy ``setup(self, config)`` overrides.
+		"""
 		pass
 
 	def teardown(self):
