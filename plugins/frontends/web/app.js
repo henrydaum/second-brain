@@ -182,7 +182,7 @@ function renderToolStatus(ev) {
   const id = ev.call_id || `${ev.name}:${Date.now()}`;
   if (ev.status === "started") { loaderToolStart(id); setStatusText(`${toolLabel(ev.name)}…`); }
   else if (ev.status === "progressed") setStatusText(`${toolLabel(ev.name)}…`);
-  else if (ev.status === "finished") { loaderToolEnd(id); setStatusText("Thinking…"); }
+  else if (ev.status === "finished") loaderToolEnd(id);
 }
 let renderMeterFrame = 0, renderMeterHide = 0, renderMeterValue = 0;
 function setRenderMeter(v) {
@@ -284,8 +284,7 @@ sendBtn.addEventListener("click", async e => {
 });
 
 function setTyping(on) {
-  if (on) setStatusText("Thinking…");
-  else clearStatus();
+  if (!on) clearStatus();
 }
 
 // ----- account + paywall + auth -----
