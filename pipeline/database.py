@@ -168,9 +168,8 @@ class Database:
 		# Enable foreign key enforcement (needed for ON DELETE CASCADE)
 		self.conn.execute("PRAGMA foreign_keys = ON")
 
-		# Web users — anonymous now (user_id = sha256(ip|session_id)[:24]),
-		# upgradeable to real auth later. `credits` and `tier` are pre-wired
-		# for the monetization work.
+		# Web users — anonymous until an account is claimed. This checkout is
+		# pre-launch; the credit ledger is the sole metering system.
 		self.conn.execute("""
 			CREATE TABLE IF NOT EXISTS web_users (
 				user_id     TEXT PRIMARY KEY,
@@ -178,29 +177,29 @@ class Database:
 				ip_hash     TEXT,
 				created_at  REAL,
 				last_seen   REAL,
-				tier        TEXT DEFAULT 'free',
-				credits     INTEGER DEFAULT 0
+				purchased_credits INTEGER DEFAULT 0,
+				email       TEXT,
+				account_id  TEXT
 			)
 		""")
 		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS web_usage_events (
-				id       INTEGER PRIMARY KEY,
-				user_id  TEXT NOT NULL,
-				ts       REAL NOT NULL
+			CREATE TABLE IF NOT EXISTS web_credit_ledger (
+				id          TEXT PRIMARY KEY,
+				user_id     TEXT NOT NULL,
+				kind        TEXT NOT NULL,
+				cost        INTEGER NOT NULL,
+				free_amount INTEGER NOT NULL DEFAULT 0,
+				paid_amount INTEGER NOT NULL DEFAULT 0,
+				status      TEXT NOT NULL,
+				ts          REAL NOT NULL,
+				committed_at REAL,
+				meta_json   TEXT
 			)
 		""")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_usage_user_ts ON web_usage_events(user_id, ts)")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_usage_ts ON web_usage_events(ts)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_credit_user_ts ON web_credit_ledger(user_id, ts)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_credit_status_ts ON web_credit_ledger(status, ts)")
 
-		# Monetization: account columns on web_users, plus auth tokens,
-		# promo codes, and payments. ALTERs are guarded — sqlite raises if the
-		# column already exists, so we swallow that specific error.
-		for col, decl in (("email", "TEXT"), ("account_id", "TEXT")):
-			try:
-				self.conn.execute(f"ALTER TABLE web_users ADD COLUMN {col} {decl}")
-			except sqlite3.OperationalError as e:
-				if "duplicate column" not in str(e).lower():
-					raise
+		# Monetization: auth tokens, promo codes, and payments.
 		self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_web_users_email ON web_users(email) WHERE email IS NOT NULL")
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_users_account ON web_users(account_id)")
 		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_users_ip ON web_users(ip_hash)")

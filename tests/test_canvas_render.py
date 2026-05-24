@@ -374,3 +374,28 @@ def test_existing_seeds_empty_when_folder_absent(renders_dir):
 	"""No folder yet → no seeds (and no exception)."""
 	cs = _state_with_background("fractal")
 	assert canvas_render.existing_seeds(cs.canvas) == []
+
+
+def test_uncached_render_authorizes_once_but_cache_hit_is_free(monkeypatch, renders_dir):
+	_install_fake_run_skill(monkeypatch)
+	cs = _state_with_background("fractal")
+	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
+	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter")})
+	events = []
+	def authorize():
+		events.append("authorize")
+		return lambda ok: events.append(("settle", ok))
+	canvas_render.render_canvas(cs, skill_loader=loader, seed=42, authorize_uncached=authorize)
+	canvas_render.render_canvas(cs, skill_loader=loader, seed=42, authorize_uncached=authorize)
+	assert events == ["authorize", ("settle", True)]
+
+
+def test_failed_uncached_render_releases_authorization(monkeypatch, renders_dir):
+	_install_fake_run_skill(monkeypatch)
+	cs = _state_with_background("unknown")
+	events = []
+	def authorize():
+		return lambda ok: events.append(ok)
+	with pytest.raises(ValueError):
+		canvas_render.render_canvas(cs, skill_loader=_loader({}), seed=9, authorize_uncached=authorize)
+	assert events == [False]

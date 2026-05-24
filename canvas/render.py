@@ -72,6 +72,8 @@ class RenderResult:
 	# Intermediate-layer warnings are not propagated — only the final pixels matter.
 	warning: str | None = None
 	warning_message: str | None = None
+	total_layers: int = 0
+	cached_layers: int = 0
 
 
 # ── pool hash ────────────────────────────────────────────────────────
@@ -189,6 +191,7 @@ def render_canvas(
 	db: Any = None,
 	on_event: Callable[[dict], None] | None = None,
 	worker_pool: Any = None,
+	authorize_uncached: Callable[[], Callable[[bool], None] | None] | None = None,
 ) -> RenderResult:
 	"""Render ``cs.canvas``'s chain to a PNG file and return the result.
 
@@ -255,7 +258,7 @@ def render_canvas(
 			cs.render_seed = cached_seed
 			_persist_seed(db, cs)
 			_emit(on_event, status="cached", total_layers=len(canvas.layers), cached_layers=len(canvas.layers), seed=cached_seed, pool_hash=folder.name)
-			return RenderResult(hit, cached_seed, folder.name, cache_hit=True)
+			return RenderResult(hit, cached_seed, folder.name, cache_hit=True, total_layers=len(canvas.layers), cached_layers=len(canvas.layers))
 		# Pool empty — mint a fresh seed.
 		seed_val = _mint_seed()
 		cs.render_seed = seed_val
@@ -269,7 +272,7 @@ def render_canvas(
 			cs.canvas_id, folder.name, seed_val,
 		)
 		_emit(on_event, status="cached", total_layers=len(canvas.layers), cached_layers=len(canvas.layers), seed=seed_val, pool_hash=folder.name)
-		return RenderResult(out_path, seed_val, folder.name, cache_hit=True)
+		return RenderResult(out_path, seed_val, folder.name, cache_hit=True, total_layers=len(canvas.layers), cached_layers=len(canvas.layers))
 
 	# Cache miss: walk the chain in a temp workdir. Each layer's step PNG
 	# is copied byte-for-byte into its prefix-cache pool — the sandbox
@@ -279,6 +282,7 @@ def render_canvas(
 	with tempfile.TemporaryDirectory(prefix="canvas_render_") as workdir:
 		workdir_path = Path(workdir)
 		start_idx, current_input = _longest_prefix(canvas, seed_val, workdir_path)
+		settle = authorize_uncached() if authorize_uncached is not None else None
 		_emit(on_event, status="started", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name)
 		last_warning: dict | None = None
 		try:
@@ -327,20 +331,27 @@ def render_canvas(
 						logger.exception("save_pool failed for prefix pool=%s", cache_path.parent.name)
 				_emit(on_event, status="layer_finished", layer_index=idx + 1, total_layers=len(canvas.layers), cached_layers=start_idx, skill_slug=str(slug), seed=seed_val, pool_hash=folder.name)
 		except Exception as e:
+			if settle is not None:
+				settle(False)
 			_emit(on_event, status="error", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name, error=str(e))
 			raise
 
 		_emit(on_event, status="finished", total_layers=len(canvas.layers), cached_layers=start_idx, seed=seed_val, pool_hash=folder.name)
+		if settle is not None:
+			settle(True)
 
 	logger.info(
 		"render canvas_id=%s pool=%s seed=%d layers=%d",
 		cs.canvas_id, folder.name, seed_val, len(canvas.layers),
 	)
-	return RenderResult(
+	result = RenderResult(
 		out_path, seed_val, folder.name, cache_hit=False,
 		warning=(last_warning or {}).get("warning"),
 		warning_message=(last_warning or {}).get("warning_message"),
+		total_layers=len(canvas.layers),
+		cached_layers=start_idx,
 	)
+	return result
 
 
 def _persist_seed(db: Any, cs: CanvasState) -> None:

@@ -245,7 +245,7 @@ function render(events) {
     else if (ev.type === "error") { clearStatus(); add("error", ev.content); loaderForceStop(); renderRenderStatus({status:"error", error:ev.content}); }
     else if (ev.type === "form") add("assistant", `${ev.form?.display?.prompt || "Input required"}\n${(ev.form?.display?.choices || []).map(c => c.label || c.value).join(" / ")}`);
     else if (ev.type === "approval") approval(ev);
-    else if (ev.type === "paywall") openPaywall(ev);
+    else if (ev.type === "paywall" || ev.type === "credit_denied") openPaywall(ev);
     else if (ev.type === "account") setAccount(ev.account);
     else if (ev.type === "hero_image") {
       clearPendingControls(false);
@@ -296,7 +296,7 @@ function setTyping(on) {
   if (!on) clearStatus();
 }
 
-// ----- account + paywall + auth -----
+// ----- account + credits + auth -----
 const accountAvatar = document.querySelector("#accountAvatar");
 const avatarInner = document.querySelector("#avatarInner");
 const avatarSilhouette = document.querySelector("#avatarSilhouette");
@@ -306,6 +306,7 @@ avatarInner.addEventListener("mouseenter", () => { avatarInner.style.borderColor
 avatarInner.addEventListener("mouseleave", () => { avatarInner.style.borderColor = "var(--line)"; avatarInner.style.color = "var(--text)"; });
 const outOfMessages = document.querySelector("#outOfMessages");
 const oomBody = document.querySelector("#oomBody");
+const dismissOutOfCredits = document.querySelector("#dismissOutOfCredits");
 const chatInput = document.querySelector("#chatInput");
 const signinModal = document.querySelector("#signinModal");
 const promoModal = document.querySelector("#promoModal");
@@ -322,23 +323,18 @@ document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click
 [signinModal, promoModal].forEach(m => m.addEventListener("click", e => { if (e.target === m) closeModal(m); }));
 
 function formatRefill(seconds) {
-  if (seconds == null) return "Visit your account to add more.";
-  if (seconds <= 60) return "Your free messages refresh in less than a minute, or visit your account to add more.";
-  if (seconds < 3600) return `Your free messages refresh in about ${Math.ceil(seconds / 60)} minutes, or visit your account to add more.`;
+  if (seconds == null) return "New prompts and uncached renders need credits. Cached art remains free to open.";
+  if (seconds <= 60) return "Your free credits refresh in less than a minute, or visit your account to add more.";
+  if (seconds < 3600) return `Your free credits refresh in about ${Math.ceil(seconds / 60)} minutes, or visit your account to add more.`;
   const hours = Math.ceil(seconds / 3600);
-  return `Your free messages refresh in about ${hours} hour${hours === 1 ? "" : "s"}, or visit your account to add more.`;
+  return `Your free credits refresh in about ${hours} hour${hours === 1 ? "" : "s"}, or visit your account to add more.`;
 }
 let oomPoll = null;
+let creditsNoticeDismissed = false;
 function setOutOfMessages(acc) {
-  const unlimited = acc?.tier === "unlimited";
-  const remaining = acc?.messages_remaining;
-  const out = !unlimited && remaining === 0;
-  outOfMessages.style.display = out ? "flex" : "none";
-  if (sendBtn) sendBtn.disabled = out && !agentBusy;
-  if (chatInput) {
-    chatInput.disabled = out;
-    chatInput.placeholder = out ? "Out of Messages" : "Ask Second Brain...";
-  }
+  const out = acc?.total_available === 0;
+  if (!out) creditsNoticeDismissed = false;
+  outOfMessages.style.display = out && !creditsNoticeDismissed ? "flex" : "none";
   if (out) {
     oomBody.textContent = formatRefill(acc?.next_refill_seconds);
     if (!oomPoll) oomPoll = setInterval(refreshAccount, 20000);
@@ -347,6 +343,10 @@ function setOutOfMessages(acc) {
     oomPoll = null;
   }
 }
+dismissOutOfCredits?.addEventListener("click", () => {
+  creditsNoticeDismissed = true;
+  outOfMessages.style.display = "none";
+});
 window.addEventListener("pageshow", () => refreshAccount());
 
 function setAccount(acc) {
@@ -372,12 +372,14 @@ async function refreshAccount() {
   catch (err) { console.warn("[account] refresh failed:", err); }
 }
 function openPaywall(ev) {
-  // Server rejected mid-flight (e.g. race with another tab). Force the overlay,
-  // assuming free-tier exhaustion — refreshAccount() will reconcile the exact state.
+  const available = Number(ev?.total_available || 0);
+  if (available > 0) {
+    add("status", `A message costs ${ev.required || 10} credits. You still have ${available} for manual renders.`);
+    return;
+  }
+  creditsNoticeDismissed = false;
   outOfMessages.style.display = "flex";
-  oomBody.textContent = ev?.message || "Visit your account to add more.";
-  if (sendBtn) sendBtn.disabled = !agentBusy;
-  if (chatInput) { chatInput.disabled = true; chatInput.placeholder = "Out of Messages"; }
+  oomBody.textContent = "You're out of credits for new work. Cached images and shared art are still free to view.";
   refreshAccount();
 }
 signinForm.addEventListener("submit", async e => {

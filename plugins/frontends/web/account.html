@@ -26,10 +26,10 @@
 
     <div id="signedIn" class="account-card" hidden>
       <div class="account-row"><span>Email</span><span id="rowEmail">—</span></div>
-      <div class="account-row"><span>Plan</span><span id="rowTier">—</span></div>
-      <div class="account-row"><span>Messages remaining</span><span id="rowRemaining">—</span></div>
+      <div class="account-row"><span>Free credits</span><span id="rowFree">—</span></div>
+      <div class="account-row"><span>Extra credits</span><span id="rowExtra">—</span></div>
       <div class="account-actions">
-        <button id="buyMore" type="button" class="primary-btn">Buy 2,000 more · $2.99</button>
+        <button id="buyMore" type="button" class="primary-btn">Buy 1,000 extra credits - $2.99</button>
         <div class="account-secondary-row">
           <a href="/">← Back to demo</a>
           <a href="/auth/logout" class="danger">Sign out</a>
@@ -96,9 +96,10 @@
       $("#promoCard").hidden = false;
       $("#dangerCard").hidden = false;
       $("#rowEmail").textContent = a.email || "—";
-      const plan = a.tier === "unlimited" ? "Unlimited" : a.tier === "paid" ? "Paid" : "Free";
-      $("#rowTier").textContent = plan;
-      $("#rowRemaining").textContent = a.messages_remaining == null ? "Unlimited" : a.messages_remaining.toLocaleString();
+      $("#rowFree").textContent = Number(a.free_remaining || 0).toLocaleString();
+      $("#rowExtra").textContent = Number(a.purchased_remaining || 0).toLocaleString();
+      const pack = a.pack || {credits:1000, price_cents:299};
+      $("#buyMore").textContent = `Buy ${Number(pack.credits).toLocaleString()} credits - $${(Number(pack.price_cents) / 100).toFixed(2)}`;
       window._sbEmail = a.email || "";
     } else {
       $("#signedOut").hidden = false;
@@ -155,7 +156,7 @@
     const r = await post("/api/checkout");
     if (r.ok && r.url) { window.location = r.url; return; }
     btn.disabled = false;
-    btn.textContent = "Buy 2,000 more · $2.99";
+    btn.textContent = "Buy credits";
     alert(r.error || "Could not start checkout.");
   });
 

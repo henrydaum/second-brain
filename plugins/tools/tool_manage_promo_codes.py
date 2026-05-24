@@ -1,8 +1,8 @@
 """
 Manage promo codes for the web demo.
 
-Used (by Henry, from his REPL) to mint single-use codes that grant either
-unlimited tier or a credits boost. Marked background_safe=False so it can't
+Used (by Henry, from his REPL) to mint single-use codes that grant integer
+credit boosts. Marked background_safe=False so it can't
 run from a background driver — only from an attended session.
 """
 
@@ -20,8 +20,7 @@ class ManagePromoCodes(BaseTool):
     name = "manage_promo_codes"
     description = (
         "Create, list, or delete promo codes for the web demo. "
-        "Use op='create_unlimited' for an unlimited-tier code, "
-        "'create_credits' (with credits=N) for a credit grant, "
+        "Use op='create_credits' (with credits=N) for a credit grant, "
         "'list' to see existing codes, or 'delete' with code=... to remove one."
     )
     parameters = {
@@ -29,7 +28,7 @@ class ManagePromoCodes(BaseTool):
         "properties": {
             "op": {
                 "type": "string",
-                "enum": ["create_unlimited", "create_credits", "list", "delete"],
+                "enum": ["create_credits", "list", "delete"],
                 "description": "Which operation to perform.",
             },
             "credits": {"type": "integer", "description": "Credits to grant (for create_credits)."},
@@ -48,19 +47,6 @@ class ManagePromoCodes(BaseTool):
             return ToolResult.failed("Database not available.")
         note = (kwargs.get("note") or "").strip()
         custom_code = (kwargs.get("code") or "").strip()
-
-        if op == "create_unlimited":
-            code = custom_code or _mint_code()
-            if _code_exists(db, code):
-                return ToolResult.failed(f"Code '{code}' already exists.")
-            with db.lock:
-                db.conn.execute(
-                    "INSERT INTO web_promo_codes (code, kind, credits, max_uses, uses, created_at, note) "
-                    "VALUES (?, 'unlimited', NULL, 1, 0, ?, ?)",
-                    (code, time.time(), note),
-                )
-                db.conn.commit()
-            return ToolResult(data={"code": code, "kind": "unlimited", "note": note}, llm_summary=f"Created unlimited promo code: {code}")
 
         if op == "create_credits":
             amt = int(kwargs.get("credits") or 0)

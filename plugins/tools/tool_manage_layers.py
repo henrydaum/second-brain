@@ -61,13 +61,16 @@ def _enact_and_render(context, action_type: str, payload: dict) -> ToolResult:
 	if skill_registry is None:
 		return ToolResult.failed("skill registry not available; cannot re-render")
 
+	credits = (getattr(context, "services", None) or {}).get("credits")
+	db = getattr(context, "db", None)
 	try:
 		render_result = render_canvas(
 			cs,
 			skill_loader=skill_registry.get_record,
-			db=getattr(context, "db", None),
+			db=db,
 			on_event=bus_progress(getattr(context, "session_key", None), float((getattr(context, "config", {}) or {}).get("skill_timeout_s") or 30)),
 			worker_pool=(getattr(context, "services", None) or {}).get("skill_worker_pool"),
+			authorize_uncached=credits.render_authorizer(db, session_key, allow_prompt_overrun=True) if credits and db and session_key.startswith("web:") else None,
 		)
 	except Exception as e:
 		logger.exception("manage_layers render crashed: action=%s", action_type)

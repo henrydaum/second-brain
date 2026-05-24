@@ -27,6 +27,7 @@ from canvas.render import pool_hash as _pool_hash, render_canvas as _new_render_
 from canvas.state import CanvasState
 from config import config_manager
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
+from plugins.services.service_credits import CreditDenied
 from plugins.helpers.palettes import get_palette, list_palettes
 from plugins.skills.helpers.skill_store import anonymize_owner_in_dir
 from paths import DATA_DIR, SANDBOX_SKILLS
@@ -82,17 +83,9 @@ class WebFrontend(BaseFrontend):
         ("Web Allow Public", "web_allow_public", "Required to be true if web_host is not loopback (127.0.0.1 / ::1 / localhost). Confirms intentional public exposure.", False, {"type": "bool"}),
         ("Web Max Global Connections", "web_max_global_connections", "Maximum simultaneous in-flight HTTP requests across all clients.", DEFAULT_MAX_GLOBAL_CONNECTIONS, {"type": "integer"}),
         ("Web Max Per-IP Connections", "web_max_ip_connections", "Maximum simultaneous in-flight HTTP requests from a single IP.", DEFAULT_MAX_IP_CONNECTIONS, {"type": "integer"}),
-        ("Web Global 5h Turns", "web_global_5h_turn_limit", "Public web chat-turn budget per 5 hours.", 600, {"type": "integer"}),
-        ("Web Global Weekly Turns", "web_global_week_turn_limit", "Public web chat-turn budget per 7 days.", 6000, {"type": "integer"}),
-        ("Web Session 5h Turns", "web_session_5h_turn_limit", "Per-browser chat-turn budget per 5 hours.", 40, {"type": "integer"}),
-        ("Web Session Weekly Turns", "web_session_week_turn_limit", "Per-browser chat-turn budget per 7 days.", 160, {"type": "integer"}),
-        ("Web IP 5h Turns", "web_ip_5h_turn_limit", "Per-IP chat-turn budget per 5 hours (cookie-clearing backstop).", 60, {"type": "integer"}),
         ("App Base URL", "app_base_url", "Public origin of the web demo, used in Stripe redirects and magic links.", "http://127.0.0.1:8765", {"type": "text"}),
-        ("Price (cents)", "web_price_cents", "Stripe checkout price in cents.", 299, {"type": "integer"}),
-        ("Credit Pack Size", "web_credit_pack_size", "Messages granted per purchase.", 2000, {"type": "integer"}),
         ("Stripe Secret Key", "stripe_secret_key", "Stripe API secret key (sk_test_... or sk_live_...).", "", {"type": "text"}),
         ("Stripe Webhook Secret", "stripe_webhook_secret", "Stripe webhook signing secret (whsec_...).", "", {"type": "text"}),
-        ("Stripe Price ID", "stripe_price_id", "Stripe Price ID for the credit pack.", "", {"type": "text"}),
         ("Magic-link From", "web_email_from", "Send-as address for magic-link emails (must be a Gmail send-as alias or 'me').", "me", {"type": "text"}),
     ]
 
@@ -104,7 +97,6 @@ class WebFrontend(BaseFrontend):
         self._events_cv = threading.Condition(self._lock)
         self._stream_counts: dict[str, int] = defaultdict(int)
         self._last_hero: dict[str, str] = {}
-        self._usage_lock = threading.RLock()
 
     def session_key(self, ctx=None) -> str:
         return f"web:{ctx or 'demo'}"
@@ -142,18 +134,22 @@ class WebFrontend(BaseFrontend):
         self._ensure_conversation(key)
         if self.has_pending_approval(key):
             return [{"type": "error", "content": "Use the approval buttons to answer this permission request."}]
-        ok, error, paywall = self._record_usage(session_id, ip, account_id)
-        if not ok:
-            if paywall:
-                return [{"type": "paywall", **paywall, "message": error}]
-            return [{"type": "error", "content": error}]
-        self.submit_text(key, text)
-        events = self._drain(key)
-        # Append fresh account snapshot so the client can keep the chip updated.
-        snap = self._account_snapshot(session_id, ip, account_id)
-        if snap:
-            events.append({"type": "account", "account": snap})
-        return events
+        self.bind_credits(session_id, ip, account_id)
+        svc, db = self._credits(), getattr(self.runtime, "db", None)
+        ticket = None
+        try:
+            if svc and db:
+                ticket = svc.reserve(db, key, "ai_prompt", svc.ai_cost())
+            result = self.submit_text(key, text)
+            if svc and db:
+                (svc.commit if result and result.ok else svc.release)(db, ticket, session_key=key)
+        except CreditDenied as e:
+            return self._drain(key) or [{"type": "credit_denied", **e.payload}]
+        except Exception:
+            if svc and db:
+                svc.release(db, ticket, session_key=key)
+            raise
+        return self._drain(key)
 
     def approve(self, session_id: str, value: bool) -> list[dict]:
         key = self.session_key(session_id)
@@ -330,6 +326,16 @@ class WebFrontend(BaseFrontend):
             return
         self._push_hero_image(key, Path(snap["path"]), snap)
 
+    def on_bus_credits_changed(self, payload: dict) -> None:
+        key = (payload or {}).get("session_key")
+        if key and key in self._live_session_keys():
+            self._push(key, {"type": "account", "account": payload})
+
+    def on_bus_credit_action_denied(self, payload: dict) -> None:
+        key = (payload or {}).get("session_key")
+        if key and key in self._live_session_keys():
+            self._push(key, {"type": "credit_denied", **payload})
+
     def _chain_progress_cb(self, key: str):
         """Build an on_step callback that emits tool_status progressed events.
         Only emits when the chain has >1 step, so single-skill renders stay quiet."""
@@ -355,185 +361,24 @@ class WebFrontend(BaseFrontend):
     def _ip_hash(self, ip: str) -> str:
         return hashlib.sha256(ip.encode()).hexdigest()[:16] if ip else ""
 
-    def _resolve_account(self, db, account_id: str) -> dict | None:
-        """Return the web_users row keyed by account_id, or None."""
-        if not account_id or db is None:
-            return None
-        with db.lock:
-            row = db.conn.execute(
-                "SELECT user_id, email, account_id, tier, credits FROM web_users WHERE account_id = ?",
-                (account_id,),
-            ).fetchone()
-        return dict(row) if row else None
+    def _credits(self):
+        return (getattr(self.runtime, "services", None) or {}).get("credits")
 
-    def _record_usage(self, session_id: str, ip: str, account_id: str = "") -> tuple[bool, str, dict | None]:
-        """Returns (allowed, error_msg, paywall_payload_or_None).
-        paywall_payload is set only when the user has hit a personal cap and an
-        offer should be shown (vs. global demo cap → plain error)."""
-        db = getattr(self.runtime, "db", None)
-        if db is None:
-            return True, "", None
-        now = time.time()
-        five_h, week = now - 5 * 3600, now - 7 * 24 * 3600
-        ip_hash = self._ip_hash(ip)
+    def bind_credits(self, session_id: str, ip: str = "", account_id: str = "") -> None:
+        svc, db = self._credits(), getattr(self.runtime, "db", None)
+        if svc and db:
+            svc.bind_web_session(db, self.session_key(session_id), session_id, ip, account_id)
 
-        with self._usage_lock, db.lock:
-            account = None
-            if account_id:
-                row = db.conn.execute(
-                    "SELECT user_id, email, tier, credits FROM web_users WHERE account_id = ?",
-                    (account_id,),
-                ).fetchone()
-                if row:
-                    account = dict(row)
-            uid = account["user_id"] if account else self._anon_user_id(session_id, ip)
-            if not account:
-                db.conn.execute(
-                    "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen) "
-                    "VALUES (?, ?, ?, ?, ?) "
-                    "ON CONFLICT(user_id) DO UPDATE SET last_seen = excluded.last_seen, "
-                    "  ip_hash = excluded.ip_hash, "
-                    "  session_id = COALESCE(web_users.session_id, excluded.session_id)",
-                    (uid, session_id, ip_hash, now, now),
-                )
-            else:
-                db.conn.execute("UPDATE web_users SET last_seen = ?, ip_hash = ? WHERE user_id = ?", (now, ip_hash, uid))
-
-            # Tier shortcuts: unlimited never blocks; paid consumes credits.
-            tier = (account or {}).get("tier") or "free"
-            if tier == "unlimited":
-                db.conn.execute("INSERT INTO web_usage_events (user_id, ts) VALUES (?, ?)", (uid, now))
-                db.conn.commit()
-                return True, "", None
-            if tier == "paid":
-                credits = int((account or {}).get("credits") or 0)
-                if credits > 0:
-                    db.conn.execute("UPDATE web_users SET credits = credits - 1 WHERE user_id = ?", (uid,))
-                    db.conn.execute("INSERT INTO web_usage_events (user_id, ts) VALUES (?, ?)", (uid, now))
-                    db.conn.commit()
-                    return True, "", None
-                # Out of credits → paywall again
-                db.conn.commit()
-                return False, "You're out of messages. Buy another pack to continue.", self._paywall_payload()
-
-            # Free tier: rolling windows + IP backstop.
-            db.conn.execute("DELETE FROM web_usage_events WHERE ts < ?", (week,))
-            q = self._quota_status(db, uid, ip_hash)
-
-            global_caps = (
-                (q["g5"], q["g5_lim"], "The public demo is busy right now. Try again a little later."),
-                (q["gw"], q["gw_lim"], "The public demo hit its weekly budget. Try again later."),
-            )
-            for used, limit, msg in global_caps:
-                if limit > 0 and used >= limit:
-                    db.conn.commit()
-                    return False, msg, None  # global cap → plain error, no paywall
-
-            personal_caps = (
-                (q["s5"], q["s5_lim"], "You've hit your 5-hour demo limit."),
-                (q["sw"], q["sw_lim"], "You've hit your weekly demo limit."),
-                (q["ip5"], q["ip5_lim"], "This network has hit its 5-hour demo limit."),
-            )
-            for used, limit, msg in personal_caps:
-                if limit > 0 and used >= limit:
-                    db.conn.commit()
-                    return False, msg, self._paywall_payload()
-
-            db.conn.execute("INSERT INTO web_usage_events (user_id, ts) VALUES (?, ?)", (uid, now))
-            db.conn.commit()
-        return True, "", None
-
-    def _paywall_payload(self) -> dict:
-        return {
-            "price_cents": _int(self.config.get("web_price_cents"), 299),
-            "credits": _int(self.config.get("web_credit_pack_size"), 2000),
-        }
+    def _render_authorizer(self, session_key: str):
+        svc, db = self._credits(), getattr(self.runtime, "db", None)
+        return svc.render_authorizer(db, session_key) if svc and db and session_key.startswith("web:") else None
 
     # ----- account / billing / auth -----
 
-    def _quota_status(self, db, uid: str, ip_hash: str) -> dict:
-        """All counters + limits the free tier needs. Single source of truth."""
-        now = time.time()
-        five_h, week = now - 5 * 3600, now - 7 * 24 * 3600
-        g5 = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE ts >= ?", (five_h,)).fetchone()["n"]
-        gw = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE ts >= ?", (week,)).fetchone()["n"]
-        s5 = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, five_h)).fetchone()["n"]
-        sw = db.conn.execute("SELECT COUNT(*) AS n FROM web_usage_events WHERE user_id = ? AND ts >= ?", (uid, week)).fetchone()["n"]
-        ip5 = 0
-        if ip_hash:
-            ip5 = db.conn.execute(
-                "SELECT COUNT(*) AS n FROM web_usage_events e "
-                "JOIN web_users u ON u.user_id = e.user_id "
-                "WHERE u.ip_hash = ? AND e.ts >= ?",
-                (ip_hash, five_h),
-            ).fetchone()["n"]
-        return {
-            "g5": g5, "gw": gw, "s5": s5, "sw": sw, "ip5": ip5,
-            "g5_lim": _int(self.config.get("web_global_5h_turn_limit"), 600),
-            "gw_lim": _int(self.config.get("web_global_week_turn_limit"), 6000),
-            "s5_lim": _int(self.config.get("web_session_5h_turn_limit"), 40),
-            "sw_lim": _int(self.config.get("web_session_week_turn_limit"), 160),
-            "ip5_lim": _int(self.config.get("web_ip_5h_turn_limit"), 60),
-        }
-
-    def _free_tier_remaining(self, db, uid: str, ip_hash: str) -> int:
-        """Personal cap remaining for the free tier — min of (session-5h, session-week, IP-5h)."""
-        q = self._quota_status(db, uid, ip_hash)
-        return max(0, min(q["s5_lim"] - q["s5"], q["sw_lim"] - q["sw"], q["ip5_lim"] - q["ip5"]))
-
-    def _next_refill_seconds(self, db, uid: str) -> int | None:
-        """Free tier: seconds until the oldest event in the 5h window expires (freeing one slot).
-        None if the user has no events in the window (nothing to refill)."""
-        now = time.time()
-        five_h_ago = now - 5 * 3600
-        row = db.conn.execute(
-            "SELECT MIN(ts) AS oldest FROM web_usage_events WHERE user_id = ? AND ts >= ?",
-            (uid, five_h_ago),
-        ).fetchone()
-        if not row or row["oldest"] is None:
-            return None
-        return max(0, int(row["oldest"] + 5 * 3600 - now))
-
-    def _account_snapshot(self, session_id: str, ip: str, account_id: str) -> dict:
-        """Single-field quota surface: `messages_remaining` is an int, or null for unlimited.
-        `messages_max` is the upper bound (free → session 5h limit, paid → credit pack size,
-        unlimited → null). `next_refill_seconds` is populated only for free users at 0
-        remaining so the out-of-messages UI can show a wait time."""
-        db = getattr(self.runtime, "db", None)
-        free_max = _int(self.config.get("web_session_5h_turn_limit"), 40)
-        pack_max = _int(self.config.get("web_credit_pack_size"), 2000)
-        if db is None:
-            return {"signed_in": False, "tier": "free", "messages_remaining": None, "messages_max": free_max, "next_refill_seconds": None}
-        ip_hash = self._ip_hash(ip)
-        with db.lock:
-            row = None
-            if account_id:
-                row = db.conn.execute(
-                    "SELECT user_id, email, tier, credits FROM web_users WHERE account_id = ?",
-                    (account_id,),
-                ).fetchone()
-            if row:
-                tier = row["tier"] or "free"
-                refill: int | None = None
-                if tier == "unlimited":
-                    remaining: int | None = None
-                    max_val: int | None = None
-                elif tier == "paid":
-                    remaining = int(row["credits"] or 0)
-                    max_val = pack_max
-                else:
-                    remaining = self._free_tier_remaining(db, row["user_id"], ip_hash)
-                    max_val = free_max
-                    if remaining == 0:
-                        refill = self._next_refill_seconds(db, row["user_id"])
-                return {"signed_in": True, "email": row["email"], "tier": tier, "messages_remaining": remaining, "messages_max": max_val, "next_refill_seconds": refill}
-            anon_uid = self._anon_user_id(session_id, ip)
-            remaining = self._free_tier_remaining(db, anon_uid, ip_hash)
-            refill = self._next_refill_seconds(db, anon_uid) if remaining == 0 else None
-        return {"signed_in": False, "tier": "free", "messages_remaining": remaining, "messages_max": free_max, "next_refill_seconds": refill}
-
     def account_info(self, session_id: str, ip: str, account_id: str) -> dict:
-        return self._account_snapshot(session_id, ip, account_id)
+        self.bind_credits(session_id, ip, account_id)
+        svc, db = self._credits(), getattr(self.runtime, "db", None)
+        return svc.snapshot(db, self.session_key(session_id)) if svc and db else {}
 
     def _base_url(self) -> str:
         return str(self.config.get("app_base_url") or "http://127.0.0.1:8765").rstrip("/")
@@ -553,7 +398,7 @@ class WebFrontend(BaseFrontend):
                 )
                 db.conn.commit()
         email_hint = None
-        snap = self._account_snapshot(session_id, ip, account_id)
+        snap = self.account_info(session_id, ip, account_id)
         if snap.get("email"):
             email_hint = snap["email"]
         meta = {
@@ -563,9 +408,11 @@ class WebFrontend(BaseFrontend):
             "anon_user_id": self._anon_user_id(session_id, ip),
             "ip_hash": self._ip_hash(ip),
         }
+        pack = self._credits().pack() if self._credits() else {"stripe_price_id": "", "price_cents": 299}
         result = stripe_client.create_checkout_session(
             secret_key=str(self.config.get("stripe_secret_key") or ""),
-            price_id=str(self.config.get("stripe_price_id") or ""),
+            price_id=str(pack.get("stripe_price_id") or ""),
+            price_cents=int(pack.get("price_cents") or 299),
             success_url=f"{base}/?checkout=success&claim={claim_token}",
             cancel_url=f"{base}/?checkout=cancel",
             email_hint=email_hint,
@@ -588,7 +435,7 @@ class WebFrontend(BaseFrontend):
         meta = data.get("metadata") or {}
         email = web_auth.normalize_email(data.get("customer_email") or (data.get("customer_details") or {}).get("email") or "")
         amount_cents = int(data.get("amount_total") or 0)
-        credits_pack = _int(self.config.get("web_credit_pack_size"), 2000)
+        credits_pack = int((self._credits().pack() if self._credits() else {"credits": 1000})["credits"])
         if not email:
             logger.warning("[stripe] checkout.session.completed missing email; event=%s", event_id)
             return {"ok": True, "ignored": "no_email"}
@@ -604,14 +451,11 @@ class WebFrontend(BaseFrontend):
                 db.conn.rollback()
                 return {"ok": True, "duplicate": True}
 
-            row = db.conn.execute("SELECT user_id, account_id, tier, credits FROM web_users WHERE email = ?", (email,)).fetchone()
+            row = db.conn.execute("SELECT user_id, account_id FROM web_users WHERE email = ?", (email,)).fetchone()
             if row:
                 aid = row["account_id"] or str(uuid.uuid4())
-                new_tier = "unlimited" if (row["tier"] == "unlimited") else "paid"
-                db.conn.execute(
-                    "UPDATE web_users SET account_id = ?, tier = ?, credits = COALESCE(credits, 0) + ? WHERE user_id = ?",
-                    (aid, new_tier, credits_pack, row["user_id"]),
-                )
+                uid = row["user_id"]
+                db.conn.execute("UPDATE web_users SET account_id = ? WHERE user_id = ?", (aid, uid))
             else:
                 # Promote the buyer's anonymous row (from metadata) into an account,
                 # or create a fresh one if we can't find theirs.
@@ -620,17 +464,18 @@ class WebFrontend(BaseFrontend):
                 upgraded = False
                 if anon_uid:
                     cur = db.conn.execute(
-                        "UPDATE web_users SET email = ?, account_id = ?, tier = 'paid', credits = COALESCE(credits, 0) + ? "
+                        "UPDATE web_users SET email = ?, account_id = ? "
                         "WHERE user_id = ? AND email IS NULL",
-                        (email, aid, credits_pack, anon_uid),
+                        (email, aid, anon_uid),
                     )
                     upgraded = (cur.rowcount or 0) > 0
+                    uid = anon_uid
                 if not upgraded:
-                    new_uid = str(uuid.uuid4())
+                    uid = str(uuid.uuid4())
                     db.conn.execute(
-                        "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen, tier, credits, email, account_id) "
-                        "VALUES (?, ?, ?, ?, ?, 'paid', ?, ?, ?)",
-                        (new_uid, meta.get("session_id") or "", meta.get("ip_hash") or "", time.time(), time.time(), credits_pack, email, aid),
+                        "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen, purchased_credits, email, account_id) "
+                        "VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
+                        (uid, meta.get("session_id") or "", meta.get("ip_hash") or "", time.time(), time.time(), email, aid),
                     )
 
             # Bind the claim_token to this email so /auth/claim can pick it up.
@@ -638,6 +483,9 @@ class WebFrontend(BaseFrontend):
             if claim_token:
                 db.conn.execute("UPDATE web_auth_tokens SET email = ? WHERE token = ? AND used_at IS NULL", (email, claim_token))
             db.conn.commit()
+        svc = self._credits()
+        if svc:
+            svc.grant(db, uid, credits_pack, "purchase")
 
         # Fire-and-forget magic-link email so the user can return on any device.
         try:
@@ -715,8 +563,8 @@ class WebFrontend(BaseFrontend):
             else:
                 new_uid = str(uuid.uuid4())
                 db.conn.execute(
-                    "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen, tier, credits, email, account_id) "
-                    "VALUES (?, '', '', ?, ?, 'free', 0, ?, ?)",
+                    "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen, purchased_credits, email, account_id) "
+                    "VALUES (?, '', '', ?, ?, 0, ?, ?)",
                     (new_uid, time.time(), time.time(), email, aid),
                 )
             db.conn.commit()
@@ -737,25 +585,18 @@ class WebFrontend(BaseFrontend):
                 return {"ok": False, "error": "Code not found."}
             if (row["uses"] or 0) >= (row["max_uses"] or 1):
                 return {"ok": False, "error": "This code has already been used."}
-            user = db.conn.execute("SELECT user_id, tier, credits FROM web_users WHERE account_id = ?", (account_id,)).fetchone()
+            user = db.conn.execute("SELECT user_id FROM web_users WHERE account_id = ?", (account_id,)).fetchone()
             if not user:
                 return {"ok": False, "error": "Account not found."}
-            if row["kind"] == "unlimited":
-                db.conn.execute("UPDATE web_users SET tier = 'unlimited' WHERE user_id = ?", (user["user_id"],))
-                granted = "unlimited"
-            elif row["kind"] == "credits":
-                amt = int(row["credits"] or 0)
-                new_tier = "paid" if user["tier"] != "unlimited" else "unlimited"
-                db.conn.execute(
-                    "UPDATE web_users SET credits = COALESCE(credits, 0) + ?, tier = ? WHERE user_id = ?",
-                    (amt, new_tier, user["user_id"]),
-                )
-                granted = f"{amt} credits"
-            else:
+            if row["kind"] != "credits":
                 return {"ok": False, "error": "Unknown code kind."}
+            amt = int(row["credits"] or 0)
             db.conn.execute("UPDATE web_promo_codes SET uses = uses + 1 WHERE code = ?", (code,))
             db.conn.commit()
-        return {"ok": True, "granted": granted}
+        svc = self._credits()
+        if svc:
+            svc.grant(db, user["user_id"], amt, "promo")
+        return {"ok": True, "granted": f"{amt} credits"}
 
     def delete_account(self, account_id: str, session_id: str, confirm_email: str) -> dict:
         """Permanent erasure: account row, auth tokens, payment history, private
@@ -815,6 +656,7 @@ class WebFrontend(BaseFrontend):
         with db.lock:
             db.conn.execute("DELETE FROM web_auth_tokens WHERE email = ?", (email,))
             db.conn.execute("DELETE FROM web_payments WHERE email = ?", (email,))
+            db.conn.execute("DELETE FROM web_credit_ledger WHERE user_id = ?", (row["user_id"],))
             db.conn.execute("DELETE FROM web_users WHERE account_id = ?", (account_id,))
             db.conn.commit()
 
@@ -897,7 +739,7 @@ class WebFrontend(BaseFrontend):
     def canvas_payload(self, session_id: str) -> dict:
         """Return the current canvas (new system), rendering on-demand if needed."""
         key = self.session_key(session_id)
-        snap = self._new_canvas_snap(key) or {}
+        snap = self._new_canvas_snap(key, charge=False) or {}
         return _canvas_payload_full(self.runtime, key, snap)
 
     def palettes_payload(self) -> list[dict]:
@@ -1051,7 +893,7 @@ class WebFrontend(BaseFrontend):
         if new_cs is None:
             return [{"type": "error", "content": "That canvas link is invalid or no longer available."}]
         cr.bind_session(key, new_cs.canvas_id)
-        snap = self._new_canvas_snap(key) or {}
+        snap = self._new_canvas_snap(key, charge=False) or {}
         # Record against the SOURCE pool_hash so popularity attributes to
         # the original look, not the user's fresh editing handle.
         owner = self._anon_user_id(key, "")
@@ -1127,6 +969,7 @@ class WebFrontend(BaseFrontend):
                 seed=seed,
                 db=getattr(self.runtime, "db", None),
                 worker_pool=(getattr(self.runtime, "services", None) or {}).get("skill_worker_pool"),
+                authorize_uncached=self._render_authorizer(key),
             )
         except Exception as e:
             logger.exception("render_for_download failed for session=%s", key)
@@ -1495,7 +1338,7 @@ class WebFrontend(BaseFrontend):
         services = getattr(self.runtime, "services", None) or {}
         return services.get("canvas")
 
-    def _new_canvas_snap(self, session_key: str, *, force_new_seed: bool = False) -> dict | None:
+    def _new_canvas_snap(self, session_key: str, *, force_new_seed: bool = False, charge: bool = True) -> dict | None:
         """Build the frontend canvas-payload from the new CanvasRuntime.
 
         Renders on demand. If the chain is empty, returns an empty-canvas
@@ -1525,6 +1368,7 @@ class WebFrontend(BaseFrontend):
                 db=getattr(self.runtime, "db", None),
                 on_event=lambda ev: self.render_canvas_status(session_key, {"timeout_s": _int(self.config.get("skill_timeout_s"), 30), **ev}),
                 worker_pool=(getattr(self.runtime, "services", None) or {}).get("skill_worker_pool"),
+                authorize_uncached=self._render_authorizer(session_key) if charge else None,
             )
         except Exception as e:
             logger.exception("new canvas render failed for session=%s", session_key)
@@ -1716,6 +1560,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "history": self.server.frontend.history(sid)})
         if path == "/api/canvas":
             sid = str(parse_qs(parsed.query).get("session_id", ["demo"])[0])[:80]
+            self.server.frontend.bind_credits(sid, self.client_address[0], self._cookie_uid())
             return self._json({"ok": True, "canvas": self.server.frontend.canvas_payload(sid)})
         if path == "/api/palettes":
             return self._json({"ok": True, "palettes": self.server.frontend.palettes_payload()})
@@ -1834,6 +1679,7 @@ class _Handler(BaseHTTPRequestHandler):
         if body is None:
             return self._json({"ok": False, "error": "payload too large"}, 413)
         sid = str(body.get("session_id") or "demo")[:80]
+        self.server.frontend.bind_credits(sid, self.client_address[0], self._cookie_uid())
         try:
             if self.path == "/api/chat":
                 events = self.server.frontend.chat(sid, str(body.get("message") or ""), self.client_address[0], self._cookie_uid())

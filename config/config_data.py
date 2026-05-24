@@ -24,6 +24,12 @@ DEFAULT_SCHEDULED_JOBS = {
     },
 }
 
+DEFAULT_WEB_CREDITS = {
+    "costs": {"ai_prompt": 10, "uncached_render": 1},
+    "free": {"five_hours": 60, "week": 600},
+    "pack": {"credits": 1000, "price_cents": 299, "stripe_price_id": ""},
+}
+
 SETTINGS_DATA = [
     # --- Directories ---
     ("Sync Directories", "sync_directories",
@@ -60,7 +66,7 @@ SETTINGS_DATA = [
     # --- Services ---
     ("Auto-load Services", "autoload_services",
      "Service names to load automatically on startup.",
-     ["timekeeper", "web_search_provider", "llm", "parser", "text_embedder", "image_embedder", "gmail", "skill_worker_pool"],
+     ["timekeeper", "web_search_provider", "llm", "parser", "text_embedder", "image_embedder", "gmail", "skill_worker_pool", "credits"],
      {"type": "json_list"}),
 
     # --- Canvas rendering ---
@@ -73,6 +79,11 @@ SETTINGS_DATA = [
      "Hard upper bound on memory granted to a single skill subprocess. The renderer scales the cap with canvas size automatically (~1.2 GB at 2048², ~3.8 GB at 4096²); this value clamps that scaling so a runaway High-resolution download can't swap the machine. On an 8 GB system, 3072 leaves headroom for the OS and a browser; raise on systems with more RAM.",
      3072,
      {"type": "slider", "range": (768, 8192, 29), "is_float": False}),
+
+    ("Web Credits", "web_credits",
+     "Public web billing: prompt and uncached-render costs, free limits, and the Stripe credit pack.",
+     DEFAULT_WEB_CREDITS,
+     {"type": "json_dict"}),
 
     # --- Frontends ---
     ("Enabled Frontends", "enabled_frontends",

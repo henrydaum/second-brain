@@ -1,7 +1,7 @@
 """Thin wrapper around the Stripe SDK so frontend_web.py stays readable.
 
-Stripe keys/price are read from frontend config:
-    stripe_secret_key, stripe_webhook_secret, stripe_price_id
+Stripe keys are read from frontend config; the pack amount/price comes from
+the core web_credits policy.
 
 If the stripe SDK isn't installed or keys are missing, these functions raise
 RuntimeError — the frontend converts that into a user-visible error.
@@ -28,17 +28,20 @@ def _stripe(secret_key: str):
 def create_checkout_session(
     secret_key: str,
     price_id: str,
+    price_cents: int,
     success_url: str,
     cancel_url: str,
     email_hint: str | None = None,
     metadata: dict | None = None,
 ) -> dict:
     stripe = _stripe(secret_key)
-    if not price_id:
-        raise RuntimeError("Stripe is not configured (missing stripe_price_id).")
+    item = {"price": price_id, "quantity": 1} if price_id else {
+        "price_data": {"currency": "usd", "unit_amount": int(price_cents), "product_data": {"name": "Second Brain Credits"}},
+        "quantity": 1,
+    }
     kwargs = dict(
         mode="payment",
-        line_items=[{"price": price_id, "quantity": 1}],
+        line_items=[item],
         success_url=success_url,
         cancel_url=cancel_url,
         allow_promotion_codes=False,

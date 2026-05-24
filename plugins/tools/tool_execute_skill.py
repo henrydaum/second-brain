@@ -87,13 +87,16 @@ class ExecuteSkill(BaseTool):
 
 		# Render the chain. On failure, roll the layer back so the next
 		# call to the agent sees the pre-failure state.
+		credits = (getattr(context, "services", None) or {}).get("credits")
+		db = getattr(context, "db", None)
 		try:
 			render_result = render_canvas(
 				cs,
 				skill_loader=skill_registry.get_record,
-				db=getattr(context, "db", None),
+				db=db,
 				on_event=bus_progress(getattr(context, "session_key", None), float((getattr(context, "config", {}) or {}).get("skill_timeout_s") or 30)),
 				worker_pool=(getattr(context, "services", None) or {}).get("skill_worker_pool"),
+				authorize_uncached=credits.render_authorizer(db, session_key, allow_prompt_overrun=True) if credits and db and session_key.startswith("web:") else None,
 			)
 		except SkillRunError as e:
 			canvas_rt.handle_action(cs.canvas_id, "remove_layer", {"chain_index": len(cs.canvas.layers) - 1})
