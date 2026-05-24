@@ -17,7 +17,7 @@ class MengerSponge3DSkill(BaseSkill):
     pitch = Slider(0, 1, default=0.36, step=0.03)
     rotation = Pan(x="yaw", y="pitch")
     scale = Slider(0.55, 1.35, default=0.95, step=0.05)
-    depth = Slider(1, 4, default=2, step=1, label="Depth")
+    depth = Slider(1, 3, default=2, step=1, label="Depth")
     outline = Bool(default=False)
 
     def _centers(self, depth):
