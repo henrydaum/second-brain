@@ -6,13 +6,8 @@ credit boosts. Marked background_safe=False so it can't
 run from a background driver — only from an attended session.
 """
 
-import logging
-import secrets
-import time
-
+from billing import promo_codes
 from plugins.BaseTool import BaseTool, ToolResult
-
-logger = logging.getLogger("ManagePromoCodes")
 
 
 class ManagePromoCodes(BaseTool):
@@ -45,51 +40,22 @@ class ManagePromoCodes(BaseTool):
         db = getattr(getattr(context, "runtime", None), "db", None) or getattr(context, "db", None)
         if db is None:
             return ToolResult.failed("Database not available.")
-        note = (kwargs.get("note") or "").strip()
-        custom_code = (kwargs.get("code") or "").strip()
-
         if op == "create_credits":
-            amt = int(kwargs.get("credits") or 0)
-            if amt <= 0:
-                return ToolResult.failed("credits must be a positive integer.")
-            code = custom_code or _mint_code()
-            if _code_exists(db, code):
-                return ToolResult.failed(f"Code '{code}' already exists.")
-            with db.lock:
-                db.conn.execute(
-                    "INSERT INTO web_promo_codes (code, kind, credits, max_uses, uses, created_at, note) "
-                    "VALUES (?, 'credits', ?, 1, 0, ?, ?)",
-                    (code, amt, time.time(), note),
-                )
-                db.conn.commit()
-            return ToolResult(data={"code": code, "kind": "credits", "credits": amt, "note": note}, llm_summary=f"Created {amt}-credit promo code: {code}")
+            try:
+                item = promo_codes.create(db, kwargs.get("credits"), kwargs.get("note") or "", kwargs.get("code") or "")
+            except ValueError as e:
+                return ToolResult.failed(str(e))
+            return ToolResult(data=item, llm_summary=f"Created {item['credits']}-credit promo code: {item['code']}")
 
         if op == "list":
-            with db.lock:
-                rows = db.conn.execute(
-                    "SELECT code, kind, credits, max_uses, uses, created_at, note FROM web_promo_codes ORDER BY created_at DESC"
-                ).fetchall()
-            items = [dict(r) for r in rows]
+            items = promo_codes.list_all(db)
             return ToolResult(data={"codes": items}, llm_summary=f"{len(items)} promo code(s).")
 
         if op == "delete":
             code = (kwargs.get("code") or "").strip()
             if not code:
                 return ToolResult.failed("code is required for delete.")
-            with db.lock:
-                cur = db.conn.execute("DELETE FROM web_promo_codes WHERE code = ?", (code,))
-                db.conn.commit()
-            deleted = (cur.rowcount or 0) > 0
+            deleted = promo_codes.delete(db, code)
             return ToolResult(data={"deleted": deleted, "code": code}, llm_summary=("Deleted." if deleted else "No matching code."))
 
         return ToolResult.failed(f"Unknown op: {op}")
-
-
-def _mint_code() -> str:
-    return secrets.token_urlsafe(9)
-
-
-def _code_exists(db, code: str) -> bool:
-    with db.lock:
-        row = db.conn.execute("SELECT 1 FROM web_promo_codes WHERE code = ?", (code,)).fetchone()
-    return row is not None

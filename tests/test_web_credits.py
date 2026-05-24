@@ -8,7 +8,7 @@ import pytest
 from config.config_data import DEFAULT_WEB_CREDITS
 from config import config_manager
 from pipeline.database import Database
-from plugins.services.service_credits import CreditDenied, CreditsService
+from billing.credits import CreditDenied, CreditsService
 
 
 @pytest.fixture

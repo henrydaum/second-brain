@@ -6,6 +6,7 @@ import sqlite3
 import threading
 import time
 
+from billing import schema as billing_schema
 from paths import ATTACHMENT_CACHE
 
 logger = logging.getLogger("Database")
@@ -168,74 +169,7 @@ class Database:
 		# Enable foreign key enforcement (needed for ON DELETE CASCADE)
 		self.conn.execute("PRAGMA foreign_keys = ON")
 
-		# Web users — anonymous until an account is claimed. This checkout is
-		# pre-launch; the credit ledger is the sole metering system.
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS web_users (
-				user_id     TEXT PRIMARY KEY,
-				session_id  TEXT,
-				ip_hash     TEXT,
-				created_at  REAL,
-				last_seen   REAL,
-				purchased_credits INTEGER DEFAULT 0,
-				email       TEXT,
-				account_id  TEXT
-			)
-		""")
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS web_credit_ledger (
-				id          TEXT PRIMARY KEY,
-				user_id     TEXT NOT NULL,
-				kind        TEXT NOT NULL,
-				cost        INTEGER NOT NULL,
-				free_amount INTEGER NOT NULL DEFAULT 0,
-				paid_amount INTEGER NOT NULL DEFAULT 0,
-				status      TEXT NOT NULL,
-				ts          REAL NOT NULL,
-				committed_at REAL,
-				meta_json   TEXT
-			)
-		""")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_credit_user_ts ON web_credit_ledger(user_id, ts)")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_credit_status_ts ON web_credit_ledger(status, ts)")
-
-		# Monetization: auth tokens, promo codes, and payments.
-		self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_web_users_email ON web_users(email) WHERE email IS NOT NULL")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_users_account ON web_users(account_id)")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_users_ip ON web_users(ip_hash)")
-
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS web_auth_tokens (
-				token       TEXT PRIMARY KEY,
-				email       TEXT NOT NULL,
-				created_at  REAL NOT NULL,
-				used_at     REAL
-			)
-		""")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_web_auth_tokens_email ON web_auth_tokens(email)")
-
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS web_promo_codes (
-				code         TEXT PRIMARY KEY,
-				kind         TEXT NOT NULL,
-				credits      INTEGER,
-				max_uses     INTEGER DEFAULT 1,
-				uses         INTEGER DEFAULT 0,
-				created_at   REAL NOT NULL,
-				note         TEXT
-			)
-		""")
-
-		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS web_payments (
-				id              INTEGER PRIMARY KEY,
-				stripe_event_id TEXT UNIQUE,
-				email           TEXT,
-				amount_cents    INTEGER,
-				credits_granted INTEGER,
-				ts              REAL
-			)
-		""")
+		billing_schema.setup(self.conn)
 
 		# Skill scoring — implicit signals (share/download/remix) attributed
 		# across chain steps. `generations` is a denominator-only counter.

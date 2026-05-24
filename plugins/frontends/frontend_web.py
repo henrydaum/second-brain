@@ -19,7 +19,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from plugins.helpers import stripe_client, web_auth
+from billing import promo_codes, storefront
+from billing.credits import CreditDenied
+from plugins.helpers import web_auth
 
 from canvas import actions as canvas_actions
 from canvas.canvas import Canvas
@@ -27,7 +29,6 @@ from canvas.render import pool_hash as _pool_hash, render_canvas as _new_render_
 from canvas.state import CanvasState
 from config import config_manager
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
-from plugins.services.service_credits import CreditDenied
 from plugins.helpers.palettes import get_palette, list_palettes
 from plugins.skills.helpers.skill_store import anonymize_owner_in_dir
 from paths import DATA_DIR, SANDBOX_SKILLS
@@ -385,148 +386,13 @@ class WebFrontend(BaseFrontend):
 
     def create_checkout(self, session_id: str, account_id: str, ip: str) -> dict:
         """Mint a Stripe Checkout Session and return its URL."""
-        base = self._base_url()
-        claim_token = secrets.token_urlsafe(24)
-        # Stash the claim token so /auth/claim can exchange it after Stripe redirects back.
-        # Reuse web_auth_tokens but with a synthetic "pending-checkout" email.
-        db = getattr(self.runtime, "db", None)
-        if db is not None:
-            with db.lock:
-                db.conn.execute(
-                    "INSERT INTO web_auth_tokens (token, email, created_at, used_at) VALUES (?, ?, ?, NULL)",
-                    (claim_token, "__pending_checkout__", time.time()),
-                )
-                db.conn.commit()
-        email_hint = None
-        snap = self.account_info(session_id, ip, account_id)
-        if snap.get("email"):
-            email_hint = snap["email"]
-        meta = {
-            "session_id": session_id,
-            "account_id": account_id or "",
-            "claim_token": claim_token,
-            "anon_user_id": self._anon_user_id(session_id, ip),
-            "ip_hash": self._ip_hash(ip),
-        }
-        pack = self._credits().pack() if self._credits() else {"stripe_price_id": "", "price_cents": 299}
-        result = stripe_client.create_checkout_session(
-            secret_key=str(self.config.get("stripe_secret_key") or ""),
-            price_id=str(pack.get("stripe_price_id") or ""),
-            price_cents=int(pack.get("price_cents") or 299),
-            success_url=f"{base}/?checkout=success&claim={claim_token}",
-            cancel_url=f"{base}/?checkout=cancel",
-            email_hint=email_hint,
-            metadata=meta,
-        )
-        return result
+        return storefront.create_checkout(self, session_id, account_id, ip)
 
     def handle_stripe_webhook(self, payload: bytes, sig_header: str) -> dict:
-        secret_key = str(self.config.get("stripe_secret_key") or "")
-        webhook_secret = str(self.config.get("stripe_webhook_secret") or "")
-        event = stripe_client.verify_webhook(secret_key, webhook_secret, payload, sig_header)
-        event_id = event.get("id")
-        etype = event.get("type")
-        db = getattr(self.runtime, "db", None)
-        if db is None:
-            return {"ok": True, "ignored": "no_db"}
-        if etype != "checkout.session.completed":
-            return {"ok": True, "ignored": etype}
-        data = (event.get("data") or {}).get("object") or {}
-        meta = data.get("metadata") or {}
-        email = web_auth.normalize_email(data.get("customer_email") or (data.get("customer_details") or {}).get("email") or "")
-        amount_cents = int(data.get("amount_total") or 0)
-        credits_pack = int((self._credits().pack() if self._credits() else {"credits": 1000})["credits"])
-        if not email:
-            logger.warning("[stripe] checkout.session.completed missing email; event=%s", event_id)
-            return {"ok": True, "ignored": "no_email"}
-
-        with db.lock:
-            # Idempotency: if we already processed this event, bail.
-            try:
-                db.conn.execute(
-                    "INSERT INTO web_payments (stripe_event_id, email, amount_cents, credits_granted, ts) VALUES (?, ?, ?, ?, ?)",
-                    (event_id, email, amount_cents, credits_pack, time.time()),
-                )
-            except Exception:
-                db.conn.rollback()
-                return {"ok": True, "duplicate": True}
-
-            row = db.conn.execute("SELECT user_id, account_id FROM web_users WHERE email = ?", (email,)).fetchone()
-            if row:
-                aid = row["account_id"] or str(uuid.uuid4())
-                uid = row["user_id"]
-                db.conn.execute("UPDATE web_users SET account_id = ? WHERE user_id = ?", (aid, uid))
-            else:
-                # Promote the buyer's anonymous row (from metadata) into an account,
-                # or create a fresh one if we can't find theirs.
-                anon_uid = meta.get("anon_user_id") or ""
-                aid = str(uuid.uuid4())
-                upgraded = False
-                if anon_uid:
-                    cur = db.conn.execute(
-                        "UPDATE web_users SET email = ?, account_id = ? "
-                        "WHERE user_id = ? AND email IS NULL",
-                        (email, aid, anon_uid),
-                    )
-                    upgraded = (cur.rowcount or 0) > 0
-                    uid = anon_uid
-                if not upgraded:
-                    uid = str(uuid.uuid4())
-                    db.conn.execute(
-                        "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen, purchased_credits, email, account_id) "
-                        "VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
-                        (uid, meta.get("session_id") or "", meta.get("ip_hash") or "", time.time(), time.time(), email, aid),
-                    )
-
-            # Bind the claim_token to this email so /auth/claim can pick it up.
-            claim_token = meta.get("claim_token") or ""
-            if claim_token:
-                db.conn.execute("UPDATE web_auth_tokens SET email = ? WHERE token = ? AND used_at IS NULL", (email, claim_token))
-            db.conn.commit()
-        svc = self._credits()
-        if svc:
-            svc.grant(db, uid, credits_pack, "purchase")
-
-        # Fire-and-forget magic-link email so the user can return on any device.
-        try:
-            link_token = web_auth.mint_token(db, email)
-            link = f"{self._base_url()}/auth/verify?token={link_token}"
-            gmail = getattr(self.runtime, "services", {}).get("gmail")
-            if gmail:
-                web_auth.send_magic_link(gmail, email, link, from_address=str(self.config.get("web_email_from") or "me"))
-            else:
-                logger.warning("[stripe] No gmail service; magic link for %s: %s", email, link)
-        except Exception:
-            logger.exception("[stripe] failed to send post-purchase magic link")
-
-        return {"ok": True}
+        return storefront.handle_webhook(self, payload, sig_header)
 
     def claim_checkout(self, claim_token: str) -> str | None:
-        """Exchange a post-checkout claim token for the buyer's account_id.
-        Returns account_id or None. Atomic single-use claim: the conditional
-        UPDATE also rejects rows whose email is still '__pending_checkout__'
-        (i.e. the Stripe webhook hasn't bound the real email yet)."""
-        db = getattr(self.runtime, "db", None)
-        if db is None or not claim_token:
-            return None
-        now = time.time()
-        with db.lock:
-            cur = db.conn.execute(
-                "UPDATE web_auth_tokens SET used_at = ? "
-                "WHERE token = ? AND used_at IS NULL "
-                "AND email IS NOT NULL AND email != '__pending_checkout__'",
-                (now, claim_token),
-            )
-            if (cur.rowcount or 0) != 1:
-                db.conn.commit()
-                return None
-            row = db.conn.execute(
-                "SELECT email FROM web_auth_tokens WHERE token = ?", (claim_token,),
-            ).fetchone()
-            email = row["email"] if row else None
-            acct = db.conn.execute("SELECT account_id FROM web_users WHERE email = ?", (email,)).fetchone() if email else None
-            db.conn.commit()
-            return acct["account_id"] if acct else None
+        return storefront.claim_checkout(self, claim_token)
 
     def request_magic_link(self, email: str) -> dict:
         email = web_auth.normalize_email(email)
@@ -574,29 +440,7 @@ class WebFrontend(BaseFrontend):
         db = getattr(self.runtime, "db", None)
         if db is None:
             return {"ok": False, "error": "Server not ready."}
-        code = (code or "").strip()
-        if not code:
-            return {"ok": False, "error": "Enter a code."}
-        if not account_id:
-            return {"ok": False, "error": "Sign in first to redeem a promo code.", "need_auth": True}
-        with db.lock:
-            row = db.conn.execute("SELECT code, kind, credits, max_uses, uses FROM web_promo_codes WHERE code = ?", (code,)).fetchone()
-            if not row:
-                return {"ok": False, "error": "Code not found."}
-            if (row["uses"] or 0) >= (row["max_uses"] or 1):
-                return {"ok": False, "error": "This code has already been used."}
-            user = db.conn.execute("SELECT user_id FROM web_users WHERE account_id = ?", (account_id,)).fetchone()
-            if not user:
-                return {"ok": False, "error": "Account not found."}
-            if row["kind"] != "credits":
-                return {"ok": False, "error": "Unknown code kind."}
-            amt = int(row["credits"] or 0)
-            db.conn.execute("UPDATE web_promo_codes SET uses = uses + 1 WHERE code = ?", (code,))
-            db.conn.commit()
-        svc = self._credits()
-        if svc:
-            svc.grant(db, user["user_id"], amt, "promo")
-        return {"ok": True, "granted": f"{amt} credits"}
+        return promo_codes.redeem(db, self._credits(), code, account_id)
 
     def delete_account(self, account_id: str, session_id: str, confirm_email: str) -> dict:
         """Permanent erasure: account row, auth tokens, payment history, private

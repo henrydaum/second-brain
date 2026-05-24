@@ -1,4 +1,4 @@
-"""Thin wrapper around the Stripe SDK so frontend_web.py stays readable.
+"""Thin wrapper around the Stripe SDK for credit-pack checkout.
 
 Stripe keys are read from frontend config; the pack amount/price comes from
 the core web_credits policy.
