@@ -81,6 +81,15 @@ def mix_hex(a, b, t):
     return rgb_to_hex((lerp(ar, br, t), lerp(ag, bg, t), lerp(ab, bb, t)))
 
 
+def with_alpha(color, alpha):
+    """Return an RGBA tuple for a hex/RGB/RGBA color with replaced alpha."""
+    if isinstance(color, str):
+        rgb = hex_to_rgb(color)
+    else:
+        rgb = tuple(color[:3])
+    return (*rgb, int(clamp(alpha, 0, 255)))
+
+
 def _luminance(rgb):
     r, g, b = (c / 255.0 for c in rgb)
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
@@ -201,6 +210,16 @@ def jittered_grid(rng, cols, rows, jitter=0.4):
             cy = (r + 0.5) * ch + (rng.random() - 0.5) * ch * jitter
             out.append((cx, cy))
     return out
+
+
+def regular_polygon(cx, cy, radius, sides, rotation=0.0, y_scale=1.0):
+    """Return points for a rotated regular polygon, optionally squashed on y."""
+    sides = max(3, int(sides))
+    return [
+        (cx + math.cos(rotation + math.tau * i / sides) * radius,
+         cy + math.sin(rotation + math.tau * i / sides) * radius * y_scale)
+        for i in range(sides)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -894,12 +913,14 @@ def build_namespace(canvas_palette):
         hex_to_rgb=hex_to_rgb,
         rgb_to_hex=rgb_to_hex,
         mix_hex=mix_hex,
+        with_alpha=with_alpha,
         palette_color=_palette_color_fn(canvas_palette),
         oklch_to_rgb=oklch_to_rgb,
         # composition
         rule_of_thirds=rule_of_thirds,
         vogel_spiral=vogel_spiral,
         jittered_grid=jittered_grid,
+        regular_polygon=regular_polygon,
         # tiny 3D renderer
         mesh=mesh,
         cube_mesh=cube_mesh,

@@ -152,7 +152,7 @@ class Canvas:
     def image_array(self, mode="RGB", dtype="float"):
         """Return the current image as a numpy array. ``mode`` is "RGB" or "RGBA"
         (passed through to PIL). ``dtype="float"`` yields float32 in [0, 1];
-        ``dtype="uint8"`` yields the raw bytes. Transform skills only."""
+        ``dtype="uint8"`` yields the raw bytes. Filter and object skills only."""
         import numpy as _np
         if self._image is None:
             raise ValueError("canvas.image_array is only available to filter and object skills")

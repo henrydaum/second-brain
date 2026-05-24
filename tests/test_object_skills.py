@@ -13,12 +13,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops
 
 from canvas.state import CanvasState
+from paths import ROOT_DIR
+from plugins.plugin_discovery import discover_skills
 from plugins.helpers.palettes import get_palette
-from plugins.skills.helpers.skill_runner import SkillRunError, run_skill
-from plugins.skills.helpers.skill_store import _KINDS
+from plugins.skills.helpers.skill_registry import SkillRegistry
+from plugins.skills.helpers.skill_runner import SkillRunError, default_controls, run_skill
+from plugins.skills.helpers.skill_store import _KINDS, assert_valid
 
 
 # =================================================================
@@ -111,3 +114,75 @@ def test_object_skill_without_prior_canvas_is_refused():
 			timeout_s=10.0,
 		)
 	assert ei.value.diagnostic.get("error_type") == "MissingPriorCanvas"
+
+
+def test_built_in_object_catalog_smokes_through_sandbox():
+	target = Path(".canvas_object_catalog_test")
+	if target.exists():
+		shutil.rmtree(target, ignore_errors=True)
+	target.mkdir(parents=True, exist_ok=True)
+	try:
+		registry = SkillRegistry()
+		discover_skills(ROOT_DIR, registry, {})
+		records = [s for s in registry.list_records() if s.kind == "object" and s.owner == "library"]
+		names = {s.name for s in records}
+		assert {
+			"Asemic Ribbon", "Boid Swarm", "Circle Pack Medallion", "Differential Vine",
+			"L-System Crest", "Phyllotaxis Pod", "Spirograph Orbit", "Voronoi Shard Halo",
+			"Particle Constellation", "Wave Ribbon", "3D Menger Sponge", "Border",
+		} <= names
+		assert len(records) >= 16
+
+		prior = target / "prior.png"
+		Image.new("RGBA", (96, 96), (13, 24, 37, 255)).save(prior, "PNG")
+		palette = get_palette("japandi")
+		for i, skill in enumerate(records):
+			assert_valid(skill.code)
+			controls = [c for c in skill.controls if c.get("type") != "palette"]
+			assert len(controls) <= 3, skill.name
+			out = target / f"{skill.slug}.png"
+			run_skill(
+				skill,
+				params=default_controls(skill),
+				palette=palette,
+				size=96,
+				seed=1000 + i,
+				input_image_path=prior,
+				output_image_path=out,
+				timeout_s=20.0,
+			)
+			final = Image.open(out).convert("RGB")
+			assert ImageChops.difference(Image.open(prior).convert("RGB"), final).getbbox(), skill.name
+	finally:
+		shutil.rmtree(target, ignore_errors=True)
+
+
+def test_color_field_and_crop_smoke_through_sandbox():
+	target = Path(".canvas_basic_skill_test")
+	if target.exists():
+		shutil.rmtree(target, ignore_errors=True)
+	target.mkdir(parents=True, exist_ok=True)
+	try:
+		registry = SkillRegistry()
+		discover_skills(ROOT_DIR, registry, {})
+		palette = get_palette("japandi")
+		color_field = registry.get_record("color_field")
+		crop = registry.get_record("crop")
+		assert color_field is not None and crop is not None
+
+		bg = target / "color_field.png"
+		run_skill(color_field, params={"mode": "linear", "angle": 20}, palette=palette, size=96, seed=9, input_image_path=None, output_image_path=bg, timeout_s=20.0)
+		assert len(set(Image.open(bg).convert("RGB").getdata())) > 1
+
+		prior = target / "prior.png"
+		img = Image.new("RGBA", (96, 96), palette.background)
+		for box, color in [((0, 0, 48, 48), palette.primary), ((48, 0, 96, 48), palette.secondary), ((0, 48, 48, 96), palette.tertiary), ((48, 48, 96, 96), palette.accent)]:
+			img.paste(Image.new("RGBA", (box[2] - box[0], box[3] - box[1]), color), box[:2])
+		img.save(prior, "PNG")
+		out = target / "crop.png"
+		run_skill(crop, params={"zoom": 2.0, "cx": 0.25, "cy": 0.25}, palette=palette, size=96, seed=10, input_image_path=prior, output_image_path=out, timeout_s=20.0)
+		final = Image.open(out).convert("RGB")
+		assert ImageChops.difference(Image.open(prior).convert("RGB"), final).getbbox()
+		assert final.getpixel((48, 48)) == Image.new("RGB", (1, 1), palette.primary).getpixel((0, 0))
+	finally:
+		shutil.rmtree(target, ignore_errors=True)
