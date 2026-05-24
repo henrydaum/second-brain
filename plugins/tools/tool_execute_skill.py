@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 
+from events.event_bus import bus
+from events.event_channels import CANVAS_CHANGED
 from canvas.render import bus_progress, render_canvas
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.skills.helpers import skill_error_log, skill_scoring
@@ -118,6 +120,7 @@ class ExecuteSkill(BaseTool):
 		skill_scoring.record_event(
 			getattr(context, "db", None), "generate", snap["chain"], snap["path"],
 		)
+		bus.emit(CANVAS_CHANGED, {"session_key": session_key, "action": "add_layer", "canvas": snap})
 		layer_index = len(cs.canvas.layers)  # newly-added layer's 1-based position
 		total = len(cs.canvas.layers)
 		cache_tag = ", cached" if render_result.cache_hit else ""

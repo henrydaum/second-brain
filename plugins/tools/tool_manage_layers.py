@@ -74,6 +74,8 @@ def _enact_and_render(context, action_type: str, payload: dict) -> ToolResult:
 		return ToolResult.failed(str(e))
 
 	snap = _snap_after(cs, render_result)
+	if session_key:
+		bus.emit(CANVAS_CHANGED, {"session_key": session_key, "action": action_type, "canvas": snap})
 	return ToolResult(
 		data={"canvas": snap, "chain": snap["chain"]},
 		llm_summary="",

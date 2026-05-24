@@ -158,6 +158,15 @@ async function post(url, body = {}) {
   return res.json();
 }
 async function poll() { try { render((await fetch(`/api/events?session_id=${encodeURIComponent(sid)}`).then(r => r.json())).events); } catch {} }
+let eventSource = null, fallbackPoll = 0;
+function startFallbackPoll() {
+  if (!fallbackPoll) fallbackPoll = setInterval(poll, 5000);
+}
+function connectEvents() {
+  if (!("EventSource" in window)) return startFallbackPoll();
+  eventSource = new EventSource(`/api/events/stream?session_id=${encodeURIComponent(sid)}`);
+  eventSource.onmessage = e => { try { render([JSON.parse(e.data)]); } catch {} };
+}
 async function get(url) { return fetch(`${url}${url.includes("?") ? "&" : "?"}session_id=${encodeURIComponent(sid)}`).then(r => r.json()); }
 function approval(ev) {
   const el = document.createElement("article");
@@ -1248,6 +1257,6 @@ document.addEventListener("keydown", async (e) => {
   const url = e.shiftKey ? "/api/redo" : "/api/undo";
   try { render((await post(url, {})).events); } catch {}
 });
-setInterval(poll, 1200);
+connectEvents();
 const bootingShare = new URLSearchParams(location.search).has("share");
 loadHistory(); loadPalettes(); if (bootingShare) handleShareDeepLink(); else loadCanvas(); loadGallery(1); loadGalleryFor("archive", 1); refreshAccount();
