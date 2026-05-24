@@ -220,7 +220,7 @@ def _enum_option_values(options) -> list | None:
 def _descriptor_semantic_errors(cls_node: ast.ClassDef) -> list[str]:
     """Catch control bugs at AST time that would otherwise only surface
     inside the subprocess: Enum default ∉ options, Slider max ≤ min,
-    Pan referencing non-Slider attrs, > 3 non-palette controls, ``palette``
+    Pan referencing non-Slider attrs, > 4 non-palette controls, ``palette``
     as a non-Palette control, palette-slot strings assigned as bare class
     attributes (a common misattempt at a control default).
     """
@@ -333,9 +333,9 @@ def _descriptor_semantic_errors(cls_node: ast.ClassDef) -> list[str]:
         if descriptor_name == "Slider" and attr_name in pan_consumed:
             continue
         visible += 1
-    if visible > 3:
+    if visible > 4:
         errors.append(
-            f"class '{cls_node.name}': {visible} non-palette controls declared, cap is 3. "
+            f"class '{cls_node.name}': {visible} non-palette controls declared, cap is 4. "
             f"Drop the least-useful ones or fold two scalars into a Pan (which counts as one widget)."
         )
 

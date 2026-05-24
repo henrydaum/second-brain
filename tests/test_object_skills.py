@@ -139,7 +139,7 @@ def test_built_in_object_catalog_smokes_through_sandbox():
 		for i, skill in enumerate(records):
 			assert_valid(skill.code)
 			controls = [c for c in skill.controls if c.get("type") != "palette"]
-			assert len(controls) <= 3, skill.name
+			assert len(controls) <= 4, skill.name
 			out = target / f"{skill.slug}.png"
 			run_skill(
 				skill,

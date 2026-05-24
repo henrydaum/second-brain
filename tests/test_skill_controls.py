@@ -136,3 +136,26 @@ def test_write_skill_accepts_full_class_source(monkeypatch):
 		for p in d.glob("*"):
 			p.unlink()
 		d.rmdir()
+
+
+def test_skill_control_cap_is_four_non_palette_controls():
+	ok_src = (
+		"from plugins.BaseSkill import BaseSkill, Bool, Enum, Slider\n\n"
+		"class FourControlSkill(BaseSkill):\n"
+		"    name = 'Four'\n"
+		"    description = 'Four controls'\n"
+		"    kind = 'background'\n"
+		"    a = Slider(0, 1, default=0.5)\n"
+		"    b = Slider(0, 1, default=0.5)\n"
+		"    c = Bool(default=False)\n"
+		"    d = Enum(['x', 'y'], default='x')\n"
+		"    def run(self, canvas):\n"
+		"        canvas.commit(canvas.new())\n"
+	)
+	skill_store.assert_valid(ok_src)
+	with pytest.raises(SkillValidationError, match="cap is 4"):
+		skill_store.assert_valid(ok_src.replace(
+			"    def run(self, canvas):\n",
+			"    e = Slider(0, 1, default=0.5)\n"
+			"    def run(self, canvas):\n",
+		))

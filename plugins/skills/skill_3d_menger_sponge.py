@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Palette, Pan, Slider
+from plugins.BaseSkill import BaseSkill, Bool, Palette, Pan, Slider
 
 import math
 
@@ -17,7 +17,8 @@ class MengerSponge3DSkill(BaseSkill):
     pitch = Slider(0, 1, default=0.36, step=0.03)
     rotation = Pan(x="yaw", y="pitch")
     scale = Slider(0.55, 1.35, default=0.95, step=0.05)
-    depth = Slider(1, 3, default=2, step=1, label="Depth")
+    depth = Slider(1, 4, default=2, step=1, label="Depth")
+    outline = Bool(default=False)
 
     def _centers(self, depth):
         cubes = [(0.0, 0.0, 0.0, 1.55 * float(self.scale))]
@@ -49,5 +50,5 @@ class MengerSponge3DSkill(BaseSkill):
             cube = art_kit.cube_mesh(size=size, center=(cx, y, cz), color=art_kit.palette_color(0.25 + 0.55 * ((y / (1.55 * self.scale)) + 0.5)))
             meshes.append(art_kit.mesh([rot(v) for v in cube.vertices], cube.faces, color=cube.color))
         img = canvas.new_layer()
-        art_kit.render_3d(img, meshes, camera=(2.8, 2.2, 3.7), target=(0, 0, 0), fov=33, outline=canvas.palette.background, ambient=0.42)
+        art_kit.render_3d(img, meshes, camera=(2.8, 2.2, 3.7), target=(0, 0, 0), fov=33, outline=canvas.palette.background if self.outline else None, ambient=0.42)
         canvas.commit(img)

@@ -299,7 +299,7 @@ class BaseSkill:
             create_skill tool. ``0.0`` triggers a fallback to file mtime.
         controls:
             Optional list of user-facing controls (slider/enum/bool/pan/
-            palette). Max 3
+            palette). Max 4
             non-palette controls; add a palette control only when the
             skill uses palette and should expose a layer override.
 
