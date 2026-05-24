@@ -10,7 +10,7 @@ except NameError:
 
 class HueShiftSkill(BaseSkill):
     name = 'Hue Shift'
-    description = 'Rotate every pixel\'s hue in HSV space. Quick way to remap an image off the canvas palette into a new color family without re-running the creation skill.'
+    description = 'Rotate every pixel\'s hue in HSV space. Quick way to remap an image off the canvas palette into a new color family without re-running the background skill.'
     kind = "filter"
 
     degrees = Slider(0, 360, default=60, step=5)

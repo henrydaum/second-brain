@@ -43,7 +43,7 @@ def record_user_action(
 	"""Insert a row + fan out to skill_scoring.
 
 	``layers`` is the canvas's layer list — used by ``skill_scoring`` to
-	distribute the signal across creation/transform skills.
+	distribute the signal across background/filter skills.
 
 	``meta`` is optional per-action metadata (title, artist, …) stored as
 	JSON in ``user_canvas_actions.meta_json``. Useful so a share can carry

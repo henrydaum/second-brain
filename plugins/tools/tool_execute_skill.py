@@ -51,7 +51,7 @@ class ExecuteSkill(BaseTool):
 		if skill_registry is None:
 			return ToolResult.failed("skill registry not available on context")
 
-		# Resolve the skill so we know its kind (creation vs transform) and
+		# Resolve the skill so we know its kind (background vs filter) and
 		# can fail fast on unknown slugs before mutating state.
 		skill_inst = skill_registry.get(slug)
 		if skill_inst is None:
@@ -60,7 +60,7 @@ class ExecuteSkill(BaseTool):
 
 		cs = canvas_rt.for_session(session_key)
 
-		# A transform with an empty chain has nothing to read — refuse
+		# A filter or object with an empty chain has nothing to read — refuse
 		# before we corrupt state. Mirrors the SkillRunError the renderer
 		# would raise, but at the action layer.
 		if kind in ("filter", "object") and not cs.canvas.layers:

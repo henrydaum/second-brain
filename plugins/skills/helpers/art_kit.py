@@ -506,12 +506,12 @@ def radial_falloff(w, h, cx=None, cy=None):
 
 
 # ---------------------------------------------------------------------------
-# Numpy primitives for transform skills.
+# Numpy primitives for filter skills.
 #
 # These let lens / warp / glitch transforms skip the most-repeated boilerplate:
 # building a centered coordinate grid and resampling an array at fractional
 # coordinates. Numpy is imported lazily so first-party skills that don't use
-# these (creation skills, PIL-only transforms) pay no import cost.
+# these (background skills, PIL-only transforms) pay no import cost.
 # ---------------------------------------------------------------------------
 
 def centered_grid(size):
@@ -543,7 +543,7 @@ def bilinear_sample(arr, fx, fy):
     Coordinates outside the array are clamped to the edge.
 
     This is the workhorse for fisheye, polar coordinates, kaleidoscope,
-    chromatic aberration, and any other warp transform.
+    chromatic aberration, and any other warp filter.
     """
     import numpy as _np
     a = _np.asarray(arr)

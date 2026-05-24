@@ -134,7 +134,7 @@ class Canvas:
     def commit_array(self, arr):
         """Commit a numpy HxWxC array. Accepts float in [0, 1] or uint8 in [0, 255];
         C may be 3 (RGB) or 4 (RGBA). Saves the numpy round-trip boilerplate that
-        every numeric transform would otherwise repeat: clip, scale, dtype convert,
+        every numeric filter would otherwise repeat: clip, scale, dtype convert,
         Image.fromarray, convert to RGBA, then commit."""
         import numpy as _np
         a = _np.asarray(arr)

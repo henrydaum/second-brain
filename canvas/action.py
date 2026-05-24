@@ -116,7 +116,7 @@ class CanvasRegenerate(CanvasAction):
 
 
 class CanvasAddLayer(CanvasAction):
-	"""Append a creation (clears the chain) or transform layer."""
+	"""Append a background (clears the chain) or transform layer."""
 
 	action_type = "add_layer"
 
@@ -157,7 +157,7 @@ class CanvasRemoveLayer(CanvasAction):
 
 
 class CanvasMoveLayer(CanvasAction):
-	"""Reorder layers. Canvas enforces 'creation must lead'."""
+	"""Reorder layers. Canvas enforces 'background must lead'."""
 
 	action_type = "move_layer"
 

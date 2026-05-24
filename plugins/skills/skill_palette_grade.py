@@ -10,7 +10,7 @@ except NameError:
 
 class PaletteGradeSkill(BaseSkill):
     name = 'Palette Grade'
-    description = 'Map luminance through the canvas palette ramp for a cohesive tonal feel. The single most-useful post-process — call after any creation skill.'
+    description = 'Map luminance through the canvas palette ramp for a cohesive tonal feel. The single most-useful post-process — call after any background skill.'
     kind = "filter"
 
     palette = Palette()
