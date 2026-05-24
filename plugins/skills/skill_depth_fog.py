@@ -18,7 +18,7 @@ class DepthFogSkill(BaseSkill):
         ('top',    'Top Fade'),
         ('bottom', 'Bottom Fade'),
         ('radial', 'Radial Edge'),
-    ], default='top')
+    ], default='radial')
     strength  = Slider(0.0, 1.0, default=0.55, step=0.05)
 
     def run(self, canvas):

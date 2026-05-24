@@ -32,7 +32,7 @@ class GrayScottSkill(BaseSkill):
     description = 'Reaction-diffusion as Gray-Scott PDE on a 256x256 grid, integrated for ~3500 steps then upscaled. Two species A and B diffuse and react; the steady-state texture depends entirely on the feed rate f and kill rate k. Five named presets explore the parameter landscape: spots, mazes, worms, coral, and U-skate (moving solitons). Final B concentration mapped through palette LUT -- the patterns emerge from chemistry, not drawing. Good for "reaction diffusion", "gray scott", "texture", "spots", "stripes", "coral", "organic", or any biology-flavored algorithmic motif.'
     kind = "background"
     palette = Palette()
-    regime = Enum([('spots', 'Spots'), ('maze', 'Maze'), ('worms', 'Worms'), ('coral', 'Coral'), ('uskate', 'U-skate (solitons)')], default='coral')
+    regime = Enum([('spots', 'Spots'), ('maze', 'Maze'), ('worms', 'Worms'), ('coral', 'Coral'), ('uskate', 'U-skate (solitons)')], default='maze')
 
     def run(self, canvas):
         s = int(canvas.size)

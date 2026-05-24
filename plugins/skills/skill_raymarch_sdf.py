@@ -46,7 +46,7 @@ class RaymarchSdfSkill(BaseSkill):
     description = '2D raymarching of a signed distance function: for each pixel, march along a ray taking step sizes equal to the SDF value at the current point. The number of steps to hit (or near-miss) the surface becomes the palette ramp coordinate; the final distance modulates atmosphere fog. Three SDF presets -- three overlapping circles smin\'d together, a torus annulus, and a rounded box + circle composition. Rendered at half resolution then upscaled to stay in the 30s budget. Good for "raymarching", "sdf", "shapes", "sphere", "torus", "glow", or any implicit-geometry algorithmic motif.'
     kind = "background"
     palette = Palette()
-    scene = Enum([('spheres', 'Three Spheres'), ('torus', 'Torus'), ('shapes', 'Mixed Shapes')], default='spheres')
+    scene = Enum([('spheres', 'Three Spheres'), ('torus', 'Torus'), ('shapes', 'Mixed Shapes')], default='torus')
 
     def run(self, canvas):
         s = int(canvas.size)

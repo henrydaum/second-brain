@@ -158,7 +158,7 @@ class LSystemGroveSkill(BaseSkill):
     description = 'Trees as Lindenmayer systems traced by a turtle: depth-aware line width and palette ramp give a heavy trunk fading into a fine halo of thin tip-branches. No leaves, no fbm sky -- pure branching grammar on a clean palette-background. Presets: a single big specimen at canvas center, a perfectly symmetric pure-math tree (no jitter), a grove of stylized silhouettes, a Barnsley-style fern, and a coral form. Good for "tree", "forest", "grove", "branches", "fern", "coral", "sapling", "botanical", or "L-system".'
     kind = "background"
     palette = Palette()
-    shape = Enum([('specimen', 'Single Specimen'), ('pure', 'Pure Symmetric'), ('grove', 'Grove Silhouettes'), ('fern', 'Barnsley Fern'), ('coral', 'Coral')], default='specimen')
+    shape = Enum([('specimen', 'Single Specimen'), ('pure', 'Pure Symmetric'), ('grove', 'Grove Silhouettes'), ('fern', 'Barnsley Fern'), ('coral', 'Coral')], default='coral')
 
     def run(self, canvas):
         s = int(canvas.size)
