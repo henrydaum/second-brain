@@ -15,7 +15,14 @@ Each entry: (title, variable_name, description, default, type_info)
 
 from paths import DATA_DIR, ATTACHMENT_CACHE, ROOT_DIR, SANDBOX_SKILLS, SKILLS_DIR
 
-DEFAULT_SCHEDULED_JOBS = {}
+DEFAULT_SCHEDULED_JOBS = {
+    "cleanup": {
+        "channel": "cleanup_due",
+        "cron": "0 4 * * *",
+        "enabled": True,
+        "payload": {},
+    },
+}
 
 SETTINGS_DATA = [
     # --- Directories ---
@@ -53,7 +60,7 @@ SETTINGS_DATA = [
     # --- Services ---
     ("Auto-load Services", "autoload_services",
      "Service names to load automatically on startup.",
-     ["web_search_provider", "llm", "parser", "text_embedder", "image_embedder", "gmail", "skill_worker_pool"],
+     ["timekeeper", "web_search_provider", "llm", "parser", "text_embedder", "image_embedder", "gmail", "skill_worker_pool"],
      {"type": "json_list"}),
 
     # --- Canvas rendering ---

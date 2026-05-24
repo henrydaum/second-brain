@@ -96,11 +96,7 @@ class Orchestrator:
 
 	def register_task(self, task: BaseTask):
 		"""Register task."""
-		try:
-			task.setup(self.config, services=self.services)
-		except TypeError:
-			# Back-compat: legacy tasks override setup(self, config) only.
-			task.setup(self.config)
+		task.setup(self.config)
 
 		if task.output_schema:
 			self.db.ensure_output_table(task.name, task.output_schema)

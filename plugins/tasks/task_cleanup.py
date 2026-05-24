@@ -59,45 +59,10 @@ class Cleanup(BaseTask):
          5.0, {"type": "slider", "range": (0.5, 100.0, 199), "is_float": True}),
         ("Conversation Max Age (hours)", "conversation_max_age_hours",
          "Ephemeral web conversations (category='Art') older than this are deleted at "
-         "cleanup time, unless still bound to a live session. Combine "
-         "with a more frequent cron expression below if you want a "
-         "tighter bound than the daily default.",
+         "cleanup time, unless still bound to a live session. The cleanup cron schedule "
+         "lives in 'scheduled_jobs' (editable via /schedule) — default is 4 AM daily.",
          24.0, {"type": "slider", "range": (1.0, 168.0, 167), "is_float": True}),
-        ("Cleanup Cron", "cleanup_cron",
-         "Cron expression for when to run the cleanup sweep. Default is "
-         "4 AM daily (low-traffic window). Set to '0 * * * *' to run "
-         "hourly if you need tighter conversation age enforcement. "
-         "Changes take effect after restart.",
-         "0 4 * * *", {"type": "text"}),
     ]
-
-    JOB_NAME = "cleanup"
-
-    def setup(self, config: dict, services: dict | None = None) -> None:
-        """Auto-provision the scheduled job that fires our cleanup event."""
-        if not services:
-            return
-        timekeeper = services.get("timekeeper")
-        if timekeeper is None:
-            return
-        cron = str(config.get("cleanup_cron") or "0 4 * * *")
-        job_def = {
-            "channel": CLEANUP_DUE,
-            "cron": cron,
-            "one_time": False,
-            "enabled": True,
-            "payload": {},
-        }
-        try:
-            existing = timekeeper.get_job(self.JOB_NAME)
-            if existing is None:
-                timekeeper.create_job(self.JOB_NAME, job_def)
-                logger.info("registered scheduled job '%s' cron=%s", self.JOB_NAME, cron)
-            elif existing.get("cron") != cron:
-                timekeeper.update_job(self.JOB_NAME, {"cron": cron})
-                logger.info("updated scheduled job '%s' cron=%s", self.JOB_NAME, cron)
-        except Exception:
-            logger.exception("failed to register cleanup scheduled job")
 
     def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
         del run_id, payload  # the heartbeat itself is the signal
