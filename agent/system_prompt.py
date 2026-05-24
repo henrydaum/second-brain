@@ -7,6 +7,7 @@ the current user turn so stable prefix text remains cacheable.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -55,7 +56,7 @@ def build_prompt_sections(
         _current_datetime(),
         _model_status(services),
         _profile_status(profile_name, scope),
-        _canvas_state(session_key) if _has_tool(r, "execute_skill") else "",
+        _canvas_state(services, session_key) if _has_tool(r, "execute_skill") else "",
         # _services_status(services),
         # _pipeline_status(db, orchestrator),
         # _sync_dirs(config),
@@ -224,17 +225,32 @@ When in doubt, prefer noise, gradients, and procedural patterns in palette tones
 You always follow through. If you start a task, you see it through to completion. Iteration is normal; tell the user that art is iterative and they can always say what to change."""
 
 
-def _canvas_state(session_key: str | None) -> str:
+def _canvas_state(services: dict | None, session_key: str | None) -> str:
     """Return a short summary of the user's current canvas for the agent prompt."""
-    if not session_key:
+    canvas_rt = (services or {}).get("canvas")
+    if not session_key or canvas_rt is None or not hasattr(canvas_rt, "for_session"):
         return ""
-    # The canvas runtime lives on the services bag. We can't reach it from
-    # this pure-function helper without plumbing it through; the system
-    # prompt builder is called with the runtime/services available, so
-    # pull from there if a future caller threads it in. For now, no-op —
-    # the agent gets canvas state from execute_skill / manage_layers
-    # results in-conversation, not from the system prompt preamble.
-    return ""
+    try:
+        cs = canvas_rt.current_for_session(session_key) if hasattr(canvas_rt, "current_for_session") else None
+        if cs is None:
+            return ""
+        layers = list(cs.canvas.layers or [])
+        lines = [
+            "## Current canvas",
+            f"Canvas id: {cs.canvas_id}",
+            f"Size: {cs.canvas.size}; Palette: {cs.canvas.palette_id}; Seed: {cs.render_seed if cs.render_seed is not None else 'not rendered yet'}",
+        ]
+        if not layers:
+            lines.append("Layers: none. The canvas is empty.")
+        else:
+            lines.append("Layers:")
+            for i, layer in enumerate(layers):
+                controls = layer.get("controls") or {}
+                detail = "; controls " + json.dumps(controls, sort_keys=True, default=str) if controls else ""
+                lines.append(f"- {i}: {layer.get('slug')} ({layer.get('kind')}){detail}")
+        return "\n".join(lines)
+    except Exception:
+        return ""
 
 
 def _sandbox_files() -> str:

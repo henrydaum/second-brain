@@ -127,6 +127,11 @@ class CanvasRuntime:
 		logger.info("for_session bound session=%s -> canvas=%s", session_key, cid)
 		return self.canvases[cid]
 
+	def current_for_session(self, session_key: str) -> CanvasState | None:
+		"""Return the canvas bound to ``session_key`` without creating one."""
+		bound = self._session_to_canvas.get(session_key)
+		return self.get(bound) if bound else None
+
 	def bind_session(self, session_key: str, canvas_id: str) -> None:
 		"""Explicitly tie a session to an existing canvas (e.g. on share-link open)."""
 		cs = self.get(canvas_id)

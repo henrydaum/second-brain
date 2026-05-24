@@ -228,6 +228,14 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         """Return current conversation metadata for the dynamic prompt."""
         return runtime.db.get_conversation(session.conversation_id) if runtime.db and session.conversation_id else None
 
+    def _session_canvas_state() -> str:
+        """Return current canvas state when canvas tools are visible."""
+        registry = active_tool_registry(runtime, session)
+        if not registry or "execute_skill" not in getattr(registry, "tools", {}):
+            return ""
+        from agent.system_prompt import _canvas_state
+        return _canvas_state(runtime.services, session.key)
+
     def _append_dynamic(prompt, *parts: str):
         """Append session-only text to the dynamic section when present."""
         extra = "\n\n".join(p for p in parts if p)
@@ -276,6 +284,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         text = base() if callable(base) else (base or "")
         return _append_dynamic(
             text,
+            _session_canvas_state(),
             _conversation_extra(_conversation_meta()),
             _plan_mode_extra() if session.plan_mode else "",
             *(v for v in (session.system_prompt_extras or {}).values() if isinstance(v, str) and v),
