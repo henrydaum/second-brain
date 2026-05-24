@@ -120,47 +120,9 @@ class WebFrontend(BaseFrontend):
         max_per_ip = _int(self.config.get("web_max_ip_connections"), DEFAULT_MAX_IP_CONNECTIONS)
         self._server = _Server((host, port), _Handler, self, max_global=max_global, max_per_ip=max_per_ip)
         logger.info("Web demo listening at http://%s:%s (max_global=%d, max_per_ip=%d)", host, port, max_global, max_per_ip)
-        self._start_conversation_sweeper()
+        # Stale demo-conversation cleanup runs on the cleanup task's schedule
+        # (see plugins/tasks/task_cleanup.py) — fired by the timekeeper.
         self._server.serve_forever()
-
-    def _start_conversation_sweeper(self) -> None:
-        """Periodically purge demo conversations older than 24h that aren't
-        currently bound to a live session. Conversations are intentionally
-        ephemeral on the web demo — this catches the ones left behind when
-        users close the tab without hitting "New chat"."""
-        def loop():
-            interval = 3600.0  # hourly
-            max_age = 86400.0  # 24h
-            while self._server is not None:
-                try:
-                    self._sweep_stale_conversations(max_age)
-                except Exception:
-                    logger.exception("conversation sweeper failed")
-                time.sleep(interval)
-        t = threading.Thread(target=loop, name="web-conversation-sweeper", daemon=True)
-        t.start()
-
-    def _sweep_stale_conversations(self, max_age: float) -> int:
-        db = getattr(self.runtime, "db", None)
-        if db is None:
-            return 0
-        cutoff = time.time() - max_age
-        live_ids = {getattr(s, "conversation_id", None) for s in self.runtime.sessions.values()}
-        live_ids.discard(None)
-        with db.lock:
-            rows = db.conn.execute(
-                "SELECT id FROM conversations WHERE category = 'Demo' AND COALESCE(updated_at, created_at) < ?",
-                (cutoff,),
-            ).fetchall()
-        stale = [int(r["id"]) for r in rows if int(r["id"]) not in live_ids]
-        for cid in stale:
-            try:
-                db.delete_conversation(cid)
-            except Exception:
-                logger.exception("sweeper: delete_conversation failed cid=%s", cid)
-        if stale:
-            logger.info("conversation sweeper purged %d stale demo conversation(s)", len(stale))
-        return len(stale)
 
     def stop(self) -> None:
         if self._server:
@@ -221,7 +183,7 @@ class WebFrontend(BaseFrontend):
         if session.conversation_id is not None:
             self._apply_web_scope(key)
             return
-        cid = self.runtime.create_conversation("Web demo conversation", kind="user", category="Demo")
+        cid = self.runtime.create_conversation("Art conversation", kind="user", category="Art")
         if cid:
             self.runtime.load_conversation(key, cid, agent_profile="default")
             self._apply_web_scope(key)

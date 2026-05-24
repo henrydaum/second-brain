@@ -1,4 +1,5 @@
-"""Tests for the cache_evict task + lazy re-render in pool_share_payload."""
+"""Tests for the cleanup task (cache eviction + conversation pruning) and
+lazy re-render in pool_share_payload."""
 
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-import plugins.tasks.task_cache_evict as task_mod
+import plugins.tasks.task_cleanup as task_mod
 from canvas import render as canvas_render
 from canvas import persistence as canvas_persistence
 from canvas.runtime import CanvasRuntime
@@ -134,7 +135,7 @@ def test_evicts_oldest_until_under_cap(renders_dir, db):
 		)
 		db.conn.commit()
 
-	task = task_mod.CacheEvict()
+	task = task_mod.Cleanup()
 	ctx = SimpleNamespace(db=db, config={"canvas_cache_max_gb": 2 / 1024})  # 2 MB cap
 	r = task.run_event("test-run", {}, ctx)
 	assert r.success
@@ -149,7 +150,7 @@ def test_evicts_oldest_until_under_cap(renders_dir, db):
 
 def test_no_eviction_when_under_cap(renders_dir, db):
 	_make_pool(renders_dir, "small", num_files=1, file_size=1000, mtime=time.time())
-	task = task_mod.CacheEvict()
+	task = task_mod.Cleanup()
 	ctx = SimpleNamespace(db=db, config={"canvas_cache_max_gb": 1.0})
 	r = task.run_event("test-run", {}, ctx)
 	assert r.success
@@ -158,10 +159,73 @@ def test_no_eviction_when_under_cap(renders_dir, db):
 
 def test_handles_missing_renders_dir(renders_dir, db):
 	shutil.rmtree(renders_dir)
-	task = task_mod.CacheEvict()
-	ctx = SimpleNamespace(db=db, config={"canvas_cache_max_gb": 1.0})
+	task = task_mod.Cleanup()
+	ctx = SimpleNamespace(db=db, config={"canvas_cache_max_gb": 1.0}, runtime=None)
 	r = task.run_event("test-run", {}, ctx)
 	assert r.success  # graceful no-op
+
+
+# =================================================================
+# conversation pruning
+# =================================================================
+
+def _insert_conversation(db, *, category: str, updated_at: float) -> int:
+	with db.lock:
+		cur = db.conn.execute(
+			"INSERT INTO conversations (title, kind, category, created_at, updated_at) "
+			"VALUES (?, 'user', ?, ?, ?)",
+			("test", category, updated_at, updated_at),
+		)
+		db.conn.commit()
+		return int(cur.lastrowid)
+
+
+def test_prunes_stale_art_conversations(renders_dir, db):
+	"""Art conversations past max age get deleted; live + recent are kept."""
+	now = time.time()
+	old_art = _insert_conversation(db, category="Art", updated_at=now - 86400 * 2)  # 48h old
+	fresh_art = _insert_conversation(db, category="Art", updated_at=now - 3600)    # 1h old
+	old_user = _insert_conversation(db, category="User", updated_at=now - 86400 * 2)  # 48h, not art
+	live_art = _insert_conversation(db, category="Art", updated_at=now - 86400 * 2)  # 48h, but bound
+
+	# Live session points at live_art.
+	runtime = SimpleNamespace(sessions={
+		"sess1": SimpleNamespace(conversation_id=live_art),
+	})
+	ctx = SimpleNamespace(
+		db=db,
+		config={"canvas_cache_max_gb": 999.0, "conversation_max_age_hours": 24.0},
+		runtime=runtime,
+	)
+	task = task_mod.Cleanup()
+	r = task.run_event("test-run", {}, ctx)
+	assert r.success
+
+	with db.lock:
+		ids = {r["id"] for r in db.conn.execute("SELECT id FROM conversations").fetchall()}
+	assert old_art not in ids, "stale art conversation should be pruned"
+	assert fresh_art in ids, "recent art conversation should survive"
+	assert old_user in ids, "non-art conversations are never auto-pruned"
+	assert live_art in ids, "art conversation bound to a live session should survive even when old"
+
+
+def test_prune_respects_max_age_config(renders_dir, db):
+	"""Setting max age to 1h evicts a 2h-old art conversation; 30min-old survives."""
+	now = time.time()
+	two_h = _insert_conversation(db, category="Art", updated_at=now - 7200)
+	half_h = _insert_conversation(db, category="Art", updated_at=now - 1800)
+
+	ctx = SimpleNamespace(
+		db=db,
+		config={"canvas_cache_max_gb": 999.0, "conversation_max_age_hours": 1.0},
+		runtime=None,
+	)
+	r = task_mod.Cleanup().run_event("test-run", {}, ctx)
+	assert r.success
+	with db.lock:
+		ids = {r["id"] for r in db.conn.execute("SELECT id FROM conversations").fetchall()}
+	assert two_h not in ids
+	assert half_h in ids
 
 
 # =================================================================
