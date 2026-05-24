@@ -59,6 +59,44 @@ const galleryPages = {shared: 1, archive: 1};
 let activeTab = "shared";
 const pendingControls = new Map();
 let typingEl = null;
+let toolStatusEl = null;
+const TOOL_LABELS = {
+  search_skills: "Searching skills",
+  read_skill: "Reading skill",
+  read_skill_guide: "Reading skill guide",
+  create_skill: "Creating skill",
+  update_skill: "Updating skill",
+  delete_skill: "Deleting skill",
+  execute_skill: "Running skill",
+  manage_layers: "Managing layers",
+  web_search: "Searching the web",
+  sql_query: "Querying database",
+  ask_user_question: "Asking a question",
+  propose_plan: "Proposing a plan",
+  manage_promo_codes: "Managing promo codes",
+};
+function toolLabel(name) {
+  if (!name) return "";
+  if (TOOL_LABELS[name]) return TOOL_LABELS[name];
+  return name.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
+}
+function setToolStatus(name) {
+  if (!name) return;
+  const text = `${toolLabel(name)}…`;
+  if (toolStatusEl && toolStatusEl.isConnected) {
+    toolStatusEl.textContent = text;
+    bottom();
+    return;
+  }
+  toolStatusEl = document.createElement("article");
+  toolStatusEl.className = "status tool-status";
+  toolStatusEl.textContent = text;
+  messages.appendChild(toolStatusEl);
+  bottom();
+}
+function clearToolStatus() {
+  if (toolStatusEl) { toolStatusEl.remove(); toolStatusEl = null; }
+}
 let agentBusy = false;
 const sendBtn = form.querySelector("button:not(#controlsToggle)");
 
@@ -145,7 +183,8 @@ function renderToolStatus(ev) {
   // agent's own step-by-step messages cover what the user needs to see.
   // We still drive the loader so "Thinking…" stays alive across tool calls.
   const id = ev.call_id || `${ev.name}:${Date.now()}`;
-  if (ev.status === "started") loaderToolStart(id);
+  if (ev.status === "started") { loaderToolStart(id); setToolStatus(ev.name); }
+  else if (ev.status === "progressed") setToolStatus(ev.name);
   else if (ev.status === "finished") loaderToolEnd(id);
 }
 let renderMeterFrame = 0, renderMeterHide = 0, renderMeterValue = 0;
@@ -193,11 +232,11 @@ function renderRenderStatus(ev) {
 }
 function render(events) {
   for (const ev of events || []) {
-    if (ev.type === "message") add("assistant", ev.content, true);
+    if (ev.type === "message") { clearToolStatus(); add("assistant", ev.content, true); }
     else if (ev.type === "status") add("status", ev.content);
     else if (ev.type === "tool_status") renderToolStatus(ev);
     else if (ev.type === "render_status") renderRenderStatus(ev);
-    else if (ev.type === "error") { add("error", ev.content); loaderForceStop(); renderRenderStatus({status:"error", error:ev.content}); }
+    else if (ev.type === "error") { clearToolStatus(); add("error", ev.content); loaderForceStop(); renderRenderStatus({status:"error", error:ev.content}); }
     else if (ev.type === "form") add("assistant", `${ev.form?.display?.prompt || "Input required"}\n${(ev.form?.display?.choices || []).map(c => c.label || c.value).join(" / ")}`);
     else if (ev.type === "approval") approval(ev);
     else if (ev.type === "paywall") openPaywall(ev);
@@ -255,9 +294,9 @@ function setTyping(on) {
     typingEl.textContent = "Thinking…";
     messages.appendChild(typingEl);
     bottom();
-  } else if (typingEl) {
-    typingEl.remove();
-    typingEl = null;
+  } else {
+    clearToolStatus();
+    if (typingEl) { typingEl.remove(); typingEl = null; }
   }
 }
 
