@@ -6,6 +6,7 @@ import json
 import logging
 import mimetypes
 import hashlib
+import html as _html
 import random
 import re
 import secrets
@@ -1280,6 +1281,82 @@ class WebFrontend(BaseFrontend):
             logger.exception("share_qr_png failed for pool_hash=%s", pool_hash)
             return None
 
+    def share_meta(self, pool_hash: str) -> dict:
+        """Title/artist for a pool_hash, pulled from its most recent share row.
+
+        Falls back to ``("untitled", "anonymous")`` when nothing was ever
+        explicitly shared with metadata (e.g. raw remix links).
+        """
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return {"title": "untitled", "artist": "anonymous"}
+        with db.lock:
+            row = db.conn.execute(
+                "SELECT meta_json FROM user_canvas_actions "
+                "WHERE pool_hash = ? AND action = 'share' "
+                "ORDER BY ts DESC LIMIT 1",
+                (pool_hash,),
+            ).fetchone()
+        meta: dict = {}
+        if row and row["meta_json"]:
+            try:
+                meta = json.loads(row["meta_json"]) or {}
+            except (TypeError, ValueError):
+                meta = {}
+        return {
+            "title": str(meta.get("title") or "untitled"),
+            "artist": str(meta.get("artist") or "anonymous"),
+        }
+
+    def share_og_html(self, pool_hash: str) -> str | None:
+        """HTML page with Open Graph / Twitter Card tags for a /share/{hash}
+        URL. Returns None if the pool doesn't exist.
+
+        Human browsers see a tiny page that immediately redirects to the
+        SPA (``/?share=<hash>``); social-media crawlers (Twitter / Discord /
+        Slack / iMessage / Facebook) read the OG tags and render an
+        unfurled card with the canvas image, title, and artist. Both
+        audiences get what they want from the same URL.
+        """
+        if not self.pool_share_payload(pool_hash):
+            return None
+        meta = self.share_meta(pool_hash)
+        title = meta["title"]
+        artist = meta["artist"]
+        base = self._base_url()
+        share_url = f"{base}/share/{pool_hash}"
+        image_url = f"{base}/share/{pool_hash}/image.png"
+        spa_url = f"/?share={quote(pool_hash, safe='')}"
+        spa_url_abs = f"{base}{spa_url}"
+        headline = f"{title} by {artist}" if title != "untitled" else "Untitled canvas"
+        description = f"{headline} — generated on Second Brain Art."
+        e = _html.escape  # shorthand for attribute-safe escaping
+        spa_url_js = json.dumps(spa_url)  # safely JSON-encoded for inline JS
+        return (
+            "<!doctype html>\n"
+            "<html lang=\"en\"><head>\n"
+            "<meta charset=\"utf-8\">\n"
+            f"<title>{e(headline)} · Second Brain Art</title>\n"
+            f"<meta name=\"description\" content=\"{e(description)}\">\n"
+            "<meta property=\"og:type\" content=\"website\">\n"
+            f"<meta property=\"og:title\" content=\"{e(headline)}\">\n"
+            f"<meta property=\"og:description\" content=\"{e(description)}\">\n"
+            f"<meta property=\"og:image\" content=\"{e(image_url)}\">\n"
+            f"<meta property=\"og:url\" content=\"{e(share_url)}\">\n"
+            "<meta property=\"og:site_name\" content=\"Second Brain Art\">\n"
+            "<meta name=\"twitter:card\" content=\"summary_large_image\">\n"
+            f"<meta name=\"twitter:title\" content=\"{e(headline)}\">\n"
+            f"<meta name=\"twitter:description\" content=\"{e(description)}\">\n"
+            f"<meta name=\"twitter:image\" content=\"{e(image_url)}\">\n"
+            f"<link rel=\"canonical\" href=\"{e(spa_url_abs)}\">\n"
+            f"<meta http-equiv=\"refresh\" content=\"0; url={e(spa_url)}\">\n"
+            f"<script>window.location.replace({spa_url_js});</script>\n"
+            "<style>body{font-family:system-ui;background:#0a0c12;color:#cbd5e1;margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh}a{color:#7fc8d4}</style>\n"
+            "</head><body>\n"
+            f"<p>Loading <a href=\"{e(spa_url)}\">{e(headline)}</a>…</p>\n"
+            "</body></html>\n"
+        )
+
     def gallery(self, session_id: str, limit: int = 24, offset: int = 0) -> dict:
         """Publicly shared canvases, newest first.
 
@@ -1612,8 +1689,16 @@ class _Handler(BaseHTTPRequestHandler):
             if pool_payload is None:
                 return self._redirect("/") if sub == "" else self.send_error(404)
             if sub == "":
+                # Two audiences, one URL: human browsers immediately
+                # redirect to the SPA via meta-refresh / inline JS, while
+                # social-media crawlers (Twitter / Discord / Slack /
+                # iMessage / Facebook) read OG + Twitter Card tags to
+                # render an unfurled preview with the canvas image.
                 self.server.frontend.record_link_open(share_id, self.client_address[0], self._cookie_uid(), pool_payload)
-                return self._redirect(f"/?share={quote(share_id, safe='')}")
+                body = self.server.frontend.share_og_html(share_id)
+                if body is None:
+                    return self._redirect(f"/?share={quote(share_id, safe='')}")
+                return self._html(body)
             if sub in {"image.png", "image.webp", "image"}:
                 img = pool_payload.get("image_path")
                 if img is None:

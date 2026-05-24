@@ -519,30 +519,78 @@ def test_share_page_link_open_scores_but_qr_does_not(monkeypatch, renders_dir):
 		_cleanup_db(db, dbpath)
 
 
-def test_share_route_redirects_to_landing_with_share_loaded(monkeypatch, renders_dir):
-	"""GET /share/{pool_hash} redirects to /?share=... and records link_open."""
+def test_share_route_serves_og_html_with_redirect(monkeypatch, renders_dir):
+	"""GET /share/{pool_hash} serves an HTML page containing OG/Twitter Card
+	tags + a meta-refresh + JS redirect to /?share=... and records
+	link_open. Crawlers see OG tags; browsers see the redirect."""
 	_install_fake_run_skill(monkeypatch)
-	db, dbpath = _fresh_db("redirect")
+	db, dbpath = _fresh_db("og_html")
 	try:
 		fe = _make_frontend(db)
+		fe._base_url = lambda: "http://localhost:8765"
 		_seed_canvas(fe)
-		fe.share("sess1", "T", "A", ip="127.0.0.1", account_id="alice")
+		fe.share("sess1", "Mandelbrot Bay", "Henry", ip="127.0.0.1", account_id="alice")
 		ph = fe.gallery("sess1")["items"][0]["pool_hash"]
-		redirects = []
+
+		body_chunks = []
 		handler = fw._Handler.__new__(fw._Handler)
 		handler.path = f"/share/{ph}"
 		handler.server = SimpleNamespace(frontend=fe)
 		handler.client_address = ("127.0.0.1", 12345)
 		handler.headers = {}
-		handler._redirect = lambda location, extra_headers=(): redirects.append(location)
+		handler._redirect = lambda location, extra_headers=(): pytest.fail(f"unexpected 303 redirect to {location}")
 		handler.send_error = lambda code: pytest.fail(f"unexpected send_error({code})")
+		# Capture _html() output via a stub.
+		handler._html = lambda body, status=200: body_chunks.append(body)
 
 		handler.do_GET()
 
-		assert redirects == [f"/?share={ph}"]
+		assert len(body_chunks) == 1
+		html = body_chunks[0]
+		# OG / Twitter Card tags present and well-formed.
+		assert 'property="og:title"' in html
+		assert 'property="og:image"' in html
+		assert 'name="twitter:card" content="summary_large_image"' in html
+		assert f"http://localhost:8765/share/{ph}/image.png" in html
+		assert "Mandelbrot Bay by Henry" in html
+		# Redirect mechanics for human browsers.
+		assert f'url=/?share={ph}' in html             # meta-refresh
+		assert f'"/?share={ph}"' in html               # inline JS replace target
+		# Link-open is still recorded for the share visit.
 		assert db.conn.execute("SELECT COUNT(*) AS n FROM user_canvas_actions WHERE action = 'link_open'").fetchone()["n"] == 1
 	finally:
 		_cleanup_db(db, dbpath)
+
+
+def test_share_og_html_escapes_user_supplied_strings(monkeypatch, renders_dir):
+	"""Title/artist must be HTML-escaped — they come from user input."""
+	_install_fake_run_skill(monkeypatch)
+	db, dbpath = _fresh_db("og_escape")
+	try:
+		fe = _make_frontend(db)
+		fe._base_url = lambda: "http://localhost:8765"
+		_seed_canvas(fe)
+		fe.share("sess1", '<script>alert(1)</script>', 'O"Brien & Co', ip="127.0.0.1", account_id="alice")
+		ph = fe.gallery("sess1")["items"][0]["pool_hash"]
+
+		html = fe.share_og_html(ph)
+		assert html is not None
+		# Raw script tag must NOT appear; the escaped form must.
+		assert "<script>alert(1)</script>" not in html
+		assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+		# Quote in artist name escaped inside attribute context.
+		assert 'O"Brien' not in html  # raw quote would break attribute
+		assert "O&quot;Brien" in html
+		assert "&amp; Co" in html
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_share_og_html_returns_none_for_unknown_pool():
+	"""Unknown pool_hash → None → caller falls back to a plain redirect."""
+	fe = SimpleNamespace(pool_share_payload=lambda _ph: None)
+	# Bind the real method, then invoke it with our stub `self`.
+	assert fw.WebFrontend.share_og_html(fe, "deadbeef") is None
 
 
 def test_broken_share_route_redirects_home():
