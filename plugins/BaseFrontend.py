@@ -26,6 +26,7 @@ from events.event_channels import (
     APPROVAL_REQUESTED,
     CHAT_MESSAGE_PUSHED,
     CANVAS_RENDER_STATUS,
+    CANVAS_CHANGED,
     COMMAND_CALL_FINISHED,
     COMMAND_CALL_PROGRESSED,
     COMMAND_CALL_STARTED,
@@ -267,6 +268,7 @@ class BaseFrontend:
             bus.subscribe(TOOL_CALL_STARTED, self.on_bus_tool_call_started),
             bus.subscribe(TOOL_CALL_FINISHED, self.on_bus_tool_call_finished),
             bus.subscribe(CANVAS_RENDER_STATUS, self.on_bus_canvas_render_status),
+            bus.subscribe(CANVAS_CHANGED, self.on_bus_canvas_changed),
             bus.subscribe(AGENT_THINKING, self.on_bus_agent_thinking),
             bus.subscribe(TOOLS_CHANGED, self.on_tools_changed),
             bus.subscribe(TASKS_CHANGED, self.on_tasks_changed),
@@ -476,6 +478,10 @@ class BaseFrontend:
         if key and key in self._live_session_keys():
             try: self.render_canvas_status(key, payload)
             except Exception: logger.exception(f"render_canvas_status failed for '{self.name}'")
+
+    def on_bus_canvas_changed(self, payload: dict) -> None:
+        """Handle canvas changed."""
+        return
 
     def on_bus_command_call_started(self, payload: dict) -> None:
         """Handle on bus command call started."""

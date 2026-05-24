@@ -59,7 +59,6 @@ const galleryPages = {shared: 1, archive: 1};
 let activeTab = "shared";
 const pendingControls = new Map();
 let typingEl = null;
-let toolStatusEl = null;
 const TOOL_LABELS = {
   search_skills: "Searching skills",
   read_skill: "Reading skill",
@@ -67,7 +66,7 @@ const TOOL_LABELS = {
   create_skill: "Creating skill",
   update_skill: "Updating skill",
   delete_skill: "Deleting skill",
-  execute_skill: "Running skill",
+  execute_skill: "Executing skill",
   manage_layers: "Managing layers",
   web_search: "Searching the web",
   sql_query: "Querying database",
@@ -80,22 +79,20 @@ function toolLabel(name) {
   if (TOOL_LABELS[name]) return TOOL_LABELS[name];
   return name.replace(/_/g, " ").replace(/^./, c => c.toUpperCase());
 }
-function setToolStatus(name) {
-  if (!name) return;
-  const text = `${toolLabel(name)}…`;
-  if (toolStatusEl && toolStatusEl.isConnected) {
-    toolStatusEl.textContent = text;
+function setStatusText(text) {
+  if (typingEl && typingEl.isConnected) {
+    typingEl.textContent = text;
     bottom();
     return;
   }
-  toolStatusEl = document.createElement("article");
-  toolStatusEl.className = "status tool-status";
-  toolStatusEl.textContent = text;
-  messages.appendChild(toolStatusEl);
+  typingEl = document.createElement("article");
+  typingEl.className = "status typing";
+  typingEl.textContent = text;
+  messages.appendChild(typingEl);
   bottom();
 }
-function clearToolStatus() {
-  if (toolStatusEl) { toolStatusEl.remove(); toolStatusEl = null; }
+function clearStatus() {
+  if (typingEl) { typingEl.remove(); typingEl = null; }
 }
 let agentBusy = false;
 const sendBtn = form.querySelector("button:not(#controlsToggle)");
@@ -183,9 +180,9 @@ function renderToolStatus(ev) {
   // agent's own step-by-step messages cover what the user needs to see.
   // We still drive the loader so "Thinking…" stays alive across tool calls.
   const id = ev.call_id || `${ev.name}:${Date.now()}`;
-  if (ev.status === "started") { loaderToolStart(id); setToolStatus(ev.name); }
-  else if (ev.status === "progressed") setToolStatus(ev.name);
-  else if (ev.status === "finished") loaderToolEnd(id);
+  if (ev.status === "started") { loaderToolStart(id); setStatusText(`${toolLabel(ev.name)}…`); }
+  else if (ev.status === "progressed") setStatusText(`${toolLabel(ev.name)}…`);
+  else if (ev.status === "finished") { loaderToolEnd(id); setStatusText("Thinking…"); }
 }
 let renderMeterFrame = 0, renderMeterHide = 0, renderMeterValue = 0;
 function setRenderMeter(v) {
@@ -232,11 +229,11 @@ function renderRenderStatus(ev) {
 }
 function render(events) {
   for (const ev of events || []) {
-    if (ev.type === "message") { clearToolStatus(); add("assistant", ev.content, true); }
+    if (ev.type === "message") { clearStatus(); add("assistant", ev.content, true); }
     else if (ev.type === "status") add("status", ev.content);
     else if (ev.type === "tool_status") renderToolStatus(ev);
     else if (ev.type === "render_status") renderRenderStatus(ev);
-    else if (ev.type === "error") { clearToolStatus(); add("error", ev.content); loaderForceStop(); renderRenderStatus({status:"error", error:ev.content}); }
+    else if (ev.type === "error") { clearStatus(); add("error", ev.content); loaderForceStop(); renderRenderStatus({status:"error", error:ev.content}); }
     else if (ev.type === "form") add("assistant", `${ev.form?.display?.prompt || "Input required"}\n${(ev.form?.display?.choices || []).map(c => c.label || c.value).join(" / ")}`);
     else if (ev.type === "approval") approval(ev);
     else if (ev.type === "paywall") openPaywall(ev);
@@ -287,17 +284,8 @@ sendBtn.addEventListener("click", async e => {
 });
 
 function setTyping(on) {
-  if (on) {
-    if (typingEl && typingEl.isConnected) { bottom(); return; }
-    typingEl = document.createElement("article");
-    typingEl.className = "status typing";
-    typingEl.textContent = "Thinking…";
-    messages.appendChild(typingEl);
-    bottom();
-  } else {
-    clearToolStatus();
-    if (typingEl) { typingEl.remove(); typingEl = null; }
-  }
+  if (on) setStatusText("Thinking…");
+  else clearStatus();
 }
 
 // ----- account + paywall + auth -----

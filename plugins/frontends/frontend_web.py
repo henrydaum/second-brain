@@ -275,6 +275,16 @@ class WebFrontend(BaseFrontend):
     def render_canvas_status(self, session_key: str, payload: dict) -> None:
         self._push(session_key, {"type": "render_status", **dict(payload or {})})
 
+    def on_bus_canvas_changed(self, payload: dict) -> None:
+        key = (payload or {}).get("session_key")
+        if not key or key not in self._live_session_keys():
+            return
+        snap = self._new_canvas_snap(key) or {}
+        if not snap.get("path"):
+            self._push(key, {"type": "canvas_reset"})
+            return
+        self._push(key, _image_event(Path(snap["path"]), _canvas_payload_full(self.runtime, key, snap)))
+
     def _chain_progress_cb(self, key: str):
         """Build an on_step callback that emits tool_status progressed events.
         Only emits when the chain has >1 step, so single-skill renders stay quiet."""

@@ -24,6 +24,7 @@ from canvas import render as canvas_render
 from canvas.runtime import CanvasRuntime
 from pipeline.database import Database
 import plugins.frontends.frontend_web as fw
+from plugins.tools.tool_manage_layers import ManageLayers
 
 
 def _install_fake_run_skill(monkeypatch):
@@ -263,6 +264,47 @@ def test_delete_background_clears_canvas_in_web_frontend(monkeypatch, renders_di
 		assert events == [{"type": "canvas_reset"}]
 		assert cs.canvas.layers == []
 	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_agent_manage_layers_clear_pushes_canvas_reset(monkeypatch, renders_dir):
+	_install_fake_run_skill(monkeypatch)
+	db, dbpath = _fresh_db("agent_clear_reset")
+	fe = None
+	try:
+		fe = fw.WebFrontend()
+		cr = CanvasRuntime(db=db)
+		runtime = SimpleNamespace(
+			services={"canvas": cr},
+			db=db,
+			skill_registry=SimpleNamespace(get_record=lambda slug: SimpleNamespace(slug=slug, name=slug, kind="background", controls=[], code="")),
+			config={},
+			sessions={},
+			get_session=lambda key: None,
+		)
+		fe.bind(runtime, commands=None, config={})
+		key, cs = _seed_canvas(fe)
+		runtime.sessions[key] = SimpleNamespace()
+		assert cs.canvas.layers
+
+		result = ManageLayers().run(SimpleNamespace(
+			session_key=key,
+			canvas=cr,
+			skill_registry=runtime.skill_registry,
+			db=db,
+			config={},
+			services={},
+		), action="clear")
+
+		assert result.success
+		assert cs.canvas.layers == []
+		assert fe._drain(key)[0]["type"] == "canvas_reset"
+	finally:
+		if fe is not None:
+			try:
+				fe.unbind()
+			except Exception:
+				pass
 		_cleanup_db(db, dbpath)
 
 

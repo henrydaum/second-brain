@@ -21,5 +21,11 @@ class BorderSkill(BaseSkill):
         }
         img = canvas.new_layer()
         w = max(1, int(self.width))
-        ImageDraw.Draw(img, "RGBA").rectangle((w // 2, w // 2, canvas.size - w // 2 - 1, canvas.size - w // 2 - 1), outline=colors.get(str(self.color), canvas.palette.accent), width=w)
+        draw = ImageDraw.Draw(img, "RGBA")
+        color = colors.get(str(self.color), canvas.palette.accent)
+        s = canvas.size
+        draw.rectangle((0, 0, s - 1, w - 1), fill=color)
+        draw.rectangle((0, s - w, s - 1, s - 1), fill=color)
+        draw.rectangle((0, 0, w - 1, s - 1), fill=color)
+        draw.rectangle((s - w, 0, s - 1, s - 1), fill=color)
         canvas.commit(img)

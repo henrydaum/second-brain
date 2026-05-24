@@ -186,3 +186,27 @@ def test_color_field_and_crop_smoke_through_sandbox():
 		assert final.getpixel((48, 48)) == Image.new("RGB", (1, 1), palette.primary).getpixel((0, 0))
 	finally:
 		shutil.rmtree(target, ignore_errors=True)
+
+
+def test_border_grows_inward_from_canvas_edge():
+	target = Path(".canvas_border_test")
+	if target.exists():
+		shutil.rmtree(target, ignore_errors=True)
+	target.mkdir(parents=True, exist_ok=True)
+	try:
+		registry = SkillRegistry()
+		discover_skills(ROOT_DIR, registry, {})
+		palette = get_palette("japandi")
+		prior = target / "prior.png"
+		Image.new("RGBA", (32, 32), palette.background).save(prior, "PNG")
+		out = target / "border.png"
+		run_skill(registry.get_record("border"), params={"width": 4, "color": "accent"}, palette=palette, size=32, seed=1, input_image_path=prior, output_image_path=out, timeout_s=20.0)
+		final = Image.open(out).convert("RGB")
+		accent = Image.new("RGB", (1, 1), palette.accent).getpixel((0, 0))
+		background = Image.new("RGB", (1, 1), palette.background).getpixel((0, 0))
+		assert final.getpixel((0, 0)) == accent
+		assert final.getpixel((3, 16)) == accent
+		assert final.getpixel((4, 16)) == background
+		assert final.getpixel((31, 31)) == accent
+	finally:
+		shutil.rmtree(target, ignore_errors=True)

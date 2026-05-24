@@ -129,6 +129,12 @@ Payload:
     skill_slug:  str (optional)
     timeout_s:   float"""
 
+CANVAS_CHANGED = "canvas_changed"
+"""Canvas state changed outside a direct web canvas endpoint.
+Payload:
+    session_key: str
+    action:      str (optional) — e.g. clear/remove_layer/move_layer"""
+
 CLEANUP_DUE = "cleanup_due"
 """Timekeeper-emitted heartbeat asking the cleanup task to enforce its
 periodic cleanups: canvas render cache size cap, stale ephemeral
@@ -243,9 +249,9 @@ Payload:
 # ── Canvas ─────────────────────────────────────────────────────────
 # The CANVAS_ACTION_STARTED / CANVAS_ACTION_FINISHED / CANVAS_COMMITTED
 # channels used by the old conversation-side canvas system have been
-# removed. The new canvas state machine in canvas/ does not emit bus
-# events today; in-flight UI indicators for canvas actions will need to
-# be rewired (or replaced) when that becomes a priority.
+# removed. The new canvas state machine in canvas/ emits only coarse
+# CANVAS_CHANGED notifications for agent-side mutations that must refresh
+# already-open frontends.
 
 
 # ── Reserved (not yet emitted) ─────────────────────────────────────

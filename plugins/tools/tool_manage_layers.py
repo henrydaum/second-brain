@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 
+from events.event_bus import bus
+from events.event_channels import CANVAS_CHANGED
 from canvas.render import bus_progress, render_canvas
 from plugins.BaseTool import BaseTool, ToolResult
 
@@ -52,6 +54,8 @@ def _enact_and_render(context, action_type: str, payload: dict) -> ToolResult:
 
 	if not cs.canvas.layers:
 		snap = _snap_after(cs, None)
+		if session_key:
+			bus.emit(CANVAS_CHANGED, {"session_key": session_key, "action": action_type})
 		return ToolResult(data={"canvas": snap, "chain": []}, llm_summary="")
 
 	if skill_registry is None:
