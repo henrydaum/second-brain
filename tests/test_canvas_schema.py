@@ -170,3 +170,21 @@ def test_setup_is_idempotent():
 			db.conn.close()
 	finally:
 		path.unlink(missing_ok=True)
+
+
+def test_existing_auth_tokens_gain_guest_claim_column():
+	path = Path(".canvas_schema_test_auth_tokens.sqlite")
+	path.unlink(missing_ok=True)
+	try:
+		import sqlite3
+		raw = sqlite3.connect(str(path))
+		raw.execute("CREATE TABLE web_auth_tokens (token TEXT PRIMARY KEY, email TEXT NOT NULL, created_at REAL NOT NULL, used_at REAL)")
+		raw.commit()
+		raw.close()
+		db = Database(str(path))
+		try:
+			assert "anon_user_id" in _columns(db, "web_auth_tokens")
+		finally:
+			db.conn.close()
+	finally:
+		path.unlink(missing_ok=True)

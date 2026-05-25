@@ -1,5 +1,7 @@
 """Database schema owned by public-web accounts and credits."""
 
+import sqlite3
+
 
 def setup(conn) -> None:
     conn.execute("""
@@ -20,7 +22,11 @@ def setup(conn) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_web_users_email ON web_users(email) WHERE email IS NOT NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_web_users_account ON web_users(account_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_web_users_ip ON web_users(ip_hash)")
-    conn.execute("CREATE TABLE IF NOT EXISTS web_auth_tokens (token TEXT PRIMARY KEY, email TEXT NOT NULL, created_at REAL NOT NULL, used_at REAL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS web_auth_tokens (token TEXT PRIMARY KEY, email TEXT NOT NULL, created_at REAL NOT NULL, used_at REAL, anon_user_id TEXT)")
+    try:
+        conn.execute("ALTER TABLE web_auth_tokens ADD COLUMN anon_user_id TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_web_auth_tokens_email ON web_auth_tokens(email)")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS web_promo_codes (

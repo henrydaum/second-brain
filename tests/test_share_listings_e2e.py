@@ -535,6 +535,59 @@ def test_save_populates_archive_listing(monkeypatch, renders_dir):
 		_cleanup_db(db, dbpath)
 
 
+def test_magic_link_claims_guest_saved_and_shared_canvases(monkeypatch, renders_dir):
+	_install_fake_run_skill(monkeypatch)
+	db, dbpath = _fresh_db("guest_claim")
+	try:
+		fe = _make_frontend(db)
+		sid, ip = "guest", "127.0.0.1"
+		_seed_canvas(fe, sid)
+		fe.save_canvas(sid, ip, "", title="Kept")
+		fe.share(sid, "Posted", "Guest", ip=ip)
+		guest_id = fe._anon_user_id(sid, ip)
+
+		assert fe.request_magic_link("artist@example.com", sid, ip)["ok"]
+		token = db.conn.execute("SELECT token FROM web_auth_tokens WHERE email = 'artist@example.com'").fetchone()["token"]
+		account_id = fe.verify_magic_link(token)
+
+		assert fe.archive_listing(sid, ip, account_id)["items"][0]["title"] == "Kept"
+		rows = db.conn.execute(
+			"SELECT action, user_id FROM user_canvas_actions WHERE action IN ('save', 'share')"
+		).fetchall()
+		assert {(row["action"], row["user_id"]) for row in rows} == {("save", account_id), ("share", account_id)}
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_checkout_claims_guest_saved_and_shared_canvases(monkeypatch, renders_dir):
+	_install_fake_run_skill(monkeypatch)
+	db, dbpath = _fresh_db("guest_checkout_claim")
+	try:
+		fe = _make_frontend(db)
+		sid, ip = "buyer", "127.0.0.1"
+		_seed_canvas(fe, sid)
+		fe.save_canvas(sid, ip, "")
+		fe.share(sid, "Posted", "Guest", ip=ip)
+		guest_id = fe._anon_user_id(sid, ip)
+		monkeypatch.setattr("billing.storefront.stripe.verify_webhook", lambda *_args: {
+			"id": "checkout-1",
+			"type": "checkout.session.completed",
+			"data": {"object": {
+				"customer_email": "buyer@example.com", "amount_total": 299,
+				"metadata": {"session_id": sid, "anon_user_id": guest_id, "ip_hash": fe._ip_hash(ip)},
+			}},
+		})
+
+		assert fe.handle_stripe_webhook(b"{}", "sig")["ok"]
+		account_id = db.conn.execute("SELECT account_id FROM web_users WHERE email = 'buyer@example.com'").fetchone()["account_id"]
+		rows = db.conn.execute(
+			"SELECT action, user_id FROM user_canvas_actions WHERE action IN ('save', 'share')"
+		).fetchall()
+		assert {(row["action"], row["user_id"]) for row in rows} == {("save", account_id), ("share", account_id)}
+	finally:
+		_cleanup_db(db, dbpath)
+
+
 # =================================================================
 # Share page + QR resolve
 # =================================================================

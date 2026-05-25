@@ -30,21 +30,21 @@ def normalize_email(value: str) -> str:
     return (value or "").strip().lower()
 
 
-def mint_token(db, email: str) -> str:
+def mint_token(db, email: str, anon_user_id: str = "") -> str:
     """Insert a new single-use auth token for the email. Returns the token."""
     token = secrets.token_urlsafe(24)
     now = time.time()
     with db.lock:
         db.conn.execute(
-            "INSERT INTO web_auth_tokens (token, email, created_at, used_at) VALUES (?, ?, ?, NULL)",
-            (token, email, now),
+            "INSERT INTO web_auth_tokens (token, email, created_at, used_at, anon_user_id) VALUES (?, ?, ?, NULL, ?)",
+            (token, email, now, anon_user_id or None),
         )
         db.conn.commit()
     return token
 
 
-def verify_token(db, token: str) -> str | None:
-    """Consume a token if valid and unused. Returns the email or None.
+def verify_token(db, token: str) -> tuple[str, str] | None:
+    """Consume a token if valid and unused. Returns (email, anonymous owner) or None.
     The claim is a single conditional UPDATE so two concurrent verifies for
     the same token can't both succeed; only the one whose UPDATE has
     rowcount=1 reads the email back."""
@@ -62,10 +62,10 @@ def verify_token(db, token: str) -> str | None:
             db.conn.commit()
             return None
         row = db.conn.execute(
-            "SELECT email FROM web_auth_tokens WHERE token = ?", (token,),
+            "SELECT email, anon_user_id FROM web_auth_tokens WHERE token = ?", (token,),
         ).fetchone()
         db.conn.commit()
-        return row["email"] if row else None
+        return (row["email"], row["anon_user_id"] or "") if row else None
 
 
 def send_magic_link(gmail_service, to_email: str, link_url: str, from_address: str | None = None) -> bool:

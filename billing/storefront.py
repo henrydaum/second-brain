@@ -54,8 +54,8 @@ def handle_webhook(frontend, payload: bytes, sig_header: str) -> dict:
             return {"ok": True, "duplicate": True}
         row = db.conn.execute("SELECT user_id, account_id FROM web_users WHERE email = ?", (email,)).fetchone()
         if row:
-            uid = row["user_id"]
-            db.conn.execute("UPDATE web_users SET account_id = ? WHERE user_id = ?", (row["account_id"] or str(uuid.uuid4()), uid))
+            uid, aid = row["user_id"], row["account_id"] or str(uuid.uuid4())
+            db.conn.execute("UPDATE web_users SET account_id = ? WHERE user_id = ?", (aid, uid))
         else:
             uid, aid = meta.get("anon_user_id") or "", str(uuid.uuid4())
             upgraded = uid and db.conn.execute("UPDATE web_users SET email = ?, account_id = ? WHERE user_id = ? AND email IS NULL", (email, aid, uid)).rowcount
@@ -65,6 +65,7 @@ def handle_webhook(frontend, payload: bytes, sig_header: str) -> dict:
         if meta.get("claim_token"):
             db.conn.execute("UPDATE web_auth_tokens SET email = ? WHERE token = ? AND used_at IS NULL", (email, meta["claim_token"]))
         db.conn.commit()
+    frontend._claim_canvas_actions(meta.get("anon_user_id") or "", aid)
     if frontend._credits():
         frontend._credits().grant(db, uid, grant, "purchase")
     try:

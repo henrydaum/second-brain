@@ -375,14 +375,14 @@ class WebFrontend(BaseFrontend):
     def claim_checkout(self, claim_token: str) -> str | None:
         return storefront.claim_checkout(self, claim_token)
 
-    def request_magic_link(self, email: str) -> dict:
+    def request_magic_link(self, email: str, session_id: str = "", ip: str = "") -> dict:
         email = web_auth.normalize_email(email)
         if not web_auth.is_email(email):
             return {"ok": False, "error": "Please enter a valid email address."}
         db = getattr(self.runtime, "db", None)
         if db is None:
             return {"ok": False, "error": "Server not ready."}
-        token = web_auth.mint_token(db, email)
+        token = web_auth.mint_token(db, email, self._anon_user_id(session_id, ip) if session_id else "")
         link = f"{self._base_url()}/auth/verify?token={token}"
         gmail = getattr(self.runtime, "services", {}).get("gmail")
         if gmail is None:
@@ -397,25 +397,27 @@ class WebFrontend(BaseFrontend):
         db = getattr(self.runtime, "db", None)
         if db is None:
             return None
-        email = web_auth.verify_token(db, token)
-        if not email or email == "__pending_checkout__":
+        verified = web_auth.verify_token(db, token)
+        if not verified or verified[0] == "__pending_checkout__":
             return None
+        email, anon_user_id = verified
         with db.lock:
             row = db.conn.execute("SELECT user_id, account_id FROM web_users WHERE email = ?", (email,)).fetchone()
             if row and row["account_id"]:
-                return row["account_id"]
-            aid = str(uuid.uuid4())
-            if row:
-                db.conn.execute("UPDATE web_users SET account_id = ? WHERE user_id = ?", (aid, row["user_id"]))
+                aid = row["account_id"]
             else:
-                new_uid = str(uuid.uuid4())
-                db.conn.execute(
-                    "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen, purchased_credits, email, account_id) "
-                    "VALUES (?, '', '', ?, ?, 0, ?, ?)",
-                    (new_uid, time.time(), time.time(), email, aid),
-                )
-            db.conn.commit()
-            return aid
+                aid = str(uuid.uuid4())
+                if row:
+                    db.conn.execute("UPDATE web_users SET account_id = ? WHERE user_id = ?", (aid, row["user_id"]))
+                else:
+                    db.conn.execute(
+                        "INSERT INTO web_users (user_id, session_id, ip_hash, created_at, last_seen, purchased_credits, email, account_id) "
+                        "VALUES (?, '', '', ?, ?, 0, ?, ?)",
+                        (str(uuid.uuid4()), time.time(), time.time(), email, aid),
+                    )
+                db.conn.commit()
+        self._claim_canvas_actions(anon_user_id, aid)
+        return aid
 
     def redeem_promo(self, code: str, account_id: str) -> dict:
         db = getattr(self.runtime, "db", None)
@@ -492,6 +494,18 @@ class WebFrontend(BaseFrontend):
         """Stable identity for the saved archive: account_id when signed in,
         otherwise the anonymous fallback derived from session+IP."""
         return account_id or self._anon_user_id(session_id, ip)
+
+    def _claim_canvas_actions(self, anon_user_id: str, account_id: str) -> None:
+        if not anon_user_id or not account_id or anon_user_id == account_id:
+            return
+        db = getattr(self.runtime, "db", None)
+        if db is not None:
+            with db.lock:
+                db.conn.execute(
+                    "UPDATE user_canvas_actions SET user_id = ? WHERE user_id = ? AND action IN ('save', 'share')",
+                    (account_id, anon_user_id),
+                )
+                db.conn.commit()
 
     def save_canvas(self, session_id: str, ip: str, account_id: str, title: str = "") -> list[dict]:
         """Record that this user saved the current canvas (pool-based).
@@ -1510,7 +1524,7 @@ class _Handler(BaseHTTPRequestHandler):
                 except RuntimeError as e:
                     return self._json({"ok": False, "error": str(e)}, 400)
             if self.path == "/api/auth/request":
-                return self._json(self.server.frontend.request_magic_link(str(body.get("email") or "")))
+                return self._json(self.server.frontend.request_magic_link(str(body.get("email") or ""), sid, self.client_address[0]))
             if self.path == "/api/promo/redeem":
                 return self._json(self.server.frontend.redeem_promo(str(body.get("code") or ""), self._cookie_uid()))
             if self.path == "/api/account/delete":
