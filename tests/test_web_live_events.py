@@ -43,8 +43,9 @@ def test_web_app_uses_eventsource_without_fast_polling():
 def test_out_of_credits_uses_chat_notice_not_popup():
 	text = Path("plugins/frontends/web/app.js").read_text(encoding="utf-8")
 	html = Path("plugins/frontends/web/index.html").read_text(encoding="utf-8")
-	assert "/app.js?v=32" in html
+	assert "/app.js?v=33" in html
 	assert "const stick = atBottom();" in text and "bottom(stick);" in text
+	assert 'scrollIntoView({block: "nearest"})' in text and 'role === "error"' in text
 	assert 'ev.error?.code === "out_of_credits"' in text
 	assert "next_refill_seconds" in text and 'link.href = "/account"' in text
 	assert 'details?.action === "render"' in text

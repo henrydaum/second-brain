@@ -121,6 +121,7 @@ const bottom = (force = false) => {
   const stick = force || atBottom();
   if (stick) requestAnimationFrame(() => messages.scrollTop = messages.scrollHeight);
 };
+const reveal = el => requestAnimationFrame(() => el.scrollIntoView({block: "nearest"}));
 const add = (role, text, useMd = false) => {
   const stick = atBottom();
   const el = document.createElement("article");
@@ -128,7 +129,7 @@ const add = (role, text, useMd = false) => {
   if (useMd) el.innerHTML = mdToHtml(text);
   else el.textContent = text;
   messages.appendChild(el);
-  bottom(stick);
+  if (role === "error") reveal(el); else bottom(stick);
   return el;
 };
 function refillText(seconds) {
@@ -139,7 +140,6 @@ function refillText(seconds) {
   return `Your free credits refill in about ${hours} hour${hours === 1 ? "" : "s"}.`;
 }
 function renderCreditError(error) {
-  const stick = atBottom();
   const d = error?.details || {}, available = Number(d.total_available || 0);
   const el = document.createElement("article");
   el.className = "error credit-error";
@@ -148,13 +148,13 @@ function renderCreditError(error) {
   const body = document.createElement("p");
   body.textContent = available
     ? `That needs ${Number(d.required || 1)} credits, and you have ${available}. You can still try a manual edit.`
-    : `${refillText(d.next_refill_seconds)} Cached art is still free to open.`;
+    : `${refillText(d.next_refill_seconds)}`;
   const link = document.createElement("a");
   link.href = "/account";
   link.textContent = "Open your account to buy more credits";
   el.append(title, body, link);
   messages.appendChild(el);
-  bottom(stick);
+  reveal(el);
 }
 function mdToHtml(src) {
   let s = String(src ?? "").replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
