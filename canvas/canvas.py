@@ -13,9 +13,9 @@ from typing import Any
 
 DEFAULT_SIZE = 1024
 MIN_SIZE = 256
-MAX_SIZE = 1536
+MAX_SIZE = 2048
 MAX_CHAIN_LENGTH = 6
-DEFAULT_PALETTE_ID = "japandi"  # mirrored from plugins.helpers.palettes
+DEFAULT_PALETTE_ID = "bauhaus"  # mirrored from plugins.helpers.palettes
 
 
 @dataclass
