@@ -151,7 +151,7 @@ function renderCreditError(error) {
     : `${refillText(d.next_refill_seconds)} Cached art is still free to open.`;
   const link = document.createElement("a");
   link.href = "/account";
-  link.textContent = "Head to your account";
+  link.textContent = "Open your account to buy more credits";
   el.append(title, body, link);
   messages.appendChild(el);
   bottom(stick);
@@ -278,10 +278,6 @@ function render(events) {
     }
     else if (ev.type === "form") add("assistant", `${ev.form?.display?.prompt || "Input required"}\n${(ev.form?.display?.choices || []).map(c => c.label || c.value).join(" / ")}`);
     else if (ev.type === "approval") approval(ev);
-    else if (ev.type === "credit_denied") {
-      renderCreditError({details: ev});
-      if (ev.action === "render") renderRenderStatus({status:"error", error:"Out of credits."});
-    }
     else if (ev.type === "account") setAccount(ev.account);
     else if (ev.type === "hero_image") {
       clearPendingControls(false);

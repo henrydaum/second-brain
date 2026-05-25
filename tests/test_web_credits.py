@@ -171,6 +171,5 @@ def test_denied_web_chat_outputs_error_event_not_assistant_message(db):
         assert error["content"] == "Out of credits."
         assert error["error"]["code"] == ERROR_OUT_OF_CREDITS
         assert not any(event.get("type") == "message" for event in events)
-        assert not any(event.get("type") == "credit_denied" for event in events)
     finally:
         frontend.unbind()

@@ -28,7 +28,6 @@ from events.event_channels import (
     CANVAS_RENDER_STATUS,
     CANVAS_CHANGED,
     CREDITS_CHANGED,
-    CREDIT_ACTION_DENIED,
     COMMAND_CALL_FINISHED,
     COMMAND_CALL_PROGRESSED,
     COMMAND_CALL_STARTED,
@@ -272,7 +271,6 @@ class BaseFrontend:
             bus.subscribe(CANVAS_RENDER_STATUS, self.on_bus_canvas_render_status),
             bus.subscribe(CANVAS_CHANGED, self.on_bus_canvas_changed),
             bus.subscribe(CREDITS_CHANGED, self.on_bus_credits_changed),
-            bus.subscribe(CREDIT_ACTION_DENIED, self.on_bus_credit_action_denied),
             bus.subscribe(AGENT_THINKING, self.on_bus_agent_thinking),
             bus.subscribe(TOOLS_CHANGED, self.on_tools_changed),
             bus.subscribe(TASKS_CHANGED, self.on_tasks_changed),
@@ -489,10 +487,6 @@ class BaseFrontend:
 
     def on_bus_credits_changed(self, payload: dict) -> None:
         """Handle credits changed."""
-        return
-
-    def on_bus_credit_action_denied(self, payload: dict) -> None:
-        """Handle credit denial."""
         return
 
     def on_bus_command_call_started(self, payload: dict) -> None:

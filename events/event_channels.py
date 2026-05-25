@@ -143,15 +143,6 @@ Payload:
     purchased_remaining:  int
     total_available:      int"""
 
-CREDIT_ACTION_DENIED = "credit_action_denied"
-"""A public-web prompt or new render could not reserve enough credits.
-Payload:
-    session_key:       str
-    action:            str
-    required:          int
-    reason:            str — insufficient_credits
-    total_available:   int"""
-
 CLEANUP_DUE = "cleanup_due"
 """Timekeeper-emitted heartbeat asking the cleanup task to enforce its
 periodic cleanups: canvas render cache size cap, stale ephemeral

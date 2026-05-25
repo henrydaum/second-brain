@@ -10,7 +10,7 @@ import uuid
 
 from billing.policy import DEFAULT_WEB_CREDITS
 from events.event_bus import bus
-from events.event_channels import CREDITS_CHANGED, CREDIT_ACTION_DENIED
+from events.event_channels import CREDITS_CHANGED
 from plugins.BaseService import BaseService
 
 
@@ -148,7 +148,6 @@ class CreditsService(BaseService):
                 )
                 db.conn.commit()
                 return rid
-        bus.emit(CREDIT_ACTION_DENIED, payload)
         raise CreditDenied(payload)
 
     def commit(self, db, reservation_id: str | None, actual_cost: int | None = None, session_key: str = "") -> None:
