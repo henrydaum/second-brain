@@ -16,6 +16,9 @@ ERROR_INVALID_INPUT = "invalid_input"
 ERROR_EXECUTION_FAILED = "execution_failed"
 ERROR_ATTACHMENT_NOT_ALLOWED = "attachment_not_allowed"
 ERROR_APPROVAL_REQUIRED = "approval_required"
+ERROR_OUT_OF_CREDITS = "out_of_credits"
+
+_CREDIT_ERROR_FIELDS = ("action", "required", "free_remaining", "purchased_remaining", "total_available", "next_refill_seconds")
 
 
 @dataclass
@@ -66,3 +69,13 @@ class ActionResult:
             "events": self.events,
             "error": self.error.to_dict() if self.error else None,
         }
+
+
+def out_of_credits_error(payload: dict[str, Any], retry_phase: str | None = None) -> ActionError:
+    """Convert a billing refusal into the shared state-machine error shape."""
+    return ActionError(
+        ERROR_OUT_OF_CREDITS,
+        "Out of credits.",
+        {key: payload.get(key) for key in _CREDIT_ERROR_FIELDS},
+        retry_phase,
+    )

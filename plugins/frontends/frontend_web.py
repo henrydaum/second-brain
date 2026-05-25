@@ -20,7 +20,6 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from billing import promo_codes, storefront
-from billing.credits import CreditDenied
 from plugins.helpers import web_auth
 
 from canvas import actions as canvas_actions
@@ -136,20 +135,7 @@ class WebFrontend(BaseFrontend):
         if self.has_pending_approval(key):
             return [{"type": "error", "content": "Use the approval buttons to answer this permission request."}]
         self.bind_credits(session_id, ip, account_id)
-        svc, db = self._credits(), getattr(self.runtime, "db", None)
-        ticket = None
-        try:
-            if svc and db:
-                ticket = svc.reserve(db, key, "ai_prompt", svc.ai_cost())
-            result = self.submit_text(key, text)
-            if svc and db:
-                (svc.commit if result and result.ok else svc.release)(db, ticket, session_key=key)
-        except CreditDenied as e:
-            return self._drain(key) or [{"type": "credit_denied", **e.payload}]
-        except Exception:
-            if svc and db:
-                svc.release(db, ticket, session_key=key)
-            raise
+        self.submit_text(key, text)
         return self._drain(key)
 
     def approve(self, session_id: str, value: bool) -> list[dict]:
@@ -295,7 +281,7 @@ class WebFrontend(BaseFrontend):
         with self._lock:
             last = (self._outbox.get(session_key) or [{}])[-1]
         if last.get("content") != text:
-            self._push(session_key, {"type": "error", "content": text})
+            self._push(session_key, {"type": "error", "content": text, "error": dict(error or {})})
 
     def render_typing(self, session_key: str, on: bool) -> None:
         self._push(session_key, {"type": "typing", "on": bool(on)})
@@ -331,11 +317,6 @@ class WebFrontend(BaseFrontend):
         key = (payload or {}).get("session_key")
         if key and key in self._live_session_keys():
             self._push(key, {"type": "account", "account": payload})
-
-    def on_bus_credit_action_denied(self, payload: dict) -> None:
-        key = (payload or {}).get("session_key")
-        if key and key in self._live_session_keys():
-            self._push(key, {"type": "credit_denied", **payload})
 
     def _chain_progress_cb(self, key: str):
         """Build an on_step callback that emits tool_status progressed events.
@@ -807,17 +788,19 @@ class WebFrontend(BaseFrontend):
         scaled_state = CanvasState(canvas=scaled_canvas)
         seed = getattr(cs, "render_seed", None)
         try:
-            rr = _new_render_canvas(
+            result, rr = cr.render_actions(cs.canvas_id, [], lambda _cs: _new_render_canvas(
                 scaled_state,
                 skill_loader=skill_registry.get_record,
                 seed=seed,
                 db=getattr(self.runtime, "db", None),
                 worker_pool=(getattr(self.runtime, "services", None) or {}).get("skill_worker_pool"),
                 authorize_uncached=self._render_authorizer(key),
-            )
+            ))
         except Exception as e:
             logger.exception("render_for_download failed for session=%s", key)
             return [{"type": "error", "content": f"Download failed: {e}"}]
+        if not result.ok:
+            return [self._canvas_error_event(result.error, "Download failed")]
         png_path = Path(rr.image_path)
         # Record the download against the scaled pool_hash (matches what was
         # actually exported), reusing the existing user-action machinery.
@@ -849,7 +832,6 @@ class WebFrontend(BaseFrontend):
         cs = cr.for_session(key)
         if not cs.canvas.layers:
             return []
-        before = cs.to_dict()
         staged = []
         for item in controls or []:
             if not isinstance(item, dict):
@@ -864,27 +846,17 @@ class WebFrontend(BaseFrontend):
             if not name:
                 return [{"type": "error", "content": "Regenerate failed: staged control requires a name"}]
             staged.append({"chain_index": chain_index, "name": name, "value": item.get("value")})
-        for item in staged:
-            result = cr.handle_action(cs.canvas_id, "set_control", {
-                "chain_index": item["chain_index"],
-                "name": item["name"],
-                "value": item.get("value"),
-            })
-            if not getattr(result, "ok", True):
-                self._restore_canvas_state(cr, cs, before)
-                msg = result.error.message if getattr(result, "error", None) else (result.message or "control update failed")
-                return [{"type": "error", "content": f"Regenerate failed: {msg}"}]
-        result = cr.handle_action(cs.canvas_id, "regenerate", {"force_new_seed": bool(force_new_seed)})
-        if not getattr(result, "ok", True):
-            self._restore_canvas_state(cr, cs, before)
-            msg = result.error.message if getattr(result, "error", None) else (result.message or "regenerate failed")
-            return [{"type": "error", "content": f"Regenerate failed: {msg}"}]
-        snap = self._new_canvas_snap(key, force_new_seed=bool(force_new_seed))
-        if snap and "error" in snap:
-            self._restore_canvas_state(cr, cs, before)
-            return [{"type": "error", "content": f"Regenerate failed: {snap['error']}"}]
+        actions = [("set_control", {"chain_index": item["chain_index"], "name": item["name"], "value": item.get("value")}) for item in staged]
+        actions.append(("regenerate", {"force_new_seed": bool(force_new_seed)}))
+        try:
+            result, rr = cr.render_actions(cs.canvas_id, actions, lambda state: self._render_canvas_state(key, state, force_new_seed=bool(force_new_seed)))
+        except Exception as e:
+            logger.exception("regenerate render failed for session=%s", key)
+            return [{"type": "error", "content": f"Regenerate failed: {e}"}]
+        if not result.ok:
+            return [self._canvas_error_event(result.error, "Regenerate failed")]
+        snap = self._render_snap(cs, rr)
         if not snap or not snap.get("path"):
-            self._restore_canvas_state(cr, cs, before)
             return [{"type": "error", "content": "Regenerate failed: render produced no image"}]
         return [{
             "type": "hero_image",
@@ -1205,19 +1177,30 @@ class WebFrontend(BaseFrontend):
         if skill_registry is None:
             return None
         try:
-            rr = _new_render_canvas(
-                cs,
-                skill_loader=skill_registry.get_record,
-                force_new_seed=force_new_seed,
-                db=getattr(self.runtime, "db", None),
-                on_event=lambda ev: self.render_canvas_status(session_key, {"timeout_s": _int(self.config.get("skill_timeout_s"), 30), **ev}),
-                worker_pool=(getattr(self.runtime, "services", None) or {}).get("skill_worker_pool"),
-                authorize_uncached=self._render_authorizer(session_key) if charge else None,
-            )
+            result, rr = cr.render_actions(cs.canvas_id, [], lambda state: self._render_canvas_state(session_key, state, force_new_seed=force_new_seed, charge=charge))
         except Exception as e:
             logger.exception("new canvas render failed for session=%s", session_key)
             return {"path": None, "chain": list(cs.canvas.layers), "error": str(e),
                     "size": cs.canvas.size, "palette_id": cs.canvas.palette_id, "canvas_id": cs.canvas_id}
+        if not result.ok:
+            return {"path": None, "chain": list(cs.canvas.layers), "error": result.error.message,
+                    "action_error": result.error.to_dict(), "size": cs.canvas.size,
+                    "palette_id": cs.canvas.palette_id, "canvas_id": cs.canvas_id}
+        return self._render_snap(cs, rr)
+
+    def _render_canvas_state(self, session_key: str, cs, *, force_new_seed: bool = False, charge: bool = True):
+        return _new_render_canvas(
+            cs,
+            skill_loader=self.runtime.skill_registry.get_record,
+            force_new_seed=force_new_seed,
+            db=getattr(self.runtime, "db", None),
+            on_event=lambda ev: self.render_canvas_status(session_key, {"timeout_s": _int(self.config.get("skill_timeout_s"), 30), **ev}),
+            worker_pool=(getattr(self.runtime, "services", None) or {}).get("skill_worker_pool"),
+            authorize_uncached=self._render_authorizer(session_key) if charge else None,
+        )
+
+    @staticmethod
+    def _render_snap(cs, rr) -> dict:
         return {
             "path": str(rr.image_path),
             "chain": list(cs.canvas.layers),
@@ -1229,26 +1212,31 @@ class WebFrontend(BaseFrontend):
             "cache_hit": rr.cache_hit,
         }
 
+    @staticmethod
+    def _canvas_error_event(error, prefix: str) -> dict:
+        message = error.message if error else prefix
+        return {"type": "error", "content": f"{prefix}: {message}", "error": error.to_dict() if error else None}
+
     def _new_canvas_action_events(self, key: str, action_type: str, payload: dict, *, fail_prefix: str) -> list[dict]:
         """Mutate the new canvas, render, return [{type:hero_image|error}] events."""
         cr = self._canvas_runtime()
         if cr is None:
             return [{"type": "error", "content": f"{fail_prefix}: canvas runtime not available"}]
         cs = cr.for_session(key)
-        before = cs.to_dict()
         try:
-            result = cr.handle_action(cs.canvas_id, action_type, dict(payload))
+            result, rr = cr.render_actions(
+                cs.canvas_id, [(action_type, dict(payload))],
+                lambda state: self._render_canvas_state(key, state) if state.canvas.layers else None,
+            )
         except Exception as e:
             logger.exception("%s failed", fail_prefix)
             return [{"type": "error", "content": f"{fail_prefix}: {e}"}]
         if not getattr(result, "ok", True):
-            err = getattr(result, "error", None)
-            msg = err.message if err is not None else (result.message or fail_prefix)
-            return [{"type": "error", "content": f"{fail_prefix}: {msg}"}]
-        snap = self._new_canvas_snap(key) or {}
-        if "error" in snap:
-            self._restore_canvas_state(cr, cs, before)
-            return [{"type": "error", "content": f"{fail_prefix}: {snap['error']}"}]
+            return [self._canvas_error_event(getattr(result, "error", None), fail_prefix)]
+        snap = self._render_snap(cs, rr) if rr is not None else {
+            "path": None, "chain": [], "size": cs.canvas.size,
+            "palette_id": cs.canvas.palette_id, "canvas_id": cs.canvas_id,
+        }
         if not snap.get("path"):
             # Empty chain after the action (e.g. remove_layer on the last layer).
             return [{
@@ -1263,19 +1251,6 @@ class WebFrontend(BaseFrontend):
             "name": Path(snap["path"]).name,
             "canvas": _canvas_payload_full(self.runtime, key, snap),
         }]
-
-    def _restore_canvas_state(self, cr, cs, state: dict) -> None:
-        restored = CanvasState.from_dict(state)
-        cs.canvas = restored.canvas
-        cs.phase = restored.phase
-        cs.history = restored.history
-        cs.render_seed = restored.render_seed
-        cs.undo_stack = restored.undo_stack
-        cs.redo_stack = restored.redo_stack
-        cs.last_error = None
-        persist = getattr(cr, "_persist", None)
-        if callable(persist):
-            persist(cs)
 
 class _Server(ThreadingHTTPServer):
     def __init__(self, addr, handler, frontend, *, max_global: int = DEFAULT_MAX_GLOBAL_CONNECTIONS, max_per_ip: int = DEFAULT_MAX_IP_CONNECTIONS):

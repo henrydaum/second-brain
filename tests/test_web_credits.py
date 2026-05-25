@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,9 @@ from config.config_data import DEFAULT_WEB_CREDITS
 from config import config_manager
 from pipeline.database import Database
 from billing.credits import CreditDenied, CreditsService
+from state_machine.errors import ERROR_OUT_OF_CREDITS
+from runtime.conversation_runtime import ConversationRuntime
+from plugins.frontends.frontend_web import WebFrontend
 
 
 @pytest.fixture
@@ -116,3 +120,57 @@ def test_agent_render_completes_when_prompt_uses_last_credits(db):
     assert svc.render_authorizer(db, key, allow_prompt_overrun=True)() is None
     svc.commit(db, prompt, session_key=key)
     assert svc.snapshot(db, key)["total_available"] == 0
+
+
+def test_denied_web_prompt_is_native_error_without_saved_message(db):
+    svc, key, _ = _bound(db, {"web_credits": {"free": {"five_hours": 0, "week": 0}}})
+    runtime = ConversationRuntime(db=db, services={"credits": svc})
+    session = runtime.open_session(key, title="Art")
+
+    result = runtime.handle_action(key, "send_text", "make a sunset")
+
+    assert not result.ok
+    assert result.error["code"] == ERROR_OUT_OF_CREDITS
+    assert result.error["details"]["action"] == "ai_prompt"
+    assert result.messages == []
+    assert session.history == []
+    assert session.cs.last_error.code == ERROR_OUT_OF_CREDITS
+
+
+def test_successful_web_prompt_commits_ten_credits_in_runtime(db):
+    svc, key, _ = _bound(db, {"web_credits": {"free": {"five_hours": 10, "week": 10}}})
+
+    class LLM:
+        loaded = True
+        calls = 0
+
+        def chat_with_tools(self, *_args, **_kwargs):
+            self.calls += 1
+            return SimpleNamespace(content="done", has_tool_calls=False, tool_calls=[], is_error=False, prompt_tokens=0)
+
+    llm = LLM()
+    runtime = ConversationRuntime(db=db, services={"credits": svc, "llm": llm})
+    runtime.open_session(key, title="Art")
+
+    result = runtime.handle_action(key, "send_text", "make a sunset")
+
+    assert result.ok and llm.calls == 1
+    row = db.conn.execute("SELECT cost, status FROM web_credit_ledger WHERE kind='ai_prompt'").fetchone()
+    assert (row["cost"], row["status"]) == (10, "committed")
+    assert svc.snapshot(db, key)["total_available"] == 0
+
+
+def test_denied_web_chat_outputs_error_event_not_assistant_message(db):
+    svc = CreditsService({"web_credits": {"free": {"five_hours": 0, "week": 0}}})
+    runtime = ConversationRuntime(db=db, services={"credits": svc})
+    frontend = WebFrontend()
+    frontend.bind(runtime, commands=None, config={})
+    try:
+        events = frontend.chat("test", "make a sunset", ip="127.0.0.1")
+        error = next(event for event in events if event.get("type") == "error")
+        assert error["content"] == "Out of credits."
+        assert error["error"]["code"] == ERROR_OUT_OF_CREDITS
+        assert not any(event.get("type") == "message" for event in events)
+        assert not any(event.get("type") == "credit_denied" for event in events)
+    finally:
+        frontend.unbind()

@@ -16,12 +16,13 @@ lives outside; this module just owns the canvases.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
+from billing.credits import CreditDenied
 from canvas import persistence as canvas_persistence
 from canvas.canvas import Canvas
 from canvas.state import CanvasState
-from state_machine.errors import ActionResult, ERROR_INVALID_ACTION
+from state_machine.errors import ActionResult, ERROR_INVALID_ACTION, out_of_credits_error
 
 logger = logging.getLogger("CanvasRuntime")
 
@@ -174,7 +175,64 @@ class CanvasRuntime:
 			self._persist(cs)
 		return result
 
+	def render_actions(
+		self,
+		canvas_id: str,
+		actions: list[tuple[str, Any]],
+		render: Callable[[CanvasState], Any],
+	) -> tuple[ActionResult, Any | None]:
+		"""Apply canvas actions and render as one rollback-safe operation."""
+		cs = self.get(canvas_id)
+		action_type = actions[-1][0] if actions else "render"
+		if cs is None:
+			return ActionResult.fail(action_type, f"unknown canvas: {canvas_id!r}", code=ERROR_INVALID_ACTION), None
+		before = cs.to_dict() if actions else None
+		result = ActionResult.success(action_type)
+		events = []
+		for action_type, payload in actions:
+			result = cs.enact(action_type, payload)
+			events.extend(result.events)
+			if not result.ok:
+				if before and len(actions) > 1:
+					self._restore(cs, before)
+					cs.last_error = result.error
+					result.events = [cs.event("error", error=result.error.to_dict())] if result.error else []
+				self._persist(cs)
+				return result, None
+		result.events = events
+		try:
+			rendered = render(cs)
+		except CreditDenied as denied:
+			if before:
+				self._restore(cs, before)
+			err = out_of_credits_error(denied.payload, cs.phase)
+			result = ActionResult.fail(action_type, err)
+			if actions:
+				cs.last_error = err
+				result.events.append(cs.event("error", error=err.to_dict()))
+				self._persist(cs)
+			return result, None
+		except Exception:
+			if before:
+				self._restore(cs, before)
+				self._persist(cs)
+			raise
+		if actions:
+			self._persist(cs)
+		return result, rendered
+
 	# ── internal ─────────────────────────────────────────────────────────
+
+	@staticmethod
+	def _restore(cs: CanvasState, state: dict) -> None:
+		restored = CanvasState.from_dict(state)
+		cs.canvas = restored.canvas
+		cs.phase = restored.phase
+		cs.history = restored.history
+		cs.render_seed = restored.render_seed
+		cs.undo_stack = restored.undo_stack
+		cs.redo_stack = restored.redo_stack
+		cs.last_error = restored.last_error
 
 	def _persist(self, cs: CanvasState) -> None:
 		"""Save to db if configured. Log-but-don't-raise so a save failure

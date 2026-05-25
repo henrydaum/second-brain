@@ -122,14 +122,40 @@ const bottom = (force = false) => {
   if (stick) requestAnimationFrame(() => messages.scrollTop = messages.scrollHeight);
 };
 const add = (role, text, useMd = false) => {
+  const stick = atBottom();
   const el = document.createElement("article");
   el.className = role;
   if (useMd) el.innerHTML = mdToHtml(text);
   else el.textContent = text;
   messages.appendChild(el);
-  bottom();
+  bottom(stick);
   return el;
 };
+function refillText(seconds) {
+  if (seconds == null) return "Your free credits will be back later.";
+  if (seconds <= 60) return "Your free credits refill in less than a minute.";
+  if (seconds < 3600) return `Your free credits refill in about ${Math.ceil(seconds / 60)} minutes.`;
+  const hours = Math.ceil(seconds / 3600);
+  return `Your free credits refill in about ${hours} hour${hours === 1 ? "" : "s"}.`;
+}
+function renderCreditError(error) {
+  const stick = atBottom();
+  const d = error?.details || {}, available = Number(d.total_available || 0);
+  const el = document.createElement("article");
+  el.className = "error credit-error";
+  const title = document.createElement("strong");
+  title.textContent = available ? "Not enough credits for that" : "You're out of credits for now";
+  const body = document.createElement("p");
+  body.textContent = available
+    ? `That needs ${Number(d.required || 1)} credits, and you have ${available}. You can still try a manual edit.`
+    : `${refillText(d.next_refill_seconds)} Cached art is still free to open.`;
+  const link = document.createElement("a");
+  link.href = "/account";
+  link.textContent = "Head to your account";
+  el.append(title, body, link);
+  messages.appendChild(el);
+  bottom(stick);
+}
 function mdToHtml(src) {
   let s = String(src ?? "").replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
   s = s.replace(/```([\s\S]*?)```/g, (_, c) => `<pre><code>${c.replace(/^\n/, "")}</code></pre>`);
@@ -242,10 +268,20 @@ function render(events) {
     else if (ev.type === "status") add("status", ev.content);
     else if (ev.type === "tool_status") renderToolStatus(ev);
     else if (ev.type === "render_status") renderRenderStatus(ev);
-    else if (ev.type === "error") { clearStatus(); add("error", ev.content); loaderForceStop(); renderRenderStatus({status:"error", error:ev.content}); }
+    else if (ev.type === "error") {
+      clearStatus(); loaderForceStop();
+      if (ev.error?.code === "out_of_credits") {
+        renderCreditError(ev.error);
+        if (ev.error.details?.action === "render") renderRenderStatus({status:"error", error:ev.content});
+      }
+      else { add("error", ev.content); renderRenderStatus({status:"error", error:ev.content}); }
+    }
     else if (ev.type === "form") add("assistant", `${ev.form?.display?.prompt || "Input required"}\n${(ev.form?.display?.choices || []).map(c => c.label || c.value).join(" / ")}`);
     else if (ev.type === "approval") approval(ev);
-    else if (ev.type === "paywall" || ev.type === "credit_denied") openPaywall(ev);
+    else if (ev.type === "credit_denied") {
+      renderCreditError({details: ev});
+      if (ev.action === "render") renderRenderStatus({status:"error", error:"Out of credits."});
+    }
     else if (ev.type === "account") setAccount(ev.account);
     else if (ev.type === "hero_image") {
       clearPendingControls(false);
@@ -304,10 +340,6 @@ const avatarLetter = document.querySelector("#avatarLetter");
 avatarInner.style.transition = "border-color 160ms ease, color 160ms ease";
 avatarInner.addEventListener("mouseenter", () => { avatarInner.style.borderColor = "var(--accent)"; avatarInner.style.color = "var(--accent)"; });
 avatarInner.addEventListener("mouseleave", () => { avatarInner.style.borderColor = "var(--line)"; avatarInner.style.color = "var(--text)"; });
-const outOfMessages = document.querySelector("#outOfMessages");
-const oomBody = document.querySelector("#oomBody");
-const dismissOutOfCredits = document.querySelector("#dismissOutOfCredits");
-const chatInput = document.querySelector("#chatInput");
 const signinModal = document.querySelector("#signinModal");
 const promoModal = document.querySelector("#promoModal");
 const signinForm = document.querySelector("#signinForm");
@@ -322,31 +354,6 @@ function closeModal(el) { el.hidden = true; }
 document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", () => closeModal(document.getElementById(b.dataset.close))));
 [signinModal, promoModal].forEach(m => m.addEventListener("click", e => { if (e.target === m) closeModal(m); }));
 
-function formatRefill(seconds) {
-  if (seconds == null) return "New prompts and uncached renders need credits. Cached art remains free to open.";
-  if (seconds <= 60) return "Your free credits refresh in less than a minute, or visit your account to add more.";
-  if (seconds < 3600) return `Your free credits refresh in about ${Math.ceil(seconds / 60)} minutes, or visit your account to add more.`;
-  const hours = Math.ceil(seconds / 3600);
-  return `Your free credits refresh in about ${hours} hour${hours === 1 ? "" : "s"}, or visit your account to add more.`;
-}
-let oomPoll = null;
-let creditsNoticeDismissed = false;
-function setOutOfMessages(acc) {
-  const out = acc?.total_available === 0;
-  if (!out) creditsNoticeDismissed = false;
-  outOfMessages.style.display = out && !creditsNoticeDismissed ? "flex" : "none";
-  if (out) {
-    oomBody.textContent = formatRefill(acc?.next_refill_seconds);
-    if (!oomPoll) oomPoll = setInterval(refreshAccount, 20000);
-  } else if (oomPoll) {
-    clearInterval(oomPoll);
-    oomPoll = null;
-  }
-}
-dismissOutOfCredits?.addEventListener("click", () => {
-  creditsNoticeDismissed = true;
-  outOfMessages.style.display = "none";
-});
 window.addEventListener("pageshow", () => refreshAccount());
 
 function setAccount(acc) {
@@ -362,7 +369,6 @@ function setAccount(acc) {
     }
     accountAvatar.title = email ? `Signed in as ${email}` : "Account";
     accountAvatar.hidden = false;
-    setOutOfMessages(acc);
   } catch (err) {
     console.warn("[account] setAccount failed:", err, acc);
   }
@@ -370,17 +376,6 @@ function setAccount(acc) {
 async function refreshAccount() {
   try { const r = await get(`/api/account?_=${Date.now()}`); setAccount(r.account); }
   catch (err) { console.warn("[account] refresh failed:", err); }
-}
-function openPaywall(ev) {
-  const available = Number(ev?.total_available || 0);
-  if (available > 0) {
-    add("status", `A message costs ${ev.required || 10} credits. You still have ${available} for manual renders.`);
-    return;
-  }
-  creditsNoticeDismissed = false;
-  outOfMessages.style.display = "flex";
-  oomBody.textContent = "You're out of credits for new work. Cached images and shared art are still free to view.";
-  refreshAccount();
 }
 signinForm.addEventListener("submit", async e => {
   e.preventDefault();

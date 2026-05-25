@@ -7,6 +7,7 @@ handle_action — including the labeled enact site that wraps cs.enact.
 from __future__ import annotations
 
 from canvas.runtime import CanvasRuntime
+from billing.credits import CreditDenied
 
 
 def test_create_canvas_returns_id_and_registers():
@@ -161,3 +162,35 @@ def test_register_existing_canvas_state():
 	rt.register(cs)
 	assert rt.get("seeded") is cs
 	assert rt.snapshot("seeded")["canvas"]["palette_id"] == "obsidian"
+
+
+def test_rendered_action_denial_restores_canvas_and_records_shared_error():
+	rt = CanvasRuntime()
+	cid = rt.create_canvas()
+	rt.handle_action(cid, "set_palette", {"palette_id": "original"})
+
+	def deny(_state):
+		raise CreditDenied({"action": "render", "required": 1, "free_remaining": 0, "purchased_remaining": 0, "total_available": 0, "next_refill_seconds": 30})
+
+	result, rendered = rt.render_actions(cid, [("set_palette", {"palette_id": "denied"})], deny)
+
+	assert not result.ok and rendered is None
+	assert result.error.code == "out_of_credits"
+	assert result.error.details["required"] == 1
+	assert rt.get(cid).canvas.palette_id == "original"
+	assert rt.get(cid).last_error.code == "out_of_credits"
+
+
+def test_render_only_denial_returns_shared_error_without_changing_canvas():
+	rt = CanvasRuntime()
+	cid = rt.create_canvas()
+	before = rt.snapshot(cid)
+
+	def deny(_state):
+		raise CreditDenied({"action": "render", "required": 1, "free_remaining": 0, "purchased_remaining": 0, "total_available": 0, "next_refill_seconds": None})
+
+	result, rendered = rt.render_actions(cid, [], deny)
+
+	assert not result.ok and rendered is None
+	assert result.error.code == "out_of_credits"
+	assert rt.snapshot(cid) == before

@@ -22,6 +22,7 @@ from PIL import Image
 
 from canvas import render as canvas_render
 from canvas.runtime import CanvasRuntime
+from billing.credits import CreditsService
 from pipeline.database import Database
 import plugins.frontends.frontend_web as fw
 from plugins.tools.tool_manage_layers import ManageLayers
@@ -263,6 +264,44 @@ def test_delete_background_clears_canvas_in_web_frontend(monkeypatch, renders_di
 
 		assert events == [{"type": "canvas_reset"}]
 		assert cs.canvas.layers == []
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_manual_render_denial_surfaces_shared_credit_error_and_restores_state(monkeypatch, renders_dir):
+	_install_fake_run_skill(monkeypatch)
+	db, dbpath = _fresh_db("manual_credit_denial")
+	try:
+		fe = _make_frontend(db)
+		key, cs = _seed_canvas(fe)
+		credits = CreditsService({"web_credits": {"free": {"five_hours": 0, "week": 0}}})
+		credits.bind_web_session(db, key, "sess1")
+		fe.runtime.services["credits"] = credits
+		before = cs.canvas.palette_id
+
+		events = fe.set_palette("sess1", "obsidian")
+
+		assert events[0]["error"]["code"] == "out_of_credits"
+		assert cs.canvas.palette_id == before
+	finally:
+		_cleanup_db(db, dbpath)
+
+
+def test_download_render_denial_surfaces_shared_credit_error_without_mutation(monkeypatch, renders_dir):
+	_install_fake_run_skill(monkeypatch)
+	db, dbpath = _fresh_db("download_credit_denial")
+	try:
+		fe = _make_frontend(db)
+		key, cs = _seed_canvas(fe)
+		credits = CreditsService({"web_credits": {"free": {"five_hours": 0, "week": 0}}})
+		credits.bind_web_session(db, key, "sess1")
+		fe.runtime.services["credits"] = credits
+		before = cs.to_dict()
+
+		events = fe.render_for_download("sess1", 2)
+
+		assert events[0]["error"]["code"] == "out_of_credits"
+		assert cs.to_dict() == before
 	finally:
 		_cleanup_db(db, dbpath)
 

@@ -71,41 +71,31 @@ class ExecuteSkill(BaseTool):
 				f"Run a background skill before this {kind}."
 			)
 
-		add_result = canvas_rt.handle_action(cs.canvas_id, "add_layer", {
-			"skill_slug": slug,
-			"kind": kind,
-			"controls": params,
-		})
-		if not add_result.ok:
-			msg = add_result.error.message if add_result.error else "add_layer failed"
-			skill_error_log.record_error(
-				getattr(context, "db", None), slug, params,
-				{"error_type": "AddLayerFailed", "message": msg},
-				session_key=session_key,
-			)
-			return ToolResult.failed(msg)
-
-		# Render the chain. On failure, roll the layer back so the next
-		# call to the agent sees the pre-failure state.
 		credits = (getattr(context, "services", None) or {}).get("credits")
 		db = getattr(context, "db", None)
 		try:
-			render_result = render_canvas(
-				cs,
-				skill_loader=skill_registry.get_record,
-				db=db,
-				on_event=bus_progress(getattr(context, "session_key", None), float((getattr(context, "config", {}) or {}).get("skill_timeout_s") or 30)),
-				worker_pool=(getattr(context, "services", None) or {}).get("skill_worker_pool"),
-				authorize_uncached=credits.render_authorizer(db, session_key, allow_prompt_overrun=True) if credits and db and session_key.startswith("web:") else None,
+			add_result, render_result = canvas_rt.render_actions(
+				cs.canvas_id,
+				[("add_layer", {"skill_slug": slug, "kind": kind, "controls": params})],
+				lambda state: render_canvas(
+					state,
+					skill_loader=skill_registry.get_record,
+					db=db,
+					on_event=bus_progress(getattr(context, "session_key", None), float((getattr(context, "config", {}) or {}).get("skill_timeout_s") or 30)),
+					worker_pool=(getattr(context, "services", None) or {}).get("skill_worker_pool"),
+					authorize_uncached=credits.render_authorizer(db, session_key, allow_prompt_overrun=True) if credits and db and session_key.startswith("web:") else None,
+				),
 			)
+			if not add_result.ok:
+				msg = add_result.error.message if add_result.error else "add_layer failed"
+				skill_error_log.record_error(db, slug, params, {"error_type": "AddLayerFailed", "message": msg}, session_key=session_key)
+				return ToolResult.failed(msg)
 		except SkillRunError as e:
-			canvas_rt.handle_action(cs.canvas_id, "remove_layer", {"chain_index": len(cs.canvas.layers) - 1})
 			diag = dict(getattr(e, "diagnostic", None) or {"error_type": "SkillRunError", "message": str(e)})
 			skill_error_log.record_error(getattr(context, "db", None), slug, params, diag, session_key=session_key)
 			return ToolResult.failed(str(e))
 		except Exception as e:
 			logger.exception("execute_skill render crashed: slug=%s", slug)
-			canvas_rt.handle_action(cs.canvas_id, "remove_layer", {"chain_index": len(cs.canvas.layers) - 1})
 			return ToolResult.failed(str(e))
 
 		snap = {

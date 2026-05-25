@@ -47,34 +47,36 @@ def _enact_and_render(context, action_type: str, payload: dict) -> ToolResult:
 	if canvas_rt is None:
 		return ToolResult.failed("canvas runtime not available on context")
 	cs = canvas_rt.for_session(session_key)
-	result = canvas_rt.handle_action(cs.canvas_id, action_type, payload)
-	if not result.ok:
-		msg = result.error.message if result.error else (result.message or f"{action_type} failed")
-		return ToolResult.failed(msg)
-
-	if not cs.canvas.layers:
-		snap = _snap_after(cs, None)
-		if session_key:
-			bus.emit(CANVAS_CHANGED, {"session_key": session_key, "action": action_type})
-		return ToolResult(data={"canvas": snap, "chain": []}, llm_summary="")
-
-	if skill_registry is None:
-		return ToolResult.failed("skill registry not available; cannot re-render")
-
 	credits = (getattr(context, "services", None) or {}).get("credits")
 	db = getattr(context, "db", None)
-	try:
-		render_result = render_canvas(
-			cs,
+	def rerender(state):
+		if not state.canvas.layers:
+			return None
+		if skill_registry is None:
+			raise RuntimeError("skill registry not available; cannot re-render")
+		return render_canvas(
+			state,
 			skill_loader=skill_registry.get_record,
 			db=db,
 			on_event=bus_progress(getattr(context, "session_key", None), float((getattr(context, "config", {}) or {}).get("skill_timeout_s") or 30)),
 			worker_pool=(getattr(context, "services", None) or {}).get("skill_worker_pool"),
 			authorize_uncached=credits.render_authorizer(db, session_key, allow_prompt_overrun=True) if credits and db and session_key.startswith("web:") else None,
 		)
+	try:
+		result, render_result = canvas_rt.render_actions(
+			cs.canvas_id, [(action_type, payload)], rerender,
+		)
 	except Exception as e:
 		logger.exception("manage_layers render crashed: action=%s", action_type)
 		return ToolResult.failed(str(e))
+	if not result.ok:
+		msg = result.error.message if result.error else (result.message or f"{action_type} failed")
+		return ToolResult.failed(msg)
+	if not cs.canvas.layers:
+		snap = _snap_after(cs, None)
+		if session_key:
+			bus.emit(CANVAS_CHANGED, {"session_key": session_key, "action": action_type})
+		return ToolResult(data={"canvas": snap, "chain": []}, llm_summary="")
 
 	snap = _snap_after(cs, render_result)
 	if session_key:

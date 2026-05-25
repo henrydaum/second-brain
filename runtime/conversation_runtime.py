@@ -53,7 +53,8 @@ from events.event_channels import (
 from state_machine.approval import StateMachineApprovalRequest
 from state_machine.conversation import CallableSpec
 from state_machine.conversation_phases import BASE_PHASE, BUSY_PHASES, FORM_PHASES, PHASE_APPROVING_REQUEST
-from state_machine.errors import ActionError
+from state_machine.errors import ActionError, ActionResult, out_of_credits_error
+from billing.credits import CreditDenied
 from runtime.session import RuntimeResult, RuntimeSession, SessionConflict
 
 from runtime import runtime_approvals as _approvals
@@ -179,10 +180,14 @@ class ConversationRuntime:
         # round-trip. Per-mutation atomicity is preserved by the dispatch
         # lock above and the lock acquired in ``inject_user_message`` and
         # in ``iterate_agent_turn`` after the handle_action returns.
+        prompt_ticket = out.data.pop("_prompt_credit_ticket", None)
         if out.data.pop("_drive_agent_turn", False):
             self._drive_agent_turn(session, out)
             with session.lock:
                 _persist.persist_marker(self, session)
+        if prompt_ticket:
+            credits = self.services.get("credits")
+            (credits.commit if out.ok else credits.release)(self.db, prompt_ticket, session_key=session_key)
 
         if user_driven:
             current_conv = self.active_conversation_id
@@ -234,6 +239,18 @@ class ConversationRuntime:
             and session.cs.turn_priority == "user"
         )
 
+        prompt_ticket = None
+        credits = self.services.get("credits")
+        if expects_agent_reply and session.key.startswith("web:") and self.db is not None and credits is not None:
+            try:
+                prompt_ticket = credits.reserve(self.db, session.key, "ai_prompt", credits.ai_cost())
+            except CreditDenied as denied:
+                err = out_of_credits_error(denied.payload, session.cs.phase)
+                session.cs.last_error = err
+                result = ActionResult.fail(action_type, err)
+                result.events.append(session.cs.event("error", actor_id or "user", error=err.to_dict()))
+                return RuntimeResult(False, events=result.events, error=err.to_dict())
+
         content = _disp.content_for_action(action_type, text, payload)
 
         out = RuntimeResult()
@@ -246,6 +263,9 @@ class ConversationRuntime:
         # ──────────────────────────────────────────────────────────────
 
         out.add_action_result(result)
+        if prompt_ticket and not result.ok:
+            credits.release(self.db, prompt_ticket, session_key=session.key)
+            prompt_ticket = None
         _approvals.resolve_answered_request(self, request_id, result)
         text = _disp.text_after_action(action_type, text, result)
         _disp.absorb_user_action(self, session, action_type, text, result)
@@ -258,6 +278,7 @@ class ConversationRuntime:
                 and session.cs.turn_priority == "agent"
                 and session.cs.phase == BASE_PHASE):
             out.data["_drive_agent_turn"] = True
+            out.data["_prompt_credit_ticket"] = prompt_ticket
 
         return out
 

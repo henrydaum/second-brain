@@ -40,6 +40,17 @@ def test_web_app_uses_eventsource_without_fast_polling():
 	assert "setInterval(poll, 1200)" not in text
 
 
+def test_out_of_credits_uses_chat_notice_not_popup():
+	text = Path("plugins/frontends/web/app.js").read_text(encoding="utf-8")
+	html = Path("plugins/frontends/web/index.html").read_text(encoding="utf-8")
+	assert "/app.js?v=31" in html
+	assert "const stick = atBottom();" in text and "bottom(stick);" in text
+	assert 'ev.error?.code === "out_of_credits"' in text
+	assert "next_refill_seconds" in text and 'link.href = "/account"' in text
+	assert 'ev.type === "credit_denied"' in text and 'details?.action === "render"' in text and 'ev.action === "render"' in text
+	assert "openPaywall" not in text and "outOfMessages" not in html
+
+
 def test_canvas_change_event_reaches_web_before_final_message():
 	key = "web:s"
 	fe = fw.WebFrontend()

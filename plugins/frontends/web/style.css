@@ -56,6 +56,11 @@ article.assistant h3, article.assistant h4, article.assistant h5 { margin: 8px 0
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes composerRail { from { transform: translateX(-50%); } to { transform: translateX(0); } }
 article.error { color: #ffb5c8; border-color: #7f3150; }
+article.credit-error { display: grid; gap: 7px; color: var(--muted); background: #17151c; }
+.credit-error strong { color: #ffd0dc; font-weight: 700; }
+.credit-error p { margin: 0; white-space: normal; }
+.credit-error a { width: fit-content; color: var(--accent); font-weight: 600; text-decoration: none; }
+.credit-error a:hover { text-decoration: underline; }
 .approval-actions { display: flex; gap: 8px; margin-top: 12px; }
 .approval-actions button, .canvas-actions a, .canvas-actions button, .share-panel button { border: 1px solid rgba(255,255,255,.24); background: rgba(0,0,0,.42); color: var(--text); padding: 9px 12px; cursor: pointer; text-decoration: none; transition: border-color 200ms ease; }
 .approval-actions button:hover, .canvas-actions a:hover, .canvas-actions button:hover, .share-panel button:hover { border-color: var(--accent); }
@@ -340,7 +345,6 @@ body.account-body { background:
   .messages { order: -1; min-height: 42vh; background: rgba(8,9,13,.94); }
   .controls-drawer { order: -1; min-height: 42vh; }
   .composer { order: 0; }
-  #outOfMessages { position: fixed !important; }
   .gallery-section { padding: 28px; }
   .gallery-head { display: block; }
   h2 { font-size: 34px; }
