@@ -1349,6 +1349,11 @@ class _Handler(BaseHTTPRequestHandler):
             # half-broken. The thread wrapper releases the concurrency slot.
             logger.debug("client connection timed out from %s", self.client_address)
             self.close_connection = True
+        except ConnectionError:
+            # Browsers may abandon a keep-alive request or an in-flight
+            # response during navigation; that is not a server failure.
+            logger.debug("client disconnected from %s", self.client_address)
+            self.close_connection = True
 
     def _csrf_ok(self) -> bool:
         if self.path in CSRF_EXEMPT_POSTS:
