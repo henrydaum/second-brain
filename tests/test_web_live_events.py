@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import plugins.frontends.frontend_web as fw
 import plugins.tools.tool_execute_skill as execute_mod
 from canvas.runtime import CanvasRuntime
@@ -38,6 +40,21 @@ def test_web_app_uses_eventsource_without_fast_polling():
 	text = Path("plugins/frontends/web/app.js").read_text(encoding="utf-8")
 	assert "new EventSource" in text
 	assert "setInterval(poll, 1200)" not in text
+
+
+@pytest.mark.parametrize("error", [ConnectionResetError(54, "reset"), BrokenPipeError(32, "pipe")])
+def test_http_handler_quietly_closes_disconnected_clients(monkeypatch, error):
+	def disconnect(_handler):
+		raise error
+
+	monkeypatch.setattr(fw.BaseHTTPRequestHandler, "handle_one_request", disconnect)
+	handler = fw._Handler.__new__(fw._Handler)
+	handler.client_address = ("127.0.0.1", 50439)
+	handler.close_connection = False
+
+	handler.handle_one_request()
+
+	assert handler.close_connection is True
 
 
 def test_out_of_credits_uses_chat_notice_not_popup():
