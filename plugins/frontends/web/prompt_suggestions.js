@@ -4,11 +4,11 @@
 const PROMPT_SUGGESTIONS = [
   // Iconic single-skill showcases — skill-name labels
   { prompt: "Show me the Mandelbrot Explorer.", label: "Mandelbrot set" },
-  { prompt: "Show me the Newton Basins Explorer with a Fisheye lens and Posterize To Palette. Also, make it green.", label: "Newton Basins" },
-  { prompt: "Show me a Lorenz Attractor zoomed out a bit, with the Synthwave palette.", label: "Lorenz Attractor" },
-  { prompt: "Run Conway's Life with the Aurora palette and add Bloom Glow.", label: "Conway's Life" },
-  { prompt: "Show me Isometric Terrain with the Botanical palette.", label: "Isometric terrain" },
-  { prompt: "Show me an Elementary Cellular Automaton with the Obsidian palette.", label: "Cellular automaton" },
+  { prompt: "Show me the Newton Basins Explorer with five roots and a Fisheye lens filter. Also, make it coral-colored.", label: "Newton Basins" },
+  { prompt: "Show me a Lorenz Attractor zoomed out, with the Synthwave palette.", label: "Lorenz Attractor" },
+  { prompt: "Run Conway's Life with the Aurora palette and add Bloom Glow and Scanlines.", label: "Conway's Life" },
+  { prompt: "Show me Isometric Terrain with the Tower Village scene and Botanical palette. After that, add a border.", label: "Isometric terrain" },
+  { prompt: "Show me an Elementary Cellular Automaton with the Obsidian palette. Then, Mirror it top to bottom and add an Anaglyph 3D filter.", label: "Cellular automaton" },
   { prompt: "Show me an Attractor Cloud using the Clifford attractor with the Aurora palette.", label: "Attractor cloud" },
   { prompt: "Show me the Buddhabrot with Bloom Glow and a white Border.", label: "Buddhabrot" },
 
