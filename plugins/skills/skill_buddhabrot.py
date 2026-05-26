@@ -42,9 +42,9 @@ class BuddhabrotSkill(BaseSkill):
         hist = np.zeros((s, s), dtype=np.float32)
 
         # Total samples drawn from the bounding box of the Mandelbrot set.
-        # 1.5M is enough for a clean figure at default density; the slider
-        # lets you push to 7.5M for poster quality.
-        total_samples = int(1_500_000 * density)
+        # 2.5M gives an acceptably smooth default; Monte Carlo noise scales
+        # as 1/sqrt(samples), so the slider runs to 12.5M for poster quality.
+        total_samples = int(2_500_000 * density)
         chunk = 100_000
         n_chunks = max(1, (total_samples + chunk - 1) // chunk)
         compact_every = 8
@@ -161,8 +161,9 @@ class BuddhabrotSkill(BaseSkill):
         bg = np.array(art_kit.hex_to_rgb(canvas.palette.background), dtype=np.uint8)
         rgb[hist < 0.5] = bg
 
-        # Rotate 90° CCW so the Buddha sits upright (head at top, body below,
-        # arms reaching left/right) -- the conventional orientation.
-        rgb = np.rot90(rgb, k=1)
+        # Rotate 90° CW so the Buddha sits upright (head at top, body below,
+        # arms reaching left/right) -- the conventional orientation. Using
+        # k=1 (CCW) lands it head-down.
+        rgb = np.rot90(rgb, k=-1)
 
         canvas.commit(Image.fromarray(rgb, "RGB").convert("RGBA"))
