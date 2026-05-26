@@ -42,11 +42,15 @@
     }
   ];
 
-  const CHIPS = [
-    { prompt: "Create a Mandelbrot explorer", label: "explore the Mandelbrot" },
-    { prompt: "Show me the Julia set", label: "see the Julia set" },
-    { prompt: "surprise me", label: "surprise me" }
-  ];
+  const SUGGESTION_COUNT = 3;
+  function pickSuggestions() {
+    const pool = (typeof PROMPT_SUGGESTIONS !== "undefined" && Array.isArray(PROMPT_SUGGESTIONS)) ? PROMPT_SUGGESTIONS.slice() : [];
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    return pool.slice(0, SUGGESTION_COUNT);
+  }
 
   function el(tag, attrs, ...children) {
     const node = document.createElement(tag);
@@ -73,6 +77,7 @@
     host.appendChild(container);
 
     let idx = 0;
+    const chipChoices = pickSuggestions();
 
     const slideWrap = el("div", { class: "tutorial-slide" });
     const dotsWrap = el("div", { class: "tutorial-dots" });
@@ -87,9 +92,9 @@
       slideWrap.appendChild(el("h2", { class: "tutorial-title" }, s.title));
       slideWrap.appendChild(el("p", { class: "tutorial-body" }, s.body));
       if (s.note) slideWrap.appendChild(el("p", { class: "tutorial-note" }, "Note: " + s.note));
-      if (idx === STEPS.length - 1) {
+      if (idx === 0 && chipChoices.length) {
         const chips = el("div", { class: "tutorial-chips" });
-        for (const c of CHIPS) {
+        for (const c of chipChoices) {
           chips.appendChild(el("button", {
             type: "button",
             class: "tutorial-chip",

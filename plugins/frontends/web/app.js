@@ -1037,6 +1037,9 @@ document.querySelector("#newChat").addEventListener("click", async () => {
 
 // Tutorial carousel: live hero (replaces the old empty-state copy) + Help modal.
 function tutorialTryIt(prompt) {
+  // Prompts are agent-bound — close the controls drawer so the left column
+  // is back in chat mode before we drop the suggestion in.
+  if (controlsDrawer.classList.contains("open")) setControlsOpen(false);
   if (prompt) input.value = prompt;
   input.focus();
   const modal = document.querySelector("#helpModal");
