@@ -31,7 +31,7 @@ class MandelbrotExplorerSkill(BaseSkill):
     pan_y = Slider(-3.0, 3.0, default=0.0, step=0.05)
     pan = Pan(x='pan_x', y='pan_y', label='Pan')
     zoom_extra = Slider(0.5, 32.0, default=1.0, step=0.05, label='Zoom')
-    iterations = Slider(0, 1500, default=0, step=10, label='Iterations (0 = preset)')
+    iterations = Slider(0, 1500, default=1500, step=10, label='Iterations')
 
     def run(self, canvas):
         cx, cy, zoom_exp, detail = _SPOTS.get(str(self.spot), _SPOTS["full"])

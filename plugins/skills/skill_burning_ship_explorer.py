@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+from plugins.BaseSkill import BaseSkill, Enum, Palette, Slider, Pan
 
 import numpy as np
 from PIL import Image
@@ -20,7 +20,7 @@ _SPOTS = {
 
 class BurningShipExplorerSkill(BaseSkill):
     name = 'Burning Ship Explorer'
-    description = 'A guided tour of the Burning Ship fractal -- the inferno cousin of the Mandelbrot set. Jagged, ship-like silhouettes with antennas, masts, and embedded mini-ships.'
+    description = 'A guided tour of the Burning Ship fractal -- the inferno cousin of the Mandelbrot set. Jagged, ship-like silhouettes with antennas, masts, and embedded mini-ships. Pan, zoom, and iteration controls let you wander off the preset and chase your own detail. Optimized: paired-real working set (the |Re|/|Im| step doesn\'t fit numpy complex), live-buffer compaction every 3 iterations.'
     kind = "background"
 
     palette = Palette()
@@ -32,20 +32,35 @@ class BurningShipExplorerSkill(BaseSkill):
         ('mast',      'Mast Spire'),
         ('deep_keel', 'Deep Keel'),
     ], default='main_ship')
+    # Pan range ±3 (= 1.5 view-widths to either side) so you can navigate
+    # between adjacent features at deep zoom; capping at ±1 only let you
+    # move by half a screen, which felt like nothing once zoomed in.
+    pan_x = Slider(-3.0, 3.0, default=0.0, step=0.05)
+    pan_y = Slider(-3.0, 3.0, default=0.0, step=0.05)
+    pan = Pan(x='pan_x', y='pan_y', label='Pan')
+    zoom_extra = Slider(0.5, 32.0, default=1.0, step=0.05, label='Zoom')
+    iterations = Slider(0, 1500, default=1500, step=10, label='Iterations')
 
     def run(self, canvas):
-        cx, cy, zoom_exp, detail = _SPOTS[self.spot]
+        cx, cy, zoom_exp, detail = _SPOTS.get(str(self.spot), _SPOTS["main_ship"])
         s = canvas.size
-        zoom = float(2.0 ** zoom_exp)
-        n_iter = int(detail)
+        zoom = float(2.0 ** zoom_exp) * float(self.zoom_extra)
+        iter_override = int(self.iterations)
+        n_iter = iter_override if iter_override >= 50 else int(detail)
 
-        use_f64 = zoom_exp > 10.0
+        # Step up to f64 once total zoom passes ~2^10, regardless of whether
+        # the extra zoom came from the preset or the user slider.
+        use_f64 = zoom > 1024.0
         real = np.float64 if use_f64 else np.float32
 
         view = 3.0 / zoom
         half = view * 0.5
-        re = np.linspace(cx - half, cx + half, s, dtype=real)
-        im = np.linspace(cy + half, cy - half, s, dtype=real)
+        # Pan offsets the view center; ±1 on the slider moves by a full half-view.
+        cx_eff = cx + float(self.pan_x) * half
+        cy_eff = cy + float(self.pan_y) * half
+        re = np.linspace(cx_eff - half, cx_eff + half, s, dtype=real)
+        # im linspace is reversed so the ship silhouette reads right-side up.
+        im = np.linspace(cy_eff + half, cy_eff - half, s, dtype=real)
         R, I = np.meshgrid(re, im)
 
         N = s * s
