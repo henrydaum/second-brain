@@ -202,18 +202,17 @@ body.share-landing.missing .share-landing-meta { text-align: center; }
 
 .ctl-panel { display: grid; gap: 7px; padding: 8px 9px; border: 1px solid rgba(255,255,255,.14); background: rgba(13,17,25,.58); transition: border-color 160ms ease, background 160ms ease, opacity 160ms ease; }
 .ctl-panel.dirty { border-color: rgba(127,200,212,.55); background: rgba(127,200,212,.08); }
-.ctl-panel.dragging { opacity: .48; }
-.ctl-panel.drop-target { border-color: var(--accent); background: rgba(127,200,212,.10); }
-.ctl-panel.drop-illegal { border-color: var(--accent-2); background: rgba(200,122,150,.10); }
-.ctl-head { display: grid; grid-template-columns: 22px minmax(0,1fr) 24px; align-items: center; gap: 7px; color: var(--text); user-select: none; min-height: 24px; }
-.ctl-head.no-drag { grid-template-columns: minmax(0,1fr) 24px; }
-.ctl-head div { min-width: 0; display: grid; gap: 1px; }
+.ctl-head { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 10px; color: var(--text); user-select: none; min-height: 24px; }
+.ctl-head > div:not(.ctl-controls) { min-width: 0; display: grid; gap: 1px; }
 .ctl-head span { font-size: 9.5px; color: var(--muted); letter-spacing: .07em; text-transform: uppercase; }
 .ctl-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; line-height: 1.05; font-weight: 800; color: var(--text); }
-.ctl-drag, .ctl-remove { width: 24px; height: 24px; padding: 0; border: 1px solid var(--line); background: #10141e; color: var(--muted); cursor: pointer; }
-.ctl-drag { cursor: grab; letter-spacing: -3px; font-size: 14px; }
-.ctl-drag:disabled { opacity: .25; cursor: default; }
-.ctl-drag:not(:disabled):hover, .ctl-remove:hover { border-color: var(--accent); color: var(--accent); }
+.ctl-controls { display: inline-flex; align-items: center; gap: 4px; }
+.ctl-move { display: inline-flex; flex-direction: column; gap: 1px; }
+.ctl-move-btn { width: 24px; height: 12px; padding: 0; border: 1px solid var(--line); background: #10141e; color: var(--muted); cursor: pointer; font-size: 9px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+.ctl-move-btn:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
+.ctl-move-btn:disabled { opacity: .25; cursor: default; }
+.ctl-remove { width: 24px; height: 24px; padding: 0; border: 1px solid var(--line); background: #10141e; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: border-color 160ms ease, color 160ms ease; }
+.ctl-remove::before { content: ""; display: block; width: 10px; height: 2px; background: currentColor; }
 .ctl-remove:hover { border-color: var(--accent-2); color: var(--accent-2); }
 .ctl-body { display: grid; gap: 8px; }
 .ctl-empty { padding: 8px 0 2px; color: var(--muted); font-size: 12px; }
@@ -267,8 +266,9 @@ body.share-landing.missing .share-landing-meta { text-align: center; }
 .gallery-card small { color: var(--muted); }
 .gallery-card button { height: 34px; border: 1px solid var(--line); background: #171f2d; color: var(--text); cursor: pointer; transition: border-color 200ms ease, color 200ms ease; }
 .gallery-card button:hover { border-color: var(--accent-2); color: var(--accent-2); }
-.gallery-card .gc-delete-btn { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; padding: 0; border-radius: 50%; background: rgba(11,13,19,.78); color: #d1d5db; border: 1px solid rgba(255,255,255,.18); font-size: 18px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: color 160ms ease, border-color 160ms ease, background 160ms ease; z-index: 2; }
-.gallery-card .gc-delete-btn:hover { color: #f87171; border-color: #f87171; background: rgba(11,13,19,.92); }
+.gallery-card .gc-delete-btn { position: absolute; top: 0; right: 0; width: 26px; height: 26px; padding: 0; border-radius: 0; background: rgba(11,13,19,.82); color: #d1d5db; border: 0; border-left: 1px solid rgba(255,255,255,.14); border-bottom: 1px solid rgba(255,255,255,.14); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: color 160ms ease, background 160ms ease; z-index: 2; }
+.gallery-card .gc-delete-btn::before { content: ""; display: block; width: 10px; height: 2px; background: currentColor; }
+.gallery-card .gc-delete-btn:hover { color: #f87171; background: rgba(11,13,19,.95); }
 .gallery-card .gc-delete-btn:disabled { opacity: .5; cursor: default; }
 
 /* Paginator */

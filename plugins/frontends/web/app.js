@@ -567,7 +567,7 @@ async function loadGalleryFor(kind, page = 1) {
   const total = typeof r.total === "number" ? r.total : items.length + offset;
   const shareIcon = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><line x1="8.1" y1="11" x2="15.9" y2="7.1"/><line x1="8.1" y1="13" x2="15.9" y2="16.9"/></svg>`;
   cfg.grid.innerHTML = items.map(x => {
-    const deleteBtn = x.mine ? `<button class="gc-delete-btn" data-kind="${kind}" data-pool-hash="${esc(x.pool_hash || x.path)}" data-action="delete" title="${kind === "shared" ? "Remove from shared gallery" : "Remove from archive"}" aria-label="Delete">×</button>` : "";
+    const deleteBtn = x.mine ? `<button class="gc-delete-btn" data-kind="${kind}" data-pool-hash="${esc(x.pool_hash || x.path)}" data-action="delete" title="${kind === "shared" ? "Remove from shared gallery" : "Remove from archive"}" aria-label="Delete"></button>` : "";
     return `<article class="gallery-card">${deleteBtn}<img src="${x.url}" alt=""><div><strong>${esc(x.title)}</strong><small>${esc(x.artist)}${x.score ? ` · ${(x.score*100).toFixed(0)}% similar` : ""}</small><div class="gallery-card-actions"><button data-kind="${kind}" data-path="${esc(x.path)}" data-action="remix">${cfg.action}</button><button class="gc-share-btn" data-kind="${kind}" data-path="${esc(x.path)}" data-action="link" title="Get share link" aria-label="Get share link">${shareIcon}</button></div></div></article>`;
   }).join("") || `<article class='assistant'>${cfg.empty}</article>`;
   renderPaginatorFor(kind, total);
@@ -657,7 +657,8 @@ function renderControlsPanel(panels) {
     return;
   }
   const movableLayers = currentControlsPanels.filter(p => Number(p.chain_index) > 0).length;
-  const stack = [...currentControlsPanels].sort((a, b) => b.chain_index - a.chain_index).map(p => renderPanel(p, movableLayers)).join("");
+  const maxChain = currentControlsPanels.reduce((m, p) => Math.max(m, Number(p.chain_index) || 0), 0);
+  const stack = [...currentControlsPanels].sort((a, b) => b.chain_index - a.chain_index).map(p => renderPanel(p, movableLayers, maxChain)).join("");
   const dirty = pendingControls.size ? " dirty" : "";
   const regen = `<section class="ctl-actions"><button type="button" class="ctl-global${dirty}" id="globalRegenerate" title="Apply staged controls with the current seed"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3Z"/></svg><span>Regenerate</span></button><button type="button" class="ctl-global${dirty}" id="globalRandomize" title="Apply staged controls with a fresh seed"><span>Randomize</span></button></section>`;
   controlsPanel.innerHTML = stack + regen;
@@ -811,16 +812,27 @@ skillSearchResults.addEventListener("click", async (e) => {
     btn.disabled = false;
   }
 });
-function renderPanel(panel, movableLayers = 0) {
+function renderPanel(panel, movableLayers = 0, maxChain = 0) {
   const widgets = (panel.schema || []).map(spec => renderWidget(panel, spec)).join("");
   const empty = widgets || `<div class="ctl-empty">No controls for this layer.</div>`;
-  const draggable = Number(panel.chain_index) > 0 && movableLayers > 1;
+  const ci = Number(panel.chain_index);
+  const movable = ci > 0 && movableLayers > 1;
+  const upDisabled = ci >= maxChain;
+  const downDisabled = ci <= 1;
+  const moveBtns = movable
+    ? `<div class="ctl-move">
+        <button type="button" class="ctl-move-btn" data-chain="${ci}" data-dir="up" ${upDisabled ? "disabled" : ""} title="Move layer up" aria-label="Move layer up">▲</button>
+        <button type="button" class="ctl-move-btn" data-chain="${ci}" data-dir="down" ${downDisabled ? "disabled" : ""} title="Move layer down" aria-label="Move layer down">▼</button>
+      </div>`
+    : "";
   const dirty = [...pendingControls.keys()].some(k => k.startsWith(`${panel.chain_index}.`)) ? " dirty" : "";
   return `<section class="ctl-panel${dirty}" data-chain="${panel.chain_index}" data-kind="${esc(panel.kind || "")}" data-skill="${esc(panel.skill_name)}">
-    <header class="ctl-head ${draggable ? "" : "no-drag"}">
-      ${draggable ? `<button type="button" class="ctl-drag" title="Drag to reorder" aria-label="Drag layer">⋮⋮</button>` : ""}
+    <header class="ctl-head">
+      <div class="ctl-controls">
+        <button type="button" class="ctl-remove" data-chain="${panel.chain_index}" title="Remove layer" aria-label="Remove layer"></button>
+        ${moveBtns}
+      </div>
       <div><strong>${esc(panel.skill_name)}</strong><span>Layer ${panel.chain_index}${panel.kind ? ` · ${esc(panel.kind)}` : ""}</span></div>
-      <button type="button" class="ctl-remove" data-chain="${panel.chain_index}" title="Remove layer" aria-label="Remove layer">×</button>
     </header>
     <div class="ctl-body">${empty}</div>
   </section>`;
@@ -840,6 +852,19 @@ controlsPanel.addEventListener("click", async e => {
     btn.disabled = true;
     loaderTicketStart();
     try { render((await post("/api/layer_delete", {chain_index: +btn.dataset.chain})).events); }
+    catch (err) { add("error", err.message); }
+    finally { loaderTicketEnd(); }
+    return;
+  }
+  const move = target.closest(".ctl-move-btn");
+  if (move) {
+    if (move.disabled) return;
+    const from = +move.dataset.chain;
+    const to = move.dataset.dir === "up" ? from + 1 : from - 1;
+    if (to < 1) return;
+    move.disabled = true;
+    loaderTicketStart();
+    try { render((await post("/api/layer_move", {from_index: from, to_index: to})).events); }
     catch (err) { add("error", err.message); }
     finally { loaderTicketEnd(); }
     return;
@@ -878,40 +903,6 @@ controlsPanel.addEventListener("click", async e => {
     return;
   }
 });
-let ctlDrag = null;
-function clearCtlDrag() {
-  controlsPanel.querySelectorAll(".ctl-panel").forEach(p => p.classList.remove("dragging", "drop-target", "drop-illegal"));
-  ctlDrag = null;
-}
-controlsPanel.addEventListener("pointerdown", e => {
-  const handle = e.target.closest(".ctl-drag");
-  if (!handle || handle.disabled) return;
-  const card = handle.closest(".ctl-panel");
-  ctlDrag = {from: +card.dataset.chain, to: null, handle};
-  card.classList.add("dragging");
-  handle.setPointerCapture(e.pointerId);
-  e.preventDefault();
-});
-controlsPanel.addEventListener("pointermove", e => {
-  if (!ctlDrag) return;
-  controlsPanel.querySelectorAll(".drop-target,.drop-illegal").forEach(p => p.classList.remove("drop-target", "drop-illegal"));
-  const card = document.elementFromPoint(e.clientX, e.clientY)?.closest(".ctl-panel");
-  if (!card || !controlsPanel.contains(card)) return;
-  const to = +card.dataset.chain;
-  card.classList.add(to > 0 ? "drop-target" : "drop-illegal");
-  ctlDrag.to = to > 0 ? to : null;
-});
-controlsPanel.addEventListener("pointerup", async () => {
-  if (!ctlDrag) return;
-  const {from, to} = ctlDrag;
-  clearCtlDrag();
-  if (!to || to === from) return;
-  loaderTicketStart();
-  try { render((await post("/api/layer_move", {from_index: from, to_index: to})).events); }
-  catch (err) { add("error", err.message); }
-  finally { loaderTicketEnd(); }
-});
-controlsPanel.addEventListener("pointercancel", clearCtlDrag);
 controlsPanel.addEventListener("input", e => {
   const el = e.target;
   const chain = +el.dataset.chain;

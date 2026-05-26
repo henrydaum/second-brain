@@ -33,7 +33,7 @@ const PROMPT_SUGGESTIONS = [
   { prompt: "Show me a Koch Snowflake with the Halftone filter and the Frost palette.", label: "Halftone snowflake" },
   { prompt: "Show me the Mandelbrot Explorer at Elephant Valley, then apply Watercolor for a painted look.", label: "Watercolor Mandelbrot" },
   { prompt: "Show me a Gray-Scott reaction-diffusion in the Maze regime, then apply Halftone.", label: "Reaction-diffusion maze" },
-  { prompt: "Show me the Burning Ship Explorer at the Mast Spire with the Magma palette and a Vignette.", label: "Burning Ship fractal" },
+  { prompt: "Show me the Burning Ship Explorer at the Embedded Mini-Ship with the Magma palette and a Vignette. Crank the zoom.", label: "Burning Ship fractal" },
 
   // Meta — 1:1 short prompts so the agent improvises
   { prompt: "Surprise me", label: "Surprise me" },

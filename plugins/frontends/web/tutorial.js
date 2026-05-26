@@ -22,7 +22,7 @@
     },
     {
       title: "Manual controls.",
-      body: "Type into the text box with the settings panel open to search skills. Press \"+\" to add a layer, use the \"-\" and three-dots buttons to delete or move a layer.",
+      body: "Type into the text box with the settings panel open to search skills. Press \"+\" to add a layer, use \"-\" and the arrows to delete or move a layer.",
       note: "Useful if you prefer manual controls instead of chatting."
     },
     {
