@@ -26,8 +26,11 @@ class JuliaExplorerSkill(BaseSkill):
     kind = "background"
     palette = Palette()
     spot = Enum([('dendrite', 'Dendrite'), ('rabbit', 'Douady Rabbit'), ('san_marco', 'San Marco'), ('siegel', 'Siegel Disk'), ('dragon', 'Dragon'), ('spiral', 'Spiral'), ('airplane', 'Airplane'), ('dust', 'Cantor Dust')], default='dragon')
-    pan_x = Slider(-1.0, 1.0, default=0.0, step=0.05)
-    pan_y = Slider(-1.0, 1.0, default=0.0, step=0.05)
+    # Pan range ±3 (= 1.5 view-widths to either side) so you can navigate
+    # between adjacent features at deep zoom; capping at ±1 only let you
+    # move by half a screen, which felt like nothing once zoomed in.
+    pan_x = Slider(-3.0, 3.0, default=0.0, step=0.05)
+    pan_y = Slider(-3.0, 3.0, default=0.0, step=0.05)
     pan = Pan(x='pan_x', y='pan_y', label='Pan')
     zoom_extra = Slider(0.5, 32.0, default=1.0, step=0.05, label='Zoom')
     iterations = Slider(0, 1500, default=0, step=10, label='Iterations (0 = preset)')
