@@ -12,7 +12,7 @@
     },
     {
       title: "Build on it.",
-      body: "Keep chatting to add more layers. Ask to change something if it isn't right.",
+      body: "Keep chatting to add more layers. Ask to change something, if it isn't right.",
       note: "Second Brain can make mistakes, but it can also fix them."
     },
     {
@@ -22,13 +22,13 @@
     },
     {
       title: "Manual controls.",
-      body: "Type into the search field with the settings panel open and press \"+\" to add a layer. Use the \"-\" and three-dots buttons to delete or move layers.",
-      note: "Useful if you prefer manual control instead of chatting."
+      body: "Type into the text box with the settings panel open to search skills. Press \"+\" to add a layer, use the \"-\" and three-dots buttons to delete or move a layer.",
+      note: "Useful if you prefer manual controls instead of chatting."
     },
     {
       title: "Save, download, or share.",
       body: "Use the buttons above the canvas to keep the image, export a PNG, or send it to someone.",
-      note: "Anything you share can be opened and remixed by anyone who sees it — they get the layers and settings, but your personal canvas is unaffected."
+      note: "Anything you share can be opened and remixed by anyone who sees it — they get the layers and settings, but your personal canvas remains unaffected."
     },
     {
       title: "Make an account.",

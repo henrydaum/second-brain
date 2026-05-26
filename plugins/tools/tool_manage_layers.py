@@ -95,17 +95,23 @@ class ManageLayers(BaseTool):
 		"filters/objects). action=delete removes layer at chain_index (0 is the "
 		"background — deleting it clears the canvas). action=move reorders from "
 		"from_index to to_index; layer 0 must stay a background. action=clear "
-		"wipes the canvas entirely. Surviving layers are replayed end-to-end "
-		"to rebuild the image."
+		"wipes the canvas entirely. action=set_control updates one control on "
+		"one layer (chain_index, name, value) — use read_skill on the layer's "
+		"slug first to see the control declarations (Slider min/max/step, Enum "
+		"options, Bool, Pan, Text) which are the source of truth for valid "
+		"names and values. Surviving layers are replayed end-to-end to rebuild "
+		"the image."
 	)
 	max_calls = 4
 	parameters = {
 		"type": "object",
 		"properties": {
-			"action": {"type": "string", "enum": ["delete", "move", "clear"]},
-			"chain_index": {"type": "integer", "description": "Target layer index for delete."},
+			"action": {"type": "string", "enum": ["delete", "move", "clear", "set_control"]},
+			"chain_index": {"type": "integer", "description": "Target layer index for delete or set_control."},
 			"from_index": {"type": "integer", "description": "Source layer index for move."},
 			"to_index": {"type": "integer", "description": "Destination layer index for move."},
+			"name": {"type": "string", "description": "Control name for set_control — must match a control declared on the layer's skill (see read_skill)."},
+			"value": {"description": "New control value for set_control. Type depends on the control (number for Slider, string for Enum/Text/Palette, bool for Bool)."},
 		},
 		"required": ["action"],
 	}
@@ -131,4 +137,12 @@ class ManageLayers(BaseTool):
 			if result.data:
 				result.llm_summary = f"Moved layer {fi} to position {ti}."
 			return result
-		return ToolResult.failed(f"Unknown action '{action}'. Use delete, move, or clear.")
+		if action == "set_control":
+			idx = int(kwargs.get("chain_index", -1))
+			name = str(kwargs.get("name") or "")
+			value = kwargs.get("value")
+			result = _enact_and_render(context, "set_control", {"chain_index": idx, "name": name, "value": value})
+			if result.data:
+				result.llm_summary = f"Set {name}={value!r} on layer {idx}."
+			return result
+		return ToolResult.failed(f"Unknown action '{action}'. Use delete, move, clear, or set_control.")
