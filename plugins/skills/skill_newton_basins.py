@@ -36,34 +36,53 @@ class NewtonBasinsSkill(BaseSkill):
         polys = _polys()
         f, fp, roots, view_half = polys.get(key, polys["cubic"])
 
-        re = np.linspace(-view_half, view_half, s, dtype=np.float64)
-        im = np.linspace(-view_half, view_half, s, dtype=np.float64)
+        re = np.linspace(-view_half, view_half, s, dtype=np.float32)
+        im = np.linspace(-view_half, view_half, s, dtype=np.float32)
         R, I = np.meshgrid(re, im)
-        Z = R + 1j * I
 
         n_iter = 40
-        tol = 1e-5
-        iters = np.zeros(Z.shape, dtype=np.float32)
-        converged = np.zeros(Z.shape, dtype=bool)
+        tol = 1e-4  # relaxed for complex64
+
+        # Live-buffer compaction: drop pixels from the working set as they
+        # converge. Most pixels finish in <10 iters; only basin boundaries
+        # need the full 40. Without compaction we kept doing the full grid
+        # of complex128 arithmetic every iteration and timed out at s=1024.
+        N = s * s
+        iters_flat = np.full(N, n_iter, dtype=np.int32)
+        converged_flat = np.zeros(N, dtype=bool)
+        Z_final = (R + 1j * I).astype(np.complex64).ravel()
+        live_idx = np.arange(N, dtype=np.int64)
+        Z_live = Z_final.copy()
+
         with np.errstate(divide="ignore", invalid="ignore"):
             for i in range(n_iter):
-                denom = fp(Z)
-                # Avoid division by zero -- nudge tiny derivatives.
-                denom = np.where(np.abs(denom) < 1e-14, 1e-14, denom)
-                dZ = f(Z) / denom
-                Z = Z - dZ
-                newly = (~converged) & (np.abs(dZ) < tol)
-                iters[newly] = i + 1
-                converged |= newly
-                if converged.all():
-                    break
-        iters[~converged] = n_iter
+                denom = fp(Z_live)
+                denom = np.where(np.abs(denom) < 1e-7, np.complex64(1e-7), denom)
+                dZ = f(Z_live) / denom
+                Z_live = Z_live - dZ
+                done = np.abs(dZ) < tol
+                if done.any():
+                    done_global = live_idx[done]
+                    iters_flat[done_global] = i + 1
+                    converged_flat[done_global] = True
+                    Z_final[done_global] = Z_live[done]
+                    keep = ~done
+                    live_idx = live_idx[keep]
+                    Z_live = Z_live[keep]
+                    if live_idx.size == 0:
+                        break
+        if live_idx.size:
+            Z_final[live_idx] = Z_live
+
+        Z = Z_final.reshape(s, s)
+        iters = iters_flat.reshape(s, s).astype(np.float32)
+        converged = converged_flat.reshape(s, s)
 
         # For polynomials with known roots, classify by nearest root.
         # For "perturbed" (which has three roots we'd need to solve for), classify
         # by final Z's argument -- still produces a clean basin map.
         if roots is not None:
-            root_arr = np.array(roots, dtype=np.complex128)
+            root_arr = np.array(roots, dtype=np.complex64)
             d = np.abs(Z[..., None] - root_arr[None, None, :])
             basin = np.argmin(d, axis=-1).astype(np.int32)
             n_basins = len(roots)

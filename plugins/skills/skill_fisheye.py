@@ -14,7 +14,7 @@ class FisheyeSkill(BaseSkill):
     kind = "filter"
 
     strength = Slider(-1.0, 1.0, default=0.6, step=0.05)
-    zoom     = Slider(0.5, 2.0, default=1.0, step=0.05)
+    zoom     = Slider(0.5, 2.0, default=1.3, step=0.05)
     cx       = Slider(0.0, 1.0, default=0.5, step=0.05)
     cy       = Slider(0.0, 1.0, default=0.5, step=0.05)
     center   = Pan(x='cx', y='cy')

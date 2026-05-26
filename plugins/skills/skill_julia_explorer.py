@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+from plugins.BaseSkill import BaseSkill, Enum, Palette, Slider, Pan
 
 import numpy as np
 from PIL import Image
@@ -22,18 +22,26 @@ _SPOTS = {
 
 class JuliaExplorerSkill(BaseSkill):
     name = 'Julia Explorer'
-    description = 'A guided tour of the most beloved filled Julia sets. Pick a constant -- the spindly Dendrite, the Douady Rabbit, the curling Dragon, the Siegel Disk, the cantor-dust airplane -- and the right framing and iteration depth come along for free. Pair with any palette. Optimized for M1: complex64 working set, |z0| pre-escape filter, and live-buffer compaction every 3 iterations.'
+    description = 'A guided tour of the most beloved filled Julia sets. Pick a constant -- the spindly Dendrite, the Douady Rabbit, the curling Dragon, the Siegel Disk, the cantor-dust airplane -- and the right framing and iteration depth come along for free. Pair with any palette. Pan, zoom, and iteration controls let you wander off the preset and chase your own detail. Optimized for M1: complex64 working set, |z0| pre-escape filter, and live-buffer compaction every 3 iterations.'
     kind = "background"
     palette = Palette()
     spot = Enum([('dendrite', 'Dendrite'), ('rabbit', 'Douady Rabbit'), ('san_marco', 'San Marco'), ('siegel', 'Siegel Disk'), ('dragon', 'Dragon'), ('spiral', 'Spiral'), ('airplane', 'Airplane'), ('dust', 'Cantor Dust')], default='dragon')
+    pan_x = Slider(-1.0, 1.0, default=0.0, step=0.02)
+    pan_y = Slider(-1.0, 1.0, default=0.0, step=0.02)
+    pan = Pan(x='pan_x', y='pan_y', label='Pan')
+    zoom_extra = Slider(0.5, 32.0, default=1.0, step=0.05, label='Zoom')
+    iterations = Slider(0, 1500, default=0, step=10, label='Iterations (0 = preset)')
 
     def run(self, canvas):
         jx, jy, zoom_exp, detail = _SPOTS.get(str(self.spot), _SPOTS["dragon"])
         s = int(canvas.size)
-        zoom = float(2.0 ** zoom_exp)
-        n_iter = int(detail)
+        zoom = float(2.0 ** zoom_exp) * float(self.zoom_extra)
+        iter_override = int(self.iterations)
+        n_iter = iter_override if iter_override >= 50 else int(detail)
 
-        use_f64 = zoom_exp > 10.0
+        # Step up to f64 once total zoom passes ~2^10, regardless of whether
+        # the extra zoom came from the preset or the user slider.
+        use_f64 = zoom > 1024.0
         cplx = np.complex128 if use_f64 else np.complex64
         real = np.float64 if use_f64 else np.float32
 
@@ -43,8 +51,11 @@ class JuliaExplorerSkill(BaseSkill):
         # 4-unit window centered at origin frames every filled Julia with |c| <= 2.
         view = 4.0 / zoom
         half = view * 0.5
-        re = np.linspace(-half, half, s, dtype=real)
-        im = np.linspace(-half, half, s, dtype=real)
+        # Pan offsets the view center; ±1 on the slider moves by a full half-view.
+        offset_x = float(self.pan_x) * half
+        offset_y = float(self.pan_y) * half
+        re = np.linspace(-half + offset_x, half + offset_x, s, dtype=real)
+        im = np.linspace(-half + offset_y, half + offset_y, s, dtype=real)
         R, I = np.meshgrid(re, im)
 
         er2 = max(abs(c_scalar), 2.0) ** 2

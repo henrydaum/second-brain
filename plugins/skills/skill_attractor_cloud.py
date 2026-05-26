@@ -1,6 +1,5 @@
 from plugins.BaseSkill import BaseSkill, Slider, Enum, Palette
 
-import math
 import numpy as np
 from PIL import Image
 
@@ -25,40 +24,58 @@ class AttractorCloudSkill(BaseSkill):
         s = canvas.size
         seed = canvas.seed
         kind = self.attractor
-        n_points = int(220_000 * self.density_boost)
 
+        # Curated canonical params. The previous de Jong list had small-d
+        # cases (e.g. d=0.4) that collapsed the y-range and produced a thin
+        # band; replaced with Paul Bourke's classic set.
         if kind == "de_jong":
             presets = [
-                (1.7, 1.8, 1.9, 0.4),
-                (1.5, 2.8, 2.0, 0.8),
-                (2.0, 2.0, 1.5, 0.4),
-                (-1.2, -2.1, -1.2, 2.0),
-                (-1.7, -2.1, -1.8, -1.9),
+                (-2.0,  -2.0,  -1.2,   2.0),
+                ( 1.4,  -2.3,   2.4,  -2.1),
+                ( 2.01, -2.53,  1.61, -0.33),
+                (-2.7,  -0.09, -0.86, -2.2),
+                (-0.827, -1.637, 1.659, -0.943),
+                (-2.24,  0.43, -0.65, -2.43),
             ]
         else:
             presets = [
-                (-1.2, -1.1, -1.0, 0.7),
-                (-2.0, -2.0, -1.0, 0.8),
-                (-2.5, -2.5, 0.5, 0.9),
-                (-1.7, -1.8, -1.9, 0.5),
+                (-1.4,  1.6,   1.0,   0.7),
+                (-1.7,  1.3,  -0.1,  -1.21),
+                ( 1.5, -1.8,   1.6,   0.9),
+                (-1.7, -1.7,  -1.1,  -1.5),
+                ( 1.6, -0.6,  -1.2,   1.6),
             ]
         a, b, c, d = presets[seed % len(presets)]
-        x, y = 0.1, 0.1
 
-        pts = []
-        for _ in range(n_points):
+        # Vectorize via parallel walkers. The point sequence is sequential
+        # per walker, but running 1024 walkers in lockstep turns 220k Python
+        # iterations of math.sin into ~220 numpy vector ops -- the attractor
+        # is ergodic so the limit density is identical.
+        n_walkers = 1024
+        burn = 300
+        n_sample = max(50, int(220 * float(self.density_boost)))
+        rng = np.random.default_rng(seed)
+        x = rng.uniform(-1.0, 1.0, n_walkers).astype(np.float32)
+        y = rng.uniform(-1.0, 1.0, n_walkers).astype(np.float32)
+
+        def _step(x, y):
             if kind == "de_jong":
-                xn = math.sin(a * y) - math.cos(b * x)
-                yn = math.sin(c * x) - math.cos(d * y)
+                xn = np.sin(a * y) - np.cos(b * x)
+                yn = np.sin(c * x) - np.cos(d * y)
             else:
-                xn = math.sin(a * y) + c * math.cos(a * x)
-                yn = math.sin(b * x) + d * math.cos(b * y)
-            x, y = xn, yn
-            pts.append((x, y))
+                xn = np.sin(a * y) + c * np.cos(a * x)
+                yn = np.sin(b * x) + d * np.cos(b * y)
+            return xn, yn
 
-        pts = np.array(pts, dtype=np.float32)
-        xs = pts[:, 0]
-        ys = pts[:, 1]
+        for _ in range(burn):
+            x, y = _step(x, y)
+
+        xs = np.empty(n_walkers * n_sample, dtype=np.float32)
+        ys = np.empty(n_walkers * n_sample, dtype=np.float32)
+        for i in range(n_sample):
+            x, y = _step(x, y)
+            xs[i * n_walkers:(i + 1) * n_walkers] = x
+            ys[i * n_walkers:(i + 1) * n_walkers] = y
 
         margin = s * 0.06
         span = s - 2 * margin

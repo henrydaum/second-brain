@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+from plugins.BaseSkill import BaseSkill, Enum, Palette, Slider, Pan
 
 import numpy as np
 from PIL import Image
@@ -20,26 +20,36 @@ _SPOTS = {
 
 class MandelbrotExplorerSkill(BaseSkill):
     name = 'Mandelbrot Explorer'
-    description = "A guided tour of the Mandelbrot set's most famous landmarks. Pick a spot -- Seahorse Valley, Elephant Valley, dendritic lightning patterns, deep spiral galaxies -- and the view, zoom, and iteration depth are all dialed in for you. Pair with any palette to taste. Optimized for M1: complex64 working set, cardioid + period-2 bulb early-exit, and live-buffer compaction every 3 iterations."
+    description = "A guided tour of the Mandelbrot set's most famous landmarks. Pick a spot -- Seahorse Valley, Elephant Valley, dendritic lightning patterns, deep spiral galaxies -- and the view, zoom, and iteration depth are all dialed in for you. Pair with any palette to taste. Pan, zoom, and iteration controls let you wander off the preset and chase your own detail. Optimized for M1: complex64 working set, cardioid + period-2 bulb early-exit, and live-buffer compaction every 3 iterations."
     kind = "background"
     palette = Palette()
     spot = Enum([('full', 'Full Set'), ('seahorse', 'Seahorse Valley'), ('elephant', 'Elephant Valley'), ('triple_spiral', 'Triple Spiral'), ('lightning', 'Lightning'), ('spiral_galaxy', 'Spiral Galaxy')], default='full')
+    pan_x = Slider(-1.0, 1.0, default=0.0, step=0.02)
+    pan_y = Slider(-1.0, 1.0, default=0.0, step=0.02)
+    pan = Pan(x='pan_x', y='pan_y', label='Pan')
+    zoom_extra = Slider(0.5, 32.0, default=1.0, step=0.05, label='Zoom')
+    iterations = Slider(0, 1500, default=0, step=10, label='Iterations (0 = preset)')
 
     def run(self, canvas):
         cx, cy, zoom_exp, detail = _SPOTS.get(str(self.spot), _SPOTS["full"])
         s = int(canvas.size)
-        zoom = float(2.0 ** zoom_exp)
-        n_iter = int(detail)
+        zoom = float(2.0 ** zoom_exp) * float(self.zoom_extra)
+        iter_override = int(self.iterations)
+        n_iter = iter_override if iter_override >= 50 else int(detail)
 
-        # Past zoom_exp 10 float32 can't resolve a pixel, so step up to float64.
-        use_f64 = zoom_exp > 10.0
+        # Step up to f64 once total zoom passes ~2^10, regardless of whether
+        # the extra zoom came from the preset or the user slider.
+        use_f64 = zoom > 1024.0
         cplx = np.complex128 if use_f64 else np.complex64
         real = np.float64 if use_f64 else np.float32
 
         view = 3.0 / zoom
         half = view * 0.5
-        re = np.linspace(cx - half, cx + half, s, dtype=real)
-        im = np.linspace(cy - half, cy + half, s, dtype=real)
+        # Pan offsets the view center; ±1 on the slider moves by a full half-view.
+        cx_eff = cx + float(self.pan_x) * half
+        cy_eff = cy + float(self.pan_y) * half
+        re = np.linspace(cx_eff - half, cx_eff + half, s, dtype=real)
+        im = np.linspace(cy_eff - half, cy_eff + half, s, dtype=real)
         R, I = np.meshgrid(re, im)
 
         # Cardioid + period-2 bulb tests skip the largest interior regions

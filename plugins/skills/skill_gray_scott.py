@@ -19,12 +19,20 @@ _PRESETS = {
     "uskate": (0.0620, 0.0609, 6000),
 }
 
-def _laplacian(z):
-    return (
-        np.roll(z, 1, 0) + np.roll(z, -1, 0)
-        + np.roll(z, 1, 1) + np.roll(z, -1, 1)
-        - 4.0 * z
-    )
+def _laplacian(z, out):
+    # 5-point stencil, periodic boundary, in-place into `out`.
+    # Replaces 4 x np.roll (each one allocates + copies the whole grid) with
+    # eight in-place slice adds. Same math, ~2x faster, zero per-call allocations.
+    np.multiply(z, -4.0, out=out)
+    out[1:, :]  += z[:-1, :]
+    out[:-1, :] += z[1:, :]
+    out[0, :]   += z[-1, :]
+    out[-1, :]  += z[0, :]
+    out[:, 1:]  += z[:, :-1]
+    out[:, :-1] += z[:, 1:]
+    out[:, 0]   += z[:, -1]
+    out[:, -1]  += z[:, 0]
+    return out
 
 
 class GrayScottSkill(BaseSkill):
@@ -59,13 +67,40 @@ class GrayScottSkill(BaseSkill):
 
         Du, Dv = 0.16, 0.08
         dt = 1.0
+        kf = k + f
+
+        # Pre-allocate every per-step buffer so the inner loop allocates
+        # nothing. Previously each step churned ~12 fresh (N,N) float32
+        # arrays; at N=384, 5000 steps, that was ~30 GB of allocator churn.
+        La = np.empty_like(A)
+        Lb = np.empty_like(B)
+        ABB = np.empty_like(A)
+        tmp = np.empty_like(A)
 
         for _ in range(n_steps):
-            La = _laplacian(A)
-            Lb = _laplacian(B)
-            ABB = A * B * B
-            A = A + (Du * La - ABB + f * (1.0 - A)) * dt
-            B = B + (Dv * Lb + ABB - (k + f) * B) * dt
+            _laplacian(A, La)
+            _laplacian(B, Lb)
+            # ABB = A * B * B
+            np.multiply(A, B, out=ABB)
+            np.multiply(ABB, B, out=ABB)
+
+            # A += dt * (Du*La - ABB + f*(1-A))  →  compute increment in La
+            np.multiply(La, Du, out=La)
+            np.subtract(La, ABB, out=La)
+            np.multiply(A, f, out=tmp)
+            np.subtract(La, tmp, out=La)
+            La += f                    # scalar add, no allocation
+            np.multiply(La, dt, out=La)
+            np.add(A, La, out=A)
+
+            # B += dt * (Dv*Lb + ABB - (k+f)*B)  →  compute increment in Lb
+            np.multiply(Lb, Dv, out=Lb)
+            np.add(Lb, ABB, out=Lb)
+            np.multiply(B, kf, out=tmp)
+            np.subtract(Lb, tmp, out=Lb)
+            np.multiply(Lb, dt, out=Lb)
+            np.add(B, Lb, out=B)
+
             np.clip(A, 0.0, 1.0, out=A)
             np.clip(B, 0.0, 1.0, out=B)
 

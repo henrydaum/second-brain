@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Enum, Palette
+from plugins.BaseSkill import BaseSkill, Enum, Palette, Slider
 
 import numpy as np
 from PIL import Image
@@ -15,6 +15,7 @@ class LorenzAttractorSkill(BaseSkill):
     kind = "background"
     palette = Palette()
     projection = Enum([('xz', 'XZ (butterfly)'), ('xy', 'XY (front)'), ('yz', 'YZ (side)')], default='xz')
+    zoom = Slider(0.4, 2.0, default=0.85, step=0.05, label='Zoom')
 
     def run(self, canvas):
         s = int(canvas.size)
@@ -78,8 +79,14 @@ class LorenzAttractorSkill(BaseSkill):
         v_lo, v_hi = float(np.percentile(v, 1)), float(np.percentile(v, 99))
         u_spread = (u_hi - u_lo) or 1.0
         v_spread = (v_hi - v_lo) or 1.0
-        cx = (u - u_lo) / u_spread * span + margin
-        cy = (v - v_lo) / v_spread * span + margin
+        # Zoom scales the projected attractor about the canvas center; default
+        # 0.85 because the percentile-fit tends to push the lobes against the
+        # canvas edges, which crops the curl of the trajectory near the wings.
+        zoom = float(self.zoom)
+        effective_span = span * zoom
+        center = s * 0.5
+        cx = (u - u_lo) / u_spread * effective_span + (center - effective_span * 0.5)
+        cy = (v - v_lo) / v_spread * effective_span + (center - effective_span * 0.5)
         # Flip y so that increasing z reads upward visually for the xz projection.
         cy = s - cy
 
