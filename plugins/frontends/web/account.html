@@ -37,6 +37,25 @@
       </div>
     </div>
 
+    <div class="account-card" id="prefsCard" hidden>
+      <h2>Preferences</h2>
+      <label class="account-pref">
+        <input type="checkbox" id="prefSkillAuthoring">
+        <span>
+          <strong>Let Second Brain author skills for me</strong>
+          <small>Lets the assistant create, edit, and delete custom skills on your behalf.</small>
+        </span>
+      </label>
+      <label class="account-pref">
+        <input type="checkbox" id="prefCommunitySkills">
+        <span>
+          <strong>Include community skills in search</strong>
+          <small>Shows skills authored by other users when searching. Off by default.</small>
+        </span>
+      </label>
+      <p id="prefsStatus" class="modal-status" hidden></p>
+    </div>
+
     <div class="account-card" id="promoCard" hidden>
       <form id="promoForm">
         <input id="promoCode" type="text" required placeholder="Promo code">
@@ -93,6 +112,7 @@
     const a = r.account || {};
     if (a.signed_in) {
       $("#signedIn").hidden = false;
+      $("#prefsCard").hidden = false;
       $("#promoCard").hidden = false;
       $("#dangerCard").hidden = false;
       $("#rowEmail").textContent = a.email || "—";
@@ -101,11 +121,32 @@
       const pack = a.pack || {credits:1000, price_cents:299};
       $("#buyMore").textContent = `Buy ${Number(pack.credits).toLocaleString()} credits - $${(Number(pack.price_cents) / 100).toFixed(2)}`;
       window._sbEmail = a.email || "";
+      const cfg = a.account_config || {};
+      $("#prefSkillAuthoring").checked = !!cfg.skill_authoring_enabled;
+      $("#prefCommunitySkills").checked = !!cfg.community_skills_enabled;
     } else {
       $("#signedOut").hidden = false;
     }
   }
   load();
+
+  async function savePref(key, value) {
+    const status = $("#prefsStatus");
+    status.hidden = false;
+    status.className = "modal-status";
+    status.textContent = "Saving…";
+    const r = await post("/api/account/config", {account_config: {[key]: value}});
+    if (r.ok) {
+      status.className = "modal-status ok";
+      status.textContent = "Saved.";
+      setTimeout(() => { status.hidden = true; }, 1200);
+    } else {
+      status.className = "modal-status err";
+      status.textContent = r.error || "Could not save.";
+    }
+  }
+  $("#prefSkillAuthoring")?.addEventListener("change", e => savePref("skill_authoring_enabled", e.target.checked));
+  $("#prefCommunitySkills")?.addEventListener("change", e => savePref("community_skills_enabled", e.target.checked));
 
   $("#deleteForm")?.addEventListener("submit", async e => {
     e.preventDefault();

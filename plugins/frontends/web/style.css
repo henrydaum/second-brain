@@ -95,6 +95,32 @@ article.credit-error { display: grid; gap: 7px; color: var(--muted); background:
 .es-chip { background: rgba(20,24,35,.85); color: var(--text); border: 1px solid var(--line); padding: 8px 12px; cursor: pointer; font-size: 13px; transition: border-color 200ms ease, color 200ms ease; }
 .es-chip:hover { border-color: var(--accent); color: var(--accent); }
 
+/* ---- Tutorial carousel ---- */
+#emptyState.tutorial-host { padding: 24px; }
+.tutorial { display: flex; flex-direction: column; gap: 18px; padding: 28px 30px; max-width: 520px; width: 100%; text-align: left; background: rgba(11,13,19,.72); border: 1px solid var(--line); backdrop-filter: blur(8px); }
+.help-modal-card .tutorial { background: transparent; border: 0; padding: 4px 0 0; backdrop-filter: none; }
+.tutorial-step { color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.tutorial-title { font-size: 24px; font-weight: 700; color: var(--text); margin: 0; letter-spacing: -.01em; line-height: 1.2; }
+.tutorial-body { color: var(--text); font-size: 14.5px; line-height: 1.55; margin: 0; }
+.tutorial-note { color: var(--muted); font-size: 12.5px; line-height: 1.5; font-style: italic; margin: 0; padding-left: 12px; border-left: 2px solid var(--line); }
+.tutorial-slide { display: flex; flex-direction: column; gap: 12px; min-height: 200px; }
+.tutorial-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.tutorial-chip { background: rgba(20,24,35,.85); color: var(--text); border: 1px solid var(--line); padding: 7px 12px; cursor: pointer; font-size: 12.5px; transition: border-color 200ms ease, color 200ms ease; }
+.tutorial-chip:hover { border-color: var(--accent); color: var(--accent); }
+.tutorial-try { margin-top: 6px; align-self: flex-start; background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: 1px solid var(--accent); color: #08090d; padding: 9px 22px; font-weight: 700; cursor: pointer; }
+.tutorial-try:hover { filter: brightness(1.08); }
+.tutorial-controls { display: flex; align-items: center; gap: 14px; justify-content: space-between; }
+.tutorial-nav-btn { background: var(--panel); border: 1px solid var(--line); color: var(--text); width: 36px; height: 36px; font-size: 20px; line-height: 1; cursor: pointer; transition: border-color 200ms ease, color 200ms ease; }
+.tutorial-nav-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.tutorial-nav-btn:disabled { opacity: .3; cursor: not-allowed; }
+.tutorial-dots { display: flex; gap: 8px; flex: 1; justify-content: center; }
+.tutorial-dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--line); background: transparent; padding: 0; cursor: pointer; transition: background 200ms ease, border-color 200ms ease; }
+.tutorial-dot.active { background: var(--accent); border-color: var(--accent); }
+.tutorial-footer { display: flex; justify-content: center; }
+.tutorial-counter { color: var(--muted); font-size: 11.5px; letter-spacing: .06em; }
+
+.help-modal-card { max-width: 520px; padding: 24px 28px 22px; }
+
 /* Canvas-actions moved to top-left */
 .canvas-actions { display: none; position: absolute; left: 22px; top: 22px; z-index: 2; gap: 8px; }
 .showcase.has-image .canvas-actions { display: flex; }
@@ -298,6 +324,13 @@ body.account-body { background:
 .account-secondary-row a { color: var(--muted); font-size: 13px; text-decoration: none; transition: color 200ms ease; }
 .account-secondary-row a:hover { color: var(--accent); }
 .account-secondary-row a.danger:hover { color: var(--accent-2); }
+.account-pref { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; cursor: pointer; }
+.account-pref + .account-pref { border-top: 1px solid var(--line); }
+.account-pref input[type="checkbox"] { margin-top: 4px; flex: 0 0 auto; width: 18px; height: 18px; cursor: pointer; }
+.account-pref span { display: flex; flex-direction: column; gap: 4px; }
+.account-pref strong { color: var(--text); font-weight: 600; font-size: 14px; }
+.account-pref small { color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+#prefsCard h2 { margin: 0 0 8px; font-size: 16px; }
 #signedOut form { display: flex; gap: 10px; align-items: stretch; margin-top: 12px; }
 #signedOut input { flex: 1; min-width: 0; }
 #signedOut button.primary-btn { height: 40px; flex: 0 0 auto; padding: 0 18px; border: 1px solid var(--accent); background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #08090d; box-shadow: 0 0 24px var(--accent-glow); }

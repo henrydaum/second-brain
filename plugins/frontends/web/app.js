@@ -1035,13 +1035,29 @@ document.querySelector("#newChat").addEventListener("click", async () => {
   loadGallery(1);
 });
 
-// Empty-state example chips: pre-fill composer, focus, but let user send.
-emptyState.addEventListener("click", e => {
-  const chip = e.target.closest(".es-chip");
-  if (!chip) return;
-  input.value = chip.dataset.prompt || chip.textContent;
+// Tutorial carousel: live hero (replaces the old empty-state copy) + Help modal.
+function tutorialTryIt(prompt) {
+  if (prompt) input.value = prompt;
   input.focus();
-});
+  const modal = document.querySelector("#helpModal");
+  if (modal && !modal.hidden) modal.hidden = true;
+}
+if (window.SBTutorial) {
+  window.SBTutorial.build(emptyState, { onTryIt: tutorialTryIt });
+}
+const helpModal = document.querySelector("#helpModal");
+const helpModalBody = document.querySelector("#helpModalBody");
+const helpBtn = document.querySelector("#helpBtn");
+if (helpBtn && helpModal && helpModalBody && window.SBTutorial) {
+  helpBtn.addEventListener("click", () => {
+    window.SBTutorial.build(helpModalBody, { onTryIt: tutorialTryIt });
+    helpModal.hidden = false;
+  });
+  helpModal.addEventListener("click", e => { if (e.target === helpModal) helpModal.hidden = true; });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && !helpModal.hidden) helpModal.hidden = true;
+  });
+}
 
 function refreshDownloadTierLabels() {
   const s = currentCanvasSize > 0 ? currentCanvasSize : 1024;

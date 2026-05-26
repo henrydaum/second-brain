@@ -140,6 +140,17 @@ SETTINGS_DATA = [
          "whitelist_or_blacklist_tools": "whitelist",
          "tools_list": [
             "search_skills",
+            "execute_skill",
+            "manage_layers",
+            "read_skill"
+            ]
+     },
+     "artist_author": {
+         "llm": "default",
+         "prompt_suffix": "",
+         "whitelist_or_blacklist_tools": "whitelist",
+         "tools_list": [
+            "search_skills",
             "create_skill",
             "update_skill",
             "delete_skill",

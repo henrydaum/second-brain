@@ -22,6 +22,10 @@ def setup(conn) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_web_users_email ON web_users(email) WHERE email IS NOT NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_web_users_account ON web_users(account_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_web_users_ip ON web_users(ip_hash)")
+    try:
+        conn.execute("ALTER TABLE web_users ADD COLUMN account_config TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.execute("CREATE TABLE IF NOT EXISTS web_auth_tokens (token TEXT PRIMARY KEY, email TEXT NOT NULL, created_at REAL NOT NULL, used_at REAL, anon_user_id TEXT)")
     try:
         conn.execute("ALTER TABLE web_auth_tokens ADD COLUMN anon_user_id TEXT")

@@ -42,11 +42,20 @@ class SearchSkills(BaseTool):
         if embedder is None:
             return ToolResult.failed("text_embedder service unavailable")
         limit = max(1, min(10, int(kwargs.get("limit") or 5)))
+        built_in_only = bool(kwargs.get("built_in_only"))
+        # Web sessions where the account has not opted into community skills
+        # see only built-ins, regardless of the tool's own parameter.
+        sk = getattr(context, "session_key", None)
+        if sk and isinstance(sk, str) and sk.startswith("web:"):
+            runtime = getattr(context, "runtime", None)
+            session = getattr(runtime, "sessions", {}).get(sk) if runtime is not None else None
+            if session is not None and not bool(getattr(session, "community_skills_enabled", False)):
+                built_in_only = True
         try:
             skills = search_skills_semantic(
                 db, embedder, query,
                 limit=limit,
-                built_in_only=bool(kwargs.get("built_in_only")),
+                built_in_only=built_in_only,
                 config=getattr(context, "config", {}) or {},
             )
         except sqlite3.OperationalError:
