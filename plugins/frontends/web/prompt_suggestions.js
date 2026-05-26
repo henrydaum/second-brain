@@ -14,8 +14,7 @@ const PROMPT_SUGGESTIONS = [
 
   // Background + object combos
   { prompt: "Add a Color Field background with a 3D Menger Sponge on top, and increase the depth to 3.", label: "3D Menger Sponge" },
-  { prompt: "Show me Wave Sea with a 3D Crystal Cluster on top, in the Deep Sea palette.", label: "Crystal cluster on water" },
-  { prompt: "Add a Color Field background, then add Typography saying 'HELLO' over it in the Synthwave palette.", label: "Typography poster" },
+  { prompt: "Add a continuous attractor background, then add Typography saying 'What you see is what you get.' over in regular font.", label: "Typography poster" },
 
   // Filter-heavy showcases — evocative labels
   { prompt: "Load the Julia Explorer and give it the 'Ink & Paper' palette. Then invert the colors with the Invert filter. Finally, add the Glitch Slice and Kaleidoscope filters.", label: "Oriental rug pattern" },
@@ -23,21 +22,16 @@ const PROMPT_SUGGESTIONS = [
   { prompt: "Show me the Julia Explorer at the 'Dendrite' location, then add the Fisheye lens and Chromatic Aberration filters.", label: "Mythical fractal orb" },
   { prompt: "Show me the Terdragon variant of the Dragon Curve with the Anaglyph 3D filter.", label: "Trippy dragon curve" },
   { prompt: "Show me the L-System Grove as a Coral with a touch of Film Grain.", label: "Stylish artificial plant" },
-  { prompt: "Show me the Burning Ship Explorer at the Antenna location with Scanlines and Chromatic Aberration.", label: "Retro arcade fractal" },
-  { prompt: "Show me the Mandelbrot Explorer at Seahorse Valley, then Pixelate it heavily for an 8-bit look.", label: "8-bit Mandelbrot" },
-  { prompt: "Show me Isometric Terrain with the Halftone filter and the Bauhaus palette.", label: "Newsprint terrain" },
-  { prompt: "Show me the Julia Explorer at the Spiral location, then push the Levels Curve filter for high contrast.", label: "Moody Julia spiral" },
-  { prompt: "Add Flow Streamlines with the Frost palette, then a 4-way Mirror filter.", label: "Symmetric flow field" },
-  { prompt: "Show me Wave Sea with Posterize To Palette using the Coral Reef palette.", label: "Posterized sea" },
-  { prompt: "Show me Isometric Terrain with the Glitch Slice filter and the Violet Storm palette.", label: "Glitched terrain" },
-  { prompt: "Show me a Koch Snowflake with the Halftone filter and the Frost palette.", label: "Halftone snowflake" },
-  { prompt: "Show me the Mandelbrot Explorer at Elephant Valley, then apply Watercolor for a painted look.", label: "Watercolor Mandelbrot" },
-  { prompt: "Show me a Gray-Scott reaction-diffusion in the Maze regime, then apply Halftone.", label: "Reaction-diffusion maze" },
+  { prompt: "Show me the Julia Explorer at the Spiral location, and zoom in slightly.", label: "Julia spiral" },
+  { prompt: "Show me Wave Sea with Posterize To Palette using the Coral Reef palette with a vignette.", label: "Background material" },
+  { prompt: "Show me the Mandelbrot Explorer at Elephant Valley.", label: "Mandelbrot elephants" },
+  { prompt: "Show me a Gray-Scott reaction-diffusion, then apply polar coordinates.", label: "Weird drip 1" },
+  { prompt: "Show me a Gray-Scott reaction-diffusion, then apply polar coordinates, and change it to 'From Polar' mode.", label: "Weird drip 2" },
   { prompt: "Show me the Burning Ship Explorer at the Embedded Mini-Ship with the Magma palette and a Vignette. Crank the zoom.", label: "Burning Ship fractal" },
 
   // Meta — 1:1 short prompts so the agent improvises
   { prompt: "Surprise me", label: "Surprise me" },
   { prompt: "Give me a suggestion", label: "Give me a suggestion" },
-  { prompt: "Make me something weird and beautiful", label: "Something weird" },
+  { prompt: "Make me something weird", label: "Something weird" },
   { prompt: "Interview me, then makes something based on my answers", label: "Interview me"}
 ];

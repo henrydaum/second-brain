@@ -14,5 +14,7 @@ const TIPS = [
   "After Second Brain has made something, ask it \"Is there anything you would change about this image?\" to get suggestions for improvement.",
   "Ask Second Brain to interview you, then make something based on your answers.",
   "To stay in the loop, tell Second Brain to \"Let me know if you have any questions\".",
-  "You can use ctrl/cmd + Z to undo changes, and ctrl/cmd + shift + Z to redo them."
+  "You can use ctrl/cmd + Z to undo changes, and ctrl/cmd + shift + Z to redo them.",
+  "You can save at 2x resolution.",
+  "Pressing 'Randomize' will generate a new image with a random seed, whereas 'Generate' will keep the same seed."
 ];

@@ -18,7 +18,7 @@ class MirrorSkill(BaseSkill):
         ('horizontal_rl', 'Right → Left'),
         ('vertical_tb',   'Top → Bottom'),
         ('vertical_bt',   'Bottom → Top'),
-        ('quad',          '4-way Kaleidoscope'),
+        ('quad',          '4-way Mirror'),
         ('flip_h',        'Flip Horizontal'),
         ('flip_v',        'Flip Vertical'),
     ], default='quad')
