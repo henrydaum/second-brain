@@ -4,7 +4,7 @@
 const PROMPT_SUGGESTIONS = [
   // Iconic single-skill showcases — skill-name labels
   { prompt: "Show me the Mandelbrot Explorer.", label: "Mandelbrot set" },
-  { prompt: "Show me Newton Basins with a Fisheye lens and Posterize To Palette. Also, make it green.", label: "Newton Basins" },
+  { prompt: "Show me the Newton Basins Explorer with a Fisheye lens and Posterize To Palette. Also, make it green.", label: "Newton Basins" },
   { prompt: "Show me a Lorenz Attractor zoomed out a bit, with the Synthwave palette.", label: "Lorenz Attractor" },
   { prompt: "Run Conway's Life with the Aurora palette and add Bloom Glow.", label: "Conway's Life" },
   { prompt: "Show me Isometric Terrain with the Botanical palette.", label: "Isometric terrain" },
