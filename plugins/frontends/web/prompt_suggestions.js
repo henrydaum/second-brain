@@ -38,5 +38,6 @@ const PROMPT_SUGGESTIONS = [
   // Meta — 1:1 short prompts so the agent improvises
   { prompt: "Surprise me", label: "Surprise me" },
   { prompt: "Give me a suggestion", label: "Give me a suggestion" },
-  { prompt: "Make me something weird and beautiful", label: "Something weird" }
+  { prompt: "Make me something weird and beautiful", label: "Something weird" },
+  { prompt: "Interview me, then makes something based on my answers", label: "Interview me"}
 ];
