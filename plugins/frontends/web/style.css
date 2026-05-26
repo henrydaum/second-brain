@@ -16,10 +16,10 @@ body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 70% 2
 button, input { font: inherit; }
 
 /* ---- Shell: chat left, square canvas right ---- */
-.shell { min-height: 100vh; display: grid; grid-template-columns: minmax(420px, 1fr) min(100vh, 70vw); gap: 1px; background: var(--line); }
+.shell { min-height: 100vh; min-height: 100dvh; display: grid; grid-template-columns: minmax(420px, 1fr) min(100vh, 70vw); gap: 1px; background: var(--line); }
 .chat, .showcase { background: rgba(8,9,13,.94); min-width: 0; }
-.chat { height: 100vh; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; position: sticky; top: 0; }
-.showcase { position: relative; overflow: hidden; aspect-ratio: 1 / 1; height: 100vh; max-width: 100%; }
+.chat { height: 100vh; height: 100dvh; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; position: sticky; top: 0; }
+.showcase { position: relative; overflow: hidden; aspect-ratio: 1 / 1; height: 100vh; height: 100dvh; max-width: 100%; }
 
 header { display: flex; align-items: center; justify-content: space-between; padding: 22px 24px; border-bottom: 1px solid var(--line); }
 h1, h2, p { margin: 0; }
@@ -392,6 +392,49 @@ body.account-body { background:
 @media (max-width: 520px) {
   #signedOut form { flex-direction: column; }
   #signedOut button.primary-btn { width: 100%; }
+}
+
+/* ---- Phone-sized screens ----
+   The 960px rule already drops the shell to a single column; this
+   block trims desktop-sized padding and typography that's still in
+   effect below ~640px so the canvas, chat, and gallery don't fight
+   each other for a 360–480px viewport. */
+@media (max-width: 640px) {
+  header { padding: 12px 16px; }
+  h1 { font-size: 20px; }
+  h2 { font-size: 22px; }
+  .eyebrow { font-size: 11px; margin-bottom: 4px; }
+
+  .showcase { min-height: 320px; }
+  .messages { padding: 14px; gap: 10px; min-height: 36vh; }
+  .composer { padding: 12px; gap: 8px; }
+  .composer button { min-width: 70px; padding: 0 12px; }
+  .composer input { height: 42px; }
+
+  .canvas-actions { left: 12px; top: 12px; gap: 6px; }
+  .render-meter { left: 12px; right: 12px; bottom: 12px; }
+
+  #emptyState { padding: 20px; gap: 14px; }
+  #emptyState .es-title { font-size: 24px; }
+  #emptyState .es-sub { font-size: 13px; max-width: none; }
+  .es-chips { max-width: none; }
+
+  .tutorial { padding: 20px 18px; gap: 14px; max-width: none; }
+
+  .gallery-section { padding: 22px 14px; }
+  .gallery { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .gallery-card div { padding: 10px; gap: 6px; }
+  .gallery-card .gallery-card-actions button { height: 40px; }
+  .gallery-card .gallery-card-actions .gc-share-btn { flex: 0 0 40px; width: 40px; }
+  .gc-mine-toggle { padding: 8px 12px; font-size: 11px; }
+
+  .tabs { gap: 16px; margin-bottom: 20px; }
+
+  .modal { padding: 16px; }
+  .modal-card { padding: 22px 18px 20px; }
+  .modal-card h2 { font-size: 20px; }
+
+  .site-footer { padding: 16px; flex-wrap: wrap; gap: 8px 14px; font-size: 12px; }
 }
 
 /* ----- Chat input wrapper (hosts the magnifier icon for search mode) ----- */

@@ -13,10 +13,10 @@ class FisheyeSkill(BaseSkill):
     description = 'Lens distortion sample. Positive strength gives a fisheye bulge; negative gives pincushion (edges stretch). Pan moves the lens center.'
     kind = "filter"
 
-    strength = Slider(-1.0, 1.0, default=0.6, step=0.05)
-    zoom     = Slider(0.5, 2.0, default=1.3, step=0.05)
-    cx       = Slider(0.0, 1.0, default=0.5, step=0.05)
-    cy       = Slider(0.0, 1.0, default=0.5, step=0.05)
+    strength = Slider(-1.0, 1.0, default=0.6, step=0.1)
+    zoom     = Slider(0.5, 3.0, default=2.0, step=0.1)
+    cx       = Slider(0.0, 1.0, default=0.5, step=0.1)
+    cy       = Slider(0.0, 1.0, default=0.5, step=0.1)
     center   = Pan(x='cx', y='cy')
 
     def run(self, canvas):
