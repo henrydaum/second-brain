@@ -13,7 +13,7 @@
     {
       title: "Build on it.",
       body: "Keep chatting to add more layers. Ask to change something if it isn't right.",
-      note: "Like any AI, Second Brain can make mistakes. But it can also fix them!"
+      note: "Second Brain can make mistakes, but it can also fix them."
     },
     {
       title: "Fine-tune the layers.",
@@ -32,8 +32,8 @@
     },
     {
       title: "Make an account.",
-      body: "Sign in to keep your saved canvases and unlock Second Brain's code-writing abilities, so it can build practically anything that fits in code.",
-      note: "Writing new code takes longer because Second Brain tests it and checks for bugs."
+      body: "Sign in to keep your saved canvases and unlock Second Brain's code-writing abilities.",
+      note: "Second Brain uses code to generate images. Writing new code takes longer because Second Brain tests it and checks for bugs."
     },
     {
       title: "Add more credits.",

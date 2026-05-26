@@ -110,7 +110,7 @@ article.credit-error { display: grid; gap: 7px; color: var(--muted); background:
 .tutorial-try { margin-top: 6px; align-self: flex-start; background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: 1px solid var(--accent); color: #08090d; padding: 9px 22px; font-weight: 700; cursor: pointer; }
 .tutorial-try:hover { filter: brightness(1.08); }
 .tutorial-controls { display: flex; align-items: center; gap: 14px; justify-content: space-between; }
-.tutorial-nav-btn { background: var(--panel); border: 1px solid var(--line); color: var(--text); width: 36px; height: 36px; font-size: 20px; line-height: 1; cursor: pointer; transition: border-color 200ms ease, color 200ms ease; }
+.tutorial-nav-btn { background: var(--panel); border: 1px solid var(--line); color: var(--text); width: 36px; height: 36px; font-size: 20px; line-height: 1; cursor: pointer; transition: border-color 200ms ease, color 200ms ease; display: inline-flex; align-items: center; justify-content: center; padding: 0 0 3px; }
 .tutorial-nav-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .tutorial-nav-btn:disabled { opacity: .3; cursor: not-allowed; }
 .tutorial-dots { display: flex; gap: 8px; flex: 1; justify-content: center; }
