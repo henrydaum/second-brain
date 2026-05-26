@@ -255,8 +255,11 @@ body.share-landing.missing .share-landing-meta { text-align: center; }
 .tabs .tab.active { color: var(--text); border-bottom-color: var(--accent); }
 .tab-panel[hidden] { display: none; }
 .gallery-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
+.gc-mine-toggle { background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 7px 14px; cursor: pointer; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; transition: border-color 200ms ease, color 200ms ease, background 200ms ease; }
+.gc-mine-toggle:hover { border-color: var(--accent); color: var(--text); }
+.gc-mine-toggle[aria-pressed="true"] { background: rgba(127,200,212,.12); border-color: var(--accent); color: var(--accent); }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
-.gallery-card { max-width: none; padding: 0; white-space: normal; border: 1px solid var(--line); background: #121722; overflow: hidden; transition: border-color 220ms ease, transform 220ms ease; }
+.gallery-card { position: relative; max-width: none; padding: 0; white-space: normal; border: 1px solid var(--line); background: #121722; overflow: hidden; transition: border-color 220ms ease, transform 220ms ease; }
 .gallery-card:hover { border-color: var(--accent); transform: translateY(-2px); }
 .gallery-card img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; }
 .gallery-card div { padding: 12px; display: grid; gap: 8px; }
@@ -264,6 +267,9 @@ body.share-landing.missing .share-landing-meta { text-align: center; }
 .gallery-card small { color: var(--muted); }
 .gallery-card button { height: 34px; border: 1px solid var(--line); background: #171f2d; color: var(--text); cursor: pointer; transition: border-color 200ms ease, color 200ms ease; }
 .gallery-card button:hover { border-color: var(--accent-2); color: var(--accent-2); }
+.gallery-card .gc-delete-btn { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; padding: 0; border-radius: 50%; background: rgba(11,13,19,.78); color: #d1d5db; border: 1px solid rgba(255,255,255,.18); font-size: 18px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: color 160ms ease, border-color 160ms ease, background 160ms ease; z-index: 2; }
+.gallery-card .gc-delete-btn:hover { color: #f87171; border-color: #f87171; background: rgba(11,13,19,.92); }
+.gallery-card .gc-delete-btn:disabled { opacity: .5; cursor: default; }
 
 /* Paginator */
 .paginator { display: flex; justify-content: center; gap: 6px; margin-top: 28px; }

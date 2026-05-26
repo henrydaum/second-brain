@@ -1194,18 +1194,27 @@ class WebFrontend(BaseFrontend):
             "</body></html>\n"
         )
 
-    def gallery(self, session_id: str, limit: int = 24, offset: int = 0) -> dict:
+    def gallery(self, session_id: str, ip: str = "", account_id: str = "",
+                limit: int = 24, offset: int = 0, mine_only: bool = False) -> dict:
         """Publicly shared canvases, newest first.
 
         Backed by user_canvas_actions: every "share" action is a vote.
         We deduplicate by pool_hash and present each unique configuration
         once, with metadata (title/artist) from its most recent share row.
+
+        ``mine_only`` restricts to the current viewer's own shares (used by
+        the "Mine" toggle in the UI). The viewer is identified by their
+        account_id when signed in; anonymous viewers see no `mine` tags
+        and the toggle is hidden client-side.
         """
         del session_id  # gallery is global, not per-session
         db = getattr(self.runtime, "db", None)
         if db is None:
             return {"items": [], "total": 0}
-        return self._listing(db, action="share", limit=limit, offset=offset, owner=None)
+        viewer = account_id or None
+        owner = viewer if (mine_only and viewer) else None
+        return self._listing(db, action="share", limit=limit, offset=offset,
+                             owner=owner, viewer=viewer)
 
     def archive_listing(self, session_id: str, ip: str, account_id: str,
                         limit: int = 24, offset: int = 0) -> dict:
@@ -1214,11 +1223,52 @@ class WebFrontend(BaseFrontend):
         db = getattr(self.runtime, "db", None)
         if db is None:
             return {"items": [], "total": 0}
-        return self._listing(db, action="save", limit=limit, offset=offset, owner=owner)
+        return self._listing(db, action="save", limit=limit, offset=offset,
+                             owner=owner, viewer=owner)
+
+    def _remove_user_action(self, viewer: str, pool_hash: str, action: str) -> dict:
+        """Delete the viewer's own ``action`` rows for ``pool_hash``.
+
+        Used by /api/unshare and /api/archive/delete. Removes only the
+        current user's contribution — other users' share/save rows for
+        the same pool_hash are untouched (so the gallery row stays if
+        anyone else also shared it).
+        """
+        if not viewer:
+            return {"ok": False, "error": "sign in required", "status": 403}
+        ph = (pool_hash or "").strip()
+        if not ph:
+            return {"ok": False, "error": "pool_hash required", "status": 400}
+        db = getattr(self.runtime, "db", None)
+        if db is None:
+            return {"ok": False, "error": "db unavailable", "status": 500}
+        with db.lock:
+            cur = db.conn.execute(
+                "DELETE FROM user_canvas_actions "
+                "WHERE user_id = ? AND pool_hash = ? AND action = ?",
+                (viewer, ph, action),
+            )
+            db.conn.commit()
+            removed = int(cur.rowcount or 0)
+        return {"ok": True, "removed": removed}
+
+    def unshare(self, account_id: str, pool_hash: str) -> dict:
+        """Retract the current user's share of ``pool_hash``."""
+        return self._remove_user_action(account_id, pool_hash, "share")
+
+    def delete_archive_entry(self, account_id: str, pool_hash: str) -> dict:
+        """Remove a canvas from the current user's saved archive."""
+        return self._remove_user_action(account_id, pool_hash, "save")
 
     def _listing(self, db, *, action: str, limit: int, offset: int,
-                 owner: str | None) -> dict:
-        """Shared implementation for gallery / archive listings."""
+                 owner: str | None, viewer: str | None = None) -> dict:
+        """Shared implementation for gallery / archive listings.
+
+        ``owner`` filters rows to a single user (used for the archive, and
+        for the gallery's "Mine only" toggle). ``viewer`` does not filter
+        — it just decides which items get tagged ``mine: true`` so the
+        client can show a delete affordance.
+        """
         owner_clause = "AND user_id = ?" if owner else ""
         sql_count = (
             f"SELECT COUNT(DISTINCT pool_hash) AS n FROM user_canvas_actions "
@@ -1249,6 +1299,16 @@ class WebFrontend(BaseFrontend):
         with db.lock:
             total = int(db.conn.execute(sql_count, sql_count_params).fetchone()["n"] or 0)
             rows = db.conn.execute(sql_page, page_params).fetchall()
+            mine_hashes: set[str] = set()
+            if viewer and rows:
+                placeholders = ",".join("?" for _ in rows)
+                mine_rows = db.conn.execute(
+                    f"SELECT DISTINCT pool_hash FROM user_canvas_actions "
+                    f"WHERE action = ? AND user_id = ? "
+                    f"  AND pool_hash IN ({placeholders})",
+                    (action, viewer, *[r["pool_hash"] for r in rows]),
+                ).fetchall()
+                mine_hashes = {r["pool_hash"] for r in mine_rows}
         items: list[dict] = []
         for row in rows:
             ph = row["pool_hash"]
@@ -1267,6 +1327,7 @@ class WebFrontend(BaseFrontend):
                 "url": _file_url(Path(payload["image_path"])),
                 "title": str(meta.get("title") or "untitled"),
                 "artist": str(meta.get("artist") or "anonymous"),
+                "mine": ph in mine_hashes,
             })
         return {"items": items, "total": total}
 
@@ -1519,7 +1580,11 @@ class _Handler(BaseHTTPRequestHandler):
             except (TypeError, ValueError): limit = 24
             try: offset = max(0, int(qs.get("offset", ["0"])[0]))
             except (TypeError, ValueError): offset = 0
-            res = self.server.frontend.gallery(sid, limit=limit, offset=offset)
+            mine_only = str(qs.get("mine", ["0"])[0]) in ("1", "true", "yes")
+            res = self.server.frontend.gallery(
+                sid, ip=self.client_address[0], account_id=self._cookie_uid(),
+                limit=limit, offset=offset, mine_only=mine_only,
+            )
             return self._json({"ok": True, **res})
         if path == "/api/archive":
             qs = parse_qs(parsed.query); sid = str(qs.get("session_id", ["demo"])[0])[:80]
@@ -1657,6 +1722,12 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "events": self.server.frontend.share(
                     sid, str(body.get("title") or "untitled"), str(body.get("artist") or "anonymous"),
                     ip=self.client_address[0], account_id=self._cookie_uid())})
+            if self.path == "/api/unshare":
+                res = self.server.frontend.unshare(self._cookie_uid(), str(body.get("pool_hash") or ""))
+                return self._json(res, res.pop("status", 200))
+            if self.path == "/api/archive/delete":
+                res = self.server.frontend.delete_archive_entry(self._cookie_uid(), str(body.get("pool_hash") or ""))
+                return self._json(res, res.pop("status", 200))
             if self.path == "/api/remix":
                 return self._json({"ok": True, "events": self.server.frontend.remix(
                     sid,
