@@ -26,8 +26,8 @@ class JuliaExplorerSkill(BaseSkill):
     kind = "background"
     palette = Palette()
     spot = Enum([('dendrite', 'Dendrite'), ('rabbit', 'Douady Rabbit'), ('san_marco', 'San Marco'), ('siegel', 'Siegel Disk'), ('dragon', 'Dragon'), ('spiral', 'Spiral'), ('airplane', 'Airplane'), ('dust', 'Cantor Dust')], default='dragon')
-    pan_x = Slider(-1.0, 1.0, default=0.0, step=0.02)
-    pan_y = Slider(-1.0, 1.0, default=0.0, step=0.02)
+    pan_x = Slider(-1.0, 1.0, default=0.0, step=0.05)
+    pan_y = Slider(-1.0, 1.0, default=0.0, step=0.05)
     pan = Pan(x='pan_x', y='pan_y', label='Pan')
     zoom_extra = Slider(0.5, 32.0, default=1.0, step=0.05, label='Zoom')
     iterations = Slider(0, 1500, default=0, step=10, label='Iterations (0 = preset)')

@@ -24,8 +24,8 @@ class MandelbrotExplorerSkill(BaseSkill):
     kind = "background"
     palette = Palette()
     spot = Enum([('full', 'Full Set'), ('seahorse', 'Seahorse Valley'), ('elephant', 'Elephant Valley'), ('triple_spiral', 'Triple Spiral'), ('lightning', 'Lightning'), ('spiral_galaxy', 'Spiral Galaxy')], default='full')
-    pan_x = Slider(-1.0, 1.0, default=0.0, step=0.02)
-    pan_y = Slider(-1.0, 1.0, default=0.0, step=0.02)
+    pan_x = Slider(-1.0, 1.0, default=0.0, step=0.05)
+    pan_y = Slider(-1.0, 1.0, default=0.0, step=0.05)
     pan = Pan(x='pan_x', y='pan_y', label='Pan')
     zoom_extra = Slider(0.5, 32.0, default=1.0, step=0.05, label='Zoom')
     iterations = Slider(0, 1500, default=0, step=10, label='Iterations (0 = preset)')
