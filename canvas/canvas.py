@@ -86,10 +86,18 @@ class Canvas:
 		self.layers.insert(to_index, step)
 
 	def push_chain_entry(self, entry: dict) -> None:
-		"""Append a filter/object, or replace the chain with a new background."""
+		"""Append a filter/object, or replace layer 0 with a new background.
+
+		Background swaps preserve any filters/objects layered on top — only
+		index 0 changes. Index 0 is always a background (enforced by
+		``move_entry``), so this is safe.
+		"""
 		kind = entry.get("kind")
 		if kind == "background":
-			self.layers = [dict(entry)]
+			if self.layers:
+				self.layers[0] = dict(entry)
+			else:
+				self.layers = [dict(entry)]
 		elif kind in ("filter", "object"):
 			self.layers = list(self.layers) + [dict(entry)]
 		else:

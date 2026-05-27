@@ -8,7 +8,7 @@
     {
       title: "Ask for an image.",
       body: "Type a request into the chat and Second Brain will render an image.",
-      note: "This can take a little while. Don't get discouraged."
+      note: "This can take a little while. Press the '+ New canvas' button to retry."
     },
     {
       title: "Build on it.",

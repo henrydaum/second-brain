@@ -41,6 +41,48 @@ def _read_skill_via(runtime, slug: str):
     registry = getattr(runtime, "skill_registry", None)
     return registry.get_record(slug) if registry is not None else None
 
+
+def _random_controls_for(skill) -> dict:
+    """Sample a random value for each control in ``skill.controls``.
+
+    Mirrors the descriptor types compiled in plugins.BaseSkill: sliders draw
+    a uniform value snapped to ``step``, enums/bools pick uniformly, palettes
+    pick from the global palette list, text controls stay at default. Pan
+    widgets aren't real attributes — their underlying x/y sliders are
+    randomized like any other slider.
+    """
+    out: dict = {}
+    palette_ids = [p.id for p in list_palettes()]
+    for spec in (skill.controls or []):
+        if not isinstance(spec, dict):
+            continue
+        kind = spec.get("type")
+        name = spec.get("name")
+        if not name:
+            continue
+        if kind == "slider":
+            lo = float(spec.get("min", 0.0))
+            hi = float(spec.get("max", 1.0))
+            step = float(spec.get("step") or 0.0)
+            v = random.uniform(lo, hi)
+            if step > 0:
+                v = lo + round((v - lo) / step) * step
+                v = min(hi, max(lo, v))
+            default = spec.get("default", 0.0)
+            out[name] = int(round(v)) if isinstance(default, int) and not isinstance(default, bool) else float(v)
+        elif kind == "bool":
+            out[name] = bool(random.getrandbits(1))
+        elif kind == "enum":
+            opts = spec.get("options") or []
+            values = [o.get("value") for o in opts if isinstance(o, dict) and "value" in o]
+            if values:
+                out[name] = random.choice(values)
+        elif kind == "palette":
+            if palette_ids:
+                out["palette"] = random.choice(palette_ids)
+        # text and pan: skip (text has no good random; pan is just a widget)
+    return out
+
 logger = logging.getLogger("WebFrontend")
 WEB_ROOT = Path(__file__).with_name("web")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -178,11 +220,17 @@ class WebFrontend(BaseFrontend):
                 self.runtime.db.delete_conversation(prev_cid)
             except Exception:
                 logger.exception("new_chat: delete_conversation failed cid=%s", prev_cid)
-        # Detach the session from any canvas; for_session will mint a fresh
-        # one on the next render.
+        # Keep the canvas bound and route the wipe through the state machine
+        # so the cleared layer stack lands on undo_stack — ctrl+Z then brings
+        # the artwork back. The conversation reset itself isn't undoable.
         cr = self._canvas_runtime()
         if cr is not None:
-            cr.unbind_session(key)
+            cs = cr.current_for_session(key)
+            if cs is not None and cs.canvas.layers:
+                try:
+                    cs.enact("clear", {})
+                except Exception:
+                    logger.exception("new_chat: canvas clear failed for key=%s", key)
         self._ensure_conversation(key, account_id=account_id)
         return [{"type": "canvas_reset"}, *self._drain(key)]
 
@@ -700,7 +748,8 @@ class WebFrontend(BaseFrontend):
         ]
 
     def add_layer(self, session_id: str, skill_slug: str) -> list[dict]:
-        """Add a skill layer to the canvas. Background skills replace any existing background."""
+        """Add a skill layer. Background skills replace layer 0 only — any
+        filters/objects on top are preserved."""
         skill_slug = (skill_slug or "").strip()
         registry = getattr(self.runtime, "skill_registry", None)
         skill = registry.get_record(skill_slug) if registry and skill_slug else None
@@ -711,6 +760,46 @@ class WebFrontend(BaseFrontend):
             key, "add_layer",
             {"skill_slug": skill_slug, "kind": skill.kind, "controls": {}},
             fail_prefix="Add layer failed",
+        )
+        if events and events[0].get("type") == "hero_image" and not (events[0].get("canvas") or {}).get("path"):
+            return [{"type": "canvas_reset"}]
+        return events
+
+    def dice_layer(self, session_id: str, account_id: str = "") -> list[dict]:
+        """Pick a random eligible skill and add it with random control values.
+
+        On an empty canvas only backgrounds are eligible (filter/object skills
+        require a prior image). With an existing stack, all three kinds are in
+        the pool — a rolled background replaces layer 0 without disturbing the
+        layers above it.
+        """
+        from plugins.skills.helpers.skill_store import is_built_in
+
+        registry = getattr(self.runtime, "skill_registry", None)
+        if registry is None:
+            return [{"type": "error", "content": "Dice failed: skill registry unavailable."}]
+
+        key = self.session_key(session_id)
+        cr = self._canvas_runtime()
+        cs = cr.current_for_session(key) if cr is not None else None
+        has_layers = bool(cs and cs.canvas.layers)
+        eligible_kinds = {"background", "filter", "object"} if has_layers else {"background"}
+
+        cfg = self._load_account_config(account_id)
+        include_community = bool(cfg.get("community_skills_enabled"))
+        candidates = [
+            s for s in registry.list_records(include_hidden=False)
+            if s.kind in eligible_kinds and (include_community or is_built_in(s.path))
+        ]
+        if not candidates:
+            return [{"type": "error", "content": "Dice failed: no eligible skills to roll."}]
+
+        skill = random.choice(candidates)
+        controls = _random_controls_for(skill)
+        events = self._new_canvas_action_events(
+            key, "add_layer",
+            {"skill_slug": skill.slug, "kind": skill.kind, "controls": controls},
+            fail_prefix="Dice failed",
         )
         if events and events[0].get("type") == "hero_image" and not (events[0].get("canvas") or {}).get("path"):
             return [{"type": "canvas_reset"}]
@@ -1769,6 +1858,8 @@ class _Handler(BaseHTTPRequestHandler):
                     controls=list(body.get("controls") or []),
                     force_new_seed=bool(body.get("force_new_seed")),
                 )})
+            if self.path == "/api/dice_layer":
+                return self._json({"ok": True, "events": self.server.frontend.dice_layer(sid, account_id=self._cookie_uid())})
             if self.path == "/api/layer_delete":
                 return self._json({"ok": True, "events": self.server.frontend.delete_layer(sid, int(body.get("chain_index") or 0))})
             if self.path == "/api/layer_move":

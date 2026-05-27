@@ -445,7 +445,7 @@ def test_add_layer_unknown_slug_returns_error():
 
 
 def test_add_layer_background_replaces_existing(monkeypatch, renders_dir):
-	"""Adding a background skill replaces the existing background (Canvas.push_chain_entry semantics)."""
+	"""Adding a background skill replaces only layer 0; filters on top survive."""
 	_install_fake_run_skill(monkeypatch)
 	db, dbpath = _fresh_db("add_layer_bg_replace")
 	try:
@@ -460,11 +460,11 @@ def test_add_layer_background_replaces_existing(monkeypatch, renders_dir):
 		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {}})
 		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "grain", "kind": "filter", "controls": {}})
 
-		# Swapping background should drop the grain layer too (background reset clears chain).
+		# Swapping background replaces only layer 0 — the grain filter stays.
 		events = fe.add_layer("sess1", "voronoi")
 
 		assert events and events[0]["type"] == "hero_image"
-		assert [layer["slug"] for layer in cs.canvas.layers] == ["voronoi"]
+		assert [layer["slug"] for layer in cs.canvas.layers] == ["voronoi", "grain"]
 	finally:
 		_cleanup_db(db, dbpath)
 
