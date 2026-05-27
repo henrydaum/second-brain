@@ -13,7 +13,7 @@ except NameError:
 _SHAPES = {
     "snowflake":      ("F--F--F",   {"F": "F+F--F+F"},                 60.0, 5),
     "anti_snowflake": ("F++F++F",   {"F": "F-F++F-F"},                 60.0, 5),
-    "island":         ("F+F+F+F",   {"F": "F+F-F-FF+F+F-F"},           90.0, 3),
+    "island":         ("F+F+F+F",   {"F": "F+F-F-FF+F+F-F"},           90.0, 5),
 }
 
 def _segments_bbox(segs):
