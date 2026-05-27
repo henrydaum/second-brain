@@ -414,7 +414,7 @@ Although Second Brain is still a ways off from being like a human brain, it can 
 
 ## License
 
-TBD
+MIT
 
 ---
 
