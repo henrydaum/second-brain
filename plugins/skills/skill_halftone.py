@@ -1,4 +1,4 @@
-from plugins.BaseSkill import BaseSkill, Slider, Palette
+from plugins.BaseSkill import BaseSkill, Slider, Palette, Enum
 
 import math
 import numpy as np
@@ -15,9 +15,11 @@ class HalftoneSkill(BaseSkill):
     description = 'Newspaper-style halftone. The image is replaced by a regular grid of palette-tinted dots whose radius scales with local luminance.'
     kind = "filter"
 
-    palette   = Palette()
-    cell_size = Slider(6, 40, default=12, step=1)
-    angle     = Slider(0, 90, default=0, step=5)
+    palette    = Palette()
+    cell_size  = Slider(6, 40, default=12, step=1)
+    angle      = Slider(0, 90, default=0, step=5)
+    background = Enum(["white", "palette", "black"], default="white")
+    dot_color  = Enum(["primary", "by_luminance"], default="primary")
 
     def run(self, canvas):
         c = int(self.cell_size)
@@ -26,7 +28,13 @@ class HalftoneSkill(BaseSkill):
         arr = canvas.image_array(mode="RGB", dtype="float")
         lum = arr[..., 0] * 0.2126 + arr[..., 1] * 0.7152 + arr[..., 2] * 0.0722
 
-        out = Image.new("RGBA", (s, s), canvas.palette.background)
+        if self.background == "white":
+            bg = (255, 255, 255, 255)
+        elif self.background == "black":
+            bg = (0, 0, 0, 255)
+        else:
+            bg = canvas.palette.background
+        out = Image.new("RGBA", (s, s), bg)
         draw = ImageDraw.Draw(out, "RGBA")
         cos_a, sin_a = math.cos(a), math.sin(a)
         diag = int(s * 1.5)
@@ -48,5 +56,9 @@ class HalftoneSkill(BaseSkill):
                 r = (1.0 - l_avg) * (c * 0.55)
                 if r < 0.5:
                     continue
-                draw.ellipse((x - r, y - r, x + r, y + r), fill=art_kit.palette_color(l_avg))
+                if self.dot_color == "primary":
+                    fill = canvas.palette.primary
+                else:
+                    fill = art_kit.palette_color(l_avg)
+                draw.ellipse((x - r, y - r, x + r, y + r), fill=fill)
         canvas.commit(out)

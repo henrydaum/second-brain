@@ -36,15 +36,21 @@ class TruchetFieldSkill(BaseSkill):
                 x0 = c * tile
                 y0 = r * tile
                 use_a = rng.random() < curl_p
+                half = tile / 2
+                pad = lw / 2
                 if use_a:
-                    bbox1 = [x0 - tile / 2, y0 - tile / 2, x0 + tile / 2, y0 + tile / 2]
+                    cx1, cy1 = x0, y0
+                    bbox1 = [cx1 - half - pad, cy1 - half - pad, cx1 + half + pad, cy1 + half + pad]
                     draw.arc(bbox1, start=0, end=90, fill=stroke, width=lw)
-                    bbox2 = [x0 + tile / 2, y0 + tile / 2, x0 + 3 * tile / 2, y0 + 3 * tile / 2]
+                    cx2, cy2 = x0 + tile, y0 + tile
+                    bbox2 = [cx2 - half - pad, cy2 - half - pad, cx2 + half + pad, cy2 + half + pad]
                     draw.arc(bbox2, start=180, end=270, fill=stroke, width=lw)
                 else:
-                    bbox1 = [x0 + tile / 2, y0 - tile / 2, x0 + 3 * tile / 2, y0 + tile / 2]
+                    cx1, cy1 = x0 + tile, y0
+                    bbox1 = [cx1 - half - pad, cy1 - half - pad, cx1 + half + pad, cy1 + half + pad]
                     draw.arc(bbox1, start=90, end=180, fill=stroke, width=lw)
-                    bbox2 = [x0 - tile / 2, y0 + tile / 2, x0 + tile / 2, y0 + 3 * tile / 2]
+                    cx2, cy2 = x0, y0 + tile
+                    bbox2 = [cx2 - half - pad, cy2 - half - pad, cx2 + half + pad, cy2 + half + pad]
                     draw.arc(bbox2, start=270, end=360, fill=stroke, width=lw)
 
         canvas.commit(img)
