@@ -1,11 +1,10 @@
 <img width="1440" height="569" alt="highreslogotypecrop" src="https://github.com/user-attachments/assets/598ab57f-ed6b-491a-9cd6-142b93b09244" />
 
 ## Atlas Cloud
-
 <img src="https://github.com/user-attachments/assets/0fdf096b-468e-4228-a7ed-774f927c0de8#gh-light-mode-only" width="500" alt="Atlas Cloud Logo">
 <img src="https://github.com/user-attachments/assets/ecafefce-7ad5-40ea-b63e-2c6e4444f32c#gh-dark-mode-only" width="500" alt="Atlas Cloud Logo">
-
-[Atlas Cloud](https://www.atlascloud.ai) provides OpenAI-compatible AI APIs and model access for AI-powered workflows in Second Brain.
+[Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=second-brain) is a full-modal AI inference platform that gives developers a single AI API to access video generation, image generation, and LLM APIs. Instead of managing multiple vendor integrations, you connect once and get unified access to 300+ curated models across all modalities.
+Check out Atlas Cloud's new coding plan promotion for more budget-friendly API access: [https://www.atlascloud.ai/console/coding-plan](https://www.atlascloud.ai/console/coding-plan)
 
 # Second Brain
 
