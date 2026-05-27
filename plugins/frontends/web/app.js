@@ -656,13 +656,11 @@ function renderControlsPanel(panels) {
   controlsToggle.hidden = false;
   refreshControlsToggleEnabled();
   controlsDrawer.hidden = false;
-  const dice = `<button type="button" class="ctl-global" id="globalDice" title="Roll a random skill with random controls"><span>Dice</span></button>`;
   if (!hasImage) {
     // Blank canvas: no layers to edit and no Regenerate button to offer,
     // but the search input above is fully functional — let the user add
-    // their first background from here. The dice button works too: it'll
-    // pick a random background to break the blank-canvas decision paralysis.
-    controlsPanel.innerHTML = `<div class="ctl-empty-canvas">No layers yet — search below to add skills to the canvas,\n or press the gear icon to go back.</div><section class="ctl-actions">${dice}</section>`;
+    // their first background from here.
+    controlsPanel.innerHTML = `<div class="ctl-empty-canvas">No layers yet — search below to add skills to the canvas,\n or press the gear icon to go back.</div>`;
     if (localStorage.sbDrawerOpen === "1") setControlsOpen(true);
     return;
   }
@@ -670,7 +668,7 @@ function renderControlsPanel(panels) {
   const maxChain = currentControlsPanels.reduce((m, p) => Math.max(m, Number(p.chain_index) || 0), 0);
   const stack = [...currentControlsPanels].sort((a, b) => b.chain_index - a.chain_index).map(p => renderPanel(p, movableLayers, maxChain)).join("");
   const dirty = pendingControls.size ? " dirty" : "";
-  const regen = `<section class="ctl-actions"><button type="button" class="ctl-global${dirty}" id="globalRegenerate" title="Apply staged controls with the current seed"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3Z"/></svg><span>Regenerate</span></button><button type="button" class="ctl-global${dirty}" id="globalShuffle" title="Apply staged controls with a fresh seed"><span>Shuffle</span></button>${dice}</section>`;
+  const regen = `<section class="ctl-actions"><button type="button" class="ctl-global${dirty}" id="globalRegenerate" title="Apply staged controls with the current seed"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.76-4.24L13 11h8V3l-3.3 3.3Z"/></svg><span>Regenerate</span></button><button type="button" class="ctl-global${dirty}" id="globalReroll" title="Apply staged controls with a fresh random seed"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v11A2.5 2.5 0 0 1 16.5 20h-9A2.5 2.5 0 0 1 5 17.5v-11Z"/><circle cx="8.5" cy="8.5" r="1.25" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.25" fill="currentColor"/><circle cx="12" cy="12" r="1.25" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.25" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.25" fill="currentColor"/></svg><span>Reroll</span></button></section>`;
   controlsPanel.innerHTML = stack + regen;
   if (localStorage.sbDrawerOpen === "1") setControlsOpen(true);
   markDirtyControls();
@@ -849,25 +847,9 @@ function renderPanel(panel, movableLayers = 0, maxChain = 0) {
 }
 controlsToggle.addEventListener("click", () => setControlsOpen(!controlsDrawer.classList.contains("open")));
 controlsPanel.addEventListener("click", async e => {
-  const dice = e.target.closest("#globalDice");
-  if (dice) {
-    if (dice.disabled) return;
-    dice.disabled = true;
-    loaderTicketStart();
-    try {
-      const r = await post("/api/dice_layer", {});
-      render(r.events || []);
-    } catch (err) {
-      add("error", err.message);
-    } finally {
-      loaderTicketEnd();
-      dice.disabled = false;
-    }
-    return;
-  }
-  const global = e.target.closest("#globalRegenerate,#globalShuffle");
+  const global = e.target.closest("#globalRegenerate,#globalReroll");
   if (global) {
-    applyControls(global.id === "globalShuffle", global);
+    applyControls(global.id === "globalReroll", global);
     return;
   }
   const target = e.target;
