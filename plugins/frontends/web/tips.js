@@ -1,20 +1,21 @@
 // Random tips shown in the empty chat. Edit freely — kept in their own file
 // so adding/removing tips doesn't touch app logic.
 const TIPS = [
-  "Second Brain specializes in algorithmic art. It writes code to make images.",
-  "Skills stack. Make something, then ask to \"add bloom\" or \"sharpen the image.\"",
-  "Tap a canvas in the shared gallery or saved archive to remix it.",
-  "Stuck? Try \"surprise me\" — the agent picks a direction.",
-  "Open Controls (gear icon) to fine-tune without another chat turn.",
-  "Conversations are ephemeral — your messages are cleared from the database when you start a new chat.",
-  "Ask for a style: \"in the style of risograph print,\" \"like a 70s sci-fi paperback.\"",
-  "Combine ideas: \"Voronoi cells, but each one is a tiny whirlpool.\"", 
-  "Don't like the result? Ask Second Brain to change any part of it.",
-  "See something interesting? Ask \"How did you make this?\"  or \"What does this mean?\"",
-  "After Second Brain has made something, ask it \"Is there anything you would change about this image?\" to get suggestions for improvement.",
-  "Ask Second Brain to interview you, then make something based on your answers.",
-  "To stay in the loop, tell Second Brain to \"Let me know if you have any questions\".",
+  "Second Brain writes and executes code to make images. It does not make images using generative AI.",
+  "You can have up to six layers in a single canvas, each with up to four settings.",
+  "Tap a canvas in the shared gallery or saved archive to remix it. This preserves the original layers and settings.",
+  "You can completely avoid talking to an AI by using the manual controls.",
+  "Conversations are ephemeral — your messages are cleared from the database whenever you start a new chat, or after 24 hours, whichever is first.",
   "You can use ctrl/cmd + Z to undo changes, and ctrl/cmd + shift + Z to redo them.",
-  "You can save at 2x resolution.",
-  "Pressing 'Randomize' will generate a new image with a random seed, whereas 'Generate' will keep the same seed."
+  "You can save at 2x resolution, or 1/2.",
+  "Pressing 'Randomize' will generate a new image with a random seed, whereas 'Generate' will keep the same seed.",
+  "If you hit 'Search,' you'll get skill results based on semantic similarity to your query — not just keywords.",
+  "You can delete images you have shared from the gallery, and unsave something from your saved archive.",
+  "The live code writing feature is available in the account settings. The agent tends to make more mistakes when using it, but the results are highly customizable.",
+  "Un-cached renders cost 1 credit, while agent messages cost 10 credits each. Cached renders are free.",
+  "For any questions or feedback, please contact secondbrainservice@gmail.com",
+  "Second Brain Art is built on top of Second Brain, a programmable open-source agentic framework made by Henry Daum, available at `github.com/henrydaum/second-brain`.",
+  "When using the live code writing feature, any skills created will be available for any user to use, so long as they have the 'Include community skills' option enabled. You can ask Second Brain to update and delete any skills you've created.",
+  "Second Brain has guardrails, and will refuse to generate images that aren't aligned with them.",
+  "You have access to 100 free credits per five hours, and 500 credits per week. Purchasing 1,000 credits costs $2.99 — no subscriptions."
 ];

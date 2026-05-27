@@ -24,7 +24,7 @@ const PROMPT_SUGGESTIONS = [
   { prompt: "Show me the L-System Grove as a Coral with a touch of Film Grain.", label: "Stylish artificial plant" },
   { prompt: "Show me the Julia Explorer at the Spiral location, and zoom in slightly.", label: "Julia spiral" },
   { prompt: "Show me Wave Sea with Posterize To Palette using the Coral Reef palette with a vignette.", label: "Background material" },
-  { prompt: "Show me the Mandelbrot Explorer at Elephant Valley.", label: "Mandelbrot elephants" },
+  { prompt: "Show me the Mandelbrot Explorer at Elephant Valley. Add a border as well.", label: "Mandelbrot elephants" },
   { prompt: "Show me a Gray-Scott reaction-diffusion, then apply polar coordinates.", label: "Weird drip 1" },
   { prompt: "Show me a Gray-Scott reaction-diffusion, then apply polar coordinates, and change it to 'From Polar' mode.", label: "Weird drip 2" },
   { prompt: "Show me the Burning Ship Explorer at the Embedded Mini-Ship with the Magma palette and a Vignette. Crank the zoom.", label: "Burning Ship fractal" },

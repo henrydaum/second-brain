@@ -12,28 +12,28 @@
     },
     {
       title: "Build on it.",
-      body: "Keep chatting to add more layers. Ask to change something, if it isn't right.",
+      body: "Keep chatting to add more layers. Ask to change something if you don't like it.",
       note: "Second Brain can make mistakes, but it can also fix them."
     },
     {
       title: "Fine-tune the layers.",
-      body: "Press the settings (gear) icon to open the layer panel. Adjust a control, then press Regenerate to apply it.",
+      body: "Press the gear icon to open the control panel. To adjust a setting, make the change and press 'Regenerate' to apply it.",
       note: "Every layer has its own settings. Try changing them to get different effects."
     },
     {
       title: "Manual controls.",
-      body: "Type into the text box with the settings panel open to search skills. Press \"+\" to add a layer, use \"-\" and the arrows to delete or move a layer.",
+      body: "Type into the text box with the control panel open to search skills. Press \"+\" to add a layer, \"-\" to delete a layer, and the arrows to move a layer in the stack.",
       note: "Useful if you prefer manual controls instead of chatting."
     },
     {
       title: "Save, download, or share.",
-      body: "Use the buttons above the canvas to keep the image, export a PNG, or send it to someone.",
+      body: "Use the buttons above the canvas to keep the image, export a PNG, or send it to a friend.",
       note: "Anything you share can be opened and remixed by anyone who sees it — they get the layers and settings, but your personal canvas remains unaffected."
     },
     {
       title: "Make an account.",
       body: "Sign in to keep your saved canvases and unlock Second Brain's code-writing abilities.",
-      note: "Second Brain uses code to generate images. Writing new code takes longer because Second Brain tests it and checks for bugs."
+      note: "Second Brain uses code to generate images. Writing new code typically takes longer because Second Brain tests it and checks for bugs."
     },
     {
       title: "Add more credits.",
