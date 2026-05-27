@@ -2,8 +2,8 @@
 
 ## Atlas Cloud
 
-![Atlas Cloud Logo](https://github.com/user-attachments/assets/0fdf096b-468e-4228-a7ed-774f927c0de8#gh-light-mode-only)
-![Atlas Cloud Logo](https://github.com/user-attachments/assets/ecafefce-7ad5-40ea-b63e-2c6e4444f32c#gh-dark-mode-only)
+<img src="https://github.com/user-attachments/assets/0fdf096b-468e-4228-a7ed-774f927c0de8#gh-light-mode-only" width="500" alt="Atlas Cloud Logo">
+<img src="https://github.com/user-attachments/assets/ecafefce-7ad5-40ea-b63e-2c6e4444f32c#gh-dark-mode-only" width="500" alt="Atlas Cloud Logo">
 
 [Atlas Cloud](https://www.atlascloud.ai) provides OpenAI-compatible AI APIs and model access for AI-powered workflows in Second Brain.
 
