@@ -17,7 +17,7 @@
     },
     {
       title: "Fine-tune the layers.",
-      body: "Press the gear icon to open the control panel. To adjust a setting, make the change and press 'Regenerate' to apply it.",
+      body: "Press the gear icon ⚙ to open the control panel. To adjust a setting, make the change and press 'Regenerate' to apply it.",
       note: "Every layer has its own settings. Try changing them to get different effects."
     },
     {
@@ -113,6 +113,18 @@
             onclick: () => opts.onTryIt && opts.onTryIt(c.prompt)
           }, c.label));
         }
+        slideWrap.appendChild(chips);
+      }
+      // Step 4 (Manual controls): one demo chip that opens the controls
+      // drawer and pre-fills the search input so the visitor can see what
+      // skill search looks like without having to figure out where to type.
+      if (idx === 3 && opts.onSearchDemo) {
+        const chips = el("div", { class: "tutorial-chips" });
+        chips.appendChild(el("button", {
+          type: "button",
+          class: "tutorial-chip",
+          onclick: () => opts.onSearchDemo("Koch")
+        }, "Try: search \"Koch\""));
         slideWrap.appendChild(chips);
       }
 

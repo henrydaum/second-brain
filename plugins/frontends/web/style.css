@@ -32,6 +32,12 @@ header button:hover, .composer button:hover { border-color: var(--accent); }
 /* New-chat as text link in chat header */
 .new-chat-link { background: transparent; border: 0; color: var(--muted); height: auto; padding: 4px 6px; cursor: pointer; font-size: 13px; font-weight: 600; letter-spacing: .01em; transition: color 160ms ease; }
 .new-chat-link:hover { color: var(--accent); border-color: transparent; }
+@keyframes newChatPulse {
+  0%, 100% { color: var(--muted); text-shadow: 0 0 0 transparent; }
+  50% { color: var(--accent); text-shadow: 0 0 12px rgba(127,200,212,.55); }
+}
+.new-chat-link.pulse { animation: newChatPulse 1.8s ease-in-out infinite; }
+.new-chat-link.pulse:hover { animation: none; color: var(--accent); }
 
 .messages { overflow: auto; padding: 22px; display: flex; flex-direction: column; gap: 12px; }
 .ephemeral-note { align-self: center; margin: auto; max-width: 320px; padding: 18px 20px; border: 2px dashed rgba(243,246,255,.35); color: var(--muted); font-size: 13px; text-align: center; display: flex; flex-direction: column; gap: 6px; background: transparent; }

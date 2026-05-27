@@ -1068,6 +1068,11 @@ document.querySelector("#newChat").addEventListener("click", async () => {
 });
 
 // Tutorial carousel: live hero (replaces the old empty-state copy) + Help modal.
+// Set when a tutorial chip kicks off a prompt — the next hero-image load
+// is the visitor's first ever render. At that moment we pulse "+ New
+// canvas" so they learn the "start over" affordance exists before they're
+// staring at their result going "now what?"
+let tutorialChipPending = false;
 function tutorialTryIt(prompt) {
   // Prompts are agent-bound — close the controls drawer so the left column
   // is back in chat mode before we drop the suggestion in.
@@ -1076,16 +1081,40 @@ function tutorialTryIt(prompt) {
   input.focus();
   const modal = document.querySelector("#helpModal");
   if (modal && !modal.hidden) modal.hidden = true;
+  tutorialChipPending = true;
+}
+function tutorialSearchDemo(query) {
+  // Step 4 demo: open the controls drawer (which flips the composer into
+  // search mode) and seed the input, then fire `input` so the search wires
+  // pick it up just as if the user had typed it themselves.
+  if (!controlsDrawer.classList.contains("open")) setControlsOpen(true);
+  input.value = query;
+  input.focus();
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  const modal = document.querySelector("#helpModal");
+  if (modal && !modal.hidden) modal.hidden = true;
 }
 if (window.SBTutorial) {
-  window.SBTutorial.build(emptyState, { onTryIt: tutorialTryIt });
+  window.SBTutorial.build(emptyState, { onTryIt: tutorialTryIt, onSearchDemo: tutorialSearchDemo });
 }
+// Pulse "+ New canvas" the first time a render finishes after a tutorial
+// chip start — teaches the reset affordance at the exact moment the
+// visitor is wondering what to do next. Cleared the moment they use it.
+heroImage?.addEventListener("load", () => {
+  if (!tutorialChipPending) return;
+  tutorialChipPending = false;
+  const newChatBtn = document.querySelector("#newChat");
+  if (newChatBtn) newChatBtn.classList.add("pulse");
+});
+document.querySelector("#newChat")?.addEventListener("click", () => {
+  document.querySelector("#newChat").classList.remove("pulse");
+}, { capture: true });
 const helpModal = document.querySelector("#helpModal");
 const helpModalBody = document.querySelector("#helpModalBody");
 const helpBtn = document.querySelector("#helpBtn");
 if (helpBtn && helpModal && helpModalBody && window.SBTutorial) {
   helpBtn.addEventListener("click", () => {
-    window.SBTutorial.build(helpModalBody, { onTryIt: tutorialTryIt });
+    window.SBTutorial.build(helpModalBody, { onTryIt: tutorialTryIt, onSearchDemo: tutorialSearchDemo });
     helpModal.hidden = false;
   });
   helpModal.addEventListener("click", e => { if (e.target === helpModal) helpModal.hidden = true; });
