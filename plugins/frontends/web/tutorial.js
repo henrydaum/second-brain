@@ -69,6 +69,12 @@
     return node;
   }
 
+  // Steps 1–CORE_STEPS are the main tutorial; anything after is a "bonus"
+  // section the visitor doesn't need to read to get going. The carousel
+  // still flows continuously, but the label + counter + a visual gap in
+  // the dot row make the split obvious.
+  const CORE_STEPS = 5;
+
   function buildTutorial(host, opts) {
     opts = opts || {};
     host.innerHTML = "";
@@ -87,8 +93,13 @@
 
     function render() {
       const s = STEPS[idx];
+      const isBonus = idx >= CORE_STEPS;
+      const bonusCount = STEPS.length - CORE_STEPS;
+      const stepLabel = isBonus
+        ? "Bonus " + (idx - CORE_STEPS + 1) + " of " + bonusCount
+        : "Step " + (idx + 1) + " of " + CORE_STEPS;
       slideWrap.innerHTML = "";
-      slideWrap.appendChild(el("div", { class: "tutorial-step" }, "Step " + (idx + 1) + " of " + STEPS.length));
+      slideWrap.appendChild(el("div", { class: "tutorial-step" + (isBonus ? " bonus" : "") }, stepLabel));
       slideWrap.appendChild(el("h2", { class: "tutorial-title" }, s.title));
       slideWrap.appendChild(el("p", { class: "tutorial-body" }, s.body));
       if (s.note) slideWrap.appendChild(el("p", { class: "tutorial-note" }, "Note: " + s.note));
@@ -107,15 +118,22 @@
 
       dotsWrap.innerHTML = "";
       for (let i = 0; i < STEPS.length; i++) {
+        const classes = ["tutorial-dot"];
+        if (i === idx) classes.push("active");
+        if (i >= CORE_STEPS) classes.push("bonus");
+        // First bonus dot gets a wider gap so the split reads visually.
+        if (i === CORE_STEPS) classes.push("bonus-start");
         const dot = el("button", {
           type: "button",
-          class: "tutorial-dot" + (i === idx ? " active" : ""),
-          "aria-label": "Go to step " + (i + 1),
+          class: classes.join(" "),
+          "aria-label": (i >= CORE_STEPS ? "Go to bonus " + (i - CORE_STEPS + 1) : "Go to step " + (i + 1)),
           onclick: () => { idx = i; render(); }
         });
         dotsWrap.appendChild(dot);
       }
-      counter.textContent = (idx + 1) + " / " + STEPS.length;
+      counter.textContent = isBonus
+        ? "Bonus " + (idx - CORE_STEPS + 1) + " / " + bonusCount
+        : (idx + 1) + " / " + CORE_STEPS;
       prevBtn.disabled = idx === 0;
       nextBtn.disabled = idx === STEPS.length - 1;
     }

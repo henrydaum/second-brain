@@ -27,11 +27,5 @@ const PROMPT_SUGGESTIONS = [
   { prompt: "Show me the Mandelbrot Explorer at Elephant Valley. Add a border as well.", label: "Mandelbrot elephants" },
   { prompt: "Show me a Gray-Scott reaction-diffusion, then apply polar coordinates.", label: "Weird drip 1" },
   { prompt: "Show me a Gray-Scott reaction-diffusion, then apply polar coordinates, and change it to 'From Polar' mode.", label: "Weird drip 2" },
-  { prompt: "Show me the Burning Ship Explorer at the Embedded Mini-Ship with the Magma palette and a Vignette. Crank the zoom.", label: "Burning Ship fractal" },
-
-  // Meta — 1:1 short prompts so the agent improvises
-  { prompt: "Surprise me", label: "Surprise me" },
-  { prompt: "Give me a suggestion", label: "Give me a suggestion" },
-  { prompt: "Make me something weird", label: "Something weird" },
-  { prompt: "Interview me, then makes something based on my answers", label: "Interview me"}
+  { prompt: "Show me the Burning Ship Explorer at the Embedded Mini-Ship with the Magma palette and a Vignette. Crank the zoom.", label: "Burning Ship fractal" }
 ];

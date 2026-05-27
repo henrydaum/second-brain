@@ -1,9 +1,12 @@
-// TIPS is defined in tips.js, loaded before this script in index.html.
+// TIPS / TIPS_SIGNED_IN are defined in tips.js, loaded before this script.
+// We merge the signed-in pool in once we know the viewer has an account,
+// so anonymous visitors don't see tips about account-only features.
 function pickTip() {
   const el = document.querySelector("#tipText");
-  if (el && Array.isArray(TIPS) && TIPS.length) {
-    el.textContent = TIPS[Math.floor(Math.random() * TIPS.length)];
-  }
+  if (!el) return;
+  const extra = (typeof signedIn !== "undefined" && signedIn && Array.isArray(TIPS_SIGNED_IN)) ? TIPS_SIGNED_IN : [];
+  const pool = Array.isArray(TIPS) ? TIPS.concat(extra) : extra;
+  if (pool.length) el.textContent = pool[Math.floor(Math.random() * pool.length)];
 }
 pickTip();
 
@@ -359,6 +362,7 @@ function setAccount(acc) {
     const wasSignedIn = signedIn;
     signedIn = !!acc?.signed_in;
     syncMineToggleVisibility();
+    if (!wasSignedIn && signedIn) pickTip();
     if (wasSignedIn && !signedIn) {
       // Signing out: drop any Mine filter so we don't keep showing a
       // filtered (and now always-empty) gallery.

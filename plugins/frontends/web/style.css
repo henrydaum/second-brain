@@ -100,6 +100,7 @@ article.credit-error { display: grid; gap: 7px; color: var(--muted); background:
 .tutorial { display: flex; flex-direction: column; gap: 18px; padding: 28px 30px; max-width: 520px; width: 100%; text-align: left; background: rgba(11,13,19,.72); border: 1px solid var(--line); backdrop-filter: blur(8px); }
 .help-modal-card .tutorial { background: transparent; border: 0; padding: 4px 0 0; backdrop-filter: none; }
 .tutorial-step { color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.tutorial-step.bonus { color: var(--muted); }
 .tutorial-title { font-size: 24px; font-weight: 700; color: var(--text); margin: 0; letter-spacing: -.01em; line-height: 1.2; }
 .tutorial-body { color: var(--text); font-size: 14.5px; line-height: 1.55; margin: 0; }
 .tutorial-note { color: var(--muted); font-size: 12.5px; line-height: 1.5; font-style: italic; margin: 0; padding-left: 12px; border-left: 2px solid var(--line); }
@@ -116,6 +117,9 @@ article.credit-error { display: grid; gap: 7px; color: var(--muted); background:
 .tutorial-dots { display: flex; gap: 8px; flex: 1; justify-content: center; }
 .tutorial-dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--line); background: transparent; padding: 0; cursor: pointer; transition: background 200ms ease, border-color 200ms ease; }
 .tutorial-dot.active { background: var(--accent); border-color: var(--accent); }
+.tutorial-dot.bonus { border-style: dashed; opacity: .7; }
+.tutorial-dot.bonus.active { background: var(--muted); border-color: var(--muted); opacity: 1; }
+.tutorial-dot.bonus-start { margin-left: 14px; }
 .tutorial-footer { display: flex; justify-content: center; }
 .tutorial-counter { color: var(--muted); font-size: 11.5px; letter-spacing: .06em; }
 

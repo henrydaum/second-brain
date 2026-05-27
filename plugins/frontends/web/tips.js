@@ -1,5 +1,10 @@
 // Random tips shown in the empty chat. Edit freely — kept in their own file
 // so adding/removing tips doesn't touch app logic.
+//
+// TIPS shows to everyone (signed in or not). TIPS_SIGNED_IN merges into the
+// pool only once we know the visitor has an account, since these tips talk
+// about account-only features (deleting shared canvases, the live
+// code-writing toggle in account settings, credit purchasing, etc.).
 const TIPS = [
   "Second Brain writes and executes code to make images. It does not make images using generative AI.",
   "You can have up to six layers in a single canvas, each with up to four settings.",
@@ -10,12 +15,15 @@ const TIPS = [
   "You can save at 2x resolution, or 1/2.",
   "Pressing 'Randomize' will generate a new image with a random seed, whereas 'Generate' will keep the same seed.",
   "If you hit 'Search,' you'll get skill results based on semantic similarity to your query — not just keywords.",
+  "For any questions or feedback, please contact secondbrainservice@gmail.com",
+  "Second Brain Art is built on top of Second Brain, a programmable open-source agentic framework made by Henry Daum, available at `github.com/henrydaum/second-brain`.",
+  "Second Brain has guardrails, and will refuse to generate images that aren't aligned with them."
+];
+
+const TIPS_SIGNED_IN = [
   "You can delete images you have shared from the gallery, and unsave something from your saved archive.",
   "The live code writing feature is available in the account settings. The agent tends to make more mistakes when using it, but the results are highly customizable.",
   "Un-cached renders cost 1 credit, while agent messages cost 10 credits each. Cached renders are free.",
-  "For any questions or feedback, please contact secondbrainservice@gmail.com",
-  "Second Brain Art is built on top of Second Brain, a programmable open-source agentic framework made by Henry Daum, available at `github.com/henrydaum/second-brain`.",
   "When using the live code writing feature, any skills created will be available for any user to use, so long as they have the 'Include community skills' option enabled. You can ask Second Brain to update and delete any skills you've created.",
-  "Second Brain has guardrails, and will refuse to generate images that aren't aligned with them.",
   "You have access to 100 free credits per five hours, and 500 credits per week. Purchasing 1,000 credits costs $2.99 — no subscriptions."
 ];
