@@ -1097,18 +1097,10 @@ function tutorialSearchDemo(query) {
 if (window.SBTutorial) {
   window.SBTutorial.build(emptyState, { onTryIt: tutorialTryIt, onSearchDemo: tutorialSearchDemo });
 }
-// Pulse "+ New canvas" the first time a render finishes after a tutorial
-// chip start — teaches the reset affordance at the exact moment the
-// visitor is wondering what to do next. Cleared the moment they use it.
 heroImage?.addEventListener("load", () => {
   if (!tutorialChipPending) return;
   tutorialChipPending = false;
-  const newChatBtn = document.querySelector("#newChat");
-  if (newChatBtn) newChatBtn.classList.add("pulse");
 });
-document.querySelector("#newChat")?.addEventListener("click", () => {
-  document.querySelector("#newChat").classList.remove("pulse");
-}, { capture: true });
 const helpModal = document.querySelector("#helpModal");
 const helpModalBody = document.querySelector("#helpModalBody");
 const helpBtn = document.querySelector("#helpBtn");

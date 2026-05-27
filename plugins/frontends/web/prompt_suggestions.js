@@ -8,7 +8,7 @@ const PROMPT_SUGGESTIONS = [
   { prompt: "Show me a Lorenz Attractor zoomed out, with the Synthwave palette.", label: "Lorenz Attractor" },
   { prompt: "Run Conway's Life with the Aurora palette and add Bloom Glow and Scanlines.", label: "Conway's Life" },
   { prompt: "Show me Isometric Terrain with the Tower Village scene and Botanical palette. After that, add a border.", label: "Isometric terrain" },
-  { prompt: "Show me an Elementary Cellular Automaton with the Obsidian palette. Then, Mirror it top to bottom and add an Anaglyph 3D filter.", label: "Cellular automaton" },
+  { prompt: "Show me an Elementary Cellular Automaton with the Obsidian palette, with rule 90 (Sierpinski triangle). Then, Mirror it top to bottom and add an Anaglyph 3D filter.", label: "Cellular automaton" },
   { prompt: "Show me an Attractor Cloud using the Clifford attractor with the Aurora palette.", label: "Attractor cloud" },
   { prompt: "Show me the Buddhabrot with Bloom Glow and a white Border.", label: "Buddhabrot" },
 

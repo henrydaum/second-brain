@@ -32,12 +32,6 @@ header button:hover, .composer button:hover { border-color: var(--accent); }
 /* New-chat as text link in chat header */
 .new-chat-link { background: transparent; border: 0; color: var(--muted); height: auto; padding: 4px 6px; cursor: pointer; font-size: 13px; font-weight: 600; letter-spacing: .01em; transition: color 160ms ease; }
 .new-chat-link:hover { color: var(--accent); border-color: transparent; }
-@keyframes newChatPulse {
-  0%, 100% { color: var(--muted); text-shadow: 0 0 0 transparent; }
-  50% { color: var(--accent); text-shadow: 0 0 12px rgba(127,200,212,.55); }
-}
-.new-chat-link.pulse { animation: newChatPulse 1.8s ease-in-out infinite; }
-.new-chat-link.pulse:hover { animation: none; color: var(--accent); }
 
 .messages { overflow: auto; padding: 22px; display: flex; flex-direction: column; gap: 12px; }
 .ephemeral-note { align-self: center; margin: auto; max-width: 320px; padding: 18px 20px; border: 2px dashed rgba(243,246,255,.35); color: var(--muted); font-size: 13px; text-align: center; display: flex; flex-direction: column; gap: 6px; background: transparent; }
@@ -391,6 +385,11 @@ body.account-body { background:
   .chat { display: contents; }
   .chat > header { order: -3; background: rgba(8,9,13,.94); }
   .showcase { order: -2; aspect-ratio: auto; height: auto; min-height: 420px; }
+  /* When the empty-state hosts the tutorial, the tutorial is taller than
+     the showcase's min-height and gets clipped by overflow:hidden. Flow it
+     in-place on mobile so the showcase grows to match the tutorial — i.e.
+     the canvas area equals the tutorial. has-image still hides it. */
+  .showcase:not(.has-image) #emptyState { position: static; inset: auto; min-height: 420px; }
   .messages { order: -1; min-height: 42vh; background: rgba(8,9,13,.94); }
   .controls-drawer { order: -1; min-height: 42vh; }
   .composer { order: 0; }
@@ -416,6 +415,7 @@ body.account-body { background:
   .eyebrow { font-size: 11px; margin-bottom: 4px; }
 
   .showcase { min-height: 320px; }
+  .showcase:not(.has-image) #emptyState { min-height: 320px; }
   .messages { padding: 14px; gap: 10px; min-height: 36vh; }
   .composer { padding: 12px; gap: 8px; }
   .composer button { min-width: 70px; padding: 0 12px; }
@@ -429,7 +429,16 @@ body.account-body { background:
   #emptyState .es-sub { font-size: 13px; max-width: none; }
   .es-chips { max-width: none; }
 
-  .tutorial { padding: 20px 18px; gap: 14px; max-width: none; }
+  #emptyState.tutorial-host { padding: 16px; }
+  .tutorial { padding: 16px 16px; gap: 10px; max-width: none; }
+  .tutorial-slide { min-height: 0; gap: 8px; }
+  .tutorial-title { font-size: 19px; }
+  .tutorial-body { font-size: 13px; line-height: 1.5; }
+  .tutorial-note { font-size: 12px; line-height: 1.45; padding-left: 10px; }
+  .tutorial-step { font-size: 11px; }
+  .tutorial-chip { padding: 6px 10px; font-size: 12px; }
+  .tutorial-controls { gap: 10px; }
+  .tutorial-nav-btn { width: 32px; height: 32px; font-size: 18px; }
 
   .gallery-section { padding: 22px 14px; }
   .gallery { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
