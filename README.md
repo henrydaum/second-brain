@@ -1,5 +1,19 @@
 <img width="1440" height="569" alt="highreslogotypecrop" src="https://github.com/user-attachments/assets/598ab57f-ed6b-491a-9cd6-142b93b09244" />
 
+## Atlas Cloud
+
+<div align="center">
+  <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=electerm">
+    <img src="https://github.com/electerm/electerm-resource/blob/master/static/images/atlas-cloud.png?raw=true" alt="Atlas Cloud" width="200" />
+  </a>
+</div>
+
+[Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=electerm) provides OpenAI-compatible AI APIs and model access for AI-powered workflows in electerm.
+
+<div align="center">
+  <img src="https://github.com/electerm/electerm-resource/raw/master/static/images/electerm.gif", alt="" />
+</div>
+
 # Second Brain
 
 Second Brain is a local-first AI runtime for your machine.
