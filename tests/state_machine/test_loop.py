@@ -227,12 +227,8 @@ def make_cs(commands: dict[str, CallableSpec] | None = None, tools: dict[str, Ca
 
 
 def sectioned_prompt():
-    """Build a tiny sectioned system prompt for ordering tests."""
-    return [
-        {"role": "system", "content": "[STATIC SYSTEM PROMPT]\nstatic"},
-        {"role": "system", "content": "[SEMI-STABLE TOOL/SCHEMA INFO]\nsemi"},
-        {"role": "system", "content": "[DYNAMIC RUNTIME CONTEXT]\ndynamic"},
-    ]
+    """Build a single merged system prompt (MiniMax requires one)."""
+    return [{"role": "system", "content": "static\n\nsemi\n\ndynamic"}]
 
 
 def test_session_system_prompt_includes_conversation_metadata():
@@ -242,23 +238,21 @@ def test_session_system_prompt_includes_conversation_metadata():
     session = RuntimeSession("chat", make_cs(), conversation_id=cid)
     session.system_prompt_extras["pin"] = "Pinned runtime note."
     runtime = SimpleNamespace(db=db, system_prompt=lambda: [
-        {"role": "system", "content": "[STATIC SYSTEM PROMPT]\nbase"},
-        {"role": "system", "content": "[SEMI-STABLE TOOL/SCHEMA INFO]\ntools"},
-        {"role": "system", "content": "[DYNAMIC RUNTIME CONTEXT]\nbase dynamic"},
+        {"role": "system", "content": "base\n\ntools\n\nbase dynamic"},
     ], active_session_key="chat")
 
     prompt = session_system_prompt(runtime, session)()
-    dynamic = prompt[-1]["content"]
+    content = prompt[-1]["content"]
 
-    assert "## Current conversation" in dynamic
-    assert f"Number: {cid}" in dynamic
-    assert "Category: Projects" in dynamic
-    assert "Title: Build Runtime Prompt" in dynamic
-    assert "Pinned runtime note." in dynamic
+    assert "## Current conversation" in content
+    assert f"Number: {cid}" in content
+    assert "Category: Projects" in content
+    assert "Title: Build Runtime Prompt" in content
+    assert "Pinned runtime note." in content
 
 
-def test_build_prompt_sections_places_stable_and_volatile_content():
-    """Verify prompt builder separates cacheable and volatile prompt content."""
+def test_build_prompt_sections_merges_into_single_system_message():
+    """Verify prompt builder emits a single merged system message containing all content."""
     db = FakeConversationDB()
     registry = FakeToolRegistry([{"function": {"name": "demo", "description": "Demo tool."}}])
     sections = build_prompt_sections(
@@ -269,21 +263,15 @@ def test_build_prompt_sections_places_stable_and_volatile_content():
         prompt_extras={"warning": "Volatile warning."},
     )
 
-    static, semi, dynamic = [m["content"] for m in sections]
-    assert static.startswith("[STATIC SYSTEM PROMPT]")
-    assert "Core Identity" in static
-    assert "Current date and time" not in static
-    assert "Memory (from memory.md)" not in static
-    assert semi.startswith("[SEMI-STABLE TOOL/SCHEMA INFO]")
-    assert "demo: Demo tool." in semi
-    assert "/new [title]" in semi
-    assert "Current conversation" not in semi
-    assert dynamic.startswith("[DYNAMIC RUNTIME CONTEXT]")
-    assert "Current date and time" in dynamic
-    assert "Current model: gpt-test." in dynamic
-    assert "C:/sync" in dynamic
-    assert "Title: Cache Work" in dynamic
-    assert "Volatile warning." in dynamic
+    assert len(sections) == 1 and sections[0]["role"] == "system"
+    content = sections[0]["content"]
+    assert "Core Identity" in content
+    assert "demo: Demo tool." in content
+    assert "/new [title]" in content
+    assert "Current date and time" in content
+    assert "Current model: gpt-test." in content
+    assert "Title: Cache Work" in content
+    assert "Volatile warning." in content
 
 
 def test_loop_messages_put_dynamic_context_before_current_user_turn():
@@ -298,11 +286,9 @@ def test_loop_messages_put_dynamic_context_before_current_user_turn():
     messages = loop._messages(history)
 
     assert [(m["role"], m["content"]) for m in messages] == [
-        ("system", "[STATIC SYSTEM PROMPT]\nstatic"),
-        ("system", "[SEMI-STABLE TOOL/SCHEMA INFO]\nsemi"),
+        ("system", "static\n\nsemi\n\ndynamic"),
         ("user", "old"),
         ("assistant", "old reply"),
-        ("system", "[DYNAMIC RUNTIME CONTEXT]\ndynamic"),
         ("user", "new"),
     ]
 
@@ -319,10 +305,10 @@ def test_loop_messages_preserve_current_tool_turn_adjacency():
 
     messages = loop._messages(history)
 
-    assert [m["role"] for m in messages] == ["system", "system", "system", "user", "assistant", "tool"]
-    assert messages[3]["content"] == "run"
-    assert messages[4]["tool_calls"] == [tool_call]
-    assert messages[5]["tool_call_id"] == "tc1"
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "tool"]
+    assert messages[1]["content"] == "run"
+    assert messages[2]["tool_calls"] == [tool_call]
+    assert messages[3]["tool_call_id"] == "tc1"
 
 
 def test_loop_messages_keep_legacy_string_prompt_compatibility():

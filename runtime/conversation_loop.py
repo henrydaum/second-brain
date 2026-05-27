@@ -49,16 +49,18 @@ def _truncate_middle(text: str, max_chars: int) -> str:
 
 
 def _system_messages(prompt: Any) -> list[dict[str, Any]]:
-    """Normalize legacy string prompts and sectioned prompt messages."""
+    """Normalize to a single system message.
+
+    MiniMax rejects requests with more than one system message, so any
+    list-shaped prompt is merged. Empty prompts return an empty list.
+    """
     if isinstance(prompt, list):
-        return [dict(m) for m in prompt if isinstance(m, dict) and m.get("role", "system") == "system" and m.get("content")]
-    return [{"role": "system", "content": prompt or ""}]
-
-
-def _split_current_turn(history: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Split prior transcript from the latest user-led turn."""
-    idx = next((i for i in range(len(history) - 1, -1, -1) if history[i].get("role") == "user"), None)
-    return (history, []) if idx is None else (history[:idx], history[idx:])
+        contents = [m.get("content") for m in prompt if isinstance(m, dict) and m.get("role", "system") == "system" and m.get("content")]
+        if not contents:
+            return []
+        return [{"role": "system", "content": "\n\n".join(c.strip() for c in contents).strip()}]
+    text = (prompt or "").strip()
+    return [{"role": "system", "content": text}] if text else []
 
 
 class ConversationLoop:
@@ -381,21 +383,15 @@ class ConversationLoop:
     # ──────────────────────────────────────────────────────────────────────
 
     def _messages(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Build provider messages with dynamic runtime context near the turn.
+        """Single system message at index 0, then history (system rows stripped).
 
-        Sectioned prompts are ordered as:
-        static/semi-stable system messages -> prior history -> dynamic
-        system message -> current turn tail. The tail starts at the latest
-        user message, which preserves assistant/tool-call adjacency during
-        multi-call turns.
+        MiniMax (the active provider) rejects multiple system messages and
+        any system message past index 0.
         """
         prompt = self.system_prompt() if callable(self.system_prompt) else self.system_prompt
         system = _system_messages(prompt)
         clean_history = [m for m in history if m.get("role") != "system"]
-        if len(system) <= 1 or not (system[-1].get("content") or "").lstrip().startswith("[DYNAMIC RUNTIME CONTEXT]"):
-            return [*system, *clean_history]
-        prior, tail = _split_current_turn(clean_history)
-        return [*system[:-1], *prior, system[-1], *tail]
+        return [*system, *clean_history]
 
     def _tool_budget_error(self, content: Any) -> str | None:
         """Internal helper to handle tool budget error."""

@@ -1,8 +1,9 @@
-"""Cache-friendly system prompt assembly.
+"""System prompt assembly.
 
-The prompt is split into static, semi-stable, and dynamic system messages.
-ConversationLoop places the dynamic message after prior history and before
-the current user turn so stable prefix text remains cacheable.
+Produces a single merged system message. MiniMax (the production provider)
+rejects requests with more than one system message or any system message
+not at index 0, so the historical static / semi-stable / dynamic split
+that fed prompt caching is collapsed here.
 """
 
 from __future__ import annotations
@@ -69,11 +70,8 @@ def build_prompt_sections(
         getattr(scope, "prompt_suffix", "") if scope else "",
         extra_suffix,
     ]
-    return [
-        _system_message("STATIC SYSTEM PROMPT", _static_prompt()),
-        _system_message("SEMI-STABLE TOOL/SCHEMA INFO", "\n\n".join(s for s in semi if s)),
-        _system_message("DYNAMIC RUNTIME CONTEXT", "\n\n".join(s for s in dynamic if s)),
-    ]
+    parts = [_static_prompt(), *[s for s in semi if s], *[s for s in dynamic if s]]
+    return [{"role": "system", "content": "\n\n".join(p.strip() for p in parts if p).strip()}]
 
 
 def _generative_art_encyclopedia() -> str:

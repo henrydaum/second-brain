@@ -237,18 +237,15 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         return _canvas_state(runtime.services, session.key)
 
     def _append_dynamic(prompt, *parts: str):
-        """Append session-only text to the dynamic section when present."""
+        """Append session-only text to the system prompt."""
         extra = "\n\n".join(p for p in parts if p)
         if not extra:
             return prompt
         if isinstance(prompt, list):
             out = [dict(m) for m in prompt]
-            target = next((m for m in reversed(out) if (m.get("content") or "").lstrip().startswith("[DYNAMIC RUNTIME CONTEXT]")), None)
-            if target is None:
-                target = out[-1] if out else {"role": "system", "content": "[DYNAMIC RUNTIME CONTEXT]"}
-                if not out:
-                    out.append(target)
-            target["content"] = (target.get("content") or "").rstrip() + "\n\n" + extra
+            if not out:
+                return [{"role": "system", "content": extra}]
+            out[-1]["content"] = (out[-1].get("content") or "").rstrip() + "\n\n" + extra
             return out
         return (prompt or "") + "\n\n" + extra
 

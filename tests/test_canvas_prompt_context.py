@@ -15,11 +15,7 @@ class Registry:
 
 
 def sectioned_prompt():
-    return [
-        {"role": "system", "content": "[STATIC SYSTEM PROMPT]\nbase"},
-        {"role": "system", "content": "[SEMI-STABLE TOOL/SCHEMA INFO]\ntools"},
-        {"role": "system", "content": "[DYNAMIC RUNTIME CONTEXT]\nbase dynamic"},
-    ]
+    return [{"role": "system", "content": "base\n\ntools\n\nbase dynamic"}]
 
 
 def test_session_system_prompt_includes_live_canvas_state():
