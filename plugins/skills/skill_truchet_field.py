@@ -42,18 +42,18 @@ class TruchetFieldSkill(BaseSkill):
         cols = (size + tile - 1) // tile + 1
         rows = (size + tile - 1) // tile + 1
 
-        for r in range(rows):
-            for c in range(cols):
-                x0 = c * tile
-                y0 = r * tile
+        radius = tile / 2
+        for row in range(rows):
+            for col in range(cols):
+                x0 = col * tile
+                y0 = row * tile
                 use_a = rng.random() < curl_p
-                r = tile / 2
                 if use_a:
-                    p1 = _arc_points(x0, y0, r, 0, 90)
-                    p2 = _arc_points(x0 + tile, y0 + tile, r, 180, 270)
+                    p1 = _arc_points(x0, y0, radius, 0, 90)
+                    p2 = _arc_points(x0 + tile, y0 + tile, radius, 180, 270)
                 else:
-                    p1 = _arc_points(x0 + tile, y0, r, 90, 180)
-                    p2 = _arc_points(x0, y0 + tile, r, 270, 360)
+                    p1 = _arc_points(x0 + tile, y0, radius, 90, 180)
+                    p2 = _arc_points(x0, y0 + tile, radius, 270, 360)
                 draw.line(p1, fill=stroke, width=lw, joint="curve")
                 draw.line(p2, fill=stroke, width=lw, joint="curve")
 
