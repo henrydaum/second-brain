@@ -1,10 +1,15 @@
 // TIPS / TIPS_SIGNED_IN are defined in tips.js, loaded before this script.
 // We merge the signed-in pool in once we know the viewer has an account,
 // so anonymous visitors don't see tips about account-only features.
+// NOTE: `signedIn` must be declared before pickTip() runs — pickTip reads
+// it on initial load, and `let` declarations sit in TDZ until execution
+// reaches them (typeof doesn't save you for let/const). Setting it here
+// up top avoids a ReferenceError that would halt script load.
+let signedIn = false;
 function pickTip() {
   const el = document.querySelector("#tipText");
   if (!el) return;
-  const extra = (typeof signedIn !== "undefined" && signedIn && Array.isArray(TIPS_SIGNED_IN)) ? TIPS_SIGNED_IN : [];
+  const extra = (signedIn && Array.isArray(TIPS_SIGNED_IN)) ? TIPS_SIGNED_IN : [];
   const pool = Array.isArray(TIPS) ? TIPS.concat(extra) : extra;
   if (pool.length) el.textContent = pool[Math.floor(Math.random() * pool.length)];
 }
@@ -61,7 +66,6 @@ let currentControlsPanels = [];
 const galleryPages = {shared: 1, archive: 1};
 const galleryMineOnly = {shared: false, archive: false};
 let activeTab = "shared";
-let signedIn = false;
 const pendingControls = new Map();
 let typingEl = null;
 const TOOL_LABELS = {
