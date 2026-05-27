@@ -22,7 +22,7 @@
     },
     {
       title: "Manual controls.",
-      body: "Type into the text box with the control panel open to search skills. Press \"+\" to add a layer, \"-\" to delete a layer, and the arrows to move a layer in the stack.",
+      body: "Type into the text box within the control panel to search skills. Press \"+\" to add a layer, \"-\" to delete a layer, and the arrows ↕ to move a layer in the stack.",
       note: "Useful if you prefer manual controls instead of chatting."
     },
     {
@@ -32,7 +32,7 @@
     },
     {
       title: "Make an account.",
-      body: "Sign in to keep your saved canvases and unlock Second Brain's code-writing abilities.",
+      body: "Sign in to keep your saved canvases and unlock Second Brain's code-writing abilities. This unlocks unparallel customizability.",
       note: "Second Brain uses code to generate images. Writing new code typically takes longer because Second Brain tests it and checks for bugs."
     },
     {
