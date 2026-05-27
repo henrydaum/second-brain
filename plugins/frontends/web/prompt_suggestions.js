@@ -14,18 +14,18 @@ const PROMPT_SUGGESTIONS = [
 
   // Background + object combos
   { prompt: "Add a Color Field background with a 3D Menger Sponge on top, and increase the depth to 3.", label: "3D Menger Sponge" },
-  { prompt: "Add a continuous attractor background, then add Typography saying 'What you see is what you get.' over in regular font.", label: "Typography poster" },
+  { prompt: "Add a continuous attractor background, then add Typography over it in regular font saying 'What you see is what you get.'", label: "Typography poster" },
 
   // Filter-heavy showcases — evocative labels
-  { prompt: "Load the Julia Explorer and give it the 'Ink & Paper' palette. Then invert the colors with the Invert filter. Finally, add the Glitch Slice and Kaleidoscope filters.", label: "Oriental rug pattern" },
-  { prompt: "Add the Wave Sea background, then change the palette to 'Synthwave.' After that, add the Pixel Sort and Dot Screen filters.", label: "80s synthwave" },
-  { prompt: "Show me the Julia Explorer at the 'Dendrite' location, then add the Fisheye lens and Chromatic Aberration filters.", label: "Mythical fractal orb" },
+  { prompt: "Load the Julia Explorer and give it the Ink & Paper palette. Then invert the colors with the Invert filter. Finally, add the Glitch Slice and Kaleidoscope filters.", label: "Oriental rug pattern" },
+  { prompt: "Add the Wave Sea background, then change the palette to Synthwave. After that, add the Pixel Sort and Dot Screen filters.", label: "80s synthwave" },
+  { prompt: "Show me the Julia Explorer at the Dendrite location, then add the Fisheye lens and Chromatic Aberration filters.", label: "Mythical fractal orb" },
   { prompt: "Show me the Terdragon variant of the Dragon Curve with the Anaglyph 3D filter.", label: "Trippy dragon curve" },
-  { prompt: "Show me the L-System Grove as a Coral with a touch of Film Grain.", label: "Stylish artificial plant" },
+  { prompt: "Show me the L-System Grove with the Coral palette and a touch of Film Grain.", label: "Stylish artificial plant" },
   { prompt: "Show me the Julia Explorer at the Spiral location, and zoom in slightly.", label: "Julia spiral" },
-  { prompt: "Show me Wave Sea with Posterize To Palette using the Coral Reef palette with a vignette.", label: "Background material" },
+  { prompt: "Show me Wave Sea with Posterize To Palette using the Coral Reef palette and a Vignette.", label: "Background material" },
   { prompt: "Show me the Mandelbrot Explorer at Elephant Valley. Add a border as well.", label: "Mandelbrot elephants" },
-  { prompt: "Show me a Gray-Scott reaction-diffusion, then apply polar coordinates.", label: "Weird drip 1" },
-  { prompt: "Show me a Gray-Scott reaction-diffusion, then apply polar coordinates, and change it to 'From Polar' mode.", label: "Weird drip 2" },
+  { prompt: "Show me a Gray-Scott reaction-diffusion, then apply polar coordinates.", label: "Reaction-diffusion blob" },
+  { prompt: "Show me a Gray-Scott reaction-diffusion, then apply polar coordinates, and change it to 'From Polar' mode.", label: "Inverted reaction-diffusion" },
   { prompt: "Show me the Burning Ship Explorer at the Embedded Mini-Ship with the Magma palette and a Vignette. Crank the zoom.", label: "Burning Ship fractal" }
 ];
