@@ -12,7 +12,7 @@ except NameError:
 
 class HalftoneSkill(BaseSkill):
     name = 'Halftone'
-    description = 'Newspaper-style halftone dot screen. The image is replaced by a regular grid of palette-tinted dots whose radius scales with local luminance.'
+    description = 'Newspaper-style halftone. The image is replaced by a regular grid of palette-tinted dots whose radius scales with local luminance.'
     kind = "filter"
 
     palette   = Palette()
