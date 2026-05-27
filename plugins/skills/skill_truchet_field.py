@@ -1,7 +1,18 @@
 from plugins.BaseSkill import BaseSkill, Palette, Slider
 from PIL import ImageDraw
 
+import math
 import random
+
+
+def _arc_points(cx, cy, radius, start_deg, end_deg, steps=24):
+    a0 = math.radians(start_deg)
+    a1 = math.radians(end_deg)
+    return [
+        (cx + radius * math.cos(a0 + (a1 - a0) * i / steps),
+         cy + radius * math.sin(a0 + (a1 - a0) * i / steps))
+        for i in range(steps + 1)
+    ]
 
 try:
     art_kit
@@ -36,15 +47,14 @@ class TruchetFieldSkill(BaseSkill):
                 x0 = c * tile
                 y0 = r * tile
                 use_a = rng.random() < curl_p
+                r = tile / 2
                 if use_a:
-                    bbox1 = [x0 - tile / 2, y0 - tile / 2, x0 + tile / 2, y0 + tile / 2]
-                    draw.arc(bbox1, start=0, end=90, fill=stroke, width=lw)
-                    bbox2 = [x0 + tile / 2, y0 + tile / 2, x0 + 3 * tile / 2, y0 + 3 * tile / 2]
-                    draw.arc(bbox2, start=180, end=270, fill=stroke, width=lw)
+                    p1 = _arc_points(x0, y0, r, 0, 90)
+                    p2 = _arc_points(x0 + tile, y0 + tile, r, 180, 270)
                 else:
-                    bbox1 = [x0 + tile / 2, y0 - tile / 2, x0 + 3 * tile / 2, y0 + tile / 2]
-                    draw.arc(bbox1, start=90, end=180, fill=stroke, width=lw)
-                    bbox2 = [x0 - tile / 2, y0 + tile / 2, x0 + tile / 2, y0 + 3 * tile / 2]
-                    draw.arc(bbox2, start=270, end=360, fill=stroke, width=lw)
+                    p1 = _arc_points(x0 + tile, y0, r, 90, 180)
+                    p2 = _arc_points(x0, y0 + tile, r, 270, 360)
+                draw.line(p1, fill=stroke, width=lw, joint="curve")
+                draw.line(p2, fill=stroke, width=lw, joint="curve")
 
         canvas.commit(img)

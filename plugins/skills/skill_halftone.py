@@ -19,7 +19,7 @@ class HalftoneSkill(BaseSkill):
     cell_size  = Slider(6, 40, default=12, step=1)
     angle      = Slider(0, 90, default=0, step=5)
     background = Enum(["white", "palette", "black"], default="white")
-    dot_color  = Enum(["primary", "by_luminance"], default="primary")
+    dot_color  = Enum(["primary", "luminance"], default="luminance")
 
     def run(self, canvas):
         c = int(self.cell_size)
