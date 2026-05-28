@@ -16,7 +16,7 @@ const TIPS = [
   "Pressing 'Randomize' will generate a new image with a random seed, whereas 'Regenerate' will keep the same seed.",
   "If you hit 'Search,' you'll get skill results based on semantic similarity to your query — not just keywords.",
   "For any questions or feedback, please contact secondbrainservice@gmail.com",
-  "Second Brain Art is built on top of Second Brain, a programmable open-source agentic framework made by Henry Daum, available at github.com/henrydaum/second-brain.",
+  "Second Brain Art is built on top of Second Brain, a programmable open-source agentic framework made by Henry Daum, available at github.com/henrydaum/second-brain",
   "Second Brain has guardrails, and will refuse to generate images that aren't aligned with them."
 ];
 
