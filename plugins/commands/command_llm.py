@@ -96,7 +96,9 @@ def _describe(context, name):
         return "Action"
     loaded = getattr((context.services or {}).get(name), "loaded", False)
     mark = " (default)" if context.config.get("default_llm_profile") == name else ""
-    return f"{name}{mark}\nStatus: {'Loaded' if loaded else 'Unloaded'}\nClass: {p.get('llm_service_class', 'OpenAILLM')}\nContext: {p.get('llm_context_size', 0)}"
+    ctx = int(p.get("llm_context_size", 0) or 0)
+    ctx_str = "0 (reactive compaction)" if ctx == 0 else f"{ctx:,}"
+    return f"{name}{mark}\nStatus: {'Loaded' if loaded else 'Unloaded'}\nClass: {p.get('llm_service_class', 'OpenAILLM')}\nContext: {ctx_str}"
 
 
 def _model_label(context, name):
