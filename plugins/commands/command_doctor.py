@@ -105,16 +105,11 @@ def _schedule_lines(tk):
 
 
 def _llm_lines(llm):
-    """Return LLM/cache findings."""
+    """Return LLM findings."""
     active = getattr(llm, "active", None) or llm
     if not active:
         return ["  LLM is not configured."]
-    cached, total = getattr(active, "last_cached_prompt_tokens", None), getattr(active, "last_prompt_tokens", None)
-    lines = [f"  Model: {getattr(active, 'model_name', 'unknown')} ({'loaded' if getattr(active, 'loaded', False) else 'unloaded'})"]
-    if total is None:
-        return lines + ["  Prompt cache: no usage data yet."]
-    pct = round((cached or 0) * 100 / total) if total else 0
-    return lines + [f"  Prompt cache: {cached or 0}/{total} input tokens cached on last call ({pct}%)."]
+    return [f"  Model: {getattr(active, 'model_name', 'unknown')} ({'loaded' if getattr(active, 'loaded', False) else 'unloaded'})"]
 
 
 def _log_lines(path, limit=8):

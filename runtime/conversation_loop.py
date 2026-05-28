@@ -23,6 +23,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable
 
+from agent.system_prompt import SYSTEM_CONTEXT_MARKER
 from state_machine.serialization import save_compaction_marker, save_history_message
 from runtime.token_stripper import strip_model_tokens
 
@@ -48,10 +49,24 @@ def _truncate_middle(text: str, max_chars: int) -> str:
     return f"{text[:head]}\n…[truncated {len(text) - max_chars} chars]…\n{text[-tail:]}"
 
 
-def _system_messages(prompt: Any) -> list[dict[str, Any]]:
-    """Normalize legacy string prompts and sectioned prompt messages."""
+def _prompt_sections(prompt: Any) -> list[dict[str, Any]]:
+    """Normalize legacy string prompts and sectioned prompt messages.
+
+    Accepts ``system``-role messages (the cacheable prefix) and a single
+    ``user``-role message tagged ``[SYSTEM CONTEXT UPDATE]`` (the dynamic
+    block that gets merged into the latest user turn).
+    """
     if isinstance(prompt, list):
-        return [dict(m) for m in prompt if isinstance(m, dict) and m.get("role", "system") == "system" and m.get("content")]
+        out = []
+        for m in prompt:
+            if not isinstance(m, dict) or not m.get("content"):
+                continue
+            role = m.get("role", "system")
+            if role == "system":
+                out.append(dict(m))
+            elif role == "user" and (m.get("content") or "").lstrip().startswith(SYSTEM_CONTEXT_MARKER):
+                out.append(dict(m))
+        return out
     return [{"role": "system", "content": prompt or ""}]
 
 
@@ -59,6 +74,21 @@ def _split_current_turn(history: list[dict[str, Any]]) -> tuple[list[dict[str, A
     """Split prior transcript from the latest user-led turn."""
     idx = next((i for i in range(len(history) - 1, -1, -1) if history[i].get("role") == "user"), None)
     return (history, []) if idx is None else (history[:idx], history[idx:])
+
+
+def _prepend_to_user(user_msg: dict[str, Any], context_text: str) -> dict[str, Any]:
+    """Return a copy of ``user_msg`` with ``context_text`` prepended to its content.
+
+    Handles both string content and OpenAI content-block list shapes.
+    """
+    out = dict(user_msg)
+    content = out.get("content")
+    if isinstance(content, list):
+        out["content"] = [{"type": "text", "text": context_text}, *content]
+    else:
+        text = str(content or "").strip()
+        out["content"] = f"{context_text}\n\n{text}" if text else context_text
+    return out
 
 
 class ConversationLoop:
@@ -352,21 +382,34 @@ class ConversationLoop:
     # ──────────────────────────────────────────────────────────────────────
 
     def _messages(self, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Build provider messages with dynamic runtime context near the turn.
+        """Build provider messages with the dynamic context attached to the turn.
 
-        Sectioned prompts are ordered as:
-        static/semi-stable system messages -> prior history -> dynamic
-        system message -> current turn tail. The tail starts at the latest
-        user message, which preserves assistant/tool-call adjacency during
-        multi-call turns.
+        Sectioned prompts come in as ``[system_combined, user_context_update]``.
+        The system message stays at position 0 (cacheable). The user-role
+        context-update message is merged into the latest real user turn so
+        the request keeps strict role alternation and stays valid for
+        providers that only accept ``system`` at position 0 (e.g. MiniMax).
         """
         prompt = self.system_prompt() if callable(self.system_prompt) else self.system_prompt
-        system = _system_messages(prompt)
+        sections = _prompt_sections(prompt)
         clean_history = [m for m in history if m.get("role") != "system"]
-        if len(system) <= 1 or not (system[-1].get("content") or "").lstrip().startswith("[DYNAMIC RUNTIME CONTEXT]"):
-            return [*system, *clean_history]
+
+        ctx_idx = next(
+            (i for i, m in enumerate(sections)
+             if m.get("role") == "user"
+             and (m.get("content") or "").lstrip().startswith(SYSTEM_CONTEXT_MARKER)),
+            None,
+        )
+        if ctx_idx is None:
+            return [*sections, *clean_history]
+
+        ctx_msg = sections[ctx_idx]
+        prefix = sections[:ctx_idx] + sections[ctx_idx + 1:]
         prior, tail = _split_current_turn(clean_history)
-        return [*system[:-1], *prior, system[-1], *tail]
+        if not tail:
+            return [*prefix, *prior, ctx_msg]
+        merged = _prepend_to_user(tail[0], ctx_msg["content"])
+        return [*prefix, *prior, merged, *tail[1:]]
 
     def _tool_budget_error(self, content: Any) -> str | None:
         """Internal helper to handle tool budget error."""

@@ -1,8 +1,16 @@
 """Cache-friendly system prompt assembly.
 
-The prompt is split into static, semi-stable, and dynamic system messages.
-ConversationLoop places the dynamic message after prior history and before
-the current user turn so stable prefix text remains cacheable.
+Returns two messages:
+- A combined ``system`` message (static + semi-stable) at position 0 —
+  cacheable across turns.
+- A ``user`` message tagged ``[SYSTEM CONTEXT UPDATE]`` carrying the
+  dynamic runtime context. ConversationLoop merges this into the latest
+  real user turn so the structure is one user message containing the
+  context block followed by the user's actual content.
+
+The user-role wrapper exists because some providers (MiniMax) reject
+``system`` messages anywhere except position 0. Keeping the dynamic block
+at the tail of the prompt also preserves the cacheable prefix.
 """
 
 from __future__ import annotations
@@ -16,6 +24,8 @@ from runtime.agent_scope import AgentScope
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _STATIC_PROMPT_PATH = Path(__file__).with_name("system_prompt_static.md")
+
+SYSTEM_CONTEXT_MARKER = "[SYSTEM CONTEXT UPDATE]"
 
 
 def _static_prompt() -> str:
@@ -64,10 +74,12 @@ def build_prompt_sections(
         getattr(scope, "prompt_suffix", "") if scope else "",
         extra_suffix,
     ]
+    static_block = _section("STATIC SYSTEM PROMPT", _static_prompt())
+    semi_block = _section("SEMI-STABLE TOOL/SCHEMA INFO", "\n\n".join(s for s in semi if s))
+    dynamic_block = _section(SYSTEM_CONTEXT_MARKER.strip("[]"), "\n\n".join(s for s in dynamic if s))
     return [
-        _system_message("STATIC SYSTEM PROMPT", _static_prompt()),
-        _system_message("SEMI-STABLE TOOL/SCHEMA INFO", "\n\n".join(s for s in semi if s)),
-        _system_message("DYNAMIC RUNTIME CONTEXT", "\n\n".join(s for s in dynamic if s)),
+        {"role": "system", "content": f"{static_block}\n\n{semi_block}"},
+        {"role": "user", "content": dynamic_block},
     ]
 
 
@@ -76,8 +88,9 @@ def build_system_prompt(*args, **kwargs) -> str:
     return "\n\n".join(m["content"] for m in build_prompt_sections(*args, **kwargs) if m.get("content"))
 
 
-def _system_message(title: str, content: str) -> dict[str, str]:
-    return {"role": "system", "content": f"[{title}]\n{content.strip()}"}
+def _section(title: str, content: str) -> str:
+    """Render a labeled section as a string."""
+    return f"[{title}]\n{content.strip()}"
 
 
 def _has_tool(registry, name: str) -> bool:

@@ -227,17 +227,22 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         return runtime.db.get_conversation(session.conversation_id) if runtime.db and session.conversation_id else None
 
     def _append_dynamic(prompt, *parts: str):
-        """Append session-only text to the dynamic section when present."""
+        """Append session-only text to the context-update section when present."""
+        from agent.system_prompt import SYSTEM_CONTEXT_MARKER
+
         extra = "\n\n".join(p for p in parts if p)
         if not extra:
             return prompt
         if isinstance(prompt, list):
             out = [dict(m) for m in prompt]
-            target = next((m for m in reversed(out) if (m.get("content") or "").lstrip().startswith("[DYNAMIC RUNTIME CONTEXT]")), None)
+            target = next(
+                (m for m in reversed(out)
+                 if (m.get("content") or "").lstrip().startswith(SYSTEM_CONTEXT_MARKER)),
+                None,
+            )
             if target is None:
-                target = out[-1] if out else {"role": "system", "content": "[DYNAMIC RUNTIME CONTEXT]"}
-                if not out:
-                    out.append(target)
+                target = {"role": "user", "content": SYSTEM_CONTEXT_MARKER}
+                out.append(target)
             target["content"] = (target.get("content") or "").rstrip() + "\n\n" + extra
             return out
         return (prompt or "") + "\n\n" + extra
