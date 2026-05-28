@@ -1,12 +1,7 @@
 """Unix-friendly entry point. Delegates to main.pyw which is the canonical source."""
-import importlib.util
-import pathlib
-
-
-spec = importlib.util.spec_from_file_location("_main", pathlib.Path(__file__).parent / "main.pyw")
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
+from pathlib import Path
+import runpy
 
 
 if __name__ == "__main__":
-    mod.main()
+    runpy.run_path(Path(__file__).with_name("main.pyw"), run_name="__main__")

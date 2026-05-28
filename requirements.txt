@@ -14,6 +14,7 @@ torch
 # Image processing
 Pillow
 pillow-heif
+easyocr
 
 # Document parsing
 PyMuPDF

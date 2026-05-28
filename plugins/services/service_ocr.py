@@ -213,6 +213,68 @@ class MacOCR(BaseService):
         return "\n".join(lines)
 
 
+class EasyOCR(BaseService):
+    """Linux OCR backed by EasyOCR."""
+
+    def __init__(self):
+        """Initialize the EasyOCR service."""
+        super().__init__()
+        self.model_name = "easyocr"
+        self.shared = True
+        self.reader = None
+
+    def _load(self):
+        """Load EasyOCR and prepare the reader."""
+        import torch
+        import easyocr
+
+        gpu_available = torch.cuda.is_available()
+        self.reader = easyocr.Reader(["en"], gpu=gpu_available)
+        self.loaded = True
+        logger.info(f"EasyOCR initialized (gpu={gpu_available}).")
+        return True
+
+    def unload(self):
+        """Handle unload."""
+        self.reader = None
+        self.loaded = False
+        logger.info("EasyOCR unloaded.")
+
+    def process_image(self, image_path):
+        """Run OCR on a single image file."""
+        import time as _time
+
+        if not self.loaded or self.reader is None:
+            return ""
+        if not os.path.exists(image_path):
+            return ""
+
+        temp_path = _create_optimized_temp_file(image_path)
+        if not temp_path:
+            return ""
+
+        try:
+            logger.debug(f"OCR starting: {Path(image_path).name}")
+            t0 = _time.time()
+            lines = self.reader.readtext(temp_path, detail=0, paragraph=True)
+            text = "\n".join(
+                line.strip()
+                for line in lines
+                if isinstance(line, str) and line.strip()
+            )
+            logger.debug(f"OCR completed: {Path(image_path).name} in {_time.time() - t0:.2f}s")
+            return text
+        except Exception as e:
+            logger.warning(f"OCR failed for {Path(image_path).name}: {e}")
+            return ""
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception as e:
+                    logger.debug(f"Temp cleanup failed: {e}")
+
+
 def build_services(config: dict) -> dict:
     """Build services."""
     import platform
@@ -221,5 +283,7 @@ def build_services(config: dict) -> dict:
         return {"ocr": WindowsOCR()}
     if system == "Darwin":
         return {"ocr": MacOCR()}
+    if system == "Linux":
+        return {"ocr": EasyOCR()}
     logger.info(f"OCR service skipped (no backend for platform: {system}).")
     return {}
