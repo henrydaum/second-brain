@@ -11,7 +11,7 @@ class ContourObject3DSkill(BaseSkill):
     palette = Palette()
     shape = Enum([("sphere", "Sphere"), ("torus", "Torus"), ("cylinder", "Cylinder"), ("blob", "Blob")], default="sphere")
     line_spacing = Slider(4, 24, default=11, step=1)
-    line_weight = Slider(0.5, 2.5, default=1.2, step=0.1)
+    line_weight = Slider(1, 10, default=1.2, step=1)
     yaw = Slider(-1.0, 1.0, default=0.35, step=0.05)
     pitch = Slider(-1.0, 1.0, default=0.25, step=0.05)
     view = Pan(x="yaw", y="pitch", label="View")
