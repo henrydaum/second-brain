@@ -20,7 +20,7 @@ SERVICE_CLASSES = ["OpenAILLM", "LiteLLMService", "LMStudioLLM"]
 WELCOME_PROMPT = (
     "Welcome to Second Brain.\n\n"
     "This setup will walk you through configuring an LLM, as well as the Telegram frontend.\n\n"
-    "Second Brain is sponsored by Atlas Cloud, an AI inference platform with access to 300+ models. Their coding plan is the fastest way to get Second Brain up and running — sign up here: "
+    "Second Brain is sponsored by Atlas Cloud, an AI inference platform with access to 300+ models. Their coding plan is a fast and seamless way to get Second Brain up and running — sign up here: "
     f"{ATLAS_CODING_PLAN_URL}"
 )
 
