@@ -10,31 +10,26 @@ from state_machine.conversation import FormStep
 ATLAS_BASE_URL = "https://api.atlascloud.ai/v1"
 ATLAS_PROMO_URL = "https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=second-brain"
 ATLAS_CODING_PLAN_URL = "https://www.atlascloud.ai/console/coding-plan"
-ATLAS_DEFAULT_MODEL = "minimaxai/minimax-m2.5"
+ATLAS_DEFAULT_MODEL = "minimaxai/minimax-m2.7"
 DEFAULT_ENV_VAR = "ATLAS_API_KEY"
 DEFAULT_CONTEXT_SIZE = 0
 
 WELCOME_PROMPT = (
     "Welcome to Second Brain.\n\n"
     "---\n\n"
-    "**Sponsor disclosure.** Second Brain is sponsored by Atlas Cloud, a "
-    "full-modal AI inference platform with OpenAI-compatible APIs and access "
-    "to 300+ models. They have an onboarding promotion for their coding plan: "
+    "Second Brain is sponsored by Atlas Cloud, a full-modal AI inference platform with OpenAI-compatible APIs and access to 300+ models. They have an onboarding promotion for their coding plan: "
     f"{ATLAS_CODING_PLAN_URL}\n\n"
-    "You can configure Atlas as your default LLM in a few steps, or skip and "
-    "configure any provider later with /llm."
+    "You can configure Atlas as your default LLM in a few steps, or skip and configure any provider later with /llm."
 )
 
 KEY_SOURCE_PROMPT = (
     "To use Atlas Cloud you need an API key. Sign up at "
-    f"{ATLAS_CODING_PLAN_URL} and create an API key, then choose how you want "
-    "to supply it:"
+    f"{ATLAS_CODING_PLAN_URL} and create an API key, then choose how you want to supply it:"
 )
 
 ENV_VAR_PROMPT = (
     "Enter the name of the environment variable that holds your Atlas key. "
-    "You'll need to set this variable in your shell/system before Second Brain "
-    "can call Atlas (for example on Windows: `setx ATLAS_API_KEY your-key`)."
+    "You'll need to set this variable in your shell/system before Second Brain can call Atlas (for example on Windows: `setx ATLAS_API_KEY your-key`)."
 )
 
 
