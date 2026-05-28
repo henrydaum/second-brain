@@ -487,15 +487,12 @@ def _cached_prompt_tokens(usage) -> int | None:
 
 class OpenAILLM(BaseLLM):
     """Open aillm."""
-    def __init__(self, model_name, api_key=None, base_url=None, prompt_cache_key=None, prompt_cache_retention=None):
+    def __init__(self, model_name, api_key=None, base_url=None):
         """Initialize the open aillm."""
         super().__init__()
         self.model_name = model_name
         self.api_key = api_key
         self.base_url = base_url
-        self.prompt_cache_key = prompt_cache_key
-        self.prompt_cache_retention = prompt_cache_retention
-        self.supports_prompt_cache_options = not base_url or "openai.com" in str(base_url).lower()
         self.client = None
         self.loaded = False
         # Best-effort capability inference from the model name. Users can
@@ -598,7 +595,6 @@ class OpenAILLM(BaseLLM):
                 f"tools={'yes' if has_tools else 'no'}, model={self.model_name}"
             )
             t0 = time.time()
-            kwargs = self._cache_kwargs(kwargs)
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
@@ -651,7 +647,6 @@ class OpenAILLM(BaseLLM):
             messages, native_paths = self._resolve_attachments(messages, attachments)
             messages = self._inject_images(messages, native_paths)
 
-            kwargs = self._cache_kwargs(kwargs)
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
@@ -670,15 +665,224 @@ class OpenAILLM(BaseLLM):
             kwargs["tools"] = tools
         return self.invoke(messages, **kwargs)
 
-    def _cache_kwargs(self, kwargs: dict) -> dict:
+
+# =====================================================================
+# LITELLM (Unified provider gateway)
+#
+# Thin translation layer over 100+ providers. Accepts OpenAI-format
+# messages and routes by the provider prefix in ``model_name``
+# (e.g., ``anthropic/claude-sonnet-4-6``, ``vertex_ai/gemini-2.5-flash``).
+# The OpenAI ``image_url`` content-block shape is the lingua franca —
+# LiteLLM translates per-provider downstream, so the attachment plumbing
+# from BaseLLM works unchanged.
+# =====================================================================
+
+
+_LITELLM_DETERMINISTIC_ERRORS = (
+    "RateLimitError",
+    "AuthenticationError",
+    "NotFoundError",
+    "PermissionDeniedError",
+    "BadRequestError",
+)
+
+
+class LiteLLMService(BaseLLM):
+    """Unified LLM backend via the litellm SDK."""
+
+    def __init__(self, model_name, api_key=None, base_url=None):
+        """Initialize the litellm service."""
+        super().__init__()
+        self.model_name = model_name
+        self.api_key = api_key
+        self.base_url = base_url
+        self.loaded = False
+        m = (model_name or "").lower()
+        if any(s in m for s in ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "claude-3", "claude-4", "claude-sonnet", "claude-opus", "claude-haiku", "gemini")):
+            self.capabilities["image"] = True
+        if "gpt-4o" in m or "gpt-5" in m or "audio" in m:
+            self.capabilities["audio"] = True
+
+    def _load(self):
+        """Internal helper to load litellm."""
+        try:
+            import litellm  # noqa: F401
+            self.loaded = True
+            return True
+        except Exception as e:
+            logger.error(f"LiteLLM Load Error: {e}")
+            return False
+
+    def unload(self):
+        """Handle unload."""
+        self.loaded = False
+        logger.info("LiteLLM unloaded.")
+
+    def _inject_images(self, messages: list[dict], image_paths: list[str]) -> list[dict]:
+        """Inject base64 images as OpenAI image_url blocks; litellm translates per-provider."""
+        import base64
+
+        if not image_paths:
+            return messages
+
+        image_blocks = []
+        valid_names = []
+        for path in image_paths:
+            if not os.path.exists(path):
+                logger.warning(f"Image not found, skipping: {path}")
+                continue
+            image_bytes = self.get_image_bytes(path)
+            if not image_bytes:
+                continue
+            try:
+                b64 = base64.b64encode(image_bytes).decode("utf-8")
+                image_blocks.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                })
+                valid_names.append(Path(path).name)
+            except Exception as e:
+                logger.error(f"Failed to encode image {path}: {e}")
+
+        if not image_blocks:
+            return messages
+
+        messages = [msg.copy() for msg in messages]
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i]["role"] == "user":
+                original_content = messages[i]["content"]
+                img_ref = "\n".join(f"<Image {j+1}: {n}>" for j, n in enumerate(valid_names))
+                text = f"{original_content}\n\nThe following images are provided:\n{img_ref}"
+                messages[i]["content"] = [
+                    {"type": "text", "text": text},
+                    *image_blocks,
+                ]
+                break
+
+        return messages
+
+    def _provider_kwargs(self, kwargs: dict) -> dict:
+        """Inject connection params; let caller-supplied values win."""
         kwargs = dict(kwargs)
-        if not self.supports_prompt_cache_options:
-            return kwargs
-        if self.prompt_cache_key:
-            kwargs.setdefault("prompt_cache_key", self.prompt_cache_key)
-        if self.prompt_cache_retention:
-            kwargs.setdefault("prompt_cache_retention", self.prompt_cache_retention)
+        if self.api_key:
+            kwargs.setdefault("api_key", self.api_key)
+        if self.base_url:
+            kwargs.setdefault("base_url", self.base_url)
         return kwargs
+
+    def _classify_error(self, e) -> str:
+        """Class-name checks short-circuit deterministic errors before the
+        ``is_context_limit_error`` heuristic, which otherwise matches
+        ``tokens`` + ``limit`` in rate-limit messages and triggers the
+        compact-and-retry path."""
+        if type(e).__name__ in _LITELLM_DETERMINISTIC_ERRORS:
+            return "provider_error"
+        if is_context_limit_error(e):
+            return "context_limit"
+        return "provider_error"
+
+    def invoke(self, messages, attachments=None, **kwargs):
+        """Handle invoke."""
+        if not self.loaded:
+            logger.error("LiteLLM not loaded. Call load() first.")
+            return LLMResponse(
+                content="Error: model not loaded",
+                error="model not loaded",
+                error_code="not_loaded",
+            )
+        try:
+            import litellm
+
+            messages, native_paths = self._resolve_attachments(messages, attachments)
+            messages = self._inject_images(messages, native_paths)
+
+            has_tools = "tools" in kwargs and kwargs["tools"]
+            logger.debug(
+                f"LiteLLM invoke: {len(messages)} messages, "
+                f"tools={'yes' if has_tools else 'no'}, model={self.model_name}"
+            )
+            kwargs = self._provider_kwargs(kwargs)
+            t0 = time.time()
+            response = litellm.completion(
+                model=self.model_name,
+                messages=messages,
+                **kwargs,
+            )
+            logger.debug(f"LiteLLM responded in {time.time() - t0:.2f}s")
+
+            choice = response.choices[0]
+            usage = getattr(response, "usage", None)
+            prompt_tok = getattr(usage, "prompt_tokens", None) if usage else None
+            cached_tok = _cached_prompt_tokens(usage)
+            self.last_prompt_tokens, self.last_cached_prompt_tokens = prompt_tok, cached_tok
+            if cached_tok:
+                logger.debug(f"LiteLLM prompt cache hit: {cached_tok}/{prompt_tok} prompt tokens")
+
+            tool_calls = getattr(choice.message, "tool_calls", None) or []
+            if tool_calls:
+                return LLMResponse(
+                    content=choice.message.content or "",
+                    tool_calls=[
+                        {
+                            "id": tc.id,
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        }
+                        for tc in tool_calls
+                    ],
+                    prompt_tokens=prompt_tok,
+                    cached_prompt_tokens=cached_tok,
+                )
+
+            return LLMResponse(
+                content=choice.message.content or "",
+                prompt_tokens=prompt_tok,
+                cached_prompt_tokens=cached_tok,
+            )
+
+        except Exception as e:
+            message = extract_llm_error_text(e)
+            logger.error(f"LiteLLM Invoke Error: {message}")
+            code = self._classify_error(e)
+            if code == "context_limit":
+                raise LLMProviderError(message, code="context_limit") from e
+            return LLMResponse(
+                content=f"Error: {message}",
+                error=message,
+                error_code=code,
+            )
+
+    def stream(self, messages, attachments=None, **kwargs):
+        """Handle stream."""
+        if not self.loaded:
+            logger.error("LiteLLM not loaded. Call load() first.")
+            return
+        try:
+            import litellm
+
+            messages, native_paths = self._resolve_attachments(messages, attachments)
+            messages = self._inject_images(messages, native_paths)
+            kwargs = self._provider_kwargs(kwargs)
+
+            response = litellm.completion(
+                model=self.model_name,
+                messages=messages,
+                stream=True,
+                **kwargs,
+            )
+            for chunk in response:
+                delta = chunk.choices[0].delta
+                content = getattr(delta, "content", None) if delta else None
+                if content:
+                    yield content
+        except Exception as e:
+            logger.error(f"LiteLLM Stream Error: {e}")
+
+    def chat_with_tools(self, messages, tools=None, **kwargs):
+        """Convenience alias — invoke() already handles tools via kwargs."""
+        if tools:
+            kwargs["tools"] = tools
+        return self.invoke(messages, **kwargs)
 
 
 def _build_llm_from_profile(model_name: str, profile: dict) -> BaseLLM:
@@ -695,7 +899,12 @@ def _build_llm_from_profile(model_name: str, profile: dict) -> BaseLLM:
     api_key = profile.get("llm_api_key", "")
     resolved_key = os.environ.get(api_key, api_key) if api_key else None
     base_url = profile.get("llm_endpoint", "") or None
-    llm = OpenAILLM(model_name, api_key=resolved_key, base_url=base_url, prompt_cache_key=profile.get("prompt_cache_key") or None, prompt_cache_retention=profile.get("prompt_cache_retention") or None)
+
+    if cls_name == "LiteLLMService":
+        llm = LiteLLMService(model_name, api_key=resolved_key, base_url=base_url)
+    else:
+        llm = OpenAILLM(model_name, api_key=resolved_key, base_url=base_url)
+
     ctx = int(profile.get("llm_context_size", 0))
     if ctx > 0:
         llm.context_size = ctx

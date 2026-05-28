@@ -92,8 +92,6 @@ class SetupCommand(BaseCommand):
             "llm_api_key": api_key_field,
             "llm_context_size": DEFAULT_CONTEXT_SIZE,
             "llm_service_class": "OpenAILLM",
-            "prompt_cache_key": "",
-            "prompt_cache_retention": "",
         }
         profiles = context.config.setdefault("llm_profiles", {})
         profiles[model_name] = profile

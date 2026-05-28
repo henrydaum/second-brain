@@ -1,6 +1,7 @@
 # LLM / AI services
 openai
 lmstudio
+litellm
 
 # Embeddings
 sentence-transformers
