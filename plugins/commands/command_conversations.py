@@ -94,6 +94,8 @@ class NewCommand(BaseCommand):
         session_key = getattr(context, "session_key", None)
         if runtime is None or db is None or not session_key:
             return "Conversations are not available in this context."
+        if not ((getattr(context, "config", {}) or {}).get("llm_profiles") or {}):
+            return "No LLM is configured yet. Run /setup to add one before starting a conversation."
         return _create_and_switch(runtime, session_key)
 
 

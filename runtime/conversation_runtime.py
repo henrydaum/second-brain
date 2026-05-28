@@ -161,6 +161,10 @@ class ConversationRuntime:
         if (user_driven and self.db is not None
                 and action_type in {"send_text", "send_attachment"}
                 and session.conversation_id is None):
+            if not (self.config.get("llm_profiles") or {}):
+                return RuntimeResult(False, messages=[
+                    "Welcome to Second Brain. Run /setup to configure an LLM and the Telegram frontend."
+                ])
             return RuntimeResult(False, messages=["No conversation loaded.\nTry /new."])
 
         with session.lock:
