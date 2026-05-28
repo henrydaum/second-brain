@@ -26,11 +26,12 @@ class GeometricAvoidanceSkill(BaseSkill):
         seed = canvas.seed
         rng = random.Random(seed)
 
-        img = Image.new("RGBA", (s, s), canvas.palette.background)
+        aa = 2
+        img = Image.new("RGBA", (s * aa, s * aa), canvas.palette.background)
         draw = ImageDraw.Draw(img, "RGBA")
 
         occ = np.zeros((s, s), dtype=bool)
-        step = int(self.step_size)
+        step = float(self.step_size) * 1.4
         n = int(self.particles)
         noise_n = int(n * float(self.noise_fraction))
 
@@ -56,19 +57,17 @@ class GeometricAvoidanceSkill(BaseSkill):
                 if not p["alive"]:
                     continue
                 any_alive = True
-                if p["noisy"]:
-                    target_ang = field(p["x"], p["y"])
-                    # Lerp toward the field direction so noise bends but doesn't dominate.
-                    d = math.atan2(math.sin(target_ang - p["ang"]), math.cos(target_ang - p["ang"]))
-                    p["ang"] += 0.18 * d
+                target_ang = field(p["x"], p["y"]) if p["noisy"] else p["ang"] + math.sin((p["x"] + p["y"]) * 0.01 + seed) * 0.04
+                d = math.atan2(math.sin(target_ang - p["ang"]), math.cos(target_ang - p["ang"]))
+                p["ang"] += (0.11 if p["noisy"] else 0.035) * d
                 nx = p["x"] + math.cos(p["ang"]) * step
                 ny = p["y"] + math.sin(p["ang"]) * step
                 ix, iy = int(nx), int(ny)
                 if not (0 <= ix < s and 0 <= iy < s) or occ[iy, ix]:
-                    # Try a few new headings before giving up.
+                    # Bend away smoothly before giving up.
                     rerouted = False
                     for _try in range(8):
-                        new_ang = rng.uniform(0, math.tau)
+                        new_ang = p["ang"] + rng.choice((-1, 1)) * rng.uniform(0.28, 0.9)
                         tx = p["x"] + math.cos(new_ang) * step
                         ty = p["y"] + math.sin(new_ang) * step
                         ix2, iy2 = int(tx), int(ty)
@@ -81,7 +80,7 @@ class GeometricAvoidanceSkill(BaseSkill):
                         continue
                     nx = p["x"] + math.cos(p["ang"]) * step
                     ny = p["y"] + math.sin(p["ang"]) * step
-                draw.line((p["x"], p["y"], nx, ny), fill=p["color"], width=1)
+                draw.line((p["x"] * aa, p["y"] * aa, nx * aa, ny * aa), fill=p["color"], width=aa + 1)
                 # Mark occupancy along the segment (cheap: just endpoints).
                 ix, iy = int(nx), int(ny)
                 if 0 <= ix < s and 0 <= iy < s:
@@ -90,4 +89,4 @@ class GeometricAvoidanceSkill(BaseSkill):
             if not any_alive:
                 break
 
-        canvas.commit(img)
+        canvas.commit(img.resize((s, s), Image.Resampling.LANCZOS))

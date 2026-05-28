@@ -1,7 +1,7 @@
 from plugins.BaseSkill import BaseSkill, Slider, Enum
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 try:
     art_kit
@@ -38,6 +38,7 @@ class AsciiConverterSkill(BaseSkill):
 
         bg_hex = {"black": "#0a0a0a", "white": "#fafafa", "palette_bg": canvas.palette.background}[str(self.bg)]
         img = Image.new("RGBA", (s, s), bg_hex)
+        draw = ImageDraw.Draw(img, "RGBA")
 
         cols = s // cell
         rows = s // cell
@@ -48,12 +49,16 @@ class AsciiConverterSkill(BaseSkill):
                 x0 = c * cell
                 x1 = x0 + cell
                 L = float(lum[y0:y1, x0:x1].mean())
+                dither = (((c * 37 + r * 17 + canvas.seed) % 23) / 22.0 - 0.5) / max(2, nramp)
+                L = float(np.clip((L - 0.5) * 1.35 + 0.5 + dither, 0.0, 1.0))
                 gi = int(L * (nramp - 1))
+                if str(self.ramp) == "binary":
+                    gi = 1 if L > 0.48 else 0
                 # Higher luminance -> denser glyph for "classic" reads light-on-dark.
                 if str(self.bg) == "white":
                     gi = (nramp - 1) - gi
                 glyph = ramp[gi]
-                if glyph == " ":
+                if glyph == " " and str(self.ramp) != "blocks":
                     continue
                 cx = x0 + cell / 2
                 cy = y0 + cell / 2
@@ -64,6 +69,13 @@ class AsciiConverterSkill(BaseSkill):
                     color = art_kit.palette_color(1.0 - L)
                 else:
                     color = "#fafafa" if str(self.bg) != "white" else "#0a0a0a"
+                if str(self.ramp) == "blocks":
+                    shade = gi / max(1, nramp - 1)
+                    if shade <= 0:
+                        continue
+                    pad = cell * (1.0 - shade) * 0.42
+                    draw.rectangle((x0 + pad, y0 + pad, x1 - pad, y1 - pad), fill=color)
+                    continue
                 art_kit.text(
                     img, (cx, cy), glyph,
                     size=cell, weight="bold", color=color, anchor="mm",

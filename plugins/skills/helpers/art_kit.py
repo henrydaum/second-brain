@@ -87,7 +87,8 @@ def with_alpha(color, alpha):
         rgb = hex_to_rgb(color)
     else:
         rgb = tuple(color[:3])
-    return (*rgb, int(clamp(alpha, 0, 255)))
+    a = float(alpha)
+    return (*rgb, int(clamp(a * 255 if a <= 1 else a, 0, 255)))
 
 
 def _luminance(rgb):

@@ -35,58 +35,42 @@ class PenroseTriangleSkill(BaseSkill):
 
     def _render_2d(self, canvas, img, cx, cy, R):
         draw = ImageDraw.Draw(img, "RGBA")
-        t = 0.22  # beam thickness as fraction of R
-        verts = []
-        for i in range(3):
-            a = math.radians(90 + i * 120)
-            verts.append((cx + R * math.cos(a), cy - R * math.sin(a)))
-
-        def sub(p, q): return (p[0] - q[0], p[1] - q[1])
-        def add(p, q): return (p[0] + q[0], p[1] + q[1])
-        def mul(p, s): return (p[0] * s, p[1] * s)
-        def norm(p):
-            d = math.hypot(p[0], p[1]) or 1.0
-            return (p[0] / d, p[1] / d)
-        def dot(p, q): return p[0] * q[0] + p[1] * q[1]
-
-        bars = []
-        for i in range(3):
-            A = verts[i]
-            B = verts[(i + 1) % 3]
-            C = verts[(i + 2) % 3]
-            eAB = norm(sub(B, A))
-            nAB = (-eAB[1], eAB[0])
-            if dot(nAB, sub(C, A)) < 0:
-                nAB = (-nAB[0], -nAB[1])
-            Ai = add(A, mul(nAB, t * R))
-            Bi = add(B, mul(nAB, t * R))
-            eBC = norm(sub(C, B))
-            B_ext_outer = add(B, mul(eBC, t * R))
-            B_ext_inner = add(B_ext_outer, mul(nAB, t * R))
-            poly = [A, B, B_ext_outer, B_ext_inner, Bi, Ai]
-            bars.append(poly)
-
+        w = max(10, int(R * 0.18))
+        A = (cx, cy - R)
+        B = (cx + R * 0.87, cy + R * 0.50)
+        C = (cx - R * 0.87, cy + R * 0.50)
         colors = [canvas.palette.primary, canvas.palette.secondary, canvas.palette.tertiary]
         outline = canvas.palette.background
-        # Draw order chosen so each bar's extension covers the next one's corner,
-        # producing the classic impossible-figure overlap.
-        order = [2, 0, 1]
-        for k in order:
-            draw.polygon(bars[k], fill=colors[k], outline=outline)
+
+        def beam(p, q, color, a=0.0, b=1.0):
+            x0, y0 = p[0] + (q[0] - p[0]) * a, p[1] + (q[1] - p[1]) * a
+            x1, y1 = p[0] + (q[0] - p[0]) * b, p[1] + (q[1] - p[1]) * b
+            dx, dy = x1 - x0, y1 - y0
+            d = math.hypot(dx, dy) or 1.0
+            nx, ny = -dy / d * w * 0.5, dx / d * w * 0.5
+            poly = [(x0 + nx, y0 + ny), (x1 + nx, y1 + ny), (x1 - nx, y1 - ny), (x0 - nx, y0 - ny)]
+            draw.polygon(poly, fill=outline)
+            poly = [(x0 + nx * 0.92, y0 + ny * 0.92), (x1 + nx * 0.92, y1 + ny * 0.92), (x1 - nx * 0.92, y1 - ny * 0.92), (x0 - nx * 0.92, y0 - ny * 0.92)]
+            draw.polygon(poly, fill=color)
+
+        beam(C, A, colors[2])
+        beam(B, C, colors[1])
+        beam(A, B, colors[0])
+        beam(C, A, colors[2], 0.76, 1.0)
 
     def _render_3d(self, canvas, img, cx, cy, R):
         # Three cube-beam arms meeting near origin, rendered from the classic
         # 30-degree iso angle. Not topologically impossible (3D can't be), but
         # reads as a shaded tribar.
-        arm = float(self.size) * 1.6
-        thick = arm * 0.22
+        arm = 2.25
+        thick = arm * 0.18
         meshes = []
         # Three arms along x, y, z axes, each ending near the origin.
         # Each arm: a long cuboid built as one cube_mesh scaled by axis ratio.
         # cube_mesh only supports uniform size; emulate cuboids via stacked cubes.
         steps = 7
-        for axis, slot in enumerate(["primary", "secondary", "tertiary"]):
-            color = getattr(canvas.palette, slot)
+        colors = [canvas.palette.primary, canvas.palette.secondary, canvas.palette.tertiary]
+        for axis, color in enumerate(colors):
             for i in range(steps):
                 t = (i + 0.5) / steps
                 offset = -arm * 0.5 + arm * t

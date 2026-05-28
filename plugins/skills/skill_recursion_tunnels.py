@@ -33,10 +33,8 @@ class RecursionTunnelsSkill(BaseSkill):
         arr = canvas.image_array(mode="RGB", dtype="uint8")
 
         # Build palette RGB table.
-        slot_rgbs = []
-        for slot in _SLOT_NAMES:
-            hex_color = getattr(canvas.palette, slot)
-            slot_rgbs.append(art_kit.hex_to_rgb(hex_color))
+        slot_hex = [canvas.palette.background, canvas.palette.tertiary, canvas.palette.secondary, canvas.palette.primary, canvas.palette.accent]
+        slot_rgbs = [art_kit.hex_to_rgb(hex_color) for hex_color in slot_hex]
         pal = np.array(slot_rgbs, dtype=np.float32)
 
         # Quantize each pixel to the nearest palette slot.
@@ -78,7 +76,7 @@ class RecursionTunnelsSkill(BaseSkill):
             tunnel_img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
             tdraw = ImageDraw.Draw(tunnel_img, "RGBA")
 
-            base_hex = getattr(canvas.palette, slot)
+            base_hex = slot_hex[slot_idx]
             bg_hex = canvas.palette.background
             for i in range(depth):
                 t = i / max(1, depth - 1)
@@ -90,7 +88,9 @@ class RecursionTunnelsSkill(BaseSkill):
                 pts = art_kit.regular_polygon(cx, cy, r, sides, rotation=rot)
                 tdraw.polygon(pts, fill=color, outline=art_kit.with_alpha(bg_hex, 0.5))
 
-            # Composite tunnel only inside the slot mask.
-            out.paste(tunnel_img, (0, 0), mask_img)
+            # Composite tunnel strokes only inside the selected slot mask.
+            clipped = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+            clipped.paste(tunnel_img, (0, 0), mask_img)
+            out.alpha_composite(clipped)
 
         canvas.commit(out)

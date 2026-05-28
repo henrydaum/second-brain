@@ -33,32 +33,33 @@ class FidenzaRibbonsSkill(BaseSkill):
         img = Image.new("RGBA", (s, s), bg)
         draw = ImageDraw.Draw(img, "RGBA")
 
-        # Occupancy grid for cheap collision avoidance.
-        cell = max(4, int(self.band_width))
+        # Occupancy grid for cheap collision avoidance between ribbons.
+        cell = max(4, int(float(self.band_width) * 0.8))
         gw = s // cell + 2
-        occupied = [[False] * gw for _ in range(gw)]
+        occupied = [[-1] * gw for _ in range(gw)]
 
-        scale = 0.0025 * float(self.curl)
+        scale = 0.0015 * float(self.curl)
         field = art_kit.flow_field(seed, scale=scale, octaves=4)
 
         n = int(self.band_count)
-        step_len = max(2.0, float(self.band_width) * 0.55)
-        max_steps = 400
-        width = float(self.band_width)
+        base_width = float(self.band_width)
+        step_len = max(2.0, base_width * 0.45)
+        max_steps = int(s / step_len * 2.6)
 
         for i in range(n):
             x = rng.uniform(-s * 0.05, s * 1.05)
             y = rng.uniform(-s * 0.05, s * 1.05)
             t_ramp = rng.random()
             base_color = art_kit.palette_color(0.15 + 0.8 * t_ramp)
-            block_len = rng.uniform(width * 0.6, width * 1.8)
+            width = base_width * rng.uniform(0.55, 1.85)
+            block_len = rng.uniform(width * 3.0, width * 8.0)
             traveled = 0.0
             for step in range(max_steps):
                 if not (-s * 0.1 <= x <= s * 1.1 and -s * 0.1 <= y <= s * 1.1):
                     break
                 gx = int(x / cell) + 1
                 gy = int(y / cell) + 1
-                if 0 <= gx < gw and 0 <= gy < gw and occupied[gy][gx]:
+                if 0 <= gx < gw and 0 <= gy < gw and occupied[gy][gx] not in (-1, i):
                     break
                 ang = field(x, y)
                 nx = x + math.cos(ang) * step_len
@@ -77,17 +78,15 @@ class FidenzaRibbonsSkill(BaseSkill):
                 traveled += step_len
                 if traveled >= block_len:
                     traveled = 0.0
-                    block_len = rng.uniform(width * 0.6, width * 1.8)
-                    # Skip a couple steps to create the gap.
-                    for _ in range(2):
-                        ang = field(nx, ny)
-                        nx = nx + math.cos(ang) * step_len
-                        ny = ny + math.sin(ang) * step_len
+                    block_len = rng.uniform(width * 3.0, width * 8.0)
+                    ang = field(nx, ny)
+                    nx = nx + math.cos(ang) * step_len * 0.35
+                    ny = ny + math.sin(ang) * step_len * 0.35
                     # Occasional color swap.
                     if rng.random() < 0.15:
                         base_color = art_kit.palette_color(rng.random())
                 if 0 <= gx < gw and 0 <= gy < gw:
-                    occupied[gy][gx] = True
+                    occupied[gy][gx] = i
                 x, y = nx, ny
 
         canvas.commit(img)
