@@ -20,7 +20,7 @@ SERVICE_CLASSES = ["OpenAILLM", "LiteLLMService", "LMStudioLLM"]
 WELCOME_PROMPT = (
     "Welcome to Second Brain.\n\n"
     "This setup will walk you through configuring an LLM, as well as the Telegram frontend.\n\n"
-    "Second Brain is sponsored by Atlas Cloud, an AI inference platform with access to 300+ models. Their coding plan provides a seamless way to get started with Second Brain: "
+    "Second Brain is sponsored by Atlas Cloud, an AI inference platform with access to 300+ models. Their coding plan is the fastest way to get Second Brain up and running — sign up here: "
     f"{ATLAS_CODING_PLAN_URL}"
 )
 
@@ -245,14 +245,14 @@ class SetupCommand(BaseCommand):
             "Files & data:\n"
             f"  DATA_DIR: {DATA_DIR}\n"
             "  Holds your config (config.json, plugin_config.json), the SQLite database, the attachment cache, and any sandbox plugins the agent writes for itself.\n"
-            "  Run /locations to browse it from inside the app."
+            "  Run /locations to see existing plugins, and /config to view and edit your config files."
         )
 
     def _hint_section(self):
         """Closing hint about how to continue."""
         return (
             "You're ready. Run /new to start a conversation, then just ask the LLM anything — "
-            "how Second Brain works, what tools are available, how to set up a task. It's reliable for the basics."
+            "how Second Brain works, what tools are available, how to set up a task, and more!"
         )
 
 
