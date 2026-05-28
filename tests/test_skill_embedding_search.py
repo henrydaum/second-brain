@@ -9,8 +9,9 @@ from types import SimpleNamespace
 import numpy as np
 
 from pipeline.database import Database
-from plugins.tasks import task_embed_skills
+from plugins.skills.helpers import skill_meta
 from plugins.tasks.task_embed_skills import EmbedSkills
+from plugins.tasks.task_index_skills import IndexSkills
 from plugins.tools.tool_search_skills import SearchSkills
 
 
@@ -58,7 +59,7 @@ def test_embed_skills_writes_skill_embedding(monkeypatch):
     root = Path(".skill_embed_dir_task")
     db, dbpath = _fresh_db("task")
     try:
-        monkeypatch.setattr(task_embed_skills, "SKILL_DIRS", (root.resolve(),))
+        monkeypatch.setattr(skill_meta, "SKILL_DIRS", (root.resolve(),))
         path = _skill_file(root)
         result = EmbedSkills().run([str(path)], SimpleNamespace(services={"text_embedder": FakeEmbedder()}))[0]
         assert result.success and len(result.data) == 1
@@ -75,7 +76,7 @@ def test_embed_skills_skips_non_skill_python(monkeypatch):
     root.mkdir(exist_ok=True)
     db, dbpath = _fresh_db("skip")
     try:
-        monkeypatch.setattr(task_embed_skills, "SKILL_DIRS", (root.resolve(),))
+        monkeypatch.setattr(skill_meta, "SKILL_DIRS", (root.resolve(),))
         path = root / "helper.py"
         path.write_text("print('x')", encoding="utf-8")
         result = EmbedSkills().run([str(path)], SimpleNamespace(services={"text_embedder": FakeEmbedder()}))[0]
@@ -91,7 +92,7 @@ def test_embed_skills_skips_prefixed_helper_file(monkeypatch):
     helper.mkdir(parents=True, exist_ok=True)
     db, dbpath = _fresh_db("helper")
     try:
-        monkeypatch.setattr(task_embed_skills, "SKILL_DIRS", (root.resolve(),))
+        monkeypatch.setattr(skill_meta, "SKILL_DIRS", (root.resolve(),))
         path = helper / "skill_store.py"
         path.write_text("def slugify(name):\n    return name\n", encoding="utf-8")
         result = EmbedSkills().run([str(path)], SimpleNamespace(services={"text_embedder": FakeEmbedder()}))[0]
@@ -106,7 +107,7 @@ def test_embed_skills_skips_prefixed_non_skill_in_skill_dir(monkeypatch):
     root.mkdir(exist_ok=True)
     db, dbpath = _fresh_db("bad")
     try:
-        monkeypatch.setattr(task_embed_skills, "SKILL_DIRS", (root.resolve(),))
+        monkeypatch.setattr(skill_meta, "SKILL_DIRS", (root.resolve(),))
         path = root / "skill_bad.py"
         path.write_text("class Bad: pass", encoding="utf-8")
         result = EmbedSkills().run([str(path)], SimpleNamespace(services={"text_embedder": FakeEmbedder()}))[0]
@@ -177,7 +178,7 @@ def test_search_skills_can_filter_to_built_ins():
 def test_search_skills_exposes_popularity_config():
     keys = {s[1]: s for s in SearchSkills.config_settings}
     assert keys["weigh_popularity"][3] is True
-    assert keys["popularity_alpha"][3] == 0.25
+    assert keys["popularity_alpha"][3] == 0.1
 
 
 def test_search_skills_popularity_breaks_equal_cosine():
@@ -233,7 +234,7 @@ def test_search_skills_returns_all_popularity_fields():
         assert {k: skill[k] for k in ("shares", "downloads", "remixes", "saves", "link_opens")} == {
             "shares": 1.0, "downloads": 2.0, "remixes": 3.0, "saves": 4.0, "link_opens": 5.0,
         }
-        assert set(("score", "cosine_score", "popularity_score")) <= set(skill)
+        assert set(("score", "embedding_rank", "bm25_rank")) <= set(skill)
     finally:
         _cleanup(db, path)
 
@@ -244,6 +245,64 @@ def test_skill_embedding_cleanup_uses_path_key():
         db.write_outputs("skill_embeddings", [_row("gone.py", "gone", "Gone", "Gone desc", [1, 0])])
         db.clean_output_tables("gone.py", ["skill_embeddings"])
         assert db.conn.execute("SELECT COUNT(*) AS n FROM skill_embeddings").fetchone()["n"] == 0
+    finally:
+        _cleanup(db, path)
+
+
+def test_index_skills_writes_fts_row(monkeypatch):
+    root = Path(".skill_index_dir")
+    db, dbpath = _fresh_db("index")
+    try:
+        monkeypatch.setattr(skill_meta, "SKILL_DIRS", (root.resolve(),))
+        db.ensure_output_table("index_skills", IndexSkills.output_schema)
+        path = _skill_file(root)
+        result = IndexSkills().run([str(path)], SimpleNamespace(db=db))[0]
+        assert result.success
+        rows = db.conn.execute("SELECT slug, name, kind FROM skill_fts WHERE path = ?", (str(path),)).fetchall()
+        assert len(rows) == 1 and dict(rows[0]) == {"slug": "ocean_wave", "name": "Ocean Wave", "kind": "background"}
+        # Re-indexing the same path must not duplicate the row.
+        IndexSkills().run([str(path)], SimpleNamespace(db=db))
+        n = db.conn.execute("SELECT COUNT(*) AS n FROM skill_fts WHERE path = ?", (str(path),)).fetchone()["n"]
+        assert n == 1
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+        _cleanup(db, dbpath)
+
+
+def test_search_bm25_lifts_exact_name_match_over_popular_neighbor():
+    """The original bug: a low-engagement skill with an exact-name query is
+    pushed out of the top results by popular neighbors. With FTS5/BM25 fused
+    in via RRF, the named skill resurfaces."""
+    db, path = _fresh_db("hybrid")
+    try:
+        db.ensure_output_table("index_skills", IndexSkills.output_schema)
+        # All three skills get the same query-side cosine (the fake embedder
+        # is binary), so without BM25 the popularity boost on `popular_a`
+        # would win even for a query that exactly names `target`.
+        db.write_outputs("skill_embeddings", [
+            _row("a.py", "popular_a", "Popular A", "Water and waves.", [1, 0]),
+            _row("b.py", "popular_b", "Popular B", "Water and waves.", [1, 0]),
+            _row("c.py", "target", "Chromatic Aberration", "Splits color channels.", [0, 1]),
+        ])
+        _score(db, "popular_a", shares=50)
+        _score(db, "popular_b", saves=40)
+        db.conn.execute(
+            "INSERT INTO skill_fts (slug, name, description, kind, path, hidden) VALUES (?, ?, ?, ?, ?, 0)",
+            ("popular_a", "Popular A", "Water and waves.", "background", "a.py"),
+        )
+        db.conn.execute(
+            "INSERT INTO skill_fts (slug, name, description, kind, path, hidden) VALUES (?, ?, ?, ?, ?, 0)",
+            ("popular_b", "Popular B", "Water and waves.", "background", "b.py"),
+        )
+        db.conn.execute(
+            "INSERT INTO skill_fts (slug, name, description, kind, path, hidden) VALUES (?, ?, ?, ?, ?, 0)",
+            ("target", "Chromatic Aberration", "Splits color channels.", "filter", "c.py"),
+        )
+        db.conn.commit()
+        result = SearchSkills().run(_ctx(db, {"weigh_popularity": True, "popularity_alpha": 0.25}),
+                                     query="chromatic aberration", limit=3)
+        assert result.success
+        assert result.data["skills"][0]["slug"] == "target"
     finally:
         _cleanup(db, path)
 
