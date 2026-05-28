@@ -1,8 +1,8 @@
 """
 OCR task.
 
-Scans image files for text using Windows OCR (or whatever OCR service
-is registered). Stores extracted text in the ocr_text table.
+Scans image files for text using the registered OCR service. Stores
+extracted text in the ocr_text table.
 
 Requires the "ocr" service to be loaded. In manual mode, this task
 sits in the queue until the user loads the OCR engine. In auto mode,
