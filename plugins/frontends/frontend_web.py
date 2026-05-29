@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import hashlib
 import html as _html
+import io
 import random
 import re
 import secrets
@@ -14,7 +15,7 @@ import socket
 import time
 import threading
 import uuid
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -1646,7 +1647,11 @@ class _Handler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             sid = str(qs.get("session_id", [self._cookie_sid()])[0])[:80]
             owner = self.server.frontend._owner_id(sid, self.client_address[0], self._cookie_uid())
-            return self._local_file(qs.get("path", [""])[0], sid, owner)
+            try:
+                width = int(qs.get("w", ["0"])[0])
+            except ValueError:
+                width = 0
+            return self._local_file(qs.get("path", [""])[0], sid, owner, width)
         if path == "/auth/verify":
             qs = parse_qs(parsed.query)
             token = str(qs.get("token", [""])[0])
@@ -1922,10 +1927,20 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _local_file(self, raw_path: str, session_id: str = "", owner_id: str = ""):
+    def _local_file(self, raw_path: str, session_id: str = "", owner_id: str = "", width: int = 0):
         path = Path(unquote(raw_path))
         if not _is_user_accessible_image(path, self.server.frontend.session_key(session_id) if session_id else "", owner_id):
             return self.send_error(404)
+        if width > 0:
+            thumb = _thumbnail(path, width)
+            if thumb is not None:
+                raw, content_type = thumb
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
         raw = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", mimetypes.guess_type(str(path))[0] or "image/png")
@@ -1969,6 +1984,55 @@ def _is_user_accessible_image(path: Path, session_key: str = "", owner_id: str =
     signature compatibility with existing call sites."""
     del session_key, owner_id
     return _is_public_image(path)
+
+
+# Allowed thumbnail widths. Clamping to a small set bounds the cache and
+# stops a caller from minting arbitrarily many distinct resize jobs.
+THUMB_WIDTHS = (256, 512)
+# In-memory LRU of encoded thumbnails — keeps disk untouched (renders stay
+# singleton-per-folder). 64 entries of ~512px WebP is well under a few MB.
+_THUMB_CACHE: "OrderedDict[tuple[str, int, int], bytes]" = OrderedDict()
+_THUMB_CACHE_MAX = 256
+_THUMB_CACHE_LOCK = threading.Lock()
+
+
+def _thumbnail(path: Path, width: int) -> tuple[bytes, str] | None:
+    """Return (bytes, content_type) for a width-constrained WebP thumbnail of
+    `path`, or None if the source is already small enough or resizing fails
+    (the caller then falls back to serving the original). Encoded thumbnails
+    are held in a small in-memory LRU keyed by (path, mtime, width); nothing
+    is written to disk."""
+    width = min((w for w in THUMB_WIDTHS if w >= width), default=THUMB_WIDTHS[-1])
+    try:
+        mtime = int(path.stat().st_mtime)
+        key = (str(path.resolve()), mtime, width)
+        with _THUMB_CACHE_LOCK:
+            hit = _THUMB_CACHE.get(key)
+            if hit is not None:
+                _THUMB_CACHE.move_to_end(key)
+                return hit, "image/webp"
+
+        from PIL import Image
+
+        with Image.open(path) as im:
+            if im.width <= width:
+                return None
+            im = im.convert("RGB")
+            ratio = width / im.width
+            im = im.resize((width, max(1, round(im.height * ratio))), Image.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, "WEBP", quality=80, method=4)
+        raw = buf.getvalue()
+
+        with _THUMB_CACHE_LOCK:
+            _THUMB_CACHE[key] = raw
+            _THUMB_CACHE.move_to_end(key)
+            while len(_THUMB_CACHE) > _THUMB_CACHE_MAX:
+                _THUMB_CACHE.popitem(last=False)
+        return raw, "image/webp"
+    except Exception:
+        logger.debug("thumbnail failed for %s @ %d", path, width, exc_info=True)
+        return None
 
 
 def _file_url(path: Path) -> str:
