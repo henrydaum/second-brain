@@ -77,8 +77,12 @@ MAX_WEBHOOK_BYTES = 1024 * 1024
 SSE_HEARTBEAT_S = 15
 
 # Concurrency caps. Defaults are conservative; tune via config.
+# Per-IP must comfortably exceed a single browser's slot usage: ~6 keep-alive
+# connections per host + the persistent SSE stream, transiently doubled while
+# old connections drain and new ones open during a gallery image burst. 10 was
+# too low and caused 503s (broken thumbnails) under that burst.
 DEFAULT_MAX_GLOBAL_CONNECTIONS = 64
-DEFAULT_MAX_IP_CONNECTIONS = 10
+DEFAULT_MAX_IP_CONNECTIONS = 32
 
 # Socket timeout. Long enough for slow agent turns (skill subprocess + LLM
 # round-trips can take a minute or more); short enough that slowloris-style
@@ -1931,20 +1935,38 @@ class _Handler(BaseHTTPRequestHandler):
         path = Path(unquote(raw_path))
         if not _is_user_accessible_image(path, self.server.frontend.session_key(session_id) if session_id else "", owner_id):
             return self.send_error(404)
+        try:
+            mtime = int(path.stat().st_mtime)
+        except OSError:
+            return self.send_error(404)
         if width > 0:
             thumb = _thumbnail(path, width)
             if thumb is not None:
                 raw, content_type = thumb
-                self.send_response(200)
-                self.send_header("Content-Type", content_type)
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
-                return
+                return self._send_cached_image(raw, content_type, mtime, width)
         raw = path.read_bytes()
+        content_type = mimetypes.guess_type(str(path))[0] or "image/png"
+        self._send_cached_image(raw, content_type, mtime, 0)
+
+    def _send_cached_image(self, raw: bytes, content_type: str, mtime: int, width: int):
+        """Serve an immutable render with long-lived caching. Renders are
+        content-addressed (a given URL's bytes never change — the URL carries
+        a mtime cache-buster), so the browser may keep them forever and skip
+        the request entirely on revisit. The ETag lets a conditional request
+        short-circuit to 304 when a cache-buster is absent or the browser
+        revalidates anyway."""
+        etag = f'"{mtime:x}-{width}-{len(raw)}"'
+        if (self.headers.get("If-None-Match") or "").strip() == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            self.end_headers()
+            return
         self.send_response(200)
-        self.send_header("Content-Type", mimetypes.guess_type(str(path))[0] or "image/png")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(raw)))
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
         self.end_headers()
         self.wfile.write(raw)
 
