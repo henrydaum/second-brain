@@ -1064,6 +1064,11 @@ form.addEventListener("submit", async e => {
 document.querySelector("#newChat").addEventListener("click", async () => {
   messages.innerHTML = `<div class="ephemeral-note" id="tipNote"><strong>Tip</strong><span id="tipText"></span></div>`;
   pickTip();
+  // Rebuild the empty-state tutorial so its first card re-rolls a fresh set
+  // of prompt suggestions each time the visitor starts over.
+  if (window.SBTutorial && emptyState) {
+    window.SBTutorial.build(emptyState, { onTryIt: tutorialTryIt, onSearchDemo: tutorialSearchDemo });
+  }
   render((await post("/api/new")).events);
   loadGallery(1);
 });
