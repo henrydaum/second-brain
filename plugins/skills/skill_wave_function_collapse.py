@@ -15,7 +15,7 @@ class WaveFunctionCollapseSkill(BaseSkill):
     kind = "background"
 
     palette = Palette()
-    grid    = Slider(10, 28, default=18, step=1)
+    grid    = Slider(8, 26, default=14, step=1)
 
     def run(self, canvas):
         s = int(canvas.size)
@@ -29,9 +29,10 @@ class WaveFunctionCollapseSkill(BaseSkill):
         def conn(t, b):
             return bool(t & b)
 
-        # Favor 2-3 connection tiles so pipes dominate over blanks/stubs.
+        # Heavily favor 2-connection path tiles so the network reads as long
+        # flowing curves and loops rather than a busy junction-filled maze.
         pop = [sum(1 for bit in (N, E, S, W) if t & bit) for t in tiles]
-        weight = {t: {0: 0.25, 1: 0.6, 2: 1.7, 3: 1.3, 4: 0.9}[pop[t]] for t in tiles}
+        weight = {t: {0: 0.06, 1: 0.18, 2: 3.0, 3: 0.4, 4: 0.18}[pop[t]] for t in tiles}
 
         def compat_h(a, b):   # a left, b right
             return conn(a, E) == conn(b, W)
@@ -97,28 +98,44 @@ class WaveFunctionCollapseSkill(BaseSkill):
         img = Image.new("RGBA", (s, s), canvas.palette.background)
         draw = ImageDraw.Draw(img, "RGBA")
         cw = s / G
-        lw = max(2, int(cw * 0.22))
-        node = cw * 0.16
+        lw = max(2, int(cw * 0.26))
+        r = cw / 2.0
         for i in range(G * G):
             t = list(domains[i])[0]
             gx, gy = i % G, i // G
-            cxp = (gx + 0.5) * cw
-            cyp = (gy + 0.5) * cw
+            x0, y0 = gx * cw, gy * cw
+            x1, y1 = (gx + 1) * cw, (gy + 1) * cw
+            cxp, cyp = x0 + r, y0 + r
             ramp = 0.32 + 0.55 * ((gx + gy) / (2.0 * (G - 1)))
             col = art_kit.palette_color(ramp)
-            ends = []
-            if conn(t, N):
-                ends.append((cxp, gy * cw))
-            if conn(t, S):
-                ends.append((cxp, (gy + 1) * cw))
-            if conn(t, W):
-                ends.append((gx * cw, cyp))
-            if conn(t, E):
-                ends.append(((gx + 1) * cw, cyp))
-            for ex, ey in ends:
-                draw.line((cxp, cyp, ex, ey), fill=col, width=lw)
-            if ends:
-                draw.ellipse((cxp - node, cyp - node, cxp + node, cyp + node), fill=col)
+            dirs = [conn(t, N), conn(t, E), conn(t, S), conn(t, W)]
+            cnt = sum(dirs)
+            cN, cE, cS, cW = dirs
+
+            if cnt == 2 and cN and cS:
+                draw.line((cxp, y0, cxp, y1), fill=col, width=lw)
+            elif cnt == 2 and cE and cW:
+                draw.line((x0, cyp, x1, cyp), fill=col, width=lw)
+            elif cnt == 2 and cN and cE:
+                draw.arc((x1 - r, y0 - r, x1 + r, y0 + r), 90, 180, fill=col, width=lw)
+            elif cnt == 2 and cE and cS:
+                draw.arc((x1 - r, y1 - r, x1 + r, y1 + r), 180, 270, fill=col, width=lw)
+            elif cnt == 2 and cS and cW:
+                draw.arc((x0 - r, y1 - r, x0 + r, y1 + r), 270, 360, fill=col, width=lw)
+            elif cnt == 2 and cW and cN:
+                draw.arc((x0 - r, y0 - r, x0 + r, y0 + r), 0, 90, fill=col, width=lw)
+            else:
+                # Stubs and junctions: straight spokes from the center.
+                ends = []
+                if cN: ends.append((cxp, y0))
+                if cS: ends.append((cxp, y1))
+                if cW: ends.append((x0, cyp))
+                if cE: ends.append((x1, cyp))
+                for ex, ey in ends:
+                    draw.line((cxp, cyp, ex, ey), fill=col, width=lw)
+                if cnt >= 3:
+                    nd = cw * 0.16
+                    draw.ellipse((cxp - nd, cyp - nd, cxp + nd, cyp + nd), fill=col)
 
         glow = img.filter(ImageFilter.GaussianBlur(radius=s * 0.003))
         canvas.commit(Image.alpha_composite(glow, img))

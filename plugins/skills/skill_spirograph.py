@@ -17,46 +17,55 @@ class SpirographSkill(BaseSkill):
     palette   = Palette()
     mode      = Enum([('hypo', 'Inner (hypotrochoid)'), ('epi', 'Outer (epitrochoid)')], default='hypo')
     teeth     = Slider(3, 24, default=7, step=1)
-    pen       = Slider(0.2, 1.0, default=0.75, step=0.05)
+    pen       = Slider(0.2, 1.0, default=0.85, step=0.05)
+    layers    = Slider(1, 8, default=5, step=1)
 
     def run(self, canvas):
         s = int(canvas.size)
         R = 1.0
-        r = float(int(self.teeth)) / 24.0      # rolling-gear radius as fraction of ring
-        r = max(0.05, min(0.95, r))
-        rho = float(self.pen) * r               # pen distance from gear center
         epi = (str(self.mode) == 'epi')
-
-        # Closed after teeth/gcd turns; use the integer tooth count for that.
-        teeth = int(self.teeth)
-        turns = teeth // math.gcd(teeth, 24) * 2 + 2
-        steps = 4000
-        pts = []
-        for i in range(steps + 1):
-            t = (i / steps) * math.tau * turns
-            if epi:
-                k = (R + r) / r
-                x = (R + r) * math.cos(t) - rho * math.cos(k * t)
-                y = (R + r) * math.sin(t) - rho * math.sin(k * t)
-            else:
-                k = (R - r) / r
-                x = (R - r) * math.cos(t) + rho * math.cos(k * t)
-                y = (R - r) * math.sin(t) - rho * math.sin(k * t)
-            pts.append((x, y))
-
-        rmax = max((px * px + py * py) ** 0.5 for px, py in pts) or 1.0
-        scale = s * 0.45 / rmax
+        n_layers = int(self.layers)
         cx = cy = s / 2.0
-        scaled = [(cx + px * scale, cy + py * scale) for px, py in pts]
+
+        def curve(teeth, rho_frac):
+            r = max(0.05, min(0.95, teeth / 24.0))
+            rho = rho_frac * r
+            turns = teeth // math.gcd(teeth, 24) * 2 + 2
+            steps = 3200
+            pts = []
+            for i in range(steps + 1):
+                t = (i / steps) * math.tau * turns
+                if epi:
+                    k = (R + r) / r
+                    x = (R + r) * math.cos(t) - rho * math.cos(k * t)
+                    y = (R + r) * math.sin(t) - rho * math.sin(k * t)
+                else:
+                    k = (R - r) / r
+                    x = (R - r) * math.cos(t) + rho * math.cos(k * t)
+                    y = (R - r) * math.sin(t) - rho * math.sin(k * t)
+                pts.append((x, y))
+            return pts
 
         img = Image.new("RGBA", (s, s), canvas.palette.background)
         draw = ImageDraw.Draw(img, "RGBA")
-        w = max(1, int(s * 0.0016))
-        runs = 200
-        per = max(1, len(scaled) // runs)
-        for j in range(0, len(scaled) - 1, per):
-            t = 0.2 + 0.75 * (j / float(len(scaled)))
-            draw.line(scaled[j:j + per + 1], fill=art_kit.palette_color(t), width=w, joint="curve")
+        w = max(1, int(s * 0.0014))
+
+        # Stack several curves, each a slightly different gear / pen, rotated so
+        # the rosettes interleave into a dense spirograph drawing.
+        base_teeth = int(self.teeth)
+        base_pen = float(self.pen)
+        for L in range(n_layers):
+            teeth = base_teeth + L * 2
+            rho_frac = base_pen * (0.55 + 0.45 * (L / max(1, n_layers - 1))) if n_layers > 1 else base_pen
+            pts = curve(teeth, rho_frac)
+            rmax = max((px * px + py * py) ** 0.5 for px, py in pts) or 1.0
+            scale = s * 0.45 / rmax
+            phi = L * (math.pi / max(1, n_layers)) * 0.7
+            ca, sa = math.cos(phi), math.sin(phi)
+            scaled = [(cx + (px * ca - py * sa) * scale, cy + (px * sa + py * ca) * scale)
+                      for px, py in pts]
+            t = 0.25 + 0.65 * (L / max(1, n_layers - 1)) if n_layers > 1 else 0.7
+            draw.line(scaled, fill=art_kit.palette_color(t), width=w, joint="curve")
 
         glow = img.filter(ImageFilter.GaussianBlur(radius=s * 0.004))
         canvas.commit(Image.alpha_composite(glow, img))

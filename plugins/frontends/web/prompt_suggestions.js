@@ -27,5 +27,6 @@ const PROMPT_SUGGESTIONS = [
   { prompt: "Show me the Mandelbrot Explorer at Elephant Valley. Add a border as well.", label: "Mandelbrot elephants" },
   { prompt: "Show me a Gray-Scott reaction-diffusion, then apply polar coordinates.", label: "Reaction-diffusion blob" },
   { prompt: "Show me a Gray-Scott reaction-diffusion, then apply polar coordinates, and change it to 'From Polar' mode.", label: "Inverted reaction-diffusion" },
-  { prompt: "Show me the Burning Ship Explorer at the Embedded Mini-Ship with the Magma palette and a Vignette. Crank the zoom.", label: "Burning Ship fractal" }
+  { prompt: "Show me the Burning Ship Explorer at the Embedded Mini-Ship with the Magma palette and a Vignette. Crank the zoom.", label: "Burning Ship fractal" },
+  { prompt: "Show me a Barnsley Fern with the Neutral Mono palette.", label: "Silver fern" }
 ];
