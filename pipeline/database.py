@@ -61,78 +61,6 @@ class Database:
 		if not _VALID_IDENTIFIER.match(name):
 			raise ValueError(f"Invalid SQL identifier: {name!r}")
 
-	def _migrate_technique_tables(self):
-		"""One-time rename of the legacy ``skill_*`` canvas tables to ``technique_*``.
-
-		Covers all five analytics/index tables (events, scores, errors,
-		embeddings, fts), the two renamed ``technique_errors`` columns, and the
-		two per-account config keys stored as JSON in ``web_users``. Runs in
-		_setup after billing_schema.setup (so web_users exists) and before the
-		CREATE/INSERT statements, so existing rows survive the rename.
-		Idempotent: every step is guarded."""
-		def _has_table(name):
-			return self.conn.execute(
-				"SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-			).fetchone() is not None
-
-		for old, new in (
-			("skill_events", "technique_events"),
-			("skill_scores", "technique_scores"),
-			("skill_errors", "technique_errors"),
-			("skill_embeddings", "technique_embeddings"),
-			("skill_fts", "technique_fts"),
-		):
-			if _has_table(old) and not _has_table(new):
-				self.conn.execute(f"ALTER TABLE {old} RENAME TO {new}")
-
-		if _has_table("technique_errors"):
-			cols = {r[1] for r in self.conn.execute("PRAGMA table_info(technique_errors)")}
-			if "skill_lineno" in cols:
-				self.conn.execute("ALTER TABLE technique_errors RENAME COLUMN skill_lineno TO technique_lineno")
-			if "skill_line" in cols:
-				self.conn.execute("ALTER TABLE technique_errors RENAME COLUMN skill_line TO technique_line")
-
-		# Drop stale indexes; _setup recreates the idx_technique_* ones fresh.
-		for idx in (
-			"idx_skill_events_slug", "idx_skill_events_kind",
-			"idx_skill_errors_slug", "idx_skill_errors_type",
-			"idx_skill_embeddings_slug", "idx_skill_embeddings_hidden",
-		):
-			self.conn.execute(f"DROP INDEX IF EXISTS {idx}")
-
-		# Rename the two per-account config keys stored as JSON in web_users.
-		import json as _json
-		key_map = {
-			"skill_authoring_enabled": "technique_authoring_enabled",
-			"community_skills_enabled": "community_techniques_enabled",
-		}
-		try:
-			rows = self.conn.execute("SELECT account_id, account_config FROM web_users").fetchall()
-		except Exception:
-			rows = []
-		for r in rows:
-			raw = r["account_config"]
-			if not raw:
-				continue
-			try:
-				cfg = _json.loads(raw)
-			except Exception:
-				continue
-			if not isinstance(cfg, dict):
-				continue
-			changed = False
-			for old, new in key_map.items():
-				if old in cfg:
-					cfg.setdefault(new, cfg.pop(old))
-					changed = True
-			if changed:
-				self.conn.execute(
-					"UPDATE web_users SET account_config=? WHERE account_id=?",
-					(_json.dumps(cfg), r["account_id"]),
-				)
-
-		self.conn.commit()
-
 	def _setup(self):
 		# WAL mode allows concurrent readers while one writer holds the lock —
 		# critical for the dispatch loop reading while workers write results.
@@ -242,9 +170,6 @@ class Database:
 		self.conn.execute("PRAGMA foreign_keys = ON")
 
 		billing_schema.setup(self.conn)
-
-		# Rename legacy skill_* canvas tables before (re)creating technique_* ones.
-		self._migrate_technique_tables()
 
 		# Technique scoring — implicit signals (share/download/remix) attributed
 		# across chain steps. `generations` is a denominator-only counter.

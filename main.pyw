@@ -85,10 +85,6 @@ def main():
 	for d in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS, SANDBOX_TECHNIQUES):
 		d.mkdir(parents=True, exist_ok=True)
 
-	# --- 1b'. One-time skill→technique sandbox migration (before discovery) ---
-	from plugins.techniques.helpers.sandbox_migration import migrate_sandbox_skills
-	migrate_sandbox_skills()
-
 	# --- 1c. Load existing plugin config into runtime config ---
 	config_manager.load_plugin_config_early(config)
 
