@@ -105,7 +105,7 @@ article.credit-error { display: grid; gap: 7px; color: var(--muted); background:
 .tutorial-body { color: var(--text); font-size: 14.5px; line-height: 1.55; margin: 0; }
 .tutorial-note { color: var(--muted); font-size: 12.5px; line-height: 1.5; font-style: italic; margin: 0; padding-left: 12px; border-left: 2px solid var(--line); }
 .tutorial-slide { display: flex; flex-direction: column; gap: 12px; min-height: 200px; }
-.tutorial-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.tutorial-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 4px; }
 .tutorial-chip { background: rgba(20,24,35,.85); color: var(--text); border: 1px solid var(--line); padding: 7px 12px; cursor: pointer; font-size: 12.5px; transition: border-color 200ms ease, color 200ms ease; }
 .tutorial-chip:hover { border-color: var(--accent); color: var(--accent); }
 .tutorial-try { margin-top: 6px; align-self: flex-start; background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: 1px solid var(--accent); color: #08090d; padding: 9px 22px; font-weight: 700; cursor: pointer; }

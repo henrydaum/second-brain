@@ -661,7 +661,7 @@ function renderControlsPanel(panels) {
     // Blank canvas: no layers to edit and no Regenerate button to offer,
     // but the search input above is fully functional — let the user add
     // their first background from here.
-    controlsPanel.innerHTML = `<div class="ctl-empty-canvas">No layers yet — search below to add techniques to the canvas,\n or press the gear icon to go back.</div>`;
+    controlsPanel.innerHTML = `<div class="ctl-empty-canvas">No layers yet — search below to add layers to the canvas,\n or press the gear icon to go back.</div>`;
     if (localStorage.sbDrawerOpen === "1") setControlsOpen(true);
     return;
   }
