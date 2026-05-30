@@ -65,6 +65,8 @@ class AttachmentBundle:
         for att in self.items:
             if caps.get(att.modality):
                 native_paths.append(att.path)
+                if (att.metadata or {}).get("llm_context"):
+                    suffix_parts.append(str(att.metadata["llm_context"]))
                 continue
             if att.parsed_text:
                 blurb = (

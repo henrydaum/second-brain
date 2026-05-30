@@ -46,13 +46,13 @@ def build_prompt_sections(
     semi = [
         _tool_catalog(r),
         _command_catalog(commands),
-        _authoring_guidance() if _has_tool(r, "test_plugin") else "",
+        _authoring_guidance(r) if _has_tool(r, "test_plugin") else "",
         _sandbox_files() if _has_tool(r, "test_plugin") else "",
         _attachments() if _has_tool(r, "sql_query") else "",
         _database_tables(db) if _has_tool(r, "sql_query") else "",
         _generative_art_encyclopedia() if _has_tool(r, "execute_technique") else "",
-        _palette_catalog() if _has_tool(r, "execute_technique") else "",
-        _technique_workflow() if _has_tool(r, "execute_technique") else "",
+        _palette_catalog(r) if _has_tool(r, "execute_technique") else "",
+        _technique_workflow(r) if _has_tool(r, "execute_technique") else "",
     ]
     dynamic = [
         _current_datetime(),
@@ -81,7 +81,7 @@ def _generative_art_encyclopedia() -> str:
         return ""
 
 
-def _palette_catalog() -> str:
+def _palette_catalog(registry=None) -> str:
     """List the available palettes with their colors so the agent can match user color requests to a palette id."""
     try:
         from plugins.helpers.palettes import list_palettes
@@ -92,7 +92,7 @@ def _palette_catalog() -> str:
         return ""
     lines = [
         "## Available palettes",
-        "The canvas has a fixed catalog of palettes. To change the palette on a layer, the layer's technique must expose a `palette` control (use read_technique on its slug to check — look for `palette = Palette()`). Then call `manage_layers` with `action=set_control`, `chain_index=<n>`, `name=\"palette\"`, `value=\"<id>\"`. Use the `id` slug below, not the display name. Match a user's color request (e.g. \"red/orange/yellow\", \"neon\", \"earthy\") to the closest palette by its kind and hex colors.",
+        "The canvas has a fixed catalog of palettes. To change the palette on a layer, the layer's technique must expose a `palette` control" + (" (use read_technique on its slug to check — look for `palette = Palette()`)" if _has_tool(registry, "read_technique") else "") + ". Then call `manage_layers` with `action=set_control`, `chain_index=<n>`, `name=\"palette\"`, `value=\"<id>\"`. Use the `id` slug below, not the display name. Match a user's color request (e.g. \"red/orange/yellow\", \"neon\", \"earthy\") to the closest palette by its kind and hex colors.",
         "",
         "Format: `id (Name) — kind: primary secondary tertiary accent / bg background`",
         "",
@@ -117,6 +117,10 @@ def _has_tool(registry, name: str) -> bool:
 
 def _has_any(registry, *names: str) -> bool:
     return any(_has_tool(registry, n) for n in names)
+
+
+def _technique_authoring_tools(registry) -> list[str]:
+    return [n for n in ("create_technique", "update_technique", "delete_technique") if _has_tool(registry, n)]
 
 
 def _current_datetime() -> str:
@@ -192,15 +196,18 @@ Techniques are the canvas family: each technique is a `class X(BaseTechnique)` d
     )
 
 
-def _authoring_guidance() -> str:
+def _authoring_guidance(registry=None) -> str:
     from paths import DATA_DIR, ROOT_DIR
+    can_techniques = bool(_technique_authoring_tools(registry))
+    families = "tools, tasks, services, commands, frontends, and techniques" if can_techniques else "tools, tasks, services, commands, and frontends"
+    technique_note = "Technique authoring should use the dedicated technique tools named in the canvas workflow." if can_techniques else "Technique authoring is outside this session's tool scope; do not claim you can create, edit, or delete techniques."
     return (
         f"""## Building plugins
-You can extend Second Brain by authoring tools, tasks, services, commands, frontends, and techniques.
+You can extend Second Brain by authoring {families}.
 
-Read the matching template in templates/, then write the plugin into {DATA_DIR}/sandbox_<family>/ with the required prefix, e.g. tool_foo.py in {DATA_DIR}/sandbox_tools/, or technique_foo.py in {DATA_DIR}/sandbox_techniques/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
+Read the matching template in templates/, then write the plugin into {DATA_DIR}/sandbox_<family>/ with the required prefix, e.g. tool_foo.py in {DATA_DIR}/sandbox_tools/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
 
-Techniques are special: prefer the dedicated `create_technique` / `update_technique` tools over hand-writing the file. Give those tools complete `BaseTechnique` class source with descriptor controls; they stamp managed metadata, AST-validate, and register it with the runtime registry in one step.
+{technique_note}
 
 Workflow:
 1. Understand the user's intended behavior. Ask clarifying questions when a missing decision would materially change the design.
@@ -220,13 +227,34 @@ The context object is passed to every plugin and contains relevant runtime infor
     )
 
 
-def _technique_workflow() -> str:
-    return """## Canvas technique workflow
+def _technique_workflow(registry) -> str:
+    can_search = _has_tool(registry, "search_techniques")
+    can_read = _has_tool(registry, "read_technique")
+    can_guide = _has_tool(registry, "read_technique_guide")
+    can_execute = _has_tool(registry, "execute_technique")
+    author_tools = _technique_authoring_tools(registry)
+    lines = ["""## Canvas technique workflow
 Your name is Second Brain. Second Brain makes generative, algorithmic art — not literal illustration. Treat every canvas request as a prompt for an abstract algorithmic interpretation, not a representational depiction. For example, a "flower" is a Vogel spiral of palette-blended cells, not stacked petals. Second Brain plays to their strengths: math, code, and procedural generation.
 
 Workflow:
-1. Call search_techniques with the subject. If a strong match exists, call execute_technique.
-2. If no match, pick an algorithmic technique appropriate to the subject *before* writing code. Then call create_technique with a complete BaseTechnique class, then execute_technique with the returned slug.
+"""]
+    steps = []
+    if can_search:
+        steps.append("Call `search_techniques` with the subject. Search returns only techniques visible to this session; when community techniques are disabled, community-authored techniques will not appear.")
+    if can_read:
+        steps.append("Use `read_technique` to inspect a promising hit or clone a nearby technique when authoring is enabled.")
+    if can_execute:
+        steps.append("If a strong match exists, call `execute_technique`.")
+    if author_tools:
+        steps.append(f"Technique authoring is enabled for this session. You may use the available authoring tools: {', '.join(author_tools)}.")
+        if can_guide:
+            steps.append("Call `read_technique_guide` once per session before the first new technique if you need the template, helpers, or composition guidance.")
+        if _has_tool(registry, "create_technique"):
+            steps.append("If no match exists, pick an algorithmic technique before writing code, then call `create_technique` with a complete BaseTechnique class and execute the returned slug.")
+    else:
+        steps.append("Technique authoring is not enabled for this session. Do not say you can create, edit, or delete techniques; work with search, read, execution, and layer controls that are available.")
+    lines.extend(f"{i}. {s}" for i, s in enumerate(steps, 1))
+    lines.append("""
 
 Techniques (good-for hints — formulas live in the encyclopedia above):
 - vogel_spiral -- flowers, sunflowers, galaxies, star fields, seed-pod patterns
@@ -242,7 +270,8 @@ Techniques (good-for hints — formulas live in the encyclopedia above):
 
 When in doubt, prefer noise, gradients, and procedural patterns in palette tones over explicit shapes. Compose multiple techniques (e.g. fbm background + vogel foreground + radial vignette) rather than drawing literal features.
 
-You always follow through. If you start a task, you see it through to completion. Iteration is normal; tell the user that art is iterative and they can always say what to change."""
+You always follow through. If you start a task, you see it through to completion. Iteration is normal; tell the user that art is iterative and they can always say what to change.""")
+    return "\n".join(lines)
 
 
 def _canvas_state(services: dict | None, session_key: str | None) -> str:
@@ -259,15 +288,16 @@ def _canvas_state(services: dict | None, session_key: str | None) -> str:
             "## Current canvas",
             f"Canvas id: {cs.canvas_id}",
             f"Size: {cs.canvas.size}; Palette: {cs.canvas.palette_id}; Seed: {cs.render_seed if cs.render_seed is not None else 'not rendered yet'}",
+            f"Layer count: {len(layers)}/6",
         ]
         if not layers:
-            lines.append("Layers: none. The canvas is empty.")
+            lines.append("Layers: none. The canvas is empty. Add or execute a background technique before filters or objects.")
         else:
-            lines.append("Layers:")
+            lines.append("Layers below are the source of truth. Use these zero-based indices for manage_layers; layer 0 is the background and later layers are filters or objects. Do not assume layers not listed here.")
             for i, layer in enumerate(layers):
                 controls = layer.get("controls") or {}
                 detail = "; controls " + json.dumps(controls, sort_keys=True, default=str) if controls else ""
-                lines.append(f"- {i}: {layer.get('slug')} ({layer.get('kind')}){detail}")
+                lines.append(f"- index {i}: slug={layer.get('slug')} kind={layer.get('kind')}{detail}")
         return "\n".join(lines)
     except Exception:
         return ""
@@ -369,4 +399,3 @@ def _conversation_metadata(meta: dict[str, Any] | None) -> str:
 def _prompt_extras(extras: dict[str, Any] | None) -> str:
     values = [v for v in (extras or {}).values() if isinstance(v, str) and v]
     return "\n\n".join(values)
-

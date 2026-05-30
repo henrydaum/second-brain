@@ -34,3 +34,7 @@ def test_openai_compatible_endpoint_does_not_get_openai_cache_options():
     llm = OpenAILLM("local-model", base_url="http://localhost:1234/v1", prompt_cache_key="second-brain", prompt_cache_retention="24h")
 
     assert llm._cache_kwargs({"temperature": 0}) == {"temperature": 0}
+
+
+def test_kimi_k26_is_marked_vision_capable():
+    assert OpenAILLM("moonshotai/kimi-k2.6").has_capability("image")

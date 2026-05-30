@@ -501,7 +501,7 @@ class OpenAILLM(BaseLLM):
         # Best-effort capability inference from the model name. Users can
         # override by editing ``capabilities`` after construction.
         m = (model_name or "").lower()
-        if any(s in m for s in ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "claude-3", "claude-4", "gemini")):
+        if any(s in m for s in ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "claude-3", "claude-4", "gemini", "moonshotai/kimi-k2.6")):
             self.capabilities["image"] = True
         if "gpt-4o" in m or "gpt-5" in m or "audio" in m:
             self.capabilities["audio"] = True

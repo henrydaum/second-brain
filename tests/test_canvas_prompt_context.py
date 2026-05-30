@@ -8,10 +8,11 @@ from state_machine.conversation import ConversationState, Participant
 
 
 class Registry:
-    tools = {"execute_technique": SimpleNamespace(max_calls=3)}
+    def __init__(self, *names):
+        self.tools = {name: SimpleNamespace(max_calls=3) for name in (names or ("execute_technique",))}
 
     def get_all_schemas(self):
-        return [{"function": {"name": "execute_technique", "description": "Execute canvas technique."}}]
+        return [{"function": {"name": name, "description": f"{name}."}} for name in self.tools]
 
 
 def sectioned_prompt():
@@ -27,7 +28,8 @@ def test_session_system_prompt_includes_live_canvas_state():
     dynamic = session_system_prompt(runtime, RuntimeSession("chat", ConversationState([Participant("user", "user"), Participant("agent", "agent")])))()[-1]["content"]
 
     assert "## Current canvas" in dynamic
-    assert "- 0: color_field (background)" in dynamic
+    assert "Layer count: 1/6" in dynamic
+    assert "- index 0: slug=color_field kind=background" in dynamic
     assert '"mode": "linear"' in dynamic
 
 
@@ -40,7 +42,8 @@ def test_build_prompt_sections_canvas_state_reflects_manual_canvas_edits():
     canvas.handle_action(cs.canvas_id, "clear", {})
     after = build_prompt_sections(None, None, Registry(), {"canvas": canvas}, session_key="chat")[-1]["content"]
 
-    assert "- 0: gradient_field (background)" in before
+    assert "Use these zero-based indices for manage_layers" in before
+    assert "- index 0: slug=gradient_field kind=background" in before
     assert "Layers: none. The canvas is empty." in after
     assert "gradient_field" not in after
 
@@ -51,3 +54,17 @@ def test_canvas_prompt_does_not_create_unbound_canvas():
     build_prompt_sections(None, None, Registry(), {"canvas": canvas}, session_key="chat")
 
     assert canvas.canvases == {}
+
+
+def test_prompt_does_not_claim_technique_authoring_without_authoring_tools():
+    prompt = build_prompt_sections(None, None, Registry("search_techniques", "read_technique", "execute_technique"), {}, session_key="chat")[-1]["content"]
+
+    assert "Technique authoring is not enabled for this session" in prompt
+    assert "create_technique` with a complete" not in prompt
+
+
+def test_prompt_claims_technique_authoring_when_tool_is_visible():
+    prompt = build_prompt_sections(None, None, Registry("search_techniques", "read_technique", "read_technique_guide", "execute_technique", "create_technique"), {}, session_key="chat")[-1]["content"]
+
+    assert "Technique authoring is enabled for this session" in prompt
+    assert "create_technique" in prompt

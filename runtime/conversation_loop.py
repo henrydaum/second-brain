@@ -419,7 +419,12 @@ class ConversationLoop:
         """Internal helper to handle invoke."""
         from plugins.services.service_llm import is_context_limit_error
 
-        bundle = attachments or None
+        from attachments.attachment import AttachmentBundle
+        bundle = AttachmentBundle.from_iterable(attachments)
+        canvas_attachment = self._canvas_attachment()
+        if canvas_attachment:
+            bundle.append(canvas_attachment)
+        bundle = bundle or None
         self._emit_thinking(True)
         try:
             try:
@@ -570,6 +575,21 @@ class ConversationLoop:
         new_messages.append(msg)
         if db is not None and conversation_id is not None:
             save_history_message(db, conversation_id, msg)
+
+    def _canvas_attachment(self):
+        """Return the current rendered canvas image for vision-capable LLMs."""
+        if not self.session_key or self.runtime is None or not getattr(self.llm, "has_capability", lambda _m: False)("image"):
+            return None
+        canvas_rt = (getattr(self.runtime, "services", {}) or {}).get("canvas")
+        if canvas_rt is None or not hasattr(canvas_rt, "current_for_session"):
+            return None
+        cs = canvas_rt.current_for_session(self.session_key)
+        if cs is None or not cs.canvas.layers or cs.render_seed is None:
+            return None
+        from attachments.attachment import Attachment
+        from canvas.render import folder_for
+        path = folder_for(cs.canvas) / f"{int(cs.render_seed)}.png"
+        return Attachment(str(path), "png", "current_canvas.png", "image", metadata={"llm_context": "The attached image is the current canvas PNG."}) if path.is_file() else None
 
     def _tool_started(self, action_type: str, content: Any):
         """Internal helper to handle tool started."""
