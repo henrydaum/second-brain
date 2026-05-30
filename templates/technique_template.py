@@ -26,7 +26,7 @@ TECHNIQUE AUTHORING FLOW
 4. While drafting, call read_technique_guide(methods=["fbm_grid", ...]) to
    inspect specific art_kit helpers — full signature, docstring, source.
 5. Provide a complete BaseTechnique class file to create_technique:
-     - imports (math, random, colorsys, numpy, PIL.*, plugins.BaseTechnique)
+     - imports (math, random, colorsys, numpy, PIL.*, and every descriptor used from plugins.BaseTechnique)
      - metadata as class attributes
      - descriptor controls as class attributes
      - one `def run(self, canvas):` method

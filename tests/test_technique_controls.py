@@ -66,6 +66,27 @@ def test_get_controls_is_rejected():
 		assert_valid(src)
 
 
+@pytest.mark.parametrize("descriptor,imports,line", [
+	("Slider", "", "    control = Slider(0, 1, default=0.5)\n"),
+	("Bool", "", "    control = Bool(default=False)\n"),
+	("Enum", "", "    control = Enum(['a', 'b'], default='a')\n"),
+	("Pan", ", Slider", "    cx = Slider(0, 1, default=0.5)\n    cy = Slider(0, 1, default=0.5)\n    control = Pan(x='cx', y='cy')\n"),
+	("Palette", "", "    palette = Palette()\n"),
+	("Text", "", "    control = Text(default='hi')\n"),
+])
+def test_missing_descriptor_import_is_rejected_before_plugin_load(descriptor, imports, line):
+	src = (
+		f"from plugins.BaseTechnique import BaseTechnique{imports}\n\n"
+		"class BadTechnique(BaseTechnique):\n"
+		"    name = 'Bad'\n"
+		f"{line}"
+		"    def run(self, canvas):\n"
+		"        canvas.commit(canvas.new())\n"
+	)
+	with pytest.raises(TechniqueValidationError, match=f"{descriptor} is used as a control descriptor but is not imported"):
+		assert_valid(src)
+
+
 def test_stale_palette_control_is_filtered_from_technique_record():
 	d = Path(".test_tmp_technique_controls"); d.mkdir(exist_ok=True)
 	path = d / f"technique_blur_{uuid.uuid4().hex}.py"
@@ -85,6 +106,42 @@ def test_stale_palette_control_is_filtered_from_technique_record():
 
 def test_palette_control_is_kept_when_source_uses_palette():
 	assert source_uses_palette("def run(self, canvas):\n    canvas.new()\n") is True
+
+
+def test_validation_catches_missing_commit():
+	src = (
+		"from plugins.BaseTechnique import BaseTechnique\n\n"
+		"class BadTechnique(BaseTechnique):\n"
+		"    def run(self, canvas):\n"
+		"        img = canvas.new()\n"
+	)
+	with pytest.raises(TechniqueValidationError, match="never calls canvas.commit"):
+		assert_valid(src)
+
+
+def test_validation_catches_background_reading_prior_image():
+	src = (
+		"from plugins.BaseTechnique import BaseTechnique\n\n"
+		"class BadTechnique(BaseTechnique):\n"
+		"    kind = 'background'\n"
+		"    def run(self, canvas):\n"
+		"        canvas.commit(canvas.image)\n"
+	)
+	with pytest.raises(TechniqueValidationError, match="background techniques cannot read canvas.image"):
+		assert_valid(src)
+
+
+def test_validation_catches_unseeded_random_calls():
+	src = (
+		"from plugins.BaseTechnique import BaseTechnique\n"
+		"import random\n\n"
+		"class BadTechnique(BaseTechnique):\n"
+		"    def run(self, canvas):\n"
+		"        random.random()\n"
+		"        canvas.commit(canvas.new())\n"
+	)
+	with pytest.raises(TechniqueValidationError, match="seeded RNG"):
+		assert_valid(src)
 
 
 def test_coerce_text_truncates_and_handles_none():

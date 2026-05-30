@@ -159,6 +159,26 @@ def _descriptor_call_errors(cls_node: ast.ClassDef) -> list[str]:
     return errors
 
 
+def _base_technique_imports(tree: ast.Module) -> set[str]:
+    return {
+        alias.asname or alias.name
+        for node in tree.body if isinstance(node, ast.ImportFrom) and node.module == "plugins.BaseTechnique"
+        for alias in node.names
+    }
+
+
+def _missing_descriptor_import_errors(tree: ast.Module, cls_node: ast.ClassDef) -> list[str]:
+    imported = _base_technique_imports(tree)
+    missing = sorted({
+        _call_name(item.value.func)
+        for item in cls_node.body
+        if isinstance(item, (ast.Assign, ast.AnnAssign)) and isinstance(item.value, ast.Call)
+        and isinstance(item.value.func, ast.Name) and _call_name(item.value.func) in _DESCRIPTOR_KWARGS
+        and _call_name(item.value.func) not in imported
+    })
+    return [f"{name} is used as a control descriptor but is not imported; add `from plugins.BaseTechnique import {name}`" for name in missing]
+
+
 # Class-attribute names that BaseTechnique metadata reserves; literal class-level
 # assignments to these are NOT misnamed control attempts.
 _METADATA_NAMES = frozenset({
@@ -353,6 +373,47 @@ def _unsupported_control_api_errors(cls_node: ast.ClassDef) -> list[str]:
     return errors
 
 
+def _class_literal(cls_node: ast.ClassDef, name: str):
+    for item in cls_node.body:
+        if isinstance(item, ast.Assign) and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name) and item.targets[0].id == name:
+            try:
+                return ast.literal_eval(item.value)
+            except Exception:
+                return None
+    return None
+
+
+def _canvas_contract_errors(cls_node: ast.ClassDef, run: ast.FunctionDef) -> list[str]:
+    errors: list[str] = []
+    commits = [
+        n for n in ast.walk(run) if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute) and n.func.attr in {"commit", "commit_array"}
+        and isinstance(n.func.value, ast.Name) and n.func.value.id == "canvas"
+    ]
+    if not commits:
+        errors.append(f"class '{cls_node.name}': run() never calls canvas.commit(image) or canvas.commit_array(arr)")
+    elif any(not n.args for n in commits):
+        errors.append(f"class '{cls_node.name}': canvas.commit/commit_array needs an image or array argument")
+    if _class_literal(cls_node, "kind") == "background":
+        for n in ast.walk(run):
+            if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "canvas" and n.attr in {"image", "image_array"}:
+                errors.append(f"class '{cls_node.name}': background techniques cannot read canvas.{n.attr}; use canvas.create_image() or canvas.new(...)")
+                break
+    return errors
+
+
+def _random_seed_errors(run: ast.FunctionDef) -> list[str]:
+    errors = []
+    for n in ast.walk(run):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name) and n.func.value.id == "random" and n.func.attr != "Random":
+            errors.append("use a seeded RNG, e.g. `rng = random.Random(canvas.seed)`, not module-level random.* calls")
+            break
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Attribute) and isinstance(n.func.value.value, ast.Name) and n.func.value.attr == "random" and n.func.value.value.id in {"np", "numpy"} and n.func.attr != "default_rng":
+            errors.append("use a seeded numpy RNG, e.g. `rng_np = numpy.random.default_rng(canvas.seed)`, not module-level numpy.random.* calls")
+            break
+    return errors
+
+
 def validate_technique_code(source: str) -> list[str]:
     """Return a list of violations. Empty list means the code is acceptable.
 
@@ -396,6 +457,7 @@ def validate_technique_code(source: str) -> list[str]:
     else:
         for lineno in _literal_control_attrs(cls_node):
             errors.append(f"class '{cls_node.name}' declares literal controls at line {lineno}; use Slider/Enum/Bool/Pan/Text/Palette descriptors")
+        errors.extend(_missing_descriptor_import_errors(tree, cls_node))
         errors.extend(_descriptor_call_errors(cls_node))
         errors.extend(_descriptor_semantic_errors(cls_node))
         errors.extend(_unsupported_control_api_errors(cls_node))
@@ -406,6 +468,9 @@ def validate_technique_code(source: str) -> list[str]:
             err = _run_signature_error(run)
             if err:
                 errors.append(f"class '{cls_node.name}': {err}")
+            else:
+                errors.extend(_canvas_contract_errors(cls_node, run))
+                errors.extend(_random_seed_errors(run))
 
     return errors
 

@@ -13,7 +13,7 @@ logger = logging.getLogger("TechniqueTools")
 
 class CreateTechnique(BaseTool):
     name = "create_technique"
-    description = "Author a new canvas technique by supplying a complete BaseTechnique class file. Declare controls directly as class attributes with Slider/Enum/Bool/Pan/Text/Palette descriptors, e.g. `slot = Enum(['background','primary'], default='primary', label='Palette Slot')`, and read them as self.<name> inside run(self, canvas). Do not define get_controls(), plain control defaults, or controls=[...]. Palette() is only a whole-layer palette override; use Enum for choosing a palette slot. Prefer colors from canvas.palette slots or art_kit.palette_color(t), seed RNGs from canvas.seed, and call canvas.commit(image) on every path."
+    description = "Author a new canvas technique by supplying a complete BaseTechnique class file. Import every descriptor you use from plugins.BaseTechnique, e.g. `from plugins.BaseTechnique import BaseTechnique, Slider, Enum, Palette`. Declare controls directly as class attributes with Slider/Enum/Bool/Pan/Text/Palette descriptors, e.g. `slot = Enum(['background','primary'], default='primary', label='Palette Slot')`, and read them as self.<name> inside run(self, canvas). Do not define get_controls(), plain control defaults, or controls=[...]. Palette() is only a whole-layer palette override; use Enum for choosing a palette slot. Prefer colors from canvas.palette slots or art_kit.palette_color(t), seed RNGs from canvas.seed, and call canvas.commit(image) on every path."
     max_calls = 4
     parameters = {
         "type": "object",
