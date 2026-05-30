@@ -29,7 +29,7 @@
       <div class="account-row"><span>Free credits</span><span id="rowFree">—</span></div>
       <div class="account-row"><span>Extra credits</span><span id="rowExtra">—</span></div>
       <div class="account-actions">
-        <button id="buyMore" type="button" class="primary-btn">Buy 1,000 extra credits - $2.99</button>
+        <button id="buyMore" type="button" class="primary-btn">Buy credits</button>
         <div class="account-secondary-row">
           <a href="/">← Back to demo</a>
           <a href="/auth/logout" class="danger">Sign out</a>
@@ -118,8 +118,10 @@
       $("#rowEmail").textContent = a.email || "—";
       $("#rowFree").textContent = Number(a.free_remaining || 0).toLocaleString();
       $("#rowExtra").textContent = Number(a.purchased_remaining || 0).toLocaleString();
-      const pack = a.pack || {credits:1000, price_cents:299};
-      $("#buyMore").textContent = `Buy ${Number(pack.credits).toLocaleString()} credits - $${(Number(pack.price_cents) / 100).toFixed(2)}`;
+      const pack = a.pack || {};
+      $("#buyMore").textContent = pack.credits && pack.price_cents != null
+        ? `Buy ${Number(pack.credits).toLocaleString()} credits - $${(Number(pack.price_cents) / 100).toFixed(2)}`
+        : "Buy credits";
       window._sbEmail = a.email || "";
       const cfg = a.account_config || {};
       $("#prefTechniqueAuthoring").checked = !!cfg.technique_authoring_enabled;

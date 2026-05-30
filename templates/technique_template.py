@@ -263,9 +263,9 @@ execute_technique errors and the user must delete a layer first.
 
 PERFORMANCE — STAY UNDER THE 30s TIMEOUT
 ----------------------------------------
-Techniques run in a subprocess with a hard 30-second wall-clock timeout and
-a 768 MB memory cap. At 1024×1024 that's ~1 ns/pixel — Python loops
-cannot meet this. Vectorize.
+Techniques run in a subprocess with a configured wall-clock timeout and a
+size-scaled memory cap. At 1024×1024, pure Python pixel loops are still far
+too slow. Vectorize.
 
   # WRONG — minutes:
   for y in range(size):

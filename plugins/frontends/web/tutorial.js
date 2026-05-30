@@ -37,7 +37,7 @@
     },
     {
       title: "Add more credits.",
-      body: "Need more usage? Top up with extra credits — $2.99 per pack.",
+      body: "Need more usage? Top up with extra credits from your account page.",
       note: "Usage limits keep things fair for everyone."
     }
   ];

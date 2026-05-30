@@ -6,6 +6,7 @@ import time
 import uuid
 
 from billing import stripe
+from config.config_data import DEFAULT_WEB_CREDITS
 from plugins.helpers import web_auth
 
 logger = logging.getLogger("billing.storefront")
@@ -19,11 +20,11 @@ def create_checkout(frontend, session_id: str, account_id: str, ip: str) -> dict
             db.conn.execute("INSERT INTO web_auth_tokens (token, email, created_at, used_at) VALUES (?, ?, ?, NULL)", (token, "__pending_checkout__", time.time()))
             db.conn.commit()
     snap = frontend.account_info(session_id, ip, account_id)
-    pack = frontend._credits().pack() if frontend._credits() else {"stripe_price_id": "", "price_cents": 299}
+    pack = frontend._credits().pack() if frontend._credits() else DEFAULT_WEB_CREDITS["pack"]
     return stripe.create_checkout_session(
         secret_key=str(frontend.config.get("stripe_secret_key") or ""),
         price_id=str(pack.get("stripe_price_id") or ""),
-        price_cents=int(pack.get("price_cents") or 299),
+        price_cents=int(pack.get("price_cents") or DEFAULT_WEB_CREDITS["pack"]["price_cents"]),
         success_url=f"{base}/?checkout=success&claim={token}",
         cancel_url=f"{base}/?checkout=cancel",
         email_hint=snap.get("email") or None,
@@ -42,7 +43,7 @@ def handle_webhook(frontend, payload: bytes, sig_header: str) -> dict:
     data = (event.get("data") or {}).get("object") or {}
     meta = data.get("metadata") or {}
     email = web_auth.normalize_email(data.get("customer_email") or (data.get("customer_details") or {}).get("email") or "")
-    amount, grant = int(data.get("amount_total") or 0), int((frontend._credits().pack() if frontend._credits() else {"credits": 1000})["credits"])
+    amount, grant = int(data.get("amount_total") or 0), int((frontend._credits().pack() if frontend._credits() else DEFAULT_WEB_CREDITS["pack"])["credits"])
     if not email:
         logger.warning("[stripe] checkout.session.completed missing email; event=%s", event.get("id"))
         return {"ok": True, "ignored": "no_email"}

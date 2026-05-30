@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from billing import promo_codes, storefront
+from config.config_data import DEFAULT_WEB_CREDITS
 from plugins.helpers import web_auth
 
 from canvas import actions as canvas_actions
@@ -460,6 +461,7 @@ class WebFrontend(BaseFrontend):
         self.bind_credits(session_id, ip, account_id)
         svc, db = self._credits(), getattr(self.runtime, "db", None)
         snap = svc.snapshot(db, self.session_key(session_id)) if svc and db else {}
+        snap.setdefault("pack", dict((self.config.get("web_credits") or {}).get("pack") or DEFAULT_WEB_CREDITS["pack"]))
         if account_id:
             cfg = self._load_account_config(account_id)
             snap["account_config"] = {

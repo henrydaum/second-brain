@@ -1,7 +1,7 @@
 """Thin wrapper around the Stripe SDK for credit-pack checkout.
 
 Stripe keys are read from frontend config; the pack amount/price comes from
-the core web_credits policy.
+the core web_credits config.
 
 If the stripe SDK isn't installed or keys are missing, these functions raise
 RuntimeError — the frontend converts that into a user-visible error.

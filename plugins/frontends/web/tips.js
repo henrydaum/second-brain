@@ -23,7 +23,7 @@ const TIPS = [
 const TIPS_SIGNED_IN = [
   "You can delete images you have shared from the gallery, and unsave something from your saved archive.",
   "The live code writing feature is available in the account settings. The agent tends to make more mistakes when using it, but the results are highly customizable.",
-  "Un-cached renders cost 1 credit, while agent messages cost 10 credits each. Cached renders are free.",
+  "Cached renders are free; account credits are only spent when the app has to do new work.",
   "When using the live code writing feature, any techniques created will be available for any user to use, so long as they have the 'Include community techniques' option enabled. You can ask Second Brain to update and delete any techniques you've created.",
-  "You have access to 100 free credits per five hours, and 500 credits per week. Purchasing 1,000 credits costs $2.99 — no subscriptions."
+  "Your account page shows the current free-credit limits and top-up price — no subscriptions."
 ];

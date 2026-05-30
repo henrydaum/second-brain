@@ -11,11 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from plugins.helpers.palettes import DEFAULT_PALETTE_ID
+
 DEFAULT_SIZE = 1024
 MIN_SIZE = 256
 MAX_SIZE = 2048
 MAX_CHAIN_LENGTH = 6
-DEFAULT_PALETTE_ID = "bauhaus"  # mirrored from plugins.helpers.palettes
 
 
 @dataclass

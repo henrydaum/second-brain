@@ -35,10 +35,6 @@ class ExecuteTechnique(BaseTool):
 		 "Wall-clock seconds before a single technique run is killed. Raise for heavy compute; lower to catch runaway loops sooner.",
 		 30,
 		 {"type": "slider", "range": (5, 180, 35), "is_float": False}),
-		("Technique Memory Cap (MB)", "technique_memory_mb",
-		 "Per-technique address-space limit for the sandbox subprocess. Linux-only — the cap is set via RLIMIT_AS and is ignored on Windows / macOS.",
-		 768,
-		 {"type": "slider", "range": (256, 4096, 30), "is_float": False}),
 	]
 
 	def run(self, context, **kwargs) -> ToolResult:

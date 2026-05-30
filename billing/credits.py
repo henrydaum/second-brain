@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 
-from billing.policy import DEFAULT_WEB_CREDITS
+from config.config_data import DEFAULT_WEB_CREDITS
 from events.event_bus import bus
 from events.event_channels import CREDITS_CHANGED
 from plugins.BaseService import BaseService
