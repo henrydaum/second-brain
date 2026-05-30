@@ -32,20 +32,20 @@ SANDBOX_TASKS    = DATA_DIR / "sandbox_tasks"
 SANDBOX_SERVICES = DATA_DIR / "sandbox_services"
 SANDBOX_COMMANDS = DATA_DIR / "sandbox_commands"
 SANDBOX_FRONTENDS = DATA_DIR / "sandbox_frontends"
-SANDBOX_SKILLS   = DATA_DIR / "sandbox_skills"
-SANDBOX_SKILLS.mkdir(parents=True, exist_ok=True)
+SANDBOX_TECHNIQUES   = DATA_DIR / "sandbox_techniques"
+SANDBOX_TECHNIQUES.mkdir(parents=True, exist_ok=True)
 
 # Attachment cache: files dropped in from frontends (e.g. Telegram).
 # Registered as a sync_directory by default so the Stage_2 pipeline indexes them.
 ATTACHMENT_CACHE = DATA_DIR / "attachment_cache"
 ATTACHMENT_CACHE.mkdir(parents=True, exist_ok=True)
 
-# Legacy skill directories (pre-plugin-format `.skill.py` files). The new
+# Legacy technique directories (pre-plugin-format `.technique.py` files). The new
 # loader does not read these; files here will not load until they are
-# migrated to the BaseSkill class form under plugins/skills/ + sandbox_skills/.
+# migrated to the BaseTechnique class form under plugins/techniques/ + sandbox_techniques/.
 # Kept as named constants so the migration task can find them.
-SKILLS_DIR = DATA_DIR / "skills"
-BUILT_IN_SKILLS_DIR = ROOT_DIR / "skills"
+TECHNIQUES_DIR = DATA_DIR / "techniques"
+BUILT_IN_TECHNIQUES_DIR = ROOT_DIR / "techniques"
 
 
 def open_file(path):

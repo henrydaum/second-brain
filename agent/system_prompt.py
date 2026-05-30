@@ -50,15 +50,15 @@ def build_prompt_sections(
         _sandbox_files() if _has_tool(r, "test_plugin") else "",
         _attachments() if _has_tool(r, "sql_query") else "",
         _database_tables(db) if _has_tool(r, "sql_query") else "",
-        _generative_art_encyclopedia() if _has_tool(r, "execute_skill") else "",
-        _palette_catalog() if _has_tool(r, "execute_skill") else "",
-        _skill_workflow() if _has_tool(r, "execute_skill") else "",
+        _generative_art_encyclopedia() if _has_tool(r, "execute_technique") else "",
+        _palette_catalog() if _has_tool(r, "execute_technique") else "",
+        _technique_workflow() if _has_tool(r, "execute_technique") else "",
     ]
     dynamic = [
         _current_datetime(),
         _model_status(services),
         _profile_status(profile_name, scope),
-        _canvas_state(services, session_key) if _has_tool(r, "execute_skill") else "",
+        _canvas_state(services, session_key) if _has_tool(r, "execute_technique") else "",
         # _services_status(services),
         # _pipeline_status(db, orchestrator),
         # _sync_dirs(config),
@@ -92,7 +92,7 @@ def _palette_catalog() -> str:
         return ""
     lines = [
         "## Available palettes",
-        "The canvas has a fixed catalog of palettes. To change the palette on a layer, the layer's skill must expose a `palette` control (use read_skill on its slug to check — look for `palette = Palette()`). Then call `manage_layers` with `action=set_control`, `chain_index=<n>`, `name=\"palette\"`, `value=\"<id>\"`. Use the `id` slug below, not the display name. Match a user's color request (e.g. \"red/orange/yellow\", \"neon\", \"earthy\") to the closest palette by its kind and hex colors.",
+        "The canvas has a fixed catalog of palettes. To change the palette on a layer, the layer's technique must expose a `palette` control (use read_technique on its slug to check — look for `palette = Palette()`). Then call `manage_layers` with `action=set_control`, `chain_index=<n>`, `name=\"palette\"`, `value=\"<id>\"`. Use the `id` slug below, not the display name. Match a user's color request (e.g. \"red/orange/yellow\", \"neon\", \"earthy\") to the closest palette by its kind and hex colors.",
         "",
         "Format: `id (Name) — kind: primary secondary tertiary accent / bg background`",
         "",
@@ -184,11 +184,11 @@ def _form_hint(form, commands=None) -> str:
 def _plugin_contracts() -> str:
     return (
         """## Plugin contracts
-Second Brain has six plugin families: tools, tasks, services, commands, frontends, and skills.
+Second Brain has six plugin families: tools, tasks, services, commands, frontends, and techniques.
 
 Built-in plugins live under plugins/<family>. Sandbox plugins live in the matching DATA_DIR sandbox directory. Templates are the source of truth. To learn more about how they work, read the files directly.
 
-Skills are the canvas family: each skill is a `class X(BaseSkill)` defining descriptor controls as class attributes and `def run(self, canvas)` to paint a background, apply a filter, or overlay an object onto the canvas. They run in a sandboxed subprocess with restricted imports — see templates/skill_template.py and plugins/BaseSkill.py."""
+Techniques are the canvas family: each technique is a `class X(BaseTechnique)` defining descriptor controls as class attributes and `def run(self, canvas)` to paint a background, apply a filter, or overlay an object onto the canvas. They run in a sandboxed subprocess with restricted imports — see templates/technique_template.py and plugins/BaseTechnique.py."""
     )
 
 
@@ -196,11 +196,11 @@ def _authoring_guidance() -> str:
     from paths import DATA_DIR, ROOT_DIR
     return (
         f"""## Building plugins
-You can extend Second Brain by authoring tools, tasks, services, commands, frontends, and skills.
+You can extend Second Brain by authoring tools, tasks, services, commands, frontends, and techniques.
 
-Read the matching template in templates/, then write the plugin into {DATA_DIR}/sandbox_<family>/ with the required prefix, e.g. tool_foo.py in {DATA_DIR}/sandbox_tools/, or skill_foo.py in {DATA_DIR}/sandbox_skills/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
+Read the matching template in templates/, then write the plugin into {DATA_DIR}/sandbox_<family>/ with the required prefix, e.g. tool_foo.py in {DATA_DIR}/sandbox_tools/, or technique_foo.py in {DATA_DIR}/sandbox_techniques/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
 
-Skills are special: prefer the dedicated `create_skill` / `update_skill` tools over hand-writing the file. Give those tools complete `BaseSkill` class source with descriptor controls; they stamp managed metadata, AST-validate, and register it with the runtime registry in one step.
+Techniques are special: prefer the dedicated `create_technique` / `update_technique` tools over hand-writing the file. Give those tools complete `BaseTechnique` class source with descriptor controls; they stamp managed metadata, AST-validate, and register it with the runtime registry in one step.
 
 Workflow:
 1. Understand the user's intended behavior. Ask clarifying questions when a missing decision would materially change the design.
@@ -220,13 +220,13 @@ The context object is passed to every plugin and contains relevant runtime infor
     )
 
 
-def _skill_workflow() -> str:
-    return """## Canvas skill workflow
+def _technique_workflow() -> str:
+    return """## Canvas technique workflow
 Your name is Second Brain. Second Brain makes generative, algorithmic art — not literal illustration. Treat every canvas request as a prompt for an abstract algorithmic interpretation, not a representational depiction. For example, a "flower" is a Vogel spiral of palette-blended cells, not stacked petals. Second Brain plays to their strengths: math, code, and procedural generation.
 
 Workflow:
-1. Call search_skills with the subject. If a strong match exists, call execute_skill.
-2. If no match, pick an algorithmic technique appropriate to the subject *before* writing code. Then call create_skill with a complete BaseSkill class, then execute_skill with the returned slug.
+1. Call search_techniques with the subject. If a strong match exists, call execute_technique.
+2. If no match, pick an algorithmic technique appropriate to the subject *before* writing code. Then call create_technique with a complete BaseTechnique class, then execute_technique with the returned slug.
 
 Techniques (good-for hints — formulas live in the encyclopedia above):
 - vogel_spiral -- flowers, sunflowers, galaxies, star fields, seed-pod patterns

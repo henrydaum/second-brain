@@ -14,7 +14,7 @@ Each entry: (title, variable_name, description, default, type_info)
 """
 
 from billing.policy import DEFAULT_WEB_CREDITS
-from paths import DATA_DIR, ATTACHMENT_CACHE, ROOT_DIR, SANDBOX_SKILLS, SKILLS_DIR
+from paths import DATA_DIR, ATTACHMENT_CACHE, ROOT_DIR, SANDBOX_TECHNIQUES, TECHNIQUES_DIR
 
 DEFAULT_SCHEDULED_JOBS = {
     "cleanup": {
@@ -29,7 +29,7 @@ SETTINGS_DATA = [
     # --- Directories ---
     ("Sync Directories", "sync_directories",
      "Folders to monitor for new and changed files. Sub-folders are included.",
-     [str(ATTACHMENT_CACHE), str(SKILLS_DIR), str(ROOT_DIR / "plugins" / "skills"), str(SANDBOX_SKILLS)],
+     [str(ATTACHMENT_CACHE), str(TECHNIQUES_DIR), str(ROOT_DIR / "plugins" / "techniques"), str(SANDBOX_TECHNIQUES)],
      {"type": "json_list"}),
 
     ("Database Path", "db_path",
@@ -61,7 +61,7 @@ SETTINGS_DATA = [
     # --- Services ---
     ("Auto-load Services", "autoload_services",
      "Service names to load automatically on startup.",
-     ["timekeeper", "web_search_provider", "llm", "parser", "text_embedder", "image_embedder", "gmail", "skill_worker_pool", "credits"],
+     ["timekeeper", "web_search_provider", "llm", "parser", "text_embedder", "image_embedder", "gmail", "technique_worker_pool", "credits"],
      {"type": "json_list"}),
 
     # --- Canvas rendering ---
@@ -71,7 +71,7 @@ SETTINGS_DATA = [
      {"type": "slider", "range": (0, 9, 9), "is_float": False}),
 
     ("Render Memory Ceiling (MB)", "render_memory_max_mb",
-     "Hard upper bound on memory granted to a single skill subprocess. The renderer scales the cap with canvas size automatically (~1.2 GB at 2048², ~3.8 GB at 4096²); this value clamps that scaling so a runaway High-resolution download can't swap the machine. On an 8 GB system, 3072 leaves headroom for the OS and a browser; raise on systems with more RAM.",
+     "Hard upper bound on memory granted to a single technique subprocess. The renderer scales the cap with canvas size automatically (~1.2 GB at 2048², ~3.8 GB at 4096²); this value clamps that scaling so a runaway High-resolution download can't swap the machine. On an 8 GB system, 3072 leaves headroom for the OS and a browser; raise on systems with more RAM.",
      3072,
      {"type": "slider", "range": (768, 8192, 29), "is_float": False}),
 
@@ -139,10 +139,10 @@ SETTINGS_DATA = [
          "prompt_suffix": "",
          "whitelist_or_blacklist_tools": "whitelist",
          "tools_list": [
-            "search_skills",
-            "execute_skill",
+            "search_techniques",
+            "execute_technique",
             "manage_layers",
-            "read_skill"
+            "read_technique"
             ]
      },
      "artist_author": {
@@ -150,14 +150,14 @@ SETTINGS_DATA = [
          "prompt_suffix": "",
          "whitelist_or_blacklist_tools": "whitelist",
          "tools_list": [
-            "search_skills",
-            "create_skill",
-            "update_skill",
-            "delete_skill",
-            "execute_skill",
+            "search_techniques",
+            "create_technique",
+            "update_technique",
+            "delete_technique",
+            "execute_technique",
             "manage_layers",
-            "read_skill",
-            "read_skill_guide"
+            "read_technique",
+            "read_technique_guide"
             ]
      }},
      {"type": "json_dict", "hidden": True}),

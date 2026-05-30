@@ -28,15 +28,15 @@ import plugins.frontends.frontend_web as fw
 from plugins.tools.tool_manage_layers import ManageLayers
 
 
-def _install_fake_run_skill(monkeypatch):
-	"""Stub the skill subprocess: write a tiny PNG instead."""
+def _install_fake_run_technique(monkeypatch):
+	"""Stub the technique subprocess: write a tiny PNG instead."""
 	calls = []
-	def fake_run_skill(skill, *, params, palette, size, seed, input_image_path, output_image_path, **kwargs):
-		calls.append({"slug": getattr(skill, "slug", ""), "params": params, "seed": seed})
+	def fake_run_technique(technique, *, params, palette, size, seed, input_image_path, output_image_path, **kwargs):
+		calls.append({"slug": getattr(technique, "slug", ""), "params": params, "seed": seed})
 		Path(output_image_path).parent.mkdir(parents=True, exist_ok=True)
 		Image.new("RGBA", (4, 4), (16, 32, 64, 255)).save(output_image_path, format="PNG")
 		return {"ok": True}
-	monkeypatch.setattr(canvas_render, "run_skill", fake_run_skill)
+	monkeypatch.setattr(canvas_render, "run_technique", fake_run_technique)
 	return calls
 
 
@@ -52,21 +52,21 @@ def renders_dir(request, monkeypatch):
 	shutil.rmtree(target, ignore_errors=True)
 
 
-def _make_frontend(db, skills=None):
-	"""Build a WebFrontend instance with a stubbed runtime + skill registry."""
+def _make_frontend(db, techniques=None):
+	"""Build a WebFrontend instance with a stubbed runtime + technique registry."""
 	cr = CanvasRuntime(db=db)
-	skills = skills or {}
+	techniques = techniques or {}
 
-	class _SkillReg:
+	class _TechniqueReg:
 		def get(self, slug):
-			return skills.get(slug) or SimpleNamespace(slug=slug, name=slug, kind="background", controls=[], code="")
+			return techniques.get(slug) or SimpleNamespace(slug=slug, name=slug, kind="background", controls=[], code="")
 		def get_record(self, slug):
 			return self.get(slug)
 
 	runtime = SimpleNamespace(
 		services={"canvas": cr},
 		db=db,
-		skill_registry=_SkillReg(),
+		technique_registry=_TechniqueReg(),
 		config={},
 		sessions={},
 		get_session=lambda key: None,
@@ -88,14 +88,14 @@ def _seed_canvas(fe, session_id="sess1"):
 	cr = fe.runtime.services["canvas"]
 	cs = cr.for_session(key)
 	cr.handle_action(cs.canvas_id, "add_layer", {
-		"skill_slug": "fractal", "kind": "background", "controls": {},
+		"technique_slug": "fractal", "kind": "background", "controls": {},
 	})
 	return key, cs
 
 
 def test_canvas_payload_keeps_palette_controls_per_layer():
 	palette = {"type": "palette", "label": "Palette"}
-	runtime = SimpleNamespace(skill_registry=SimpleNamespace(
+	runtime = SimpleNamespace(technique_registry=SimpleNamespace(
 		get_record=lambda slug: SimpleNamespace(slug=slug, name=slug.title(), kind="background", controls=[palette]),
 	))
 	payload = fw._canvas_payload_full(runtime, "web:s", {"chain": [
@@ -108,7 +108,7 @@ def test_canvas_payload_keeps_palette_controls_per_layer():
 
 
 def test_canvas_payload_includes_layers_without_controls():
-	runtime = SimpleNamespace(skill_registry=SimpleNamespace(
+	runtime = SimpleNamespace(technique_registry=SimpleNamespace(
 		get_record=lambda slug: SimpleNamespace(slug=slug, name=slug.title(), kind="background", controls=[]),
 	))
 	payload = fw._canvas_payload_full(runtime, "web:s", {"chain": [{"slug": "plain", "kind": "background", "controls": {}}]})
@@ -117,21 +117,21 @@ def test_canvas_payload_includes_layers_without_controls():
 
 
 def test_move_layer_reorders_and_rejects_background_displacement(monkeypatch, renders_dir):
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("move_layer")
 	try:
-		skills = {
+		techniques = {
 			"base": SimpleNamespace(slug="base", name="Base", kind="background", controls=[], code=""),
 			"a": SimpleNamespace(slug="a", name="A", kind="filter", controls=[], code=""),
 			"b": SimpleNamespace(slug="b", name="B", kind="filter", controls=[], code=""),
 		}
-		fe = _make_frontend(db, skills=skills)
+		fe = _make_frontend(db, techniques=techniques)
 		key, cs = _seed_canvas(fe)
 		cr = fe.runtime.services["canvas"]
 		cs.canvas.layers[0]["slug"] = "base"
 		cs.canvas.layers[0]["kind"] = "background"
-		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "a", "kind": "filter"})
-		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "b", "kind": "filter"})
+		cr.handle_action(cs.canvas_id, "add_layer", {"technique_slug": "a", "kind": "filter"})
+		cr.handle_action(cs.canvas_id, "add_layer", {"technique_slug": "b", "kind": "filter"})
 
 		events = fe.move_layer("sess1", 2, 1)
 		assert events[0]["type"] == "hero_image"
@@ -143,7 +143,7 @@ def test_move_layer_reorders_and_rejects_background_displacement(monkeypatch, re
 
 
 def test_regenerate_applies_staged_controls_without_new_seed(monkeypatch, renders_dir):
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	seeds = iter([111, 222])
 	monkeypatch.setattr(canvas_render, "_mint_seed", lambda: next(seeds))
 	db, dbpath = _fresh_db("regen_staged")
@@ -167,7 +167,7 @@ def test_regenerate_applies_staged_controls_without_new_seed(monkeypatch, render
 
 
 def test_randomize_forces_new_seed(monkeypatch, renders_dir):
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	seeds = iter([111, 222])
 	monkeypatch.setattr(canvas_render, "_mint_seed", lambda: next(seeds))
 	db, dbpath = _fresh_db("regen_randomize")
@@ -185,7 +185,7 @@ def test_randomize_forces_new_seed(monkeypatch, renders_dir):
 
 
 def test_regenerate_invalid_staged_control_skips_render(monkeypatch, renders_dir):
-	calls = _install_fake_run_skill(monkeypatch)
+	calls = _install_fake_run_technique(monkeypatch)
 	seeds = iter([111, 222])
 	monkeypatch.setattr(canvas_render, "_mint_seed", lambda: next(seeds))
 	db, dbpath = _fresh_db("regen_invalid_control")
@@ -207,13 +207,13 @@ def test_regenerate_invalid_staged_control_skips_render(monkeypatch, renders_dir
 
 
 def test_regenerate_render_failure_rolls_back_staged_controls(monkeypatch, renders_dir):
-	def fake_run_skill(skill, *, params, output_image_path, **_kwargs):
+	def fake_run_technique(technique, *, params, output_image_path, **_kwargs):
 		if params.get("bad"):
 			raise TypeError("bad control")
 		Path(output_image_path).parent.mkdir(parents=True, exist_ok=True)
 		Image.new("RGBA", (4, 4), (16, 32, 64, 255)).save(output_image_path, format="PNG")
 		return {"ok": True}
-	monkeypatch.setattr(canvas_render, "run_skill", fake_run_skill)
+	monkeypatch.setattr(canvas_render, "run_technique", fake_run_technique)
 	db, dbpath = _fresh_db("regen_render_rollback")
 	try:
 		fe = _make_frontend(db)
@@ -231,15 +231,15 @@ def test_regenerate_render_failure_rolls_back_staged_controls(monkeypatch, rende
 
 
 def test_delete_render_failure_rolls_back_layer_change(monkeypatch, renders_dir):
-	def fake_run_skill(*_args, **_kwargs):
+	def fake_run_technique(*_args, **_kwargs):
 		raise RuntimeError("render exploded")
-	monkeypatch.setattr(canvas_render, "run_skill", fake_run_skill)
+	monkeypatch.setattr(canvas_render, "run_technique", fake_run_technique)
 	db, dbpath = _fresh_db("delete_render_rollback")
 	try:
 		fe = _make_frontend(db)
 		_, cs = _seed_canvas(fe)
 		cr = fe.runtime.services["canvas"]
-		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "swirl", "kind": "filter"})
+		cr.handle_action(cs.canvas_id, "add_layer", {"technique_slug": "swirl", "kind": "filter"})
 		before = cs.to_dict()
 
 		events = fe.delete_layer("sess1", 1)
@@ -252,13 +252,13 @@ def test_delete_render_failure_rolls_back_layer_change(monkeypatch, renders_dir)
 
 
 def test_delete_background_clears_canvas_in_web_frontend(monkeypatch, renders_dir):
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("delete_background_clears")
 	try:
 		fe = _make_frontend(db)
 		_, cs = _seed_canvas(fe)
 		cr = fe.runtime.services["canvas"]
-		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "swirl", "kind": "filter"})
+		cr.handle_action(cs.canvas_id, "add_layer", {"technique_slug": "swirl", "kind": "filter"})
 
 		events = fe.delete_layer("sess1", 0)
 
@@ -269,7 +269,7 @@ def test_delete_background_clears_canvas_in_web_frontend(monkeypatch, renders_di
 
 
 def test_manual_render_denial_surfaces_shared_credit_error_and_restores_state(monkeypatch, renders_dir):
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("manual_credit_denial")
 	try:
 		fe = _make_frontend(db)
@@ -288,7 +288,7 @@ def test_manual_render_denial_surfaces_shared_credit_error_and_restores_state(mo
 
 
 def test_download_render_denial_surfaces_shared_credit_error_without_mutation(monkeypatch, renders_dir):
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("download_credit_denial")
 	try:
 		fe = _make_frontend(db)
@@ -307,7 +307,7 @@ def test_download_render_denial_surfaces_shared_credit_error_without_mutation(mo
 
 
 def test_agent_manage_layers_clear_pushes_canvas_reset(monkeypatch, renders_dir):
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("agent_clear_reset")
 	fe = None
 	try:
@@ -316,7 +316,7 @@ def test_agent_manage_layers_clear_pushes_canvas_reset(monkeypatch, renders_dir)
 		runtime = SimpleNamespace(
 			services={"canvas": cr},
 			db=db,
-			skill_registry=SimpleNamespace(get_record=lambda slug: SimpleNamespace(slug=slug, name=slug, kind="background", controls=[], code="")),
+			technique_registry=SimpleNamespace(get_record=lambda slug: SimpleNamespace(slug=slug, name=slug, kind="background", controls=[], code="")),
 			config={},
 			sessions={},
 			get_session=lambda key: None,
@@ -329,7 +329,7 @@ def test_agent_manage_layers_clear_pushes_canvas_reset(monkeypatch, renders_dir)
 		result = ManageLayers().run(SimpleNamespace(
 			session_key=key,
 			canvas=cr,
-			skill_registry=runtime.skill_registry,
+			technique_registry=runtime.technique_registry,
 			db=db,
 			config={},
 			services={},
@@ -348,14 +348,14 @@ def test_agent_manage_layers_clear_pushes_canvas_reset(monkeypatch, renders_dir)
 
 
 # =================================================================
-# Skill search picker — backend endpoints
+# Technique search picker — backend endpoints
 # =================================================================
 
-def _make_frontend_with_skills(db, skill_specs):
+def _make_frontend_with_techniques(db, technique_specs):
 	"""Frontend with a registry whose list_records() returns the given specs."""
 	cr = CanvasRuntime(db=db)
 
-	class _SkillReg:
+	class _TechniqueReg:
 		def __init__(self, specs):
 			self._by_slug = {s["slug"]: SimpleNamespace(**s) for s in specs}
 		def get(self, slug):
@@ -365,11 +365,17 @@ def _make_frontend_with_skills(db, skill_specs):
 		def list_records(self, include_hidden=False):
 			return list(self._by_slug.values())
 
-	specs = [{**s, "controls": s.get("controls", []), "code": ""} for s in skill_specs]
+	from paths import ROOT_DIR
+	_built_in = ROOT_DIR / "plugins" / "techniques"
+	specs = [
+		{**s, "controls": s.get("controls", []), "code": "",
+		 "path": str(_built_in / f"technique_{s['slug']}.py")}
+		for s in technique_specs
+	]
 	runtime = SimpleNamespace(
 		services={"canvas": cr},
 		db=db,
-		skill_registry=_SkillReg(specs),
+		technique_registry=_TechniqueReg(specs),
 		config={},
 		sessions={},
 		get_session=lambda key: None,
@@ -383,16 +389,16 @@ def _make_frontend_with_skills(db, skill_specs):
 	return fe
 
 
-def test_skills_payload_returns_registered_skills():
-	"""skills_payload exposes the registry as a lightweight list."""
-	db, dbpath = _fresh_db("skills_payload")
+def test_techniques_payload_returns_registered_techniques():
+	"""techniques_payload exposes the registry as a lightweight list."""
+	db, dbpath = _fresh_db("techniques_payload")
 	try:
-		fe = _make_frontend_with_skills(db, [
+		fe = _make_frontend_with_techniques(db, [
 			{"slug": "mandelbrot_explorer", "name": "Mandelbrot Explorer", "description": "Zoomable fractal.", "kind": "background"},
 			{"slug": "generate_mandelbrot", "name": "Generate Mandelbrot", "description": "Static fractal.", "kind": "background"},
 			{"slug": "swirl", "name": "Swirl", "description": "Twists pixels.", "kind": "filter"},
 		])
-		out = fe.skills_payload()
+		out = fe.techniques_payload()
 		assert {r["slug"] for r in out} == {"mandelbrot_explorer", "generate_mandelbrot", "swirl"}
 		row = next(r for r in out if r["slug"] == "swirl")
 		assert row == {"slug": "swirl", "name": "Swirl", "description": "Twists pixels.", "kind": "filter"}
@@ -401,11 +407,11 @@ def test_skills_payload_returns_registered_skills():
 
 
 def test_add_layer_via_search_endpoint(monkeypatch, renders_dir):
-	"""POST /api/add_layer adds the chosen skill and re-renders."""
-	_install_fake_run_skill(monkeypatch)
+	"""POST /api/add_layer adds the chosen technique and re-renders."""
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("add_layer_endpoint")
 	try:
-		fe = _make_frontend_with_skills(db, [
+		fe = _make_frontend_with_techniques(db, [
 			{"slug": "fractal", "name": "Fractal", "description": "", "kind": "background"},
 			{"slug": "grain", "name": "Grain", "description": "", "kind": "filter"},
 		])
@@ -413,7 +419,7 @@ def test_add_layer_via_search_endpoint(monkeypatch, renders_dir):
 		key = fe.session_key("sess1")
 		cr = fe.runtime.services["canvas"]
 		cs = cr.for_session(key)
-		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {}})
+		cr.handle_action(cs.canvas_id, "add_layer", {"technique_slug": "fractal", "kind": "background", "controls": {}})
 
 		events = fe.add_layer("sess1", "grain")
 
@@ -427,7 +433,7 @@ def test_add_layer_unknown_slug_returns_error():
 	"""POST /api/add_layer with an unknown slug doesn't mutate canvas."""
 	db, dbpath = _fresh_db("add_layer_unknown")
 	try:
-		fe = _make_frontend_with_skills(db, [
+		fe = _make_frontend_with_techniques(db, [
 			{"slug": "fractal", "name": "Fractal", "description": "", "kind": "background"},
 		])
 		key = fe.session_key("sess1")
@@ -435,21 +441,21 @@ def test_add_layer_unknown_slug_returns_error():
 		cs = cr.for_session(key)
 		before = list(cs.canvas.layers)
 
-		events = fe.add_layer("sess1", "nonexistent_skill")
+		events = fe.add_layer("sess1", "nonexistent_technique")
 
 		assert events[0]["type"] == "error"
-		assert "nonexistent_skill" in events[0]["content"]
+		assert "nonexistent_technique" in events[0]["content"]
 		assert cs.canvas.layers == before
 	finally:
 		_cleanup_db(db, dbpath)
 
 
 def test_add_layer_background_replaces_existing(monkeypatch, renders_dir):
-	"""Adding a background skill replaces only layer 0; filters on top survive."""
-	_install_fake_run_skill(monkeypatch)
+	"""Adding a background technique replaces only layer 0; filters on top survive."""
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("add_layer_bg_replace")
 	try:
-		fe = _make_frontend_with_skills(db, [
+		fe = _make_frontend_with_techniques(db, [
 			{"slug": "fractal", "name": "Fractal", "description": "", "kind": "background"},
 			{"slug": "voronoi", "name": "Voronoi", "description": "", "kind": "background"},
 			{"slug": "grain", "name": "Grain", "description": "", "kind": "filter"},
@@ -457,8 +463,8 @@ def test_add_layer_background_replaces_existing(monkeypatch, renders_dir):
 		key = fe.session_key("sess1")
 		cr = fe.runtime.services["canvas"]
 		cs = cr.for_session(key)
-		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {}})
-		cr.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "grain", "kind": "filter", "controls": {}})
+		cr.handle_action(cs.canvas_id, "add_layer", {"technique_slug": "fractal", "kind": "background", "controls": {}})
+		cr.handle_action(cs.canvas_id, "add_layer", {"technique_slug": "grain", "kind": "filter", "controls": {}})
 
 		# Swapping background replaces only layer 0 — the grain filter stays.
 		events = fe.add_layer("sess1", "voronoi")
@@ -489,7 +495,7 @@ def _cleanup_db(db, path):
 
 def test_share_populates_gallery_listing(monkeypatch, renders_dir):
 	"""After share(), the canvas appears in gallery() with title/artist."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("gallery")
 	try:
 		fe = _make_frontend(db)
@@ -517,7 +523,7 @@ def test_share_populates_gallery_listing(monkeypatch, renders_dir):
 
 def test_save_populates_archive_listing(monkeypatch, renders_dir):
 	"""After save_canvas(), the canvas appears in this user's archive."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("archive")
 	try:
 		fe = _make_frontend(db)
@@ -536,7 +542,7 @@ def test_save_populates_archive_listing(monkeypatch, renders_dir):
 
 
 def test_magic_link_claims_guest_saved_and_shared_canvases(monkeypatch, renders_dir):
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("guest_claim")
 	try:
 		fe = _make_frontend(db)
@@ -560,7 +566,7 @@ def test_magic_link_claims_guest_saved_and_shared_canvases(monkeypatch, renders_
 
 
 def test_checkout_claims_guest_saved_and_shared_canvases(monkeypatch, renders_dir):
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("guest_checkout_claim")
 	try:
 		fe = _make_frontend(db)
@@ -594,7 +600,7 @@ def test_checkout_claims_guest_saved_and_shared_canvases(monkeypatch, renders_di
 
 def test_pool_share_payload_resolves_after_render(monkeypatch, renders_dir):
 	"""Once we've rendered, the pool_hash resolves to share payload."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("payload")
 	try:
 		fe = _make_frontend(db)
@@ -613,7 +619,7 @@ def test_pool_share_payload_resolves_after_render(monkeypatch, renders_dir):
 
 def test_qr_png_is_generated_after_share(monkeypatch, renders_dir):
 	"""share_qr_png returns a valid PNG for a shared pool_hash."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("qr")
 	try:
 		fe = _make_frontend(db)
@@ -632,7 +638,7 @@ def test_qr_png_is_generated_after_share(monkeypatch, renders_dir):
 
 def test_share_page_link_open_scores_but_qr_does_not(monkeypatch, renders_dir):
 	"""HTML share-page opens count; QR generation does not."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("linkopen")
 	try:
 		fe = _make_frontend(db)
@@ -646,7 +652,7 @@ def test_share_page_link_open_scores_but_qr_does_not(monkeypatch, renders_dir):
 		fe.share_qr_png(ph)
 
 		actions = db.conn.execute("SELECT COUNT(*) AS n FROM user_canvas_actions WHERE action = 'link_open'").fetchone()["n"]
-		score = db.conn.execute("SELECT link_opens FROM skill_scores WHERE slug = 'fractal'").fetchone()["link_opens"]
+		score = db.conn.execute("SELECT link_opens FROM technique_scores WHERE slug = 'fractal'").fetchone()["link_opens"]
 		assert actions == 1
 		assert score == 1.0
 	finally:
@@ -657,7 +663,7 @@ def test_share_route_serves_og_html_with_redirect(monkeypatch, renders_dir):
 	"""GET /share/{pool_hash} serves an HTML page containing OG/Twitter Card
 	tags + a meta-refresh + JS redirect to /?share=... and records
 	link_open. Crawlers see OG tags; browsers see the redirect."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("og_html")
 	try:
 		fe = _make_frontend(db)
@@ -698,7 +704,7 @@ def test_share_route_serves_og_html_with_redirect(monkeypatch, renders_dir):
 
 def test_share_og_html_escapes_user_supplied_strings(monkeypatch, renders_dir):
 	"""Title/artist must be HTML-escaped — they come from user input."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("og_escape")
 	try:
 		fe = _make_frontend(db)

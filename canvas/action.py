@@ -122,10 +122,10 @@ class CanvasAddLayer(CanvasAction):
 
 	def execute(self) -> ActionResult:
 		"""Push the entry; let Canvas validate the kind."""
-		slug = self.content.get("skill_slug")
+		slug = self.content.get("technique_slug")
 		kind = self.content.get("kind")
 		if not slug:
-			raise self.error(ERROR_INVALID_INPUT, "add_layer requires 'skill_slug'.")
+			raise self.error(ERROR_INVALID_INPUT, "add_layer requires 'technique_slug'.")
 		if kind not in ("background", "filter", "object"):
 			raise self.error(ERROR_INVALID_INPUT, f"add_layer 'kind' must be 'background', 'filter', or 'object' (got {kind!r}).")
 		entry = {
@@ -134,7 +134,7 @@ class CanvasAddLayer(CanvasAction):
 			"controls": dict(self.content.get("controls") or {}),
 		}
 		self.cs.canvas.push_chain_entry(entry)
-		ev = self.cs.event("add_layer", skill_slug=slug, kind=kind)
+		ev = self.cs.event("add_layer", technique_slug=slug, kind=kind)
 		return ActionResult(True, self.action_type, events=[ev])
 
 

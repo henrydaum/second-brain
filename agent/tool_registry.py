@@ -44,7 +44,7 @@ class ToolRegistry:
         self._lock = threading.Lock()
         self.orchestrator = None        # set after construction in main.pyw
         self.runtime = None             # ConversationRuntime, set by frontend bootstrap
-        self.skill_registry = None      # SkillRegistry, set after construction in main.pyw
+        self.technique_registry = None      # TechniqueRegistry, set after construction in main.pyw
 
     def register(self, tool: BaseTool):
         """Register a tool. Overwrites if name already exists."""
@@ -108,7 +108,7 @@ class ToolRegistry:
         context = build_context(self.db, self.config, self.services,
                                 call_tool=self.call,
                                 tool_registry=self,
-                                skill_registry=self.skill_registry,
+                                technique_registry=self.technique_registry,
                                 orchestrator=self.orchestrator,
                                 runtime=self.runtime,
                                 session_key=session_key,

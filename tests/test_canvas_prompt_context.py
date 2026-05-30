@@ -8,10 +8,10 @@ from state_machine.conversation import ConversationState, Participant
 
 
 class Registry:
-    tools = {"execute_skill": SimpleNamespace(max_calls=3)}
+    tools = {"execute_technique": SimpleNamespace(max_calls=3)}
 
     def get_all_schemas(self):
-        return [{"function": {"name": "execute_skill", "description": "Execute canvas skill."}}]
+        return [{"function": {"name": "execute_technique", "description": "Execute canvas technique."}}]
 
 
 def sectioned_prompt():
@@ -21,7 +21,7 @@ def sectioned_prompt():
 def test_session_system_prompt_includes_live_canvas_state():
     canvas = CanvasRuntime()
     cs = canvas.for_session("chat")
-    canvas.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "color_field", "kind": "background", "controls": {"mode": "linear"}})
+    canvas.handle_action(cs.canvas_id, "add_layer", {"technique_slug": "color_field", "kind": "background", "controls": {"mode": "linear"}})
     runtime = SimpleNamespace(db=None, config={}, services={"canvas": canvas}, tool_registry=Registry(), system_prompt=sectioned_prompt, active_session_key="chat")
 
     dynamic = session_system_prompt(runtime, RuntimeSession("chat", ConversationState([Participant("user", "user"), Participant("agent", "agent")])))()[-1]["content"]
@@ -34,7 +34,7 @@ def test_session_system_prompt_includes_live_canvas_state():
 def test_build_prompt_sections_canvas_state_reflects_manual_canvas_edits():
     canvas = CanvasRuntime()
     cs = canvas.for_session("chat")
-    canvas.handle_action(cs.canvas_id, "add_layer", {"skill_slug": "gradient_field", "kind": "background", "controls": {"mode": "radial"}})
+    canvas.handle_action(cs.canvas_id, "add_layer", {"technique_slug": "gradient_field", "kind": "background", "controls": {"mode": "radial"}})
 
     before = build_prompt_sections(None, None, Registry(), {"canvas": canvas}, session_key="chat")[-1]["content"]
     canvas.handle_action(cs.canvas_id, "clear", {})

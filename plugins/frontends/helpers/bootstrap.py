@@ -125,13 +125,13 @@ class FrontendManager:
 
 def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
                     tool_registry, services, config, root_dir,
-                    skill_registry=None):
+                    technique_registry=None):
     """Start frontends."""
     if not frontends:
         return None, {}, []
 
     runtime = _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir,
-                                    skill_registry=skill_registry)
+                                    technique_registry=technique_registry)
     from canvas.render import apply_render_config
     apply_render_config(config)
     classes = discover_frontends(root_dir, config)
@@ -155,7 +155,7 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
 
 
 def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir,
-                          skill_registry=None):
+                          technique_registry=None):
     """Internal helper to handle conversation runtime."""
     # Parallel canvas state machine. Lives in the same shared services bag so
     # build_context picks it up wherever a SecondBrainContext is built —
@@ -169,7 +169,7 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
             scaffold.db, config, services, tool_registry=tool_registry,
             orchestrator=scaffold.orchestrator, runtime=ref.get("runtime"),
             root_dir=root_dir, session_key=session_key,
-            skill_registry=skill_registry,
+            technique_registry=technique_registry,
         )
     )
     discover_commands(root_dir, registry, config)
@@ -194,7 +194,7 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
     )
     runtime.command_registry = registry
     runtime._orchestrator_ref = scaffold.orchestrator
-    runtime.skill_registry = skill_registry
+    runtime.technique_registry = technique_registry
     ref["runtime"] = runtime
     # Tasks running through the orchestrator reach the runtime via
     # context.runtime.

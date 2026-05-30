@@ -2,7 +2,7 @@
 // the tutorial randomly picks three from this pool each time it's built.
 // Each entry: { prompt: <sent to the chat>, label: <shown on the chip> }.
 const PROMPT_SUGGESTIONS = [
-  // Iconic single-skill showcases — skill-name labels
+  // Iconic single-technique showcases — technique-name labels
   { prompt: "Show me the Mandelbrot Explorer.", label: "Mandelbrot set" },
   { prompt: "Show me the Newton Basins Explorer with five roots and a Fisheye lens filter. Also, make it coral-colored.", label: "Newton Basins" },
   { prompt: "Show me a Lorenz Attractor zoomed out, with the Synthwave palette.", label: "Lorenz Attractor" },

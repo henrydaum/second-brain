@@ -130,31 +130,31 @@ _TASK_CONFIG = _discovery_config("task")
 _SERVICE_CONFIG = _discovery_config("service")
 _COMMAND_CONFIG = _discovery_config("command")
 _FRONTEND_CONFIG = _discovery_config("frontend")
-_SKILL_CONFIG = _discovery_config("skill")
+_TECHNIQUE_CONFIG = _discovery_config("technique")
 
 
 # ── Bulk discovery (startup) ─────────────────────────────────────────
 
 def discover_all(root_dir: Path, tool_registry, orchestrator, config: dict,
-                 skill_registry=None) -> dict:
+                 technique_registry=None) -> dict:
     """Discover all plugins. Returns the services dict."""
     discover_tools(root_dir, tool_registry, config)
     discover_tasks(root_dir, orchestrator, config)
-    if skill_registry is not None:
-        discover_skills(root_dir, skill_registry, config)
+    if technique_registry is not None:
+        discover_techniques(root_dir, technique_registry, config)
     return discover_services(root_dir, config)
 
 
-def discover_skills(root_dir: Path, skill_registry, config: dict | None = None, reload: bool = False):
-    """Discover and register all skills (baked-in + sandbox)."""
-    from plugins.BaseSkill import BaseSkill
-    cfg = _SKILL_CONFIG
+def discover_techniques(root_dir: Path, technique_registry, config: dict | None = None, reload: bool = False):
+    """Discover and register all techniques (baked-in + sandbox)."""
+    from plugins.BaseTechnique import BaseTechnique
+    cfg = _TECHNIQUE_CONFIG
     t0 = time.time()
     count = 0
     baked_in_slugs = set()
 
     if reload:
-        _purge_plugin_settings({"skill"})
+        _purge_plugin_settings({"technique"})
 
     if cfg["baked_in_dir"].exists():
         for py_file in sorted(cfg["baked_in_dir"].glob(cfg["glob"])):
@@ -162,11 +162,11 @@ def discover_skills(root_dir: Path, skill_registry, config: dict | None = None, 
             module = _load_baked_in(module_name, reload)
             if module is None:
                 continue
-            for instance in _find_subclass_instances(module, BaseSkill, module_name):
+            for instance in _find_subclass_instances(module, BaseTechnique, module_name):
                 instance._source_path = _source_path(py_file)
-                skill_registry.register(instance)
-                _collect_config_settings(instance, plugin_type="skill")
-                from plugins.skills.helpers.skill_store import slugify
+                technique_registry.register(instance)
+                _collect_config_settings(instance, plugin_type="technique")
+                from plugins.techniques.helpers.technique_store import slugify
                 baked_in_slugs.add(slugify(getattr(instance, "name", "") or py_file.stem))
                 count += 1
 
@@ -176,18 +176,18 @@ def discover_skills(root_dir: Path, skill_registry, config: dict | None = None, 
             module = _load_sandbox(module_name, py_file, reload)
             if module is None:
                 continue
-            for instance in _find_subclass_instances(module, BaseSkill, module_name):
-                from plugins.skills.helpers.skill_store import slugify
+            for instance in _find_subclass_instances(module, BaseTechnique, module_name):
+                from plugins.techniques.helpers.technique_store import slugify
                 slug = slugify(getattr(instance, "name", "") or py_file.stem)
                 if slug in baked_in_slugs:
-                    logger.warning(f"Sandbox skill '{slug}' collides with baked-in — skipped")
+                    logger.warning(f"Sandbox technique '{slug}' collides with baked-in — skipped")
                     continue
                 instance._source_path = _source_path(py_file)
-                skill_registry.register(instance)
-                _collect_config_settings(instance, plugin_type="skill")
+                technique_registry.register(instance)
+                _collect_config_settings(instance, plugin_type="technique")
                 count += 1
 
-    logger.info(f"Discovered {count} skill(s) in {time.time() - t0:.2f}s")
+    logger.info(f"Discovered {count} technique(s) in {time.time() - t0:.2f}s")
 
 
 def discover_commands(root_dir: Path, command_registry, config: dict | None = None, reload: bool = False):
@@ -437,7 +437,7 @@ def load_single_plugin(plugin_type: str, file_path: Path,
                        tool_registry=None, orchestrator=None,
                        services: dict = None, config: dict = None,
                        command_registry=None, frontend_manager=None,
-                       skill_registry=None) -> tuple[str | None, str | None]:
+                       technique_registry=None) -> tuple[str | None, str | None]:
     """
     Load a single sandbox plugin file and register it.
 
@@ -454,8 +454,8 @@ def load_single_plugin(plugin_type: str, file_path: Path,
         return _load_single_command(file_path, command_registry or getattr(tool_registry, "command_registry", None))
     elif plugin_type == "frontend":
         return _load_single_frontend(file_path, frontend_manager)
-    elif plugin_type == "skill":
-        return _load_single_skill(file_path, skill_registry)
+    elif plugin_type == "technique":
+        return _load_single_technique(file_path, technique_registry)
     else:
         return None, f"Unknown plugin_type: {plugin_type}"
 
@@ -464,7 +464,7 @@ def unload_plugin(plugin_type: str, plugin_name: str,
                   tool_registry=None, orchestrator=None,
                   services: dict = None, source_path: str = None,
                   command_registry=None, frontend_manager=None,
-                  skill_registry=None):
+                  technique_registry=None):
     """Unregister a plugin. For services, uses source_path to find all
     service names registered from that file."""
     if plugin_type == "tool" and tool_registry:
@@ -486,11 +486,11 @@ def unload_plugin(plugin_type: str, plugin_name: str,
         adapters = getattr(frontend_manager, "adapters", {})
         for name in _names_by_source({k: v.__class__ for k, v in adapters.items()}, plugin_name, source_path):
             frontend_manager.unregister(name)
-    elif plugin_type == "skill" and skill_registry is not None:
+    elif plugin_type == "technique" and technique_registry is not None:
         if source_path:
-            skill_registry.unregister_by_source(source_path)
+            technique_registry.unregister_by_source(source_path)
         elif plugin_name:
-            skill_registry.unregister(plugin_name)
+            technique_registry.unregister(plugin_name)
 
 
 def _names_by_source(items: dict, plugin_name: str, source_path: str | None) -> list[str]:
@@ -585,32 +585,32 @@ def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None
     return cls.name, None
 
 
-def _load_single_skill(file_path: Path, skill_registry) -> tuple[str | None, str | None]:
-    """Internal helper to load a single skill file (sandbox)."""
-    from plugins.BaseSkill import BaseSkill
-    from plugins.skills.helpers.skill_store import slugify
+def _load_single_technique(file_path: Path, technique_registry) -> tuple[str | None, str | None]:
+    """Internal helper to load a single technique file (sandbox)."""
+    from plugins.BaseTechnique import BaseTechnique
+    from plugins.techniques.helpers.technique_store import slugify
     info, err = plugin_info(file_path)
     if err:
         return None, err
-    if skill_registry is None:
-        return None, "No skill registry available"
+    if technique_registry is None:
+        return None, "No technique registry available"
 
     # Drop any prior registration from this exact file so reloads replace cleanly.
-    skill_registry.unregister_by_source(file_path)
+    technique_registry.unregister_by_source(file_path)
 
     module_name = info.module_name
     module = _load_sandbox(module_name, file_path, reload=True)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
-    instances = _find_subclass_instances(module, BaseSkill, module_name)
+    instances = _find_subclass_instances(module, BaseTechnique, module_name)
     if not instances:
-        return None, f"No BaseSkill subclass found in {file_path.name}"
+        return None, f"No BaseTechnique subclass found in {file_path.name}"
 
     instance = instances[0]
     instance._source_path = _source_path(file_path)
-    skill_registry.register(instance)
-    _collect_config_settings(instance, plugin_type="skill")
+    technique_registry.register(instance)
+    _collect_config_settings(instance, plugin_type="technique")
     return slugify(getattr(instance, "name", "") or file_path.stem), None
 
 

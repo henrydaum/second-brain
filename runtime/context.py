@@ -42,7 +42,7 @@ class SecondBrainContext:
     approve_command: Any = None  # callable(command, justification) -> bool (tools only)
     request_user_input: Any = None # callable(...)->StateMachineApprovalRequest (tools only)
     tool_registry: Any = None    # ToolRegistry instance (tools only)
-    skill_registry: Any = None   # SkillRegistry instance (skill tools only)
+    technique_registry: Any = None   # TechniqueRegistry instance (technique tools only)
     orchestrator: Any = None     # Orchestrator instance (tools only)
     runtime: Any = None          # ConversationRuntime — present for tasks that
                                  # need to drive a state-machine session.
@@ -59,7 +59,7 @@ class SecondBrainContext:
                                  # (palette_color, vogel_spiral, fbm, voronoi_nearest,
                                  # flow_field, lerp, smoothstep, oklch_to_rgb, ...).
                                  # Lets parent-process tools/tasks reuse the same
-                                 # primitives skills consume in the sandbox.
+                                 # primitives techniques consume in the sandbox.
 
 
 def build_context(db, config: dict, services: dict, call_tool=None,
@@ -70,7 +70,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
                    session_key: str | None = None,
                    user_initiated: bool = False,
                    current_tool_name: str | None = None,
-                   skill_registry=None) -> SecondBrainContext:
+                   technique_registry=None) -> SecondBrainContext:
     """
     Build a fully wired runtime context.
 
@@ -126,7 +126,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
                 return False
             return req.approved
 
-    from plugins.skills.helpers.art_kit import build_namespace as _build_art_kit
+    from plugins.techniques.helpers.art_kit import build_namespace as _build_art_kit
 
     # Callers that don't know about the canvas runtime (existing
     # orchestrator/tool_registry sites) get it via the services dict, which
@@ -142,7 +142,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         approve_command=approve_command,
         request_user_input=request_user_input,
         tool_registry=tool_registry,
-        skill_registry=skill_registry,
+        technique_registry=technique_registry,
         orchestrator=orchestrator,
         runtime=runtime,
         canvas=canvas,

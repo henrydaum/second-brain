@@ -5,9 +5,9 @@ Covers:
   - render_canvas writing canvas_pools on cache miss (canvas/render.py).
   - CanvasRuntime.remix(pool_hash) cloning state under a new canvas_id.
   - canvas/actions.py recording user_canvas_actions + fanning out into
-    skill_scores via skill_scoring.
+    technique_scores via technique_scoring.
 
-Skill subprocess is monkeypatched in the render tests so the suite stays fast.
+Technique subprocess is monkeypatched in the render tests so the suite stays fast.
 """
 
 from __future__ import annotations
@@ -48,17 +48,17 @@ def _cleanup(db: Database, path: Path) -> None:
 def _seed_state(slug: str = "fractal", **controls) -> CanvasState:
 	"""One-layer background, populated and ready to render."""
 	cs = CanvasState()
-	cs.enact("add_layer", {"skill_slug": slug, "kind": "background", "controls": controls})
+	cs.enact("add_layer", {"technique_slug": slug, "kind": "background", "controls": controls})
 	return cs
 
 
-def _install_fake_run_skill(monkeypatch):
-	"""Replace render.run_skill with a stub that writes a tiny PNG."""
-	def fake_run_skill(skill, *, params, palette, size, seed, input_image_path, output_image_path, **kwargs):
+def _install_fake_run_technique(monkeypatch):
+	"""Replace render.run_technique with a stub that writes a tiny PNG."""
+	def fake_run_technique(technique, *, params, palette, size, seed, input_image_path, output_image_path, **kwargs):
 		Path(output_image_path).parent.mkdir(parents=True, exist_ok=True)
 		Image.new("RGBA", (4, 4), (32, 64, 96, 255)).save(output_image_path, format="PNG")
 		return {"ok": True}
-	monkeypatch.setattr(canvas_render, "run_skill", fake_run_skill)
+	monkeypatch.setattr(canvas_render, "run_technique", fake_run_technique)
 
 
 @pytest.fixture
@@ -73,12 +73,12 @@ def renders_dir(request, monkeypatch):
 	shutil.rmtree(target, ignore_errors=True)
 
 
-def _skill(slug: str, kind: str = "background"):
+def _technique(slug: str, kind: str = "background"):
 	return SimpleNamespace(slug=slug, kind=kind, code="")
 
 
-def _loader(skills: dict):
-	return lambda slug: skills.get(slug)
+def _loader(techniques: dict):
+	return lambda slug: techniques.get(slug)
 
 
 # =============================================================
@@ -131,12 +131,12 @@ def test_load_pool_unknown_returns_none():
 
 def test_render_canvas_writes_pool_on_cache_miss(monkeypatch, renders_dir):
 	"""A fresh render with db= writes the canvas_pools row."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("render_pool")
 	try:
 		cs = _seed_state("fractal", z=2.0)
-		loader = _loader({"fractal": _skill("fractal")})
-		result = canvas_render.render_canvas(cs, skill_loader=loader, seed=11, db=db)
+		loader = _loader({"fractal": _technique("fractal")})
+		result = canvas_render.render_canvas(cs, technique_loader=loader, seed=11, db=db)
 		assert result.cache_hit is False
 		ph = result.pool_hash
 		loaded = canvas_persistence.load_pool(db, ph)
@@ -148,25 +148,25 @@ def test_render_canvas_writes_pool_on_cache_miss(monkeypatch, renders_dir):
 
 def test_render_canvas_does_not_require_db(monkeypatch, renders_dir):
 	"""Rendering without ``db`` still works — pool write is silently skipped."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	cs = _seed_state("fractal")
-	loader = _loader({"fractal": _skill("fractal")})
+	loader = _loader({"fractal": _technique("fractal")})
 	# Just verify no exception when db is omitted.
-	canvas_render.render_canvas(cs, skill_loader=loader, seed=7)
+	canvas_render.render_canvas(cs, technique_loader=loader, seed=7)
 
 
 def test_render_canvas_writes_pool_on_cache_hit_too(monkeypatch, renders_dir):
 	"""Pool write must run on cache hits, not just misses — otherwise canvases
 	rendered before canvas_pools existed would never become shareable. INSERT OR
 	IGNORE keeps repeat writes free."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	db, dbpath = _fresh_db("render_pool_hit")
 	try:
 		cs = _seed_state("fractal")
-		loader = _loader({"fractal": _skill("fractal")})
+		loader = _loader({"fractal": _technique("fractal")})
 
 		# First call: miss → renders, writes pool row.
-		canvas_render.render_canvas(cs, skill_loader=loader, seed=11, db=db)
+		canvas_render.render_canvas(cs, technique_loader=loader, seed=11, db=db)
 		# Clear canvas_pools to simulate "pool entry never existed yet"
 		# (e.g. file on disk from before the new code).
 		with db.lock:
@@ -174,7 +174,7 @@ def test_render_canvas_writes_pool_on_cache_hit_too(monkeypatch, renders_dir):
 			db.conn.commit()
 
 		# Second call: same config → cache hit. MUST still write the pool row.
-		canvas_render.render_canvas(cs, skill_loader=loader, db=db)
+		canvas_render.render_canvas(cs, technique_loader=loader, db=db)
 		ph = canvas_render.pool_hash(cs.canvas)
 		assert canvas_persistence.load_pool(db, ph) is not None
 	finally:
@@ -234,7 +234,7 @@ def test_remix_does_not_disturb_original_canvas():
 		rt = CanvasRuntime(db=db)
 		fresh = rt.remix(ph)
 		assert fresh is not None
-		rt.handle_action(fresh.canvas_id, "add_layer", {"skill_slug": "swirl", "kind": "filter"})
+		rt.handle_action(fresh.canvas_id, "add_layer", {"technique_slug": "swirl", "kind": "filter"})
 		# Source's persisted pool still has only the one layer.
 		reloaded = canvas_persistence.load_pool(db, ph)
 		assert len(reloaded["layers"]) == 1
@@ -265,8 +265,8 @@ def test_record_user_action_writes_row():
 		_cleanup(db, path)
 
 
-def test_record_user_action_bumps_skill_scores():
-	"""'share' fans out to skill_scores via skill_scoring.record_event."""
+def test_record_user_action_bumps_technique_scores():
+	"""'share' fans out to technique_scores via technique_scoring.record_event."""
 	db, path = _fresh_db("ucactions_scores")
 	try:
 		canvas_actions.record_user_action(
@@ -277,7 +277,7 @@ def test_record_user_action_bumps_skill_scores():
 		)
 		scores = {
 			r["slug"]: r["shares"]
-			for r in db.conn.execute("SELECT slug, shares FROM skill_scores").fetchall()
+			for r in db.conn.execute("SELECT slug, shares FROM technique_scores").fetchall()
 		}
 		# Default weights: 0.6 to background, 0.4 to the single filter.
 		assert scores["fractal"] == 0.6

@@ -6,7 +6,7 @@ import threading
 import time
 from pathlib import Path
 
-from paths import DATA_DIR, ROOT_DIR, SANDBOX_SKILLS, SKILLS_DIR
+from paths import DATA_DIR, ROOT_DIR, SANDBOX_TECHNIQUES, TECHNIQUES_DIR
 
 # Silence noisy libraries
 logging.getLogger("PIL").setLevel(logging.WARNING)
@@ -37,8 +37,8 @@ from pipeline.watcher import Watcher
 from pipeline.event_trigger import EventTrigger
 from agent.tool_registry import ToolRegistry
 from plugins.frontends.helpers.bootstrap import start_frontends
-from plugins.plugin_discovery import discover_services, discover_skills, discover_tasks, discover_tools, get_plugin_settings
-from plugins.skills.helpers.skill_registry import SkillRegistry
+from plugins.plugin_discovery import discover_services, discover_techniques, discover_tasks, discover_tools, get_plugin_settings
+from plugins.techniques.helpers.technique_registry import TechniqueRegistry
 
 
 @dataclass
@@ -49,7 +49,7 @@ class Scaffold:
 	services: dict = field(default_factory=dict)
 	config: dict = field(default_factory=dict)
 	tool_registry: Any = None
-	skill_registry: Any = None
+	technique_registry: Any = None
 	watcher: Any = None
 	event_trigger: Any = None
 	frontend_runtime: Any = None
@@ -69,7 +69,7 @@ def main():
 	# --- 1. Load config ---
 	config = config_manager.load()
 	sync_dirs = [str(p) for p in (config.get("sync_directories") or [])]
-	for d in (SKILLS_DIR, ROOT_DIR / "plugins" / "skills", SANDBOX_SKILLS):
+	for d in (TECHNIQUES_DIR, ROOT_DIR / "plugins" / "techniques", SANDBOX_TECHNIQUES):
 		if str(d) not in sync_dirs:
 			sync_dirs.append(str(d))
 	if sync_dirs != config.get("sync_directories"):
@@ -82,8 +82,12 @@ def main():
 
 	# --- 1b. Ensure sandbox directories exist ---
 	from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS
-	for d in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS, SANDBOX_SKILLS):
+	for d in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS, SANDBOX_TECHNIQUES):
 		d.mkdir(parents=True, exist_ok=True)
+
+	# --- 1b'. One-time skill→technique sandbox migration (before discovery) ---
+	from plugins.techniques.helpers.sandbox_migration import migrate_sandbox_skills
+	migrate_sandbox_skills()
 
 	# --- 1c. Load existing plugin config into runtime config ---
 	config_manager.load_plugin_config_early(config)
@@ -130,19 +134,19 @@ def main():
 	discover_tools(_ROOT, tool_registry, config)
 	logger.info(f"Tools registered: {list(tool_registry.tools.keys())} ({time.time() - t0:.2f}s)")
 
-	# --- 5d. Initialize skill registry ---
+	# --- 5d. Initialize technique registry ---
 	t0 = time.time()
-	skill_registry = SkillRegistry()
-	discover_skills(_ROOT, skill_registry, config)
-	tool_registry.skill_registry = skill_registry
-	orchestrator.skill_registry = skill_registry
-	logger.info(f"Skills registered: {len(skill_registry.list(include_hidden=True))} ({time.time() - t0:.2f}s)")
+	technique_registry = TechniqueRegistry()
+	discover_techniques(_ROOT, technique_registry, config)
+	tool_registry.technique_registry = technique_registry
+	orchestrator.technique_registry = technique_registry
+	logger.info(f"Techniques registered: {len(technique_registry.list(include_hidden=True))} ({time.time() - t0:.2f}s)")
 
 	# --- 5c. Reconcile plugin config defaults ---
 	config_manager.reconcile_plugin_config(config, get_plugin_settings())
 
 	# --- 6. Initialize app context ---
-	scaffold = Scaffold(orchestrator, database, services, config, tool_registry, skill_registry)
+	scaffold = Scaffold(orchestrator, database, services, config, tool_registry, technique_registry)
 
 	# --- 6b. Determine which frontends to start ---
 	frontends = set(config.get("enabled_frontends", ["web"]))
@@ -259,15 +263,15 @@ def main():
 	# --- 10. Start frontends via the shared runtime/bootstrap path ---
 	scaffold.frontend_runtime, _adapters, _frontend_threads = start_frontends(
 		frontends, scaffold, shutdown, _shutdown, tool_registry, services, config, _ROOT,
-		skill_registry=skill_registry,
+		technique_registry=technique_registry,
 	)
-	_bind_runtime_services(services, tool_registry, orchestrator, scaffold.frontend_runtime, skill_registry)
+	_bind_runtime_services(services, tool_registry, orchestrator, scaffold.frontend_runtime, technique_registry)
 
 	# --- 11. Main thread idles until shutdown ---
 	while not _shutdown.is_set():
 		_shutdown.wait(timeout=1.0)
 
-def _bind_runtime_services(services, tool_registry, orchestrator, runtime, skill_registry=None):
+def _bind_runtime_services(services, tool_registry, orchestrator, runtime, technique_registry=None):
 	for svc in services.values():
 		if hasattr(svc, "bind_runtime"):
 			svc.bind_runtime(
@@ -275,7 +279,7 @@ def _bind_runtime_services(services, tool_registry, orchestrator, runtime, skill
 				orchestrator=orchestrator,
 				command_registry=getattr(runtime, "command_registry", None),
 				frontend_manager=getattr(runtime, "frontend_manager", None),
-				skill_registry=skill_registry,
+				technique_registry=technique_registry,
 			)
 
 

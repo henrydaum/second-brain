@@ -47,7 +47,7 @@ def test_save_and_load_round_trip():
 	try:
 		cs = CanvasState(canvas_id="abc")
 		cs.enact("set_palette", {"palette_id": "obsidian"})
-		cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {"z": 2}})
+		cs.enact("add_layer", {"technique_slug": "fractal", "kind": "background", "controls": {"z": 2}})
 		cs.render_seed = 123
 		canvas_persistence.save(db, cs)
 

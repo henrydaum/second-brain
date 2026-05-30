@@ -1,7 +1,7 @@
 """Tests for canvas.render.
 
-We don't run the real skill subprocess sandbox here — we monkeypatch
-``canvas.render.run_skill`` with a stub that writes a tiny PNG to the
+We don't run the real technique subprocess sandbox here — we monkeypatch
+``canvas.render.run_technique`` with a stub that writes a tiny PNG to the
 output path. That lets us assert folder layout, seed handling, cache
 behavior, and chain-input threading without paying the subprocess cost.
 
@@ -32,14 +32,14 @@ def _write_fake_png(output_image_path: Path, color: tuple[int, int, int, int] = 
 	Image.new("RGBA", (4, 4), color).save(output_image_path, format="PNG")
 
 
-def _install_fake_run_skill(monkeypatch):
-	"""Replace render.run_skill with a counter-equipped stub."""
+def _install_fake_run_technique(monkeypatch):
+	"""Replace render.run_technique with a counter-equipped stub."""
 	calls: list[dict] = []
 
-	def fake_run_skill(skill, *, params, palette, size, seed, input_image_path, output_image_path, **kwargs):
+	def fake_run_technique(technique, *, params, palette, size, seed, input_image_path, output_image_path, **kwargs):
 		calls.append({
-			"slug": skill.slug,
-			"kind": skill.kind,
+			"slug": technique.slug,
+			"kind": technique.kind,
 			"params": dict(params),
 			"palette_id": palette.id,
 			"size": size,
@@ -52,7 +52,7 @@ def _install_fake_run_skill(monkeypatch):
 		_write_fake_png(Path(output_image_path), color=(seed % 200, (seed // 7) % 200, 96, 255))
 		return {"ok": True}
 
-	monkeypatch.setattr(canvas_render, "run_skill", fake_run_skill)
+	monkeypatch.setattr(canvas_render, "run_technique", fake_run_technique)
 	return calls
 
 
@@ -73,20 +73,20 @@ def renders_dir(request, monkeypatch):
 	shutil.rmtree(target, ignore_errors=True)
 
 
-def _skill(slug: str, kind: str = "background"):
-	"""Build a minimal Skill stand-in matching what render.py reads (slug + kind)."""
+def _technique(slug: str, kind: str = "background"):
+	"""Build a minimal Technique stand-in matching what render.py reads (slug + kind)."""
 	return SimpleNamespace(slug=slug, kind=kind, code="")
 
 
-def _loader(skills: dict):
-	"""Build a skill_loader callable from a dict."""
-	return lambda slug: skills.get(slug)
+def _loader(techniques: dict):
+	"""Build a technique_loader callable from a dict."""
+	return lambda slug: techniques.get(slug)
 
 
 def _state_with_background(slug: str = "fractal", **controls) -> CanvasState:
 	"""Helper: CanvasState with a single background layer."""
 	cs = CanvasState()
-	cs.enact("add_layer", {"skill_slug": slug, "kind": "background", "controls": controls})
+	cs.enact("add_layer", {"technique_slug": slug, "kind": "background", "controls": controls})
 	return cs
 
 
@@ -111,8 +111,8 @@ def test_pool_hash_ignores_canvas_id():
 	"""Two canvases with identical configs share a folder regardless of id."""
 	a = CanvasState(canvas_id="aaa")
 	b = CanvasState(canvas_id="bbb")
-	a.enact("add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {"z": 1}})
-	b.enact("add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {"z": 1}})
+	a.enact("add_layer", {"technique_slug": "fractal", "kind": "background", "controls": {"z": 1}})
+	b.enact("add_layer", {"technique_slug": "fractal", "kind": "background", "controls": {"z": 1}})
 	assert canvas_render.pool_hash(a.canvas) == canvas_render.pool_hash(b.canvas)
 
 
@@ -137,11 +137,11 @@ def test_pool_hash_changes_when_palette_changes():
 
 def test_render_writes_to_pool_hash_folder(monkeypatch, renders_dir):
 	"""Output file lives at {pool_hash}/{seed}.png under RENDERS_DIR."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal")
-	skills = {"fractal": _skill("fractal")}
+	techniques = {"fractal": _technique("fractal")}
 
-	result = canvas_render.render_canvas(cs, skill_loader=_loader(skills), seed=42)
+	result = canvas_render.render_canvas(cs, technique_loader=_loader(techniques), seed=42)
 	expected = renders_dir / canvas_render.pool_hash(cs.canvas) / "42.png"
 	assert result.image_path == expected
 	assert result.image_path.is_file()
@@ -152,12 +152,12 @@ def test_render_writes_to_pool_hash_folder(monkeypatch, renders_dir):
 
 def test_render_chains_input_through_layers(monkeypatch, renders_dir):
 	"""Layer N gets layer N-1's output as its input."""
-	calls = _install_fake_run_skill(monkeypatch)
+	calls = _install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter", "controls": {"angle": 30}})
-	skills = {"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter")}
+	cs.enact("add_layer", {"technique_slug": "swirl", "kind": "filter", "controls": {"angle": 30}})
+	techniques = {"fractal": _technique("fractal"), "swirl": _technique("swirl", "filter")}
 
-	canvas_render.render_canvas(cs, skill_loader=_loader(skills), seed=7)
+	canvas_render.render_canvas(cs, technique_loader=_loader(techniques), seed=7)
 
 	assert len(calls) == 2
 	# Creation has no input.
@@ -168,26 +168,26 @@ def test_render_chains_input_through_layers(monkeypatch, renders_dir):
 	assert calls[1]["input_image_path"] == calls[0]["output_image_path"]
 
 
-def test_render_passes_seed_and_size_to_skills(monkeypatch, renders_dir):
+def test_render_passes_seed_and_size_to_techniques(monkeypatch, renders_dir):
 	"""Every layer is invoked with the same resolved seed and the canvas size."""
-	calls = _install_fake_run_skill(monkeypatch)
+	calls = _install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
+	cs.enact("add_layer", {"technique_slug": "swirl", "kind": "filter"})
 	cs.enact("set_size", {"size": 768})
-	skills = {"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter")}
+	techniques = {"fractal": _technique("fractal"), "swirl": _technique("swirl", "filter")}
 
-	canvas_render.render_canvas(cs, skill_loader=_loader(skills), seed=99)
+	canvas_render.render_canvas(cs, technique_loader=_loader(techniques), seed=99)
 
 	assert {c["seed"] for c in calls} == {99}
 	assert {c["size"] for c in calls} == {768}
 
 
 def test_render_resolves_palette_control_out_of_params(monkeypatch, renders_dir):
-	"""Palette swatches change the palette object, not the skill kwargs."""
-	calls = _install_fake_run_skill(monkeypatch)
+	"""Palette swatches change the palette object, not the technique kwargs."""
+	calls = _install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal", palette="frost", zoom=2)
 
-	canvas_render.render_canvas(cs, skill_loader=_loader({"fractal": _skill("fractal")}), seed=4)
+	canvas_render.render_canvas(cs, technique_loader=_loader({"fractal": _technique("fractal")}), seed=4)
 
 	assert calls[0]["palette_id"] == "frost"
 	assert calls[0]["params"] == {"zoom": 2}
@@ -195,18 +195,18 @@ def test_render_resolves_palette_control_out_of_params(monkeypatch, renders_dir)
 
 def test_render_raises_on_empty_chain(monkeypatch, renders_dir):
 	"""Rendering a chainless canvas is a programmer error."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	cs = CanvasState()
 	with pytest.raises(ValueError):
-		canvas_render.render_canvas(cs, skill_loader=_loader({}))
+		canvas_render.render_canvas(cs, technique_loader=_loader({}))
 
 
-def test_render_raises_on_unknown_skill(monkeypatch, renders_dir):
+def test_render_raises_on_unknown_technique(monkeypatch, renders_dir):
 	"""Chain referencing a slug the loader can't resolve fails clearly."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("ghost")
 	with pytest.raises(ValueError, match="ghost"):
-		canvas_render.render_canvas(cs, skill_loader=_loader({}))
+		canvas_render.render_canvas(cs, technique_loader=_loader({}))
 
 
 # =================================================================
@@ -215,20 +215,20 @@ def test_render_raises_on_unknown_skill(monkeypatch, renders_dir):
 
 def test_explicit_seed_is_honored(monkeypatch, renders_dir):
 	"""Passing seed=N writes exactly N.png."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal")
-	r = canvas_render.render_canvas(cs, skill_loader=_loader({"fractal": _skill("fractal")}), seed=123)
+	r = canvas_render.render_canvas(cs, technique_loader=_loader({"fractal": _technique("fractal")}), seed=123)
 	assert r.seed == 123
 	assert r.image_path.name == "123.png"
 
 
 def test_force_new_seed_mints_fresh_each_call(monkeypatch, renders_dir):
 	"""force_new_seed=True bypasses any pool cache and writes a new file."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal")
-	loader = _loader({"fractal": _skill("fractal")})
-	r1 = canvas_render.render_canvas(cs, skill_loader=loader, force_new_seed=True)
-	r2 = canvas_render.render_canvas(cs, skill_loader=loader, force_new_seed=True)
+	loader = _loader({"fractal": _technique("fractal")})
+	r1 = canvas_render.render_canvas(cs, technique_loader=loader, force_new_seed=True)
+	r2 = canvas_render.render_canvas(cs, technique_loader=loader, force_new_seed=True)
 	assert r1.seed != r2.seed
 	assert r1.cache_hit is False and r2.cache_hit is False
 	folder = canvas_render.folder_for(cs.canvas)
@@ -237,14 +237,14 @@ def test_force_new_seed_mints_fresh_each_call(monkeypatch, renders_dir):
 
 def test_render_returns_cached_when_pool_has_files(monkeypatch, renders_dir):
 	"""Second call with no explicit seed reuses an existing file (cache hit)."""
-	calls = _install_fake_run_skill(monkeypatch)
+	calls = _install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal")
-	loader = _loader({"fractal": _skill("fractal")})
+	loader = _loader({"fractal": _technique("fractal")})
 
-	r1 = canvas_render.render_canvas(cs, skill_loader=loader, seed=10)
+	r1 = canvas_render.render_canvas(cs, technique_loader=loader, seed=10)
 	assert r1.cache_hit is False
 	calls_after_first = len(calls)
-	r2 = canvas_render.render_canvas(cs, skill_loader=loader)
+	r2 = canvas_render.render_canvas(cs, technique_loader=loader)
 	assert r2.cache_hit is True
 	assert len(calls) == calls_after_first   # no new subprocess invocation
 	assert r2.image_path == r1.image_path
@@ -252,121 +252,121 @@ def test_render_returns_cached_when_pool_has_files(monkeypatch, renders_dir):
 
 def test_first_render_locks_existing_pool_seed(monkeypatch, renders_dir):
 	"""A new session adopts an existing pool seed instead of minting another."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	cs1 = _state_with_background("fractal")
-	loader = _loader({"fractal": _skill("fractal")})
-	r1 = canvas_render.render_canvas(cs1, skill_loader=loader, seed=77)
+	loader = _loader({"fractal": _technique("fractal")})
+	r1 = canvas_render.render_canvas(cs1, technique_loader=loader, seed=77)
 	cs2 = _state_with_background("fractal")
-	r2 = canvas_render.render_canvas(cs2, skill_loader=loader)
+	r2 = canvas_render.render_canvas(cs2, technique_loader=loader)
 	assert r2.cache_hit is True
 	assert r2.seed == r1.seed == cs2.render_seed
 
 
 def test_appending_layer_reuses_cached_prefix(monkeypatch, renders_dir):
 	"""After rendering two layers, appending a third only runs the third."""
-	calls = _install_fake_run_skill(monkeypatch)
+	calls = _install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter"), "grain": _skill("grain", "filter")})
-	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
+	cs.enact("add_layer", {"technique_slug": "swirl", "kind": "filter"})
+	loader = _loader({"fractal": _technique("fractal"), "swirl": _technique("swirl", "filter"), "grain": _technique("grain", "filter")})
+	canvas_render.render_canvas(cs, technique_loader=loader, seed=42)
 	calls.clear()
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "filter"})
-	r = canvas_render.render_canvas(cs, skill_loader=loader)
+	cs.enact("add_layer", {"technique_slug": "grain", "kind": "filter"})
+	r = canvas_render.render_canvas(cs, technique_loader=loader)
 	assert r.seed == 42
 	assert [c["slug"] for c in calls] == ["grain"]
 	assert calls[0]["input_image_path"] is not None
 
 
 def test_cached_prefix_skips_worker_pool_for_cached_layers(monkeypatch, renders_dir):
-	calls = _install_fake_run_skill(monkeypatch)
+	calls = _install_fake_run_technique(monkeypatch)
 	pool = object()
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter"), "grain": _skill("grain", "filter")})
-	canvas_render.render_canvas(cs, skill_loader=loader, seed=42, worker_pool=pool)
+	cs.enact("add_layer", {"technique_slug": "swirl", "kind": "filter"})
+	loader = _loader({"fractal": _technique("fractal"), "swirl": _technique("swirl", "filter"), "grain": _technique("grain", "filter")})
+	canvas_render.render_canvas(cs, technique_loader=loader, seed=42, worker_pool=pool)
 	assert all(c["worker_pool"] is pool for c in calls)
 	calls.clear()
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "filter"})
-	canvas_render.render_canvas(cs, skill_loader=loader, worker_pool=pool)
+	cs.enact("add_layer", {"technique_slug": "grain", "kind": "filter"})
+	canvas_render.render_canvas(cs, technique_loader=loader, worker_pool=pool)
 	assert [c["slug"] for c in calls] == ["grain"]
 	assert calls[0]["worker_pool"] is pool
 
 
 def test_render_progress_reports_cached_prefix(monkeypatch, renders_dir):
 	"""Progress events expose cached prefix count so the UI can show reuse."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	events: list[dict] = []
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter"), "grain": _skill("grain", "filter")})
-	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "filter"})
-	canvas_render.render_canvas(cs, skill_loader=loader, on_event=events.append)
+	cs.enact("add_layer", {"technique_slug": "swirl", "kind": "filter"})
+	loader = _loader({"fractal": _technique("fractal"), "swirl": _technique("swirl", "filter"), "grain": _technique("grain", "filter")})
+	canvas_render.render_canvas(cs, technique_loader=loader, seed=42)
+	cs.enact("add_layer", {"technique_slug": "grain", "kind": "filter"})
+	canvas_render.render_canvas(cs, technique_loader=loader, on_event=events.append)
 	assert ("started", 2) in [(e["status"], e.get("cached_layers")) for e in events]
-	assert [e.get("skill_slug") for e in events if e["status"] == "layer_started"] == ["grain"]
+	assert [e.get("technique_slug") for e in events if e["status"] == "layer_started"] == ["grain"]
 
 
 def test_editing_last_layer_reuses_earlier_prefix(monkeypatch, renders_dir):
 	"""Changing layer 3 keeps layers 1-2 cached and reruns only layer 3."""
-	calls = _install_fake_run_skill(monkeypatch)
+	calls = _install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "filter", "controls": {"a": 1}})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter"), "grain": _skill("grain", "filter")})
-	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
+	cs.enact("add_layer", {"technique_slug": "swirl", "kind": "filter"})
+	cs.enact("add_layer", {"technique_slug": "grain", "kind": "filter", "controls": {"a": 1}})
+	loader = _loader({"fractal": _technique("fractal"), "swirl": _technique("swirl", "filter"), "grain": _technique("grain", "filter")})
+	canvas_render.render_canvas(cs, technique_loader=loader, seed=42)
 	calls.clear()
 	cs.enact("set_control", {"chain_index": 2, "name": "a", "value": 2})
-	canvas_render.render_canvas(cs, skill_loader=loader)
+	canvas_render.render_canvas(cs, technique_loader=loader)
 	assert [c["slug"] for c in calls] == ["grain"]
 
 
 def test_editing_first_layer_invalidates_suffix(monkeypatch, renders_dir):
 	"""Changing layer 1 changes every prefix, so the full chain reruns."""
-	calls = _install_fake_run_skill(monkeypatch)
+	calls = _install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal", zoom=1)
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
-	cs.enact("add_layer", {"skill_slug": "grain", "kind": "filter"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter"), "grain": _skill("grain", "filter")})
-	canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
+	cs.enact("add_layer", {"technique_slug": "swirl", "kind": "filter"})
+	cs.enact("add_layer", {"technique_slug": "grain", "kind": "filter"})
+	loader = _loader({"fractal": _technique("fractal"), "swirl": _technique("swirl", "filter"), "grain": _technique("grain", "filter")})
+	canvas_render.render_canvas(cs, technique_loader=loader, seed=42)
 	calls.clear()
 	cs.enact("set_control", {"chain_index": 0, "name": "zoom", "value": 2})
-	canvas_render.render_canvas(cs, skill_loader=loader)
+	canvas_render.render_canvas(cs, technique_loader=loader)
 	assert [c["slug"] for c in calls] == ["fractal", "swirl", "grain"]
 
 
 def test_force_new_seed_does_not_reuse_old_prefix(monkeypatch, renders_dir):
 	"""Regenerate-style renders use a fresh seed and therefore rerun all layers."""
-	calls = _install_fake_run_skill(monkeypatch)
+	calls = _install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter")})
-	r1 = canvas_render.render_canvas(cs, skill_loader=loader, seed=42)
+	cs.enact("add_layer", {"technique_slug": "swirl", "kind": "filter"})
+	loader = _loader({"fractal": _technique("fractal"), "swirl": _technique("swirl", "filter")})
+	r1 = canvas_render.render_canvas(cs, technique_loader=loader, seed=42)
 	calls.clear()
-	r2 = canvas_render.render_canvas(cs, skill_loader=loader, force_new_seed=True)
+	r2 = canvas_render.render_canvas(cs, technique_loader=loader, force_new_seed=True)
 	assert r2.seed != r1.seed
 	assert [c["slug"] for c in calls] == ["fractal", "swirl"]
 
 
 def test_explicit_seed_with_existing_file_is_a_cache_hit(monkeypatch, renders_dir):
 	"""Passing the same explicit seed twice doesn't re-render."""
-	calls = _install_fake_run_skill(monkeypatch)
+	calls = _install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal")
-	loader = _loader({"fractal": _skill("fractal")})
-	canvas_render.render_canvas(cs, skill_loader=loader, seed=55)
+	loader = _loader({"fractal": _technique("fractal")})
+	canvas_render.render_canvas(cs, technique_loader=loader, seed=55)
 	calls_after_first = len(calls)
-	r = canvas_render.render_canvas(cs, skill_loader=loader, seed=55)
+	r = canvas_render.render_canvas(cs, technique_loader=loader, seed=55)
 	assert r.cache_hit is True
 	assert len(calls) == calls_after_first
 
 
 def test_existing_seeds_lists_pool(monkeypatch, renders_dir):
 	"""existing_seeds returns every seed in the pool folder, sorted."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal")
-	loader = _loader({"fractal": _skill("fractal")})
-	canvas_render.render_canvas(cs, skill_loader=loader, seed=3)
-	canvas_render.render_canvas(cs, skill_loader=loader, seed=1)
-	canvas_render.render_canvas(cs, skill_loader=loader, seed=2)
+	loader = _loader({"fractal": _technique("fractal")})
+	canvas_render.render_canvas(cs, technique_loader=loader, seed=3)
+	canvas_render.render_canvas(cs, technique_loader=loader, seed=1)
+	canvas_render.render_canvas(cs, technique_loader=loader, seed=2)
 	assert canvas_render.existing_seeds(cs.canvas) == [1, 2, 3]
 
 
@@ -377,25 +377,25 @@ def test_existing_seeds_empty_when_folder_absent(renders_dir):
 
 
 def test_uncached_render_authorizes_once_but_cache_hit_is_free(monkeypatch, renders_dir):
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("fractal")
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
-	loader = _loader({"fractal": _skill("fractal"), "swirl": _skill("swirl", "filter")})
+	cs.enact("add_layer", {"technique_slug": "swirl", "kind": "filter"})
+	loader = _loader({"fractal": _technique("fractal"), "swirl": _technique("swirl", "filter")})
 	events = []
 	def authorize():
 		events.append("authorize")
 		return lambda ok: events.append(("settle", ok))
-	canvas_render.render_canvas(cs, skill_loader=loader, seed=42, authorize_uncached=authorize)
-	canvas_render.render_canvas(cs, skill_loader=loader, seed=42, authorize_uncached=authorize)
+	canvas_render.render_canvas(cs, technique_loader=loader, seed=42, authorize_uncached=authorize)
+	canvas_render.render_canvas(cs, technique_loader=loader, seed=42, authorize_uncached=authorize)
 	assert events == ["authorize", ("settle", True)]
 
 
 def test_failed_uncached_render_releases_authorization(monkeypatch, renders_dir):
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	cs = _state_with_background("unknown")
 	events = []
 	def authorize():
 		return lambda ok: events.append(ok)
 	with pytest.raises(ValueError):
-		canvas_render.render_canvas(cs, skill_loader=_loader({}), seed=9, authorize_uncached=authorize)
+		canvas_render.render_canvas(cs, technique_loader=_loader({}), seed=9, authorize_uncached=authorize)
 	assert events == [False]

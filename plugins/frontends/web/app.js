@@ -57,7 +57,7 @@ const archivePanel = document.querySelector("#archivePanel");
 const controlsPanel = document.querySelector("#controlsPanel");
 const controlsDrawer = document.querySelector("#controlsDrawer");
 const controlsToggle = document.querySelector("#controlsToggle");
-const skillSearchResults = document.querySelector("#skillSearchResults");
+const techniqueSearchResults = document.querySelector("#techniqueSearchResults");
 const emptyState = document.querySelector("#emptyState");
 const NEAR_BOTTOM_PX = 80;
 const GALLERY_PAGE = 10;
@@ -69,13 +69,13 @@ let activeTab = "shared";
 const pendingControls = new Map();
 let typingEl = null;
 const TOOL_LABELS = {
-  search_skills: "Searching skills",
-  read_skill: "Reading skill",
-  read_skill_guide: "Reading skill guide",
-  create_skill: "Creating skill",
-  update_skill: "Updating skill",
-  delete_skill: "Deleting skill",
-  execute_skill: "Executing skill",
+  search_techniques: "Searching techniques",
+  read_technique: "Reading technique",
+  read_technique_guide: "Reading technique guide",
+  create_technique: "Creating technique",
+  update_technique: "Updating technique",
+  delete_technique: "Deleting technique",
+  execute_technique: "Executing technique",
   manage_layers: "Managing layers",
   web_search: "Searching the web",
   sql_query: "Querying database",
@@ -106,17 +106,17 @@ function clearStatus() {
 let agentBusy = false;
 const sendBtn = form.querySelector("button:not(#controlsToggle)");
 
-// ----- Skill search (used when the controls drawer is open) -----
-let skillsCache = [];            // last /api/skills response
-let skillsLoading = null;        // in-flight fetch promise (dedup)
-let inSearchMode = false;        // drawer open → input is a skill picker
+// ----- Technique search (used when the controls drawer is open) -----
+let techniquesCache = [];            // last /api/techniques response
+let techniquesLoading = null;        // in-flight fetch promise (dedup)
+let inSearchMode = false;        // drawer open → input is a technique picker
 const CHAT_PLACEHOLDER = input.placeholder;
-const SEARCH_PLACEHOLDER = "Search skills...";
+const SEARCH_PLACEHOLDER = "Search techniques...";
 
 function refreshControlsToggleEnabled() {
   // Single source of truth for the gear's disabled state. The only gate is
   // agentBusy — the drawer is useful even on a blank canvas because the
-  // search input adds a background skill directly.
+  // search input adds a background technique directly.
   if (agentBusy) {
     controlsToggle.disabled = true;
     controlsToggle.title = "Wait for the current turn to finish";
@@ -257,7 +257,7 @@ function renderRenderStatus(ev) {
     renderMeterLabel.textContent = cached ? `Rendering · reused ${cached}/${total} cached layers` : `Rendering · ${total} layer${total === 1 ? "" : "s"}`;
     setRenderMeter(cached / total);
   } else if (ev.status === "layer_started") {
-    renderMeterLabel.textContent = `Rendering layer ${idx}/${total} · ${ev.skill_slug || "skill"} · seed ${ev.seed}`;
+    renderMeterLabel.textContent = `Rendering layer ${idx}/${total} · ${ev.technique_slug || "technique"} · seed ${ev.seed}`;
     animateRenderMeter((idx - 1) / total, idx / total, ev.timeout_s);
   } else if (ev.status === "layer_finished") {
     setRenderMeter(idx / total);
@@ -661,7 +661,7 @@ function renderControlsPanel(panels) {
     // Blank canvas: no layers to edit and no Regenerate button to offer,
     // but the search input above is fully functional — let the user add
     // their first background from here.
-    controlsPanel.innerHTML = `<div class="ctl-empty-canvas">No layers yet — search below to add skills to the canvas,\n or press the gear icon to go back.</div>`;
+    controlsPanel.innerHTML = `<div class="ctl-empty-canvas">No layers yet — search below to add techniques to the canvas,\n or press the gear icon to go back.</div>`;
     if (localStorage.sbDrawerOpen === "1") setControlsOpen(true);
     return;
   }
@@ -682,17 +682,17 @@ function setControlsOpen(open) {
   setSearchMode(!!open);
 }
 
-// ----- Skill search wiring -----
-async function loadSkills() {
-  if (skillsLoading) return skillsLoading;
-  skillsLoading = (async () => {
+// ----- Technique search wiring -----
+async function loadTechniques() {
+  if (techniquesLoading) return techniquesLoading;
+  techniquesLoading = (async () => {
     try {
-      const r = await get("/api/skills");
-      skillsCache = Array.isArray(r.skills) ? r.skills : [];
-    } catch { skillsCache = []; }
-    finally { skillsLoading = null; }
+      const r = await get("/api/techniques");
+      techniquesCache = Array.isArray(r.techniques) ? r.techniques : [];
+    } catch { techniquesCache = []; }
+    finally { techniquesLoading = null; }
   })();
-  return skillsLoading;
+  return techniquesLoading;
 }
 
 function tokenize(s) {
@@ -705,11 +705,11 @@ function tokenize(s) {
     .filter(Boolean);
 }
 
-function rankSkills(query) {
+function rankTechniques(query) {
   const qTokens = tokenize(query);
   if (!qTokens.length) return [];
   const out = [];
-  for (const s of skillsCache) {
+  for (const s of techniquesCache) {
     const nameTokens = new Set([...tokenize(s.slug), ...tokenize(s.name)]);
     const descTokens = new Set(tokenize(s.description));
     let score = 0;
@@ -728,18 +728,18 @@ function rankSkills(query) {
       if (best === 0) { allMatched = false; break; }
       score += best;
     }
-    if (allMatched) out.push({ skill: s, score });
+    if (allMatched) out.push({ technique: s, score });
   }
-  out.sort((a, b) => b.score - a.score || a.skill.slug.length - b.skill.slug.length || a.skill.slug.localeCompare(b.skill.slug));
+  out.sort((a, b) => b.score - a.score || a.technique.slug.length - b.technique.slug.length || a.technique.slug.localeCompare(b.technique.slug));
   // Cap kept tight (10) because results render inline with the controls
   // panel in a shared scroll container — a long tail would push layer
   // controls off-screen. Keep typing to narrow if 10 isn't enough.
-  return out.slice(0, 10).map(r => r.skill);
+  return out.slice(0, 10).map(r => r.technique);
 }
 
 function renderSearchResults(rows, { semantic = false } = {}) {
   if (!rows || !rows.length) {
-    skillSearchResults.innerHTML = `<div class="skill-search-empty">${semantic ? "No semantic matches." : "No matches. Click <strong>Search</strong> for a semantic lookup."}</div>`;
+    techniqueSearchResults.innerHTML = `<div class="technique-search-empty">${semantic ? "No semantic matches." : "No matches. Click <strong>Search</strong> for a semantic lookup."}</div>`;
     return;
   }
   const html = rows.map(s => {
@@ -747,24 +747,24 @@ function renderSearchResults(rows, { semantic = false } = {}) {
     const name = esc(s.name || s.slug || "");
     const slug = esc(s.slug || "");
     const desc = esc((s.description || "").trim().split(/\s+/).slice(0, 28).join(" "));
-    return `<div class="skill-result-row" data-slug="${slug}">
-      <div class="skill-result-meta">
-        <span class="skill-result-kind kind-${kind}">${kind}</span>
-        <div class="skill-result-text">
-          <div class="skill-result-name">${name}</div>
-          <div class="skill-result-desc">${desc}</div>
+    return `<div class="technique-result-row" data-slug="${slug}">
+      <div class="technique-result-meta">
+        <span class="technique-result-kind kind-${kind}">${kind}</span>
+        <div class="technique-result-text">
+          <div class="technique-result-name">${name}</div>
+          <div class="technique-result-desc">${desc}</div>
         </div>
       </div>
-      <button type="button" class="skill-result-add" data-slug="${slug}" title="Add to canvas">+ Add</button>
+      <button type="button" class="technique-result-add" data-slug="${slug}" title="Add to canvas">+ Add</button>
     </div>`;
   }).join("");
-  skillSearchResults.innerHTML = html;
+  techniqueSearchResults.innerHTML = html;
 }
 
 function showSearchResults(show) {
   // Results coexist with the layer controls in one scroll zone — only the
   // results visibility toggles. The controls stay visible underneath.
-  skillSearchResults.hidden = !show;
+  techniqueSearchResults.hidden = !show;
 }
 
 function updateSearch() {
@@ -773,7 +773,7 @@ function updateSearch() {
   // Enable the Search button only when the agent isn't busy and there's a query
   if (!agentBusy) sendBtn.disabled = !q;
   if (!q) { showSearchResults(false); return; }
-  renderSearchResults(rankSkills(q));
+  renderSearchResults(rankTechniques(q));
   showSearchResults(true);
 }
 
@@ -785,7 +785,7 @@ function setSearchMode(on) {
       sendBtn.textContent = "Search";
       sendBtn.disabled = !input.value.trim();
     }
-    loadSkills().then(() => updateSearch());
+    loadTechniques().then(() => updateSearch());
   } else {
     input.placeholder = CHAT_PLACEHOLDER;
     if (!agentBusy) {
@@ -806,14 +806,14 @@ input.addEventListener("keydown", (e) => {
   }
 });
 
-skillSearchResults.addEventListener("click", async (e) => {
-  const btn = e.target.closest(".skill-result-add");
+techniqueSearchResults.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".technique-result-add");
   if (!btn) return;
   const slug = btn.dataset.slug;
   if (!slug) return;
   btn.disabled = true;
   try {
-    const r = await post("/api/add_layer", { skill_slug: slug });
+    const r = await post("/api/add_layer", { technique_slug: slug });
     render(r.events || []);
   } catch (err) {
     add("error", err.message);
@@ -835,13 +835,13 @@ function renderPanel(panel, movableLayers = 0, maxChain = 0) {
       </div>`
     : "";
   const dirty = [...pendingControls.keys()].some(k => k.startsWith(`${panel.chain_index}.`)) ? " dirty" : "";
-  return `<section class="ctl-panel${dirty}" data-chain="${panel.chain_index}" data-kind="${esc(panel.kind || "")}" data-skill="${esc(panel.skill_name)}">
+  return `<section class="ctl-panel${dirty}" data-chain="${panel.chain_index}" data-kind="${esc(panel.kind || "")}" data-technique="${esc(panel.technique_name)}">
     <header class="ctl-head">
       <div class="ctl-controls">
         <button type="button" class="ctl-remove" data-chain="${panel.chain_index}" title="Remove layer" aria-label="Remove layer"></button>
         ${moveBtns}
       </div>
-      <div><strong>${esc(panel.skill_name)}</strong><span>Layer ${panel.chain_index}${panel.kind ? ` · ${esc(panel.kind)}` : ""}</span></div>
+      <div><strong>${esc(panel.technique_name)}</strong><span>Layer ${panel.chain_index}${panel.kind ? ` · ${esc(panel.kind)}` : ""}</span></div>
     </header>
     <div class="ctl-body">${empty}</div>
   </section>`;
@@ -1038,12 +1038,12 @@ form.addEventListener("submit", async e => {
   const text = input.value.trim();
   if (!text) return;
   if (inSearchMode) {
-    // Semantic fallback — call /api/search_skills and render its results
+    // Semantic fallback — call /api/search_techniques and render its results
     // alongside (in place of) the prefix-rank hits.
     sendBtn.disabled = true;
     try {
-      const r = await post("/api/search_skills", { query: text, limit: 10 });
-      renderSearchResults(r.skills || [], { semantic: true });
+      const r = await post("/api/search_techniques", { query: text, limit: 10 });
+      renderSearchResults(r.techniques || [], { semantic: true });
       showSearchResults(true);
     } catch (err) {
       add("error", err.message);

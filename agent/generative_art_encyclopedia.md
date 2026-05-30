@@ -6,12 +6,12 @@ the bare formula, a minimal Python snippet showing the math, and the
 trade-off that decides when to reach for it.
 
 The implementation contract (sandbox rules, the `canvas` surface, every
-`art_kit` helper) lives in `templates/skill_template.py`. Read it via
-`read_skill_guide` before authoring — this file assumes you already know
+`art_kit` helper) lives in `templates/technique_template.py`. Read it via
+`read_technique_guide` before authoring — this file assumes you already know
 the contract and just need the math.
 
 Do not copy snippets verbatim. Adapt for palette, composition, and the
-canvas size you're rendering into. Every color in the final skill must
+canvas size you're rendering into. Every color in the final technique must
 trace back to a palette slot or `art_kit.palette_color(t)`.
 
 ### §1 Fractals

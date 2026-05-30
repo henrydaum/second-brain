@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import plugins.frontends.frontend_web as fw
-import plugins.tools.tool_execute_skill as execute_mod
+import plugins.tools.tool_execute_technique as execute_mod
 from canvas.runtime import CanvasRuntime
 from events.event_bus import bus
 from events.event_channels import CANVAS_CHANGED
@@ -75,7 +75,7 @@ def test_canvas_change_event_reaches_web_before_final_message():
 	fe.config = {}
 	fe.runtime = SimpleNamespace(
 		sessions={key: SimpleNamespace()},
-		skill_registry=SimpleNamespace(get_record=lambda slug: SimpleNamespace(name=slug, kind="background", controls=[])),
+		technique_registry=SimpleNamespace(get_record=lambda slug: SimpleNamespace(name=slug, kind="background", controls=[])),
 	)
 	snap = {"path": "render.png", "chain": [{"slug": "base", "kind": "background", "controls": {}}], "size": 512, "palette_id": "default"}
 	fe.on_bus_canvas_changed({"session_key": key, "canvas": snap})
@@ -83,7 +83,7 @@ def test_canvas_change_event_reaches_web_before_final_message():
 	assert [e["type"] for e in fe._drain(key, force=True)] == ["hero_image", "message"]
 
 
-def test_execute_skill_emits_canvas_changed_after_render(monkeypatch):
+def test_execute_technique_emits_canvas_changed_after_render(monkeypatch):
 	events = []
 	unsub = bus.subscribe(CANVAS_CHANGED, events.append)
 	try:
@@ -96,8 +96,8 @@ def test_execute_skill_emits_canvas_changed_after_render(monkeypatch):
 				return SimpleNamespace(slug=slug, kind="background", controls=[])
 			get_record = get
 
-		ctx = SimpleNamespace(session_key="web:s", canvas=CanvasRuntime(), skill_registry=Reg(), db=None, config={}, services={})
-		result = execute_mod.ExecuteSkill().run(ctx, slug="base")
+		ctx = SimpleNamespace(session_key="web:s", canvas=CanvasRuntime(), technique_registry=Reg(), db=None, config={}, services={})
+		result = execute_mod.ExecuteTechnique().run(ctx, slug="base")
 		assert result.success
 		assert events and events[-1]["canvas"]["path"] == "render.png"
 	finally:

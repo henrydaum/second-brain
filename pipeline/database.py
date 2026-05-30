@@ -61,6 +61,78 @@ class Database:
 		if not _VALID_IDENTIFIER.match(name):
 			raise ValueError(f"Invalid SQL identifier: {name!r}")
 
+	def _migrate_technique_tables(self):
+		"""One-time rename of the legacy ``skill_*`` canvas tables to ``technique_*``.
+
+		Covers all five analytics/index tables (events, scores, errors,
+		embeddings, fts), the two renamed ``technique_errors`` columns, and the
+		two per-account config keys stored as JSON in ``web_users``. Runs in
+		_setup after billing_schema.setup (so web_users exists) and before the
+		CREATE/INSERT statements, so existing rows survive the rename.
+		Idempotent: every step is guarded."""
+		def _has_table(name):
+			return self.conn.execute(
+				"SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+			).fetchone() is not None
+
+		for old, new in (
+			("skill_events", "technique_events"),
+			("skill_scores", "technique_scores"),
+			("skill_errors", "technique_errors"),
+			("skill_embeddings", "technique_embeddings"),
+			("skill_fts", "technique_fts"),
+		):
+			if _has_table(old) and not _has_table(new):
+				self.conn.execute(f"ALTER TABLE {old} RENAME TO {new}")
+
+		if _has_table("technique_errors"):
+			cols = {r[1] for r in self.conn.execute("PRAGMA table_info(technique_errors)")}
+			if "skill_lineno" in cols:
+				self.conn.execute("ALTER TABLE technique_errors RENAME COLUMN skill_lineno TO technique_lineno")
+			if "skill_line" in cols:
+				self.conn.execute("ALTER TABLE technique_errors RENAME COLUMN skill_line TO technique_line")
+
+		# Drop stale indexes; _setup recreates the idx_technique_* ones fresh.
+		for idx in (
+			"idx_skill_events_slug", "idx_skill_events_kind",
+			"idx_skill_errors_slug", "idx_skill_errors_type",
+			"idx_skill_embeddings_slug", "idx_skill_embeddings_hidden",
+		):
+			self.conn.execute(f"DROP INDEX IF EXISTS {idx}")
+
+		# Rename the two per-account config keys stored as JSON in web_users.
+		import json as _json
+		key_map = {
+			"skill_authoring_enabled": "technique_authoring_enabled",
+			"community_skills_enabled": "community_techniques_enabled",
+		}
+		try:
+			rows = self.conn.execute("SELECT account_id, account_config FROM web_users").fetchall()
+		except Exception:
+			rows = []
+		for r in rows:
+			raw = r["account_config"]
+			if not raw:
+				continue
+			try:
+				cfg = _json.loads(raw)
+			except Exception:
+				continue
+			if not isinstance(cfg, dict):
+				continue
+			changed = False
+			for old, new in key_map.items():
+				if old in cfg:
+					cfg.setdefault(new, cfg.pop(old))
+					changed = True
+			if changed:
+				self.conn.execute(
+					"UPDATE web_users SET account_config=? WHERE account_id=?",
+					(_json.dumps(cfg), r["account_id"]),
+				)
+
+		self.conn.commit()
+
 	def _setup(self):
 		# WAL mode allows concurrent readers while one writer holds the lock —
 		# critical for the dispatch loop reading while workers write results.
@@ -171,10 +243,13 @@ class Database:
 
 		billing_schema.setup(self.conn)
 
-		# Skill scoring — implicit signals (share/download/remix) attributed
+		# Rename legacy skill_* canvas tables before (re)creating technique_* ones.
+		self._migrate_technique_tables()
+
+		# Technique scoring — implicit signals (share/download/remix) attributed
 		# across chain steps. `generations` is a denominator-only counter.
 		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS skill_events (
+			CREATE TABLE IF NOT EXISTS technique_events (
 				id              INTEGER PRIMARY KEY,
 				ts              REAL NOT NULL,
 				kind            TEXT NOT NULL,
@@ -184,10 +259,10 @@ class Database:
 				weight          REAL NOT NULL
 			)
 		""")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_events_slug ON skill_events(slug)")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_events_kind ON skill_events(kind)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_technique_events_slug ON technique_events(slug)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_technique_events_kind ON technique_events(kind)")
 		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS skill_scores (
+			CREATE TABLE IF NOT EXISTS technique_scores (
 				slug         TEXT PRIMARY KEY,
 				shares       REAL DEFAULT 0,
 				downloads    REAL DEFAULT 0,
@@ -199,37 +274,37 @@ class Database:
 		""")
 		# Idempotent migration for existing installs.
 		try:
-			self.conn.execute("ALTER TABLE skill_scores ADD COLUMN saves REAL DEFAULT 0")
+			self.conn.execute("ALTER TABLE technique_scores ADD COLUMN saves REAL DEFAULT 0")
 		except Exception:
 			pass
 
-		# Skill execution errors — metadata only (no conversation content). The
+		# Technique execution errors — metadata only (no conversation content). The
 		# agent boots cold every session; this table is the "pain signal" record
 		# we mine offline to fold common pitfalls into the system prompt.
 		self.conn.execute("""
-			CREATE TABLE IF NOT EXISTS skill_errors (
+			CREATE TABLE IF NOT EXISTS technique_errors (
 				id            INTEGER PRIMARY KEY,
 				ts            REAL NOT NULL,
 				slug          TEXT NOT NULL,
 				error_type    TEXT NOT NULL,
 				message       TEXT,
-				skill_lineno  INTEGER,
-				skill_line    TEXT,
+				technique_lineno  INTEGER,
+				technique_line    TEXT,
 				hint          TEXT,
 				params_json   TEXT,
 				session_key   TEXT
 			)
 		""")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_errors_slug ON skill_errors(slug)")
-		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_skill_errors_type ON skill_errors(error_type)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_technique_errors_slug ON technique_errors(slug)")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_technique_errors_type ON technique_errors(error_type)")
 
 		# Legacy canvas tables (canvas_shares, canvas_layer_cache,
-		# canvas_seed_pool) and Phase 0 dormant tables (skills, canvases,
+		# canvas_seed_pool) and Phase 0 dormant tables (techniques, canvases,
 		# canvas_layers, image_generations) are removed. Drop them on
 		# startup for existing installs so leftover rows don't linger.
 		for legacy in (
 			"canvas_shares", "canvas_layer_cache", "canvas_seed_pool",
-			"skills", "canvases", "canvas_layers", "image_generations",
+			"techniques", "canvases", "canvas_layers", "image_generations",
 		):
 			try:
 				self.conn.execute(f"DROP TABLE IF EXISTS {legacy}")
@@ -294,7 +369,7 @@ class Database:
 
 		# link_opens mirrors the lazy-add pattern used for `saves` above.
 		try:
-			self.conn.execute("ALTER TABLE skill_scores ADD COLUMN link_opens REAL DEFAULT 0")
+			self.conn.execute("ALTER TABLE technique_scores ADD COLUMN link_opens REAL DEFAULT 0")
 		except Exception:
 			pass
 

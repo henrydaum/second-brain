@@ -1,12 +1,12 @@
 """User-to-canvas interactions: writes to ``user_canvas_actions`` plus the
-chain-weighted fan-out into ``skill_scores`` via existing scoring helper.
+chain-weighted fan-out into ``technique_scores`` via existing scoring helper.
 
 One call site for everything: ``record_user_action(db, user_id, pool_hash,
 action, *, layers, image_path)``. Pulls double duty:
   1. Inserts a row into ``user_canvas_actions`` so "user U did X to canvas
      C" is durable history.
-  2. Calls ``skill_scoring.record_event`` so the popularity counters on
-     ``skill_scores`` move (shares/saves/downloads/remixes/link_opens).
+  2. Calls ``technique_scoring.record_event`` so the popularity counters on
+     ``technique_scores`` move (shares/saves/downloads/remixes/link_opens).
 
 Pool_hash is the *content* identity (the renderer's hash), NOT the
 canvas_id editing handle. Multiple canvas_ids can resolve to the same
@@ -20,13 +20,13 @@ import logging
 import time
 from typing import Iterable
 
-from plugins.skills.helpers import skill_scoring
+from plugins.techniques.helpers import technique_scoring
 
 logger = logging.getLogger("CanvasActions")
 
 
 # Actions we treat as legitimate. New ones are accepted (TEXT column),
-# but only these contribute to skill_scoring via skill_scoring._KIND_FIELDS.
+# but only these contribute to technique_scoring via technique_scoring._KIND_FIELDS.
 KNOWN_ACTIONS = {"share", "save", "download", "remix", "link_open"}
 
 
@@ -40,10 +40,10 @@ def record_user_action(
 	image_path: str | None = None,
 	meta: dict | None = None,
 ) -> None:
-	"""Insert a row + fan out to skill_scoring.
+	"""Insert a row + fan out to technique_scoring.
 
-	``layers`` is the canvas's layer list — used by ``skill_scoring`` to
-	distribute the signal across background/filter skills.
+	``layers`` is the canvas's layer list — used by ``technique_scoring`` to
+	distribute the signal across background/filter techniques.
 
 	``meta`` is optional per-action metadata (title, artist, …) stored as
 	JSON in ``user_canvas_actions.meta_json``. Useful so a share can carry
@@ -60,7 +60,7 @@ def record_user_action(
 		db.conn.commit()
 
 	if layers:
-		# skill_scoring expects [{"slug": ..., "kind": ...}, ...] — that's
+		# technique_scoring expects [{"slug": ..., "kind": ...}, ...] — that's
 		# exactly the layer dict shape we already use.
 		chain = [
 			{"slug": layer.get("slug"), "kind": layer.get("kind")}
@@ -68,7 +68,7 @@ def record_user_action(
 			if layer.get("slug")
 		]
 		if chain:
-			skill_scoring.record_event(db, action, chain, image_path)
+			technique_scoring.record_event(db, action, chain, image_path)
 	logger.info(
 		"record_user_action user=%s pool=%s action=%s layers=%d",
 		user_id, pool_hash, action, len(list(layers) if layers else []),

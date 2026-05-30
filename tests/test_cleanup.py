@@ -23,12 +23,12 @@ import plugins.frontends.frontend_web as fw
 # helpers
 # =================================================================
 
-def _install_fake_run_skill(monkeypatch):
-	def fake_run_skill(skill, *, params, palette, size, seed, input_image_path, output_image_path, **kwargs):
+def _install_fake_run_technique(monkeypatch):
+	def fake_run_technique(technique, *, params, palette, size, seed, input_image_path, output_image_path, **kwargs):
 		Path(output_image_path).parent.mkdir(parents=True, exist_ok=True)
 		Image.new("RGBA", (4, 4), (16, 32, 64, 255)).save(output_image_path, format="PNG")
 		return {"ok": True}
-	monkeypatch.setattr(canvas_render, "run_skill", fake_run_skill)
+	monkeypatch.setattr(canvas_render, "run_technique", fake_run_technique)
 
 
 @pytest.fixture
@@ -234,18 +234,18 @@ def test_prune_respects_max_age_config(renders_dir, db):
 
 def test_pool_share_payload_re_renders_when_files_evicted(monkeypatch, renders_dir, db):
 	"""After eviction, visiting a share link should re-render rather than 404."""
-	_install_fake_run_skill(monkeypatch)
+	_install_fake_run_technique(monkeypatch)
 	cr = CanvasRuntime(db=db)
 
-	class _SkillReg:
+	class _TechniqueReg:
 		def get(self, slug):
 			return SimpleNamespace(slug=slug, name=slug, kind="background", controls=[], code="")
 		def get_record(self, slug):
 			return self.get(slug)
 
 	runtime = SimpleNamespace(
-		services={"canvas": cr, "skill_worker_pool": None},
-		db=db, skill_registry=_SkillReg(), config={}, sessions={}, get_session=lambda key: None,
+		services={"canvas": cr, "technique_worker_pool": None},
+		db=db, technique_registry=_TechniqueReg(), config={}, sessions={}, get_session=lambda key: None,
 	)
 	fe = fw.WebFrontend.__new__(fw.WebFrontend)
 	fe.runtime = runtime
@@ -258,9 +258,9 @@ def test_pool_share_payload_re_renders_when_files_evicted(monkeypatch, renders_d
 	key = "web:sess"
 	cs = cr.for_session(key)
 	cr.handle_action(cs.canvas_id, "add_layer", {
-		"skill_slug": "fractal", "kind": "background", "controls": {},
+		"technique_slug": "fractal", "kind": "background", "controls": {},
 	})
-	rr = canvas_render.render_canvas(cs, skill_loader=runtime.skill_registry.get_record, seed=42, db=db)
+	rr = canvas_render.render_canvas(cs, technique_loader=runtime.technique_registry.get_record, seed=42, db=db)
 	pool_hash = rr.pool_hash
 	payload_before = fe.pool_share_payload(pool_hash)
 	assert payload_before is not None

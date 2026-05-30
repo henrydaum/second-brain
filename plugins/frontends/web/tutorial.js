@@ -22,7 +22,7 @@
     },
     {
       title: "Manual controls.",
-      body: "Type into the text box within the control panel to search skills. Press \"+\" to add a layer, \"-\" to delete a layer, and the arrows ↕ to move a layer in the stack.",
+      body: "Type into the text box within the control panel to search techniques. Press \"+\" to add a layer, \"-\" to delete a layer, and the arrows ↕ to move a layer in the stack.",
       note: "Useful if you prefer manual controls instead of chatting."
     },
     {
@@ -117,7 +117,7 @@
       }
       // Step 4 (Manual controls): one demo chip that opens the controls
       // drawer and pre-fills the search input so the visitor can see what
-      // skill search looks like without having to figure out where to type.
+      // technique search looks like without having to figure out where to type.
       if (idx === 3 && opts.onSearchDemo) {
         const chips = el("div", { class: "tutorial-chips" });
         chips.appendChild(el("button", {

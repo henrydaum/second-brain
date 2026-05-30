@@ -48,9 +48,9 @@ def test_set_palette_changes_palette_and_emits_event():
 def test_add_layer_background_then_filter():
 	"""add_layer background starts the chain; filter appends."""
 	cs = CanvasState()
-	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background"})
+	cs.enact("add_layer", {"technique_slug": "fractal", "kind": "background"})
 	assert len(cs.canvas.layers) == 1
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter", "controls": {"angle": 30}})
+	cs.enact("add_layer", {"technique_slug": "swirl", "kind": "filter", "controls": {"angle": 30}})
 	assert len(cs.canvas.layers) == 2
 	assert cs.canvas.layers[1]["controls"] == {"angle": 30}
 
@@ -58,7 +58,7 @@ def test_add_layer_background_then_filter():
 def test_add_layer_rejects_unknown_kind():
 	"""kind must be 'background', 'filter', or 'object'."""
 	cs = CanvasState()
-	r = cs.enact("add_layer", {"skill_slug": "fractal", "kind": "bogus"})
+	r = cs.enact("add_layer", {"technique_slug": "fractal", "kind": "bogus"})
 	assert not r.ok
 	assert cs.last_error is not None
 	assert cs.canvas.layers == []
@@ -67,9 +67,9 @@ def test_add_layer_rejects_unknown_kind():
 def test_add_layer_accepts_object_kind_after_background():
 	"""object layers append onto an existing chain like filters."""
 	cs = CanvasState()
-	r1 = cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background"})
+	r1 = cs.enact("add_layer", {"technique_slug": "fractal", "kind": "background"})
 	assert r1.ok
-	r2 = cs.enact("add_layer", {"skill_slug": "typography", "kind": "object",
+	r2 = cs.enact("add_layer", {"technique_slug": "typography", "kind": "object",
 	                            "controls": {"phrase": "hi"}})
 	assert r2.ok
 	assert len(cs.canvas.layers) == 2
@@ -77,8 +77,8 @@ def test_add_layer_accepts_object_kind_after_background():
 	assert cs.canvas.layers[1]["controls"] == {"phrase": "hi"}
 
 
-def test_add_layer_requires_skill_slug():
-	"""Missing skill_slug fails cleanly."""
+def test_add_layer_requires_technique_slug():
+	"""Missing technique_slug fails cleanly."""
 	cs = CanvasState()
 	r = cs.enact("add_layer", {"kind": "background"})
 	assert not r.ok
@@ -87,7 +87,7 @@ def test_add_layer_requires_skill_slug():
 def test_remove_layer_out_of_range_fails_cleanly():
 	"""Out-of-range index produces an ActionResult.fail rather than raising."""
 	cs = CanvasState()
-	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background"})
+	cs.enact("add_layer", {"technique_slug": "fractal", "kind": "background"})
 	r = cs.enact("remove_layer", {"chain_index": 5})
 	assert not r.ok
 	assert cs.last_error is not None
@@ -97,8 +97,8 @@ def test_remove_layer_out_of_range_fails_cleanly():
 def test_remove_background_clears_chain():
 	"""Removing layer 0 clears dependent layers too, avoiding invalid chains."""
 	cs = CanvasState()
-	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background"})
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
+	cs.enact("add_layer", {"technique_slug": "fractal", "kind": "background"})
+	cs.enact("add_layer", {"technique_slug": "swirl", "kind": "filter"})
 	r = cs.enact("remove_layer", {"chain_index": 0})
 	assert r.ok
 	assert cs.canvas.layers == []
@@ -107,8 +107,8 @@ def test_remove_background_clears_chain():
 def test_move_layer_rejects_background_displacement():
 	"""Moving the background off layer 0 must fail (Canvas.move_entry rule)."""
 	cs = CanvasState()
-	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background"})
-	cs.enact("add_layer", {"skill_slug": "swirl", "kind": "filter"})
+	cs.enact("add_layer", {"technique_slug": "fractal", "kind": "background"})
+	cs.enact("add_layer", {"technique_slug": "swirl", "kind": "filter"})
 	before = list(cs.canvas.layers)
 	r = cs.enact("move_layer", {"from_index": 1, "to_index": 0})
 	assert not r.ok
@@ -127,7 +127,7 @@ def test_set_size_clamps_to_min_max():
 def test_set_control_updates_chain_entry():
 	"""set_control mutates the named control on the target layer."""
 	cs = CanvasState()
-	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {"zoom": 1.0}})
+	cs.enact("add_layer", {"technique_slug": "fractal", "kind": "background", "controls": {"zoom": 1.0}})
 	r = cs.enact("set_control", {"chain_index": 0, "name": "zoom", "value": 4.5})
 	assert r.ok
 	assert cs.canvas.layers[0]["controls"]["zoom"] == 4.5
@@ -138,7 +138,7 @@ def test_clear_resets_chain_but_preserves_palette_and_size():
 	cs = CanvasState()
 	cs.enact("set_palette", {"palette_id": "obsidian"})
 	cs.enact("set_size", {"size": 512})
-	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background"})
+	cs.enact("add_layer", {"technique_slug": "fractal", "kind": "background"})
 	cs.enact("clear", {})
 	assert cs.canvas.layers == []
 	assert cs.canvas.palette_id == "obsidian"
@@ -148,7 +148,7 @@ def test_clear_resets_chain_but_preserves_palette_and_size():
 def test_regenerate_records_intent_in_state_history():
 	"""regenerate records whether the caller requested a fresh seed."""
 	cs = CanvasState()
-	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background"})
+	cs.enact("add_layer", {"technique_slug": "fractal", "kind": "background"})
 	cs.enact("regenerate", {})
 	assert cs.history[-1]["type"] == "regenerate"
 	assert cs.history[-1]["needs_new_seed"] is False
@@ -172,7 +172,7 @@ def test_to_dict_from_dict_round_trip():
 	"""Snapshot → restore yields equivalent state."""
 	cs = CanvasState()
 	cs.enact("set_palette", {"palette_id": "obsidian"})
-	cs.enact("add_layer", {"skill_slug": "fractal", "kind": "background", "controls": {"z": 2}})
+	cs.enact("add_layer", {"technique_slug": "fractal", "kind": "background", "controls": {"z": 2}})
 	cs.enact("set_size", {"size": 768})
 	cs.render_seed = 456
 	snap = cs.to_dict()

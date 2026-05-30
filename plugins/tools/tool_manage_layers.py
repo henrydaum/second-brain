@@ -43,7 +43,7 @@ def _enact_and_render(context, action_type: str, payload: dict) -> ToolResult:
 	"""Mutate via context.canvas, then render if the chain still has layers."""
 	session_key = getattr(context, "session_key", None) or "local"
 	canvas_rt = getattr(context, "canvas", None)
-	skill_registry = getattr(context, "skill_registry", None)
+	technique_registry = getattr(context, "technique_registry", None)
 	if canvas_rt is None:
 		return ToolResult.failed("canvas runtime not available on context")
 	cs = canvas_rt.for_session(session_key)
@@ -52,14 +52,14 @@ def _enact_and_render(context, action_type: str, payload: dict) -> ToolResult:
 	def rerender(state):
 		if not state.canvas.layers:
 			return None
-		if skill_registry is None:
-			raise RuntimeError("skill registry not available; cannot re-render")
+		if technique_registry is None:
+			raise RuntimeError("technique registry not available; cannot re-render")
 		return render_canvas(
 			state,
-			skill_loader=skill_registry.get_record,
+			technique_loader=technique_registry.get_record,
 			db=db,
-			on_event=bus_progress(getattr(context, "session_key", None), float((getattr(context, "config", {}) or {}).get("skill_timeout_s") or 30)),
-			worker_pool=(getattr(context, "services", None) or {}).get("skill_worker_pool"),
+			on_event=bus_progress(getattr(context, "session_key", None), float((getattr(context, "config", {}) or {}).get("technique_timeout_s") or 30)),
+			worker_pool=(getattr(context, "services", None) or {}).get("technique_worker_pool"),
 			authorize_uncached=credits.render_authorizer(db, session_key, allow_prompt_overrun=True) if credits and db and session_key.startswith("web:") else None,
 		)
 	try:
@@ -96,7 +96,7 @@ class ManageLayers(BaseTool):
 		"background — deleting it clears the canvas). action=move reorders from "
 		"from_index to to_index; layer 0 must stay a background. action=clear "
 		"wipes the canvas entirely. action=set_control updates one control on "
-		"one layer (chain_index, name, value) — use read_skill on the layer's "
+		"one layer (chain_index, name, value) — use read_technique on the layer's "
 		"slug first to see the control declarations (Slider min/max/step, Enum "
 		"options, Bool, Pan, Text) which are the source of truth for valid "
 		"names and values. Surviving layers are replayed end-to-end to rebuild "
@@ -110,7 +110,7 @@ class ManageLayers(BaseTool):
 			"chain_index": {"type": "integer", "description": "Target layer index for delete or set_control."},
 			"from_index": {"type": "integer", "description": "Source layer index for move."},
 			"to_index": {"type": "integer", "description": "Destination layer index for move."},
-			"name": {"type": "string", "description": "Control name for set_control — must match a control declared on the layer's skill (see read_skill)."},
+			"name": {"type": "string", "description": "Control name for set_control — must match a control declared on the layer's technique (see read_technique)."},
 			"value": {"description": "New control value for set_control. Type depends on the control (number for Slider, string for Enum/Text/Palette, bool for Bool)."},
 		},
 		"required": ["action"],

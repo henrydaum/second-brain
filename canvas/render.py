@@ -46,7 +46,7 @@ from canvas.canvas import Canvas
 from canvas.state import CanvasState
 from paths import DATA_DIR
 from plugins.helpers.palettes import get_palette as _default_get_palette
-from plugins.skills.helpers.skill_runner import resolve_entry, run_skill
+from plugins.techniques.helpers.technique_runner import resolve_entry, run_technique
 
 logger = logging.getLogger("CanvasRender")
 
@@ -67,7 +67,7 @@ class RenderResult:
 	seed: int
 	pool_hash: str
 	cache_hit: bool
-	# Post-render validator warning from the LAST layer's run_skill, if any.
+	# Post-render validator warning from the LAST layer's run_technique, if any.
 	# Set to a short tag like "palette_drift" / "blank_canvas" / "transparent_canvas".
 	# Intermediate-layer warnings are not propagated — only the final pixels matter.
 	warning: str | None = None
@@ -138,12 +138,12 @@ def _prefix_path(canvas, count: int, seed: int) -> Path:
 
 # ── render ───────────────────────────────────────────────────────────
 
-# Skill memory is inherently O(N²) — every working array a skill allocates is
-# sized to the canvas. The subprocess cap in skill_runner is flat by default
+# Technique memory is inherently O(N²) — every working array a technique allocates is
+# sized to the canvas. The subprocess cap in technique_runner is flat by default
 # (DEFAULT_MEMORY_MB = 768), so doubling the canvas (4× the pixels) reliably
-# blows the cap on anything beyond trivial skills. Scale the cap with size:
+# blows the cap on anything beyond trivial techniques. Scale the cap with size:
 # baseline covers the Python+numpy+PIL footprint, the quadratic term covers
-# per-pixel working arrays (sized for a skill carrying ~16 N² float arrays at
+# per-pixel working arrays (sized for a technique carrying ~16 N² float arrays at
 # peak, e.g. fisheye). Clamped to a reasonable absolute ceiling.
 MEMORY_BASELINE_MB = 300
 MEMORY_PER_MEGAPIXEL_MB = 220
@@ -178,14 +178,14 @@ def apply_render_config(config: dict | None) -> None:
 
 
 def _mint_seed() -> int:
-	"""Random 31-bit seed (matches the existing convention in skill_cache)."""
+	"""Random 31-bit seed (matches the existing convention in technique_cache)."""
 	return random.randint(1, 2_147_483_647)
 
 
 def render_canvas(
 	cs: CanvasState,
 	*,
-	skill_loader: Callable[[str], Any],
+	technique_loader: Callable[[str], Any],
 	seed: int | None = None,
 	force_new_seed: bool = False,
 	db: Any = None,
@@ -202,8 +202,8 @@ def render_canvas(
 	    the most-recently-modified one (cache hit, no subprocess). Empty
 	    pool → mint and render.
 
-	``skill_loader(slug) -> Skill | None`` mirrors what
-	``skill_runner.replay_chain`` accepts; caller provides the lookup.
+	``technique_loader(slug) -> Technique | None`` mirrors what
+	``technique_runner.replay_chain`` accepts; caller provides the lookup.
 
 	If ``db`` is provided, a fresh render also writes the configuration
 	to ``canvas_pools`` (idempotent on pool_hash). That row is what
@@ -288,14 +288,14 @@ def render_canvas(
 		try:
 			for idx, layer in enumerate(canvas.layers[start_idx:], start=start_idx):
 				slug = layer.get("slug")
-				skill = skill_loader(slug) if slug else None
-				if skill is None:
-					raise ValueError(f"chain references unknown skill: {slug!r}")
+				technique = technique_loader(slug) if slug else None
+				if technique is None:
+					raise ValueError(f"chain references unknown technique: {slug!r}")
 				step_png = workdir_path / f"step_{idx:02d}.png"
 				params, palette = resolve_entry(layer, fallback_palette=fallback_palette)
-				_emit(on_event, status="layer_started", layer_index=idx + 1, total_layers=len(canvas.layers), cached_layers=start_idx, skill_slug=str(slug), seed=seed_val, pool_hash=folder.name)
-				run_result = run_skill(
-					skill,
+				_emit(on_event, status="layer_started", layer_index=idx + 1, total_layers=len(canvas.layers), cached_layers=start_idx, technique_slug=str(slug), seed=seed_val, pool_hash=folder.name)
+				run_result = run_technique(
+					technique,
 					params=params,
 					palette=palette,
 					size=int(canvas.size),
@@ -329,7 +329,7 @@ def render_canvas(
 						save_pool(db, pool_hash=cache_path.parent.name, state=_truncated(canvas, idx + 1).to_dict())
 					except Exception:
 						logger.exception("save_pool failed for prefix pool=%s", cache_path.parent.name)
-				_emit(on_event, status="layer_finished", layer_index=idx + 1, total_layers=len(canvas.layers), cached_layers=start_idx, skill_slug=str(slug), seed=seed_val, pool_hash=folder.name)
+				_emit(on_event, status="layer_finished", layer_index=idx + 1, total_layers=len(canvas.layers), cached_layers=start_idx, technique_slug=str(slug), seed=seed_val, pool_hash=folder.name)
 		except Exception as e:
 			if settle is not None:
 				settle(False)
@@ -385,7 +385,7 @@ def _longest_prefix(canvas, seed: int, workdir_path: Path) -> tuple[int, Path | 
 	"""Return ``(layers_already_done, last_cached_png_path)``.
 
 	The cached prefix file is itself a PNG at the right pool location, so we
-	hand it directly to the next layer as input — no copy, no decode. Skills
+	hand it directly to the next layer as input — no copy, no decode. Techniques
 	open the input as read-only via PIL, so reusing the cache path is safe.
 	"""
 	del workdir_path  # kept for signature stability; no longer needed

@@ -2,7 +2,7 @@
 
 Each palette has five named slots: primary, secondary, tertiary, accent, background.
 
-Skills consume a Palette via the Canvas API and should reference slots by name
+Techniques consume a Palette via the Canvas API and should reference slots by name
 rather than hard-coding hex values, so the user's selected palette is honored.
 """
 

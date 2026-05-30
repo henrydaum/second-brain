@@ -32,14 +32,14 @@ class PluginWatcherService(BaseService):
         self._lock = threading.RLock()
 
     def bind_runtime(self, *, tool_registry=None, orchestrator=None, command_registry=None,
-                     frontend_manager=None, skill_registry=None):
+                     frontend_manager=None, technique_registry=None):
         """Bind runtime."""
         self._runtime.update({
             "tool_registry": tool_registry,
             "orchestrator": orchestrator,
             "command_registry": command_registry,
             "frontend_manager": frontend_manager,
-            "skill_registry": skill_registry,
+            "technique_registry": technique_registry,
         })
 
     def _load(self) -> bool:
@@ -126,7 +126,7 @@ class PluginWatcherService(BaseService):
                 config=self.config,
                 command_registry=self._runtime.get("command_registry"),
                 frontend_manager=self._runtime.get("frontend_manager"),
-                skill_registry=self._runtime.get("skill_registry"),
+                technique_registry=self._runtime.get("technique_registry"),
             )
         except Exception as e:
             name, error = None, str(e)
@@ -155,7 +155,7 @@ class PluginWatcherService(BaseService):
             source_path=str(path),
             command_registry=self._runtime.get("command_registry"),
             frontend_manager=self._runtime.get("frontend_manager"),
-            skill_registry=self._runtime.get("skill_registry"),
+            technique_registry=self._runtime.get("technique_registry"),
         )
         self._reconcile_plugin_config()
         for name in names:
@@ -180,9 +180,9 @@ class PluginWatcherService(BaseService):
             items = self.services
         elif plugin_type == "frontend":
             items = {k: v.__class__ for k, v in getattr(self._runtime.get("frontend_manager"), "adapters", {}).items()}
-        elif plugin_type == "skill":
-            registry = self._runtime.get("skill_registry")
-            items = dict(getattr(registry, "_skills", {})) if registry is not None else {}
+        elif plugin_type == "technique":
+            registry = self._runtime.get("technique_registry")
+            items = dict(getattr(registry, "_techniques", {})) if registry is not None else {}
         else:
             items = {}
         return [name for name, item in items.items() if getattr(item, "_source_path", "") == source]

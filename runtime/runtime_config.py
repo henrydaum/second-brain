@@ -82,7 +82,7 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
         cloned = ToolRegistry(registry.db, registry.config, registry.services)
         cloned.orchestrator = getattr(registry, "orchestrator", None)
         cloned.runtime = getattr(registry, "runtime", None)
-        cloned.skill_registry = getattr(registry, "skill_registry", None)
+        cloned.technique_registry = getattr(registry, "technique_registry", None)
         cloned.tools.update(registry.tools)
         if getattr(registry, "visible_tool_names", None) is not None:
             cloned.visible_tool_names = set(registry.visible_tool_names)
@@ -97,7 +97,7 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
         cloned = ToolRegistry(registry.db, registry.config, registry.services)
         cloned.orchestrator = getattr(registry, "orchestrator", None)
         cloned.runtime = getattr(registry, "runtime", None)
-        cloned.skill_registry = getattr(registry, "skill_registry", None)
+        cloned.technique_registry = getattr(registry, "technique_registry", None)
         cloned.tools.update(registry.tools)
         if getattr(registry, "visible_tool_names", None) is not None:
             cloned.visible_tool_names = set(registry.visible_tool_names)
@@ -231,7 +231,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
     def _session_canvas_state() -> str:
         """Return current canvas state when canvas tools are visible."""
         registry = active_tool_registry(runtime, session)
-        if not registry or "execute_skill" not in getattr(registry, "tools", {}):
+        if not registry or "execute_technique" not in getattr(registry, "tools", {}):
             return ""
         from agent.system_prompt import _canvas_state
         return _canvas_state(runtime.services, session.key)

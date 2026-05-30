@@ -5,8 +5,8 @@ import pytest
 from PIL import Image
 
 from plugins.helpers.palettes import get_palette
-from plugins.skills.helpers.art_kit import build_namespace
-from plugins.skills.helpers.skill_runner import run_skill
+from plugins.techniques.helpers.art_kit import build_namespace
+from plugins.techniques.helpers.technique_runner import run_technique
 
 
 def _palette():
@@ -41,12 +41,12 @@ def test_render_3d_uses_palette_ramp_when_mesh_has_no_color():
 	assert len(set(img.getdata())) > 1
 
 
-def test_render_3d_runs_inside_skill_sandbox():
+def test_render_3d_runs_inside_technique_sandbox():
 	src = """
-from plugins.BaseSkill import BaseSkill
+from plugins.BaseTechnique import BaseTechnique
 
 
-class SandboxCubeSkill(BaseSkill):
+class SandboxCubeTechnique(BaseTechnique):
     name = "Sandbox Cube"
     kind = "background"
 
@@ -58,7 +58,7 @@ class SandboxCubeSkill(BaseSkill):
 """
 	out = Path(".canvas_3d_sandbox_test.png")
 	try:
-		run_skill(
+		run_technique(
 			SimpleNamespace(slug="sandbox_cube", kind="background", code=src),
 			params={}, palette=get_palette("japandi"), size=96, seed=1,
 			input_image_path=None, output_image_path=out, timeout_s=20.0,
@@ -69,11 +69,11 @@ class SandboxCubeSkill(BaseSkill):
 
 
 @pytest.mark.parametrize("path", [
-	Path("plugins/skills/skill_3d_cube_stack.py"),
-	Path("plugins/skills/skill_3d_crystal_cluster.py"),
-	Path("plugins/skills/skill_3d_prism_halo.py"),
+	Path("plugins/techniques/technique_3d_cube_stack.py"),
+	Path("plugins/techniques/technique_3d_crystal_cluster.py"),
+	Path("plugins/techniques/technique_3d_prism_halo.py"),
 ])
-def test_builtin_3d_object_skills_render_over_prior_canvas(path):
+def test_builtin_3d_object_techniques_render_over_prior_canvas(path):
 	palette = get_palette("japandi")
 	target = Path(".canvas_3d_object_test")
 	target.mkdir(exist_ok=True)
@@ -81,7 +81,7 @@ def test_builtin_3d_object_skills_render_over_prior_canvas(path):
 	out = target / f"{path.stem}.png"
 	try:
 		Image.new("RGBA", (96, 96), palette.background).save(prior, "PNG")
-		run_skill(
+		run_technique(
 			SimpleNamespace(slug=path.stem, kind="object", code=path.read_text(encoding="utf-8")),
 			params={}, palette=palette, size=96, seed=3,
 			input_image_path=prior, output_image_path=out, timeout_s=20.0,

@@ -4,10 +4,10 @@ After the canvas-rework cleanup, the canvas tables in the central DB are:
   - canvas_states      (per-user canvas editing handle: id -> state JSON)
   - canvas_pools       (pool_hash -> render-determining state JSON)
   - user_canvas_actions (user X did Y on pool Z at ts)
-  - skill_scores / skill_events / skill_errors (analytics, with link_opens)
+  - technique_scores / technique_events / technique_errors (analytics, with link_opens)
 
 The legacy tables (canvas_shares, canvas_layer_cache, canvas_seed_pool,
-and the abandoned Phase 0 ones: skills, canvases, canvas_layers,
+and the abandoned Phase 0 ones: techniques, canvases, canvas_layers,
 image_generations) are dropped on startup for existing installs.
 """
 
@@ -55,11 +55,11 @@ def test_canvas_tables_exist():
 		_cleanup(db, path)
 
 
-def test_skill_scores_has_link_opens_column():
-	"""skill_scores keeps the link_opens column added during the rework."""
+def test_technique_scores_has_link_opens_column():
+	"""technique_scores keeps the link_opens column added during the rework."""
 	db, path = _fresh_db("scores")
 	try:
-		assert "link_opens" in _columns(db, "skill_scores")
+		assert "link_opens" in _columns(db, "technique_scores")
 	finally:
 		_cleanup(db, path)
 
@@ -81,7 +81,7 @@ def test_legacy_tables_are_dropped_on_startup():
 		}
 		for gone in (
 			"canvas_shares", "canvas_layer_cache", "canvas_seed_pool",
-			"skills", "canvases", "canvas_layers", "image_generations",
+			"techniques", "canvases", "canvas_layers", "image_generations",
 		):
 			assert gone not in tables, f"legacy table {gone!r} still present"
 	finally:

@@ -40,17 +40,17 @@
     <div class="account-card" id="prefsCard" hidden>
       <h2>Preferences</h2>
       <label class="account-pref">
-        <input type="checkbox" id="prefSkillAuthoring">
+        <input type="checkbox" id="prefTechniqueAuthoring">
         <span>
-          <strong>Let Second Brain author skills for me</strong>
-          <small>Lets the assistant create, edit, and delete custom skills on your behalf.</small>
+          <strong>Let Second Brain author techniques for me</strong>
+          <small>Lets the assistant create, edit, and delete custom techniques on your behalf.</small>
         </span>
       </label>
       <label class="account-pref">
-        <input type="checkbox" id="prefCommunitySkills">
+        <input type="checkbox" id="prefCommunityTechniques">
         <span>
-          <strong>Include community skills in search</strong>
-          <small>Shows skills authored by other users when searching. Off by default.</small>
+          <strong>Include community techniques in search</strong>
+          <small>Shows techniques authored by other users when searching. Off by default.</small>
         </span>
       </label>
       <p id="prefsStatus" class="modal-status" hidden></p>
@@ -66,7 +66,7 @@
 
     <div class="account-card delete-card" id="dangerCard" hidden>
       <h2>Delete account</h2>
-      <p>Removes your email, private archive, and any chats from this device. Skills and shared canvases stay in the public catalog with the author set to anonymous. Type your email to confirm.</p>
+      <p>Removes your email, private archive, and any chats from this device. Techniques and shared canvases stay in the public catalog with the author set to anonymous. Type your email to confirm.</p>
       <form id="deleteForm">
         <input id="deleteConfirm" type="email" required placeholder="you@example.com" autocomplete="off">
         <button type="submit" class="delete-btn">Delete account</button>
@@ -122,8 +122,8 @@
       $("#buyMore").textContent = `Buy ${Number(pack.credits).toLocaleString()} credits - $${(Number(pack.price_cents) / 100).toFixed(2)}`;
       window._sbEmail = a.email || "";
       const cfg = a.account_config || {};
-      $("#prefSkillAuthoring").checked = !!cfg.skill_authoring_enabled;
-      $("#prefCommunitySkills").checked = !!cfg.community_skills_enabled;
+      $("#prefTechniqueAuthoring").checked = !!cfg.technique_authoring_enabled;
+      $("#prefCommunityTechniques").checked = !!cfg.community_techniques_enabled;
     } else {
       $("#signedOut").hidden = false;
     }
@@ -145,8 +145,8 @@
       status.textContent = r.error || "Could not save.";
     }
   }
-  $("#prefSkillAuthoring")?.addEventListener("change", e => savePref("skill_authoring_enabled", e.target.checked));
-  $("#prefCommunitySkills")?.addEventListener("change", e => savePref("community_skills_enabled", e.target.checked));
+  $("#prefTechniqueAuthoring")?.addEventListener("change", e => savePref("technique_authoring_enabled", e.target.checked));
+  $("#prefCommunityTechniques")?.addEventListener("change", e => savePref("community_techniques_enabled", e.target.checked));
 
   $("#deleteForm")?.addEventListener("submit", async e => {
     e.preventDefault();

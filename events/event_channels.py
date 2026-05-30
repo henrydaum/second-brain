@@ -126,7 +126,7 @@ Payload:
     status:      str
     layer_index: int (optional, 1-based)
     total_layers:int
-    skill_slug:  str (optional)
+    technique_slug:  str (optional)
     timeout_s:   float"""
 
 CANVAS_CHANGED = "canvas_changed"
