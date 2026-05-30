@@ -91,7 +91,7 @@ def _enact_and_render(context, action_type: str, payload: dict) -> ToolResult:
 class ManageLayers(BaseTool):
 	name = "manage_layers"
 	description = (
-		"Edit the canvas layer chain (max 4 layers: 1 background + up to 5 "
+		"Edit the canvas layer chain (max 6 layers: 1 background + up to 5 "
 		"filters/objects). action=delete removes layer at chain_index (0 is the "
 		"background — deleting it clears the canvas). action=move reorders from "
 		"from_index to to_index; layer 0 must stay a background. action=clear "

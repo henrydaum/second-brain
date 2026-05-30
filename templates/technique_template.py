@@ -256,8 +256,8 @@ A single background rarely produces a finished image. High-quality pattern:
   3. One of **bloom_glow**, **vignette**, **film_grain**, **sharpen**
      — adds atmosphere or sharpens detail.
 
-Keep filter chains ≤ 3 deep. The runtime enforces a hard cap of 4 total
-chain entries (1 background + 3 filters or objects); past that,
+Keep filter/object chains <= 5 deep. The runtime enforces a hard cap of 6 total
+chain entries (1 background + 5 filters or objects); past that,
 execute_technique errors and the user must delete a layer first.
 
 
