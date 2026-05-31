@@ -1472,7 +1472,10 @@ def test_new_command_starts_default_main_conversation():
     """Verify new command starts default main conversation."""
     db = FakeConversationDB()
     runtime = ConversationRuntime(db=db)
-    result = NewCommand().run({}, SimpleNamespace(db=db, runtime=runtime, session_key="chat"))
+    result = NewCommand().run({}, SimpleNamespace(
+        db=db, runtime=runtime, session_key="chat",
+        config={"llm_profiles": {"default": {}}},
+    ))
 
     assert result == "Started new conversation #1 under 'Main'.\nAgent: default"
     assert db.conversations[1]["category"] is None

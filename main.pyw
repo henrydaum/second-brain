@@ -251,6 +251,7 @@ def _bind_runtime_services(services, tool_registry, orchestrator, runtime):
 			svc.bind_runtime(
 				tool_registry=tool_registry,
 				orchestrator=orchestrator,
+				runtime=runtime,
 				command_registry=getattr(runtime, "command_registry", None),
 				frontend_manager=getattr(runtime, "frontend_manager", None),
 			)

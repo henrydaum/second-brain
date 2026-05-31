@@ -59,7 +59,8 @@ def test_invoke_forwards_model_messages_and_credentials(monkeypatch):
     assert result.content == "ok"
     assert calls[0]["model"] == "anthropic/claude-sonnet-4-6"
     assert calls[0]["api_key"] == "sk-test"
-    assert calls[0]["base_url"] == "https://example.test"
+    # LiteLLM's canonical connection param is api_base, not base_url.
+    assert calls[0]["api_base"] == "https://example.test"
 
 
 def test_tool_calls_round_trip(monkeypatch):

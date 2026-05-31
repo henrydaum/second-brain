@@ -3,6 +3,9 @@ openai
 lmstudio
 litellm
 
+# MCP (Model Context Protocol) client — optional, used by the mcp service
+mcp
+
 # Embeddings
 sentence-transformers
 numpy

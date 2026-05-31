@@ -707,6 +707,11 @@ class LiteLLMService(BaseLLM):
         """Internal helper to load litellm."""
         try:
             import litellm  # noqa: F401
+            # Tolerate provider-unsupported OpenAI params (e.g. temperature on
+            # reasoning models) by dropping them instead of erroring.
+            litellm.drop_params = True
+            # Local-first: opt out of LiteLLM's usage telemetry.
+            litellm.telemetry = False
             self.loaded = True
             return True
         except Exception as e:
@@ -767,7 +772,9 @@ class LiteLLMService(BaseLLM):
         if self.api_key:
             kwargs.setdefault("api_key", self.api_key)
         if self.base_url:
-            kwargs.setdefault("base_url", self.base_url)
+            # LiteLLM's canonical connection param is ``api_base`` (``base_url``
+            # is the OpenAI SDK's name and is not reliably honored here).
+            kwargs.setdefault("api_base", self.base_url)
         return kwargs
 
     def _classify_error(self, e) -> str:
@@ -775,6 +782,10 @@ class LiteLLMService(BaseLLM):
         ``is_context_limit_error`` heuristic, which otherwise matches
         ``tokens`` + ``limit`` in rate-limit messages and triggers the
         compact-and-retry path."""
+        # LiteLLM normalizes context-overflow to this exception across
+        # providers; trust it before the (fragile) string heuristic.
+        if type(e).__name__ == "ContextWindowExceededError":
+            return "context_limit"
         if type(e).__name__ in _LITELLM_DETERMINISTIC_ERRORS:
             return "provider_error"
         if is_context_limit_error(e):

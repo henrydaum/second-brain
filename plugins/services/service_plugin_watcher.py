@@ -31,8 +31,9 @@ class PluginWatcherService(BaseService):
         self._runtime = {}
         self._lock = threading.RLock()
 
-    def bind_runtime(self, *, tool_registry=None, orchestrator=None, command_registry=None, frontend_manager=None):
-        """Bind runtime."""
+    def bind_runtime(self, *, tool_registry=None, orchestrator=None, command_registry=None, frontend_manager=None, runtime=None, **_):
+        """Bind runtime. Accepts (and ignores) ``runtime`` so the shared
+        ``_bind_runtime_services`` call signature stays uniform across services."""
         self._runtime.update({
             "tool_registry": tool_registry,
             "orchestrator": orchestrator,
