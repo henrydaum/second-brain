@@ -95,8 +95,17 @@ class CreditsService(BaseService):
         ).fetchone()["n"]
         return free, max(0, paid - int(reserved))
 
-    def _next_refill_seconds(self, db, uid: str, now: float | None = None) -> int | None:
+    def _next_refill_seconds(self, db, uid: str, now: float | None = None, free: int | None = None) -> int | None:
+        """Seconds until the user's free balance next grows.
+
+        Free is gated by whichever rolling window (5-hour or week) currently
+        leaves the least headroom; availability ticks up when the oldest free
+        spend in that binding window ages out. Report that roll-off whenever a
+        window is constraining free — including when some free credits remain
+        but aren't enough for the action — so a denial can always show a time."""
         now = now or time.time()
+        if free is None:
+            free, _ = self._availability(db, uid, now)
         waits = []
         limits = self.policy()["free"]
         for span, cap in ((5 * 3600, limits["five_hours"]), (7 * 24 * 3600, limits["week"])):
@@ -105,7 +114,7 @@ class CreditsService(BaseService):
                 "WHERE user_id=? AND ts>=? AND status IN ('reserved','committed') AND free_amount>0",
                 (uid, now - span),
             ).fetchone()
-            if int(row["n"]) >= int(cap) and row["oldest"] is not None:
+            if row["oldest"] is not None and max(0, int(cap) - int(row["n"])) == free:
                 waits.append(max(0, int(float(row["oldest"]) + span - now)))
         return max(waits) if waits else None
 
@@ -116,7 +125,7 @@ class CreditsService(BaseService):
         return {
             "session_key": session_key, "signed_in": bool(row and row["account_id"]), "email": row["email"] if row else None,
             "free_remaining": free, "purchased_remaining": paid, "total_available": free + paid,
-            "next_refill_seconds": self._next_refill_seconds(db, uid) if not free else None,
+            "next_refill_seconds": self._next_refill_seconds(db, uid, free=free),
             "pack": {"credits": int(pack["credits"]), "price_cents": int(pack["price_cents"])},
         }
 

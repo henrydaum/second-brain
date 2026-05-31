@@ -82,6 +82,22 @@ def test_snapshot_reports_five_hour_refill_when_free_is_empty(db):
     assert 5 * 3600 - 65 <= remaining <= 5 * 3600 - 55
 
 
+def test_refill_time_is_reported_when_some_free_remains_but_not_enough(db):
+    # Denials can happen with free still > 0 (e.g. 5 free, action needs 10). The
+    # snapshot must still report when the next free credit rolls back in.
+    svc, key, uid = _bound(db, {"web_credits": {"free": {"five_hours": 60, "week": 600}}})
+    now = time.time()
+    with db.lock:
+        db.conn.execute(
+            "INSERT INTO web_credit_ledger (id,user_id,kind,cost,free_amount,paid_amount,status,ts,committed_at,meta_json) VALUES ('partial',?,'ai_prompt',55,55,0,'committed',?,?, '{}')",
+            (uid, now - 120, now - 120),
+        )
+        db.conn.commit()
+    snap = svc.snapshot(db, key)
+    assert snap["free_remaining"] == 5
+    assert 5 * 3600 - 125 <= snap["next_refill_seconds"] <= 5 * 3600 - 115
+
+
 def test_week_limit_controls_refill_even_after_five_hour_window(db):
     svc, key, uid = _bound(db, {"web_credits": {"free": {"five_hours": 2, "week": 2}}})
     now = time.time()

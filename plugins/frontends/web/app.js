@@ -157,11 +157,14 @@ function renderCreditError(error) {
   const body = document.createElement("p");
   body.textContent = available
     ? `That needs ${Number(d.required || 1)} credits, and you have ${available}. You can still try a manual edit.`
-    : `${refillText(d.next_refill_seconds)}`;
+    : "You're out of free credits for now.";
+  const refill = document.createElement("p");
+  refill.className = "credit-refill";
+  refill.textContent = refillText(d.next_refill_seconds);
   const link = document.createElement("a");
   link.href = "/account";
   link.textContent = "Open your account to buy more credits";
-  el.append(title, body, link);
+  el.append(title, body, refill, link);
   messages.appendChild(el);
   reveal(el);
 }
