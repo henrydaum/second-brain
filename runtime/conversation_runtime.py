@@ -481,6 +481,11 @@ class ConversationRuntime:
         """Ask the compaction task to summarize a transcript and wait for the result."""
         import uuid
         from events.event_channels import COMPACT_CHAT
+        # The compaction task is an installable plugin. If it isn't present,
+        # don't block the loop for the full timeout — skip compaction cleanly.
+        if not bus.has_subscribers(COMPACT_CHAT):
+            logger.debug("No COMPACT_CHAT subscriber installed; skipping compaction.")
+            return None
         token = f"compact:{uuid.uuid4().hex}"
         slot = {"event": threading.Event(), "summary": None, "error": None}
         with self._compaction_lock:

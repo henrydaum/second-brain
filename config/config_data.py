@@ -15,20 +15,10 @@ Each entry: (title, variable_name, description, default, type_info)
 
 from paths import DATA_DIR, ATTACHMENT_CACHE
 
-DEFAULT_SCHEDULED_JOBS = {
-    "update_titles": {
-        "channel": "update_titles",
-        "cron": "*/30 * * * *",
-        "enabled": True,
-        "payload": {},
-    },
-    "dream_memory": {
-        "channel": "dream_memory",
-        "cron": "0 4 * * *",
-        "enabled": True,
-        "payload": {},
-    },
-}
+# Lite kernel ships no scheduled jobs. The tasks they used to drive
+# (update_titles, dream_memory) and the timekeeper service that fires them are
+# installable from the store; a plugin registers its own default jobs on install.
+DEFAULT_SCHEDULED_JOBS: dict = {}
 
 SETTINGS_DATA = [
     # --- Directories ---
@@ -66,13 +56,14 @@ SETTINGS_DATA = [
     # --- Services ---
     ("Auto-load Services", "autoload_services",
      "Service names to load automatically on startup (e.g. [\"google_drive\"]).",
-     ["web_search_provider", "timekeeper", "llm", "parser", "plugin_watcher"],
+     ["llm", "parser", "plugin_watcher"],
      {"type": "json_list"}),
 
     # --- Frontends ---
     ("Enabled Frontends", "enabled_frontends",
-     "Frontend modules to start on launch. Options: repl, telegram. Requires app restart.",
-     ["repl", "telegram"],
+     "Frontend modules to start on launch. The lite kernel ships only the REPL; "
+     "the Telegram frontend is installable from the store. Requires app restart.",
+     ["repl"],
      {"type": "json_list"}),
 
     # --- Processing ---

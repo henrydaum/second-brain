@@ -3,6 +3,105 @@
 Local-first file intelligence pipeline with REPL + Telegram frontends. Python /
 SQLite. Solo dev (Henry). The Flet GUI was removed; do not reintroduce.
 
+---
+
+# ⚡ LITE BRANCH — the kernel (READ FIRST)
+
+**You are on the `lite` branch.** This branch is a deliberate strip-down of
+Second Brain into a **microkernel**: a minimal, reliable core that boots, runs
+the conversation loop + agent turn, and loads/unloads plugins — with *everything
+else* destined to be installed from a **plugin store** (the agentskills.io model:
+a registry you browse, install, and uninstall from). `main` remains the full
+product. Do not port heavy features back into the kernel; they belong in the store.
+
+> Goal in priority order: (1) the kernel works **flawlessly and reliably**, then
+> (2) build install/uninstall against a cloud store, then (3) versioning and
+> possibly containerization. We are at the end of step (1).
+
+## What ships in the kernel (`plugins/`)
+
+Plugins are discovered purely by file presence (`plugins/plugin_discovery.py`).
+The kernel was produced by **moving** non-essential plugins into `store/` (a
+staging catalog that mirrors `plugins/`, preserved via `git mv` to seed the
+future store) — *not* by deleting them. What remains:
+
+- **Services:** `service_llm`, `service_parser` (text-only — see below),
+  `service_plugin_watcher` (hot-reload = the install/uninstall substrate).
+- **Tasks:** `task_compact_chat` (context-safety; nothing else).
+- **Tools:** `tool_read_file`, `tool_ask_user_question`, and `tool_propose_plan`
+  (the last is injected only in plan mode by `runtime/runtime_config.py:~95`, but
+  the file must stay — see hard deps below).
+- **Frontend:** `frontend_repl` only. Telegram moved to `store/frontends/`.
+- **Commands:** REPL UX + introspection only — `config`, `setup` (LLM onboarding
+  wizard), `llm`, `conversations`, `clear`, `cancel`, `plan`, `doctor`,
+  `locations`, `commands`, `tools`, `services`, `tasks`. Moved out: `mcp`,
+  `agent`, `schedule`, `update`.
+
+The pipeline substrate (`pipeline/` — orchestrator, watcher, event_trigger) still
+boots, but ships **zero pipeline tasks**: it idles until a pipeline plugin
+(extract/chunk/index/embed) is installed. `parse_text` is kept and registers
+text/code extensions plus PDF/DOCX/PPTX (all heavy libs are lazy
+`try/except ImportError`, so they degrade gracefully). The richer modality
+parsers (image/audio/video/tabular/container) moved to `store/services/helpers/`.
+
+## The kernel boundary (the one rule)
+
+Core code (`pipeline/`, `runtime/`, `state_machine/`, `agent/`, `events/`,
+`config/`, `main.pyw`) hard-imports **exactly three** plugin modules. Keep these
+three resolvable in any kernel:
+1. `service_llm` — `runtime/agent_scope.py` + `runtime/conversation_loop.py`.
+2. `tool_propose_plan` — `runtime/runtime_config.py` (plan mode).
+3. `parser_registry` — `pipeline/orchestrator.py`, `pipeline/watcher.py`,
+   `agent/system_prompt.py`.
+
+Everything else is discovery-based. The agent system prompt gates every optional
+section behind `_has_tool(...)` in `agent/system_prompt.py`, so missing tools
+degrade silently and correctly.
+
+## Hardening applied for kernel reliability
+
+These edits exist so the kernel degrades cleanly when a stdlib plugin is absent —
+the difference between a microkernel and a pile of assumptions:
+- **`runtime/conversation_runtime.py` `request_compaction`** — guards on
+  `bus.has_subscribers(COMPACT_CHAT)` and skips compaction instead of blocking the
+  full 120s timeout when `task_compact_chat` isn't installed.
+- **`runtime/runtime_config.py` `build_loop`** — the "no LLM" path now raises a
+  friendly message pointing at `/setup` instead of an opaque error.
+- **`config/config_data.py`** — `autoload_services` trimmed to
+  `["llm", "parser", "plugin_watcher"]`; `enabled_frontends` → `["repl"]`;
+  `DEFAULT_SCHEDULED_JOBS` → `{}` (jobs/timekeeper are store plugins now).
+- **`requirements.txt`** — kernel-minimal (`openai/lmstudio/litellm`, `requests`,
+  `watchdog`, `Pillow`; optional doc-parsing deps commented). The full per-plugin
+  dependency map is documented in that file's footer.
+
+## Next steps (not yet built)
+
+- **Plugin store**: a manifest per plugin (deps, default config, default scheduled
+  jobs, version), a registry (start GitHub-backed like skills), and a `/plugin`
+  command (`search`/`install`/`uninstall`/`list`). The install *substrate already
+  exists*: `plugin_discovery.load_single_plugin`/`unload_plugin`,
+  `service_plugin_watcher` hot-reload, the `DATA_DIR/sandbox_*` discovery dirs, and
+  the pip-install gate. Seed catalog = the `store/` tree on this branch.
+- **Versioning + containerization** (Henry's follow-on; design later).
+
+## Verifying the kernel
+
+Discovery/boot smoke (no frontend, no config writes):
+```bash
+python -c "from pathlib import Path; _R=Path.cwd(); \
+from config import config_manager; from pipeline.database import Database; \
+from pipeline.orchestrator import Orchestrator; from agent.tool_registry import ToolRegistry; \
+from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools; \
+c=config_manager.load(); db=Database(c['db_path']); s=discover_services(_R,c); \
+o=Orchestrator(db,c,s); discover_tasks(_R,o,c); t=ToolRegistry(db,c,s); t.orchestrator=o; \
+discover_tools(_R,t,c); print(sorted(s), sorted(o.tasks), sorted(t.tools))"
+```
+Expect services `[llm, parser, plugin_watcher]`, tasks `[compact_chat]`, tools
+`[ask_user_question, read_file]`. Then `python main.py`, run `/setup` to configure
+an LLM, and confirm a REPL round-trip + clean compaction on a long conversation.
+
+---
+
 ## Recent work — state machine unification
 
 The conversation layer was unified around a single state machine

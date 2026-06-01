@@ -16,8 +16,11 @@ delegate to peers (e.g. parse_gdoc -> google_drive, parse_audio -> whisper).
 import logging
 
 from plugins.BaseService import BaseService
-from plugins.services.helpers import parse_audio, parse_container, parse_image, parse_tabular
 from plugins.services.helpers import parser_registry
+# Lite kernel: only the text parser ships built-in. Importing it triggers its
+# top-level registry.register() calls for text/code/PDF/DOCX/PPTX extensions.
+# Richer modality parsers (image, audio, video, tabular, container) live in the
+# store and re-register themselves when their plugin is installed.
 from plugins.services.helpers import parse_text
 
 logger = logging.getLogger("ParserService")
@@ -31,12 +34,9 @@ class ParserService(BaseService):
     config_settings: list = []
 
     def _load(self) -> bool:
-        # Importing each parser module triggers its top-level register() calls,
-        # which populate parser_registry._REGISTRY and _MODALITY_MAP.
+        # The text parser registers its extensions on import (module top-level).
+        # Nothing further to load for the lite kernel.
         """Internal helper to load parser service."""
-        from plugins.services.helpers import (
-            parse_video,
-        )
         self.loaded = True
         return True
 

@@ -5,6 +5,15 @@ working **on** the Second Brain codebase. Humans should read [README.md](README.
 this file is the agent-facing companion. If anything here conflicts with an
 explicit user instruction, the user wins.
 
+## ⚡ This is the `lite` branch (the kernel)
+
+This branch is a **microkernel** strip-down: a minimal core that boots, runs the
+agent turn, and loads plugins — with non-essential capabilities moved into
+`store/` to seed a future plugin store. **Read the "LITE BRANCH — the kernel"
+section at the top of [CLAUDE.md](CLAUDE.md) before making changes.** The
+description below reflects the full `main` product; on `lite`, search,
+scheduling, modalities, integrations, and Telegram are store plugins, not built-ins.
+
 ## What this project is
 
 Second Brain is a **local-first AI runtime**: a programmable conversation runtime

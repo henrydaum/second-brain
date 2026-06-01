@@ -329,7 +329,10 @@ def build_loop(runtime, session_key: str | None = None) -> ConversationLoop:
         if router is not llm and getattr(router, "loaded", False):
             llm = router
     if llm is None or not getattr(llm, "loaded", True):
-        raise RuntimeError("LLM service is not loaded.")
+        raise RuntimeError(
+            "No LLM is configured or loaded. Run /setup to configure one "
+            "(or /llm to add a profile), then try again."
+        )
 
     def notice(text: str):
         """Handle notice."""

@@ -1,55 +1,38 @@
-# LLM / AI services
+# Second Brain — Lite kernel dependencies
+#
+# The kernel aims to stay close to pure Python. Capabilities beyond the core
+# (search, embeddings, OCR, audio, integrations, Telegram, …) are installed from
+# the store, and each store plugin declares its own extra dependencies.
+
+# --- LLM clients (service_llm) ---
 openai
 lmstudio
 litellm
 
-# MCP (Model Context Protocol) client — optional, used by the mcp service
-mcp
-
-# Embeddings
-sentence-transformers
-numpy
-
-# Speech transcription
-faster-whisper
-torch
-
-# Image processing
-Pillow
-pillow-heif
-easyocr
-
-# Document parsing
-PyMuPDF
-python-docx
-python-pptx
-pandas
-
-# Archive parsing
-py7zr
-rarfile
-
-# HTTP
+# --- HTTP ---
 requests
 
-# Scheduling
-croniter
-cron-descriptor
-
-# Telegram bot
-python-telegram-bot
-
-# Google Drive
-google-auth
-google-auth-oauthlib
-google-api-python-client
-
-# Windows OCR (Windows only)
-winsdk; sys_platform == "win32"
-
-# Mac OCR (macOS only) — Apple Vision via pyobjc
-pyobjc-framework-Vision; sys_platform == "darwin"
-pyobjc-framework-Quartz; sys_platform == "darwin"
-
-# Syncing
+# --- File watcher (pipeline/watcher) ---
 watchdog
+
+# --- Images: attachment handling + optional embedded-image extraction ---
+Pillow
+
+# --- Optional: richer document text extraction (parse_text) ---
+# Plaintext and code always work with zero extra deps. The PDF/Word/PowerPoint
+# parsers degrade gracefully when these are absent — install to enable them:
+# PyMuPDF
+# python-docx
+# python-pptx
+
+# ===================================================================
+# Moved to store plugins — install alongside the plugin that needs them:
+#   search / embeddings : sentence-transformers, numpy, torch
+#   audio transcription : faster-whisper, torch
+#   ocr                 : easyocr, torch; winsdk (win); pyobjc-framework-Vision/Quartz (mac)
+#   tabular / archives  : pandas, py7zr, rarfile
+#   scheduling          : croniter, cron-descriptor
+#   telegram frontend   : python-telegram-bot
+#   google (gmail/drive): google-auth, google-auth-oauthlib, google-api-python-client
+#   mcp client          : mcp
+# ===================================================================
