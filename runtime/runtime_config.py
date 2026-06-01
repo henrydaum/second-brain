@@ -39,10 +39,31 @@ logger = logging.getLogger("Runtime.config")
 # ──────────────────────────────────────────────────────────────────────
 
 def profile_for(runtime, session: RuntimeSession | None) -> str:
-    """Return the effective agent profile for a runtime session."""
+    """Return the effective agent profile for a runtime session.
+
+    Precedence: an explicit per-session override (``/agent switch``) wins, then
+    the originating frontend's configured profile, then the global active
+    profile. The frontend profile is a baseline, so a frontend can pin a
+    restricted agent while ``/agent switch`` (when permitted) still overrides.
+    """
     if session is not None and session.profile_override:
         return session.profile_override
+    if session is not None and session.frontend_name:
+        pinned = _frontend_agent_profile(runtime.config, session.frontend_name)
+        if pinned:
+            return pinned
     return runtime.config.get("active_agent_profile") or "default"
+
+
+def _frontend_agent_profile(config: dict, frontend_name: str) -> str | None:
+    """Return the agent profile a frontend pins, if any and it exists."""
+    fp = (config.get("frontend_profiles") or {}).get(frontend_name) or {}
+    name = fp.get("agent_profile")
+    if not name or name == "default":
+        return None
+    if name in (config.get("agent_profiles") or {}):
+        return name
+    return None
 
 
 def scope_for_profile(runtime, profile: str):
@@ -92,7 +113,7 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
         registry = cloned
     if getattr(session, "plan_mode", False) and hasattr(registry, "db") and hasattr(registry, "config") and hasattr(registry, "services"):
         from agent.tool_registry import ToolRegistry
-        from plugins.tools.tool_propose_plan import ProposePlan
+        from plugins.tool_propose_plan import ProposePlan
         cloned = ToolRegistry(registry.db, registry.config, registry.services)
         cloned.orchestrator = getattr(registry, "orchestrator", None)
         cloned.runtime = getattr(registry, "runtime", None)

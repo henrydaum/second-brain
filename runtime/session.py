@@ -62,6 +62,11 @@ class RuntimeSession:
     # instances that are not part of the global tool_registry. When None /
     # empty, the session follows the runtime's active profile and registry.
     profile_override: str | None = None
+    # The frontend transport that owns this session ("repl", "telegram", ...).
+    # Set by BaseFrontend on first submit; lets the runtime apply that
+    # frontend's profile (agent scope + command access). None for background
+    # drivers, which follow the global active profile.
+    frontend_name: str | None = None
     extra_tool_instances: list = field(default_factory=list)
     system_prompt_extras: dict[str, Any] = field(default_factory=dict)
     plan_mode: bool = False
@@ -78,6 +83,7 @@ class RuntimeSession:
             "conversation_id": self.conversation_id,
             "active_agent_profile": self.active_agent_profile,
             "profile_override": self.profile_override,
+            "frontend_name": self.frontend_name,
             "notification_mode": self.notification_mode,
             "system_prompt_extras": self.system_prompt_extras,
             "plan_mode": self.plan_mode,

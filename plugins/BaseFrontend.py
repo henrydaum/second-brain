@@ -287,6 +287,7 @@ class BaseFrontend:
             raise RuntimeError(
                 f"Frontend '{self.name}' is not bound — call bind(runtime, ...) first."
             )
+        self._tag_session(session_key)
         result = self.runtime.handle_action(session_key, action_type, payload)
         self._render_result(session_key, result)
         return result
@@ -314,6 +315,8 @@ class BaseFrontend:
             if stripped.startswith("/") and ACTION_CALL_COMMAND in legal:
                 name, _, arg = stripped[1:].partition(" ")
                 cmd = next((c for c in self.commands.all_commands() if c.name == name), None) if name and self.commands else None
+                if cmd and not self.command_allowed(name):
+                    return self._command_not_allowed(session_key, name)
                 if cmd:
                     args = self.commands.parse_args(name, arg, session_key=session_key) if arg.strip() else {}
                     return self.submit(session_key, ACTION_CALL_COMMAND, {"name": name, "args": args})
@@ -348,6 +351,8 @@ class BaseFrontend:
         if stripped.startswith("/"):
             name, _, arg = stripped[1:].partition(" ")
             cmd = next((c for c in self.commands.all_commands() if c.name == name), None) if name and self.commands else None
+            if cmd and not self.command_allowed(name):
+                return self._command_not_allowed(session_key, name)
             if cmd:
                 args = self.commands.parse_args(name, arg, session_key=session_key) if arg.strip() else {}
                 return self.submit(
@@ -377,6 +382,27 @@ class BaseFrontend:
         result = RuntimeResult(False, messages=[f"`/{name}` isn't a recognized slash command. Type `/commands` to see the full list of what's available."])
         self._render_result(session_key, result)
         return result
+
+    def _command_not_allowed(self, session_key: str, name: str):
+        """Render a message for a command blocked by this frontend's profile."""
+        result = RuntimeResult(False, messages=[f"`/{name}` is not available on the '{self.name}' frontend. Type `/commands` to see what's available here."])
+        self._render_result(session_key, result)
+        return result
+
+    def command_allowed(self, name: str) -> bool:
+        """Whether ``name`` may run on this frontend under its profile."""
+        from plugins.frontends.helpers.command_registry import command_allowed
+        return command_allowed(self.config, self.name, name)
+
+    def _tag_session(self, session_key: str) -> None:
+        """Stamp the originating frontend onto a session so the runtime can
+        apply this frontend's profile (agent scope + command access)."""
+        try:
+            session = self.runtime.get_session(session_key)
+        except Exception:
+            return
+        if getattr(session, "frontend_name", None) != self.name:
+            session.frontend_name = self.name
 
     # ──────────────────────────────────────────────────────────────────────
     # Bus handlers. Subclasses can override for richer behavior, but the

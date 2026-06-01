@@ -121,6 +121,18 @@ SETTINGS_DATA = [
      "default",
      {"type": "text", "hidden": True}),
 
+    # --- Frontend Profiles ---
+    # One profile per real frontend (keyed by frontend name). Each picks the
+    # agent profile sessions on that frontend use and narrows which slash
+    # commands the user may run there. A frontend with no entry is unrestricted
+    # and follows the global active agent profile. Managed via /frontends.
+    ("Frontend Profiles", "frontend_profiles",
+     "Per-frontend access profiles. Each references an agent profile (by name or "
+     "'default') and can whitelist/blacklist slash commands so a user-facing "
+     "transport can expose a restricted agent and command set.",
+     {},
+     {"type": "json_dict", "hidden": True}),
+
     ("Restore Last Conversation on Startup", "startup_restore_conversation",
      "When enabled, the most recently active conversation is reloaded automatically when a frontend starts.",
      True,

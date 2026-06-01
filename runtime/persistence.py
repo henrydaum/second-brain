@@ -165,6 +165,7 @@ def load_conversation(
         notification_mode=saved_mode,
         has_compaction_checkpoint=latest_compaction(rows) is not None,
     )
+    session.frontend_name = marker.get("frontend_name")
     # Re-seed cs with session-aware specs.
     session.cs = new_state(runtime, marker, session=session)
     _sync_notification_mode(session)

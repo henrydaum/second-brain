@@ -16,6 +16,26 @@ logger = logging.getLogger("Commands")
 _HELP_SECTIONS = ["Conversation", "System", "Services & Tools", "Tasks", "Config & System", "Other"]
 
 
+def command_allowed(config: dict | None, frontend_name: str | None, name: str) -> bool:
+    """Whether ``name`` may run on ``frontend_name`` under its frontend profile.
+
+    A frontend with no profile entry is unrestricted. Otherwise the profile's
+    ``whitelist_or_blacklist_commands`` mode applies to ``commands_list``.
+    """
+    if not frontend_name:
+        return True
+    fp = ((config or {}).get("frontend_profiles") or {}).get(frontend_name) or {}
+    listed = set(fp.get("commands_list") or [])
+    if fp.get("whitelist_or_blacklist_commands", "blacklist") == "whitelist":
+        return name in listed
+    return name not in listed
+
+
+def frontend_command_filter(config: dict | None, frontend_name: str | None):
+    """Return a ``predicate(name) -> bool`` for one frontend's command policy."""
+    return lambda name: command_allowed(config, frontend_name, name)
+
+
 class CommandRegistry:
     """Command registry."""
     def __init__(self, context_provider: Callable[[str | None], object] | None = None):
@@ -77,9 +97,17 @@ class CommandRegistry:
         """Handle all commands."""
         return sorted(self._commands.values(), key=lambda cmd: cmd.name)
 
-    def visible_commands(self) -> list[BaseCommand]:
-        """Handle visible commands."""
-        return [cmd for cmd in self.all_commands() if not getattr(cmd, "hide_from_help", False)]
+    def visible_commands(self, predicate=None) -> list[BaseCommand]:
+        """Handle visible commands.
+
+        ``predicate(name) -> bool`` optionally filters by a frontend's command
+        policy so listings match what the user can actually run.
+        """
+        return [
+            cmd for cmd in self.all_commands()
+            if not getattr(cmd, "hide_from_help", False)
+            and (predicate is None or predicate(cmd.name))
+        ]
 
     def to_callable_specs(self) -> dict[str, CallableSpec]:
         """Handle to callable specs."""
@@ -94,10 +122,10 @@ class CommandRegistry:
             )
         return specs
 
-    def help_text(self) -> str:
-        """Handle help text."""
+    def help_text(self, predicate=None) -> str:
+        """Handle help text. ``predicate`` filters by frontend command policy."""
         by_cat: dict[str, list[BaseCommand]] = {}
-        for cmd in self.visible_commands():
+        for cmd in self.visible_commands(predicate):
             by_cat.setdefault(cmd.category or "Other", []).append(cmd)
         ordered = [c for c in _HELP_SECTIONS if c in by_cat] + [c for c in by_cat if c not in _HELP_SECTIONS]
         lines = ["Commands:"]
