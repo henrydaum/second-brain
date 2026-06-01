@@ -56,7 +56,7 @@ SETTINGS_DATA = [
     # --- Services ---
     ("Auto-load Services", "autoload_services",
      "Service names to load automatically on startup (e.g. [\"google_drive\"]).",
-     ["llm", "parser", "plugin_watcher"],
+     ["llm", "compactor", "parser", "plugin_watcher"],
      {"type": "json_list"}),
 
     # --- Frontends ---

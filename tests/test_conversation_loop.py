@@ -135,3 +135,41 @@ def test_tool_failure_is_surfaced_to_the_model_as_error():
     tool_msg = next(m for m in new_messages if m["role"] == "tool")
     assert "kaboom" in tool_msg["content"]
     assert reply == "I hit an error."
+
+
+def test_compaction_uses_compactor_service_directly():
+    class _Compactor:
+        loaded = True
+
+        def __init__(self):
+            self.calls = []
+
+        def compact(self, **kwargs):
+            self.calls.append(kwargs)
+            return "Earlier summary."
+
+    notices = []
+    compactor = _Compactor()
+    runtime = SimpleNamespace(services={"compactor": compactor}, sessions={})
+    loop = ConversationLoop(
+        _FakeLLM([]),
+        _FakeRegistry([]),
+        {},
+        "prompt",
+        on_notice=notices.append,
+        runtime=runtime,
+        session_key="chat",
+    )
+    history = [
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "three"},
+    ]
+
+    loop._compact(history)
+
+    assert compactor.calls[0]["runtime"] is runtime
+    assert compactor.calls[0]["session_key"] == "chat"
+    assert history[0]["content"] == "[Conversation summary from earlier]\nEarlier summary."
+    assert history[1]["content"] == "Understood - I have the earlier context."
+    assert notices == ["Compacting conversation...", "Compacted 3 messages."]

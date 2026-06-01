@@ -477,8 +477,8 @@ class ConversationLoop:
         most recent user message (and any in-flight tool_call/result pair
         that immediately follows it), aggressively truncating any string
         content. Used when compaction itself can't help — either because
-        the compact_chat task didn't run, the summary came back empty, or
-        the post-compact retry still overflowed."""
+        the compactor service did not produce a summary, the summary came
+        back empty, or the post-compact retry still overflowed."""
         if not history:
             return
         last_user_idx = next((i for i in range(len(history) - 1, -1, -1) if history[i].get("role") == "user"), None)
@@ -514,17 +514,21 @@ class ConversationLoop:
         self._compact(history)
 
     def _compact(self, history) -> None:
-        """Summarize the head of `history` in place by delegating to the
-        ``compact_chat`` task. The runtime call blocks until the task
-        finishes (or times out)."""
+        """Summarize the head of `history` in place via the compactor service."""
         if len(history) <= 2 or self.runtime is None:
             return
         try:
+            compactor = (getattr(self.runtime, "services", {}) or {}).get("compactor")
+            if compactor is None or not getattr(compactor, "loaded", False):
+                logger.warning("Compactor service is not loaded. History will not shrink via summary.")
+                return
             transcript = "\n".join(f"{m.get('role', '').upper()}: {(m.get('content') or '')[:1000]}" for m in history)
             transcript = transcript[:20000]
-            summary = self.runtime.request_compaction(self.session_key, transcript)
+            if self.on_notice:
+                self.on_notice("Compacting conversation...")
+            summary = compactor.compact(runtime=self.runtime, session_key=self.session_key, transcript=transcript)
             if not summary:
-                logger.warning("Compaction returned no summary (timeout or empty). History will not shrink via summary.")
+                logger.warning("Compaction returned no summary. History will not shrink via summary.")
                 return
             old_count = len(history)
             if self._active_db is not None and self._active_conversation_id is not None:

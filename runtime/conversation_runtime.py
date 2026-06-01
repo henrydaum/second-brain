@@ -106,13 +106,6 @@ class ConversationRuntime:
         self._pending_restore_conv_id = self.config.get("last_active_conversation_id") if self.config else None
         self._restore_consumed_keys: set[str] = set()
         self._persisted_active_conv_id = self._pending_restore_conv_id
-        # Compaction request registry: token -> {"event": Event, "summary": str|None, "error": str|None}.
-        # ConversationLoop fills this with a fresh entry, emits COMPACT_CHAT,
-        # and waits on the event. The compact_chat task posts the summary
-        # back via _finish_compaction.
-        self._compaction_pending: dict[str, dict] = {}
-        self._compaction_lock = threading.Lock()
-
     # ──────────────────────────────────────────────────────────────────
     # Public entrypoint — every action a frontend can take ends up here.
     # ──────────────────────────────────────────────────────────────────
@@ -469,51 +462,6 @@ class ConversationRuntime:
         profile = session.profile_override or session.active_agent_profile or "default"
         suffix = f": {title.strip()}" if title.strip() else ""
         return f"Loaded last conversation{suffix}.\nAgent: {profile}"
-
-    # ──────────────────────────────────────────────────────────────────
-    # Compaction handoff. The actual summarization runs as an event-driven
-    # task (``task_compact_chat``) so it has its own observable run record
-    # and can be cancelled / inspected like any other task. The loop
-    # blocks here waiting for the result.
-    # ──────────────────────────────────────────────────────────────────
-
-    def request_compaction(self, session_key: str | None, transcript: str, timeout: float = 120.0) -> str | None:
-        """Ask the compaction task to summarize a transcript and wait for the result."""
-        import uuid
-        from events.event_channels import COMPACT_CHAT
-        # The compaction task is an installable plugin. If it isn't present,
-        # don't block the loop for the full timeout — skip compaction cleanly.
-        if not bus.has_subscribers(COMPACT_CHAT):
-            logger.debug("No COMPACT_CHAT subscriber installed; skipping compaction.")
-            return None
-        token = f"compact:{uuid.uuid4().hex}"
-        slot = {"event": threading.Event(), "summary": None, "error": None}
-        with self._compaction_lock:
-            self._compaction_pending[token] = slot
-        try:
-            bus.emit(COMPACT_CHAT, {
-                "request_token": token,
-                "session_key": session_key,
-                "transcript": transcript,
-            })
-            if not slot["event"].wait(timeout=timeout):
-                logger.warning(f"Compaction timed out after {timeout}s (token {token})")
-                return None
-            return slot["summary"]
-        finally:
-            with self._compaction_lock:
-                self._compaction_pending.pop(token, None)
-
-    def finish_compaction(self, token: str, summary: str | None, error: str | None = None) -> None:
-        """Resolve a waiting compaction request with either a summary or an error."""
-        with self._compaction_lock:
-            slot = self._compaction_pending.get(token)
-        if slot is None:
-            logger.warning(f"finish_compaction: no pending slot for token {token}")
-            return
-        slot["summary"] = summary
-        slot["error"] = error
-        slot["event"].set()
 
     def _persist_active_conversation(self, conv_id: int | None) -> None:
         """Remember the active conversation ID in config for the next startup."""

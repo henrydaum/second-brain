@@ -25,9 +25,10 @@ The kernel was produced by **moving** non-essential plugins into `store/` (a
 staging catalog that mirrors `plugins/`, preserved via `git mv` to seed the
 future store) — *not* by deleting them. What remains:
 
-- **Services:** `service_llm`, `service_parser` (text-only — see below),
-  `service_plugin_watcher` (hot-reload = the install/uninstall substrate).
-- **Tasks:** `task_compact_chat` (context-safety; nothing else).
+- **Services:** `service_llm`, `service_compactor` (context-safety),
+  `service_parser` (text-only — see below), `service_plugin_watcher`
+  (hot-reload = the install/uninstall substrate).
+- **Tasks:** none.
 - **Tools:** `tool_read_file`, `tool_ask_user_question`, and `tool_propose_plan`
   (the last is injected only in plan mode by `runtime/runtime_config.py:~95`, but
   the file must stay — see hard deps below).
@@ -62,13 +63,13 @@ degrade silently and correctly.
 
 These edits exist so the kernel degrades cleanly when a stdlib plugin is absent —
 the difference between a microkernel and a pile of assumptions:
-- **`runtime/conversation_runtime.py` `request_compaction`** — guards on
-  `bus.has_subscribers(COMPACT_CHAT)` and skips compaction instead of blocking the
-  full 120s timeout when `task_compact_chat` isn't installed.
+- **`plugins/services/service_compactor.py`** — context compaction is a
+  synchronous service call from the conversation loop, so the kernel does not
+  route a blocking request through the event task queue.
 - **`runtime/runtime_config.py` `build_loop`** — the "no LLM" path now raises a
   friendly message pointing at `/setup` instead of an opaque error.
 - **`config/config_data.py`** — `autoload_services` trimmed to
-  `["llm", "parser", "plugin_watcher"]`; `enabled_frontends` → `["repl"]`;
+  `["llm", "compactor", "parser", "plugin_watcher"]`; `enabled_frontends` → `["repl"]`;
   `DEFAULT_SCHEDULED_JOBS` → `{}` (jobs/timekeeper are store plugins now).
 - **`requirements.txt`** — kernel-minimal (`litellm`, `watchdog`, `Pillow`;
   optional doc-parsing deps commented). The full per-plugin
@@ -96,7 +97,7 @@ c=config_manager.load(); db=Database(c['db_path']); s=discover_services(_R,c); \
 o=Orchestrator(db,c,s); discover_tasks(_R,o,c); t=ToolRegistry(db,c,s); t.orchestrator=o; \
 discover_tools(_R,t,c); print(sorted(s), sorted(o.tasks), sorted(t.tools))"
 ```
-Expect services `[llm, parser, plugin_watcher]`, tasks `[compact_chat]`, tools
+Expect services `[compactor, llm, parser, plugin_watcher]`, tasks `[]`, tools
 `[ask_user_question, read_file]`. Then `python main.py`, run `/setup` to configure
 an LLM, and confirm a REPL round-trip + clean compaction on a long conversation.
 
