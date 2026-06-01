@@ -56,6 +56,12 @@ def test_llm_command_add_stores_declared_capabilities(monkeypatch):
     assert saved[-1]["llm_profiles"]["openai/gpt-4o"] == profile
 
 
+def test_llm_command_add_hints_provider_env_var():
+    context = SimpleNamespace(config={"llm_profiles": {}, "default_llm_profile": ""}, services={})
+    steps = LlmCommand().form({"model_name": "add", "new_model_name": "anthropic/claude-sonnet-4-6", "llm_service_class": "LiteLLMService"}, context)
+    assert "ANTHROPIC_API_KEY" in next(s.prompt for s in steps if s.name == "llm_api_key")
+
+
 # ── /debug ───────────────────────────────────────────────────────────
 
 def _session_context(tmp_path, monkeypatch, cs, **session_attrs):

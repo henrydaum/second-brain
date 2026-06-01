@@ -169,6 +169,11 @@ class BaseLLM(BaseService):
         """Return whether capability."""
         return bool(self.capabilities.get(modality))
 
+    @classmethod
+    def suggested_api_key_env(cls, model_name: str) -> str | None:
+        """Return the likely API-key env var for setup prompts, if known."""
+        return None
+
     def _load(self):
         """Internal helper to load base LLM."""
         raise NotImplementedError
@@ -282,6 +287,12 @@ def _llm_backend_classes() -> dict[str, type[BaseLLM]]:
 
 def llm_backend_names() -> list[str]:
     return sorted(_llm_backend_classes())
+
+
+def llm_backend_api_key_hint(class_name: str, model_name: str) -> str:
+    cls = _llm_backend_classes().get(class_name or "LiteLLMService")
+    env = cls.suggested_api_key_env(model_name) if cls else None
+    return f" Suggested env var: `{env}`." if env else ""
 
 
 def _load_sandbox_backend(path, module_name):

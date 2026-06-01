@@ -10,6 +10,17 @@ from plugins.services.service_llm import BaseLLM, LLMProviderError, LLMResponse,
 logger = logging.getLogger("LLMClass")
 
 _DETERMINISTIC_ERRORS = {"RateLimitError", "AuthenticationError", "NotFoundError", "PermissionDeniedError", "BadRequestError"}
+_API_KEY_ENV_OVERRIDES = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+    "cohere": "COHERE_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+    "xai": "XAI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
 
 
 def _quiet_litellm():
@@ -27,6 +38,11 @@ class LiteLLMService(BaseLLM):
     def __init__(self, model_name, api_key=None, base_url=None):
         super().__init__()
         self.model_name, self.api_key, self.base_url, self.loaded = model_name, api_key, base_url, False
+
+    @classmethod
+    def suggested_api_key_env(cls, model_name: str) -> str | None:
+        provider = model_name.split("/", 1)[0].lower().replace("-", "_") if "/" in model_name else ""
+        return _API_KEY_ENV_OVERRIDES.get(provider) or (f"{provider.upper()}_API_KEY" if provider else None)
 
     def _load(self):
         try:

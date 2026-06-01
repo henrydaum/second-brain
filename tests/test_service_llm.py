@@ -14,6 +14,7 @@ from plugins.services.service_llm import (
     LLMProviderError,
     _build_llm_from_profile,
     is_context_limit_error,
+    llm_backend_api_key_hint,
 )
 from plugins.services.service_litellm import LiteLLMService
 
@@ -51,6 +52,10 @@ def test_build_from_profile_picks_litellm_service():
     })
     assert isinstance(llm, LiteLLMService)
     assert llm.context_size == 200000
+
+
+def test_litellm_backend_suggests_provider_env_var():
+    assert llm_backend_api_key_hint("LiteLLMService", "anthropic/claude-sonnet-4-6") == " Suggested env var: `ANTHROPIC_API_KEY`."
 
 
 def test_invoke_forwards_model_messages_and_credentials(monkeypatch):
