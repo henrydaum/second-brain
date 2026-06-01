@@ -1,4 +1,9 @@
-"""Regression tests for agent tool scope."""
+"""Tests for agent tool scoping (``agent_scope`` + ``ToolRegistry``).
+
+An agent profile whitelists/blacklists tools. Blacklisted tools stay callable
+as dependencies of visible tools but are hidden from the LLM's schema list, and
+the agent cannot invoke a hidden tool directly through the state machine.
+"""
 
 from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult

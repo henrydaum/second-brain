@@ -1,4 +1,9 @@
-"""Regression tests for orchestrator lifecycle."""
+"""Tests for the pipeline orchestrator.
+
+The orchestrator subscribes to service-load events to wire up tasks; this
+guards its bus lifecycle so a stopped orchestrator leaves no dangling
+subscribers (which would leak across the kernel's hot-reload cycles).
+"""
 
 from events.event_bus import bus
 from events.event_channels import SERVICE_LOADED

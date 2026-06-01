@@ -1,5 +1,5 @@
 """
-Runtime context passed into tools and tasks.
+Runtime context passed into plugins.
 
 The context packages together the database handle, config, shared
 services, and a few runtime helpers so plugins do not need to know how

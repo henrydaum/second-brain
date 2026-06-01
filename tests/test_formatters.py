@@ -1,4 +1,8 @@
-"""Regression tests for tool result formatters."""
+"""Tests for frontend tool-result formatting.
+
+How a ``ToolResult`` is rendered back to the user — preferring the human
+summary over raw JSON on success, and a clear failure line on error.
+"""
 
 from types import SimpleNamespace
 

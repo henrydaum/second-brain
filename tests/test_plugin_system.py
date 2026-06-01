@@ -1,4 +1,10 @@
-"""Regression tests for plugin watcher service."""
+"""Tests for the plugin hot-reload substrate (``service_plugin_watcher``).
+
+The watcher is the install/uninstall mechanism the future plugin store builds
+on: it scans the plugin dirs, debounces filesystem events, and loads/unloads
+plugins by file presence. These tests fake the loader and assert the
+scan/add/edit/delete/ignore paths and the user-facing chat notices.
+"""
 
 from pathlib import Path
 

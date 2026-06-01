@@ -48,7 +48,7 @@ def profile_for(runtime, session: RuntimeSession | None) -> str:
 def scope_for_profile(runtime, profile: str):
     """Load the configured tool/prompt scope for one agent profile."""
     try:
-        from runtime.agent_scope import load_scope
+        from agent.agent_scope import load_scope
         scope = load_scope(profile, runtime.config)
     except ValueError:
         return None
@@ -68,7 +68,7 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
     """
     if not runtime.tool_registry:
         return None
-    from runtime.agent_scope import scoped_registry
+    from agent.agent_scope import scoped_registry
     scope = active_scope(runtime, session)
     registry = runtime.tool_registry
     if scope:
@@ -109,7 +109,7 @@ def active_llm(runtime, session: RuntimeSession | None = None):
     """Return the LLM service instance that should drive this session."""
     profile = profile_for(runtime, session)
     try:
-        from runtime.agent_scope import resolve_agent_llm
+        from agent.agent_scope import resolve_agent_llm
         return resolve_agent_llm(profile, runtime.config, runtime.services)
     except Exception:
         return runtime.services.get("llm")

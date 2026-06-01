@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from plugins.services.helpers.parser_registry import get_supported_extensions
-from runtime.agent_scope import AgentScope
+from agent.agent_scope import AgentScope
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _STATIC_PROMPT_PATH = Path(__file__).with_name("system_prompt_static.md")
