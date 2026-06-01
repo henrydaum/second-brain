@@ -41,6 +41,7 @@ class BaseService(ABC):
 
     model_name: str = ""
     shared: bool = True
+    is_llm_backend: bool = False
 
     # --- Config settings this plugin needs ---
     # Each entry is a tuple:

@@ -189,8 +189,7 @@ pip install -r requirements.txt
 
 Key dependencies include:
 
-- `openai`
-- `lmstudio`
+- `litellm`
 - `sentence-transformers`
 - `faster-whisper`
 - `PyMuPDF`
@@ -229,7 +228,7 @@ Minimal shape:
       "llm_endpoint": "",
       "llm_api_key": "OPENAI_API_KEY",
       "llm_context_size": 0,
-      "llm_service_class": "OpenAILLM"
+      "llm_service_class": "LiteLLMService"
     }
   },
   "default_llm_profile": "gpt-4.1-mini",
@@ -249,7 +248,6 @@ Notes:
 - Configure LLM profiles with `/llm`.
 - Configure agent profiles with `/agent`.
 - Configure app and plugin settings with `/config`.
-- Tool calling is not available with LM Studio.
 - `llm_context_size: 0` lets automatic compaction manage context.
 - Brave Search and Brave Answers are optional web-search providers configured through plugin settings.
 - Each `llm_profiles` entry is registered as its own service, and the `llm` router follows `default_llm_profile`.

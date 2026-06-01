@@ -11,10 +11,10 @@ import pytest
 
 from plugins.services.service_llm import (
     LLMProviderError,
-    LiteLLMService,
     _build_llm_from_profile,
     is_context_limit_error,
 )
+from plugins.services.service_litellm import LiteLLMService
 
 
 def _install_fake_litellm(monkeypatch, completion):

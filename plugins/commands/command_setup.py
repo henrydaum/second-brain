@@ -5,6 +5,7 @@ import os
 from config import config_manager
 from paths import DATA_DIR
 from plugins.BaseCommand import BaseCommand
+from plugins.services.service_llm import llm_backend_names
 from state_machine.conversation import FormStep
 
 
@@ -15,7 +16,7 @@ ATLAS_DEFAULT_MODEL = "minimaxai/minimax-m2.7"
 DEFAULT_ENV_VAR = "ATLAS_API_KEY"
 DEFAULT_CONTEXT_SIZE = 0
 
-SERVICE_CLASSES = ["OpenAILLM", "LiteLLMService", "LMStudioLLM"]
+DEFAULT_BACKEND = "LiteLLMService"
 
 WELCOME_PROMPT = (
     "Welcome to Second Brain.\n\n"
@@ -39,9 +40,7 @@ OTHER_MODEL_PROMPT = (
 )
 OTHER_SERVICE_PROMPT = (
     "How should Second Brain connect to this model?\n\n"
-    "• OpenAILLM — any OpenAI-compatible endpoint (most providers)\n"
-    "• LiteLLMService — LiteLLM proxy/router\n"
-    "• LMStudioLLM — local LM Studio instance"
+    "Installed LLM backends are normal service plugins."
 )
 OTHER_ENDPOINT_PROMPT = (
     "Endpoint URL. Leave blank for the provider default (OpenAI's API). "
@@ -112,10 +111,11 @@ class SetupCommand(BaseCommand):
 
     def _other_steps(self, args):
         """Generic LLM profile collection (mirrors /llm add)."""
+        backends = llm_backend_names() or [DEFAULT_BACKEND]
         return [
             FormStep("other_model_name", OTHER_MODEL_PROMPT, True),
             FormStep("other_service_class", OTHER_SERVICE_PROMPT, True,
-                     enum=SERVICE_CLASSES, default="OpenAILLM", columns=1),
+                     enum=backends, default=backends[0], columns=1),
             FormStep("other_endpoint", OTHER_ENDPOINT_PROMPT, False, default="", prompt_when_missing=True),
             FormStep("other_api_key", OTHER_KEY_PROMPT, False, default="OPENAI_API_KEY", prompt_when_missing=True),
             FormStep("other_context_size", OTHER_CONTEXT_PROMPT, False, "integer", default=0, prompt_when_missing=True),
@@ -188,7 +188,7 @@ class SetupCommand(BaseCommand):
             "llm_endpoint": ATLAS_BASE_URL,
             "llm_api_key": api_key_field,
             "llm_context_size": DEFAULT_CONTEXT_SIZE,
-            "llm_service_class": "OpenAILLM",
+            "llm_service_class": DEFAULT_BACKEND,
         }
         _install_llm_profile(context, model_name, profile)
 
@@ -215,7 +215,7 @@ class SetupCommand(BaseCommand):
             "llm_endpoint": (args.get("other_endpoint") or "").strip(),
             "llm_api_key": (args.get("other_api_key") or "").strip(),
             "llm_context_size": int(args.get("other_context_size") or 0),
-            "llm_service_class": (args.get("other_service_class") or "OpenAILLM").strip() or "OpenAILLM",
+            "llm_service_class": (args.get("other_service_class") or DEFAULT_BACKEND).strip() or DEFAULT_BACKEND,
         }
         _install_llm_profile(context, name, profile)
         endpoint = profile["llm_endpoint"] or "(provider default)"

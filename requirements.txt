@@ -4,11 +4,8 @@
 # (search, embeddings, OCR, audio, integrations, Telegram, …) are installed from
 # the store, and each store plugin declares its own extra dependencies.
 
-# --- LLM clients (service_llm) ---
+# --- LLM backend (service_litellm) ---
 litellm
-
-# --- HTTP ---
-requests
 
 # --- File watcher (pipeline/watcher) ---
 watchdog
@@ -18,3 +15,12 @@ Pillow
 
 # --- Pytest ---
 pytest
+
+# --- Optional: rich document parsing (plugins/services/helpers/parse_text) ---
+# parse_text registers text/code extensions unconditionally; PDF/DOCX/PPTX and
+# in-PDF table extraction are gated behind these via try/except ImportError, so
+# they degrade gracefully when absent. Uncomment to enable.
+# PyMuPDF       # PDF text + table extraction (imported as `fitz`)
+# python-docx   # .docx extraction (imported as `docx`)
+# python-pptx   # .pptx extraction (imported as `pptx`)
+# pandas        # DataFrames for extracted PDF tables

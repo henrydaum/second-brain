@@ -70,8 +70,8 @@ the difference between a microkernel and a pile of assumptions:
 - **`config/config_data.py`** — `autoload_services` trimmed to
   `["llm", "parser", "plugin_watcher"]`; `enabled_frontends` → `["repl"]`;
   `DEFAULT_SCHEDULED_JOBS` → `{}` (jobs/timekeeper are store plugins now).
-- **`requirements.txt`** — kernel-minimal (`openai/lmstudio/litellm`, `requests`,
-  `watchdog`, `Pillow`; optional doc-parsing deps commented). The full per-plugin
+- **`requirements.txt`** — kernel-minimal (`litellm`, `watchdog`, `Pillow`;
+  optional doc-parsing deps commented). The full per-plugin
   dependency map is documented in that file's footer.
 
 ## Next steps (not yet built)

@@ -107,14 +107,14 @@ not assume the registry is available at load time. `service_mcp.py` shows this.
 ## Conventions
 
 - OpenAI message format (`[{"role","content"}, ...]`) is the lingua franca for
-  LLM calls; `LiteLLMService` / `OpenAILLM` translate per provider. Tool schemas
+  LLM calls; services with `is_llm_backend = True` translate per provider. Tool schemas
   are OpenAI function-calling shape (`to_schema()` on `BaseTool`).
 - Keep the system prompt cache-friendly: static → semi-stable → dynamic, with
   `system` only at message index 0 (some providers, e.g. MiniMax, reject it
   elsewhere). See `agent/system_prompt.py`.
 - Don't add heavy imports at module top level in plugins — import inside `_load`
   / `run` so discovery stays cheap and optional deps stay optional (see how
-  `service_llm.py` lazy-imports `litellm`/`openai`/`lmstudio`).
+  `service_litellm.py` lazy-imports `litellm`).
 - Prefer extending via a plugin over editing the core runtime.
 
 ## Testing

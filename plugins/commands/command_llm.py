@@ -4,6 +4,7 @@ import json
 
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
+from plugins.services.service_llm import llm_backend_names
 from state_machine.conversation import FormStep
 
 
@@ -11,6 +12,7 @@ ACTIONS = ["edit", "set_default", "remove"]
 ACTION_LABELS = ["Edit", "Set default", "Remove"]
 FIELDS = ["llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class"]
 FIELD_LABELS = ["Endpoint", "API key", "Context size", "Service class"]
+DEFAULT_BACKEND = "LiteLLMService"
 
 
 class LlmCommand(BaseCommand):
@@ -25,9 +27,10 @@ class LlmCommand(BaseCommand):
         names = [*sorted(profiles), "add"]
         steps = [FormStep("model_name", _default_prompt(context), True, enum=names, enum_labels=[_model_label(context, n) for n in names])]
         if args.get("model_name") == "add":
+            backends = llm_backend_names() or [DEFAULT_BACKEND]
             return steps + [
                 FormStep("new_model_name", "Enter the provider's model name exactly.", True),
-                FormStep("llm_service_class", "Choose how Second Brain should connect to this model.", True, enum=["OpenAILLM", "LiteLLMService", "LMStudioLLM"], default="OpenAILLM"),
+                FormStep("llm_service_class", "Choose how Second Brain should connect to this model.", True, enum=backends, default=backends[0]),
                 FormStep("llm_endpoint", "Optional OpenAI-compatible endpoint URL.", False, default="", prompt_when_missing=True),
                 FormStep("llm_api_key", "API key value, or the environment variable name that contains it.", False, default="OPENAI_API_KEY", prompt_when_missing=True),
                 FormStep("llm_context_size", "Optional context window size in tokens. Use 0 if unknown.", False, "integer", default=0, prompt_when_missing=True),
@@ -98,7 +101,7 @@ def _describe(context, name):
     mark = " (default)" if context.config.get("default_llm_profile") == name else ""
     ctx = int(p.get("llm_context_size", 0) or 0)
     ctx_str = "0 (reactive compaction)" if ctx == 0 else f"{ctx:,}"
-    return f"{name}{mark}\nStatus: {'Loaded' if loaded else 'Unloaded'}\nClass: {p.get('llm_service_class', 'OpenAILLM')}\nContext: {ctx_str}"
+    return f"{name}{mark}\nStatus: {'Loaded' if loaded else 'Unloaded'}\nClass: {p.get('llm_service_class', DEFAULT_BACKEND)}\nContext: {ctx_str}"
 
 
 def _model_label(context, name):
@@ -118,7 +121,7 @@ def _value_prompt(field):
         "llm_endpoint": "Enter the endpoint URL, or leave it blank for the provider default.",
         "llm_api_key": "Enter the API key value or environment variable name.",
         "llm_context_size": "Enter the context window size in tokens. Use 0 if unknown.",
-        "llm_service_class": "Enter OpenAILLM, LiteLLMService, or LMStudioLLM.",
+        "llm_service_class": f"Enter one of: {', '.join(llm_backend_names() or [DEFAULT_BACKEND])}.",
     }.get(field, "Enter the new value.")
 
 
