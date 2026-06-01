@@ -25,16 +25,35 @@ class _ToolRegistry:
         self.unregistered.append(name)
 
 
-def _patch_plugin_dir(monkeypatch, directory):
+def _patch_plugin_dir(monkeypatch, directory, plugin_type="tool"):
     """Internal helper to handle patch plugin dir."""
     import plugins.helpers.plugin_paths as paths
     import plugins.services.service_plugin_watcher as watcher_mod
 
     config = dict(paths.PLUGIN_CONFIG)
-    built, sandbox, prefix, namespaces = config["tool"]
-    config["tool"] = (Path(directory).resolve(), sandbox, prefix, namespaces)
+    built, sandbox, prefix, namespaces = config[plugin_type]
+    config[plugin_type] = (Path(directory).resolve(), sandbox, prefix, namespaces)
     monkeypatch.setattr(paths, "PLUGIN_CONFIG", config)
-    monkeypatch.setattr(watcher_mod, "iter_plugin_dirs", lambda: [("tool", Path(directory).resolve())])
+    monkeypatch.setattr(watcher_mod, "iter_plugin_dirs", lambda: [(plugin_type, Path(directory).resolve())])
+
+
+class _CommandRegistry:
+    """Command registry."""
+    def __init__(self):
+        """Initialize command registry."""
+        self._commands = {}
+
+    def register(self, command):
+        """Register command."""
+        self._commands[command.name] = command
+
+    def unregister(self, name):
+        """Unregister command."""
+        self._commands.pop(name, None)
+
+    def to_callable_specs(self):
+        """Return command specs."""
+        return dict(self._commands)
 
 
 def test_plugin_watcher_initial_scan_records_mtimes(monkeypatch):
@@ -192,6 +211,68 @@ def test_plugin_watcher_wrong_name_does_not_load(monkeypatch):
         service.handle_create_or_modify(str(path))
 
         assert not calls
+    finally:
+        path.unlink(missing_ok=True)
+        root_dir.rmdir()
+
+
+def test_plugin_watcher_refreshes_runtime_commands_on_command_load(monkeypatch):
+    """Verify command hot-load updates the runtime command snapshot."""
+    root_dir = Path(".codex_plugin_watcher")
+    path = root_dir / "command_agent.py"
+    try:
+        root_dir.mkdir(exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+        _patch_plugin_dir(monkeypatch, root_dir, "command")
+        registry = _CommandRegistry()
+        runtime = type("Runtime", (), {"commands": {}, "refreshes": 0})()
+        runtime.refresh_session_specs = lambda: setattr(runtime, "refreshes", runtime.refreshes + 1)
+
+        def fake_load(plugin_type, _path, **kwargs):
+            command = type("AgentCommand", (), {"name": "agent", "_source_path": str(path.resolve())})()
+            kwargs["command_registry"].register(command)
+            return "agent", None
+
+        monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", fake_load)
+        monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
+        service = PluginWatcherService({})
+        service.bind_runtime(command_registry=registry, runtime=runtime)
+
+        service.handle_create_or_modify(str(path))
+
+        assert "agent" in registry._commands
+        assert "agent" in runtime.commands
+        assert runtime.refreshes == 1
+    finally:
+        path.unlink(missing_ok=True)
+        root_dir.rmdir()
+
+
+def test_plugin_watcher_refreshes_runtime_commands_on_command_delete(monkeypatch):
+    """Verify command hot-unload updates the runtime command snapshot."""
+    root_dir = Path(".codex_plugin_watcher")
+    path = root_dir / "command_agent.py"
+    try:
+        root_dir.mkdir(exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+        _patch_plugin_dir(monkeypatch, root_dir, "command")
+        command = type("AgentCommand", (), {"name": "agent", "_source_path": str(path.resolve())})()
+        registry = _CommandRegistry()
+        registry.register(command)
+        runtime = type("Runtime", (), {"commands": {"agent": command}, "refreshes": 0})()
+        runtime.refresh_session_specs = lambda: setattr(runtime, "refreshes", runtime.refreshes + 1)
+        service = PluginWatcherService({})
+        service.bind_runtime(command_registry=registry, runtime=runtime)
+        service._known_mtimes[str(path.resolve())] = path.stat().st_mtime
+        monkeypatch.setattr("plugins.services.service_plugin_watcher.unload_plugin", lambda *a, **k: registry.unregister("agent"))
+        monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
+
+        path.unlink()
+        service.handle_delete(str(path))
+
+        assert "agent" not in registry._commands
+        assert "agent" not in runtime.commands
+        assert runtime.refreshes == 1
     finally:
         path.unlink(missing_ok=True)
         root_dir.rmdir()

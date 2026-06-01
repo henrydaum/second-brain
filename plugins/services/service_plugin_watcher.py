@@ -39,6 +39,7 @@ class PluginWatcherService(BaseService):
             "orchestrator": orchestrator,
             "command_registry": command_registry,
             "frontend_manager": frontend_manager,
+            "runtime": runtime,
         })
 
     def _load(self) -> bool:
@@ -134,6 +135,8 @@ class PluginWatcherService(BaseService):
             return
         if info.plugin_type == "service":
             wire_peer_services(self.services)
+        if info.plugin_type == "command":
+            self._refresh_commands()
         self._reconcile_plugin_config()
         self._notify(f"Registered plugin{' edit' if edited else ''}: {name}")
         logger.info(f"Plugin watcher loaded {info.plugin_type}: {name}")
@@ -154,6 +157,8 @@ class PluginWatcherService(BaseService):
             command_registry=self._runtime.get("command_registry"),
             frontend_manager=self._runtime.get("frontend_manager"),
         )
+        if info.plugin_type == "command":
+            self._refresh_commands()
         self._reconcile_plugin_config()
         for name in names:
             self._notify(f"Unregistered plugin: {name}")
@@ -188,6 +193,14 @@ class PluginWatcherService(BaseService):
             cm.reconcile_plugin_config(self.config, get_plugin_settings())
         except Exception as e:
             logger.warning(f"Plugin watcher config reconcile failed: {e}")
+
+    def _refresh_commands(self):
+        runtime = self._runtime.get("runtime")
+        registry = self._runtime.get("command_registry")
+        if runtime and registry and hasattr(registry, "to_callable_specs"):
+            runtime.commands = registry.to_callable_specs()
+        if runtime and hasattr(runtime, "refresh_session_specs"):
+            runtime.refresh_session_specs()
 
 
 class _PluginEventHandler(FileSystemEventHandler):
