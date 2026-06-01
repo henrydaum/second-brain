@@ -8,8 +8,9 @@ from state_machine.conversation import FormStep
 
 
 ACTIONS = ["switch", "edit", "remove"]
-FIELDS = ["llm", "prompt_suffix", "whitelist_or_blacklist_tools", "tools_list"]
-FIELD_LABELS = ["LLM", "Prompt suffix", "Tool mode", "Tool list"]
+PROFILE_FIELDS = ["llm", "prompt_suffix", "whitelist_or_blacklist_tools", "tools_list"]
+FIELDS = ["agent_profile_name", *PROFILE_FIELDS]
+FIELD_LABELS = ["Profile name", "LLM", "Prompt suffix", "Tool mode", "Tool list"]
 
 
 class AgentCommand(BaseCommand):
@@ -30,7 +31,7 @@ class AgentCommand(BaseCommand):
                 FormStep("new_profile_name", "Enter a short name for the new agent profile.", True),
                 FormStep("llm", "Choose the LLM this agent should use. Select default to follow the current default LLM.", True, enum=llms, default="default"),
                 FormStep("prompt_suffix", "Optional extra instructions to append to this agent's system prompt.", False, default="", prompt_when_missing=True),
-                FormStep("whitelist_or_blacklist_tools", "Choose how this profile should treat the tool list.", True, enum=["blacklist", "whitelist"], default="blacklist", enum_labels=["Block listed tools", "Allow only listed tools"]),
+                FormStep("whitelist_or_blacklist_tools", "Choose how this profile should treat the tool list.", True, enum=["blacklist", "whitelist"], default="blacklist", enum_labels=["Blacklist tools", "Whitelist tools"]),
                 FormStep("tools_list", f"Optional tool names. Available: {', '.join(tools) or '(none)'}", False, "array", default=[], prompt_when_missing=True),
             ]
         if args.get("profile_name"):
@@ -61,7 +62,17 @@ class AgentCommand(BaseCommand):
             return f"Active agent profile set to: {name}"
         if args.get("action") == "edit":
             field = args.get("field")
-            profiles[name][field] = _coerce(field, args.get("value"))
+            if field == "agent_profile_name":
+                new_name = _coerce(field, args.get("value")).strip()
+                if not new_name:
+                    return "Profile name is required."
+                if new_name != name and new_name in profiles:
+                    return f"Agent profile already exists: {new_name}"
+                profiles[new_name] = profiles.pop(name)
+                _rename_active_refs(context, name, new_name)
+                name = new_name
+            else:
+                profiles[name][field] = _coerce(field, args.get("value"))
             _save(context.config)
             _refresh(context)
             return f"Updated agent profile: {name}"
@@ -79,7 +90,7 @@ class AgentCommand(BaseCommand):
 
 def _profile(args):
     """Internal helper to handle profile."""
-    return {f: _coerce(f, args.get(f)) for f in FIELDS}
+    return {f: _coerce(f, args.get(f)) for f in PROFILE_FIELDS}
 
 
 def _coerce(field, value):
@@ -106,11 +117,24 @@ def _profile_label(context, name):
 def _value_prompt(field):
     """Internal helper to handle value prompt."""
     return {
+        "agent_profile_name": "Enter the new profile name.",
         "llm": "Enter the LLM profile name, or default.",
         "prompt_suffix": "Enter the extra system-prompt instructions for this agent.",
         "whitelist_or_blacklist_tools": "Enter blacklist to block listed tools, or whitelist to allow only listed tools.",
         "tools_list": "Enter tool names.",
     }.get(field, "Enter the new value.")
+
+
+def _rename_active_refs(context, old, new):
+    """Update global and live-session references after a profile rename."""
+    if context.config.get("active_agent_profile") == old:
+        context.config["active_agent_profile"] = new
+    runtime = getattr(context, "runtime", None)
+    for session in getattr(runtime, "sessions", {}).values() if runtime else []:
+        if getattr(session, "active_agent_profile", None) == old:
+            session.active_agent_profile = new
+        if getattr(session, "profile_override", None) == old:
+            session.profile_override = new
 
 
 def _save(config):
