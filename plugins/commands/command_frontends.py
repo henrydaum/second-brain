@@ -7,7 +7,7 @@ from plugins.BaseCommand import BaseCommand
 from state_machine.conversation import FormStep
 
 
-ACTIONS = ["enable", "disable", "configure"]
+ACTIONS = ["configure", "enable", "disable"]
 ACTION_LABELS = ["Edit", "Enable", "Disable"]
 
 # Editable fields of a frontend profile. Each profile pins the agent profile
