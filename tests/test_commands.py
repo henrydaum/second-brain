@@ -56,10 +56,22 @@ def test_llm_command_add_stores_declared_capabilities(monkeypatch):
     assert saved[-1]["llm_profiles"]["openai/gpt-4o"] == profile
 
 
-def test_llm_command_add_hints_provider_env_var():
-    context = SimpleNamespace(config={"llm_profiles": {}, "default_llm_profile": ""}, services={})
-    steps = LlmCommand().form({"model_name": "add", "new_model_name": "anthropic/claude-sonnet-4-6", "llm_service_class": "LiteLLMService"}, context)
-    assert "ANTHROPIC_API_KEY" in next(s.prompt for s in steps if s.name == "llm_api_key")
+def test_llm_command_can_rename_profile(monkeypatch):
+    saved, removed, added = [], [], []
+    monkeypatch.setattr("plugins.commands.command_llm._save", lambda config: saved.append(dict(config)))
+    router = SimpleNamespace(remove_llm=lambda name: removed.append(name), add_llm=lambda name, profile: added.append((name, profile)))
+    context = SimpleNamespace(config={"llm_profiles": {"bad": {"llm_endpoint": "https://api.atlascloud.ai/v1"}}, "default_llm_profile": "bad"}, services={"llm": router})
+
+    steps = LlmCommand().form({"model_name": "bad", "action": "edit"}, context)
+    result = LlmCommand().run({"model_name": "bad", "action": "edit", "field": "llm_model_name", "value": "deepseek-ai/deepseek-v4-pro"}, context)
+
+    assert "llm_model_name" in next(s.enum for s in steps if s.name == "field")
+    assert result == "Updated LLM profile: deepseek-ai/deepseek-v4-pro"
+    assert "bad" not in context.config["llm_profiles"]
+    assert context.config["default_llm_profile"] == "deepseek-ai/deepseek-v4-pro"
+    assert removed == ["bad"]
+    assert added[-1][0] == "deepseek-ai/deepseek-v4-pro"
+    assert saved[-1]["default_llm_profile"] == "deepseek-ai/deepseek-v4-pro"
 
 
 # ── /debug ───────────────────────────────────────────────────────────

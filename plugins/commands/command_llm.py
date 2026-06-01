@@ -4,14 +4,15 @@ import json
 
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
-from plugins.services.service_llm import llm_backend_api_key_hint, llm_backend_names
+from plugins.services.service_llm import llm_backend_names
 from state_machine.conversation import FormStep
 
 
 ACTIONS = ["edit", "set_default", "remove"]
 ACTION_LABELS = ["Edit", "Set default", "Remove"]
-FIELDS = ["llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class", "llm_capability_image", "llm_capability_audio", "llm_capability_video"]
-FIELD_LABELS = ["Endpoint", "API key", "Context size", "Service class", "Images", "Audio", "Video"]
+PROFILE_FIELDS = ["llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class", "llm_capability_image", "llm_capability_audio", "llm_capability_video"]
+FIELDS = ["llm_model_name", *PROFILE_FIELDS]
+FIELD_LABELS = ["Model name", "Endpoint", "API key", "Context size", "Service class", "Images", "Audio", "Video"]
 DEFAULT_BACKEND = "LiteLLMService"
 CAPABILITY_FIELDS = {
     "llm_capability_image": "image",
@@ -34,10 +35,10 @@ class LlmCommand(BaseCommand):
         if args.get("model_name") == "add":
             backends = llm_backend_names() or [DEFAULT_BACKEND]
             return steps + [
-                FormStep("new_model_name", "Enter the LiteLLM model name exactly, including provider prefix when needed (for example `openai/gpt-4o-mini` or `anthropic/claude-3-5-sonnet-latest`).", True),
+                FormStep("new_model_name", "Enter the model name exactly, including provider prefix when needed (for example `openai/gpt-4o-mini` or `anthropic/claude-3-5-sonnet-latest`).", True),
                 FormStep("llm_service_class", "Choose how Second Brain should connect to this model.", True, enum=backends, default=backends[0]),
-                FormStep("llm_endpoint", "Optional provider base URL or LiteLLM proxy URL. Leave blank for the provider default.", False, default="", prompt_when_missing=True),
-                FormStep("llm_api_key", _api_key_prompt(args), False, default="", prompt_when_missing=True),
+                FormStep("llm_endpoint", "Optional provider base URL. Leave blank for the provider default.", False, default="", prompt_when_missing=True),
+                FormStep("llm_api_key", "API key value, or the environment variable name that contains it. Leave blank to let the backend read its own environment.", False, default="", prompt_when_missing=True),
                 FormStep("llm_context_size", "Optional context window size in tokens. Use 0 if unknown.", False, "integer", default=0, prompt_when_missing=True),
                 FormStep("llm_capability_image", "Can this model read images natively? Choose yes/no, or /skip if unsure.", False, "boolean", default=None, prompt_when_missing=True),
                 FormStep("llm_capability_audio", "Can this model read audio natively? Choose yes/no, or /skip if unsure.", False, "boolean", default=None, prompt_when_missing=True),
@@ -68,11 +69,25 @@ class LlmCommand(BaseCommand):
             return "Unknown LLM profile."
         if args.get("action") == "edit":
             field = args.get("field")
-            if field in CAPABILITY_FIELDS:
+            if field == "llm_model_name":
+                new_name = _coerce(field, args.get("value")).strip()
+                if not new_name:
+                    return "Model name is required."
+                if new_name != name and new_name in profiles:
+                    return f"LLM profile already exists: {new_name}"
+                profiles[new_name] = profiles.pop(name)
+                if context.config.get("default_llm_profile") == name:
+                    context.config["default_llm_profile"] = new_name
+                if router and hasattr(router, "remove_llm"):
+                    router.remove_llm(name)
+                if router and hasattr(router, "add_llm"):
+                    router.add_llm(new_name, profiles[new_name])
+                name = new_name
+            elif field in CAPABILITY_FIELDS:
                 profiles[name].setdefault("llm_capabilities", {})[CAPABILITY_FIELDS[field]] = _coerce(field, args.get("value"))
             else:
                 profiles[name][field] = _coerce(field, args.get("value"))
-            if router and hasattr(router, "add_llm"):
+            if field != "llm_model_name" and router and hasattr(router, "add_llm"):
                 router.add_llm(name, profiles[name])
             _save(context.config)
             return f"Updated LLM profile: {name}"
@@ -93,7 +108,7 @@ class LlmCommand(BaseCommand):
 
 def _profile(args):
     """Internal helper to handle profile."""
-    profile = {f: _coerce(f, args.get(f)) for f in FIELDS}
+    profile = {f: _coerce(f, args.get(f)) for f in PROFILE_FIELDS}
     caps = {cap: _coerce(field, args.get(field)) for field, cap in CAPABILITY_FIELDS.items() if field in args and args.get(field) is not None}
     if caps:
         profile["llm_capabilities"] = caps
@@ -141,19 +156,15 @@ def _default_prompt(context):
 def _value_prompt(field):
     """Internal helper to handle value prompt."""
     return {
-        "llm_endpoint": "Enter a provider base URL or LiteLLM proxy URL, or leave it blank for the provider default.",
-        "llm_api_key": "Enter the API key value or environment variable name, such as OPENAI_API_KEY or ANTHROPIC_API_KEY.",
+        "llm_endpoint": "Enter a provider base URL, or leave it blank for the provider default.",
+        "llm_model_name": "Enter the model name for this profile.",
+        "llm_api_key": "Enter the API key value or environment variable name. Leave blank to let the backend read its own environment.",
         "llm_context_size": "Enter the context window size in tokens. Use 0 if unknown.",
         "llm_service_class": f"Enter one of: {', '.join(llm_backend_names() or [DEFAULT_BACKEND])}.",
         "llm_capability_image": "Can this model read images natively?",
         "llm_capability_audio": "Can this model read audio natively?",
         "llm_capability_video": "Can this model read video natively?",
     }.get(field, "Enter the new value.")
-
-
-def _api_key_prompt(args):
-    hint = llm_backend_api_key_hint(args.get("llm_service_class") or DEFAULT_BACKEND, args.get("new_model_name") or "")
-    return f"API key value, or the environment variable name that contains it.{hint} Leave blank to let the backend read its own environment."
 
 
 def _save(config):

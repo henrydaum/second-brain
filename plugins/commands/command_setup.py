@@ -5,7 +5,7 @@ import os
 from config import config_manager
 from paths import DATA_DIR
 from plugins.BaseCommand import BaseCommand
-from plugins.services.service_llm import llm_backend_api_key_hint, llm_backend_names
+from plugins.services.service_llm import llm_backend_names
 from state_machine.conversation import FormStep
 
 
@@ -47,7 +47,7 @@ OTHER_ENDPOINT_PROMPT = (
     "For local models or self-hosted gateways, paste the full base URL."
 )
 OTHER_KEY_PROMPT = (
-    "API key. You can paste the key directly, or enter the name of an environment variable that holds it (for example `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`)."
+    "API key. You can paste the key directly, enter the name of an environment variable that holds it, or leave it blank to let the backend read its own environment."
 )
 OTHER_CONTEXT_PROMPT = (
     "Context window size in tokens. Use 0 if you don't know — Second Brain will still work, it just won't proactively compact."
@@ -117,7 +117,7 @@ class SetupCommand(BaseCommand):
             FormStep("other_service_class", OTHER_SERVICE_PROMPT, True,
                      enum=backends, default=backends[0], columns=1),
             FormStep("other_endpoint", OTHER_ENDPOINT_PROMPT, False, default="", prompt_when_missing=True),
-            FormStep("other_api_key", _other_key_prompt(args), False, default="", prompt_when_missing=True),
+            FormStep("other_api_key", OTHER_KEY_PROMPT, False, default="", prompt_when_missing=True),
             FormStep("other_context_size", OTHER_CONTEXT_PROMPT, False, "integer", default=0, prompt_when_missing=True),
         ]
 
@@ -268,11 +268,6 @@ def _llm_steps_complete(args, choice):
     if choice == "other":
         return bool(args.get("other_model_name") and args.get("other_service_class"))
     return False
-
-
-def _other_key_prompt(args):
-    hint = llm_backend_api_key_hint(args.get("other_service_class") or DEFAULT_BACKEND, args.get("other_model_name") or "")
-    return f"{OTHER_KEY_PROMPT} {hint}Leave blank to let the backend read its own environment."
 
 
 def _install_llm_profile(context, name, profile):

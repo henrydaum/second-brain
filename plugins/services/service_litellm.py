@@ -10,17 +10,7 @@ from plugins.services.service_llm import BaseLLM, LLMProviderError, LLMResponse,
 logger = logging.getLogger("LLMClass")
 
 _DETERMINISTIC_ERRORS = {"RateLimitError", "AuthenticationError", "NotFoundError", "PermissionDeniedError", "BadRequestError"}
-_API_KEY_ENV_OVERRIDES = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
-    "mistral": "MISTRAL_API_KEY",
-    "cohere": "COHERE_API_KEY",
-    "groq": "GROQ_API_KEY",
-    "minimax": "MINIMAX_API_KEY",
-    "xai": "XAI_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-}
+_KNOWN_PROVIDER_PREFIXES = {"anthropic", "azure", "bedrock", "cohere", "deepseek", "gemini", "groq", "minimax", "mistral", "ollama", "openai", "openrouter", "vertex_ai", "xai"}
 
 
 def _quiet_litellm():
@@ -38,11 +28,6 @@ class LiteLLMService(BaseLLM):
     def __init__(self, model_name, api_key=None, base_url=None):
         super().__init__()
         self.model_name, self.api_key, self.base_url, self.loaded = model_name, api_key, base_url, False
-
-    @classmethod
-    def suggested_api_key_env(cls, model_name: str) -> str | None:
-        provider = model_name.split("/", 1)[0].lower().replace("-", "_") if "/" in model_name else ""
-        return _API_KEY_ENV_OVERRIDES.get(provider) or (f"{provider.upper()}_API_KEY" if provider else None)
 
     def _load(self):
         try:
@@ -94,6 +79,10 @@ class LiteLLMService(BaseLLM):
             kwargs.setdefault("api_base", self.base_url)
         return kwargs
 
+    def _litellm_model_name(self) -> str:
+        provider = self.model_name.split("/", 1)[0].lower().replace("-", "_") if "/" in self.model_name else ""
+        return f"openai/{self.model_name}" if self.base_url and provider not in _KNOWN_PROVIDER_PREFIXES else self.model_name
+
     def _classify_error(self, e) -> str:
         if type(e).__name__ == "ContextWindowExceededError":
             return "context_limit"
@@ -113,7 +102,7 @@ class LiteLLMService(BaseLLM):
             messages = self._inject_images(messages, native_paths)
             logger.debug(f"LiteLLM invoke: {len(messages)} messages, tools={'yes' if kwargs.get('tools') else 'no'}, model={self.model_name}")
             t0 = time.time()
-            response = litellm.completion(model=self.model_name, messages=messages, **self._provider_kwargs(kwargs))
+            response = litellm.completion(model=self._litellm_model_name(), messages=messages, **self._provider_kwargs(kwargs))
             logger.debug(f"LiteLLM responded in {time.time() - t0:.2f}s")
             choice, usage = response.choices[0], getattr(response, "usage", None)
             prompt_tok = getattr(usage, "prompt_tokens", None) if usage else None
@@ -139,7 +128,7 @@ class LiteLLMService(BaseLLM):
             import litellm
             _quiet_litellm()
             messages, native_paths = self._resolve_attachments(messages, attachments)
-            for chunk in litellm.completion(model=self.model_name, messages=self._inject_images(messages, native_paths), stream=True, **self._provider_kwargs(kwargs)):
+            for chunk in litellm.completion(model=self._litellm_model_name(), messages=self._inject_images(messages, native_paths), stream=True, **self._provider_kwargs(kwargs)):
                 content = getattr(chunk.choices[0].delta, "content", None)
                 if content:
                     yield content

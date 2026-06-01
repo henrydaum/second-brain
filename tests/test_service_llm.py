@@ -14,7 +14,6 @@ from plugins.services.service_llm import (
     LLMProviderError,
     _build_llm_from_profile,
     is_context_limit_error,
-    llm_backend_api_key_hint,
 )
 from plugins.services.service_litellm import LiteLLMService
 
@@ -54,10 +53,6 @@ def test_build_from_profile_picks_litellm_service():
     assert llm.context_size == 200000
 
 
-def test_litellm_backend_suggests_provider_env_var():
-    assert llm_backend_api_key_hint("LiteLLMService", "anthropic/claude-sonnet-4-6") == " Suggested env var: `ANTHROPIC_API_KEY`."
-
-
 def test_invoke_forwards_model_messages_and_credentials(monkeypatch):
     calls = []
 
@@ -73,6 +68,22 @@ def test_invoke_forwards_model_messages_and_credentials(monkeypatch):
     assert calls[0]["api_key"] == "sk-test"
     # LiteLLM's canonical connection param is api_base, not base_url.
     assert calls[0]["api_base"] == "https://example.test"
+
+
+def test_custom_base_url_routes_unknown_model_as_openai_compatible(monkeypatch):
+    calls = []
+
+    def completion(**kwargs):
+        calls.append(kwargs)
+        return _response()
+
+    llm = LiteLLMService("deepseek-ai/deepseek-v4-pro", api_key="sk-test", base_url="https://api.atlascloud.ai/v1")
+    _install_fake_litellm(monkeypatch, completion)
+    llm.loaded = True
+
+    assert llm.invoke([{"role": "user", "content": "hi"}]).content == "ok"
+    assert calls[0]["model"] == "openai/deepseek-ai/deepseek-v4-pro"
+    assert calls[0]["api_base"] == "https://api.atlascloud.ai/v1"
 
 
 def test_tool_calls_round_trip(monkeypatch):
