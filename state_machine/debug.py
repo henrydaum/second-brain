@@ -1,16 +1,12 @@
-"""PokerMonster-style state printer for the conversation state machine.
+"""Human-readable snapshots of the conversation state machine.
 
-Use this in REPL `--debug` mode or in tests to see exactly what the state
-machine looks like at any moment. Mirrors PokerMonster's `display_info` /
-`display_actions` so the same kind of inspection works for both projects.
-
-    from state_machine.debug import display_state, display_actions
-    display_state(cs)
-    display_actions(cs)
+Originally a PokerMonster-style `print` inspector; now a set of pure
+string formatters so the `/debug` command (and tests) can render the live
+`ConversationState` — turn, phase stack, participants, legal actions, and
+recent events — through any frontend.
 """
 
 from __future__ import annotations
-
 
 from typing import TYPE_CHECKING
 
@@ -20,66 +16,42 @@ if TYPE_CHECKING:  # pragma: no cover
     from state_machine.conversation import ConversationState
 
 
-# ANSI colors, matching PokerMonster's palette.
-RED = "\033[91m"
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-BLUE = "\033[94m"
-MAGENTA = "\033[95m"
-CYAN = "\033[96m"
-RESET = "\033[0m"
-
-
-def _color_for(actor_kind: str) -> str:
-    """Internal helper to handle color for."""
-    return GREEN if actor_kind == "user" else RED
-
-
-def display_state(cs: "ConversationState") -> None:
-    """Print the conversation state in PokerMonster's `display_info` style."""
+def format_state(cs: "ConversationState") -> str:
+    """Return a multi-line snapshot of the state machine's current shape."""
     active = cs.active
-    color = _color_for(active.kind)
-    print(f"{color}\n=== {active.id.upper()}'S TURN ({active.kind}) ==={RESET}")
-    print(f"Phase: {cs.phase}")
+    lines = [
+        f"Turn: {active.id} ({active.kind})",
+        f"Phase: {cs.phase}",
+    ]
 
     frames = cs.cache.get("phases") or []
     if frames:
-        print(f"{CYAN}Phase stack ({len(frames)}):{RESET}")
+        lines.append(f"Phase stack ({len(frames)}):")
         for i, frame in enumerate(frames):
             data = getattr(frame, "data", {}) or {}
             args = data.get("args") or {}
             step = frame.step.name if getattr(frame, "step", None) else "—"
-            print(f"  [{i}] {frame.phase} :: {frame.action_type} (actor={frame.actor_id}, name={frame.name}, step={step}, args={args})")
+            lines.append(f"  [{i}] {frame.phase} :: {frame.action_type} (actor={frame.actor_id}, name={frame.name}, step={step}, args={args})")
 
-    print(f"Participants: " + ", ".join(
-        f"{_color_for(p.kind)}{p.id}{RESET}({p.kind})" for p in cs.participants.values()
-    ))
+    lines.append("Participants: " + ", ".join(f"{p.id}({p.kind})" for p in cs.participants.values()))
 
     if cs.last_error:
-        print(f"{RED}Last error: {cs.last_error.code} — {cs.last_error.message}{RESET}")
+        lines.append(f"Last error: {cs.last_error.code} — {cs.last_error.message}")
 
-    print(f"{MAGENTA}Legal actions: {legal_actions_in_phase(cs.phase) or ['(none)']}{RESET}\n")
-
-
-def display_actions(cs: "ConversationState") -> None:
-    """Print just the currently legal action types, one per line."""
-    actions = legal_actions_in_phase(cs.phase)
-    if not actions:
-        print("(no legal actions for this phase)")
-        return
-    print("Legal actions:")
-    for i, action_type in enumerate(actions):
-        print(f"  [{i}] {action_type}")
-    print("")
+    lines.append(f"Legal actions: {', '.join(legal_actions_in_phase(cs.phase)) or '(none)'}")
+    return "\n".join(lines)
 
 
-def display_history_tail(cs: "ConversationState", n: int = 5) -> None:
-    """Print the last `n` events from the state machine's event history."""
+def format_recent_events(cs: "ConversationState", n: int = 5) -> str:
+    """Return the last ``n`` events from the in-memory state-machine event log.
+
+    Note: this log lives on the live ``ConversationState`` and resets when the
+    session is rebuilt from a marker, so it reflects the current process only.
+    """
     if not cs.history:
-        print("(no events yet)")
-        return
-    print(f"{CYAN}Last {min(n, len(cs.history))} events:{RESET}")
+        return "Recent events: (none yet)"
+    lines = [f"Recent events (last {min(n, len(cs.history))}):"]
     for ev in cs.history[-n:]:
-        print(f"  · {ev.get('type')} by {ev.get('actor_id')} in {ev.get('phase')}: " + ", ".join(
-            f"{k}={v!r}" for k, v in ev.items() if k not in {"type", "actor_id", "phase"}
-        ))
+        detail = ", ".join(f"{k}={v!r}" for k, v in ev.items() if k not in {"type", "actor_id", "phase"})
+        lines.append(f"  · {ev.get('type')} by {ev.get('actor_id')} in {ev.get('phase')}" + (f": {detail}" if detail else ""))
+    return "\n".join(lines)

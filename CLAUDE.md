@@ -34,7 +34,7 @@ future store) — *not* by deleting them. What remains:
   the file must stay — see hard deps below).
 - **Frontend:** `frontend_repl` only. Telegram moved to `store/frontends/`.
 - **Commands:** REPL UX + introspection only — `config`, `setup` (LLM onboarding
-  wizard), `llm`, `conversations`, `clear`, `cancel`, `plan`, `doctor`,
+  wizard), `llm`, `conversations`, `clear`, `cancel`, `plan`, `debug`,
   `locations`, `commands`, `tools`, `services`, `tasks`. Moved out: `mcp`,
   `agent`, `schedule`, `update`.
 
