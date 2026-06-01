@@ -5,6 +5,7 @@ forwarding, error classification, and capability inference — using a fake
 ``litellm`` module so no network or API key is required.
 """
 import sys
+import logging
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -119,6 +120,26 @@ def test_invoke_not_loaded_returns_error():
     llm = LiteLLMService("anthropic/claude-sonnet-4-6")
     result = llm.invoke([{"role": "user", "content": "hi"}])
     assert result.error_code == "not_loaded"
+
+
+def test_load_suppresses_litellm_logging(monkeypatch):
+    _install_fake_litellm(monkeypatch, lambda **kwargs: _response())
+    llm_logger = logging.getLogger("LiteLLM")
+    llm_logger.addHandler(logging.StreamHandler())
+    llm_logger.propagate = True
+    llm_logger.setLevel(logging.INFO)
+
+    llm = LiteLLMService("minimax/MiniMax-M2.7")
+
+    assert llm.load() is True
+    fake = sys.modules["litellm"]
+    assert fake.telemetry is False
+    assert fake.set_verbose is False
+    assert fake.suppress_debug_info is True
+    assert fake.logging is False
+    assert llm_logger.handlers == []
+    assert llm_logger.propagate is False
+    assert llm_logger.level == logging.ERROR
 
 
 def test_stream_yields_chunks(monkeypatch):

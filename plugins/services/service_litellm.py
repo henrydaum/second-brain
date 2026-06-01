@@ -12,6 +12,14 @@ logger = logging.getLogger("LLMClass")
 _DETERMINISTIC_ERRORS = {"RateLimitError", "AuthenticationError", "NotFoundError", "PermissionDeniedError", "BadRequestError"}
 
 
+def _quiet_litellm():
+    """Keep LiteLLM's own diagnostics out of the REPL/app log."""
+    llm_logger = logging.getLogger("LiteLLM")
+    llm_logger.handlers.clear()
+    llm_logger.propagate = False
+    llm_logger.setLevel(logging.ERROR)
+
+
 class LiteLLMService(BaseLLM):
     """Unified LLM backend via the litellm SDK."""
     is_llm_backend = True
@@ -22,9 +30,14 @@ class LiteLLMService(BaseLLM):
 
     def _load(self):
         try:
+            _quiet_litellm()
             import litellm
             litellm.drop_params = True
             litellm.telemetry = False
+            litellm.set_verbose = False
+            litellm.suppress_debug_info = True
+            litellm.logging = False
+            _quiet_litellm()
             self.loaded = True
             return True
         except Exception as e:
@@ -77,7 +90,9 @@ class LiteLLMService(BaseLLM):
             logger.error("LiteLLM not loaded. Call load() first.")
             return LLMResponse(content="Error: model not loaded", error="model not loaded", error_code="not_loaded")
         try:
+            _quiet_litellm()
             import litellm
+            _quiet_litellm()
             messages, native_paths = self._resolve_attachments(messages, attachments)
             messages = self._inject_images(messages, native_paths)
             logger.debug(f"LiteLLM invoke: {len(messages)} messages, tools={'yes' if kwargs.get('tools') else 'no'}, model={self.model_name}")
@@ -104,7 +119,9 @@ class LiteLLMService(BaseLLM):
             logger.error("LiteLLM not loaded. Call load() first.")
             return
         try:
+            _quiet_litellm()
             import litellm
+            _quiet_litellm()
             messages, native_paths = self._resolve_attachments(messages, attachments)
             for chunk in litellm.completion(model=self.model_name, messages=self._inject_images(messages, native_paths), stream=True, **self._provider_kwargs(kwargs)):
                 content = getattr(chunk.choices[0].delta, "content", None)
