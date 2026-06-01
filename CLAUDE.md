@@ -189,7 +189,7 @@ first-party ones in [plugins/](plugins/).
   user/agent action type lives here; one class per action.
 - [pipeline/orchestrator.py](pipeline/orchestrator.py) — task scheduling and
   the dependency-pipeline DAG. `runtime` is wired in
-  [plugins/frontends/bootstrap.py](plugins/frontends/bootstrap.py).
+  [runtime/bootstrap.py](runtime/bootstrap.py).
 - [agent/system_prompt.py](agent/system_prompt.py) — single entry point for
   building the agent system prompt; gates sections by which tools the
   current scope exposes.

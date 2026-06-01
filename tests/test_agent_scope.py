@@ -7,7 +7,7 @@ the agent cannot invoke a hidden tool directly through the state machine.
 
 from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult
-from agent.agent_scope import load_scope, scoped_registry
+from runtime.agent_scope import load_scope, scoped_registry
 from state_machine.conversation import CallableSpec, ConversationState, Participant
 from state_machine.conversation_phases import PHASE_AWAITING_INPUT
 

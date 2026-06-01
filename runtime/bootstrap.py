@@ -1,4 +1,10 @@
-"""Frontend plugin for bootstrap."""
+"""Application composition root.
+
+Builds the ``ConversationRuntime`` (commands, context, system prompt, agent
+scope) and the ``FrontendManager`` that starts/stops transport plugins, then
+wires them together. This is the top of the dependency graph — ``main.pyw``
+calls ``start_frontends`` here after services and the pipeline are up.
+"""
 
 from __future__ import annotations
 
@@ -12,10 +18,10 @@ from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.command_registry import CommandRegistry
 from plugins.plugin_discovery import discover_commands, discover_frontends, get_plugin_settings
 from runtime.context import build_context
-from agent.agent_scope import load_scope, scoped_registry
+from runtime.agent_scope import load_scope, scoped_registry
 from runtime.conversation_runtime import ConversationRuntime
 
-logger = logging.getLogger("Frontends")
+logger = logging.getLogger("Bootstrap")
 
 
 class _HostCommand(BaseCommand):
