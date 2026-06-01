@@ -49,6 +49,7 @@ from state_machine.conversation_phases import (
     PHASE_APPROVING_REQUEST,
 )
 from state_machine.approval import StateMachineApprovalRequest
+from runtime.session import RuntimeResult
 
 logger = logging.getLogger("Frontend")
 
@@ -316,6 +317,7 @@ class BaseFrontend:
                 if cmd:
                     args = self.commands.parse_args(name, arg, session_key=session_key) if arg.strip() else {}
                     return self.submit(session_key, ACTION_CALL_COMMAND, {"name": name, "args": args})
+                return self._unknown_command(session_key, name)
             if not stripped and ACTION_SKIP_FORM in legal:
                 return self.submit(session_key, ACTION_SKIP_FORM)
             # If the typed text doesn't fit the current form step (e.g. user
@@ -334,6 +336,8 @@ class BaseFrontend:
                 result = self.submit(session_key, ACTION_CANCEL)
                 self._clear_pending_approval(session_key)
                 return result
+            if (text or "").lstrip().startswith("/"):
+                return self._unknown_command(session_key, (text or "").lstrip()[1:].partition(" ")[0])
             result = self.submit(session_key, ACTION_ANSWER_APPROVAL, text)
             self._clear_pending_approval(session_key)
             return result
@@ -351,6 +355,7 @@ class BaseFrontend:
                     ACTION_CALL_COMMAND,
                     {"name": name, "args": args},
                 )
+            return self._unknown_command(session_key, name)
         return self.submit(session_key, ACTION_SEND_TEXT, text)
 
     def submit_attachment(self, session_key: str, path: str, extension: str | None = None):
@@ -366,6 +371,12 @@ class BaseFrontend:
     def cancel(self, session_key: str):
         """Cancel base frontend."""
         return self.submit(session_key, ACTION_CANCEL)
+
+    def _unknown_command(self, session_key: str, name: str):
+        """Render an unknown slash-command message without waking the agent."""
+        result = RuntimeResult(False, messages=[f"`/{name}` isn't a recognized slash command. Type `/commands` to see the full list of what's available."])
+        self._render_result(session_key, result)
+        return result
 
     # ──────────────────────────────────────────────────────────────────────
     # Bus handlers. Subclasses can override for richer behavior, but the

@@ -159,6 +159,41 @@ def test_frontend_text_back_submits_back_form_action():
     assert seen == [("back_form", None)]
 
 
+def test_frontend_unknown_slash_command_does_not_submit(capsys):
+    cs = ConversationState([Participant("user", "user", commands={})])
+    seen = []
+    repl = ReplFrontend()
+    repl.runtime = SimpleNamespace(get_session=lambda _key: SimpleNamespace(cs=cs))
+    repl.commands = SimpleNamespace(all_commands=lambda: [])
+    repl.submit = lambda _key, action_type, payload=None: seen.append((action_type, payload))
+
+    result = repl.submit_text("default", "/doctor")
+    out = capsys.readouterr().out
+
+    assert "`/doctor` isn't a recognized slash command." in out
+    assert result.ok is False
+    assert seen == []
+
+
+def test_frontend_unknown_slash_command_in_form_does_not_submit(capsys):
+    cs = ConversationState([
+        Participant("user", "user", commands={"agent": CallableSpec("agent", form=[FormStep("profile_name", "Select an agent profile.", True)])}),
+    ])
+    assert cs.enact("call_command", {"name": "agent", "args": {}}, "user").ok
+    seen = []
+    repl = ReplFrontend()
+    repl.runtime = SimpleNamespace(get_session=lambda _key: SimpleNamespace(cs=cs))
+    repl.commands = SimpleNamespace(all_commands=lambda: [])
+    repl.submit = lambda _key, action_type, payload=None: seen.append((action_type, payload))
+
+    result = repl.submit_text("default", "/doctor")
+    out = capsys.readouterr().out
+
+    assert "`/doctor` isn't a recognized slash command." in out
+    assert result.ok is False
+    assert seen == []
+
+
 # ── Compaction / state markers ───────────────────────────────────────
 
 class _FakeDb:
