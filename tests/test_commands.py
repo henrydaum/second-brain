@@ -30,6 +30,30 @@ def test_llm_command_can_set_default(monkeypatch):
     assert saved[-1]["default_llm_profile"] == "b"
 
 
+def test_llm_command_add_stores_declared_capabilities(monkeypatch):
+    saved = []
+    monkeypatch.setattr("plugins.commands.command_llm._save", lambda config: saved.append(dict(config)))
+    context = SimpleNamespace(config={"llm_profiles": {}, "default_llm_profile": ""}, services={})
+
+    steps = LlmCommand().form({"model_name": "add"}, context)
+    result = LlmCommand().run({
+        "model_name": "add",
+        "new_model_name": "openai/gpt-4o",
+        "llm_service_class": "LiteLLMService",
+        "llm_endpoint": "",
+        "llm_api_key": "OPENAI_API_KEY",
+        "llm_context_size": 0,
+        "llm_capability_image": True,
+        "llm_capability_audio": False,
+    }, context)
+
+    profile = context.config["llm_profiles"]["openai/gpt-4o"]
+    assert [s.name for s in steps][-3:] == ["llm_capability_image", "llm_capability_audio", "llm_capability_video"]
+    assert result == "Added LLM profile: openai/gpt-4o"
+    assert profile["llm_capabilities"] == {"image": True, "audio": False}
+    assert saved[-1]["llm_profiles"]["openai/gpt-4o"] == profile
+
+
 # ── /doctor ──────────────────────────────────────────────────────────
 
 class _DoctorDb:

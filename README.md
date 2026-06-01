@@ -228,7 +228,12 @@ Minimal shape:
       "llm_endpoint": "",
       "llm_api_key": "OPENAI_API_KEY",
       "llm_context_size": 0,
-      "llm_service_class": "LiteLLMService"
+      "llm_service_class": "LiteLLMService",
+      "llm_capabilities": {
+        "image": true,
+        "audio": false,
+        "video": false
+      }
     }
   },
   "default_llm_profile": "gpt-4.1-mini",

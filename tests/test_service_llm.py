@@ -137,11 +137,14 @@ def test_stream_yields_chunks(monkeypatch):
     assert out == "Hello"
 
 
-def test_image_capability_inferred_from_model_name():
-    assert LiteLLMService("anthropic/claude-sonnet-4-6").capabilities["image"] is True
-    assert LiteLLMService("openai/gpt-4o").capabilities["image"] is True
-    assert LiteLLMService("vertex_ai/gemini-2.5-flash").capabilities["image"] is True
-    assert LiteLLMService("mistral/mistral-large-latest").capabilities["image"] is None
+def test_capabilities_come_from_profile_not_model_name():
+    assert LiteLLMService("openai/gpt-4o").capabilities["image"] is None
+    llm = _build_llm_from_profile("openai/gpt-4o", {
+        "llm_service_class": "LiteLLMService",
+        "llm_capabilities": {"image": True, "audio": False},
+    })
+    assert llm.capabilities["image"] is True
+    assert llm.capabilities["audio"] is False
 
 
 # ── Error classification heuristics ──────────────────────────────────

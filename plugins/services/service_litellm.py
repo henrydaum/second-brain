@@ -19,11 +19,6 @@ class LiteLLMService(BaseLLM):
     def __init__(self, model_name, api_key=None, base_url=None):
         super().__init__()
         self.model_name, self.api_key, self.base_url, self.loaded = model_name, api_key, base_url, False
-        m = (model_name or "").lower()
-        if any(s in m for s in ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "claude-3", "claude-4", "claude-sonnet", "claude-opus", "claude-haiku", "gemini")):
-            self.capabilities["image"] = True
-        if "gpt-4o" in m or "gpt-5" in m or "audio" in m:
-            self.capabilities["audio"] = True
 
     def _load(self):
         try:

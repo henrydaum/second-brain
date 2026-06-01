@@ -10,9 +10,14 @@ from state_machine.conversation import FormStep
 
 ACTIONS = ["edit", "set_default", "remove"]
 ACTION_LABELS = ["Edit", "Set default", "Remove"]
-FIELDS = ["llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class"]
-FIELD_LABELS = ["Endpoint", "API key", "Context size", "Service class"]
+FIELDS = ["llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class", "llm_capability_image", "llm_capability_audio", "llm_capability_video"]
+FIELD_LABELS = ["Endpoint", "API key", "Context size", "Service class", "Images", "Audio", "Video"]
 DEFAULT_BACKEND = "LiteLLMService"
+CAPABILITY_FIELDS = {
+    "llm_capability_image": "image",
+    "llm_capability_audio": "audio",
+    "llm_capability_video": "video",
+}
 
 
 class LlmCommand(BaseCommand):
@@ -34,11 +39,14 @@ class LlmCommand(BaseCommand):
                 FormStep("llm_endpoint", "Optional OpenAI-compatible endpoint URL.", False, default="", prompt_when_missing=True),
                 FormStep("llm_api_key", "API key value, or the environment variable name that contains it.", False, default="OPENAI_API_KEY", prompt_when_missing=True),
                 FormStep("llm_context_size", "Optional context window size in tokens. Use 0 if unknown.", False, "integer", default=0, prompt_when_missing=True),
+                FormStep("llm_capability_image", "Can this model read images natively? Choose yes/no, or /skip if unsure.", False, "boolean", default=None, prompt_when_missing=True),
+                FormStep("llm_capability_audio", "Can this model read audio natively? Choose yes/no, or /skip if unsure.", False, "boolean", default=None, prompt_when_missing=True),
+                FormStep("llm_capability_video", "Can this model read video natively? Choose yes/no, or /skip if unsure.", False, "boolean", default=None, prompt_when_missing=True),
             ]
         if args.get("model_name"):
             steps.append(FormStep("action", f"What do you want to do with this LLM profile?\n\n{_describe(context, args['model_name'])}", True, enum=ACTIONS, enum_labels=ACTION_LABELS))
         if args.get("action") == "edit":
-            steps += [FormStep("field", "Choose which LLM setting to edit.", True, enum=FIELDS, enum_labels=FIELD_LABELS), FormStep("value", _value_prompt(args.get("field")), True)]
+            steps += [FormStep("field", "Choose which LLM setting to edit.", True, enum=FIELDS, enum_labels=FIELD_LABELS), FormStep("value", _value_prompt(args.get("field")), True, _value_type(args.get("field")))]
         return steps
 
     def run(self, args, context):
@@ -60,7 +68,10 @@ class LlmCommand(BaseCommand):
             return "Unknown LLM profile."
         if args.get("action") == "edit":
             field = args.get("field")
-            profiles[name][field] = _coerce(field, args.get("value"))
+            if field in CAPABILITY_FIELDS:
+                profiles[name].setdefault("llm_capabilities", {})[CAPABILITY_FIELDS[field]] = _coerce(field, args.get("value"))
+            else:
+                profiles[name][field] = _coerce(field, args.get("value"))
             if router and hasattr(router, "add_llm"):
                 router.add_llm(name, profiles[name])
             _save(context.config)
@@ -82,14 +93,25 @@ class LlmCommand(BaseCommand):
 
 def _profile(args):
     """Internal helper to handle profile."""
-    return {f: _coerce(f, args.get(f)) for f in FIELDS}
+    profile = {f: _coerce(f, args.get(f)) for f in FIELDS}
+    caps = {cap: _coerce(field, args.get(field)) for field, cap in CAPABILITY_FIELDS.items() if field in args and args.get(field) is not None}
+    if caps:
+        profile["llm_capabilities"] = caps
+    return profile
 
 
 def _coerce(field, value):
     """Internal helper to handle coerce."""
     if field == "llm_context_size":
         return int(value or 0)
+    if field in CAPABILITY_FIELDS:
+        return value if isinstance(value, bool) else str(value).strip().lower() in {"true", "yes", "1", "y"}
     return "" if value is None else str(value)
+
+
+def _value_type(field):
+    """Internal helper to handle form type."""
+    return "integer" if field == "llm_context_size" else "boolean" if field in CAPABILITY_FIELDS else "string"
 
 
 def _describe(context, name):
@@ -101,7 +123,8 @@ def _describe(context, name):
     mark = " (default)" if context.config.get("default_llm_profile") == name else ""
     ctx = int(p.get("llm_context_size", 0) or 0)
     ctx_str = "0 (reactive compaction)" if ctx == 0 else f"{ctx:,}"
-    return f"{name}{mark}\nStatus: {'Loaded' if loaded else 'Unloaded'}\nClass: {p.get('llm_service_class', DEFAULT_BACKEND)}\nContext: {ctx_str}"
+    caps = ", ".join(k for k, v in (p.get("llm_capabilities") or {}).items() if v) or "none declared"
+    return f"{name}{mark}\nStatus: {'Loaded' if loaded else 'Unloaded'}\nClass: {p.get('llm_service_class', DEFAULT_BACKEND)}\nContext: {ctx_str}\nNative attachments: {caps}"
 
 
 def _model_label(context, name):
@@ -122,6 +145,9 @@ def _value_prompt(field):
         "llm_api_key": "Enter the API key value or environment variable name.",
         "llm_context_size": "Enter the context window size in tokens. Use 0 if unknown.",
         "llm_service_class": f"Enter one of: {', '.join(llm_backend_names() or [DEFAULT_BACKEND])}.",
+        "llm_capability_image": "Can this model read images natively?",
+        "llm_capability_audio": "Can this model read audio natively?",
+        "llm_capability_video": "Can this model read video natively?",
     }.get(field, "Enter the new value.")
 
 

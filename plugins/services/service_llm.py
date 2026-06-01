@@ -254,6 +254,7 @@ class BaseLLM(BaseService):
             if img:
                 img.close()
 
+
 def _cached_prompt_tokens(usage) -> int | None:
     details = getattr(usage, "prompt_tokens_details", None) if usage else None
     return (details.get("cached_tokens") if isinstance(details, dict) else getattr(details, "cached_tokens", None)) if details else None
@@ -312,6 +313,7 @@ def _build_llm_from_profile(model_name: str, profile: dict) -> BaseLLM:
     if cls is None:
         raise RuntimeError(f"No LLM backend named {cls_name!r} is installed.")
     llm = cls(model_name, api_key=resolved_key, base_url=base_url)
+    llm.capabilities.update({k: v for k, v in (profile.get("llm_capabilities") or {}).items() if k in llm.capabilities})
 
     ctx = int(profile.get("llm_context_size", 0))
     if ctx > 0:
