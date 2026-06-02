@@ -190,6 +190,10 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
     runtime.command_registry = registry
     runtime._orchestrator_ref = scaffold.orchestrator
     ref["runtime"] = runtime
+    # Plan mode is expressed through the generic hook registry rather than
+    # hardcoded core branches. Step 2 moves this into a plan/ plugin bundle.
+    from runtime.plan_mode import register_plan_mode_hooks
+    register_plan_mode_hooks(runtime)
     # Tasks running through the orchestrator reach the runtime via
     # context.runtime.
     if scaffold.orchestrator is not None:

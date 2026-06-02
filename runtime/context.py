@@ -93,12 +93,16 @@ def build_context(db, config: dict, services: dict, call_tool=None,
             if ctx is not None:
                 ctx.approval_denial_reason = ""
             session = getattr(runtime, "sessions", {}).get(session_key)
-            if getattr(session, "plan_mode", False):
-                if ctx is not None:
-                    ctx.approval_denial_reason = PLAN_MODE_PERMISSION_DENIED
-                return False
-            if getattr(session, "full_permissions_this_turn", False):
-                return True
+            # Consult opt-in permission gates (plan mode, future policy plugins)
+            # before the kernel's own logic. A gate may force allow/deny; None
+            # from every gate means "no opinion — fall through".
+            hooks = getattr(runtime, "hooks", None)
+            if hooks is not None:
+                verdict = hooks.vet_permission(session, current_tool_name, command)
+                if verdict is not None:
+                    if not verdict.allow and ctx is not None:
+                        ctx.approval_denial_reason = verdict.reason
+                    return verdict.allow
             if current_tool_name and current_tool_name in (config.get("skip_permissions") or []):
                 return True
             req = runtime.request_input(

@@ -111,18 +111,11 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
             if cloned.visible_tool_names is not None:
                 cloned.visible_tool_names.add(tool.name)
         registry = cloned
-    if getattr(session, "plan_mode", False) and hasattr(registry, "db") and hasattr(registry, "config") and hasattr(registry, "services"):
-        from agent.tool_registry import ToolRegistry
-        from plugins.tool_propose_plan import ProposePlan
-        cloned = ToolRegistry(registry.db, registry.config, registry.services)
-        cloned.orchestrator = getattr(registry, "orchestrator", None)
-        cloned.runtime = getattr(registry, "runtime", None)
-        cloned.tools.update(registry.tools)
-        if getattr(registry, "visible_tool_names", None) is not None:
-            cloned.visible_tool_names = set(registry.visible_tool_names)
-            cloned.visible_tool_names.add("propose_plan")
-        cloned.tools["propose_plan"] = ProposePlan()
-        registry = cloned
+    # Opt-in scope shapers (plan mode injects propose_plan; future plugins can
+    # add/hide tools per session). No-op when no shaper is registered.
+    hooks = getattr(runtime, "hooks", None)
+    if hooks is not None and session is not None:
+        registry = hooks.shape_scope(session, registry)
     return registry
 
 

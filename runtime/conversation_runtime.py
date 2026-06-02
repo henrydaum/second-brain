@@ -93,6 +93,10 @@ class ConversationRuntime:
         self.on_tool_result = on_tool_result
         self.on_notice = on_notice
         self.sessions: dict[str, RuntimeSession] = {}
+        # Opt-in per-session extension points (permission gates, scope shapers).
+        # Empty by default; plugins register into it. See runtime/hooks.py.
+        from runtime.hooks import HookRegistry
+        self.hooks = HookRegistry()
         self._approval_requests: dict[str, StateMachineApprovalRequest] = {}
         self._sessions_lock = threading.RLock()
         # Single global "active" session — the most recent user-driven
