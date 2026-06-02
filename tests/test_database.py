@@ -135,6 +135,7 @@ def test_base_user_is_seeded(db):
     base = db.get_user(DEFAULT_USER_ID)
     assert base is not None
     assert base["config"] == {}
+    assert base["user_type"] == "base"
     assert base["username"] is None  # the base user is not a login account
 
 
@@ -162,6 +163,17 @@ def test_user_config_round_trip(db):
     uid = db.upsert_user("art", "guest")
     db.set_user_config(uid, {"theme": "dark", "credits": 10})
     assert db.get_user_config(uid) == {"theme": "dark", "credits": 10}
+
+
+def test_user_type_is_frontend_defined_metadata(db):
+    uid = db.upsert_user("art", "alice", user_type="creator")
+    assert db.get_user(uid)["user_type"] == "creator"
+
+    assert db.upsert_user("art", "alice", user_type="guest") == uid
+    assert db.get_user(uid)["user_type"] == "creator"  # touch existing identities; don't reclassify them
+
+    db.set_user_type(uid, "paid")
+    assert db.get_user_by_external("art", "alice")["user_type"] == "paid"
 
 
 def test_conversations_are_user_scoped(db):

@@ -16,6 +16,7 @@ import pytest
 import state_machine  # noqa: F401
 from state_machine import ConversationRuntime
 from pipeline.database import Database, DEFAULT_USER_ID
+from plugins.BaseFrontend import BaseFrontend
 from plugins.commands.command_agent import AgentCommand
 from plugins.commands.command_tools import _toggle_skip
 
@@ -140,3 +141,18 @@ def test_skip_permissions_persist_per_user(tmp_path):
     assert _toggle_skip(context, "run_command", True) == "Skip permissions enabled for run_command."
     assert db.get_user_config(uid)["skip_permissions"] == ["run_command"]
     assert "skip_permissions" not in rt.config
+
+
+def test_frontend_identify_can_mint_user_type(tmp_path):
+    class WebFrontend(BaseFrontend):
+        name = "web"
+
+    db = Database(str(tmp_path / "frontend-user-type.db"))
+    rt = ConversationRuntime(db=db, services={}, config={})
+    frontend = WebFrontend()
+    frontend.runtime = rt
+
+    uid = frontend.identify("s", "alice", user_type="creator")
+
+    assert db.get_user(uid)["user_type"] == "creator"
+    assert rt.session_user_id("s") == uid

@@ -196,6 +196,7 @@ class Database:
 				id            INTEGER PRIMARY KEY AUTOINCREMENT,
 				frontend      TEXT,
 				external_id   TEXT,
+				user_type     TEXT DEFAULT 'user',
 				username      TEXT UNIQUE,
 				password_hash TEXT,
 				config        TEXT DEFAULT '{}',
@@ -204,6 +205,12 @@ class Database:
 				UNIQUE(frontend, external_id)
 			)
 		""")
+		try:
+			self.conn.execute("ALTER TABLE users ADD COLUMN user_type TEXT DEFAULT 'user'")
+			self.conn.commit()
+		except Exception:
+			pass
+		self.conn.execute("UPDATE users SET user_type = 'user' WHERE user_type IS NULL OR user_type = ''")
 		# Seed the base user (id 1). No credentials — it isn't a login account.
 		# 'base' is a sentinel in the transport-identity columns: this user belongs
 		# to no frontend (every transport falls back to it), so it is not 'local'
@@ -211,9 +218,13 @@ class Database:
 		# lives in frontend_profile).
 		now = time.time()
 		self.conn.execute("""
-			INSERT OR IGNORE INTO users (id, frontend, external_id, config, created_at, updated_at)
-			VALUES (?, 'base', 'base', '{}', ?, ?)
+			INSERT OR IGNORE INTO users (id, frontend, external_id, user_type, config, created_at, updated_at)
+			VALUES (?, 'base', 'base', 'base', '{}', ?, ?)
 		""", (DEFAULT_USER_ID, now, now))
+		self.conn.execute("""
+			UPDATE users SET user_type = 'base'
+			WHERE id = ? AND frontend = 'base' AND external_id = 'base'
+		""", (DEFAULT_USER_ID,))
 
 		self.conn.commit()
 
@@ -825,7 +836,7 @@ class Database:
 			user["config"] = {}
 		return user
 
-	def upsert_user(self, frontend, external_id, config=None) -> int:
+	def upsert_user(self, frontend, external_id, config=None, user_type="user") -> int:
 		"""Create-or-touch a user by transport identity; return its id.
 
 		Stores no credentials — use ``set_user_credentials`` for those. On an
@@ -834,13 +845,14 @@ class Database:
 		"""
 		now = time.time()
 		blob = json.dumps(config or {})
+		kind = (str(user_type or "user").strip() or "user")
 		with self.lock:
 			cur = self.conn.execute("""
-				INSERT INTO users (frontend, external_id, config, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?)
+				INSERT INTO users (frontend, external_id, user_type, config, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?)
 				ON CONFLICT(frontend, external_id) DO UPDATE SET updated_at = excluded.updated_at
 				RETURNING id
-			""", (frontend, external_id, blob, now, now))
+			""", (frontend, external_id, kind, blob, now, now))
 			row = cur.fetchone()
 			self.conn.commit()
 			return row["id"]
@@ -875,6 +887,20 @@ class Database:
 			self.conn.execute(
 				"UPDATE users SET username = ?, password_hash = ?, updated_at = ? WHERE id = ?",
 				(username, password_hash, time.time(), user_id))
+			self.conn.commit()
+
+	def set_user_type(self, user_id, user_type) -> None:
+		"""Set the frontend-defined user type label for a user row.
+
+		The kernel stores and exposes this label but does not grant permissions from
+		it. Frontends/policy plugins decide what values such as guest, admin, paid,
+		or creator mean.
+		"""
+		kind = (str(user_type or "user").strip() or "user")
+		with self.lock:
+			self.conn.execute(
+				"UPDATE users SET user_type = ?, updated_at = ? WHERE id = ?",
+				(kind, time.time(), user_id))
 			self.conn.commit()
 
 	def get_user_config(self, user_id) -> dict:

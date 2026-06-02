@@ -462,7 +462,7 @@ class BaseFrontend:
         if self.runtime is not None:
             self.runtime.set_session_attended(session_key, False)
 
-    def identify(self, session_key: str, external_id, config: dict | None = None) -> int | None:
+    def identify(self, session_key: str, external_id, config: dict | None = None, user_type: str = "user") -> int | None:
         """Resolve (creating if needed) the user behind this session and bind it.
 
         This frontend's own ``name`` namespaces the identity, so ``external_id``
@@ -481,7 +481,7 @@ class BaseFrontend:
                 f"identify(); the per-user binding is ignored unless you switch "
                 f"to 'per_user'."
             )
-        uid = self.runtime.db.upsert_user(self.name, str(external_id), config)
+        uid = self.runtime.db.upsert_user(self.name, str(external_id), config, user_type=user_type)
         self.runtime.set_session_user(session_key, uid)
         return uid
 

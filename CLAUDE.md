@@ -153,8 +153,10 @@ is a frontend concern (the kernel ships no crypto — it stores `password_hash`
 opaquely). `session.user_id` is **not** persisted
 in the marker: ownership lives on `conversations.user_id` (the source of truth), so
 identity can never leak in by loading a conversation. Per-user data is the `users`
-table (`config` JSON blob + `username`/`password_hash` columns), reached anywhere
-via `context.user_id` / `context.current_user()` / `context.db`. Plugins declare
+table (`user_type` label + `config` JSON blob + `username`/`password_hash` columns),
+reached anywhere via `context.user_id` / `context.current_user()` / `context.db`.
+`user_type` is frontend-defined metadata (guest/admin/paid/creator/etc.), not a
+kernel admin bypass; frontends and policy plugins decide what it means. Plugins declare
 **user-scoped settings** with `{"scope": "user"}` in a setting's `type_info`; `/config`
 reads/writes those against the current user's `config` blob instead of the global
 config. The remembered `last_active_conversation_id` also lives in the current

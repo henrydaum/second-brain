@@ -80,6 +80,10 @@ exactly THREE pathways, built from those two attributes:
      `external_id` is whatever is unique within THIS frontend (a username, email,
      or cookie). bind_session() creates the user on first sight and rebinds the
      session. This is pathways (2) and (3) — "each user is somebody else".
+     Frontends that need app-specific user classes can pass a label when minting:
+        uid = self.identify(key, external_id=email, user_type="creator")
+     The kernel stores that label on users.user_type but does not treat it as an
+     admin bypass; frontend/policy plugins decide what labels mean.
 
 WARNING for "per_user": if you leave default_user_id at the base user, anonymous
 visitors would act as the OPERATOR and see operator data. Always point a per_user
