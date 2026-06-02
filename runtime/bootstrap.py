@@ -74,6 +74,7 @@ class FrontendManager:
         self._adapters: dict[str, object] = {}
         self._threads: list[threading.Thread] = []
         self._factories: dict[str, callable] = {}
+        self.available_frontends: set[str] = set()
 
     def set_factory(self, name: str, factory) -> None:
         """Set factory."""
@@ -94,6 +95,7 @@ class FrontendManager:
         name = getattr(cls, "name", "")
         if not name:
             return "Frontend class has no name"
+        self.available_frontends.add(name)
         if name in self._adapters:
             return f"Frontend '{name}' already running"
         factory = self._factories.get(name)
@@ -138,6 +140,7 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
     classes = discover_frontends(root_dir, config)
     config_manager.reconcile_plugin_config(config, get_plugin_settings())
     manager = FrontendManager(runtime, runtime.command_registry, config)
+    manager.available_frontends.update(classes)
 
     # Transport-specific constructor args: discovery returns the class, the
     # bootstrap supplies what each frontend needs to talk to the host.

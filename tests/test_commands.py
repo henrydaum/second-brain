@@ -9,6 +9,7 @@ context dependencies.
 from types import SimpleNamespace
 
 from plugins.commands import command_debug
+from plugins.commands.command_frontends import FrontendsCommand
 from plugins.commands.command_agent import AgentCommand
 from plugins.commands.command_debug import DebugCommand
 from plugins.commands.command_llm import LlmCommand
@@ -94,6 +95,22 @@ def test_agent_command_can_rename_profile(monkeypatch):
     assert session.active_agent_profile == "writer"
     assert session.profile_override == "writer"
     assert saved[-1]["active_agent_profile"] == "writer"
+
+
+# ── /frontends ───────────────────────────────────────────────────────
+
+def test_frontends_form_uses_runtime_cache_without_discovery(monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise AssertionError("frontend discovery should not run while rendering form hints")
+
+    monkeypatch.setattr("plugins.plugin_discovery.discover_frontends", boom)
+    manager = SimpleNamespace(available_frontends={"repl", "telegram"}, adapters={"repl": object()})
+    runtime = SimpleNamespace(frontend_manager=manager)
+    context = SimpleNamespace(config={"enabled_frontends": ["repl"], "frontend_profiles": {}}, runtime=runtime)
+
+    steps = FrontendsCommand().form({}, context)
+
+    assert steps[0].enum == ["repl", "telegram"]
 
 
 # ── /debug ───────────────────────────────────────────────────────────

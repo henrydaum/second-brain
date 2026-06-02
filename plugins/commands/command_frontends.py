@@ -113,13 +113,9 @@ def _frontends(context):
     """
     config = getattr(context, "config", {}) or {}
     names = set()
-    root_dir = getattr(context, "root_dir", None)
-    if root_dir is not None:
-        try:
-            from plugins.plugin_discovery import discover_frontends
-            names.update(discover_frontends(root_dir, config).keys())
-        except Exception:
-            pass
+    manager = getattr(getattr(context, "runtime", None), "frontend_manager", None)
+    names.update(getattr(manager, "available_frontends", ()) or ())
+    names.update(getattr(manager, "adapters", {}) or {})
     names.update(config.get("enabled_frontends", []) or [])
     names.update(config.get("frontend_profiles", {}) or {})
     return sorted(names)
