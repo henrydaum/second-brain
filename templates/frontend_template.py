@@ -42,6 +42,55 @@ and bus subscriptions. Subclasses own transport-specific IO and rendering:
 
 Use submit_text(), submit_attachment(), submit(), and cancel() instead of
 calling runtime.handle_action directly.
+
+USER BINDING — WHICH USER OWNS A SESSION  (READ THIS, IT IS NOT INTUITIVE)
+-------------------------------------------------------------------------
+A session_key identifies a *conversation stream*. A user_id identifies *whose
+data* it is (conversations, per-user /config settings, credits, etc.). They are
+NOT the same thing: handing every visitor a distinct session_key does NOT give
+them distinct accounts. If you never bind a user, EVERY session — every website
+visitor included — acts as the SAME default user, and they share data.
+
+Binding is a declared part of the contract via two attributes:
+
+    user_binding    = "single" | "per_user"     (default "single")
+    default_user_id = <uid>                       (default = the base user, 1)
+
+The base auto-binds each new session to ``default_user_id`` (only while it is
+still unbound), so you usually declare attributes and nothing else. There are
+exactly THREE pathways, built from those two attributes:
+
+  1. ONE FIXED USER  (REPL, Telegram, single-operator tools)
+        user_binding = "single"            # default
+        default_user_id = DEFAULT_USER_ID  # the base user (1)
+     Every session is the base user. No per-session code. This is pathway (1).
+
+  1b. ONE FIXED *SHARED* USER  (kiosk, public demo where everyone is the same
+      sandbox account)
+        user_binding = "single"
+        default_user_id = <some shared uid>
+     Same mechanism as (1), just not the base user.
+
+  2. A DIFFERENT USER PER PERSON  (a real multi-user website)
+        user_binding = "per_user"
+        default_user_id = <a GUEST uid you create on start>   # NOT the base user!
+     Anonymous sessions land on the guest user (because default_user_id points
+     there). When a visitor logs in, UPGRADE that session to their real account:
+        uid = self.bind_session(key, external_id=their_username_or_email)
+     `external_id` is whatever is unique within THIS frontend (a username, email,
+     or cookie). bind_session() creates the user on first sight and rebinds the
+     session. This is pathways (2) and (3) — "each user is somebody else".
+
+WARNING for "per_user": if you leave default_user_id at the base user, anonymous
+visitors would act as the OPERATOR and see operator data. Always point a per_user
+frontend's default_user_id at a dedicated guest user you upsert on start():
+        self.default_user_id = self.runtime.db.upsert_user(self.name, "guest")
+
+Binding is the "whose data" axis ONLY. It does NOT decide permissions, which
+commands run, or which agent is used — that is the frontend_profile. A user is
+only as isolated as the tools/commands their frontend_profile exposes (the
+conversation guard protects the built-in conversation surface; a permissive tool
+like raw SQL can still read across users).
 """
 
 # =====================================================================
@@ -49,6 +98,7 @@ calling runtime.handle_action directly.
 # =====================================================================
 
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
+from pipeline.database import DEFAULT_USER_ID
 
 
 # =====================================================================
@@ -65,6 +115,9 @@ from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
 #         supports_typing=True,
 #         supports_proactive_push=True,
 #     )
+#     # Single local operator — every session is the base user (pathway 1).
+#     user_binding = "single"
+#     default_user_id = DEFAULT_USER_ID
 #
 #     def session_key(self, ctx=None) -> str:
 #         return "minimal"
@@ -116,3 +169,33 @@ from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
 # def on_user_file(frontend: BaseFrontend, transport_ctx, path: str):
 #     key = frontend.session_key(transport_ctx)
 #     frontend.submit_attachment(key, path)
+
+
+# =====================================================================
+# EXAMPLE: A multi-user ("per_user") web frontend — pathways 2 & 3
+# =====================================================================
+#
+# class WebFrontend(BaseFrontend):
+#     name = "web"
+#     description = "Public website; anonymous chat, accounts for saved data."
+#     user_binding = "per_user"          # each identity gets its own user
+#
+#     def start(self) -> None:
+#         # Point the anonymous default at a GUEST user, never the base user, so
+#         # logged-out visitors never act as the operator. Sessions auto-bind here
+#         # until a visitor logs in.
+#         self.default_user_id = self.runtime.db.upsert_user(self.name, "guest")
+#         # ... start the HTTP/WebSocket server ...
+#
+#     def session_key(self, ctx) -> str:
+#         return f"web:{ctx.connection_id}"     # one stream per connection
+#
+#     # On login, UPGRADE the session to the visitor's real account. external_id
+#     # is unique within this frontend (username/email/cookie); bind_session
+#     # creates the user on first sight and rebinds the session.
+#     def on_login(self, ctx, username: str) -> None:
+#         self.bind_session(self.session_key(ctx), external_id=username)
+#
+#     # On logout, drop back to the anonymous guest user.
+#     def on_logout(self, ctx) -> None:
+#         self.bind_session(self.session_key(ctx))   # no external_id -> default_user_id

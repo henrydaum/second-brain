@@ -7,6 +7,7 @@ import sys
 import threading
 
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
+from pipeline.database import DEFAULT_USER_ID
 from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
 
 logger = logging.getLogger("REPL")
@@ -20,6 +21,10 @@ class ReplFrontend(BaseFrontend):
         supports_attachments_in=True,
         supports_proactive_push=True,
     )
+    # Single local operator — every session acts as the base user. The terminal
+    # has no login; authorization for the REPL is its frontend_profile, not a user.
+    user_binding = "single"
+    default_user_id = DEFAULT_USER_ID
 
     def __init__(self, shutdown_fn=None, shutdown_event: threading.Event | None = None):
         """Initialize the REPL frontend."""

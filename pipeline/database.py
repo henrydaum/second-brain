@@ -205,10 +205,14 @@ class Database:
 			)
 		""")
 		# Seed the base user (id 1). No credentials — it isn't a login account.
+		# 'base' is a sentinel in the transport-identity columns: this user belongs
+		# to no frontend (every transport falls back to it), so it is not 'local'
+		# (Telegram is remote) nor 'admin' (it holds no privilege — authorization
+		# lives in frontend_profile).
 		now = time.time()
 		self.conn.execute("""
 			INSERT OR IGNORE INTO users (id, frontend, external_id, config, created_at, updated_at)
-			VALUES (?, 'local', 'local', '{}', ?, ?)
+			VALUES (?, 'base', 'base', '{}', ?, ?)
 		""", (DEFAULT_USER_ID, now, now))
 
 		self.conn.commit()

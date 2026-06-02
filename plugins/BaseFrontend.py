@@ -116,6 +116,11 @@ class BaseFrontend:
             FrontendCapabilities describing the transport.
         config_settings:
             Same tuple format as SETTINGS_DATA. See plugins.BaseTool.
+        user_binding / default_user_id:
+            How sessions map to users — "single" (default; all sessions act as
+            default_user_id) or "per_user" (each identity its own user). See the
+            attribute block below. This is the "whose data" axis; it does NOT set
+            permissions — those come from frontend_profile.
 
     Lifecycle (override):
         start()                     — begin the transport's main loop.
@@ -140,6 +145,9 @@ class BaseFrontend:
         submit_text(session_key, text)
         submit_attachment(session_key, path)
         cancel(session_key)
+        bind_session(session_key, external_id=None) -> int   — apply user_binding
+        identify(session_key, external_id, config=None) -> int — per_user upgrade
+        mark_attended/mark_unattended(session_key)            — attendance
     """
 
     # --- Identity ---
@@ -467,9 +475,35 @@ class BaseFrontend:
         in the frontend_profile, not the user."""
         if self.runtime is None or getattr(self.runtime, "db", None) is None:
             return None
+        if self.user_binding == USER_BINDING_SINGLE:
+            logger.debug(
+                f"Frontend '{self.name}' is user_binding='single' but called "
+                f"identify(); the per-user binding is ignored unless you switch "
+                f"to 'per_user'."
+            )
         uid = self.runtime.db.upsert_user(self.name, str(external_id), config)
         self.runtime.set_session_user(session_key, uid)
         return uid
+
+    def bind_session(self, session_key: str, external_id=None) -> int | None:
+        """Bind a session to a user per this frontend's declared ``user_binding``.
+        The one call a frontend needs — no guessing. Returns the bound user_id.
+
+        - ``single``   → always ``default_user_id`` (``external_id`` ignored).
+        - ``per_user`` → the user for ``external_id`` (created on first sight via
+          ``identify``); with no ``external_id``, the anonymous ``default_user_id``
+          (typically a guest user).
+
+        Note the base already auto-binds new sessions to ``default_user_id``, so
+        ``single`` frontends never need to call this. ``per_user`` frontends call
+        it to *upgrade* a session to a real account once the user authenticates.
+        """
+        if self.runtime is None:
+            return None
+        if self.user_binding == USER_BINDING_PER_USER and external_id is not None:
+            return self.identify(session_key, external_id)
+        self.runtime.set_session_user(session_key, self.default_user_id)
+        return self.default_user_id
 
     # ──────────────────────────────────────────────────────────────────────
     # Bus handlers. Subclasses can override for richer behavior, but the

@@ -144,10 +144,13 @@ Sessions also carry an **ephemeral, frontend-bound `user_id`** ("whose data is
 this?"), seeded fallback `DEFAULT_USER_ID = 1` (the base user). **Identity
 (`user_id`) and authorization (`frontend_profile`) are separate axes** — there is
 no privileged "admin" user; the REPL is powerful because its *frontend_profile* is
-unrestricted, not because of its user. A frontend binds identity via
-`BaseFrontend.identify(session_key, external_id)` /
-`runtime.set_session_user`; login itself is a frontend concern (the kernel ships no
-crypto — it stores `password_hash` opaquely). `session.user_id` is **not** persisted
+unrestricted, not because of its user. A frontend **declares** how sessions map to
+users via `BaseFrontend.user_binding` (`"single"` ⇒ every session is
+`default_user_id`; `"per_user"` ⇒ each identity its own user) + `default_user_id`;
+the base auto-binds unbound sessions to that default, and `per_user` frontends call
+`bind_session(key, external_id)` / `identify(...)` to upgrade on login. Login itself
+is a frontend concern (the kernel ships no crypto — it stores `password_hash`
+opaquely). `session.user_id` is **not** persisted
 in the marker: ownership lives on `conversations.user_id` (the source of truth), so
 identity can never leak in by loading a conversation. Per-user data is the `users`
 table (`config` JSON blob + `username`/`password_hash` columns), reached anywhere
