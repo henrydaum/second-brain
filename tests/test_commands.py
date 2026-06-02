@@ -12,7 +12,6 @@ from plugins.commands import command_debug
 from plugins.commands.command_agent import AgentCommand
 from plugins.commands.command_debug import DebugCommand
 from plugins.commands.command_llm import LlmCommand
-from plugins.services.service_plan_mode import PlanModeService, PLUGIN
 from state_machine.conversation import ConversationState, Participant
 
 
@@ -113,9 +112,9 @@ def _session_context(tmp_path, monkeypatch, cs, **session_attrs):
 
 def test_debug_reports_state_machine_snapshot_and_log_tail(tmp_path, monkeypatch):
     cs = ConversationState([Participant("user", "user"), Participant("agent", "agent")])
-    service = PlanModeService()
-    context = _session_context(tmp_path, monkeypatch, cs, plugin_state={PLUGIN: {"enabled": True}})
-    context.services["plan_mode"] = service
+    service = SimpleNamespace(debug_flags=lambda _session: ["sample extension"])
+    context = _session_context(tmp_path, monkeypatch, cs)
+    context.services["sample"] = service
 
     out = DebugCommand().run({}, context)
 
@@ -123,7 +122,7 @@ def test_debug_reports_state_machine_snapshot_and_log_tail(tmp_path, monkeypatch
     assert "Turn: user (user)" in out
     assert f"Phase: {cs.phase}" in out
     assert "Participants: user(user), agent(agent)" in out
-    assert "Session: plan mode" in out
+    assert "Session: sample extension" in out
     # The valuable part of the old /doctor: recent warnings/errors.
     assert "Recent log warnings/errors:" in out
     assert "Plugin registration failed: demo" in out

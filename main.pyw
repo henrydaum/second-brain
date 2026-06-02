@@ -37,6 +37,7 @@ from pipeline.watcher import Watcher
 from pipeline.event_trigger import EventTrigger
 from agent.tool_registry import ToolRegistry
 from runtime.bootstrap import start_frontends
+from plugins.BaseService import should_autoload_service
 from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
 
 
@@ -89,17 +90,18 @@ def main():
 	services = discover_services(_ROOT, config)
 	logger.info(f"Services discovered: {list(services.keys())} ({time.time() - t0:.2f}s)")
 
-	# --- 3b. Auto-load services ---
-	for svc_name in config.get("autoload_services", []):
-		svc = services.get(svc_name)
-		if svc is None:
-			logger.warning(f"Auto-load: unknown service '{svc_name}', skipping.")
+	# --- 3b. Auto-load managed services from config plus installed extensions ---
+	for svc_name, svc in services.items():
+		if not should_autoload_service(svc_name, svc, config):
 			continue
 		try:
 			svc.load()
 			logger.info(f"Auto-loaded service: {svc_name}")
 		except Exception as e:
 			logger.error(f"Auto-load failed for '{svc_name}': {e}")
+	for svc_name in config.get("autoload_services", []):
+		if svc_name not in services:
+			logger.warning(f"Auto-load: unknown service '{svc_name}', skipping.")
 
 	# --- 4. Initialize orchestrator ---
 	orchestrator = Orchestrator(database, config, services)

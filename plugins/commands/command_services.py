@@ -1,6 +1,7 @@
 """Slash command plugin for `/services`."""
 
 from plugins.BaseCommand import BaseCommand
+from plugins.BaseService import is_extension_service, is_user_managed_service, service_lifecycle
 from plugins.frontends.helpers.formatters import format_services
 from state_machine.conversation import FormStep
 
@@ -11,14 +12,14 @@ ACTIONS = ["load", "unload"]
 class ServicesCommand(BaseCommand):
     """Slash-command handler for `/services`."""
     name = "services"
-    description = "Select a service, then load or unload it"
+    description = "Inspect services and load or unload managed ones"
     category = "System"
 
     def form(self, args, context):
         """Handle form."""
         services = context.services or {}
-        steps = [FormStep("service_name", "Select a service to load or unload.", True, enum=sorted((context.services or {}).keys()), columns=2)]
-        if args.get("service_name"):
+        steps = [FormStep("service_name", "Select a service.", True, enum=sorted((context.services or {}).keys()), columns=2)]
+        if args.get("service_name") and is_user_managed_service(services.get(args["service_name"])):
             steps.append(FormStep("action", f"What do you want to do with this service?\n\n{_describe(services, args['service_name'])}", True, enum=ACTIONS, enum_labels=["Load it", "Unload it"]))
         return steps
 
@@ -31,6 +32,10 @@ class ServicesCommand(BaseCommand):
         svc = services.get(name)
         if svc is None:
             return "Unknown service."
+        if not action:
+            return _describe(services, name)
+        if not is_user_managed_service(svc):
+            return f"{name} is an installed extension and is loaded automatically."
         if action == "load":
             if svc.load() is False:
                 return f"Failed to load service: {name}"
@@ -46,7 +51,7 @@ class ServicesCommand(BaseCommand):
 def _show(services):
     """Internal helper to handle show."""
     return format_services([
-        {"name": name, "loaded": getattr(svc, "loaded", False), "model_name": getattr(svc, "model_name", "")}
+        {"name": name, "loaded": getattr(svc, "loaded", False), "model_name": getattr(svc, "model_name", ""), "lifecycle": service_lifecycle(svc)}
         for name, svc in sorted(services.items())
     ])
 
@@ -56,7 +61,8 @@ def _describe(services, name):
     svc = services.get(name)
     if svc is None:
         return "Action"
-    return f"{name}\nStatus: {'Loaded' if getattr(svc, 'loaded', False) else 'Unloaded'}\nModel: {getattr(svc, 'model_name', '') or '-'}"
+    status = "Extension" if is_extension_service(svc) else ("Loaded" if getattr(svc, 'loaded', False) else "Unloaded")
+    return f"{name}\nStatus: {status}\nModel: {getattr(svc, 'model_name', '') or '-'}"
 
 
 def _clear_tasks(context):

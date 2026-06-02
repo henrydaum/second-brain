@@ -55,7 +55,7 @@ SETTINGS_DATA = [
 
     # --- Services ---
     ("Auto-load Services", "autoload_services",
-     "Service names to load automatically on startup (e.g. [\"google_drive\"]).",
+     "Managed service names to load automatically on startup. Extension services auto-load when installed.",
      ["llm", "compactor", "parser", "plugin_watcher"],
      {"type": "json_list"}),
 

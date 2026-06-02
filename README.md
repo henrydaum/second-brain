@@ -220,7 +220,7 @@ Minimal shape:
     "C:/Users/you/AppData/Local/Second Brain/attachment_cache"
   ],
   "enabled_frontends": ["repl", "telegram"],
-  "autoload_services": ["llm", "compactor", "parser", "plugin_watcher", "plan_mode"],
+  "autoload_services": ["llm", "compactor", "parser", "plugin_watcher"],
   "telegram_bot_token": "",
   "telegram_allowed_user_id": 0,
   "llm_profiles": {
@@ -399,7 +399,7 @@ Authoring rules:
 
 - Tools expose LLM-callable capabilities and return `ToolResult`.
 - Tasks are pipeline/event workers and should be idempotent where possible.
-- Services own reusable backends with explicit load/unload lifecycle.
+- Services own reusable backends or runtime extensions. Managed services can be loaded/unloaded; extension services auto-load when installed.
 - Commands are user-facing conversation actions and can define `FormStep` flows.
 - Frontends are transports; they submit runtime actions and render runtime output.
 - Plugins can declare `config_settings`, which appear in config views and are stored in `plugin_config.json`.

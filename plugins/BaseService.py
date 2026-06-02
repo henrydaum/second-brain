@@ -2,16 +2,18 @@
 Service interface.
 
 Services are long-lived capabilities shared across tools and tasks.
-They wrap models, schedulers, external APIs, or other reusable runtime
-state and give the rest of the system a consistent lifecycle:
-build, load, use, and unload.
+They wrap models, schedulers, external APIs, runtime extensions, or other
+reusable state and give the rest of the system a consistent lifecycle.
 """
 
 import logging
 import time
-from abc import ABC, abstractmethod
+from abc import ABC
 
 logger = logging.getLogger("BaseService")
+
+MANAGED = "managed"
+EXTENSION = "extension"
 
 
 class BaseService(ABC):
@@ -24,6 +26,9 @@ class BaseService(ABC):
         shared:
             If True, one instance is shared across threads.
             If False, callers should use get_client() for thread-safe access.
+        lifecycle:
+            "managed" services are user-loadable backends. "extension" services
+            are runtime hook carriers that auto-load whenever installed.
 
     Lifecycle:
         load():
@@ -42,6 +47,7 @@ class BaseService(ABC):
     model_name: str = ""
     shared: bool = True
     is_llm_backend: bool = False
+    lifecycle: str = MANAGED
 
     # --- Config settings this plugin needs ---
     # Each entry is a tuple:
@@ -89,15 +95,14 @@ class BaseService(ABC):
             logger.error(f"Service crashed during load: {name} ({time.time() - t0:.2f}s): {e}")
             raise
 
-    @abstractmethod
     def _load(self) -> bool:
         """Initialize the service. Return True on success, False on failure."""
-        ...
+        self.loaded = True
+        return True
 
-    @abstractmethod
     def unload(self):
         """Release all resources. Must be safe to call even if not loaded."""
-        ...
+        self.loaded = False
 
     def get_client(self):
         """
@@ -122,3 +127,23 @@ class BaseService(ABC):
     def set_peer_services(self, services: dict):
         """Receive the live runtime service registry."""
         self.services = services
+
+
+def service_lifecycle(svc) -> str:
+    """Return a service lifecycle, defaulting to managed."""
+    return getattr(svc, "lifecycle", MANAGED) or MANAGED
+
+
+def is_extension_service(svc) -> bool:
+    """Whether a service is an installed runtime extension."""
+    return service_lifecycle(svc) == EXTENSION
+
+
+def is_user_managed_service(svc) -> bool:
+    """Whether /services should offer load/unload controls."""
+    return service_lifecycle(svc) == MANAGED
+
+
+def should_autoload_service(name: str, svc, config: dict) -> bool:
+    """Whether startup should load a service."""
+    return is_extension_service(svc) or name in (config.get("autoload_services") or [])

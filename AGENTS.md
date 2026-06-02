@@ -98,11 +98,12 @@ baked-in + sandbox.
 
 ### Service ↔ startup ordering gotcha
 
-In [main.pyw](main.pyw): `autoload_services` calls `svc.load()` **before** the
-tool registry exists and **before** `bind_runtime` is wired (that happens in
-`_bind_runtime_services` after frontends start). So a service that registers
-tools must do so idempotently from **both** `_load()` and `bind_runtime()` — do
-not assume the registry is available at load time. `service_mcp.py` shows this.
+In [main.pyw](main.pyw): managed services in `autoload_services` and installed
+`lifecycle = "extension"` services call `svc.load()` **before** the tool
+registry exists and **before** `bind_runtime` is wired (that happens in
+`_bind_runtime_services` after frontends start). Runtime-extension services that
+register hooks/tools should do that work in `bind_runtime()` and make it
+idempotent; do not assume the registry/runtime is available at load time.
 
 ## Conventions
 

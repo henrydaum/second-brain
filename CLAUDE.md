@@ -26,15 +26,13 @@ staging catalog that mirrors `plugins/`, preserved via `git mv` to seed the
 future store) — *not* by deleting them. What remains:
 
 - **Services:** `service_llm`, `service_compactor` (context-safety),
-  `service_parser` (text-only — see below), `service_plugin_watcher`
-  (hot-reload = the install/uninstall substrate), and `service_plan_mode`
-  (a tiny runtime-extension wrapper for the optional planning workflow).
+  `service_parser` (text-only — see below), and `service_plugin_watcher`
+  (hot-reload = the install/uninstall substrate).
 - **Tasks:** none.
-- **Tools:** `tool_read_file`, `tool_ask_user_question`, and `tool_propose_plan`
-  (the last is `auto_register=False` and is injected only by `service_plan_mode`).
+- **Tools:** `tool_read_file` and `tool_ask_user_question`.
 - **Frontend:** `frontend_repl` only. Telegram moved to `store/frontends/`.
 - **Commands:** REPL UX + introspection only — `config`, `setup` (LLM onboarding
-  wizard), `llm`, `conversations`, `clear`, `cancel`, `plan`, `debug`,
+  wizard), `llm`, `conversations`, `clear`, `cancel`, `debug`,
   `locations`, `commands`, `tools`, `services`, `tasks`. Moved out: `mcp`,
   `agent`, `schedule`, `update`.
 
@@ -68,7 +66,7 @@ the difference between a microkernel and a pile of assumptions:
 - **`runtime/runtime_config.py` `build_loop`** — the "no LLM" path now raises a
   friendly message pointing at `/setup` instead of an opaque error.
 - **`config/config_data.py`** — `autoload_services` trimmed to
-  `["llm", "compactor", "parser", "plugin_watcher", "plan_mode"]`; `enabled_frontends` → `["repl"]`;
+  `["llm", "compactor", "parser", "plugin_watcher"]`; `enabled_frontends` → `["repl"]`;
   `DEFAULT_SCHEDULED_JOBS` → `{}` (jobs/timekeeper are store plugins now).
 - **`requirements.txt`** — kernel-minimal (`litellm`, `watchdog`, `Pillow`;
   optional doc-parsing deps commented). The full per-plugin

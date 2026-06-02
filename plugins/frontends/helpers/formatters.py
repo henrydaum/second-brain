@@ -91,19 +91,29 @@ def format_services(services: list[dict], compact: bool = False) -> str:
         lines = []
         for s in services:
             model = f" ({s['model_name']})" if s["model_name"] else ""
-            lines.append(f"{s['name']}: {status_badge(s['loaded'])}{model}")
+            status = "Extension" if s.get("lifecycle") == "extension" else status_badge(s['loaded'])
+            lines.append(f"{s['name']}: {status}{model}")
         return "Services:\n" + "\n".join(lines)
 
-    loaded = [s for s in services if s["loaded"]]
-    unloaded = [s for s in services if not s["loaded"]]
+    extensions = [s for s in services if s.get("lifecycle") == "extension"]
+    managed = [s for s in services if s.get("lifecycle") != "extension"]
+    loaded = [s for s in managed if s["loaded"]]
+    unloaded = [s for s in managed if not s["loaded"]]
     lines = ["Services:"]
+    if extensions:
+        lines.append("  Extensions:")
+        for s in extensions:
+            model = s['model_name'] or ""
+            lines.append(f"    {s['name']:<20} {model}")
     if loaded:
+        if extensions:
+            lines.append("")
         lines.append("  Loaded:")
         for s in loaded:
             model = s['model_name'] or ""
             lines.append(f"    {s['name']:<20} {model}")
     if unloaded:
-        if loaded:
+        if loaded or extensions:
             lines.append("")
         lines.append("  Unloaded:")
         for s in unloaded:

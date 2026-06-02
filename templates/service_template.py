@@ -12,14 +12,17 @@ Service authoring flow:
   2. Create sandbox_services/service_<your_name>.py with edit_file.
   3. The code MUST inherit from BaseService and include:
        from plugins.BaseService import BaseService
-  4. Implement _load(), unload(), and your service methods.
-  5. Add a build_services(config) factory function at the bottom.
-  6. Call test_plugin(plugin_path="sandbox_services/service_<your_name>.py").
-  7. If testing fails, read the error, edit the same file, and retry.
-  8. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
-  9. To update: edit the file; plugin_watcher reloads it when enabled.
- 10. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
- 11. If the service needs extra packages, install them first with
+  4. Choose lifecycle:
+       - managed (default): user-loadable backend, implement _load()/unload() if it owns resources.
+       - extension: runtime hook/prompt/scope helper, set lifecycle = "extension".
+  5. Implement your service methods. Override _load()/unload() only when real setup/cleanup is needed.
+  6. Add a build_services(config) factory function at the bottom.
+  7. Call test_plugin(plugin_path="sandbox_services/service_<your_name>.py").
+  8. If testing fails, read the error, edit the same file, and retry.
+  9. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
+ 10. To update: edit the file; plugin_watcher reloads it when enabled.
+ 11. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
+ 12. If the service needs extra packages, install them first with
      run_command(command="pip install <pkg>", justification="...", timeout=300).
 
 test_plugin diagnostics cover:
@@ -44,14 +47,27 @@ SERVICE LIFECYCLE
 -----------------
   1. build_services(config) is called at startup — creates the instance
   2. load() is called when a user or the system needs the service
-     - Calls your _load() implementation
+     - Calls your _load() implementation, or the BaseService no-op default
      - Sets self.loaded = True on success
      - Handles timing and logging automatically
   3. The service is used by tasks/tools via context.services.get("name")
      - Inside a service, use self.services.get("name") to reach peers.
   4. unload() is called to free resources (GPU memory, connections, etc.)
 
-Services can be loaded/unloaded at runtime from the Telegram frontend or REPL.
+Lifecycle modes:
+  lifecycle = "managed"    (default)
+      User-loadable backend. Listed in autoload_services if it should start
+      with the app. /services offers load/unload controls.
+
+  lifecycle = "extension"
+      Runtime extension. Auto-loads whenever installed, independent of
+      autoload_services. /services shows it as an extension but does not offer
+      load/unload controls. Use for hook carriers, policy plugins, prompt/scope
+      modifiers, and other tiny runtime add-ons.
+
+If your service does not own resources, do not override _load() or unload();
+BaseService marks it loaded/unloaded for you. Override only for real setup or
+cleanup.
 
 
 TRIGGERING EVENT TASKS FROM A SERVICE
@@ -128,13 +144,17 @@ In build_services(), access via: config.get("whisper_model_name", "base")
 
 import logging
 import time
-from abc import ABC, abstractmethod
+from abc import ABC
+
+MANAGED = "managed"
+EXTENSION = "extension"
 
 
 class BaseService(ABC):
     """Base service."""
     model_name: str = ""    # human-readable name shown in frontends
     shared: bool = True     # True = one instance for all threads
+    lifecycle: str = MANAGED # "managed" or "extension"
     config_settings: list = []  # settings shown in the Settings UI
 
     def __init__(self):
@@ -169,15 +189,14 @@ class BaseService(ABC):
             logger.error(f"Model crashed during load: {name}: {e}")
             raise
 
-    @abstractmethod
     def _load(self) -> bool:
         """Initialize the service. Return True on success."""
-        ...
+        self.loaded = True
+        return True
 
-    @abstractmethod
     def unload(self):
         """Release all resources. Must be safe to call even if not loaded."""
-        ...
+        self.loaded = False
 
     def get_client(self):
         """Override for per-call services (shared=False)."""
@@ -238,6 +257,30 @@ class BaseService(ABC):
 #             device="cuda" if config.get("whisper_use_cuda", True) else "cpu",
 #         ),
 #     }
+
+
+# =====================================================================
+# EXAMPLE: A tiny runtime extension service
+# =====================================================================
+
+# from plugins.BaseService import EXTENSION, BaseService
+#
+#
+# class PolicyExtension(BaseService):
+#     model_name = "Policy Extension"
+#     lifecycle = EXTENSION
+#
+#     def bind_runtime(self, *, runtime=None, **_):
+#         self.runtime = runtime
+#         if runtime and getattr(runtime, "hooks", None):
+#             runtime.hooks.add_permission_gate(self.permission_gate)
+#
+#     def permission_gate(self, session, tool_name, command):
+#         return None  # No opinion; let other gates/default approval decide.
+#
+#
+# def build_services(config: dict) -> dict:
+#     return {"policy_extension": PolicyExtension()}
 
 
 # =====================================================================
