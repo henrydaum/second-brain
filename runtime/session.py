@@ -67,6 +67,13 @@ class RuntimeSession:
     # frontend's profile (agent scope + command access). None for background
     # drivers, which follow the global active profile.
     frontend_name: str | None = None
+    # The user whose data this session acts on. Ephemeral live binding set by the
+    # frontend (like ``attended``) — None means the base user (DEFAULT_USER_ID).
+    # Deliberately NOT persisted in to_marker(): ownership lives on the
+    # conversation row, and persisting it here would let loading a conversation
+    # silently rebind the session's identity. Identity flows frontend → session;
+    # ownership flows conversation row → guard; the two never cross.
+    user_id: int | None = None
     extra_tool_instances: list = field(default_factory=list)
     system_prompt_extras: dict[str, Any] = field(default_factory=dict)
     # Free-form per-plugin state bag, keyed by plugin name. The substrate for

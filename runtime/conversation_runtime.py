@@ -59,6 +59,7 @@ from runtime import runtime_approvals as _approvals
 from runtime import runtime_config as _cfg
 from runtime import dispatch as _disp
 from runtime import persistence as _persist
+from pipeline.database import DEFAULT_USER_ID
 
 logger = logging.getLogger("Runtime")
 
@@ -345,11 +346,16 @@ class ConversationRuntime:
         title: str = "New Conversation",
         agent_profile: str | None = None,
         system_prompt_extras: dict[str, Any] | None = None,
+        override: bool = False,
     ) -> RuntimeSession:
         """Create-or-load a session bound to a specific conversation.
 
-        See :func:`state_machine.runtime_persistence.open_session`.
+        See :func:`state_machine.runtime_persistence.open_session`. When binding to
+        an *existing* conversation, refuses (raises ``PermissionError``) if the
+        session's effective user does not own it, unless ``override`` is set.
         """
+        if conversation_id is not None and not self.assert_conversation_access(session_key, conversation_id, override=override):
+            raise PermissionError(f"Conversation {conversation_id} is not accessible to this session.")
         return _persist.open_session(
             self, session_key,
             conversation_id=conversation_id, kind=kind, category=category,
@@ -357,16 +363,26 @@ class ConversationRuntime:
             system_prompt_extras=system_prompt_extras,
         )
 
-    def create_conversation(self, title: str = "New Conversation", *, kind: str = "user", category: str | None = None) -> int | None:
-        """Create a persisted conversation row and return its ID."""
-        return _persist.create_conversation(self, title, kind=kind, category=category)
+    def create_conversation(self, title: str = "New Conversation", *, kind: str = "user", category: str | None = None, user_id: int = DEFAULT_USER_ID) -> int | None:
+        """Create a persisted conversation row (owned by ``user_id``) and return its ID."""
+        return _persist.create_conversation(self, title, kind=kind, category=category, user_id=user_id)
 
-    def load_conversation(self, session_key: str, conversation_id: int, *, agent_profile: str | None = None, system_prompt_extras: dict[str, Any] | None = None) -> RuntimeSession:
-        """Load a persisted conversation into a runtime session."""
+    def load_conversation(self, session_key: str, conversation_id: int, *, agent_profile: str | None = None, system_prompt_extras: dict[str, Any] | None = None, override: bool = False) -> RuntimeSession:
+        """Load a persisted conversation into a runtime session.
+
+        Refuses (raises ``PermissionError``) if the session's effective user does
+        not own the conversation, unless ``override`` is set."""
+        if not self.assert_conversation_access(session_key, conversation_id, override=override):
+            raise PermissionError(f"Conversation {conversation_id} is not accessible to this session.")
         return _persist.load_conversation(self, session_key, conversation_id, agent_profile=agent_profile, system_prompt_extras=system_prompt_extras)
 
-    def load_history(self, session_key: str, conversation_id: int) -> RuntimeResult:
-        """Load saved transcript history for one conversation."""
+    def load_history(self, session_key: str, conversation_id: int, *, override: bool = False) -> RuntimeResult:
+        """Load saved transcript history for one conversation.
+
+        Refuses cross-user access with a non-leaking message (the conversation is
+        reported as if it does not exist)."""
+        if not self.assert_conversation_access(session_key, conversation_id, override=override):
+            return RuntimeResult(False, messages=["No such conversation."])
         return _persist.load_history(self, session_key, conversation_id)
 
     def reset_conversation(self, session_key: str) -> RuntimeSession:
@@ -393,8 +409,33 @@ class ConversationRuntime:
         """Alias for plugin code that reads in conversation lifecycle terms."""
         return self.close_session(session_key)
 
-    def set_conversation_notification_mode(self, conversation_id: int, mode: str) -> str:
-        """Update notification mode for a live or stored conversation."""
+    def delete_conversation(self, session_key: str, conversation_id: int, *, override: bool = False) -> bool:
+        """Delete a conversation the session's effective user owns. Returns False
+        (refused) on a cross-user attempt; raw deletes go through ``db`` directly.
+
+        The access guard is the authorization — once it passes we delete by id
+        (the ``db`` ``user_id`` scope is a separate defence-in-depth path for
+        callers that bypass this guard)."""
+        if not self.assert_conversation_access(session_key, conversation_id, override=override):
+            return False
+        if self.db is not None:
+            self.db.delete_conversation(conversation_id)
+        return True
+
+    def set_conversation_category(self, session_key: str, conversation_id: int, category: str | None, *, override: bool = False) -> bool:
+        """Re-category a conversation the session's effective user owns. Returns
+        False (refused) on a cross-user attempt."""
+        if not self.assert_conversation_access(session_key, conversation_id, override=override):
+            return False
+        if self.db is not None:
+            self.db.set_conversation_category(conversation_id, category)
+        return True
+
+    def set_conversation_notification_mode(self, session_key: str, conversation_id: int, mode: str, *, override: bool = False) -> str | None:
+        """Update notification mode for a live or stored conversation. Returns the
+        normalized mode, or None (refused) on a cross-user attempt."""
+        if not self.assert_conversation_access(session_key, conversation_id, override=override):
+            return None
         from runtime.notifications import notification_mode as normalize
         from state_machine.serialization import latest_state, save_state_marker
         normalized = normalize(mode)
@@ -448,6 +489,43 @@ class ConversationRuntime:
         session = self.sessions.get(session_key)
         if session is not None:
             session.attended = attended
+
+    # ──────────────────────────────────────────────────────────────────
+    # User identity — "whose data is this session acting on?" Ephemeral,
+    # frontend-bound (like attendance). Orthogonal to authorization, which
+    # lives in frontend_profile. Ownership of conversations is the source of
+    # truth (the user_id column); the session binding only decides which
+    # user new rows are stamped with and is checked by the access guard.
+    # ──────────────────────────────────────────────────────────────────
+
+    def set_session_user(self, session_key: str, user_id: int | None) -> None:
+        """Frontend hook: bind the user behind ``session_key`` (None ⇒ base user).
+
+        Creates the session if it doesn't exist yet, so a frontend can bind
+        identity up-front — before any conversation is created — and the first
+        conversation gets stamped with the right owner."""
+        _persist.get_or_create_session(self, session_key).user_id = user_id
+
+    def session_user_id(self, session_key: str) -> int:
+        """The session's *effective* user — its frontend-bound user, or the base
+        user when none was bound."""
+        session = self.sessions.get(session_key)
+        if session is not None and session.user_id is not None:
+            return session.user_id
+        return DEFAULT_USER_ID
+
+    def assert_conversation_access(self, session_key: str, conversation_id: int, *, override: bool = False) -> bool:
+        """Whether ``session_key``'s effective user may load/mutate the
+        conversation. ``override=True`` (system/background callers) skips the
+        check. Returns ``False`` rather than raising so user-driven paths can
+        degrade to a clean "no such conversation" without leaking existence."""
+        if override or self.db is None:
+            return True
+        row = self.db.get_conversation(conversation_id)
+        if row is None:
+            return False
+        owner = row.get("user_id")
+        return owner is None or owner == self.session_user_id(session_key)
 
     # ──────────────────────────────────────────────────────────────────
     # Reopen-where-you-left-off persistence.

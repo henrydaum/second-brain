@@ -1,5 +1,6 @@
 """Pipeline support for database."""
 
+import json
 import logging
 import re
 import sqlite3
@@ -27,6 +28,12 @@ def _priority_for(path: str) -> int:
     return _DEFAULT_PRIORITY
 
 _VALID_IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+# The base user every session falls back to when no frontend has bound an
+# identity (REPL, Telegram, background drivers). Seeded as row id 1. Identity
+# (whose data) is orthogonal to authorization (frontend_profile, what's allowed):
+# there is deliberately no privileged "admin" user.
+DEFAULT_USER_ID = 1
 
 """
 Database for the task pipeline.
@@ -67,6 +74,10 @@ class Database:
 		self.conn.execute("PRAGMA journal_mode=WAL")
 		# Negative value = KB. -50000 ≈ 50 MB page cache (default is ~2 MB).
 		self.conn.execute("PRAGMA cache_size=-50000")
+		# Enable foreign key enforcement (needed for ON DELETE CASCADE). Must run
+		# before any DML below — a pending implicit transaction makes SQLite
+		# silently ignore this PRAGMA, which would disable cascades.
+		self.conn.execute("PRAGMA foreign_keys = ON")
 
 		# Master file registry — one row per file on disk
 		self.conn.execute("""
@@ -165,8 +176,40 @@ class Database:
 			CREATE INDEX IF NOT EXISTS idx_conv_msg_conv
 			ON conversation_messages(conversation_id)
 		""")
-		# Enable foreign key enforcement (needed for ON DELETE CASCADE)
-		self.conn.execute("PRAGMA foreign_keys = ON")
+		# Migration: conversations become user-owned. Add the column then backfill
+		# pre-existing rows to the base user so they stay visible to the operator.
+		try:
+			self.conn.execute("ALTER TABLE conversations ADD COLUMN user_id INTEGER")
+			self.conn.execute(
+				"UPDATE conversations SET user_id = ? WHERE user_id IS NULL",
+				(DEFAULT_USER_ID,))
+			self.conn.commit()
+		except Exception:
+			pass
+
+		# Users — the "user dimension". One row per identity. ``config`` is a JSON
+		# blob (email, credits, per-user settings); ``username``/``password_hash``
+		# are first-class columns because login looks them up directly. Identity
+		# only — authorization lives in frontend_profile, not here.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS users (
+				id            INTEGER PRIMARY KEY AUTOINCREMENT,
+				frontend      TEXT,
+				external_id   TEXT,
+				username      TEXT UNIQUE,
+				password_hash TEXT,
+				config        TEXT DEFAULT '{}',
+				created_at    REAL,
+				updated_at    REAL,
+				UNIQUE(frontend, external_id)
+			)
+		""")
+		# Seed the base user (id 1). No credentials — it isn't a login account.
+		now = time.time()
+		self.conn.execute("""
+			INSERT OR IGNORE INTO users (id, frontend, external_id, config, created_at, updated_at)
+			VALUES (?, 'local', 'local', '{}', ?, ?)
+		""", (DEFAULT_USER_ID, now, now))
 
 		self.conn.commit()
 
@@ -763,16 +806,111 @@ class Database:
 			}
 
 	# =================================================================
+	# USERS
+	# =================================================================
+
+	@staticmethod
+	def _user_row(row) -> dict | None:
+		"""Decode a users row into a dict with ``config`` parsed to a dict."""
+		if row is None:
+			return None
+		user = dict(row)
+		try:
+			user["config"] = json.loads(user.get("config") or "{}")
+		except (TypeError, json.JSONDecodeError):
+			user["config"] = {}
+		return user
+
+	def upsert_user(self, frontend, external_id, config=None) -> int:
+		"""Create-or-touch a user by transport identity; return its id.
+
+		Stores no credentials — use ``set_user_credentials`` for those. On an
+		existing (frontend, external_id) only ``updated_at`` is refreshed; the
+		stored config is left intact.
+		"""
+		now = time.time()
+		blob = json.dumps(config or {})
+		with self.lock:
+			cur = self.conn.execute("""
+				INSERT INTO users (frontend, external_id, config, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT(frontend, external_id) DO UPDATE SET updated_at = excluded.updated_at
+				RETURNING id
+			""", (frontend, external_id, blob, now, now))
+			row = cur.fetchone()
+			self.conn.commit()
+			return row["id"]
+
+	def get_user(self, user_id) -> dict | None:
+		"""Fetch one user by id (config parsed to a dict)."""
+		with self.lock:
+			cur = self.conn.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+			return self._user_row(cur.fetchone())
+
+	def get_user_by_external(self, frontend, external_id) -> dict | None:
+		"""Fetch one user by transport identity (frontend, external_id)."""
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT * FROM users WHERE frontend = ? AND external_id = ?",
+				(frontend, external_id))
+			return self._user_row(cur.fetchone())
+
+	def get_user_by_username(self, username) -> dict | None:
+		"""Fetch one user by account login name (the indexed login lookup)."""
+		with self.lock:
+			cur = self.conn.execute("SELECT * FROM users WHERE username = ?", (username,))
+			return self._user_row(cur.fetchone())
+
+	def set_user_credentials(self, user_id, username, password_hash) -> None:
+		"""Attach/replace an account login on a user row.
+
+		The kernel stores the hash opaquely — hashing and verification are the
+		frontend's responsibility (the kernel ships no crypto).
+		"""
+		with self.lock:
+			self.conn.execute(
+				"UPDATE users SET username = ?, password_hash = ?, updated_at = ? WHERE id = ?",
+				(username, password_hash, time.time(), user_id))
+			self.conn.commit()
+
+	def get_user_config(self, user_id) -> dict:
+		"""Return a user's config blob as a dict (empty if missing)."""
+		user = self.get_user(user_id)
+		return user["config"] if user else {}
+
+	def set_user_config(self, user_id, config: dict) -> None:
+		"""Replace a user's config blob."""
+		with self.lock:
+			self.conn.execute(
+				"UPDATE users SET config = ?, updated_at = ? WHERE id = ?",
+				(json.dumps(config or {}), time.time(), user_id))
+			self.conn.commit()
+
+	def list_users(self, limit=50) -> list[dict]:
+		"""List users, newest first."""
+		with self.lock:
+			cur = self.conn.execute(
+				"SELECT * FROM users ORDER BY created_at DESC LIMIT ?", (limit,))
+			return [self._user_row(row) for row in cur.fetchall()]
+
+	def delete_user(self, user_id) -> None:
+		"""Delete a user row. Conversation rows are left intact (orphaned to the
+		former owner id); callers that need cascade should handle it explicitly."""
+		with self.lock:
+			self.conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+			self.conn.commit()
+
+	# =================================================================
 	# CONVERSATIONS
 	# =================================================================
 
-	def create_conversation(self, title="New Conversation", kind="user", category=None) -> int:
+	def create_conversation(self, title="New Conversation", kind="user", category=None, user_id=DEFAULT_USER_ID) -> int:
 		"""Create conversation."""
 		now = time.time()
 		with self.lock:
 			cur = self.conn.execute(
-				"INSERT INTO conversations (title, kind, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-				(title, kind, category, now, now))
+				"INSERT INTO conversations (title, kind, category, user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+				(title, kind, category, user_id, now, now))
 			self.conn.commit()
 			return cur.lastrowid
 
@@ -838,12 +976,18 @@ class Database:
 				(int(threshold),))
 			return [dict(row) for row in cur.fetchall()]
 
-	def set_conversation_category(self, conversation_id, category):
-		"""Set/overwrite the category on a conversation row."""
+	def set_conversation_category(self, conversation_id, category, user_id=None):
+		"""Set/overwrite the category on a conversation row.
+
+		When ``user_id`` is given the update is scoped to that owner (no-op on a
+		mismatch) — defence-in-depth behind the runtime ownership guard.
+		"""
+		scope = " AND user_id = ?" if user_id is not None else ""
+		params = [category, conversation_id] + ([user_id] if user_id is not None else [])
 		with self.lock:
 			self.conn.execute(
-				"UPDATE conversations SET category = ? WHERE id = ?",
-				(category, conversation_id))
+				f"UPDATE conversations SET category = ? WHERE id = ?{scope}",
+				params)
 			self.conn.commit()
 
 	def get_conversation(self, conversation_id):
@@ -855,30 +999,37 @@ class Database:
 			row = cur.fetchone()
 			return dict(row) if row else None
 
-	def list_conversations(self, limit=50):
-		"""List conversations."""
+	def list_conversations(self, limit=50, user_id=None):
+		"""List conversations, optionally scoped to one owner."""
+		where = "WHERE user_id = ?" if user_id is not None else ""
+		params = ([user_id] if user_id is not None else []) + [limit]
 		with self.lock:
 			cur = self.conn.execute(
-				"SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?",
-				(limit,))
+				f"SELECT * FROM conversations {where} ORDER BY updated_at DESC LIMIT ?",
+				params)
 			return [dict(row) for row in cur.fetchall()]
 
-	def list_conversations_page(self, offset=0, limit=10, category=None) -> tuple[list[dict], bool]:
+	def list_conversations_page(self, offset=0, limit=10, category=None, user_id=None) -> tuple[list[dict], bool]:
 		"""Return ``(rows, has_more)`` sorted by most-recent activity.
 
 		``category``:
 		    - None → no filter (every conversation).
 		    - "" → conversations with NULL/empty category (the "Main" bucket).
 		    - any other string → exact match on the category column.
+		``user_id``: when given, only that owner's conversations.
 		"""
 		params: list = []
-		where = ""
+		clauses: list[str] = []
 		if category is not None:
 			if category == "":
-				where = "WHERE category IS NULL OR category = ''"
+				clauses.append("(category IS NULL OR category = '')")
 			else:
-				where = "WHERE category = ?"
+				clauses.append("category = ?")
 				params.append(category)
+		if user_id is not None:
+			clauses.append("user_id = ?")
+			params.append(user_id)
+		where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 		params += [limit + 1, offset]
 		with self.lock:
 			cur = self.conn.execute(
@@ -888,14 +1039,17 @@ class Database:
 		has_more = len(rows) > limit
 		return rows[:limit], has_more
 
-	def list_conversation_categories(self) -> list[str | None]:
+	def list_conversation_categories(self, user_id=None) -> list[str | None]:
 		"""Distinct category values present in the conversations table.
 
-		``None`` is included if any row has NULL/empty category.
+		``None`` is included if any row has NULL/empty category. Scoped to one
+		owner when ``user_id`` is given.
 		"""
+		where = "WHERE user_id = ?" if user_id is not None else ""
+		params = [user_id] if user_id is not None else []
 		with self.lock:
 			cur = self.conn.execute(
-				"SELECT DISTINCT category FROM conversations")
+				f"SELECT DISTINCT category FROM conversations {where}", params)
 			values = [row["category"] for row in cur.fetchall()]
 		out: list[str | None] = []
 		seen_main = False
@@ -908,17 +1062,20 @@ class Database:
 				out.append(v)
 		return out
 
-	def list_user_conversations(self, limit=50):
-		"""List user conversations."""
+	def list_user_conversations(self, limit=50, user_id=None):
+		"""List user conversations, optionally scoped to one owner."""
+		where = "WHERE c.user_id = ?" if user_id is not None else ""
+		params = ([user_id] if user_id is not None else []) + [limit]
 		with self.lock:
 			cur = self.conn.execute(
-				"""
+				f"""
 				SELECT *
 				FROM conversations c
+				{where}
 				ORDER BY c.updated_at DESC
 				LIMIT ?
 				""",
-				(limit,))
+				params)
 			return [dict(row) for row in cur.fetchall()]
 
 	def get_conversation_messages(self, conversation_id):
@@ -979,11 +1136,15 @@ class Database:
 				(conversation_id,))
 			self.conn.commit()
 
-	def delete_conversation(self, conversation_id):
-		"""Delete conversation."""
+	def delete_conversation(self, conversation_id, user_id=None):
+		"""Delete conversation. When ``user_id`` is given the delete is scoped to
+		that owner (no-op on a mismatch) — defence-in-depth behind the runtime
+		ownership guard."""
+		scope = " AND user_id = ?" if user_id is not None else ""
+		params = [conversation_id] + ([user_id] if user_id is not None else [])
 		with self.lock:
 			self.conn.execute(
-				"DELETE FROM conversations WHERE id = ?", (conversation_id,))
+				f"DELETE FROM conversations WHERE id = ?{scope}", params)
 			self.conn.commit()
 
 	def delete_all_conversations(self):

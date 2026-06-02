@@ -31,6 +31,7 @@ from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
 from state_machine.serialization import latest_compaction, latest_state, messages_to_history, save_history_message, save_state_marker
 from runtime.runtime_config import new_state, refresh_specs
 from runtime.session import RuntimeSession, SessionConflict
+from pipeline.database import DEFAULT_USER_ID
 from runtime.notifications import (
     DEFAULT_NOTIFICATION_MODE,
     emit_fallback_push,
@@ -103,7 +104,9 @@ def open_session(
     if conversation_id is None:
         if runtime.db is None:
             raise RuntimeError("Cannot create a conversation without a database.")
-        conversation_id = runtime.db.create_conversation(title, kind=kind, category=category)
+        conversation_id = runtime.db.create_conversation(
+            title, kind=kind, category=category,
+            user_id=runtime.session_user_id(session_key))
 
     return load_conversation(
         runtime, session_key, conversation_id,
@@ -119,12 +122,13 @@ def create_conversation(
     *,
     kind: str = "user",
     category: str | None = None,
+    user_id: int = DEFAULT_USER_ID,
 ) -> int | None:
     """Create a conversation row only — does not load it into a session.
 
     Use ``open_session`` instead unless you really want a detached row.
     """
-    return runtime.db.create_conversation(title, kind=kind, category=category) if runtime.db else None
+    return runtime.db.create_conversation(title, kind=kind, category=category, user_id=user_id) if runtime.db else None
 
 
 def load_conversation(
@@ -166,6 +170,12 @@ def load_conversation(
         has_compaction_checkpoint=latest_compaction(rows) is not None,
     )
     session.frontend_name = marker.get("frontend_name")
+    # Identity is a live frontend binding, not conversation state — carry it from
+    # the prior in-memory session so loading never silently drops (or, worse,
+    # changes) who the session acts for. Ownership comes from the conversation
+    # row + access guard, never from the marker.
+    if existing is not None:
+        session.user_id = existing.user_id
     # Re-seed cs with session-aware specs.
     session.cs = new_state(runtime, marker, session=session)
     _sync_notification_mode(session)
@@ -212,9 +222,16 @@ def load_history(runtime, session_key: str, conversation_id: int):
 def reset_conversation(runtime, session_key: str) -> RuntimeSession:
     """Handle reset conversation."""
     with runtime._sessions_lock:
-        existed = session_key in runtime.sessions
+        prior = runtime.sessions.get(session_key)
+        existed = prior is not None
         session = RuntimeSession(session_key, new_state(runtime))
         session.cs = new_state(runtime, session=session)
+        # Identity is a live frontend binding, not conversation state — carry it
+        # across the reset so /new keeps acting for the same user (the new
+        # conversation will be stamped with this owner).
+        if prior is not None:
+            session.user_id = prior.user_id
+            session.frontend_name = prior.frontend_name
         _sync_notification_mode(session)
         runtime.sessions[session_key] = session
     if existed:
@@ -397,6 +414,7 @@ def ensure_conversation(runtime, session: RuntimeSession, title_text: str = "") 
     if session.conversation_id is None and runtime.db:
         session.conversation_id = runtime.db.create_conversation(
             (title_text or "New Conversation").replace("\n", " ")[:80] or "New Conversation",
+            user_id=runtime.session_user_id(session.key),
         )
 
 

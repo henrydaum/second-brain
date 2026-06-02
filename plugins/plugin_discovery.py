@@ -54,6 +54,16 @@ def get_plugin_setting_type(setting_key: str) -> str | None:
     return _plugin_setting_types.get(setting_key)
 
 
+def get_plugin_setting_scope(setting_key: str) -> str:
+    """Return a plugin setting's scope: ``"user"`` (stored per-user, in the user's
+    config blob) or ``"global"`` (the default — config.json / plugin_config.json)."""
+    for entry in _plugin_settings:
+        if entry[1] == setting_key:
+            info = entry[4] if isinstance(entry[4], dict) else {}
+            return "user" if info.get("scope") == "user" else "global"
+    return "global"
+
+
 def _collect_config_settings(source, service_names: list[str] | None = None,
                              plugin_type: str | None = None):
     """Extract config_settings from a plugin instance or module and accumulate.

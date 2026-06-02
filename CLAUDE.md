@@ -138,6 +138,28 @@ connect, unattended on disconnect): the kernel only *reads* attendance, the
 frontend *owns* the policy. Single-user frontends (REPL, Telegram) set
 nothing and keep `attended=None`, inheriting the global behavior unchanged.
 
+### The user dimension
+
+Sessions also carry an **ephemeral, frontend-bound `user_id`** ("whose data is
+this?"), seeded fallback `DEFAULT_USER_ID = 1` (the base user). **Identity
+(`user_id`) and authorization (`frontend_profile`) are separate axes** — there is
+no privileged "admin" user; the REPL is powerful because its *frontend_profile* is
+unrestricted, not because of its user. A frontend binds identity via
+`BaseFrontend.identify(session_key, external_id)` /
+`runtime.set_session_user`; login itself is a frontend concern (the kernel ships no
+crypto — it stores `password_hash` opaquely). `session.user_id` is **not** persisted
+in the marker: ownership lives on `conversations.user_id` (the source of truth), so
+identity can never leak in by loading a conversation. Per-user data is the `users`
+table (`config` JSON blob + `username`/`password_hash` columns), reached anywhere
+via `context.user_id` / `context.current_user()` / `context.db`. Plugins declare
+**user-scoped settings** with `{"scope": "user"}` in a setting's `type_info`; `/config`
+reads/writes those against the current user's `config` blob instead of the global
+config. **Conversation ownership is enforced** by `runtime.assert_conversation_access`
+on every load/mutate-by-id path (`load_history`, `load_conversation`, `open_session`,
+`delete_conversation`, `set_conversation_category`,
+`set_conversation_notification_mode`) — listing filters are convenience only;
+`override=True` (or using the raw `db.*` methods) is the system path.
+
 ## Command lifecycle (current)
 
 A command emits two events: `COMMAND_CALL_STARTED` (first invocation, even if

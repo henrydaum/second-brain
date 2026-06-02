@@ -5,7 +5,7 @@ import json
 from config.config_data import SETTINGS_DATA
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
-from plugins.plugin_discovery import get_plugin_setting_type, get_plugin_settings
+from plugins.plugin_discovery import get_plugin_setting_scope, get_plugin_setting_type, get_plugin_settings
 from state_machine.conversation import FormStep
 
 
@@ -44,6 +44,20 @@ class ConfigCommand(BaseCommand):
         if args.get("action") != "edit":
             return _describe(context, key)
         value = _parse(args.get("value"), key)
+
+        # User-scoped settings write only to the current user's config blob —
+        # never to global config.json / plugin_config.json.
+        if _scope(key) == "user":
+            db = getattr(context, "db", None)
+            if db is None:
+                return "User settings are not available in this context."
+            uid = getattr(context, "user_id", None)
+            user_cfg = db.get_user_config(uid)
+            old = user_cfg.get(key, _default_for(key))
+            user_cfg[key] = value
+            db.set_user_config(uid, user_cfg)
+            return f"Set {key} = {value}" if value != old else f"Set {key} = {value}"
+
         old = config.get(key)
         config[key] = value
         config_manager.save(config)
@@ -62,6 +76,30 @@ class ConfigCommand(BaseCommand):
 def _settings():
     """Internal helper to handle settings."""
     return CORE | {name: (title, desc) for title, name, desc, _, info in get_plugin_settings() if not _hidden(info)}
+
+
+def _scope(key) -> str:
+    """"user" (stored in the current user's config) or "global". Core settings are
+    always global; only plugins opt into user scope."""
+    return get_plugin_setting_scope(key) if key in _plugin_keys() else "global"
+
+
+def _default_for(key):
+    """Declared default value for a setting key."""
+    entry = _setting_data(key)
+    return entry[3] if entry else None
+
+
+def _current_value(context, key):
+    """The value to display/edit: per-user for user-scoped keys (defaulting to the
+    declared default), else the global config value."""
+    if _scope(key) == "user":
+        db = getattr(context, "db", None)
+        if db is None:
+            return _default_for(key)
+        uid = getattr(context, "user_id", None)
+        return db.get_user_config(uid).get(key, _default_for(key))
+    return (context.config or {}).get(key)
 
 
 def _plugin_keys():
@@ -98,12 +136,13 @@ def _value_prompt(key):
 def _describe(context, key):
     """Internal helper to handle describe."""
     title, desc = _settings().get(key, (key, ""))
-    return f"{title}\n{key} = {(context.config or {}).get(key)}\n{desc}"
+    tag = " (per-user)" if _scope(key) == "user" else ""
+    return f"{title}{tag}\n{key} = {_current_value(context, key)}\n{desc}"
 
 
 def _list(context):
     """Internal helper to list config."""
-    return "Settings:\n" + "\n".join(f"  {k} = {(context.config or {}).get(k)}" for k in sorted(_settings()))
+    return "Settings:\n" + "\n".join(f"  {k} = {_current_value(context, k)}" for k in sorted(_settings()))
 
 
 def _parse(value, key=None):

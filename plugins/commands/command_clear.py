@@ -25,6 +25,10 @@ class ClearCommand(BaseCommand):
         title = (conv.get("title") or "").strip()
         if title and not title.endswith(" (cleared)"):
             db.update_conversation_title(conv_id, f"{title} (cleared)")
+        # Preserve the session's bound identity across the close/reload, so the
+        # ownership guard still sees the right user when re-loading.
+        uid = runtime.session_user_id(session_key)
         runtime.close_session(session_key)
+        runtime.set_session_user(session_key, uid)
         runtime.load_conversation(session_key, conv_id)
         return "Conversation cleared."

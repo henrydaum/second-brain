@@ -7,7 +7,7 @@ temp dir, so the schema bootstrap in ``_setup`` is exercised for real.
 
 import pytest
 
-from pipeline.database import Database
+from pipeline.database import Database, DEFAULT_USER_ID
 
 
 @pytest.fixture
@@ -127,6 +127,67 @@ def test_title_check_threshold_tracks_unseen_messages(db):
     # After marking the high-water mark, it's no longer due.
     db.update_conversation_title_check_count(cid, 5)
     assert db.list_conversations_for_title_check(threshold=4) == []
+
+
+# ── Users ────────────────────────────────────────────────────────────
+
+def test_base_user_is_seeded(db):
+    base = db.get_user(DEFAULT_USER_ID)
+    assert base is not None
+    assert base["config"] == {}
+    assert base["username"] is None  # the base user is not a login account
+
+
+def test_upsert_user_is_idempotent_on_identity(db):
+    uid1 = db.upsert_user("art", "guest")
+    uid2 = db.upsert_user("art", "guest")
+    assert uid1 == uid2
+    assert uid1 != DEFAULT_USER_ID
+
+
+def test_credentials_round_trip_and_username_is_unique(db):
+    uid = db.upsert_user("art", "alice@example.com")
+    db.set_user_credentials(uid, "alice", "hash123")
+
+    found = db.get_user_by_username("alice")
+    assert found is not None and found["id"] == uid
+    assert found["password_hash"] == "hash123"
+
+    other = db.upsert_user("art", "bob@example.com")
+    with pytest.raises(Exception):  # UNIQUE(username) violation
+        db.set_user_credentials(other, "alice", "hash456")
+
+
+def test_user_config_round_trip(db):
+    uid = db.upsert_user("art", "guest")
+    db.set_user_config(uid, {"theme": "dark", "credits": 10})
+    assert db.get_user_config(uid) == {"theme": "dark", "credits": 10}
+
+
+def test_conversations_are_user_scoped(db):
+    mine = db.create_conversation(title="mine", user_id=DEFAULT_USER_ID)
+    theirs = db.create_conversation(title="theirs", user_id=2)
+
+    ids_for_1 = {c["id"] for c in db.list_conversations(user_id=DEFAULT_USER_ID)}
+    ids_for_2 = {c["id"] for c in db.list_conversations(user_id=2)}
+    assert mine in ids_for_1 and theirs not in ids_for_1
+    assert theirs in ids_for_2 and mine not in ids_for_2
+
+    page, _ = db.list_conversations_page(user_id=2)
+    assert {c["id"] for c in page} == {theirs}
+
+
+def test_scoped_delete_is_a_noop_on_mismatch(db):
+    cid = db.create_conversation(title="owned by 1", user_id=DEFAULT_USER_ID)
+    db.delete_conversation(cid, user_id=2)  # wrong owner → no-op
+    assert db.get_conversation(cid) is not None
+    db.delete_conversation(cid, user_id=DEFAULT_USER_ID)
+    assert db.get_conversation(cid) is None
+
+
+def test_create_conversation_defaults_to_base_user(db):
+    cid = db.create_conversation(title="default owner")
+    assert db.get_conversation(cid)["user_id"] == DEFAULT_USER_ID
 
 
 # ── Direct query ─────────────────────────────────────────────────────

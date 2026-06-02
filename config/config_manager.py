@@ -159,6 +159,10 @@ def reconcile_plugin_config(config: dict, plugin_settings: list):
     plugin_values = dict(saved)
 
     for title, var_name, description, default, type_info in plugin_settings:
+        # User-scoped settings live in each user's config blob, never in the
+        # global plugin_config.json — their defaults apply lazily on read.
+        if isinstance(type_info, dict) and type_info.get("scope") == "user":
+            continue
         if var_name in plugin_values:
             continue
         plugin_values[var_name] = config.get(var_name, default)

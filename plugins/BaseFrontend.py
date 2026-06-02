@@ -49,8 +49,15 @@ from state_machine.conversation_phases import (
 )
 from state_machine.approval import StateMachineApprovalRequest
 from runtime.session import RuntimeResult
+from pipeline.database import DEFAULT_USER_ID
 
 logger = logging.getLogger("Frontend")
+
+# User-binding styles — how a frontend maps its sessions to users (the "whose
+# data" axis; orthogonal to authorization, which is owned by frontend_profile).
+USER_BINDING_SINGLE = "single"      # every session acts as one user (default_user_id)
+USER_BINDING_PER_USER = "per_user"  # each external identity gets its own user
+_USER_BINDINGS = (USER_BINDING_SINGLE, USER_BINDING_PER_USER)
 
 
 def _form_step_accepts(step, text: str) -> bool:
@@ -140,6 +147,21 @@ class BaseFrontend:
     description: str = ""
     capabilities: FrontendCapabilities = FrontendCapabilities()
 
+    # --- User binding (the "whose data" axis; authorization is frontend_profile) ---
+    # How this frontend maps sessions to users. Declared, not guessed:
+    #   "single"   — every session acts as ONE user, ``default_user_id``. REPL,
+    #                Telegram, single-operator transports, kiosks, demos.
+    #   "per_user" — each external identity gets its OWN user. Multi-user
+    #                transports (a website). Unbound sessions act as
+    #                ``default_user_id`` (point it at a guest user, NOT the base
+    #                user, so anonymous traffic never lands on the operator);
+    #                call ``bind_session(key, external_id)`` to upgrade a session
+    #                to a real account on login.
+    # The base auto-binds new sessions to ``default_user_id`` (only when unbound),
+    # so a "single" frontend needs no per-session code at all.
+    user_binding: str = USER_BINDING_SINGLE
+    default_user_id: int = DEFAULT_USER_ID
+
     # --- Config settings this plugin needs ---
     # Each entry is a tuple:
     # (title, variable_name, description, default, type_info)
@@ -151,6 +173,13 @@ class BaseFrontend:
         super().__init_subclass__(**kwargs)
         if isinstance(cls.config_settings, list):
             cls.config_settings = list(cls.config_settings)
+        if cls.user_binding not in _USER_BINDINGS:
+            logger.warning(
+                f"Frontend '{cls.name or cls.__name__}' declared invalid "
+                f"user_binding={cls.user_binding!r}; falling back to "
+                f"'{USER_BINDING_SINGLE}'. Valid: {_USER_BINDINGS}."
+            )
+            cls.user_binding = USER_BINDING_SINGLE
 
     def __init__(self):
         """Initialize the base frontend."""
@@ -401,6 +430,13 @@ class BaseFrontend:
             return
         if getattr(session, "frontend_name", None) != self.name:
             session.frontend_name = self.name
+        # Apply this frontend's declared default binding the first time we see a
+        # session — so a "single" frontend needs no per-session code, and a
+        # "per_user" frontend's not-yet-identified sessions land on its guest
+        # default (default_user_id) instead of the kernel base user. An explicit
+        # bind_session()/identify() that already set a user is left untouched.
+        if getattr(session, "user_id", None) is None:
+            session.user_id = self.default_user_id
 
     def mark_attended(self, session_key: str) -> None:
         """Declare that a human is present at ``session_key`` (e.g. a websocket
@@ -417,6 +453,23 @@ class BaseFrontend:
         notifications until ``mark_attended`` is called again."""
         if self.runtime is not None:
             self.runtime.set_session_attended(session_key, False)
+
+    def identify(self, session_key: str, external_id, config: dict | None = None) -> int | None:
+        """Resolve (creating if needed) the user behind this session and bind it.
+
+        This frontend's own ``name`` namespaces the identity, so ``external_id``
+        only has to be unique within the frontend (a cookie, a chat id, an account
+        username). Returns the user_id, or None when there's no database.
+
+        Single-user frontends (REPL) never call this — their sessions stay on the
+        base user. A public frontend binds a guest user for anonymous sessions and
+        re-binds to a real account on login. Authorization is unaffected: it lives
+        in the frontend_profile, not the user."""
+        if self.runtime is None or getattr(self.runtime, "db", None) is None:
+            return None
+        uid = self.runtime.db.upsert_user(self.name, str(external_id), config)
+        self.runtime.set_session_user(session_key, uid)
+        return uid
 
     # ──────────────────────────────────────────────────────────────────────
     # Bus handlers. Subclasses can override for richer behavior, but the

@@ -11,6 +11,8 @@ shortcut on the context.
 from dataclasses import dataclass, field
 from typing import Any
 
+from pipeline.database import DEFAULT_USER_ID
+
 
 @dataclass
 class SecondBrainContext:
@@ -46,6 +48,8 @@ class SecondBrainContext:
     root_dir: Any = None         # Project root for repo/plugin operations.
     command_registry: Any = None # Slash-command registry for command plugins.
     session_key: str | None = None # Frontend conversation/session key, when available.
+    user_id: int = DEFAULT_USER_ID # Effective user this call acts for (the base user when no frontend bound one).
+    current_user: Any = None     # callable() -> user row dict (config parsed) or None.
     user_initiated: bool = False # Explicit user command, not an autonomous agent call.
     current_tool_name: str | None = None
     approval_denial_reason: str = ""
@@ -77,6 +81,16 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         if session_key and "_session_key" not in kwargs:
             kwargs["_session_key"] = session_key
         return call_tool(name, **kwargs)
+
+    # Resolve the effective user from the live session (frontend-bound, ephemeral).
+    # Falls back to the base user when nothing was bound. This is the "whose data"
+    # axis — orthogonal to authorization, which lives in frontend_profile.
+    user_id = DEFAULT_USER_ID
+    if runtime is not None and session_key:
+        _s = getattr(runtime, "sessions", {}).get(session_key)
+        if _s is not None and getattr(_s, "user_id", None) is not None:
+            user_id = _s.user_id
+    current_user = (lambda: db.get_user(user_id)) if db is not None else None
 
     approve_command = None
     request_user_input = None
@@ -130,6 +144,8 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         root_dir=root_dir,
         command_registry=command_registry,
         session_key=session_key,
+        user_id=user_id,
+        current_user=current_user,
         user_initiated=user_initiated,
         current_tool_name=current_tool_name,
     )

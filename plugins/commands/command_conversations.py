@@ -41,7 +41,8 @@ class ConversationsCommand(BaseCommand):
         if db is None:
             return []
 
-        cats = _existing_categories(db)
+        uid = getattr(context, "user_id", None)
+        cats = _existing_categories(db, uid)
         steps = [FormStep("category", "Choose a conversation category.", True, enum=cats, columns=1)]
 
         picked = args.get("category")
@@ -64,14 +65,18 @@ class ConversationsCommand(BaseCommand):
 
         action = args.get("action") or _LOAD
         if action == _DELETE:
-            db.delete_conversation(cid)
+            if not runtime.delete_conversation(session_key, cid):
+                return "No such conversation."
             return f"Deleted conversation #{cid}."
         if action == _CHANGE_NOTIF:
-            mode = runtime.set_conversation_notification_mode(cid, args.get("mode"))
+            mode = runtime.set_conversation_notification_mode(session_key, cid, args.get("mode"))
+            if mode is None:
+                return "No such conversation."
             return f"Notifications for #{cid} → {mode}."
         if action == _CHANGE_CATEGORY:
             category = _resolve_category(args)
-            db.set_conversation_category(cid, _lookup_value(category) or None)
+            if not runtime.set_conversation_category(session_key, cid, _lookup_value(category) or None):
+                return "No such conversation."
             return f"Conversation #{cid} moved to '{category}'."
 
         # Default: load. load_history reads the conversation's stored
@@ -106,7 +111,8 @@ class NewCommand(BaseCommand):
 def _existing_conversation_steps(args, context, category):
     """Internal helper to handle existing conversation steps."""
     db = getattr(context, "db", None)
-    rows, _ = db.list_conversations_page(offset=0, limit=_LIMIT, category=_lookup_value(category))
+    uid = getattr(context, "user_id", None)
+    rows, _ = db.list_conversations_page(offset=0, limit=_LIMIT, category=_lookup_value(category), user_id=uid)
     if not rows:
         return [FormStep("conversation_id", f"No conversations found under '{category}'.", True,
                          enum=["(none)"], enum_labels=["(none)"], columns=1)]
@@ -123,7 +129,7 @@ def _existing_conversation_steps(args, context, category):
     prompt = f"What do you want to do with this conversation?\n\n{_preview_for(db, cid) or ''}".strip()
     steps.append(FormStep("action", prompt, True, enum=[_LOAD, _DELETE, _CHANGE_CATEGORY, _CHANGE_NOTIF], columns=1))
     if args.get("action") == _CHANGE_CATEGORY:
-        steps.append(FormStep("target_category", "Choose the new category.", True, enum=_category_choices(db) + [_NEW_CAT], columns=1))
+        steps.append(FormStep("target_category", "Choose the new category.", True, enum=_category_choices(db, uid) + [_NEW_CAT], columns=1))
         if args.get("target_category") == _NEW_CAT:
             steps.append(FormStep("custom_category", "Enter a name for the new category.", True, columns=1))
     if args.get("action") == _CHANGE_NOTIF:
@@ -135,22 +141,23 @@ def _existing_conversation_steps(args, context, category):
 # Category helpers
 # ──────────────────────────────────────────────────────────────────────
 
-def _existing_categories(db) -> list[str]:
+def _existing_categories(db, user_id=None) -> list[str]:
     """Distinct, user-facing category labels currently in the DB.
 
-    NULL/empty categories surface as ``Main`` so the bucket has a name.
+    NULL/empty categories surface as ``Main`` so the bucket has a name. Scoped to
+    the current user when ``user_id`` is given.
     """
     out: list[str] = []
-    for v in db.list_conversation_categories():
+    for v in db.list_conversation_categories(user_id=user_id):
         label = _MAIN if v in (None, "") else v
         if label not in out:
             out.append(label)
     return out
 
 
-def _category_choices(db) -> list[str]:
+def _category_choices(db, user_id=None) -> list[str]:
     """Internal helper to handle category choices."""
-    cats = _existing_categories(db)
+    cats = _existing_categories(db, user_id)
     return cats if _MAIN in cats else [_MAIN] + cats
 
 
@@ -254,7 +261,8 @@ def _truncate(text: str, limit: int) -> str:
 
 def _create_and_switch(runtime, session_key) -> str:
     """Internal helper to create and switch."""
-    new_id = runtime.create_conversation(f"New conversation ({_MAIN})", kind="user", category=None)
+    new_id = runtime.create_conversation(f"New conversation ({_MAIN})", kind="user", category=None,
+                                         user_id=runtime.session_user_id(session_key))
     if new_id is None:
         return "Failed to create conversation."
     existing = runtime.sessions.get(session_key)
