@@ -235,6 +235,18 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             return ""
         return notify_block(session.notification_mode)
 
+    def _account_suffix() -> str:
+        """Tell the agent which account it is assisting — but only when the
+        session's user is a real account (has a username). Anonymous / base /
+        guest sessions add nothing, so the line never becomes noise on
+        single-operator frontends. Lazy + in the dynamic section so it never
+        touches the cacheable static prefix."""
+        if runtime.db is None:
+            return ""
+        user = runtime.db.get_user(runtime.session_user_id(session.key))
+        username = (user or {}).get("username")
+        return f'You are assisting the user "{username}".' if username else ""
+
     def _conversation_meta() -> dict[str, Any] | None:
         """Return current conversation metadata for the dynamic prompt."""
         return runtime.db.get_conversation(session.conversation_id) if runtime.db and session.conversation_id else None
@@ -268,7 +280,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         def _session_prompt():
             """Internal helper to handle session prompt."""
             prompt_extras = dict(session.system_prompt_extras or {})
-            return build_prompt_sections(
+            sections = build_prompt_sections(
                 runtime.db,
                 getattr(runtime, "_orchestrator_ref", None) or runtime.services.get("orchestrator"),
                 active_tool_registry(runtime, session), runtime.services,
@@ -280,6 +292,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
                 prompt_extras=prompt_extras,
                 notification_suffix=_notify_suffix(),
             )
+            return _append_dynamic(sections, _account_suffix())
         return _session_prompt
 
     base = runtime.system_prompt
@@ -292,6 +305,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             _conversation_extra(_conversation_meta()),
             *(v for v in (session.system_prompt_extras or {}).values() if isinstance(v, str) and v),
             _notify_suffix(),
+            _account_suffix(),
         )
     return _user_prompt
 
