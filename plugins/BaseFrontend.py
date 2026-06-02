@@ -27,7 +27,6 @@ from events.event_channels import (
     COMMAND_CALL_FINISHED,
     COMMAND_CALL_PROGRESSED,
     COMMAND_CALL_STARTED,
-    PLAN_MODE_CHANGED,
     TASKS_CHANGED,
     TOOL_CALL_FINISHED,
     TOOL_CALL_STARTED,
@@ -255,7 +254,6 @@ class BaseFrontend:
         self._unsubs = [
             bus.subscribe(APPROVAL_REQUESTED, self.on_bus_approval_requested),
             bus.subscribe(CHAT_MESSAGE_PUSHED, self.on_bus_message_pushed),
-            bus.subscribe(PLAN_MODE_CHANGED, self.on_bus_plan_mode_changed),
             bus.subscribe(COMMAND_CALL_STARTED, self.on_bus_command_call_started),
             bus.subscribe(COMMAND_CALL_PROGRESSED, self.on_bus_command_call_progressed),
             bus.subscribe(COMMAND_CALL_FINISHED, self.on_bus_command_call_finished),
@@ -476,10 +474,6 @@ class BaseFrontend:
                 self.render_messages(key, [body])
             except Exception:
                 logger.exception(f"render_messages (push) failed for '{self.name}'")
-
-    def on_bus_plan_mode_changed(self, payload: dict) -> None:
-        """Render plan-mode state changes through the normal message surface."""
-        self.on_bus_message_pushed(payload)
 
     def on_bus_tool_call_started(self, payload: dict) -> None:
         """Handle on bus tool call started."""

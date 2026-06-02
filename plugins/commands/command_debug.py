@@ -40,9 +40,12 @@ def _state_section(context) -> str:
         return "  (no active session)"
 
     parts = [format_state(cs)]
-    if getattr(session, "plan_mode", False) or getattr(session, "full_permissions_this_turn", False):
-        flags = ["plan mode" if getattr(session, "plan_mode", False) else None,
-                 "full permissions this turn" if getattr(session, "full_permissions_this_turn", False) else None]
+    flags = [
+        flag
+        for svc in (getattr(context, "services", None) or {}).values()
+        for flag in (svc.debug_flags(session) if callable(getattr(svc, "debug_flags", None)) else [])
+    ]
+    if flags:
         parts.append("Session: " + ", ".join(f for f in flags if f))
     if getattr(session, "busy", False):
         parts.append("Session: agent turn in progress")

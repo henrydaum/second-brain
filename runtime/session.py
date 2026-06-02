@@ -71,11 +71,8 @@ class RuntimeSession:
     system_prompt_extras: dict[str, Any] = field(default_factory=dict)
     # Free-form per-plugin state bag, keyed by plugin name. The substrate for
     # on-demand plugins to stash session-scoped state without core-defined
-    # fields. Persisted with the marker. (Plan mode still uses its named fields
-    # below for now; step 2 of the plan-mode migration moves it in here.)
+    # fields. Persisted with the marker.
     plugin_state: dict[str, dict] = field(default_factory=dict)
-    plan_mode: bool = False
-    full_permissions_this_turn: bool = False
     notification_mode: str = DEFAULT_NOTIFICATION_MODE
     has_compaction_checkpoint: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
@@ -92,7 +89,6 @@ class RuntimeSession:
             "notification_mode": self.notification_mode,
             "system_prompt_extras": self.system_prompt_extras,
             "plugin_state": self.plugin_state,
-            "plan_mode": self.plan_mode,
             "busy": self.busy,
         })
         return state

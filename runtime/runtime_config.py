@@ -111,8 +111,7 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
             if cloned.visible_tool_names is not None:
                 cloned.visible_tool_names.add(tool.name)
         registry = cloned
-    # Opt-in scope shapers (plan mode injects propose_plan; future plugins can
-    # add/hide tools per session). No-op when no shaper is registered.
+    # Opt-in scope shapers can add/hide tools per session. No-op when no shaper is registered.
     hooks = getattr(runtime, "hooks", None)
     if hooks is not None and session is not None:
         registry = hooks.shape_scope(session, registry)
@@ -269,8 +268,6 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         def _session_prompt():
             """Internal helper to handle session prompt."""
             prompt_extras = dict(session.system_prompt_extras or {})
-            if session.plan_mode:
-                prompt_extras["plan_mode"] = _plan_mode_extra()
             return build_prompt_sections(
                 runtime.db,
                 getattr(runtime, "_orchestrator_ref", None) or runtime.services.get("orchestrator"),
@@ -293,22 +290,10 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         return _append_dynamic(
             text,
             _conversation_extra(_conversation_meta()),
-            _plan_mode_extra() if session.plan_mode else "",
             *(v for v in (session.system_prompt_extras or {}).values() if isinstance(v, str) and v),
             _notify_suffix(),
         )
     return _user_prompt
-
-
-def _plan_mode_extra() -> str:
-    """Return plan-mode instructions for the current session."""
-    return (
-        "## Plan mode\n"
-        "Plan mode is active. Permission dialogs are automatically rejected in plan mode. "
-        "Inspect, read, search, and ask the user questions as needed, but do not try to modify state. "
-        "When ready, call propose_plan with a concise plan for the user to approve. "
-        "The user can approve normally, approve and auto-approve permission dialogs for this turn, or deny the plan."
-    )
 
 
 def _conversation_extra(row: dict[str, Any] | None) -> str:

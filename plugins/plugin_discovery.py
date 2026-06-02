@@ -387,7 +387,8 @@ def wire_peer_services(services: dict):
 def load_single_plugin(plugin_type: str, file_path: Path,
                        tool_registry=None, orchestrator=None,
                        services: dict = None, config: dict = None,
-                       command_registry=None, frontend_manager=None) -> tuple[str | None, str | None]:
+                       command_registry=None, frontend_manager=None,
+                       runtime=None) -> tuple[str | None, str | None]:
     """
     Load a single sandbox plugin file and register it.
 
@@ -399,7 +400,13 @@ def load_single_plugin(plugin_type: str, file_path: Path,
     elif plugin_type == "task":
         return _load_single_task(file_path, orchestrator, config)
     elif plugin_type == "service":
-        return _load_single_service(file_path, services, config)
+        return _load_single_service(file_path, services, config, {
+            "tool_registry": tool_registry,
+            "orchestrator": orchestrator,
+            "command_registry": command_registry,
+            "frontend_manager": frontend_manager,
+            "runtime": runtime,
+        })
     elif plugin_type == "command":
         return _load_single_command(file_path, command_registry or getattr(tool_registry, "command_registry", None))
     elif plugin_type == "frontend":
@@ -575,7 +582,7 @@ def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str 
     return instance.name, None
 
 
-def _load_single_service(file_path: Path, services: dict, config: dict) -> tuple[str | None, str | None]:
+def _load_single_service(file_path: Path, services: dict, config: dict, bindings: dict | None = None) -> tuple[str | None, str | None]:
     """Internal helper to load single service."""
     info, err = plugin_info(file_path)
     if err:
@@ -588,7 +595,7 @@ def _load_single_service(file_path: Path, services: dict, config: dict) -> tuple
         name for name, svc in services.items()
         if getattr(svc, "_source_path", None) == source and getattr(svc, "loaded", False)
     }
-    runtime_bindings = {
+    old_bindings = {
         name: dict(getattr(svc, "_runtime", {}) or {})
         for name, svc in services.items()
         if getattr(svc, "_source_path", None) == source
@@ -608,8 +615,9 @@ def _load_single_service(file_path: Path, services: dict, config: dict) -> tuple
         svc._source_path = _source_path(file_path)
         _collect_config_settings(svc, service_names=names, plugin_type="service")
         services[svc_name] = svc
-        if runtime_bindings.get(svc_name) and hasattr(svc, "bind_runtime"):
-            svc.bind_runtime(**runtime_bindings[svc_name])
+        runtime_bindings = old_bindings.get(svc_name) or (bindings or {})
+        if runtime_bindings and hasattr(svc, "bind_runtime"):
+            svc.bind_runtime(**runtime_bindings)
         if svc_name in was_loaded:
             try:
                 svc.load()

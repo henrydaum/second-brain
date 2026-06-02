@@ -46,6 +46,8 @@ PermissionGate = Callable[[Any, Optional[str], str], Optional[PermissionVerdict]
 # A shaper receives the session and the registry the agent would otherwise see,
 # and returns a (possibly replaced) registry.
 ScopeShaper = Callable[[Any, Any], Any]
+# A finalizer runs after an agent turn ends.
+TurnFinalizer = Callable[[Any], None]
 
 
 class HookRegistry:
@@ -55,6 +57,7 @@ class HookRegistry:
         """Initialize an empty registry."""
         self._permission_gates: list[PermissionGate] = []
         self._scope_shapers: list[ScopeShaper] = []
+        self._turn_finalizers: list[TurnFinalizer] = []
 
     # --- registration (called by plugins at load) ---
 
@@ -66,9 +69,13 @@ class HookRegistry:
         """Register a shaper that can add/hide tools for a session's registry."""
         self._scope_shapers.append(shaper)
 
+    def add_turn_finalizer(self, finalizer: TurnFinalizer) -> None:
+        """Register a callback run after each agent turn."""
+        self._turn_finalizers.append(finalizer)
+
     def remove(self, fn: Callable) -> None:
         """Drop a previously registered gate or shaper (for plugin unload)."""
-        for bucket in (self._permission_gates, self._scope_shapers):
+        for bucket in (self._permission_gates, self._scope_shapers, self._turn_finalizers):
             try:
                 bucket.remove(fn)
             except ValueError:
@@ -96,3 +103,11 @@ class HookRegistry:
             except Exception:
                 logger.exception("Scope shaper raised; leaving registry unchanged")
         return registry
+
+    def finish_turn(self, session) -> None:
+        """Run registered turn finalizers."""
+        for finalizer in self._turn_finalizers:
+            try:
+                finalizer(session)
+            except Exception:
+                logger.exception("Turn finalizer raised; continuing")

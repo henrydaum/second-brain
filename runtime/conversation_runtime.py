@@ -44,7 +44,6 @@ from typing import Any, Callable
 from events.event_bus import bus
 from events.event_channels import (
     CHAT_MESSAGE_PUSHED,
-    PLAN_MODE_CHANGED,
     SESSION_AGENT_PROFILE_CHANGED,
     SESSION_CLOSED,
     SYSTEM_PROMPT_EXTRA_CHANGED,
@@ -302,7 +301,9 @@ class ConversationRuntime:
             if session.cs.turn_priority != "user":
                 session.cs.set_priority("user")
             session.cancel_event.clear()
-            session.full_permissions_this_turn = False
+            hooks = getattr(self, "hooks", None)
+            if hooks is not None:
+                hooks.finish_turn(session)
 
         if reply:
             out.messages.append(reply)
@@ -536,22 +537,40 @@ class ConversationRuntime:
                 "turn_priority": s.cs.turn_priority,
                 "conversation_id": s.conversation_id,
                 "busy": s.busy,
-                "plan_mode": s.plan_mode,
+                "plugin_state": list((s.plugin_state or {}).keys()),
                 "system_prompt_extras": list(s.system_prompt_extras.keys()),
                 "session_tools": [t.name for t in s.extra_tool_instances],
             })
         return out
 
-    def set_plan_mode(self, session_key: str, enabled: bool, message: str | None = None) -> bool:
-        """Enable or disable plan mode for one live session."""
+    def get_session_plugin_state(self, session_key: str, plugin: str, key: str | None = None, default=None):
+        """Return one plugin's session state, or one key inside it."""
+        session = self.sessions.get(session_key)
+        if session is None:
+            return default
+        state = (session.plugin_state or {}).get(plugin) or {}
+        return state.get(key, default) if key is not None else state
+
+    def update_session_plugin_state(self, session_key: str, plugin: str, patch: dict[str, Any] | None = None, **values) -> bool:
+        """Merge values into one plugin's session state."""
         session = self.sessions.get(session_key)
         if session is None:
             return False
-        old = bool(session.plan_mode)
-        session.plan_mode = bool(enabled)
+        session.plugin_state.setdefault(plugin, {}).update({**(patch or {}), **values})
         _persist.persist_marker(self, session)
-        if old != session.plan_mode:
-            bus.emit(PLAN_MODE_CHANGED, {"session_key": session_key, "enabled": session.plan_mode, "message": message or f"Plan mode {'on' if enabled else 'off'}."})
+        return True
+
+    def clear_session_plugin_state(self, session_key: str, plugin: str, *keys: str) -> bool:
+        """Clear one plugin state bag, or selected keys in it."""
+        session = self.sessions.get(session_key)
+        if session is None:
+            return False
+        if keys:
+            for key in keys:
+                (session.plugin_state.get(plugin) or {}).pop(key, None)
+        else:
+            session.plugin_state.pop(plugin, None)
+        _persist.persist_marker(self, session)
         return True
 
     def push_message(self, session_key: str, text: str, *, title: str | None = None,

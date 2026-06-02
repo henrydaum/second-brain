@@ -91,6 +91,25 @@ def scoped_registry(base_registry: ToolRegistry, scope: AgentScope, db=None) -> 
     return new_registry
 
 
+def registry_with_tools(registry, tools=(), *, visible: bool = True):
+    """Return a cloned registry with extra tools, or ``registry`` if unclonable."""
+    tools = [tool for tool in (tools or []) if getattr(tool, "name", "")]
+    if not tools or not (hasattr(registry, "db") and hasattr(registry, "config") and hasattr(registry, "services")):
+        return registry
+    cloned = ToolRegistry(registry.db, registry.config, registry.services)
+    cloned.services = registry.services
+    cloned.orchestrator = getattr(registry, "orchestrator", None)
+    cloned.runtime = getattr(registry, "runtime", None)
+    cloned.tools.update(registry.tools)
+    if getattr(registry, "visible_tool_names", None) is not None:
+        cloned.visible_tool_names = set(registry.visible_tool_names)
+        if visible:
+            cloned.visible_tool_names.update(tool.name for tool in tools)
+    for tool in tools:
+        cloned.tools[tool.name] = tool
+    return cloned
+
+
 def resolve_agent_llm(profile_name: str, config: dict, services: dict):
     """Resolve the LLM service an agent profile should use."""
     profile = (config.get("agent_profiles", {}) or {}).get(profile_name, {}) or {}

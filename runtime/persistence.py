@@ -162,7 +162,6 @@ def load_conversation(
         profile_override=saved_profile,
         system_prompt_extras={**dict(marker.get("system_prompt_extras") or {}), **dict(system_prompt_extras or {})},
         plugin_state=dict(marker.get("plugin_state") or {}),
-        plan_mode=bool(marker.get("plan_mode", False)),
         notification_mode=saved_mode,
         has_compaction_checkpoint=latest_compaction(rows) is not None,
     )

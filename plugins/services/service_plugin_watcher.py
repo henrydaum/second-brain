@@ -126,6 +126,7 @@ class PluginWatcherService(BaseService):
                 config=self.config,
                 command_registry=self._runtime.get("command_registry"),
                 frontend_manager=self._runtime.get("frontend_manager"),
+                runtime=self._runtime.get("runtime"),
             )
         except Exception as e:
             name, error = None, str(e)

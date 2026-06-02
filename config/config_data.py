@@ -56,7 +56,7 @@ SETTINGS_DATA = [
     # --- Services ---
     ("Auto-load Services", "autoload_services",
      "Service names to load automatically on startup (e.g. [\"google_drive\"]).",
-     ["llm", "compactor", "parser", "plugin_watcher"],
+     ["llm", "compactor", "parser", "plugin_watcher", "plan_mode"],
      {"type": "json_list"}),
 
     # --- Frontends ---
@@ -88,7 +88,7 @@ SETTINGS_DATA = [
      {"type": "slider", "range": (30, 1800, 59), "is_float": False}),
 
     ("Skip Permissions", "skip_permissions",
-     "Tool names whose permission dialogs are automatically approved when plan mode is off.",
+     "Tool names whose permission dialogs are automatically approved unless a permission plugin rejects them.",
      [],
      {"type": "json_list"}),
 

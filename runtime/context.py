@@ -11,8 +11,6 @@ shortcut on the context.
 from dataclasses import dataclass, field
 from typing import Any
 
-PLAN_MODE_PERMISSION_DENIED = "Permission dialogs automatically rejected in plan mode."
-
 
 @dataclass
 class SecondBrainContext:
@@ -93,7 +91,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
             if ctx is not None:
                 ctx.approval_denial_reason = ""
             session = getattr(runtime, "sessions", {}).get(session_key)
-            # Consult opt-in permission gates (plan mode, future policy plugins)
+            # Consult opt-in permission gates registered by policy plugins
             # before the kernel's own logic. A gate may force allow/deny; None
             # from every gate means "no opinion — fall through".
             hooks = getattr(runtime, "hooks", None)

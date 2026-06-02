@@ -12,6 +12,7 @@ from plugins.commands import command_debug
 from plugins.commands.command_agent import AgentCommand
 from plugins.commands.command_debug import DebugCommand
 from plugins.commands.command_llm import LlmCommand
+from plugins.services.service_plan_mode import PlanModeService, PLUGIN
 from state_machine.conversation import ConversationState, Participant
 
 
@@ -107,12 +108,14 @@ def _session_context(tmp_path, monkeypatch, cs, **session_attrs):
         encoding="utf-8",
     )
     session = SimpleNamespace(cs=cs, **session_attrs)
-    return SimpleNamespace(runtime=SimpleNamespace(sessions={"chat": session}), session_key="chat")
+    return SimpleNamespace(runtime=SimpleNamespace(sessions={"chat": session}), session_key="chat", services={})
 
 
 def test_debug_reports_state_machine_snapshot_and_log_tail(tmp_path, monkeypatch):
     cs = ConversationState([Participant("user", "user"), Participant("agent", "agent")])
-    context = _session_context(tmp_path, monkeypatch, cs, plan_mode=True, full_permissions_this_turn=False)
+    service = PlanModeService()
+    context = _session_context(tmp_path, monkeypatch, cs, plugin_state={PLUGIN: {"enabled": True}})
+    context.services["plan_mode"] = service
 
     out = DebugCommand().run({}, context)
 
@@ -130,7 +133,7 @@ def test_debug_reports_state_machine_snapshot_and_log_tail(tmp_path, monkeypatch
 
 def test_debug_handles_no_active_session(tmp_path, monkeypatch):
     monkeypatch.setattr(command_debug, "DATA_DIR", tmp_path)
-    context = SimpleNamespace(runtime=SimpleNamespace(sessions={}), session_key="chat")
+    context = SimpleNamespace(runtime=SimpleNamespace(sessions={}), session_key="chat", services={})
 
     out = DebugCommand().run({}, context)
 

@@ -220,7 +220,7 @@ Minimal shape:
     "C:/Users/you/AppData/Local/Second Brain/attachment_cache"
   ],
   "enabled_frontends": ["repl", "telegram"],
-  "autoload_services": ["llm", "compactor", "parser", "plugin_watcher"],
+  "autoload_services": ["llm", "compactor", "parser", "plugin_watcher", "plan_mode"],
   "telegram_bot_token": "",
   "telegram_allowed_user_id": 0,
   "llm_profiles": {

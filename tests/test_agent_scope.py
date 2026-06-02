@@ -7,7 +7,7 @@ the agent cannot invoke a hidden tool directly through the state machine.
 
 from agent.tool_registry import ToolRegistry
 from plugins.BaseTool import BaseTool, ToolResult
-from runtime.agent_scope import load_scope, scoped_registry
+from runtime.agent_scope import load_scope, registry_with_tools, scoped_registry
 from state_machine.conversation import CallableSpec, ConversationState, Participant
 from state_machine.conversation_phases import PHASE_AWAITING_INPUT
 
@@ -42,6 +42,12 @@ class _Hybrid(_Lexical):
             "lex": context.call_tool("lexical_search", **kwargs).data,
             "sem": context.call_tool("semantic_search", **kwargs).data,
         })
+
+
+class _Injected(_Lexical):
+    """Injected."""
+    name = "injected_tool"
+    description = "Session-scoped injected tool."
 
 
 def _registry():
@@ -90,3 +96,43 @@ def test_agent_cannot_directly_call_blacklisted_dependency():
     assert not result.ok
     assert result.error.code == "unknown_tool"
     assert result.message == "Tool not in agent scope: 'lexical_search'."
+
+
+def test_registry_with_tools_clones_and_exposes_injected_tools():
+    """Verify registry_with_tools preserves registry wiring and exposes new tools."""
+    registry = _registry()
+    registry.orchestrator = object()
+    registry.runtime = object()
+    registry.visible_tool_names = {"hybrid_search"}
+
+    cloned = registry_with_tools(registry, [_Injected()])
+
+    assert cloned is not registry
+    assert cloned.db is registry.db
+    assert cloned.config is registry.config
+    assert cloned.services is registry.services
+    assert cloned.orchestrator is registry.orchestrator
+    assert cloned.runtime is registry.runtime
+    assert set(cloned.tools) == {"hybrid_search", "lexical_search", "semantic_search", "injected_tool"}
+    assert cloned.visible_tool_names == {"hybrid_search", "injected_tool"}
+    assert registry.visible_tool_names == {"hybrid_search"}
+
+
+def test_registry_with_tools_replaces_existing_tool():
+    """Verify injected tools replace by name."""
+    registry = _registry()
+    registry.visible_tool_names = {"hybrid_search"}
+    replacement = _Injected()
+    replacement.name = "hybrid_search"
+
+    cloned = registry_with_tools(registry, [replacement], visible=False)
+
+    assert cloned.tools["hybrid_search"] is replacement
+    assert cloned.visible_tool_names == {"hybrid_search"}
+
+
+def test_registry_with_tools_leaves_uncloneable_registries_unchanged():
+    """Verify stub registries are left untouched."""
+    registry = object()
+
+    assert registry_with_tools(registry, [_Injected()]) is registry
