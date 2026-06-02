@@ -56,9 +56,9 @@ class AgentCommand(BaseCommand):
         if args.get("action") == "switch":
             runtime, session_key = getattr(context, "runtime", None), getattr(context, "session_key", None)
             if runtime and session_key and runtime.set_agent_profile(session_key, name):
+                _set_active(context, name)
                 return f"Switched agent profile to: {name}"
-            context.config["active_agent_profile"] = name
-            _save(context.config)
+            _set_active(context, name)
             return f"Active agent profile set to: {name}"
         if args.get("action") == "edit":
             field = args.get("field")
@@ -81,7 +81,7 @@ class AgentCommand(BaseCommand):
                 return "Cannot remove the default agent profile."
             profiles.pop(name, None)
             if context.config.get("active_agent_profile") == name:
-                context.config["active_agent_profile"] = "default"
+                _set_active(context, "default")
             _save(context.config)
             _refresh(context)
             return f"Removed agent profile: {name}"
@@ -128,13 +128,29 @@ def _value_prompt(field):
 def _rename_active_refs(context, old, new):
     """Update global and live-session references after a profile rename."""
     if context.config.get("active_agent_profile") == old:
-        context.config["active_agent_profile"] = new
+        _set_active(context, new)
     runtime = getattr(context, "runtime", None)
     for session in getattr(runtime, "sessions", {}).values() if runtime else []:
         if getattr(session, "active_agent_profile", None) == old:
             session.active_agent_profile = new
         if getattr(session, "profile_override", None) == old:
             session.profile_override = new
+
+
+def _set_active(context, name):
+    """Persist the current user's active profile preference."""
+    context.config["active_agent_profile"] = name
+    runtime, session_key = getattr(context, "runtime", None), getattr(context, "session_key", None)
+    if runtime and session_key and hasattr(runtime, "set_user_setting"):
+        runtime.set_user_setting(session_key, "active_agent_profile", name)
+        return
+    db, uid = getattr(context, "db", None), getattr(context, "user_id", None)
+    if db is not None and uid is not None:
+        cfg = db.get_user_config(uid)
+        cfg["active_agent_profile"] = name
+        db.set_user_config(uid, cfg)
+        return
+    _save(context.config)
 
 
 def _save(config):

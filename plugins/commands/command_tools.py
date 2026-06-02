@@ -1,7 +1,6 @@
 """Slash command plugin for `/tools`."""
 
 from plugins.BaseCommand import BaseCommand
-from config import config_manager
 from plugins.frontends.helpers.formatters import format_tool_result, format_tools
 from state_machine.conversation import FormStep
 from state_machine.forms import schema_to_form_steps
@@ -62,14 +61,16 @@ def _describe(tool, context=None):
 
 def _toggle_skip(context, tool_name: str, enabled: bool) -> str:
     """Add or remove a tool from skip_permissions."""
-    config = getattr(context, "config", None)
-    if config is None:
-        return "No config available."
-    names = [str(n) for n in (config.get("skip_permissions") or []) if str(n)]
+    runtime = getattr(context, "runtime", None)
+    session_key = getattr(context, "session_key", None)
+    db = getattr(context, "db", None)
+    if runtime is None or not session_key or db is None:
+        return "User settings are not available in this context."
+    names = [str(n) for n in ((getattr(context, "config", None) or {}).get("skip_permissions") or []) if str(n)]
     if enabled and tool_name not in names:
         names.append(tool_name)
     if not enabled:
         names = [n for n in names if n != tool_name]
-    config["skip_permissions"] = sorted(names)
-    config_manager.save(config)
+    runtime.set_user_setting(session_key, "skip_permissions", sorted(names))
+    context.config["skip_permissions"] = sorted(names)
     return f"Skip permissions {'enabled' if enabled else 'disabled'} for {tool_name}."

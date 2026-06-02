@@ -90,7 +90,7 @@ SETTINGS_DATA = [
     ("Skip Permissions", "skip_permissions",
      "Tool names whose permission dialogs are automatically approved unless a permission plugin rejects them.",
      [],
-     {"type": "json_list"}),
+     {"type": "json_list", "scope": "user"}),
 
     ("Reprocess Interval", "reprocess_interval",
      "Seconds between re-checking files for changes.",
@@ -119,7 +119,7 @@ SETTINGS_DATA = [
     ("Active Agent Profile", "active_agent_profile",
      "Name of the currently active agent profile.",
      "default",
-     {"type": "text", "hidden": True}),
+     {"type": "text", "hidden": True, "scope": "user"}),
 
     # --- Frontend Profiles ---
     # One profile per real frontend (keyed by frontend name). Each picks the
@@ -137,10 +137,5 @@ SETTINGS_DATA = [
      "When enabled, the most recently active conversation is reloaded automatically when a frontend starts.",
      True,
      {"type": "bool"}),
-
-    ("Last Active Conversation", "last_active_conversation_id",
-     "Conversation id last touched by a user-driven session. Restored on startup so the user reopens where they left off.",
-     None,
-     {"type": "integer", "hidden": True}),
 
 ]

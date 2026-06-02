@@ -25,6 +25,10 @@ _LIST_KEYS = {name for _, name, _, default, info in SETTINGS_DATA if isinstance(
 _DEFAULT_CONFIG_PATH = str(DATA_DIR / "config.json")
 _DEFAULT_PLUGIN_CONFIG_PATH = str(DATA_DIR / "plugin_config.json")
 _SUPPORTED_FRONTENDS = ("repl", "telegram")
+USER_CONFIG_KEYS = {
+    name for _, name, _, _, info in SETTINGS_DATA
+    if isinstance(info, dict) and info.get("scope") == "user"
+} | {"last_active_conversation_id"}
 
 
 def _normalize_frontends(value) -> list[str]:
@@ -76,7 +80,9 @@ def load(path: str = None) -> dict:
     # If the schema introduced new SETTINGS_DATA keys since the file was last
     # written, persist the merged defaults now so the on-disk file no longer
     # drifts behind the schema.
-    if set(merged.keys()) - set(user_config.keys()) or any(user_config.get(k) != merged.get(k) for k in _LIST_KEYS):
+    if (set(merged.keys()) - set(user_config.keys())
+            or any(user_config.get(k) != merged.get(k) for k in _LIST_KEYS)
+            or any(k in user_config for k in USER_CONFIG_KEYS)):
         save(merged, path)
 
     return merged
@@ -98,7 +104,7 @@ def save(config: dict, path: str = None):
             existing = {}
     merged = {**DEFAULTS, **existing, **(config or {})}
     to_save = {k: v for k, v in merged.items()
-                if k != "_root" and k not in plugin_keys}
+                if k != "_root" and k not in plugin_keys and k not in USER_CONFIG_KEYS}
     with open(path, "w") as f:
         json.dump(to_save, f, indent=4)
     logger.info(f"Config saved to {path}")

@@ -56,6 +56,10 @@ class ConfigCommand(BaseCommand):
             old = user_cfg.get(key, _default_for(key))
             user_cfg[key] = value
             db.set_user_config(uid, user_cfg)
+            context.config[key] = value
+            runtime = getattr(context, "runtime", None)
+            if key == "active_agent_profile" and runtime and hasattr(runtime, "refresh_session_specs"):
+                runtime.refresh_session_specs()
             return f"Set {key} = {value}" if value != old else f"Set {key} = {value}"
 
         old = config.get(key)
@@ -80,8 +84,10 @@ def _settings():
 
 def _scope(key) -> str:
     """"user" (stored in the current user's config) or "global". Core settings are
-    always global; only plugins opt into user scope."""
-    return get_plugin_setting_scope(key) if key in _plugin_keys() else "global"
+    global unless their type_info opts into user scope; plugins use the same flag."""
+    entry = _setting_data(key)
+    info = entry[4] if entry and isinstance(entry[4], dict) else {}
+    return "user" if info.get("scope") == "user" else (get_plugin_setting_scope(key) if key in _plugin_keys() else "global")
 
 
 def _default_for(key):
@@ -98,7 +104,7 @@ def _current_value(context, key):
         if db is None:
             return _default_for(key)
         uid = getattr(context, "user_id", None)
-        return db.get_user_config(uid).get(key, _default_for(key))
+        return db.get_user_config(uid).get(key, (context.config or {}).get(key, _default_for(key)))
     return (context.config or {}).get(key)
 
 

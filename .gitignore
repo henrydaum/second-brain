@@ -1,6 +1,7 @@
 __pycache__/
 .pytest_cache/
 pytest-cache-files-*/
+.pytest_tmp_profile_prefs
 *.tmp
 config.json
 database.db*

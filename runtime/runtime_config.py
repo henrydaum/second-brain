@@ -52,6 +52,8 @@ def profile_for(runtime, session: RuntimeSession | None) -> str:
         pinned = _frontend_agent_profile(runtime.config, session.frontend_name)
         if pinned:
             return pinned
+    if session is not None and hasattr(runtime, "user_setting"):
+        return runtime.user_setting(session.key, "active_agent_profile", "default") or "default"
     return runtime.config.get("active_agent_profile") or "default"
 
 
@@ -192,7 +194,7 @@ def refresh_specs(runtime, session: RuntimeSession) -> None:
     Also normalizes per-session notification mode.
     """
     if not session.profile_override:
-        session.active_agent_profile = runtime.config.get("active_agent_profile") or "default"
+        session.active_agent_profile = profile_for(runtime, session)
     from runtime.persistence import _sync_notification_mode
     _sync_notification_mode(session)
     session.cs.participants["user"].commands = dict(runtime.commands)
@@ -272,9 +274,11 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             return out
         return (prompt or "") + "\n\n" + extra
 
-    if session.profile_override:
+    effective_profile = profile_for(runtime, session)
+    global_profile = runtime.config.get("active_agent_profile") or "default"
+    if session.profile_override or effective_profile != global_profile:
         from agent.system_prompt import build_prompt_sections
-        profile = session.profile_override or session.active_agent_profile or "default"
+        profile = effective_profile
         scope = scope_for_profile(runtime, profile)
 
         def _session_prompt():

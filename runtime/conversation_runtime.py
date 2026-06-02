@@ -107,9 +107,9 @@ class ConversationRuntime:
         # active conversation auto-restored, so the user lands back where
         # they left off. The id is persisted to config on every conversation
         # switch (see ``_persist_active_conversation``).
-        self._pending_restore_conv_id = self.config.get("last_active_conversation_id") if self.config else None
+        self._legacy_restore_conv_id = self.config.get("last_active_conversation_id") if self.config else None
         self._restore_consumed_keys: set[str] = set()
-        self._persisted_active_conv_id = self._pending_restore_conv_id
+        self._persisted_active_conv_by_user: dict[int, int | None] = {}
     # ──────────────────────────────────────────────────────────────────
     # Public entrypoint — every action a frontend can take ends up here.
     # ──────────────────────────────────────────────────────────────────
@@ -397,8 +397,10 @@ class ConversationRuntime:
         """Inject input and immediately drive the agent turn outside a frontend transport."""
         return _persist.iterate_agent_turn(self, session_key, prompt, attachments=attachments, actor_id=actor_id)
 
-    def inject_user_message(self, session_key: str, text: str, *, conversation_id: int | None = None, actor_id: str = "user") -> RuntimeResult:
+    def inject_user_message(self, session_key: str, text: str, *, conversation_id: int | None = None, actor_id: str = "user", override: bool = False) -> RuntimeResult:
         """Append a message directly to a session before handing control to the agent loop."""
+        if conversation_id is not None and not self.assert_conversation_access(session_key, conversation_id, override=override):
+            return RuntimeResult(False, messages=["No such conversation."])
         return _persist.inject_user_message(self, session_key, text, conversation_id=conversation_id, actor_id=actor_id)
 
     def close_session(self, session_key: str) -> bool:
@@ -514,6 +516,24 @@ class ConversationRuntime:
             return session.user_id
         return DEFAULT_USER_ID
 
+    def user_config(self, session_key: str) -> dict:
+        """Current user's config blob for ``session_key``."""
+        return self.db.get_user_config(self.session_user_id(session_key)) if self.db is not None else {}
+
+    def user_setting(self, session_key: str, key: str, default=None):
+        """Current user's setting value, falling back to legacy/global config."""
+        cfg = self.user_config(session_key)
+        return cfg[key] if key in cfg else (self.config or {}).get(key, default)
+
+    def set_user_setting(self, session_key: str, key: str, value) -> None:
+        """Persist one setting in the current user's config blob."""
+        if self.db is None:
+            return
+        user_id = self.session_user_id(session_key)
+        cfg = self.db.get_user_config(user_id)
+        cfg[key] = value
+        self.db.set_user_config(user_id, cfg)
+
     def assert_conversation_access(self, session_key: str, conversation_id: int, *, override: bool = False) -> bool:
         """Whether ``session_key``'s effective user may load/mutate the
         conversation. ``override=True`` (system/background callers) skips the
@@ -530,11 +550,11 @@ class ConversationRuntime:
     # ──────────────────────────────────────────────────────────────────
     # Reopen-where-you-left-off persistence.
     #
-    # The first user-driven action after process restart picks up the last
-    # active conversation from config. After that, every conversation
-    # *change* writes the new id back to config so the next restart lands
-    # in the same place. Per-action persistence is intentionally avoided —
-    # only the actual switch event hits disk.
+    # The first user-driven action after process restart picks up that user's
+    # last active conversation from their user config. After that, every
+    # conversation *change* writes the new id back to the same user config so
+    # the next restart lands in the same place. Per-action persistence is
+    # intentionally avoided — only the actual switch event hits disk.
     # ──────────────────────────────────────────────────────────────────
 
     def restore_last_active(self, session_key: str) -> str | None:
@@ -547,12 +567,12 @@ class ConversationRuntime:
         self._restore_consumed_keys.add(session_key)
         if self.config and not self.config.get("startup_restore_conversation", True):
             return None
-        conv_id = self._pending_restore_conv_id
+        conv_id = self._last_active_conversation_id(session_key)
         try:
             conv_id = int(conv_id) if conv_id not in (None, "") else None
         except (TypeError, ValueError):
             conv_id = None
-        if conv_id is None or self.db is None or self.db.get_conversation(conv_id) is None:
+        if conv_id is None or self.db is None or not self.assert_conversation_access(session_key, conv_id):
             return None
         existing = self.sessions.get(session_key)
         if existing is not None and existing.conversation_id is not None:
@@ -561,30 +581,56 @@ class ConversationRuntime:
             # alone, no restore needed.
             return None
         try:
-            session = _persist.load_conversation(self, session_key, conv_id)
+            session = self.load_conversation(session_key, conv_id)
         except Exception:
             logger.exception(f"Failed to restore last active conversation {conv_id}")
             return None
-        self._persisted_active_conv_id = conv_id
+        self._persisted_active_conv_by_user[self.session_user_id(session_key)] = conv_id
         title = (self.db.get_conversation(conv_id) or {}).get("title") or ""
         profile = session.profile_override or session.active_agent_profile or "default"
         suffix = f": {title.strip()}" if title.strip() else ""
         return f"Loaded last conversation{suffix}.\nAgent: {profile}"
 
     def _persist_active_conversation(self, conv_id: int | None) -> None:
-        """Remember the active conversation ID in config for the next startup."""
-        self._persisted_active_conv_id = conv_id
-        if self.config is None:
+        """Remember the active conversation ID for this session's user."""
+        session_key = self.active_session_key
+        if not session_key or self.db is None:
             return
-        if self.config.get("last_active_conversation_id") == conv_id:
+        user_id = self.session_user_id(session_key)
+        if self._persisted_active_conv_by_user.get(user_id) == conv_id:
             return
-        self.config["last_active_conversation_id"] = conv_id
+        cfg = self.db.get_user_config(user_id)
+        if cfg.get("last_active_conversation_id") == conv_id:
+            self._persisted_active_conv_by_user[user_id] = conv_id
+            return
+        cfg["last_active_conversation_id"] = conv_id
         try:
-            import config.config_manager as config_manager
-            config_manager.save(self.config)
-            logger.info(f"Persisted last_active_conversation_id={conv_id}")
+            self.db.set_user_config(user_id, cfg)
+            self._persisted_active_conv_by_user[user_id] = conv_id
+            logger.info(f"Persisted last_active_conversation_id={conv_id} for user_id={user_id}")
         except Exception:
             logger.exception("Failed to persist last_active_conversation_id")
+
+    def _last_active_conversation_id(self, session_key: str):
+        """Return the current user's remembered conversation id.
+
+        One-time legacy fallback reads the old global config key for the base user
+        so existing local installs restore once and then rewrite into user config.
+        """
+        if self.db is None:
+            return None
+        user_id = self.session_user_id(session_key)
+        cfg = self.db.get_user_config(user_id)
+        if cfg.get("last_active_conversation_id") not in (None, ""):
+            return cfg.get("last_active_conversation_id")
+        if user_id == DEFAULT_USER_ID and self._legacy_restore_conv_id not in (None, ""):
+            cfg["last_active_conversation_id"] = self._legacy_restore_conv_id
+            try:
+                self.db.set_user_config(user_id, cfg)
+            except Exception:
+                logger.exception("Failed to migrate last_active_conversation_id to user config")
+            return self._legacy_restore_conv_id
+        return None
 
     # ──────────────────────────────────────────────────────────────────
     # Approval / typed-input requests.

@@ -157,9 +157,13 @@ table (`config` JSON blob + `username`/`password_hash` columns), reached anywher
 via `context.user_id` / `context.current_user()` / `context.db`. Plugins declare
 **user-scoped settings** with `{"scope": "user"}` in a setting's `type_info`; `/config`
 reads/writes those against the current user's `config` blob instead of the global
-config. **Conversation ownership is enforced** by `runtime.assert_conversation_access`
+config. The remembered `last_active_conversation_id` also lives in the current
+user's config blob, so startup restore is per-user rather than one public/global
+pointer. `active_agent_profile` and `skip_permissions` are user-scoped too:
+profile definitions remain global, but the user's selected profile and trusted
+tool list live with that user. **Conversation ownership is enforced** by `runtime.assert_conversation_access`
 on every load/mutate-by-id path (`load_history`, `load_conversation`, `open_session`,
-`delete_conversation`, `set_conversation_category`,
+`inject_user_message(..., conversation_id=...)`, `delete_conversation`, `set_conversation_category`,
 `set_conversation_notification_mode`) — listing filters are convenience only;
 `override=True` (or using the raw `db.*` methods) is the system path.
 

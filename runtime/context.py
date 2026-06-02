@@ -11,6 +11,7 @@ shortcut on the context.
 from dataclasses import dataclass, field
 from typing import Any
 
+from config.config_manager import DEFAULTS, USER_CONFIG_KEYS
 from pipeline.database import DEFAULT_USER_ID
 
 
@@ -50,6 +51,7 @@ class SecondBrainContext:
     session_key: str | None = None # Frontend conversation/session key, when available.
     user_id: int = DEFAULT_USER_ID # Effective user this call acts for (the base user when no frontend bound one).
     current_user: Any = None     # callable() -> user row dict (config parsed) or None.
+    user_config: dict = field(default_factory=dict)
     user_initiated: bool = False # Explicit user command, not an autonomous agent call.
     current_tool_name: str | None = None
     approval_denial_reason: str = ""
@@ -90,6 +92,13 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         _s = getattr(runtime, "sessions", {}).get(session_key)
         if _s is not None and getattr(_s, "user_id", None) is not None:
             user_id = _s.user_id
+    user_cfg = runtime.user_config(session_key) if runtime is not None and session_key and hasattr(runtime, "user_config") else (db.get_user_config(user_id) if db is not None else {})
+    effective_config = dict(config or {})
+    for key in USER_CONFIG_KEYS:
+        if key in DEFAULTS:
+            effective_config[key] = user_cfg.get(key, (config or {}).get(key, DEFAULTS.get(key)))
+        elif key in user_cfg:
+            effective_config[key] = user_cfg[key]
     current_user = (lambda: db.get_user(user_id)) if db is not None else None
 
     approve_command = None
@@ -115,7 +124,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
                     if not verdict.allow and ctx is not None:
                         ctx.approval_denial_reason = verdict.reason
                     return verdict.allow
-            if current_tool_name and current_tool_name in (config.get("skip_permissions") or []):
+            if current_tool_name and current_tool_name in (effective_config.get("skip_permissions") or []):
                 return True
             req = runtime.request_input(
                 session_key,
@@ -133,7 +142,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
 
     ctx = SecondBrainContext(
         db=db,
-        config=config,
+        config=effective_config,
         services=services,
         call_tool=call_tool_with_session if call_tool is not None else None,
         approve_command=approve_command,
@@ -146,6 +155,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         session_key=session_key,
         user_id=user_id,
         current_user=current_user,
+        user_config=user_cfg,
         user_initiated=user_initiated,
         current_tool_name=current_tool_name,
     )

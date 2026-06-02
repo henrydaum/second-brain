@@ -180,12 +180,12 @@ class Database:
 		# pre-existing rows to the base user so they stay visible to the operator.
 		try:
 			self.conn.execute("ALTER TABLE conversations ADD COLUMN user_id INTEGER")
-			self.conn.execute(
-				"UPDATE conversations SET user_id = ? WHERE user_id IS NULL",
-				(DEFAULT_USER_ID,))
 			self.conn.commit()
 		except Exception:
 			pass
+		self.conn.execute(
+			"UPDATE conversations SET user_id = ? WHERE user_id IS NULL",
+			(DEFAULT_USER_ID,))
 
 		# Users — the "user dimension". One row per identity. ``config`` is a JSON
 		# blob (email, credits, per-user settings); ``username``/``password_hash``

@@ -152,7 +152,7 @@ def load_conversation(
     rows = runtime.db.get_conversation_messages(conversation_id) if runtime.db else []
     marker = latest_state(rows) or {}
     saved_profile = agent_profile or marker.get("profile_override") or marker.get("active_agent_profile")
-    profile = saved_profile or runtime.config.get("active_agent_profile") or "default"
+    profile = saved_profile or runtime.user_setting(session_key, "active_agent_profile", "default") or "default"
     saved_mode = normalize_notification_mode(
         notification_mode or marker.get("notification_mode") or DEFAULT_NOTIFICATION_MODE
     )
@@ -202,7 +202,7 @@ def load_history(runtime, session_key: str, conversation_id: int):
     from runtime.session import RuntimeResult
 
     old = runtime.sessions.get(session_key)
-    old_profile = (old.profile_override or old.active_agent_profile) if old else runtime.config.get("active_agent_profile") or "default"
+    old_profile = (old.profile_override or old.active_agent_profile) if old else runtime.user_setting(session_key, "active_agent_profile", "default") or "default"
     if old and old.conversation_id != conversation_id:
         close_session(runtime, session_key)
     session = load_conversation(runtime, session_key, conversation_id)
@@ -248,7 +248,7 @@ def new_conversation(runtime, session_key: str):
     from runtime.session import RuntimeResult
 
     reset_conversation(runtime, session_key)
-    profile = runtime.config.get("active_agent_profile") or "default"
+    profile = runtime.user_setting(session_key, "active_agent_profile", "default") or "default"
     return RuntimeResult(messages=[f"New conversation started. Agent: {profile}."])
 
 

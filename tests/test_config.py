@@ -57,6 +57,23 @@ def test_load_merges_missing_keys_and_persists(tmp_path):
     assert "enabled_frontends" in on_disk
 
 
+def test_load_strips_user_config_keys_from_disk(tmp_path):
+    path = _cfg(tmp_path)
+    (tmp_path / "config.json").write_text(json.dumps({
+        "last_active_conversation_id": 12,
+        "active_agent_profile": "builder",
+        "skip_permissions": ["run_command"],
+    }))
+
+    config = config_manager.load(path)
+
+    assert config["last_active_conversation_id"] == 12  # legacy value is still available for migration
+    on_disk = json.loads((tmp_path / "config.json").read_text())
+    assert "last_active_conversation_id" not in on_disk
+    assert "active_agent_profile" not in on_disk
+    assert "skip_permissions" not in on_disk
+
+
 def test_load_normalizes_enabled_frontends(tmp_path):
     path = _cfg(tmp_path)
     (tmp_path / "config.json").write_text(json.dumps({
@@ -99,3 +116,17 @@ def test_save_preserves_existing_unrelated_values(tmp_path):
     on_disk = json.loads((tmp_path / "config.json").read_text())
     assert on_disk["max_workers"] == 8
     assert on_disk["poll_interval"] == 2.0
+
+
+def test_save_strips_user_config_keys(tmp_path):
+    path = _cfg(tmp_path)
+    config_manager.save({
+        "last_active_conversation_id": 12,
+        "active_agent_profile": "builder",
+        "skip_permissions": ["run_command"],
+    }, path)
+
+    on_disk = json.loads((tmp_path / "config.json").read_text())
+    assert "last_active_conversation_id" not in on_disk
+    assert "active_agent_profile" not in on_disk
+    assert "skip_permissions" not in on_disk
