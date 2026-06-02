@@ -125,6 +125,19 @@ non-active sessions. The scheduled-subagent layer was deleted and is
 slated for a clean rebuild on top of these primitives — there is no
 `is_subagent` flag in the runtime.
 
+"Is a human present at this session right now?" is asked in exactly three
+places (interactive-tool gating, the notify-prompt block, background
+notification push) via one reader: `runtime.is_attended(session_key)`. By
+default this is just `session_key == active_session_key` (the single-active
+rule), but a frontend can override it per session — `RuntimeSession.attended`
+(`bool | None`, ephemeral, not persisted), set through
+`runtime.set_session_attended` or the `BaseFrontend.mark_attended` /
+`mark_unattended` helpers. This is the kernel's hook for **concurrent
+multi-user frontends** (e.g. a website marking a session attended on socket
+connect, unattended on disconnect): the kernel only *reads* attendance, the
+frontend *owns* the policy. Single-user frontends (REPL, Telegram) set
+nothing and keep `attended=None`, inheriting the global behavior unchanged.
+
 ## Command lifecycle (current)
 
 A command emits two events: `COMMAND_CALL_STARTED` (first invocation, even if

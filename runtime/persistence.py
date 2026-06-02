@@ -287,7 +287,7 @@ def iterate_agent_turn(
     # visible in the active session.
     if (out.ok and session is not None
             and session.notification_mode == "on"
-            and session_key != getattr(runtime, "active_session_key", None)
+            and not runtime.is_attended(session_key)
             and final_text):
         emit_fallback_push(
             session_key=session_key,

@@ -74,6 +74,14 @@ class RuntimeSession:
     # fields. Persisted with the marker.
     plugin_state: dict[str, dict] = field(default_factory=dict)
     notification_mode: str = DEFAULT_NOTIFICATION_MODE
+    # Whether a human is present at this session right now (can answer an
+    # interactive prompt and see output). None = defer to the kernel's global
+    # single-active rule (REPL/Telegram, background drivers). True/False = the
+    # owning frontend manages attendance explicitly (concurrent multi-user
+    # frontends, e.g. a website setting it on socket connect/disconnect).
+    # Ephemeral live state — deliberately NOT persisted in to_marker(), so it
+    # resets to None (defer-to-global) across restarts.
+    attended: bool | None = None
     has_compaction_checkpoint: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)

@@ -231,7 +231,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
         # agent's regular output. Evaluated lazily inside the prompt
         # closure so it reflects the active session at turn time.
         """Internal helper to append notification guidance for background conversations."""
-        if session.key == getattr(runtime, "active_session_key", None):
+        if runtime.is_attended(session.key):
             return ""
         return notify_block(session.notification_mode)
 

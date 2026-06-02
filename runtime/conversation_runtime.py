@@ -425,6 +425,31 @@ class ConversationRuntime:
         return session.conversation_id if session else None
 
     # ──────────────────────────────────────────────────────────────────
+    # Attendance — "is a human present at this session right now?" The
+    # kernel only *reads* this (interactive-tool gating, notification
+    # routing, the notify prompt block). A frontend *owns* the policy:
+    # by default a session is unattended unless it is the global active
+    # one, but a concurrent multi-user frontend can override per session
+    # via ``set_session_attended`` (e.g. on socket connect/disconnect).
+    # ──────────────────────────────────────────────────────────────────
+
+    def is_attended(self, session_key: str) -> bool:
+        """Whether a human is present at ``session_key`` to answer prompts /
+        see output. The owning frontend's explicit opinion wins; otherwise
+        fall back to the global single-active-session rule."""
+        session = self.sessions.get(session_key)
+        if session is not None and session.attended is not None:
+            return session.attended
+        return session_key == self.active_session_key
+
+    def set_session_attended(self, session_key: str, attended: bool | None) -> None:
+        """Frontend hook: declare whether a human is present at ``session_key``.
+        Pass ``None`` to relinquish the override and defer to the global rule."""
+        session = self.sessions.get(session_key)
+        if session is not None:
+            session.attended = attended
+
+    # ──────────────────────────────────────────────────────────────────
     # Reopen-where-you-left-off persistence.
     #
     # The first user-driven action after process restart picks up the last

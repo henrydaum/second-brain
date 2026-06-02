@@ -81,7 +81,7 @@ class ToolRegistry:
         if (not getattr(tool, "background_safe", True)
                 and session_key is not None
                 and self.runtime is not None
-                and session_key != getattr(self.runtime, "active_session_key", None)):
+                and not self.runtime.is_attended(session_key)):
             return ToolResult.failed(
                 f"Tool '{tool_name}' requires an active conversation and cannot run in the background."
             )

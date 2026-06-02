@@ -402,6 +402,22 @@ class BaseFrontend:
         if getattr(session, "frontend_name", None) != self.name:
             session.frontend_name = self.name
 
+    def mark_attended(self, session_key: str) -> None:
+        """Declare that a human is present at ``session_key`` (e.g. a websocket
+        connected). Concurrent multi-user frontends call this so each user's
+        session is treated as foreground independently; single-user frontends
+        (REPL, Telegram) can ignore it and inherit the global active-session
+        behavior unchanged."""
+        if self.runtime is not None:
+            self.runtime.set_session_attended(session_key, True)
+
+    def mark_unattended(self, session_key: str) -> None:
+        """Declare that no human is present at ``session_key`` (e.g. the socket
+        closed). Interactive tools will be refused and replies delivered as
+        notifications until ``mark_attended`` is called again."""
+        if self.runtime is not None:
+            self.runtime.set_session_attended(session_key, False)
+
     # ──────────────────────────────────────────────────────────────────────
     # Bus handlers. Subclasses can override for richer behavior, but the
     # defaults route everything through the abstract render_* methods.
