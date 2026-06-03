@@ -82,7 +82,7 @@
       ]
     },
     {
-      "description": "Archive and email extraction \u2014 ZIP, TAR/GZ/BZ2, EML (stdlib); 7Z and RAR when py7zr/rarfile are present.",
+      "description": "Archive and email extraction \u2014 ZIP/TAR/GZ/BZ2/EML (stdlib), 7Z/RAR (py7zr/rarfile when present) \u2014 bundled with the extract_container task that feeds extracted child files back into the pipeline.",
       "id": "parser-container",
       "name": "Container Parser",
       "tags": [
