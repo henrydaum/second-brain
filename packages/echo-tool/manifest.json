@@ -1,0 +1,10 @@
+{
+  "id": "echo-tool",
+  "name": "Echo Tool",
+  "description": "Tiny package-store smoke test tool.",
+  "requires": [],
+  "files": [
+    "tools/tool_echo.py",
+    "tools/helpers/echo_format.py"
+  ]
+}
