@@ -7,6 +7,7 @@ from state_machine.conversation import FormStep
 
 
 ACTIONS = ["search", "list", "info", "install", "uninstall"]
+ACTION_LABELS = ["Search available", "List installed", "Package info", "Install package", "Uninstall package"]
 
 
 class PackagesCommand(BaseCommand):
@@ -16,7 +17,7 @@ class PackagesCommand(BaseCommand):
     category = "System"
 
     def form(self, args, context):
-        steps = [FormStep("action", "Choose a package action.", True, enum=ACTIONS)]
+        steps = [FormStep("action", "Choose a package action.", True, enum=ACTIONS, enum_labels=ACTION_LABELS)]
         action = args.get("action")
         if action == "search":
             steps.append(FormStep("query", "Enter a package search query.", False, default=""))
@@ -47,7 +48,7 @@ class PackagesCommand(BaseCommand):
 def _format_index(items: list[dict]) -> str:
     if not items:
         return "No packages found."
-    lines = ["Packages:"]
+    lines = ["Available packages:"]
     for item in items:
         desc = item.get("description") or ""
         suffix = f" - {desc}" if desc else ""
@@ -57,7 +58,7 @@ def _format_index(items: list[dict]) -> str:
 
 def _format_installed(items: list[dict]) -> str:
     if not items:
-        return "No packages installed."
+        return "No packages installed.\nUse /packages search to browse available packages, then /packages install <id>."
     lines = ["Installed packages:"]
     for item in items:
         mode = "requested" if item.get("requested") else "auto"
