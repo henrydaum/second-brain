@@ -19,7 +19,7 @@
       ]
     },
     {
-      "description": "Toggle plan mode for the active conversation.",
+      "description": "Toggle hook-backed plan mode for the active conversation.",
       "id": "command-plan",
       "name": "Plan Command",
       "tags": [
@@ -124,6 +124,15 @@
       "name": "OCR Services",
       "tags": [
         "ocr",
+        "service"
+      ]
+    },
+    {
+      "description": "Runtime hooks for session-scoped plan mode.",
+      "id": "service-plan-mode",
+      "name": "Plan Mode Service",
+      "tags": [
+        "planning",
         "service"
       ]
     },
@@ -295,7 +304,7 @@
       ]
     },
     {
-      "description": "Ask the user to approve a plan and exit plan mode.",
+      "description": "Ask the user to approve a plan through the plan-mode service.",
       "id": "tool-propose-plan",
       "name": "Propose Plan Tool",
       "tags": [

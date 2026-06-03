@@ -32,6 +32,9 @@ class ProposePlan(BaseTool):
         ask = getattr(context, "request_user_input", None)
         if ask is None:
             return ToolResult.failed("Plan approval is not available — no live session is configured.")
+        service = (getattr(context, "services", None) or {}).get("plan_mode")
+        if service is None:
+            return ToolResult.failed("Plan mode service is not available.")
         body = f"{title}\n\n{plan}"
         choices = ["approve", "approve_full_permissions", "deny"]
         req = ask("Approve plan?", body, type="string", enum=choices)
@@ -48,11 +51,10 @@ class ProposePlan(BaseTool):
         if runtime is not None and session_key:
             session = runtime.sessions.get(session_key)
             message = "Plan approved. Plan mode is off, and permission dialogs are auto-approved for this turn." if choice == "approve_full_permissions" and getattr(session, "busy", False) else "Plan approved. Plan mode is off."
-            runtime.set_plan_mode(session_key, False, message=message)
-            if session is not None and choice == "approve_full_permissions" and session.busy:
-                session.full_permissions_this_turn = True
+            if service is not None:
+                service.approve(session_key, full_permissions=choice == "approve_full_permissions" and getattr(session, "busy", False), message=message)
         if choice == "approve_full_permissions":
-            enabled = bool(runtime is not None and session_key and getattr(runtime.sessions.get(session_key), "full_permissions_this_turn", False))
+            enabled = bool(service is not None and runtime is not None and session_key and service.has_full_permissions_this_turn(runtime.sessions.get(session_key)))
             summary = "Plan approved. Plan mode is off, and permission dialogs are auto-approved for this turn." if enabled else "Plan approved. Plan mode is off."
             return ToolResult(data={"approved": True, "full_permissions_this_turn": enabled}, llm_summary=summary)
         return ToolResult(data={"approved": True, "full_permissions_this_turn": False}, llm_summary="Plan approved. Plan mode is off.")

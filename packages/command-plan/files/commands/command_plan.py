@@ -16,6 +16,9 @@ class PlanCommand(BaseCommand):
         if runtime is None or not session_key:
             return "No active session."
         session = runtime.sessions.get(session_key)
-        enabled = not bool(getattr(session, "plan_mode", False))
-        runtime.set_plan_mode(session_key, enabled)
+        service = (getattr(context, "services", None) or {}).get("plan_mode")
+        if service is None or not getattr(service, "loaded", False):
+            return "Plan mode is not loaded."
+        enabled = not service.is_enabled(session)
+        service.set_enabled(session_key, enabled)
         return None
