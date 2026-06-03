@@ -145,6 +145,15 @@
       ]
     },
     {
+      "description": "Google Drive OAuth service (registered as 'google_drive'); backs .gdoc and .gsheet parsing.",
+      "id": "service-drive",
+      "name": "Google Drive Service",
+      "tags": [
+        "google-drive",
+        "service"
+      ]
+    },
+    {
       "description": "Text and image embedding services for indexed search.",
       "id": "service-embed",
       "name": "Embedding Services",
