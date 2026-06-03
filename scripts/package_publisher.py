@@ -90,8 +90,8 @@ def write_package(
             raise StorePublishError(f"Package already exists: {package_id}. Use --update to replace it.")
         shutil.rmtree(package_dir)
     files = expand_file_specs(file_specs)
-    if not files:
-        raise StorePublishError("At least one --file is required.")
+    if not files and not requires:
+        raise StorePublishError("A package needs at least one --file, or --require for a meta-package bundle.")
     package_files = package_dir / "files"
     for source, dest in files:
         target = package_files / dest
@@ -259,7 +259,7 @@ def _parse_args(argv: list[str] | None):
     publish.add_argument("package_id")
     publish.add_argument("--name", required=True)
     publish.add_argument("--description", required=True)
-    publish.add_argument("--file", action="append", required=True, help="SOURCE=DEST, repeatable. Directories are copied recursively.")
+    publish.add_argument("--file", action="append", default=[], help="SOURCE=DEST, repeatable. Directories are copied recursively. Omit for a meta-package bundle (requires-only).")
     publish.add_argument("--require", action="append", default=[])
     publish.add_argument("--tag", action="append", default=[])
     publish.add_argument("--entrypoint", action="append", default=None)

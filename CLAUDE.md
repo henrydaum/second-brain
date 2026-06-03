@@ -26,7 +26,7 @@ staging catalog that mirrors `plugins/`, preserved via `git mv` to seed the
 future store) — *not* by deleting them. What remains:
 
 - **Services:** `service_llm`, `service_compactor` (context-safety),
-  `service_parser` (text-only — see below), and `service_plugin_watcher`
+  `service_parser` (text + image — see below), and `service_plugin_watcher`
   (hot-reload = the install/uninstall substrate).
 - **Tasks:** none.
 - **Tools:** `tool_read_file` and `tool_ask_user_question`.
@@ -38,10 +38,24 @@ future store) — *not* by deleting them. What remains:
 
 The pipeline substrate (`pipeline/` — orchestrator, watcher, event_trigger) still
 boots, but ships **zero pipeline tasks**: it idles until a pipeline plugin
-(extract/chunk/index/embed) is installed. `parse_text` is kept and registers
-text/code extensions plus PDF/DOCX/PPTX (all heavy libs are lazy
-`try/except ImportError`, so they degrade gracefully). The richer modality
-parsers (image/audio/video/tabular/container) moved to `store/services/helpers/`.
+(extract/chunk/index/embed) is installed.
+
+**Parsers.** The kernel keeps only the two dependency-light parsers:
+`parse_text` (UTF-8 / code / CSV / TSV, stdlib) and `parse_image` (standard
+rasters via Pillow, already a kernel dep; HEIC lazy). Shared text helpers live
+in `parsing_utils.py`. The registry (`parser_registry.py`) carries a static
+native-modality default map so `get_modality` resolves image/audio/video even
+with no parser installed (attachment routing relies on this). Every heavier
+parser is an installable store package (`parser-pdf`, `parser-office`,
+`parser-tabular`, `parser-audio`, `parser-video`, `parser-gdoc`,
+`parser-container`) that ships a `services/helpers/parse_*.py` file —
+**not** a plugin entrypoint. `ParserService._load()` rebuilds the registry by
+discovery-scanning `services/helpers/parse_*.py` across the built-in, sandbox,
+and installed roots, so installed parsers light up on load; `package_manager`
+reloads the parser service on install/uninstall of any such file so it takes
+effect live. The attachment system is unified onto this one registry:
+`attachments/parse.py` builds an `Attachment` via `parser.get_modality` +
+`parser.parse(path, "text")` (no separate attachment-parser registry).
 
 ## The kernel boundary (the one rule)
 
@@ -83,7 +97,14 @@ the difference between a microkernel and a pile of assumptions:
   with repeatable `--file SOURCE=DEST`, `--require`, `--tag`, and `--update`.
   The script uses a temporary worktree for `origin/store`, validates the whole
   store, commits, and pushes without switching or dirtying the current branch.
-- **Deferred**: remote/GitHub fetch, versioning, package config cleanup, pip deps,
+- **pip dependencies**: install auto-detects third-party imports in a package's
+  `.py` files and `pip install`s the missing ones (mapping import roots to PyPI
+  names via `PIP_NAMES`, e.g. `fitz`→PyMuPDF). Uninstall does not pip-uninstall.
+- **Bundles (meta-packages)**: a package may ship **no files** and only a
+  `requires` list — installing it pulls its members, uninstalling prunes the
+  auto-installed ones. Used for the curated bundles (`all-parsers`, `plan-mode`,
+  `scheduling`, `web-search`, `gmail`, `mcp`, `google-drive`, `indexing-search`).
+- **Deferred**: remote/GitHub fetch, versioning, package config cleanup,
   scheduled-job installs, and containerization.
 
 ## Verifying the kernel

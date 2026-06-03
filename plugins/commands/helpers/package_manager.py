@@ -447,8 +447,11 @@ def _validate_manifest(manifest: dict) -> dict:
 
 def _validated_files(manifest: dict) -> list[str]:
     files = manifest["files"]
-    if not files:
-        raise PackageError("Manifest must include at least one file.")
+    # A file-less package is a bundle/meta-package: it ships no plugin files of
+    # its own and exists purely to pull in its `requires`. Allowed as long as it
+    # actually depends on something.
+    if not files and not manifest.get("requires"):
+        raise PackageError("Manifest must include at least one file or dependency.")
     return files
 
 
