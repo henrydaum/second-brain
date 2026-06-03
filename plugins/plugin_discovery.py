@@ -555,6 +555,8 @@ def _load_single_service(file_path: Path, services: dict, config: dict, bindings
 
     built = _call_build_services(module, module_name, config)
     if not built:
+        if _refresh_llm_backend_provider(module, services, config):
+            return "LLM backends", None
         return None, f"build_services() returned nothing in {file_path.name}"
 
     names = list(built.keys())
@@ -573,6 +575,20 @@ def _load_single_service(file_path: Path, services: dict, config: dict, bindings
 
     wire_peer_services(services)
     return ", ".join(names), None
+
+
+def _refresh_llm_backend_provider(module, services: dict, config: dict) -> bool:
+    try:
+        from plugins.services.service_llm import BaseLLM, refresh_llm_profile_services
+    except Exception:
+        return False
+    if any(
+        cls is not BaseLLM and cls.__module__ == module.__name__ and issubclass(cls, BaseLLM) and getattr(cls, "is_llm_backend", False)
+        for _name, cls in inspect.getmembers(module, inspect.isclass)
+    ):
+        refresh_llm_profile_services(services, config)
+        return True
+    return False
 
 
 def _source_path(path) -> str:

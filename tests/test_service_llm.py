@@ -11,11 +11,22 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from plugins.services.service_llm import (
+    BaseLLM,
     LLMProviderError,
+    LLMRouter,
     _build_llm_from_profile,
     is_context_limit_error,
+    refresh_llm_profile_services,
 )
-from plugins.services.service_litellm import LiteLLMService
+try:
+    from plugins.services.service_litellm import LiteLLMService
+except ModuleNotFoundError:
+    LiteLLMService = None
+
+
+def _require_litellm_plugin():
+    if LiteLLMService is None:
+        pytest.skip("LiteLLMService is an optional store plugin in lite.")
 
 
 def _install_fake_litellm(monkeypatch, completion):
@@ -26,6 +37,7 @@ def _install_fake_litellm(monkeypatch, completion):
 
 
 def _make_llm(monkeypatch, completion, **kwargs):
+    _require_litellm_plugin()
     _install_fake_litellm(monkeypatch, completion)
     llm = LiteLLMService("anthropic/claude-sonnet-4-6", **kwargs)
     llm.loaded = True
@@ -44,6 +56,7 @@ def _response(content="ok", tool_calls=None, prompt_tokens=10, cached_tokens=Non
 
 
 def test_build_from_profile_picks_litellm_service():
+    _require_litellm_plugin()
     llm = _build_llm_from_profile("anthropic/claude-sonnet-4-6", {
         "llm_service_class": "LiteLLMService",
         "llm_api_key": "ANTHROPIC_API_KEY",
@@ -71,6 +84,7 @@ def test_invoke_forwards_model_messages_and_credentials(monkeypatch):
 
 
 def test_custom_base_url_routes_unknown_model_as_openai_compatible(monkeypatch):
+    _require_litellm_plugin()
     calls = []
 
     def completion(**kwargs):
@@ -133,12 +147,14 @@ def test_context_limit_raises_provider_error(monkeypatch):
 
 
 def test_invoke_not_loaded_returns_error():
+    _require_litellm_plugin()
     llm = LiteLLMService("anthropic/claude-sonnet-4-6")
     result = llm.invoke([{"role": "user", "content": "hi"}])
     assert result.error_code == "not_loaded"
 
 
 def test_load_suppresses_litellm_logging(monkeypatch):
+    _require_litellm_plugin()
     _install_fake_litellm(monkeypatch, lambda **kwargs: _response())
     llm_logger = logging.getLogger("LiteLLM")
     llm_logger.addHandler(logging.StreamHandler())
@@ -175,6 +191,7 @@ def test_stream_yields_chunks(monkeypatch):
 
 
 def test_capabilities_come_from_profile_not_model_name():
+    _require_litellm_plugin()
     assert LiteLLMService("openai/gpt-4o").capabilities["image"] is None
     llm = _build_llm_from_profile("openai/gpt-4o", {
         "llm_service_class": "LiteLLMService",
@@ -182,6 +199,33 @@ def test_capabilities_come_from_profile_not_model_name():
     })
     assert llm.capabilities["image"] is True
     assert llm.capabilities["audio"] is False
+
+
+def test_refresh_llm_profile_services_adds_and_removes_backend(monkeypatch):
+    class StoreBackend(BaseLLM):
+        is_llm_backend = True
+        def __init__(self, model_name, api_key=None, base_url=None):
+            super().__init__()
+            self.model_name = model_name
+        def _load(self): self.loaded = True; return True
+        def unload(self): self.loaded = False
+        def invoke(self, messages, attachments=None, **kwargs): return _response()
+        def stream(self, messages, attachments=None, **kwargs): return iter(())
+        def chat_with_tools(self, messages, tools=None, **kwargs): return _response()
+
+    config = {"llm_profiles": {"model-x": {"llm_service_class": "StoreBackend"}}, "default_llm_profile": "model-x"}
+    services = {}
+    services["llm"] = LLMRouter(config, services)
+    monkeypatch.setattr("plugins.services.service_llm._llm_backend_classes", lambda: {"StoreBackend": StoreBackend})
+
+    assert refresh_llm_profile_services(services, config)
+    assert isinstance(services["model-x"], StoreBackend)
+    assert services["model-x"].loaded
+
+    monkeypatch.setattr("plugins.services.service_llm._llm_backend_classes", lambda: {})
+    assert refresh_llm_profile_services(services, config)
+    assert "model-x" not in services
+    assert services["llm"].active is None
 
 
 # ── Error classification heuristics ──────────────────────────────────

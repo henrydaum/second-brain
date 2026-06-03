@@ -6,6 +6,7 @@ plugins by file presence. These tests fake the loader and assert the
 scan/add/edit/delete/ignore paths and the user-facing chat notices.
 """
 
+import shutil
 from pathlib import Path
 
 from events.event_bus import bus
@@ -235,6 +236,47 @@ def test_plugin_watcher_wrong_name_does_not_load(monkeypatch):
     finally:
         path.unlink(missing_ok=True)
         root_dir.rmdir()
+
+
+def test_plugin_watcher_accepts_llm_backend_provider(monkeypatch):
+    """Verify service-family LLM backend files refresh profiles instead of failing."""
+    from plugins.services.service_llm import LLMRouter
+    messages = []
+    root_dir = Path(".codex_plugin_watcher")
+    path = root_dir / "service_fake_llm.py"
+    unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
+    try:
+        root_dir.mkdir(exist_ok=True)
+        path.write_text(
+            "from plugins.services.service_llm import BaseLLM, LLMResponse\n\n"
+            "class FakeBackend(BaseLLM):\n"
+            "    is_llm_backend = True\n"
+            "    def __init__(self, model_name, api_key=None, base_url=None): super().__init__(); self.model_name = model_name\n"
+            "    def _load(self): self.loaded = True; return True\n"
+            "    def unload(self): self.loaded = False\n"
+            "    def invoke(self, messages, attachments=None, **kwargs): return LLMResponse(content='ok')\n"
+            "    def stream(self, messages, attachments=None, **kwargs): return iter(())\n"
+            "    def chat_with_tools(self, messages, tools=None, **kwargs): return LLMResponse(content='ok')\n",
+            encoding="utf-8",
+        )
+        config = {"llm_profiles": {"model-x": {"llm_service_class": "FakeBackend"}}, "default_llm_profile": "model-x"}
+        services = {}
+        services["llm"] = LLMRouter(config, services)
+        _patch_plugin_dir(monkeypatch, root_dir, "service")
+        monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
+        service = PluginWatcherService(config)
+        service.services = services
+
+        service.handle_create_or_modify(str(path))
+
+        assert services["model-x"].loaded
+        assert messages == ["Registered plugin: LLM backends"]
+        path.unlink()
+        service.handle_delete(str(path))
+        assert "model-x" not in services
+    finally:
+        unsub()
+        shutil.rmtree(root_dir, ignore_errors=True)
 
 
 def test_plugin_watcher_refreshes_runtime_commands_on_command_load(monkeypatch):

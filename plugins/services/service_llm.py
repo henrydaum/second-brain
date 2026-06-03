@@ -286,6 +286,43 @@ def llm_backend_names() -> list[str]:
     return sorted(_llm_backend_classes())
 
 
+def refresh_llm_profile_services(services: dict | None, config: dict | None) -> bool:
+    """Resync live profile services after LLM backend files change."""
+    if not services or config is None:
+        return False
+    profiles = config.get("llm_profiles", {}) or {}
+    backends = _llm_backend_classes()
+    router = services.get("llm")
+    default_name = config.get("default_llm_profile") or ""
+    changed = False
+    for model_name, profile in profiles.items():
+        cls_name = profile.get("llm_service_class") or "LiteLLMService"
+        if cls_name in {"OpenAILLM", "LMStudioLLM"}:
+            cls_name = "LiteLLMService"
+        cls = backends.get(cls_name)
+        current = services.get(model_name)
+        if cls is None:
+            if isinstance(current, BaseLLM):
+                if getattr(current, "loaded", False):
+                    current.unload()
+                services.pop(model_name, None)
+                changed = True
+            continue
+        if current is None or current.__class__ is not cls:
+            was_loaded = getattr(current, "loaded", False)
+            if was_loaded:
+                current.unload()
+            services[model_name] = _build_llm_from_profile(model_name, profile)
+            services[model_name].set_peer_services(services)
+            if was_loaded or model_name == default_name:
+                services[model_name].load()
+            changed = True
+    if isinstance(router, LLMRouter):
+        router.services = services
+        router._mirror_active()
+    return changed
+
+
 def _load_sandbox_backend(path, module_name):
     _ensure_external_namespaces(module_name)
     if module_name in sys.modules:

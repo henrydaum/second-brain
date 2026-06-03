@@ -158,6 +158,8 @@ class PluginWatcherService(BaseService):
             command_registry=self._runtime.get("command_registry"),
             frontend_manager=self._runtime.get("frontend_manager"),
         )
+        if info.plugin_type == "service":
+            self._refresh_llm_backends()
         if info.plugin_type == "command":
             self._refresh_commands()
         self._reconcile_plugin_config()
@@ -202,6 +204,13 @@ class PluginWatcherService(BaseService):
             runtime.commands = registry.to_callable_specs()
         if runtime and hasattr(runtime, "refresh_session_specs"):
             runtime.refresh_session_specs()
+
+    def _refresh_llm_backends(self):
+        try:
+            from plugins.services.service_llm import refresh_llm_profile_services
+        except Exception:
+            return
+        refresh_llm_profile_services(self.services, self.config)
 
 
 class _PluginEventHandler(FileSystemEventHandler):
