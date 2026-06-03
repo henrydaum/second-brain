@@ -75,7 +75,7 @@ the difference between a microkernel and a pile of assumptions:
 ## Package store V1
 
 - **Local package store**: `/packages` reads explicit package manifests from the
-  local `store` git branch with `git show`, copies package files into
+  `origin/store` git ref with `git show`, copies package files into
   `DATA_DIR/installed_plugins`, loads recorded entrypoints, and writes receipts
   under `DATA_DIR/packages`. Uninstall mirrors install, refuses live dependents,
   and prunes only unneeded auto-installed dependencies.

@@ -113,7 +113,7 @@ def test_store_backend_reads_store_branch_without_checkout(tmp_path):
     subprocess.run(["git", "commit", "-m", "store"], cwd=repo, check=True, stdout=subprocess.PIPE)
     subprocess.run(["git", "checkout", main_branch], cwd=repo, check=True, stdout=subprocess.PIPE)
 
-    backend = GitStoreBackend(repo)
+    backend = GitStoreBackend(repo, ref="store")
 
     assert backend.get_index()[0]["id"] == "echo-tool"
     assert backend.get_manifest("echo-tool")["id"] == "echo-tool"

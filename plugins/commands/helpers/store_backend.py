@@ -1,4 +1,4 @@
-"""Read package-store files from a local git branch."""
+"""Read package-store files from a git ref."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ class StoreBackendError(RuntimeError):
 
 
 class GitStoreBackend:
-    """Branch-backed store reader."""
+    """Git-ref-backed store reader."""
 
-    def __init__(self, root_dir: str | Path, ref: str = "store"):
+    def __init__(self, root_dir: str | Path, ref: str = "origin/store"):
         self.root_dir = Path(root_dir)
         self.ref = ref
 
