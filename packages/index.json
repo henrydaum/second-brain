@@ -1,15 +1,6 @@
 {
   "packages": [
     {
-      "description": "Inspect runtime health and configuration from /doctor.",
-      "id": "command-doctor",
-      "name": "Doctor Command",
-      "tags": [
-        "command",
-        "diagnostics"
-      ]
-    },
-    {
       "description": "Manage MCP server configuration from /mcp.",
       "id": "command-mcp",
       "name": "MCP Command",
@@ -43,15 +34,6 @@
       "tags": [
         "command",
         "maintenance"
-      ]
-    },
-    {
-      "description": "Tiny package-store smoke test tool.",
-      "id": "echo-tool",
-      "name": "Echo Tool",
-      "tags": [
-        "example",
-        "tool"
       ]
     },
     {
