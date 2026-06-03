@@ -290,6 +290,16 @@
       ]
     },
     {
+      "description": "Bundle: a complete basic setup covering ~95% of everyday use \u2014 Telegram frontend, LiteLLM backend (most models), read/edit files, sql & shell tools, ask-user-question, plugin authoring (test_plugin), plus dream-memory and auto conversation titles.",
+      "id": "starter",
+      "name": "Starter",
+      "tags": [
+        "basics",
+        "bundle",
+        "starter"
+      ]
+    },
+    {
       "description": "Split extracted text into searchable chunks.",
       "id": "task-chunk-text",
       "name": "Chunk Text Task",

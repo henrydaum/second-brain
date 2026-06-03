@@ -1,0 +1,18 @@
+{
+  "description": "Bundle: a complete basic setup covering ~95% of everyday use \u2014 Telegram frontend, LiteLLM backend (most models), read/edit files, sql & shell tools, ask-user-question, plugin authoring (test_plugin), plus dream-memory and auto conversation titles.",
+  "files": [],
+  "id": "starter",
+  "name": "Starter",
+  "requires": [
+    "frontend-telegram",
+    "service-litellm",
+    "task-dream-memory",
+    "task-update-titles",
+    "tool-ask-user-question",
+    "tool-edit-file",
+    "tool-read-file",
+    "tool-run-command",
+    "tool-sql-query",
+    "tool-test-plugin"
+  ]
+}
