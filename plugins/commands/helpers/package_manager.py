@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from paths import INSTALLED_PLUGINS, PACKAGES_DIR
-from plugins.helpers.plugin_paths import PLUGIN_FAMILIES, plugin_info
+from plugins.helpers.plugin_paths import PLUGIN_FAMILIES, plugin_dirs, plugin_info
 from plugins.plugin_discovery import load_single_plugin, unload_plugin
 from plugins.commands.helpers.store_backend import GitStoreBackend
 
@@ -152,6 +152,8 @@ def _uninstall(package_id: str, context, *, lines: list[str], pruned: list[str],
     if dependents:
         raise PackageError(f"Cannot uninstall {package_id}; required by: {', '.join(dependents)}")
     receipt = _load_receipt(receipt_path)
+    cleanup = _cleanup_plan(receipt)
+    approved_cleanup = _approve_cleanup(context, package_id, cleanup, lines)
     for ep in receipt.get("entrypoints", []):
         _unload_entrypoint(ep, context)
     for item in sorted(receipt.get("files", []), key=lambda f: f.get("path", ""), reverse=True):
@@ -159,6 +161,8 @@ def _uninstall(package_id: str, context, *, lines: list[str], pruned: list[str],
         target.unlink(missing_ok=True)
     receipt_path.unlink(missing_ok=True)
     _remove_empty_dirs()
+    if approved_cleanup:
+        _apply_cleanup(context, cleanup, lines)
     lines.append(f"Uninstalled {package_id}.")
 
     for dep in receipt.get("requires", []):
@@ -270,6 +274,113 @@ def _import_roots(content: bytes) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             roots.add(node.module.split(".", 1)[0])
     return roots
+
+
+def _cleanup_plan(receipt: dict) -> dict[str, list[str]]:
+    owned_paths = {_target(item["path"]).resolve() for item in receipt.get("files", [])}
+    owned = _declared_state(owned_paths)
+    used_elsewhere = _declared_state(_other_plugin_files(owned_paths))
+    settings = sorted(owned["settings"] - used_elsewhere["settings"])
+    tables = sorted(owned["writes"] - (used_elsewhere["reads"] | used_elsewhere["writes"]))
+    return {
+        "settings": settings,
+        "tables": tables,
+        "kept_settings": sorted(owned["settings"] - set(settings)),
+        "kept_tables": sorted(owned["writes"] - set(tables)),
+    }
+
+
+def _approve_cleanup(context, package_id: str, cleanup: dict, lines: list[str]) -> bool:
+    if cleanup["kept_settings"]:
+        lines.append(f"Kept config setting(s) still declared by other plugins: {', '.join(cleanup['kept_settings'])}")
+    if cleanup["kept_tables"]:
+        lines.append(f"Kept table(s) still used by remaining tasks; their data may now be stale: {', '.join(cleanup['kept_tables'])}")
+    if not cleanup["settings"] and not cleanup["tables"]:
+        return False
+    ask = getattr(context, "request_user_input", None)
+    if ask is None:
+        lines.append("Cleanup available but no approval session is available; kept package config/table data.")
+        return False
+    prompt = "Delete package-owned data?\n\n"
+    if cleanup["settings"]:
+        prompt += "Config settings: " + ", ".join(cleanup["settings"]) + "\n"
+    if cleanup["tables"]:
+        prompt += "Tables: " + ", ".join(cleanup["tables"]) + "\n"
+    req = ask(f"Uninstall {package_id}", prompt.strip(), type="boolean")
+    if not req.wait(timeout=300.0) or not req.approved:
+        lines.append("Kept package config/table data.")
+        return False
+    return True
+
+
+def _apply_cleanup(context, cleanup: dict, lines: list[str]) -> None:
+    if cleanup["settings"]:
+        from config import config_manager
+        saved = config_manager.load_plugin_config()
+        for key in cleanup["settings"]:
+            saved.pop(key, None)
+            if getattr(context, "config", None) is not None:
+                context.config.pop(key, None)
+        config_manager.save_plugin_config(saved)
+        lines.append(f"Deleted config setting(s): {', '.join(cleanup['settings'])}")
+    if cleanup["tables"] and getattr(context, "db", None) is not None:
+        with context.db.lock:
+            for table in cleanup["tables"]:
+                context.db._validate_identifier(table)
+                context.db.conn.execute(f'DROP TABLE IF EXISTS "{table}"')
+            context.db.conn.commit()
+        lines.append(f"Deleted table(s): {', '.join(cleanup['tables'])}")
+
+
+def _other_plugin_files(excluded: set[Path]) -> set[Path]:
+    files = set()
+    for plugin_type in PLUGIN_FAMILIES:
+        for plugin_dir in plugin_dirs(plugin_type):
+            if plugin_dir.path.exists():
+                files.update(path.resolve() for path in plugin_dir.path.glob(f"{plugin_dir.prefix}*.py") if path.resolve() not in excluded)
+    return files
+
+
+def _declared_state(paths: set[Path]) -> dict[str, set[str]]:
+    state = {"settings": set(), "reads": set(), "writes": set()}
+    for path in paths:
+        if path.suffix != ".py" or not path.exists():
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.ClassDef, ast.Module)):
+                assigns = [item for item in getattr(node, "body", []) if isinstance(item, ast.Assign)]
+                for assign in assigns:
+                    names = [target.id for target in assign.targets if isinstance(target, ast.Name)]
+                    if "config_settings" in names:
+                        state["settings"].update(_setting_keys(assign.value))
+                    for attr in ("reads", "writes"):
+                        if attr in names:
+                            state[attr].update(_literal_strings(assign.value))
+    return state
+
+
+def _setting_keys(node) -> set[str]:
+    keys = set()
+    try:
+        settings = ast.literal_eval(node)
+    except Exception:
+        return keys
+    for entry in settings if isinstance(settings, list) else []:
+        if isinstance(entry, (list, tuple)) and len(entry) >= 2 and isinstance(entry[1], str):
+            keys.add(entry[1])
+    return keys
+
+
+def _literal_strings(node) -> set[str]:
+    try:
+        value = ast.literal_eval(node)
+    except Exception:
+        return set()
+    return {item for item in value if isinstance(item, str)} if isinstance(value, list) else set()
 
 
 def _validate_manifest(manifest: dict) -> dict:

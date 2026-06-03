@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -36,6 +38,8 @@ class _Context:
         self.config = {}
         self.command_registry = None
         self.runtime = None
+        self.request_user_input = None
+        self.db = None
 
 
 class _Backend:
@@ -66,12 +70,29 @@ def _patch_install_root(monkeypatch, tmp_path):
     roots = (paths.PluginRoot("installed", installed, "installed_plugins"),)
     config = dict(paths.PLUGIN_CONFIG)
     config["tool"] = (paths.PluginDir(roots[0], "tool", "tools", "tool_"),)
+    config["task"] = (paths.PluginDir(roots[0], "task", "tasks", "task_"),)
     monkeypatch.setattr(paths, "PLUGIN_ROOTS", roots)
     monkeypatch.setattr(paths, "PLUGIN_CONFIG", config)
     monkeypatch.setattr(package_manager, "INSTALLED_PLUGINS", installed)
     monkeypatch.setattr(package_manager, "RECEIPTS_DIR", receipts)
     monkeypatch.setattr(plugin_discovery, "PLUGIN_ROOTS", roots)
     return installed, receipts
+
+
+class _Approval:
+    def __init__(self, approved=True):
+        self.approved = approved
+
+    def wait(self, timeout=None):
+        return True
+
+
+class _Db:
+    _validate_identifier = staticmethod(lambda name: None)
+
+    def __init__(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.lock = threading.Lock()
 
 
 def _tool_source(summary='"echo ok"'):
@@ -259,3 +280,85 @@ def test_uninstall_refuses_when_another_package_depends_on_target(tmp_path, monk
 
     with pytest.raises(package_manager.PackageError):
         package_manager.uninstall_package("base", context)
+
+
+def test_uninstall_can_delete_owned_config_and_tables_after_approval(tmp_path, monkeypatch):
+    installed, _receipts = _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {"pkg": {"id": "pkg", "requires": [], "files": ["tasks/task_owned.py"], "entrypoints": []}},
+        {("pkg", "tasks/task_owned.py"): (
+            "from plugins.BaseTask import BaseTask\n"
+            "class OwnedTask(BaseTask):\n"
+            "    name = 'owned'\n"
+            "    writes = ['owned_table']\n"
+            "    config_settings = [('Owned', 'owned_key', '', 'x', {})]\n"
+        ).encode()},
+    )
+    saved = {}
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+    monkeypatch.setattr("config.config_manager.load_plugin_config", lambda: {"owned_key": "secret", "keep": "v"})
+    monkeypatch.setattr("config.config_manager.save_plugin_config", lambda data: saved.update(data))
+    context = _Context(tmp_path, _ToolRegistry())
+    context.config = {"owned_key": "secret"}
+    context.request_user_input = lambda *a, **k: _Approval(True)
+    context.db = _Db()
+    context.db.conn.execute("CREATE TABLE owned_table (id INTEGER)")
+    package_manager.install_package(tmp_path, "pkg", context)
+
+    result = package_manager.uninstall_package("pkg", context)
+
+    assert "Deleted config setting(s): owned_key" in result.lines
+    assert "Deleted table(s): owned_table" in result.lines
+    assert "owned_key" not in saved
+    assert "owned_key" not in context.config
+    with pytest.raises(sqlite3.OperationalError):
+        context.db.conn.execute("SELECT * FROM owned_table")
+    assert not (installed / "tasks" / "task_owned.py").exists()
+
+
+def test_uninstall_keeps_state_used_by_other_plugins(tmp_path, monkeypatch):
+    installed, _receipts = _patch_install_root(monkeypatch, tmp_path)
+    other = installed / "tasks" / "task_other.py"
+    other.parent.mkdir(parents=True)
+    other.write_text(
+        "from plugins.BaseTask import BaseTask\n"
+        "class OtherTask(BaseTask):\n"
+        "    name = 'other'\n"
+        "    reads = ['shared_table']\n"
+        "    config_settings = [('Shared', 'shared_key', '', 'x', {})]\n",
+        encoding="utf-8",
+    )
+    backend = _Backend(
+        {"pkg": {"id": "pkg", "requires": [], "files": ["tasks/task_owned.py"], "entrypoints": []}},
+        {("pkg", "tasks/task_owned.py"): (
+            "from plugins.BaseTask import BaseTask\n"
+            "class OwnedTask(BaseTask):\n"
+            "    name = 'owned'\n"
+            "    writes = ['shared_table']\n"
+            "    config_settings = [('Shared', 'shared_key', '', 'x', {})]\n"
+        ).encode()},
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+    context = _Context(tmp_path, _ToolRegistry())
+    context.request_user_input = lambda *a, **k: pytest.fail("should not ask")
+    package_manager.install_package(tmp_path, "pkg", context)
+
+    result = package_manager.uninstall_package("pkg", context)
+
+    assert "Kept config setting(s) still declared by other plugins: shared_key" in result.lines
+    assert "Kept table(s) still used by remaining tasks; their data may now be stale: shared_table" in result.lines
+
+
+def test_uninstall_without_approval_keeps_cleanup_data(tmp_path, monkeypatch):
+    _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {"pkg": {"id": "pkg", "requires": [], "files": ["tools/tool_cfg.py"], "entrypoints": []}},
+        {("pkg", "tools/tool_cfg.py"): b"config_settings = [('Owned', 'owned_key', '', 'x', {})]\n"},
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+    context = _Context(tmp_path, _ToolRegistry())
+    package_manager.install_package(tmp_path, "pkg", context)
+
+    result = package_manager.uninstall_package("pkg", context)
+
+    assert "Cleanup available but no approval session is available; kept package config/table data." in result.lines
