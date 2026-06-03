@@ -154,6 +154,15 @@
       ]
     },
     {
+      "description": "Bundle: scheduled background agents \u2014 the /schedule command, spawn-subagent task, and schedule-subagent tool.",
+      "id": "scheduling",
+      "name": "Scheduling",
+      "tags": [
+        "bundle",
+        "scheduling"
+      ]
+    },
+    {
       "description": "Google Drive OAuth service (registered as 'google_drive'); backs .gdoc and .gsheet parsing.",
       "id": "service-drive",
       "name": "Google Drive Service",
