@@ -25,7 +25,7 @@ def test_write_package_copies_file_and_dir_updates_index_and_validates(tmp_path)
         file_specs=[f"{tool}=tools/tool_echo.py", f"{helper_dir}=tools/helpers"],
         requires=[],
         tags=["example", "tool"],
-        entrypoints=[],
+        entrypoints=None,
         update=False,
     )
 
@@ -47,13 +47,33 @@ def test_write_package_refuses_existing_package_without_update(tmp_path):
         file_specs=[f"{source}=tools/tool_echo.py"],
         requires=[],
         tags=[],
-        entrypoints=[],
+        entrypoints=None,
     )
 
     package_publisher.write_package(**kwargs, update=False)
 
     with pytest.raises(package_publisher.StorePublishError):
         package_publisher.write_package(**kwargs, update=False)
+
+
+def test_write_package_can_record_no_entrypoints(tmp_path):
+    source = tmp_path / "tool_special.py"
+    source.write_text("print('special')\n", encoding="utf-8")
+
+    package_publisher.write_package(
+        tmp_path / "store",
+        package_id="tool-special",
+        name="Special Tool",
+        description="File-only special tool.",
+        file_specs=[f"{source}=tools/tool_special.py"],
+        requires=[],
+        tags=[],
+        entrypoints=[],
+        update=False,
+    )
+
+    manifest = json.loads((tmp_path / "store" / "packages" / "tool-special" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["entrypoints"] == []
 
 
 def test_validate_store_rejects_manifest_file_mismatch(tmp_path):

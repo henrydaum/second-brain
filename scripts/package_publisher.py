@@ -50,7 +50,7 @@ def publish_package(args) -> None:
             file_specs=args.file,
             requires=args.require,
             tags=args.tag,
-            entrypoints=args.entrypoint,
+            entrypoints=[] if args.no_entrypoints else args.entrypoint,
             update=args.update,
         )
         validate_store(worktree)
@@ -80,7 +80,7 @@ def write_package(
     file_specs: list[str],
     requires: list[str],
     tags: list[str],
-    entrypoints: list[str],
+    entrypoints: list[str] | None,
     update: bool,
 ) -> dict:
     package_manager._validate_package_id(package_id)
@@ -104,7 +104,7 @@ def write_package(
         "requires": sorted(set(requires)),
         "files": [dest.as_posix() for _source, dest in files],
     }
-    if entrypoints:
+    if entrypoints is not None:
         manifest["entrypoints"] = [package_manager._validate_rel_path(path) for path in entrypoints]
     package_dir.mkdir(parents=True, exist_ok=True)
     (package_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -262,7 +262,8 @@ def _parse_args(argv: list[str] | None):
     publish.add_argument("--file", action="append", required=True, help="SOURCE=DEST, repeatable. Directories are copied recursively.")
     publish.add_argument("--require", action="append", default=[])
     publish.add_argument("--tag", action="append", default=[])
-    publish.add_argument("--entrypoint", action="append", default=[])
+    publish.add_argument("--entrypoint", action="append", default=None)
+    publish.add_argument("--no-entrypoints", action="store_true", help="Write entrypoints: [] for file-only packages.")
     publish.add_argument("--update", action="store_true")
     publish.add_argument("--dry-run", action="store_true")
     publish.add_argument("--message")
