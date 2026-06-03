@@ -26,6 +26,7 @@ else:
 # these DATA_DIR trees hold agent drafts and installed optional plugins.
 SANDBOX_PLUGINS = DATA_DIR / "sandbox_plugins"
 INSTALLED_PLUGINS = DATA_DIR / "installed_plugins"
+PACKAGES_DIR = DATA_DIR / "packages"
 
 # Attachment cache: files dropped in from frontends (e.g. Telegram).
 # Registered as a sync_directory by default so the Stage_2 pipeline indexes them.

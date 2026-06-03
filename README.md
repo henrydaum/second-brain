@@ -292,11 +292,11 @@ Built-in commands include:
 | `/llm` | Select, edit, set default, or remove LLM profiles |
 | `/locations` | Show project and plugin directories |
 | `/new` | Start a conversation with default settings |
-| `/schedule` | Manage Timekeeper scheduled jobs |
+| `/packages` | Search, install, list, inspect, or uninstall local store packages |
 | `/services` | Select and load or unload services |
+| `/setup` | Configure the default LLM backend |
 | `/tasks` | Pause, resume, reset, retry, or trigger tasks |
 | `/tools` | Select and call tools |
-| `/update` | Pull latest changes from the repo |
 
 Built-in tools include:
 
@@ -378,6 +378,8 @@ Second Brain/
     ├── database.db
     ├── memory.md
     ├── attachment_cache/
+    ├── packages/
+    │   └── receipts/
     ├── sandbox_plugins/
     │   ├── commands/
     │   ├── frontends/

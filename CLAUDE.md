@@ -72,15 +72,15 @@ the difference between a microkernel and a pile of assumptions:
   optional doc-parsing deps commented). The full per-plugin
   dependency map is documented in that file's footer.
 
-## Next steps (not yet built)
+## Package store V1
 
-- **Plugin store**: a manifest per plugin (deps, default config, default scheduled
-  jobs, version), a registry (start GitHub-backed like skills), and a `/plugin`
-  command (`search`/`install`/`uninstall`/`list`). The install *substrate already
-  exists*: `plugin_discovery.load_single_plugin`/`unload_plugin`,
-  `service_plugin_watcher` hot-reload, the mirrored `DATA_DIR/sandbox_plugins`
-  and `DATA_DIR/installed_plugins` trees, and the pip-install gate.
-- **Versioning + containerization** (Henry's follow-on; design later).
+- **Local package store**: `/packages` reads explicit package manifests from the
+  local `store` git branch with `git show`, copies package files into
+  `DATA_DIR/installed_plugins`, loads recorded entrypoints, and writes receipts
+  under `DATA_DIR/packages`. Uninstall mirrors install, refuses live dependents,
+  and prunes only unneeded auto-installed dependencies.
+- **Deferred**: remote/GitHub fetch, versioning, package config cleanup, pip deps,
+  scheduled-job installs, and containerization.
 
 ## Verifying the kernel
 
