@@ -55,6 +55,16 @@
       ]
     },
     {
+      "description": "Bundle of bundles: a complete instance \u2014 starter (frontend, LLM, core tools, memory) + all-parsers (every file parser, Whisper, OCR) + indexing-search (full ingest & retrieval).",
+      "id": "full",
+      "name": "Full",
+      "tags": [
+        "bundle",
+        "full",
+        "recommended"
+      ]
+    },
+    {
       "description": "Bundle: Gmail integration \u2014 service plus check/send/mark-read/modify-labels tools.",
       "id": "gmail",
       "name": "Gmail",
