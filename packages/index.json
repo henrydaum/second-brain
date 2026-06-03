@@ -46,6 +46,16 @@
       ]
     },
     {
+      "description": "Bundle: Gmail integration \u2014 service plus check/send/mark-read/modify-labels tools.",
+      "id": "gmail",
+      "name": "Gmail",
+      "tags": [
+        "bundle",
+        "email",
+        "gmail"
+      ]
+    },
+    {
       "description": "Shared conversation-scope helper for Gmail tools.",
       "id": "helper-email-context",
       "name": "Email Context Helper",
