@@ -282,6 +282,16 @@
       ]
     },
     {
+      "description": "Pipeline task: OCR image files to text via the ocr service.",
+      "id": "task-ocr-images",
+      "name": "OCR Images Task",
+      "tags": [
+        "ocr",
+        "search",
+        "task"
+      ]
+    },
+    {
       "description": "Event task for scheduled background subagent runs.",
       "id": "task-spawn-subagent",
       "name": "Spawn Subagent Task",

@@ -1,0 +1,11 @@
+{
+  "description": "Pipeline task: OCR image files to text via the ocr service.",
+  "files": [
+    "tasks/task_ocr_images.py"
+  ],
+  "id": "task-ocr-images",
+  "name": "OCR Images Task",
+  "requires": [
+    "service-ocr"
+  ]
+}
