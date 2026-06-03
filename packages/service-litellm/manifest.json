@@ -2,7 +2,7 @@
   "description": "LiteLLM LLM backend discovered by the LLM router.",
   "entrypoints": [],
   "files": [
-    "services/helpers/llm_backends/litellm.py"
+    "services/service_litellm.py"
   ],
   "id": "service-litellm",
   "name": "LiteLLM Backend",
