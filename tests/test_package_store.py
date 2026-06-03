@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -140,6 +141,40 @@ def test_install_copies_loads_and_writes_receipt(tmp_path, monkeypatch):
     receipt = package_manager.installed_packages()[0]
     assert receipt["id"] == "echo-tool"
     assert receipt["entrypoints"][0]["path"] == "tools/tool_echo.py"
+
+
+def test_install_pip_installs_missing_imports_in_current_python(tmp_path, monkeypatch):
+    _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {"service-litellm": {"id": "service-litellm", "requires": [], "files": ["services/service_litellm.py"], "entrypoints": []}},
+        {("service-litellm", "services/service_litellm.py"): b"import pathlib\nimport litellm\nfrom plugins.services.service_llm import BaseLLM\n"},
+    )
+    calls = []
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+    monkeypatch.setattr(package_manager.importlib.util, "find_spec", lambda name: None if name == "litellm" else object())
+    monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: calls.append((cmd, kwargs)) or subprocess.CompletedProcess(cmd, 0, "", ""))
+
+    result = package_manager.install_package(tmp_path, "service-litellm", _Context(tmp_path, _ToolRegistry()))
+
+    assert calls[0][0] == [sys.executable, "-m", "pip", "install", "litellm"]
+    assert "Installed Python package(s): litellm" in result.lines
+    assert package_manager.installed_packages()[0]["pip_packages"] == ["litellm"]
+
+
+def test_install_pip_failure_aborts_package_install(tmp_path, monkeypatch):
+    installed, _receipts = _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {"bad": {"id": "bad", "requires": [], "files": ["tools/tool_bad.py"], "entrypoints": []}},
+        {("bad", "tools/tool_bad.py"): b"import definitely_missing_package\n"},
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+    monkeypatch.setattr(package_manager.importlib.util, "find_spec", lambda _name: None)
+    monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 1, "", "nope"))
+
+    with pytest.raises(package_manager.PackageError, match="pip install failed"):
+        package_manager.install_package(tmp_path, "bad", _Context(tmp_path, _ToolRegistry()))
+
+    assert not (installed / "tools" / "tool_bad.py").exists()
 
 
 def test_install_auto_installs_dependency(tmp_path, monkeypatch):

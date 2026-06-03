@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import importlib.util
 import json
 import re
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -19,6 +23,8 @@ from plugins.commands.helpers.store_backend import GitStoreBackend
 PACKAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 ALLOWED_ROOTS = {family for family, _prefix in PLUGIN_FAMILIES.values()} | {"helpers"}
 RECEIPTS_DIR = PACKAGES_DIR / "receipts"
+INTERNAL_IMPORTS = {"agent", "config", "events", "helpers", "installed_plugins", "paths", "pipeline", "plugins", "runtime", "sandbox_plugins", "state_machine", "templates", *ALLOWED_ROOTS}
+PIP_NAMES = {"PIL": "Pillow", "bs4": "beautifulsoup4", "cv2": "opencv-python", "docx": "python-docx", "googleapiclient": "google-api-python-client", "sklearn": "scikit-learn", "yaml": "PyYAML"}
 
 
 class PackageError(RuntimeError):
@@ -109,6 +115,7 @@ def _install(package_id: str, backend, context, *, requested: bool, active: set[
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(content)
                 written.append(target)
+            pip_installed = _install_missing_imports(file_bytes)
             loaded = _load_entrypoints(entrypoints, context)
             receipt = {
                 "id": package_id,
@@ -120,6 +127,7 @@ def _install(package_id: str, backend, context, *, requested: bool, active: set[
                 "manifest_hash": _sha256(backend.get_manifest_bytes(package_id)),
                 "files": [{"path": rel, "sha256": _sha256(content)} for rel, content in file_bytes.items()],
                 "entrypoints": loaded,
+                "pip_packages": pip_installed,
             }
             _write_receipt(receipt)
         except Exception:
@@ -128,6 +136,8 @@ def _install(package_id: str, backend, context, *, requested: bool, active: set[
             _remove_empty_dirs()
             raise
         installed.append(package_id)
+        if pip_installed:
+            lines.append(f"Installed Python package(s): {', '.join(pip_installed)}")
         lines.append(f"Installed {package_id}: {len(files)} file(s), {len(loaded)} plugin entrypoint(s).")
     finally:
         active.remove(package_id)
@@ -215,6 +225,51 @@ def _refresh_commands(context):
         runtime.commands = registry.to_callable_specs()
     if runtime and hasattr(runtime, "refresh_session_specs"):
         runtime.refresh_session_specs()
+
+
+def _install_missing_imports(file_bytes: dict[str, bytes]) -> list[str]:
+    packages = _missing_pip_packages(file_bytes)
+    if not packages:
+        return []
+    result = subprocess.run([sys.executable, "-m", "pip", "install", *packages], capture_output=True, text=True, timeout=600)
+    if result.returncode:
+        raise PackageError(f"pip install failed for {', '.join(packages)}:\n{result.stderr or result.stdout}")
+    return packages
+
+
+def _missing_pip_packages(file_bytes: dict[str, bytes]) -> list[str]:
+    roots = set()
+    for rel, content in file_bytes.items():
+        if rel.endswith(".py"):
+            roots.update(_import_roots(content))
+    stdlib = set(getattr(sys, "stdlib_module_names", set())) | set(sys.builtin_module_names)
+    missing = []
+    for root in sorted(roots):
+        if root in stdlib or root in INTERNAL_IMPORTS or _module_available(root):
+            continue
+        missing.append(PIP_NAMES.get(root, root))
+    return sorted(set(missing), key=str.lower)
+
+
+def _module_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:
+        return True
+
+
+def _import_roots(content: bytes) -> set[str]:
+    try:
+        tree = ast.parse(content.decode("utf-8"))
+    except Exception:
+        return set()
+    roots = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            roots.add(node.module.split(".", 1)[0])
+    return roots
 
 
 def _validate_manifest(manifest: dict) -> dict:
