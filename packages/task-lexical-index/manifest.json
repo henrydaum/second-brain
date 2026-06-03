@@ -1,0 +1,11 @@
+{
+  "description": "Write full-text lexical index rows for search.",
+  "files": [
+    "tasks/task_lexical_index.py"
+  ],
+  "id": "task-lexical-index",
+  "name": "Lexical Index Task",
+  "requires": [
+    "task-chunk-text"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "description": "Pull application updates from the configured git remote.",
+  "files": [
+    "commands/command_update.py"
+  ],
+  "id": "command-update",
+  "name": "Update Command",
+  "requires": []
+}

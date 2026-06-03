@@ -1,0 +1,9 @@
+{
+  "description": "Speech transcription service backed by Faster Whisper.",
+  "files": [
+    "services/service_whisper.py"
+  ],
+  "id": "service-whisper",
+  "name": "Whisper Service",
+  "requires": []
+}

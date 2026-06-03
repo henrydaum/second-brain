@@ -1,0 +1,9 @@
+{
+  "description": "Run scoped terminal commands with approval-aware behavior.",
+  "files": [
+    "tools/tool_run_command.py"
+  ],
+  "id": "tool-run-command",
+  "name": "Run Command Tool",
+  "requires": []
+}

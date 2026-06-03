@@ -1,0 +1,10 @@
+{
+  "description": "Ask the user to approve a plan and exit plan mode.",
+  "entrypoints": [],
+  "files": [
+    "tools/tool_propose_plan.py"
+  ],
+  "id": "tool-propose-plan",
+  "name": "Propose Plan Tool",
+  "requires": []
+}

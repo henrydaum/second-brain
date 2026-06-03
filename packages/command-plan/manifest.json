@@ -1,0 +1,11 @@
+{
+  "description": "Toggle plan mode for the active conversation.",
+  "files": [
+    "commands/command_plan.py"
+  ],
+  "id": "command-plan",
+  "name": "Plan Command",
+  "requires": [
+    "tool-propose-plan"
+  ]
+}

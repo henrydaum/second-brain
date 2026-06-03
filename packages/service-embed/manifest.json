@@ -1,0 +1,9 @@
+{
+  "description": "Text and image embedding services for indexed search.",
+  "files": [
+    "services/service_embed.py"
+  ],
+  "id": "service-embed",
+  "name": "Embedding Services",
+  "requires": []
+}

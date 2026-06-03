@@ -1,0 +1,13 @@
+{
+  "description": "Search indexed files by embedding similarity.",
+  "files": [
+    "tools/tool_semantic_search.py"
+  ],
+  "id": "tool-semantic-search",
+  "name": "Semantic Search Tool",
+  "requires": [
+    "helper-search-result",
+    "service-embed",
+    "tool-lexical-search"
+  ]
+}

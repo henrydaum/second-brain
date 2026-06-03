@@ -1,0 +1,9 @@
+{
+  "description": "OCR service implementations for images and documents.",
+  "files": [
+    "services/service_ocr.py"
+  ],
+  "id": "service-ocr",
+  "name": "OCR Services",
+  "requires": []
+}

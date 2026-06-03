@@ -1,0 +1,9 @@
+{
+  "description": "Inspect runtime health and configuration from /doctor.",
+  "files": [
+    "commands/command_doctor.py"
+  ],
+  "id": "command-doctor",
+  "name": "Doctor Command",
+  "requires": []
+}

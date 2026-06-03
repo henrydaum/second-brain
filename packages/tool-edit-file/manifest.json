@@ -1,0 +1,9 @@
+{
+  "description": "Create, edit, append, or delete UTF-8 text files.",
+  "files": [
+    "tools/tool_edit_file.py"
+  ],
+  "id": "tool-edit-file",
+  "name": "Edit File Tool",
+  "requires": []
+}
