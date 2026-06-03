@@ -73,6 +73,15 @@
       ]
     },
     {
+      "description": "Audio waveform loading via soundfile/librosa with ffprobe metadata.",
+      "id": "parser-audio",
+      "name": "Audio Parser",
+      "tags": [
+        "audio",
+        "parser"
+      ]
+    },
+    {
       "description": "Microsoft Office extraction \u2014 Word (.docx/.doc) and PowerPoint (.pptx) text and embedded images via python-docx and python-pptx.",
       "id": "parser-office",
       "name": "Office Parser",
