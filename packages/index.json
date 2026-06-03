@@ -145,6 +145,15 @@
       ]
     },
     {
+      "description": "Bundle: plan-first workflow \u2014 the /plan command, plan-mode service, and propose_plan tool.",
+      "id": "plan-mode",
+      "name": "Plan Mode",
+      "tags": [
+        "bundle",
+        "planning"
+      ]
+    },
+    {
       "description": "Google Drive OAuth service (registered as 'google_drive'); backs .gdoc and .gsheet parsing.",
       "id": "service-drive",
       "name": "Google Drive Service",
