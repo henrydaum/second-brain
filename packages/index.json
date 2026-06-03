@@ -56,6 +56,15 @@
       ]
     },
     {
+      "description": "Bundle: Google Drive \u2014 the Drive service plus the parsers that use it (.gdoc, and .gsheet via parser-tabular).",
+      "id": "google-drive",
+      "name": "Google Drive",
+      "tags": [
+        "bundle",
+        "google-drive"
+      ]
+    },
+    {
       "description": "Shared conversation-scope helper for Gmail tools.",
       "id": "helper-email-context",
       "name": "Email Context Helper",
