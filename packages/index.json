@@ -83,6 +83,15 @@
       ]
     },
     {
+      "description": "Bundle: Model Context Protocol support \u2014 the /mcp command, MCP service, and OAuth helper.",
+      "id": "mcp",
+      "name": "MCP",
+      "tags": [
+        "bundle",
+        "mcp"
+      ]
+    },
+    {
       "description": "Audio waveform loading via soundfile/librosa with ffprobe metadata.",
       "id": "parser-audio",
       "name": "Audio Parser",
