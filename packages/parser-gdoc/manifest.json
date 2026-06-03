@@ -1,0 +1,10 @@
+{
+  "description": "Google Docs (.gdoc) shortcut parsing \u2014 fetches document text via the google_drive service.",
+  "entrypoints": [],
+  "files": [
+    "services/helpers/parse_gdoc.py"
+  ],
+  "id": "parser-gdoc",
+  "name": "Google Docs Parser",
+  "requires": []
+}
