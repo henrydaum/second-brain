@@ -101,6 +101,16 @@
       ]
     },
     {
+      "description": "Bundle: full ingestion + retrieval \u2014 extract/chunk/embed/lexical-index tasks, OCR/transcribe/textualize tasks, embed & OCR & whisper services, and hybrid/lexical/semantic search tools.",
+      "id": "indexing-search",
+      "name": "Indexing & Search",
+      "tags": [
+        "bundle",
+        "indexing",
+        "search"
+      ]
+    },
+    {
       "description": "Bundle: Model Context Protocol support \u2014 the /mcp command, MCP service, and OAuth helper.",
       "id": "mcp",
       "name": "MCP",
