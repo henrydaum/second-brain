@@ -10,17 +10,27 @@ litellm
 # --- File watcher (pipeline/watcher) ---
 watchdog
 
-# --- Images: attachment handling + optional embedded-image extraction ---
+# --- Images: attachment handling + standard raster image parsing (parse_image) ---
+# Pillow is a hard kernel dependency: it backs attachment image routing and the
+# built-in image parser. HEIC/HEIF support is optional (pillow-heif, lazy).
 Pillow
 
 # --- Pytest ---
 pytest
 
-# --- Optional: rich document parsing (plugins/services/helpers/parse_text) ---
-# parse_text registers text/code extensions unconditionally; PDF/DOCX/PPTX and
-# in-PDF table extraction are gated behind these via try/except ImportError, so
-# they degrade gracefully when absent. Uncomment to enable.
-# PyMuPDF       # PDF text + table extraction (imported as `fitz`)
-# python-docx   # .docx extraction (imported as `docx`)
-# python-pptx   # .pptx extraction (imported as `pptx`)
-# pandas        # DataFrames for extracted PDF tables
+# --- Built-in parsers (plugins/services/helpers) ---
+# Only two parsers ship in the kernel, and both are dependency-light:
+#   parse_text   — UTF-8 / code / CSV / TSV (stdlib only)
+#   parse_image  — standard rasters via Pillow (above); HEIC via pillow-heif (lazy)
+#
+# Every richer parser is an installable store package that drops its own
+# services/helpers/parse_*.py and is picked up by the parser service's
+# discovery scan. Each pip dependency below is auto-installed by the package
+# manager when its package is installed — listed here only as a reference map:
+#   parser-pdf        -> PyMuPDF            (imported as `fitz`)
+#   parser-office     -> python-docx, python-pptx
+#   parser-tabular    -> pandas (+ openpyxl / pyarrow for xlsx / parquet)
+#   parser-audio      -> soundfile, librosa
+#   parser-video      -> av (PyAV)
+#   parser-gdoc       -> (none; needs the google_drive service)
+#   parser-container  -> stdlib for zip/tar/eml; py7zr / rarfile for 7z / rar

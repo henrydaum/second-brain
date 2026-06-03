@@ -33,6 +33,38 @@ logger = logging.getLogger("ParserRegistry")
 _REGISTRY: dict[tuple[str, str], callable] = {}
 _MODALITY_MAP: dict[str, str] = {}
 
+# Native modalities the LLM may ingest directly even when no parser is
+# installed for the extension. This is the kernel's standing knowledge of
+# "what kind of file is this?" — independent of which heavy parsers happen
+# to be installed — so attachment routing can still inline e.g. a .png into
+# a vision model with zero image parsers present. Registered parsers
+# (_MODALITY_MAP) take precedence over these defaults.
+_NATIVE_DEFAULTS: dict[str, str] = {
+    # Image
+    ".jpg": "image", ".jpeg": "image", ".png": "image", ".gif": "image",
+    ".webp": "image", ".bmp": "image", ".tiff": "image", ".tif": "image",
+    ".heic": "image", ".heif": "image", ".ico": "image",
+    # Audio
+    ".mp3": "audio", ".wav": "audio", ".flac": "audio", ".m4a": "audio",
+    ".aac": "audio", ".ogg": "audio", ".oga": "audio", ".opus": "audio",
+    ".wma": "audio",
+    # Video
+    ".mp4": "video", ".mov": "video", ".webm": "video", ".mkv": "video",
+    ".avi": "video",
+}
+
+
+def clear():
+    """Empty the registry so a fresh discovery scan can rebuild it.
+
+    The ParserService calls this before re-scanning the ``parse_*.py``
+    helper modules, so installing/uninstalling a parser package takes
+    effect on the next parser-service (re)load without stale entries.
+    The native-modality defaults are static and are not cleared.
+    """
+    _REGISTRY.clear()
+    _MODALITY_MAP.clear()
+
 
 def register(extensions: str | list[str], modality: str, func: callable):
     """
@@ -50,9 +82,13 @@ def register(extensions: str | list[str], modality: str, func: callable):
 
 
 def get_modality(extension: str) -> str:
-    """Get the default modality for an extension. Returns 'unknown' if unregistered."""
+    """Get the default modality for an extension.
+
+    A registered parser's modality wins; otherwise fall back to the static
+    native-modality defaults (image/audio/video); otherwise 'unknown'.
+    """
     ext = extension.lower() if extension.startswith(".") else f".{extension}"
-    return _MODALITY_MAP.get(ext, "unknown")
+    return _MODALITY_MAP.get(ext) or _NATIVE_DEFAULTS.get(ext) or "unknown"
 
 
 def get_modalities_for(extension: str) -> list[str]:

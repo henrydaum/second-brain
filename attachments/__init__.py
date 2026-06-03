@@ -1,32 +1,23 @@
-"""Attachment dataclasses, lightweight per-extension parsers, and the
-attachment cache (where frontends drop incoming files).
+"""Attachment dataclasses, the parser-service-backed attachment builder, and
+the attachment cache (where frontends drop incoming files).
 
-Attachment parsers are intentionally NOT plugins. Each one is a small
-function in ``attachments/parsers/parser_*.py`` that turns a file into a
-text blurb (e.g. audio -> transcription). The blurb is stored on the
-``Attachment`` dataclass and used by the LLM service as a prompt suffix
-when the model lacks the native capability for that modality.
-
-Three-tier routing in ``AttachmentBundle.for_llm(capabilities)``:
-    1. Native    - capability matches modality -> raw file path inlined.
-    2. Parsed    - parser produced text       -> appended as a suffix.
-    3. Pointer   - neither                    -> just file name + path.
+Attachments no longer carry their own parser registry. ``parse_attachment``
+builds an :class:`Attachment` using the unified parser service
+(``services["parser"]``): the parser supplies both the file's modality and an
+LLM-readable text blurb. ``AttachmentBundle.for_llm(capabilities)`` then does
+three-tier routing:
+    1. Native  - capability matches modality -> raw file path inlined.
+    2. Parsed  - parser produced text       -> appended as a suffix.
+    3. Pointer - neither                     -> just file name + path.
 """
 
 from attachments.attachment import Attachment, AttachmentBundle
-from attachments.registry import parse_attachment, modality_for, register
+from attachments.parse import parse_attachment
 from attachments.cache import save
-
-# Importing the parsers package triggers each parser's ``register(...)``
-# call so the registry is populated as soon as anything imports this
-# module.
-from attachments import parsers  # noqa: F401
 
 __all__ = [
     "Attachment",
     "AttachmentBundle",
     "parse_attachment",
-    "modality_for",
-    "register",
     "save",
 ]

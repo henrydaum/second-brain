@@ -24,7 +24,7 @@ PACKAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 ALLOWED_ROOTS = {family for family, _prefix in PLUGIN_FAMILIES.values()} | {"helpers"}
 RECEIPTS_DIR = PACKAGES_DIR / "receipts"
 INTERNAL_IMPORTS = {"agent", "config", "events", "helpers", "installed_plugins", "paths", "pipeline", "plugins", "runtime", "sandbox_plugins", "state_machine", "templates", *ALLOWED_ROOTS}
-PIP_NAMES = {"PIL": "Pillow", "bs4": "beautifulsoup4", "cv2": "opencv-python", "docx": "python-docx", "googleapiclient": "google-api-python-client", "sklearn": "scikit-learn", "yaml": "PyYAML"}
+PIP_NAMES = {"PIL": "Pillow", "bs4": "beautifulsoup4", "cv2": "opencv-python", "docx": "python-docx", "fitz": "PyMuPDF", "googleapiclient": "google-api-python-client", "pptx": "python-pptx", "sklearn": "scikit-learn", "yaml": "PyYAML"}
 
 
 class PackageError(RuntimeError):
