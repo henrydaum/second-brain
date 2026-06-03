@@ -61,10 +61,10 @@ def _format_installed(items: list[dict]) -> str:
         return "No packages installed.\nUse /packages search to browse available packages, then /packages install <id>."
     lines = ["Installed packages:"]
     for item in items:
-        mode = "requested" if item.get("requested") else "auto"
+        mode = "" if item.get("requested") else " [dependency]"
         deps = item.get("requires") or []
         suffix = f" (requires: {', '.join(deps)})" if deps else ""
-        lines.append(f"  {item.get('id')} [{mode}]{suffix}")
+        lines.append(f"  {item.get('id')}{mode}{suffix}")
     return "\n".join(lines)
 
 
