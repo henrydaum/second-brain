@@ -95,6 +95,17 @@
       ]
     },
     {
+      "description": "Tabular parsing \u2014 CSV/TSV, Excel, Parquet/Feather, SQLite, and Google Sheets \u2014 into pandas DataFrames.",
+      "id": "parser-tabular",
+      "name": "Tabular Parser",
+      "tags": [
+        "data",
+        "parser",
+        "spreadsheet",
+        "tabular"
+      ]
+    },
+    {
       "description": "Text and image embedding services for indexed search.",
       "id": "service-embed",
       "name": "Embedding Services",

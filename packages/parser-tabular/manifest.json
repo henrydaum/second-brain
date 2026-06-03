@@ -1,0 +1,10 @@
+{
+  "description": "Tabular parsing \u2014 CSV/TSV, Excel, Parquet/Feather, SQLite, and Google Sheets \u2014 into pandas DataFrames.",
+  "entrypoints": [],
+  "files": [
+    "services/helpers/parse_tabular.py"
+  ],
+  "id": "parser-tabular",
+  "name": "Tabular Parser",
+  "requires": []
+}
