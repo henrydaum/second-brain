@@ -1,0 +1,10 @@
+{
+  "description": "Bundle: web search \u2014 the web-search service and its tool.",
+  "files": [],
+  "id": "web-search",
+  "name": "Web Search",
+  "requires": [
+    "service-web-search",
+    "tool-web-search"
+  ]
+}

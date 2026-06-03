@@ -511,6 +511,16 @@
         "tool",
         "web-search"
       ]
+    },
+    {
+      "description": "Bundle: web search \u2014 the web-search service and its tool.",
+      "id": "web-search",
+      "name": "Web Search",
+      "tags": [
+        "bundle",
+        "search",
+        "web"
+      ]
     }
   ]
 }
