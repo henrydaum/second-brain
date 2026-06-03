@@ -312,6 +312,16 @@
       ]
     },
     {
+      "description": "Pipeline task: transcribe audio files to text via the whisper service.",
+      "id": "task-transcribe-audio",
+      "name": "Transcribe Audio Task",
+      "tags": [
+        "audio",
+        "search",
+        "task"
+      ]
+    },
+    {
       "description": "Event task for conversation title generation.",
       "id": "task-update-titles",
       "name": "Update Titles Task",

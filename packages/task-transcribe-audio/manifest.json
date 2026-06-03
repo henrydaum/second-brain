@@ -1,0 +1,11 @@
+{
+  "description": "Pipeline task: transcribe audio files to text via the whisper service.",
+  "files": [
+    "tasks/task_transcribe_audio.py"
+  ],
+  "id": "task-transcribe-audio",
+  "name": "Transcribe Audio Task",
+  "requires": [
+    "service-whisper"
+  ]
+}
