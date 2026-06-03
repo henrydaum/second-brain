@@ -56,7 +56,7 @@ class TimekeeperService(BaseService):
     def _load(self) -> bool:
         """Internal helper to load timekeeper service."""
         with self._lock:
-            self._load_jobs_from_config()
+            self._load_jobs_from_config(purge_expired=True)
             self._stop = threading.Event()
             self._thread = threading.Thread(target=self._loop, name="Timekeeper", daemon=True)
             self._thread.start()
@@ -208,7 +208,7 @@ class TimekeeperService(BaseService):
             else:
                 self._next_fire_at[name] = self._compute_next_fire(current, from_time=scheduled_for)
 
-    def _load_jobs_from_config(self):
+    def _load_jobs_from_config(self, purge_expired: bool = False):
         """Internal helper to load jobs from config."""
         raw = self._config.get("scheduled_jobs", {})
         if isinstance(raw, str):
@@ -222,15 +222,22 @@ class TimekeeperService(BaseService):
         jobs: dict[str, dict] = {}
         next_fire: dict[str, datetime | None] = {}
         now = _now_local()
+        purged = []
         for name, job_def in raw.items():
             if not isinstance(job_def, dict):
                 raise ValueError(f"Job '{name}' must be an object.")
             normalized = self._normalize_job(name, job_def)
+            if purge_expired and normalized["one_time"] and self._parse_datetime(normalized["run_at"], name) < now:
+                purged.append(name)
+                continue
             jobs[name] = normalized
             next_fire[name] = self._compute_next_fire(normalized, from_time=now)
 
         self._jobs = jobs
         self._next_fire_at = next_fire
+        if purged:
+            logger.info(f"Purged expired one-time job(s): {', '.join(sorted(purged))}")
+            self._persist_jobs()
 
     def _normalize_job(self, name: str, job_def: dict) -> dict:
         """Internal helper to normalize job."""
