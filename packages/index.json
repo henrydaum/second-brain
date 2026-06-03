@@ -73,6 +73,18 @@
       ]
     },
     {
+      "description": "Microsoft Office extraction \u2014 Word (.docx/.doc) and PowerPoint (.pptx) text and embedded images via python-docx and python-pptx.",
+      "id": "parser-office",
+      "name": "Office Parser",
+      "tags": [
+        "document",
+        "docx",
+        "office",
+        "parser",
+        "pptx"
+      ]
+    },
+    {
       "description": "PDF text, image, and table extraction via PyMuPDF (fitz).",
       "id": "parser-pdf",
       "name": "PDF Parser",
