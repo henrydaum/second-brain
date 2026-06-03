@@ -297,8 +297,6 @@ def refresh_llm_profile_services(services: dict | None, config: dict | None) -> 
     changed = False
     for model_name, profile in profiles.items():
         cls_name = profile.get("llm_service_class") or "LiteLLMService"
-        if cls_name in {"OpenAILLM", "LMStudioLLM"}:
-            cls_name = "LiteLLMService"
         cls = backends.get(cls_name)
         current = services.get(model_name)
         if cls is None:
@@ -360,8 +358,6 @@ def _build_llm_from_profile(model_name: str, profile: dict) -> BaseLLM:
     the dict key in ``llm_profiles`` and is passed in separately.
     """
     cls_name = profile.get("llm_service_class") or "LiteLLMService"
-    if cls_name in {"OpenAILLM", "LMStudioLLM"}:
-        cls_name = "LiteLLMService"
 
     api_key = profile.get("llm_api_key", "")
     resolved_key = os.environ.get(api_key, api_key) if api_key else None
