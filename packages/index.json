@@ -1,6 +1,15 @@
 {
   "packages": [
     {
+      "description": "Bundle: every file parser \u2014 PDF, Office, tabular, audio, video, Google Docs, containers \u2014 plus Whisper transcription and OCR.",
+      "id": "all-parsers",
+      "name": "All Parsers",
+      "tags": [
+        "bundle",
+        "parsers"
+      ]
+    },
+    {
       "description": "Manage MCP server configuration from /mcp.",
       "id": "command-mcp",
       "name": "MCP Command",
