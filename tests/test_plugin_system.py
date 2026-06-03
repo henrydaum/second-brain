@@ -10,6 +10,7 @@ from pathlib import Path
 
 from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED
+from plugins import plugin_discovery
 from plugins.services.service_plugin_watcher import PluginWatcherService
 
 
@@ -24,6 +25,10 @@ class _ToolRegistry:
         """Unregister tool registry."""
         self.unregistered.append(name)
 
+    def register(self, tool):
+        """Register tool registry."""
+        self.tools[tool.name] = tool
+
 
 def _patch_plugin_dir(monkeypatch, directory, plugin_type="tool"):
     """Internal helper to handle patch plugin dir."""
@@ -31,10 +36,26 @@ def _patch_plugin_dir(monkeypatch, directory, plugin_type="tool"):
     import plugins.services.service_plugin_watcher as watcher_mod
 
     config = dict(paths.PLUGIN_CONFIG)
-    built, sandbox, prefix, namespaces = config[plugin_type]
-    config[plugin_type] = (Path(directory).resolve(), sandbox, prefix, namespaces)
+    directory = Path(directory).resolve()
+    family = directory.name
+    root = paths.PluginRoot("test", directory.parent, "test_plugins")
+    prefix = paths.PLUGIN_FAMILIES[plugin_type][1]
+    config[plugin_type] = (paths.PluginDir(root, plugin_type, family, prefix),)
     monkeypatch.setattr(paths, "PLUGIN_CONFIG", config)
     monkeypatch.setattr(watcher_mod, "iter_plugin_dirs", lambda: [(plugin_type, Path(directory).resolve())])
+
+
+def _patch_tool_discovery(monkeypatch, roots):
+    """Patch tool discovery to use test roots."""
+    import plugins.helpers.plugin_paths as paths
+
+    plugin_roots = tuple(paths.PluginRoot(name, Path(root), module, built_in) for name, root, module, built_in in roots)
+    config = dict(paths.PLUGIN_CONFIG)
+    config["tool"] = tuple(paths.PluginDir(root, "tool", "tools", "tool_") for root in plugin_roots)
+    monkeypatch.setattr(paths, "PLUGIN_ROOTS", plugin_roots)
+    monkeypatch.setattr(paths, "PLUGIN_CONFIG", config)
+    monkeypatch.setattr(plugin_discovery, "PLUGIN_ROOTS", plugin_roots)
+    monkeypatch.setattr(plugin_discovery, "_TOOL_CONFIG", plugin_discovery._discovery_config("tool"))
 
 
 class _CommandRegistry:
@@ -286,6 +307,58 @@ def test_plugin_watcher_unload_cancels_pending_timers():
     service.unload()
 
     assert handler.cancelled
+
+
+def test_discovery_loads_sandbox_tree_relative_helpers(tmp_path, monkeypatch):
+    """Verify sandbox_plugins tools can import family-local helpers relatively."""
+    root = tmp_path / "sandbox_plugins"
+    tools = root / "tools"
+    helpers = tools / "helpers"
+    helpers.mkdir(parents=True)
+    (helpers / "answer.py").write_text('VALUE = "relative ok"\n', encoding="utf-8")
+    (tools / "tool_relative.py").write_text(
+        "from plugins.BaseTool import BaseTool, ToolResult\n"
+        "from .helpers.answer import VALUE\n\n"
+        "class RelativeTool(BaseTool):\n"
+        "    name = 'relative_tool'\n"
+        "    description = 'test'\n"
+        "    parameters = {}\n"
+        "    def run(self, context, **kwargs):\n"
+        "        return ToolResult(llm_summary=VALUE)\n",
+        encoding="utf-8",
+    )
+    _patch_tool_discovery(monkeypatch, (("sandbox", root, "sandbox_plugins", False),))
+    registry = _ToolRegistry()
+
+    plugin_discovery.discover_tools(tmp_path, registry, {}, reload=True)
+
+    assert registry.tools["relative_tool"].run(None).llm_summary == "relative ok"
+
+
+def test_discovery_precedence_prefers_sandbox_over_installed(tmp_path, monkeypatch):
+    """Verify earlier roots win name collisions."""
+    sandbox = tmp_path / "sandbox_plugins"
+    installed = tmp_path / "installed_plugins"
+    for root, label in ((sandbox, "sandbox"), (installed, "installed")):
+        tools = root / "tools"
+        tools.mkdir(parents=True)
+        (tools / "tool_same.py").write_text(
+            "from plugins.BaseTool import BaseTool\n\n"
+            "class SameTool(BaseTool):\n"
+            "    name = 'same_tool'\n"
+            f"    description = '{label}'\n"
+            "    parameters = {}\n",
+            encoding="utf-8",
+        )
+    _patch_tool_discovery(
+        monkeypatch,
+        (("sandbox", sandbox, "sandbox_plugins", False), ("installed", installed, "installed_plugins", False)),
+    )
+    registry = _ToolRegistry()
+
+    plugin_discovery.discover_tools(tmp_path, registry, {}, reload=True)
+
+    assert registry.tools["same_tool"].description == "sandbox"
 
 
 class _FakeHandler:

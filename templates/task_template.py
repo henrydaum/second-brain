@@ -9,11 +9,11 @@ inputs, outputs, and failure modes easy to inspect from code and database rows.
 
 Task authoring flow:
   1. Read this template, then read one similar built-in task for style.
-  2. Create sandbox_tasks/task_<your_name>.py with edit_file.
+  2. Create sandbox_plugins/tasks/task_<your_name>.py with edit_file.
   3. The code MUST inherit from BaseTask and include:
        from plugins.BaseTask import BaseTask, TaskResult
   4. Fill in the class attributes and implement run() or run_event().
-  5. Call test_plugin(plugin_path="sandbox_tasks/task_<your_name>.py").
+  5. Call test_plugin(plugin_path="sandbox_plugins/tasks/task_<your_name>.py").
   6. If testing fails, read the error, edit the same file, and retry.
   7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
   8. To update: edit the file; plugin_watcher reloads it when enabled.
@@ -32,10 +32,11 @@ test_plugin diagnostics cover:
 
 AUTO-DISCOVERY RULES
 --------------------
-- File must be in plugins/tasks/ (baked-in) or the sandbox tasks dir
+- File must be in plugins/tasks/, sandbox_plugins/tasks/, or installed_plugins/tasks/
 - File name must start with "task_"
 - Class must inherit from BaseTask
 - One task class per file (recommended)
+- Import host APIs from plugins.* and helper code with relative imports.
 
 
 TRIGGER KINDS

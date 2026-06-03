@@ -7,9 +7,10 @@ import os
 import logging
 import json
 import sys
+import types
 
 from plugins.BaseService import BaseService
-from plugins.helpers.plugin_paths import PLUGIN_CONFIG
+from plugins.helpers.plugin_paths import PLUGIN_ROOTS, plugin_dirs
 
 logger = logging.getLogger("LLMClass")
 
@@ -262,15 +263,16 @@ def _cached_prompt_tokens(usage) -> int | None:
 
 def _llm_backend_classes() -> dict[str, type[BaseLLM]]:
     backends = {}
-    built_dir, sandbox_dir, prefix, namespaces = PLUGIN_CONFIG["service"]
-    for directory, namespace in ((built_dir, namespaces[0]), (sandbox_dir, namespaces[1])):
+    for plugin_dir in plugin_dirs("service"):
+        directory = plugin_dir.path
         if not directory.exists():
             continue
-        for py_file in sorted(directory.glob(f"{prefix}*.py")):
+        for py_file in sorted(directory.glob(f"{plugin_dir.prefix}*.py")):
             if py_file.stem in {"service_llm"} or py_file.stem.startswith("_"):
                 continue
+            module_name = plugin_dir.module_name(py_file.stem)
             try:
-                module = importlib.import_module(namespace.format(stem=py_file.stem)) if namespace.startswith("plugins.") else _load_sandbox_backend(py_file, namespace.format(stem=py_file.stem))
+                module = importlib.import_module(module_name) if plugin_dir.root.built_in else _load_sandbox_backend(py_file, module_name)
             except Exception as e:
                 logger.warning(f"Could not inspect LLM backend {py_file.name}: {e}")
                 continue
@@ -285,6 +287,7 @@ def llm_backend_names() -> list[str]:
 
 
 def _load_sandbox_backend(path, module_name):
+    _ensure_external_namespaces(module_name)
     if module_name in sys.modules:
         return sys.modules[module_name]
     spec = importlib.util.spec_from_file_location(module_name, path)
@@ -292,6 +295,25 @@ def _load_sandbox_backend(path, module_name):
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _ensure_external_namespaces(module_name: str):
+    root_paths = {root.module: root.path for root in PLUGIN_ROOTS if not root.built_in}
+    parts = module_name.split(".")
+    root_path = root_paths.get(parts[0])
+    if root_path is None:
+        return
+    for i in range(1, len(parts)):
+        name = ".".join(parts[:i])
+        path = root_path.joinpath(*parts[1:i])
+        module = sys.modules.get(name)
+        if module is None:
+            module = types.ModuleType(name)
+            module.__path__ = [str(path)]
+            module.__package__ = name
+            sys.modules[name] = module
+        elif hasattr(module, "__path__") and str(path) not in module.__path__:
+            module.__path__.append(str(path))
 
 
 def _build_llm_from_profile(model_name: str, profile: dict) -> BaseLLM:

@@ -72,15 +72,15 @@ Frontends do not own that flow. `BaseFrontend` turns transport input into runtim
 
 Everything user-extensible is a plugin family:
 
-| Family | Built-in path | Sandbox path | Contract |
-|---|---|---|---|
-| Tools | `plugins/tools/` | `sandbox_tools/` | LLM-callable actions via `BaseTool` |
-| Tasks | `plugins/tasks/` | `sandbox_tasks/` | Pipeline and event work via `BaseTask` |
-| Services | `plugins/services/` | `sandbox_services/` | Shared backends via `BaseService` |
-| Commands | `plugins/commands/` | `sandbox_commands/` | User slash commands via `BaseCommand` |
-| Frontends | `plugins/frontends/` | `sandbox_frontends/` | User transports via `BaseFrontend` |
+| Family | Built-in path | Sandbox path | Installed path | Contract |
+|---|---|---|---|---|
+| Tools | `plugins/tools/` | `sandbox_plugins/tools/` | `installed_plugins/tools/` | LLM-callable actions via `BaseTool` |
+| Tasks | `plugins/tasks/` | `sandbox_plugins/tasks/` | `installed_plugins/tasks/` | Pipeline and event work via `BaseTask` |
+| Services | `plugins/services/` | `sandbox_plugins/services/` | `installed_plugins/services/` | Shared backends via `BaseService` |
+| Commands | `plugins/commands/` | `sandbox_plugins/commands/` | `installed_plugins/commands/` | User slash commands via `BaseCommand` |
+| Frontends | `plugins/frontends/` | `sandbox_plugins/frontends/` | `installed_plugins/frontends/` | User transports via `BaseFrontend` |
 
-Built-in plugins are source-controlled. Sandbox plugins live in the Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; when `plugin_watcher` is in `autoload_services`, adds, edits, and deletes are synced live.
+Built-in plugins are source-controlled. Sandbox drafts and installed optional plugins live in mirrored trees in the Second Brain data directory. Valid plugin entry files are discovered on startup; when `plugin_watcher` is in `autoload_services`, adds, edits, and deletes are synced live.
 
 The live authoring loop is:
 
@@ -266,7 +266,7 @@ python main.py
 Startup does the following:
 
 1. Loads config and plugin config.
-2. Creates data, attachment, and sandbox directories.
+2. Creates data, attachment, sandbox plugin, and installed plugin directories.
 3. Initializes SQLite.
 4. Discovers services, tasks, tools, commands, and frontends.
 5. Starts the task orchestrator.
@@ -321,7 +321,7 @@ Built-in tools include:
 Second Brain/
 ├── main.py                 # Console entry point
 ├── main.pyw                # Windowed startup script
-├── paths.py                # Root, data, attachment, and sandbox paths
+├── paths.py                # Root, data, attachment, and plugin tree paths
 │
 ├── state_machine/
 │   ├── conversation.py     # Participants, callable specs, forms, phases
@@ -378,11 +378,20 @@ Second Brain/
     ├── database.db
     ├── memory.md
     ├── attachment_cache/
-    ├── sandbox_tools/
-    ├── sandbox_tasks/
-    ├── sandbox_services/
-    ├── sandbox_commands/
-    └── sandbox_frontends/
+    ├── sandbox_plugins/
+    │   ├── commands/
+    │   ├── frontends/
+    │   ├── helpers/
+    │   ├── services/
+    │   ├── tasks/
+    │   └── tools/
+    └── installed_plugins/
+        ├── commands/
+        ├── frontends/
+        ├── helpers/
+        ├── services/
+        ├── tasks/
+        └── tools/
 ```
 
 ## Extension Authoring Guide
@@ -403,7 +412,8 @@ Authoring rules:
 - Commands are user-facing conversation actions and can define `FormStep` flows.
 - Frontends are transports; they submit runtime actions and render runtime output.
 - Plugins can declare `config_settings`, which appear in config views and are stored in `plugin_config.json`.
-- Sandbox plugins must follow naming conventions: `tool_*.py`, `task_*.py`, `service_*.py`, `command_*.py`, and `frontend_*.py`.
+- Sandbox and installed plugin entry files must follow naming conventions: `tool_*.py`, `task_*.py`, `service_*.py`, `command_*.py`, and `frontend_*.py`.
+- Import host APIs from `plugins.*`; import helpers inside a plugin tree with relative imports so files can move between sandbox, installed, and built-in trees.
 
 For source-controlled additions, move stable sandbox plugins into the matching built-in plugin directory. For live experimentation, keep them in the data directory, call `test_plugin`, and let `plugin_watcher` load them when it is enabled.
 

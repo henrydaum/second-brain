@@ -78,8 +78,8 @@ the difference between a microkernel and a pile of assumptions:
   jobs, version), a registry (start GitHub-backed like skills), and a `/plugin`
   command (`search`/`install`/`uninstall`/`list`). The install *substrate already
   exists*: `plugin_discovery.load_single_plugin`/`unload_plugin`,
-  `service_plugin_watcher` hot-reload, the `DATA_DIR/sandbox_*` discovery dirs, and
-  the pip-install gate. Seed catalog = the `store/` tree on this branch.
+  `service_plugin_watcher` hot-reload, the mirrored `DATA_DIR/sandbox_plugins`
+  and `DATA_DIR/installed_plugins` trees, and the pip-install gate.
 - **Versioning + containerization** (Henry's follow-on; design later).
 
 ## Verifying the kernel
@@ -187,8 +187,8 @@ payload)`. Telegram edits a single message in place: `⋯ /name` →
 ## Where to plug in
 
 - **Add a slash command**: drop a `BaseCommand` subclass into
-  [plugins/commands/](plugins/commands/) as `command_*.py`, or into the sandbox
-  command directory via `build_plugin`. Commands receive `SecondBrainContext`
+  [plugins/commands/](plugins/commands/) as `command_*.py`, or into
+  `DATA_DIR/sandbox_plugins/commands/` via `build_plugin`. Commands receive `SecondBrainContext`
   in both `form(args, context)` and `run(args, context)`.
 - **Add a tool**: drop a `BaseTool` subclass into [plugins/tools/](plugins/tools/);
   it's discovered automatically. Tools receive `SecondBrainContext` from
@@ -207,17 +207,19 @@ payload)`. Telegram edits a single message in place: `⋯ /name` →
 Slash commands now mirror the rest of the plugin system. The repo starts with a
 clean command slate: add built-ins as `command_*.py` files under
 [plugins/commands/](plugins/commands/), or create sandbox commands under
-`DATA_DIR/sandbox_commands`. The registry in
+`DATA_DIR/sandbox_plugins/commands`. The registry in
 [plugins/frontends/helpers/command_registry.py](plugins/frontends/helpers/command_registry.py)
 is only the adapter: it builds context-aware forms, parses one-shot `/cmd ...`
 input mechanically, and dispatches structured dict args.
 
 ## Sandbox plugin system
 
-The agent can author its own tools/tasks/services/commands into sandbox folders
-via the `build_plugin` tool. The `run_command` tool gates pip install/uninstall
-behind user approval. Sandbox plugins are auto-discovered alongside
-first-party ones in [plugins/](plugins/).
+The agent can author its own tools/tasks/services/commands into
+`DATA_DIR/sandbox_plugins/<family>/` via the `build_plugin` tool. The
+`run_command` tool gates pip install/uninstall behind user approval. Sandbox and
+installed plugins are auto-discovered alongside first-party ones in
+[plugins/](plugins/). Plugin helpers should use relative imports so files can
+move between the built-in, sandbox, and installed trees.
 
 ## Files that matter most
 

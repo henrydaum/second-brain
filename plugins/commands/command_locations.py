@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from paths import DATA_DIR, ROOT_DIR, SANDBOX_COMMANDS, SANDBOX_SERVICES, SANDBOX_TASKS, SANDBOX_TOOLS
+from paths import DATA_DIR, INSTALLED_PLUGINS, ROOT_DIR, SANDBOX_PLUGINS
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.formatters import format_locations
 from state_machine.conversation import FormStep
@@ -10,10 +10,9 @@ from state_machine.conversation import FormStep
 
 KINDS = {
     "root": (ROOT_DIR, DATA_DIR),
-    "commands": (ROOT_DIR / "plugins" / "commands", SANDBOX_COMMANDS),
-    "tools": (ROOT_DIR / "plugins" / "tools", SANDBOX_TOOLS),
-    "tasks": (ROOT_DIR / "plugins" / "tasks", SANDBOX_TASKS),
-    "services": (ROOT_DIR / "plugins" / "services", SANDBOX_SERVICES),
+    "plugins": (ROOT_DIR / "plugins", DATA_DIR),
+    "sandbox": (SANDBOX_PLUGINS, SANDBOX_PLUGINS),
+    "installed": (INSTALLED_PLUGINS, INSTALLED_PLUGINS),
 }
 
 

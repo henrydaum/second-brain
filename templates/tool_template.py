@@ -12,11 +12,11 @@ Write tools in the same voice the system expects elsewhere:
 
 Tool authoring flow:
   1. Read this template, then read one similar built-in tool for style.
-  2. Create sandbox_tools/tool_<your_name>.py with edit_file.
+  2. Create sandbox_plugins/tools/tool_<your_name>.py with edit_file.
   3. The code MUST inherit from BaseTool and include:
        from plugins.BaseTool import BaseTool, ToolResult
   4. Fill in the class attributes and implement run().
-  5. Call test_plugin(plugin_path="sandbox_tools/tool_<your_name>.py").
+  5. Call test_plugin(plugin_path="sandbox_plugins/tools/tool_<your_name>.py").
   6. If testing fails, read the error, edit the same file, and retry.
   7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
   8. To update: edit the file; plugin_watcher reloads it when enabled.
@@ -35,10 +35,11 @@ test_plugin diagnostics cover:
 
 AUTO-DISCOVERY RULES
 --------------------
-- File must be in plugins/tools/ (baked-in) or the sandbox tools dir
+- File must be in plugins/tools/, sandbox_plugins/tools/, or installed_plugins/tools/
 - File name must start with "tool_"
 - Class must inherit from BaseTool
 - One tool class per file (recommended)
+- Import host APIs from plugins.* and helper code with relative imports.
 
 
 TOOLS vs TASKS

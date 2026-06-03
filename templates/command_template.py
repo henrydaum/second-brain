@@ -10,12 +10,12 @@ interactive UI/workflow control; use tools for agent-callable capabilities.
 
 Command authoring flow:
   1. Read this template, then read one similar built-in command for style.
-  2. Create sandbox_commands/command_<your_name>.py with edit_file.
+  2. Create sandbox_plugins/commands/command_<your_name>.py with edit_file.
   3. The code MUST inherit from BaseCommand and include:
        from plugins.BaseCommand import BaseCommand
        from state_machine.conversation import FormStep
   4. Fill in name, description, category, optional form(), and run().
-  5. Call test_plugin(plugin_path="sandbox_commands/command_<your_name>.py").
+  5. Call test_plugin(plugin_path="sandbox_plugins/commands/command_<your_name>.py").
   6. If testing fails, read the error, edit the same file, and retry.
   7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
   8. To update: edit the file; plugin_watcher reloads it when enabled.
@@ -23,10 +23,11 @@ Command authoring flow:
 
 AUTO-DISCOVERY RULES
 --------------------
-- File must be in plugins/commands/ (baked-in) or the sandbox commands dir
+- File must be in plugins/commands/, sandbox_plugins/commands/, or installed_plugins/commands/
 - File name must start with "command_"
 - Class must inherit from BaseCommand
 - Class must have a non-empty `name`
+- Import host APIs from plugins.* and helper code with relative imports.
 
 FORMS
 -----

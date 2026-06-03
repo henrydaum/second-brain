@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from plugins.helpers.plugin_paths import PLUGIN_CONFIG, plugin_info
+from plugins.helpers.plugin_paths import PLUGIN_ROOTS, plugin_dirs, plugin_info
 
 logger = logging.getLogger("Discovery")
 
@@ -125,13 +125,10 @@ def _purge_plugin_settings(plugin_types: set[str]):
 
 def _discovery_config(plugin_type: str) -> dict:
     """Internal helper to handle discovery config."""
-    built_dir, sandbox_dir, prefix, namespaces = PLUGIN_CONFIG[plugin_type]
+    dirs = plugin_dirs(plugin_type)
     return {
-        "baked_in_dir": built_dir,
-        "sandbox_dir": sandbox_dir,
-        "glob": f"{prefix}*.py" if prefix else "*.py",
-        "baked_in_ns": namespaces[0],
-        "sandbox_ns": namespaces[1],
+        "dirs": dirs,
+        "glob": f"{dirs[0].prefix}*.py" if dirs else "*.py",
     }
 
 
@@ -152,53 +149,41 @@ def discover_all(root_dir: Path, tool_registry, orchestrator, config: dict) -> d
 
 
 def discover_commands(root_dir: Path, command_registry, config: dict | None = None, reload: bool = False):
-    """Discover and register all slash commands (baked-in + sandbox)."""
+    """Discover and register all slash commands."""
     from plugins.BaseCommand import BaseCommand
     cfg = _COMMAND_CONFIG
     t0 = time.time()
     count = 0
-    baked_in_names = set()
+    seen_names = set()
 
     if reload:
         _purge_plugin_settings({"command"})
 
-    if cfg["baked_in_dir"].exists():
-        for py_file in sorted(cfg["baked_in_dir"].glob(cfg["glob"])):
-            module_name = cfg["baked_in_ns"].format(stem=py_file.stem)
-            module = _load_baked_in(module_name, reload)
+    for plugin_dir in cfg["dirs"]:
+        if not plugin_dir.path.exists():
+            continue
+        for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
+            module_name = plugin_dir.module_name(py_file.stem)
+            module = _load_plugin_module(module_name, py_file, plugin_dir.root.built_in, reload)
             if module is None:
                 continue
             for instance in _find_subclass_instances(module, BaseCommand, module_name):
                 if not getattr(instance, "name", ""):
                     continue
-                instance._source_path = _source_path(py_file)
-                command_registry.register(instance)
-                _collect_config_settings(instance, plugin_type="command")
-                baked_in_names.add(instance.name)
-                count += 1
-
-    if cfg["sandbox_dir"].exists():
-        for py_file in sorted(cfg["sandbox_dir"].glob(cfg["glob"])):
-            module_name = cfg["sandbox_ns"].format(stem=py_file.stem)
-            module = _load_sandbox(module_name, py_file, reload)
-            if module is None:
-                continue
-            for instance in _find_subclass_instances(module, BaseCommand, module_name):
-                if not getattr(instance, "name", ""):
-                    continue
-                if instance.name in baked_in_names:
-                    logger.warning(f"Sandbox command '{instance.name}' collides with baked-in — skipped")
+                if instance.name in seen_names:
+                    logger.warning(f"Command '{instance.name}' from {plugin_dir.root.name} collides with an earlier root — skipped")
                     continue
                 instance._source_path = _source_path(py_file)
                 command_registry.register(instance)
                 _collect_config_settings(instance, plugin_type="command")
+                seen_names.add(instance.name)
                 count += 1
 
     logger.info(f"Discovered {count} command(s) in {time.time() - t0:.2f}s")
 
 
 def discover_frontends(root_dir: Path, config: dict | None = None, reload: bool = False) -> dict[str, type]:
-    """Discover frontend plugin classes (baked-in + sandbox).
+    """Discover frontend plugin classes.
 
     Returns ``{frontend_name: cls}``. Frontends are instantiated by the
     bootstrap layer (which supplies transport-specific constructor args)
@@ -209,176 +194,128 @@ def discover_frontends(root_dir: Path, config: dict | None = None, reload: bool 
     cfg = _FRONTEND_CONFIG
     t0 = time.time()
     found: dict[str, type] = {}
-    baked_in_names: set[str] = set()
+    seen_names: set[str] = set()
 
     if reload:
         _purge_plugin_settings({"frontend"})
 
-    if cfg["baked_in_dir"].exists():
-        for py_file in sorted(cfg["baked_in_dir"].glob(cfg["glob"])):
-            module_name = cfg["baked_in_ns"].format(stem=py_file.stem)
-            module = _load_baked_in(module_name, reload)
+    for plugin_dir in cfg["dirs"]:
+        if not plugin_dir.path.exists():
+            continue
+        for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
+            module_name = plugin_dir.module_name(py_file.stem)
+            module = _load_plugin_module(module_name, py_file, plugin_dir.root.built_in, reload)
             if module is None:
                 continue
             for cls in _find_subclasses(module, BaseFrontend, module_name):
                 name = getattr(cls, "name", "") or ""
                 if not name:
                     continue
-                cls._source_path = _source_path(py_file)
-                found[name] = cls
-                _collect_config_settings(cls, plugin_type="frontend")
-                baked_in_names.add(name)
-
-    if cfg["sandbox_dir"].exists():
-        for py_file in sorted(cfg["sandbox_dir"].glob(cfg["glob"])):
-            module_name = cfg["sandbox_ns"].format(stem=py_file.stem)
-            module = _load_sandbox(module_name, py_file, reload)
-            if module is None:
-                continue
-            for cls in _find_subclasses(module, BaseFrontend, module_name):
-                name = getattr(cls, "name", "") or ""
-                if not name:
-                    continue
-                if name in baked_in_names:
-                    logger.warning(f"Sandbox frontend '{name}' collides with baked-in — skipped")
+                if name in seen_names:
+                    logger.warning(f"Frontend '{name}' from {plugin_dir.root.name} collides with an earlier root — skipped")
                     continue
                 cls._source_path = _source_path(py_file)
                 found[name] = cls
                 _collect_config_settings(cls, plugin_type="frontend")
+                seen_names.add(name)
 
     logger.info(f"Discovered {len(found)} frontend(s) in {time.time() - t0:.2f}s")
     return found
 
 
 def discover_tools(root_dir: Path, tool_registry, config: dict, reload: bool = False):
-    """Discover and register all tools (baked-in + sandbox)."""
+    """Discover and register all tools."""
     from plugins.BaseTool import BaseTool
     cfg = _TOOL_CONFIG
     t0 = time.time()
     count = 0
-    baked_in_names = set()
+    seen_names = set()
 
     if reload:
         _purge_plugin_settings({"tool"})
 
-    # Baked-in
-    for py_file in sorted(cfg["baked_in_dir"].glob(cfg["glob"])):
-        module_name = cfg["baked_in_ns"].format(stem=py_file.stem)
-        module = _load_baked_in(module_name, reload)
-        if module is None:
+    for plugin_dir in cfg["dirs"]:
+        if not plugin_dir.path.exists():
             continue
-        for instance in _find_subclass_instances(module, BaseTool, module_name):
-            instance._source_path = _source_path(py_file)
-            tool_registry.register(instance)
-            _collect_config_settings(instance, plugin_type="tool")
-            baked_in_names.add(instance.name)
-            count += 1
-
-    # Sandbox
-    if cfg["sandbox_dir"].exists():
-        for py_file in sorted(cfg["sandbox_dir"].glob(cfg["glob"])):
-            module_name = cfg["sandbox_ns"].format(stem=py_file.stem)
-            module = _load_sandbox(module_name, py_file, reload)
+        for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
+            module_name = plugin_dir.module_name(py_file.stem)
+            module = _load_plugin_module(module_name, py_file, plugin_dir.root.built_in, reload)
             if module is None:
                 continue
             for instance in _find_subclass_instances(module, BaseTool, module_name):
-                if instance.name in baked_in_names:
-                    logger.warning(f"Sandbox tool '{instance.name}' collides with baked-in — skipped")
+                if instance.name in seen_names:
+                    logger.warning(f"Tool '{instance.name}' from {plugin_dir.root.name} collides with an earlier root — skipped")
                     continue
                 instance._source_path = _source_path(py_file)
                 tool_registry.register(instance)
                 _collect_config_settings(instance, plugin_type="tool")
+                seen_names.add(instance.name)
                 count += 1
 
     logger.info(f"Discovered {count} tool(s) in {time.time() - t0:.2f}s")
 
 
 def discover_tasks(root_dir: Path, orchestrator, config: dict, reload: bool = False):
-    """Discover and register all tasks (baked-in + sandbox)."""
+    """Discover and register all tasks."""
     from plugins.BaseTask import BaseTask
     cfg = _TASK_CONFIG
     t0 = time.time()
     count = 0
-    baked_in_names = set()
+    seen_names = set()
 
     if reload:
         _purge_plugin_settings({"task"})
 
-    # Baked-in
-    for py_file in sorted(cfg["baked_in_dir"].glob(cfg["glob"])):
-        module_name = cfg["baked_in_ns"].format(stem=py_file.stem)
-        module = _load_baked_in(module_name, reload)
-        if module is None:
+    for plugin_dir in cfg["dirs"]:
+        if not plugin_dir.path.exists():
             continue
-        for instance in _find_subclass_instances(module, BaseTask, module_name):
-            instance._source_path = _source_path(py_file)
-            orchestrator.register_task(instance)
-            _collect_config_settings(instance, plugin_type="task")
-            baked_in_names.add(instance.name)
-            count += 1
-
-    # Sandbox
-    if cfg["sandbox_dir"].exists():
-        for py_file in sorted(cfg["sandbox_dir"].glob(cfg["glob"])):
-            module_name = cfg["sandbox_ns"].format(stem=py_file.stem)
-            module = _load_sandbox(module_name, py_file, reload)
+        for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
+            module_name = plugin_dir.module_name(py_file.stem)
+            module = _load_plugin_module(module_name, py_file, plugin_dir.root.built_in, reload)
             if module is None:
                 continue
             for instance in _find_subclass_instances(module, BaseTask, module_name):
-                if instance.name in baked_in_names:
-                    logger.warning(f"Sandbox task '{instance.name}' collides with baked-in — skipped")
+                if instance.name in seen_names:
+                    logger.warning(f"Task '{instance.name}' from {plugin_dir.root.name} collides with an earlier root — skipped")
                     continue
                 instance._source_path = _source_path(py_file)
                 orchestrator.register_task(instance)
                 _collect_config_settings(instance, plugin_type="task")
+                seen_names.add(instance.name)
                 count += 1
 
     logger.info(f"Discovered {count} task(s) in {time.time() - t0:.2f}s")
 
 
 def discover_services(root_dir: Path, config: dict) -> dict:
-    """Discover all services (baked-in + sandbox). Returns {name: instance}."""
+    """Discover all services. Returns {name: instance}."""
     _setting_to_services.clear()
     _purge_plugin_settings({"service"})
     cfg = _SERVICE_CONFIG
     t0 = time.time()
     services = {}
-    baked_in_names = set()
+    seen_names = set()
 
-    # Baked-in
-    for py_file in sorted(cfg["baked_in_dir"].glob(cfg["glob"])):
-        if py_file.stem.startswith("_"):
+    for plugin_dir in cfg["dirs"]:
+        if not plugin_dir.path.exists():
             continue
-        module_name = cfg["baked_in_ns"].format(stem=py_file.stem)
-        module = _load_baked_in(module_name, reload=False)
-        if module is None:
-            continue
-        built = _call_build_services(module, module_name, config)
-        built_names = list(built.keys())
-        for svc_name, svc in built.items():
-            svc._source_path = _source_path(py_file)
-            _collect_config_settings(svc, service_names=built_names, plugin_type="service")
-            services[svc_name] = svc
-            baked_in_names.add(svc_name)
-
-    # Sandbox
-    if cfg["sandbox_dir"].exists():
-        for py_file in sorted(cfg["sandbox_dir"].glob(cfg["glob"])):
+        for py_file in sorted(plugin_dir.path.glob(cfg["glob"])):
             if py_file.stem.startswith("_"):
                 continue
-            module_name = cfg["sandbox_ns"].format(stem=py_file.stem)
-            module = _load_sandbox(module_name, py_file, reload=False)
+            module_name = plugin_dir.module_name(py_file.stem)
+            module = _load_plugin_module(module_name, py_file, plugin_dir.root.built_in, reload=False)
             if module is None:
                 continue
             built = _call_build_services(module, module_name, config)
-            built_names = [n for n in built if n not in baked_in_names]
+            built_names = [n for n in built if n not in seen_names]
             for svc_name, svc in built.items():
-                if svc_name in baked_in_names:
-                    logger.warning(f"Sandbox service '{svc_name}' collides with baked-in — skipped")
+                if svc_name in seen_names:
+                    logger.warning(f"Service '{svc_name}' from {plugin_dir.root.name} collides with an earlier root — skipped")
                     continue
                 svc._source_path = _source_path(py_file)
                 _collect_config_settings(svc, service_names=built_names, plugin_type="service")
                 services[svc_name] = svc
+                seen_names.add(svc_name)
 
     wire_peer_services(services)
     logger.info(f"Discovered {len(services)} service(s) in {time.time() - t0:.2f}s")
@@ -499,7 +436,7 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
         return None, err
     module_name = info.module_name
 
-    module = _load_sandbox(module_name, file_path, reload=True)
+    module = _load_plugin_module(module_name, file_path, info.built_in, reload=True)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -526,7 +463,7 @@ def _load_single_frontend(file_path: Path, frontend_manager) -> tuple[str | None
     if frontend_manager is None:
         return None, "No frontend manager available"
 
-    module = _load_sandbox(module_name, file_path, reload=True)
+    module = _load_plugin_module(module_name, file_path, info.built_in, reload=True)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -554,7 +491,7 @@ def _load_single_command(file_path: Path, command_registry) -> tuple[str | None,
     if command_registry is None:
         return None, "No command registry available"
 
-    module = _load_sandbox(module_name, file_path, reload=True)
+    module = _load_plugin_module(module_name, file_path, info.built_in, reload=True)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -577,7 +514,7 @@ def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str 
         return None, err
     module_name = info.module_name
 
-    module = _load_sandbox(module_name, file_path, reload=True)
+    module = _load_plugin_module(module_name, file_path, info.built_in, reload=True)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -612,7 +549,7 @@ def _load_single_service(file_path: Path, services: dict, config: dict, bindings
     }
     _unload_services_by_source(services, _source_path(file_path))
 
-    module = _load_sandbox(module_name, file_path, reload=True)
+    module = _load_plugin_module(module_name, file_path, info.built_in, reload=True)
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
@@ -658,29 +595,69 @@ def _load_baked_in(module_name: str, reload: bool):
     return None
 
 
-def _load_sandbox(module_name: str, file_path: Path, reload: bool):
-    """Load a sandbox module via spec_from_file_location.
+def _load_plugin_module(module_name: str, file_path: Path, built_in: bool, reload: bool):
+    """Load a plugin module from a built-in or DATA_DIR plugin tree."""
+    return _load_baked_in(module_name, reload) if built_in else _load_external(module_name, file_path, reload)
+
+
+def _load_external(module_name: str, file_path: Path, reload: bool):
+    """Load a DATA_DIR plugin module via spec_from_file_location.
 
     Always uses spec_from_file_location (never importlib.reload) because
     reload() can't re-find specs for modules loaded this way.
     """
     try:
+        _ensure_external_namespaces(module_name)
         if reload:
+            _purge_external_helper_modules(module_name)
             sys.modules.pop(module_name, None)
         elif module_name in sys.modules:
             return sys.modules[module_name]
         spec = importlib.util.spec_from_file_location(module_name, file_path)
         if spec is None:
-            logger.error(f"Failed to load sandbox plugin {file_path.name}: spec not found")
+            logger.error(f"Failed to load plugin {file_path.name}: spec not found")
             return None
         module = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = module
         spec.loader.exec_module(module)
         return module
     except Exception as e:
-        logger.error(f"Failed to load sandbox plugin {file_path.name}: {e}")
+        logger.error(f"Failed to load plugin {file_path.name}: {e}")
         sys.modules.pop(module_name, None)
     return None
+
+
+def _purge_external_helper_modules(module_name: str):
+    """Drop helper modules that may be reused by a reloaded plugin."""
+    parts = module_name.split(".")
+    if len(parts) < 3:
+        return
+    prefixes = (f"{parts[0]}.{parts[1]}.helpers", f"{parts[0]}.helpers")
+    for name in list(sys.modules):
+        if any(name == prefix or name.startswith(prefix + ".") for prefix in prefixes):
+            sys.modules.pop(name, None)
+
+
+def _ensure_external_namespaces(module_name: str):
+    """Create namespace packages for DATA_DIR plugin roots."""
+    import types
+
+    root_paths = {root.module: root.path for root in PLUGIN_ROOTS if not root.built_in}
+    parts = module_name.split(".")
+    root_path = root_paths.get(parts[0])
+    if root_path is None:
+        return
+    for i in range(1, len(parts)):
+        name = ".".join(parts[:i])
+        path = root_path.joinpath(*parts[1:i])
+        module = sys.modules.get(name)
+        if module is None:
+            module = types.ModuleType(name)
+            module.__path__ = [str(path)]
+            module.__package__ = name
+            sys.modules[name] = module
+        elif hasattr(module, "__path__") and str(path) not in module.__path__:
+            module.__path__.append(str(path))
 
 
 def _find_subclass_instances(module, base_class, module_name: str) -> list:

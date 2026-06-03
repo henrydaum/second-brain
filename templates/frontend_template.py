@@ -12,11 +12,11 @@ when adding a new transport or presentation layer.
 Frontend authoring flow:
   1. Read this template, then read plugins/frontends/frontend_repl.py or
      frontend_telegram.py for the closest existing transport.
-  2. Create sandbox_frontends/frontend_<your_name>.py with edit_file.
+  2. Create sandbox_plugins/frontends/frontend_<your_name>.py with edit_file.
   3. The code MUST inherit from BaseFrontend and include:
        from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
   4. Fill in name, description, capabilities, lifecycle, session_key(), and render_* methods.
-  5. Call test_plugin(plugin_path="sandbox_frontends/frontend_<your_name>.py").
+  5. Call test_plugin(plugin_path="sandbox_plugins/frontends/frontend_<your_name>.py").
   6. If testing fails, read the error, edit the same file, and retry.
   7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
   8. To update: edit the file; plugin_watcher reloads it when enabled.
@@ -24,10 +24,11 @@ Frontend authoring flow:
 
 AUTO-DISCOVERY RULES
 --------------------
-- File must be in plugins/frontends/ (baked-in) or the sandbox frontends dir
+- File must be in plugins/frontends/, sandbox_plugins/frontends/, or installed_plugins/frontends/
 - File name must start with "frontend_"
 - Class must inherit from BaseFrontend
 - Class must have a non-empty `name`
+- Import host APIs from plugins.* and helper code with relative imports.
 
 FRONTEND CONTRACT
 -----------------

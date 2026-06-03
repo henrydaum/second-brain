@@ -168,17 +168,17 @@ def _plugin_contracts() -> str:
         """## Plugin contracts
 Second Brain has five plugin families: tools, tasks, services, commands, and frontends.
 
-Built-in plugins live under plugins/<family>. Sandbox plugins live in the matching DATA_DIR sandbox directory. Templates are the source of truth. To learn more about how they work, read the files directly."""
+Built-in plugins live under plugins/<family>. Sandbox drafts live under DATA_DIR/sandbox_plugins/<family>; installed optional plugins live under DATA_DIR/installed_plugins/<family>. Templates are the source of truth. To learn more about how they work, read the files directly."""
     )
 
 
 def _authoring_guidance() -> str:
-    from paths import DATA_DIR, ROOT_DIR
+    from paths import ROOT_DIR, SANDBOX_PLUGINS
     return (
         f"""## Building plugins
 You can extend Second Brain by authoring tools, tasks, services, commands, and frontends.
 
-Read the matching template in templates/, then write the plugin into {DATA_DIR}/sandbox_<family>/ with the required prefix, e.g. tool_foo.py in {DATA_DIR}/sandbox_tools/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
+Read the matching template in templates/, then write the plugin into {SANDBOX_PLUGINS}/<family>/ with the required prefix, e.g. tool_foo.py in {SANDBOX_PLUGINS}/tools/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
 
 Workflow:
 1. Understand the user's intended behavior. Ask clarifying questions when a missing decision would materially change the design.
@@ -192,16 +192,16 @@ Workflow:
 Valid plugin files are loaded, reloaded, or unloaded as they change when plugin_watcher is loaded.
 To remove a plugin from the live runtime, delete its file with the run_command tool.
 
-Names must be unique across built-in and sandbox plugins. Config settings use (title, variable_name, description, default, type_info), are stored in plugin_config.json, and are read with context.config.get(key).
+Names must be unique across built-in, sandbox, and installed plugins. Import kernel APIs with absolute plugins.* imports; import plugin helpers with relative imports such as from .helpers.foo import bar or from ..helpers.shared import thing. Config settings use (title, variable_name, description, default, type_info), are stored in plugin_config.json, and are read with context.config.get(key).
 
 The context object is passed to every plugin and contains relevant runtime information and helper methods. Read its definition in runtime/context.py if you have questions about how to use it effectively in your plugin code."""
     )
 
 
 def _sandbox_files() -> str:
-    from paths import SANDBOX_COMMANDS, SANDBOX_FRONTENDS, SANDBOX_SERVICES, SANDBOX_TASKS, SANDBOX_TOOLS
+    from paths import SANDBOX_PLUGINS
     lines = []
-    for sd in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS):
+    for sd in (SANDBOX_PLUGINS / "tools", SANDBOX_PLUGINS / "tasks", SANDBOX_PLUGINS / "services", SANDBOX_PLUGINS / "commands", SANDBOX_PLUGINS / "frontends"):
         if sd.exists():
             lines.extend(f"  {p}" for p in sorted(sd.glob("*.py")) if not p.name.startswith("_"))
     return "## Sandbox plugins\n" + ("\n".join(lines) if lines else """## Sandbox plugins

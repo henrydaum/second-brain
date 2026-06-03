@@ -72,9 +72,11 @@ def main():
 		logger.error("No sync_directories set in config.json. Add at least one folder path.")
 		sys.exit(1)
 
-	# --- 1b. Ensure sandbox directories exist ---
-	from paths import SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS
-	for d in (SANDBOX_TOOLS, SANDBOX_TASKS, SANDBOX_SERVICES, SANDBOX_COMMANDS, SANDBOX_FRONTENDS):
+	# --- 1b. Ensure mutable plugin directories exist ---
+	from plugins.helpers.plugin_paths import iter_plugin_dirs
+	for _plugin_type, d in iter_plugin_dirs():
+		if d.is_relative_to(_ROOT / "plugins"):
+			continue
 		d.mkdir(parents=True, exist_ok=True)
 
 	# --- 1c. Load existing plugin config into runtime config ---

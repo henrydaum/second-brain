@@ -22,12 +22,10 @@ elif _system == "Darwin":
 else:
     DATA_DIR = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "Second Brain"
 
-# Sandbox directories for agent-created plugins
-SANDBOX_TOOLS    = DATA_DIR / "sandbox_tools"
-SANDBOX_TASKS    = DATA_DIR / "sandbox_tasks"
-SANDBOX_SERVICES = DATA_DIR / "sandbox_services"
-SANDBOX_COMMANDS = DATA_DIR / "sandbox_commands"
-SANDBOX_FRONTENDS = DATA_DIR / "sandbox_frontends"
+# Mirrored plugin trees. ``plugins/`` in the repo is the kernel/bundled tree;
+# these DATA_DIR trees hold agent drafts and installed optional plugins.
+SANDBOX_PLUGINS = DATA_DIR / "sandbox_plugins"
+INSTALLED_PLUGINS = DATA_DIR / "installed_plugins"
 
 # Attachment cache: files dropped in from frontends (e.g. Telegram).
 # Registered as a sync_directory by default so the Stage_2 pipeline indexes them.

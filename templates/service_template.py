@@ -9,7 +9,7 @@ config they need, when they are loaded, and how callers should access them.
 
 Service authoring flow:
   1. Read this template, then read one similar built-in service for style.
-  2. Create sandbox_services/service_<your_name>.py with edit_file.
+  2. Create sandbox_plugins/services/service_<your_name>.py with edit_file.
   3. The code MUST inherit from BaseService and include:
        from plugins.BaseService import BaseService
   4. Choose lifecycle:
@@ -17,7 +17,7 @@ Service authoring flow:
        - extension: runtime hook/prompt/scope helper, set lifecycle = "extension".
   5. Implement your service methods. Override _load()/unload() only when real setup/cleanup is needed.
   6. Add a build_services(config) factory function at the bottom.
-  7. Call test_plugin(plugin_path="sandbox_services/service_<your_name>.py").
+  7. Call test_plugin(plugin_path="sandbox_plugins/services/service_<your_name>.py").
   8. If testing fails, read the error, edit the same file, and retry.
   9. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
  10. To update: edit the file; plugin_watcher reloads it when enabled.
@@ -36,11 +36,12 @@ test_plugin diagnostics cover:
 
 AUTO-DISCOVERY RULES
 --------------------
-- File must be in plugins/services/ (baked-in) or the sandbox services dir
+- File must be in plugins/services/, sandbox_plugins/services/, or installed_plugins/services/
 - File name must start with "service_"
 - Module must have a top-level build_services(config) -> dict function
 - The returned dict maps service names to service instances
 - Service names are how tasks/tools reference the service in requires_services
+- Import host APIs from plugins.* and helper code with relative imports.
 
 
 SERVICE LIFECYCLE
