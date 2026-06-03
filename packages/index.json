@@ -73,6 +73,16 @@
       ]
     },
     {
+      "description": "PDF text, image, and table extraction via PyMuPDF (fitz).",
+      "id": "parser-pdf",
+      "name": "PDF Parser",
+      "tags": [
+        "document",
+        "parser",
+        "pdf"
+      ]
+    },
+    {
       "description": "Text and image embedding services for indexed search.",
       "id": "service-embed",
       "name": "Embedding Services",
