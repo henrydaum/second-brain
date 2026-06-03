@@ -79,6 +79,10 @@ the difference between a microkernel and a pile of assumptions:
   `DATA_DIR/installed_plugins`, loads recorded entrypoints, and writes receipts
   under `DATA_DIR/packages`. Uninstall mirrors install, refuses live dependents,
   and prunes only unneeded auto-installed dependencies.
+- **Publishing**: use `python scripts/package_publisher.py publish <id> --name ...`
+  with repeatable `--file SOURCE=DEST`, `--require`, `--tag`, and `--update`.
+  The script uses a temporary worktree for `origin/store`, validates the whole
+  store, commits, and pushes without switching or dirtying the current branch.
 - **Deferred**: remote/GitHub fetch, versioning, package config cleanup, pip deps,
   scheduled-job installs, and containerization.
 
