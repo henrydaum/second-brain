@@ -117,6 +117,7 @@ def _install(package_id: str, backend, context, *, requested: bool, active: set[
                 written.append(target)
             pip_installed = _install_missing_imports(file_bytes)
             loaded = _load_entrypoints(entrypoints, context)
+            _reload_parser_service_if_needed(file_bytes, context, lines)
             receipt = {
                 "id": package_id,
                 "name": manifest.get("name", package_id),
@@ -156,11 +157,13 @@ def _uninstall(package_id: str, context, *, lines: list[str], pruned: list[str],
     approved_cleanup = _approve_cleanup(context, package_id, cleanup, lines)
     for ep in receipt.get("entrypoints", []):
         _unload_entrypoint(ep, context)
+    removed_paths = [item["path"] for item in receipt.get("files", [])]
     for item in sorted(receipt.get("files", []), key=lambda f: f.get("path", ""), reverse=True):
         target = _target(item["path"])
         target.unlink(missing_ok=True)
     receipt_path.unlink(missing_ok=True)
     _remove_empty_dirs()
+    _reload_parser_service_if_needed(removed_paths, context, lines)
     if approved_cleanup:
         _apply_cleanup(context, cleanup, lines)
     lines.append(f"Uninstalled {package_id}.")
@@ -220,6 +223,41 @@ def _unload_entrypoint(entrypoint: dict, context):
     )
     if entrypoint.get("type") == "command":
         _refresh_commands(context)
+
+
+def _is_parser_helper(rel: str) -> bool:
+    """Whether a package file is a parser-discovery helper (services/helpers/parse_*.py).
+
+    Such files aren't plugin entrypoints — they register (extension, modality)
+    parsers when the parser service scans its helper dirs — so installing or
+    removing one only takes effect on a parser-service reload.
+    """
+    p = PurePosixPath(rel)
+    return (
+        len(p.parts) == 3
+        and p.parts[0] == "services"
+        and p.parts[1] == "helpers"
+        and p.suffix == ".py"
+        and p.name.startswith("parse_")
+    )
+
+
+def _reload_parser_service_if_needed(file_rels, context, lines: list[str]) -> None:
+    """Reload the parser service so newly written/removed parser helpers take
+    effect live, without an app restart. Non-fatal: a reload failure is noted
+    but never fails the install/uninstall."""
+    if not any(_is_parser_helper(rel) for rel in file_rels):
+        return
+    parser = (getattr(context, "services", None) or {}).get("parser")
+    if parser is None:
+        return
+    try:
+        if getattr(parser, "loaded", False):
+            parser.unload()
+        parser.load()
+        lines.append("Reloaded parser service; file parsers are now active.")
+    except Exception as e:
+        lines.append(f"Parser service reload failed (restart to apply): {e}")
 
 
 def _refresh_commands(context):
