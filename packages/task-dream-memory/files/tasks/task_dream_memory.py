@@ -74,6 +74,7 @@ class DreamMemory(BaseTask):
          "Agent profile whose LLM rewrites memory.md. 'default' follows the default LLM.",
          "default", {"type": "text"}),
     ]
+    agent_prompt = "Nightly, dream_memory may rewrite memory.md with reusable lessons and preferences."
 
     def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
         """Run event."""
