@@ -263,9 +263,9 @@
       ]
     },
     {
-      "description": "OCR service implementations for images and documents.",
+      "description": "Image-to-text OCR. Cross-platform install (pillow-heif for HEIC); the OCR engine itself is your choice and is loaded lazily per platform \u2014 Windows OCR (winrt), macOS Vision (pyobjc), or easyocr+torch \u2014 install the one you want separately.",
       "id": "service-ocr",
-      "name": "OCR Services",
+      "name": "OCR Service",
       "tags": [
         "ocr",
         "service"
