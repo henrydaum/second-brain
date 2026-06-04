@@ -63,6 +63,8 @@ class PackagesCommand(BaseCommand):
                 return package_manager.uninstall_package(args.get("package_id", ""), context, cleanup_approvals=approvals).text()
             return f"Unknown action: {action}"
         except (package_manager.PackageError, StoreBackendError) as e:
+            if action in {"install", "info"} and _is_missing_manifest(e, args.get("package_id", "")):
+                return f"Package {action} failed: {args.get('package_id', '')!r} not found."
             return f"Package {action} failed: {e}"
 
 
@@ -72,6 +74,10 @@ def _is_bundle(item: dict) -> bool:
 
 def _cleanup_arg(package_id: str) -> str:
     return "cleanup__" + re.sub(r"[^a-zA-Z0-9_]", "_", package_id)
+
+
+def _is_missing_manifest(error: Exception, package_id: str) -> bool:
+    return bool(package_id) and f"packages/{package_id}/manifest.json" in str(error) and "does not exist" in str(error)
 
 
 def _format_index(items: list[dict], installed: set[str] = frozenset()) -> str:

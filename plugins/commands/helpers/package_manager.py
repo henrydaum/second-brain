@@ -334,9 +334,10 @@ def _install_missing_imports(file_bytes: dict[str, bytes], declared_pip: list[st
         packages = _missing_pip_packages(file_bytes)
     if not packages:
         return []
-    result = subprocess.run([sys.executable, "-m", "pip", "install", *packages], text=True, timeout=600)
+    print(f"Installing Python package(s): {', '.join(packages)}. This may take a while.", flush=True)
+    result = subprocess.run([sys.executable, "-m", "pip", "install", *packages], capture_output=True, text=True, timeout=600)
     if result.returncode:
-        raise PackageError(f"pip install failed for {', '.join(packages)}:\n{getattr(result, 'stderr', '') or getattr(result, 'stdout', '')}")
+        raise PackageError(f"pip install failed for {', '.join(packages)}:\n{result.stderr or result.stdout}")
     return packages
 
 

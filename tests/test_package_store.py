@@ -13,7 +13,7 @@ import pytest
 
 from plugins.commands.helpers import package_manager
 from plugins.commands.command_packages import PackagesCommand
-from plugins.commands.helpers.store_backend import GitStoreBackend
+from plugins.commands.helpers.store_backend import GitStoreBackend, StoreBackendError
 from plugins import plugin_discovery
 
 
@@ -414,3 +414,14 @@ def test_packages_uninstall_form_collects_pruned_dependency_cleanup(tmp_path, mo
 
     assert "Kept package config/table data." in result
     assert not package_manager.installed_packages()
+
+
+def test_packages_install_missing_package_hides_git_manifest_error(tmp_path, monkeypatch):
+    def missing(*_args, **_kwargs):
+        raise StoreBackendError("Could not read origin/store:packages/hfs/manifest.json: fatal: path 'packages/hfs/manifest.json' does not exist in 'origin/store'")
+
+    monkeypatch.setattr(package_manager, "install_package", missing)
+
+    result = PackagesCommand().run({"action": "install", "package_id": "hfs"}, _Context(tmp_path, _ToolRegistry()))
+
+    assert result == "Package install failed: 'hfs' not found."
