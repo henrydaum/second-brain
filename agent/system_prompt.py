@@ -15,17 +15,34 @@ at the tail of the prompt also preserves the cacheable prefix.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from plugins.services.helpers.parser_registry import get_supported_extensions
 from runtime.agent_scope import AgentScope
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _STATIC_PROMPT_PATH = Path(__file__).with_name("system_prompt_static.md")
 
 SYSTEM_CONTEXT_MARKER = "[SYSTEM CONTEXT UPDATE]"
+
+
+@dataclass
+class PromptContext:
+    """Read-only bag passed to each plugin's ``agent_prompt_for``.
+
+    Plugins read whatever they need (db/services/orchestrator/config/scope/
+    frontend_name) to build their system-prompt contribution. Kept distinct from
+    the heavier SecondBrainContext so the prompt builder stays a pure function.
+    """
+    db: Any = None
+    services: dict = field(default_factory=dict)
+    orchestrator: Any = None
+    config: dict = field(default_factory=dict)
+    scope: "AgentScope | None" = None
+    profile_name: str = "default"
+    frontend_name: str | None = None
 
 
 def _static_prompt() -> str:
@@ -46,17 +63,32 @@ def build_prompt_sections(
     conversation_metadata: dict[str, Any] | None = None,
     prompt_extras: dict[str, Any] | None = None,
     notification_suffix: str = "",
+    frontend_name: str | None = None,
+    frontend=None,
+    command_filter: Callable[[str], bool] | None = None,
 ) -> list[dict[str, str]]:
-    """Build ordered system prompt messages."""
+    """Build ordered system prompt messages.
+
+    Optional per-plugin guidance is collected from whatever tools/services/tasks/
+    commands/frontend are currently in scope (each plugin's ``agent_prompt_for``),
+    so installed packages bring their own guidance and uninstalling removes it —
+    the kernel no longer hardcodes prompt text for plugins it may not ship.
+    """
     r = tool_registry
+    pctx = PromptContext(
+        db=db, services=services or {}, orchestrator=orchestrator,
+        config=config or {}, scope=scope, profile_name=profile_name,
+        frontend_name=frontend_name,
+    )
     semi = [
         _tool_catalog(r),
-        _command_catalog(commands),
-        _authoring_guidance() if _has_tool(r, "test_plugin") else _plugin_contracts(),
-        _sandbox_files() if _has_tool(r, "test_plugin") else "",
-        _attachments() if _has_tool(r, "sql_query") else "",
-        _database_tables(db) if _has_tool(r, "sql_query") else "",
-        _scheduling_guidance() if _has_tool(r, "schedule_subagent") else "",
+        _command_catalog(commands, command_filter),
+        _plugin_contracts(),
+        _collect(_visible_tools_for_prompt(r), pctx),
+        _collect(_loaded_services_for_prompt(services), pctx),
+        _collect(_tasks_for_prompt(orchestrator), pctx),
+        _collect(_visible_commands_for_prompt(commands, command_filter), pctx),
+        _collect([frontend] if frontend is not None else [], pctx),
     ]
     dynamic = [
         _current_datetime(),
@@ -65,7 +97,6 @@ def build_prompt_sections(
         _services_status(services),
         _pipeline_status(db, orchestrator),
         _sync_dirs(config),
-        _file_inventory(db) if _has_any(r, "read_file", "hybrid_search", "lexical_search", "semantic_search") else "",
         _agent_memory(),
         _conversation_metadata(conversation_metadata),
         _prompt_extras(prompt_extras),
@@ -93,12 +124,45 @@ def _section(title: str, content: str) -> str:
     return f"[{title}]\n{content.strip()}"
 
 
-def _has_tool(registry, name: str) -> bool:
-    return bool(registry) and name in getattr(registry, "tools", {})
+def _collect(plugins, ctx: PromptContext) -> str:
+    """Join non-empty ``agent_prompt_for`` contributions from in-scope plugins."""
+    parts = []
+    for plugin in plugins:
+        try:
+            text = (plugin.agent_prompt_for(ctx) or "").strip()
+        except Exception:
+            text = ""
+        if text:
+            parts.append(text)
+    return "\n\n".join(parts)
 
 
-def _has_any(registry, *names: str) -> bool:
-    return any(_has_tool(registry, n) for n in names)
+def _visible_tools_for_prompt(registry):
+    """Tools the agent can currently see (profile-scoped), sorted by name."""
+    if not registry or not hasattr(registry, "_visible_tools"):
+        return []
+    return sorted(registry._visible_tools(), key=lambda t: getattr(t, "name", ""))
+
+
+def _loaded_services_for_prompt(services: dict):
+    """Loaded service instances, sorted by registry name."""
+    return [svc for _, svc in sorted((services or {}).items()) if getattr(svc, "loaded", False)]
+
+
+def _tasks_for_prompt(orchestrator):
+    """Registered task instances, sorted by name."""
+    tasks = getattr(orchestrator, "tasks", {}) or {}
+    return [tasks[name] for name in sorted(tasks)]
+
+
+def _visible_commands_for_prompt(commands, command_filter):
+    """Commands visible under the current frontend's policy, sorted by name."""
+    if not commands or not hasattr(commands, "visible_commands"):
+        return []
+    try:
+        return commands.visible_commands(command_filter)
+    except Exception:
+        return []
 
 
 def _current_datetime() -> str:
@@ -134,11 +198,11 @@ def _tool_catalog(tool_registry) -> str:
     return "\n".join(lines)
 
 
-def _command_catalog(commands) -> str:
+def _command_catalog(commands, command_filter=None) -> str:
     lines = ["## Available slash commands"]
     entries = []
     try:
-        entries = commands.visible_commands() if hasattr(commands, "visible_commands") else []
+        entries = commands.visible_commands(command_filter) if hasattr(commands, "visible_commands") else []
     except Exception:
         entries = []
     if entries:
@@ -172,61 +236,6 @@ Built-in plugins live under plugins/<family>. Sandbox drafts live under DATA_DIR
     )
 
 
-def _authoring_guidance() -> str:
-    from paths import ROOT_DIR, SANDBOX_PLUGINS
-    return (
-        f"""## Building plugins
-You can extend Second Brain by authoring tools, tasks, services, commands, and frontends.
-
-Read the matching template in templates/, then write the plugin into {SANDBOX_PLUGINS}/<family>/ with the required prefix, e.g. tool_foo.py in {SANDBOX_PLUGINS}/tools/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
-
-Workflow:
-1. Understand the user's intended behavior. Ask clarifying questions when a missing decision would materially change the design.
-2. Read the relevant template with read_file.
-3. Read a similar built-in or sandbox plugin when one exists.
-4. Write the file into the correct sandbox directory using the file-editing tools.
-5. Call test_plugin(plugin_path=...) after edits for naming, import, contract, and diagnostic feedback.
-6. Treat pytest output as broad regression context, not proof that the plugin's behavior is correct.
-7. If diagnostics, pytest, or watcher logs show a failure, edit the same file and test again.
-
-Valid plugin files are loaded, reloaded, or unloaded as they change when plugin_watcher is loaded.
-To remove a plugin from the live runtime, delete its file with the run_command tool.
-
-Names must be unique across built-in, sandbox, and installed plugins. Import kernel APIs with absolute plugins.* imports; import plugin helpers with relative imports such as from .helpers.foo import bar or from ..helpers.shared import thing. Config settings use (title, variable_name, description, default, type_info), are stored in plugin_config.json, and are read with context.config.get(key).
-
-The context object is passed to every plugin and contains relevant runtime information and helper methods. Read its definition in runtime/context.py if you have questions about how to use it effectively in your plugin code."""
-    )
-
-
-def _sandbox_files() -> str:
-    from paths import SANDBOX_PLUGINS
-    lines = []
-    for sd in (SANDBOX_PLUGINS / "tools", SANDBOX_PLUGINS / "tasks", SANDBOX_PLUGINS / "services", SANDBOX_PLUGINS / "commands", SANDBOX_PLUGINS / "frontends"):
-        if sd.exists():
-            lines.extend(f"  {p}" for p in sorted(sd.glob("*.py")) if not p.name.startswith("_"))
-    return "## Sandbox plugins\n" + ("\n".join(lines) if lines else """## Sandbox plugins
-None yet. When new sandbox plugins are made, they will show up here.""")
-
-
-def _attachments() -> str:
-    from paths import ATTACHMENT_CACHE
-    return (
-        f"""## Attachments
-Files sent through frontends are saved to the attachment cache and indexed by the normal task pipeline. If they can be parsed into text, they will be added to the user message directly using a separate attachment parser system. You can extend this system by following the structure within attachments/parsers/.
-
-To find recent attachments with sql_query:
-SELECT path, file_name, mtime FROM files WHERE path LIKE '{ATTACHMENT_CACHE}%' ORDER BY mtime DESC LIMIT 10"""
-    )
-
-
-def _database_tables(db) -> str:
-    try:
-        names = [row[0] for row in db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")["rows"]]
-    except Exception:
-        names = []
-    return "## Database tables (inspect with sql_query, if available)\n" + (", ".join(names) if names else "No tables yet.")
-
-
 def _pipeline_status(db, orchestrator) -> str:
     lines = ["## Task pipeline"]
     try:
@@ -254,19 +263,6 @@ def _services_status(services: dict) -> str:
 def _sync_dirs(config: dict | None) -> str:
     dirs = (config or {}).get("sync_directories") or []
     return "## Sync directories\n" + ("\n".join(f"- {d}" for d in dirs) if dirs else "None configured.")
-
-
-def _file_inventory(db) -> str:
-    try:
-        stats = db.get_system_stats().get("files", {}) if db else {}
-    except Exception:
-        stats = {}
-    total = sum(stats.values()) if stats else 0
-    lines = ["## File inventory", (", ".join(f"{c} {m}" for m, c in sorted(stats.items())) + f" ({total} total)") if stats else "No files indexed yet."]
-    exts = sorted(get_supported_extensions())
-    if exts:
-        lines.append("Supported extensions: " + " ".join(exts))
-    return "\n".join(lines)
 
 
 def _agent_memory() -> str:
@@ -303,16 +299,3 @@ def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
         f"""## Agent profile limits
 You are running under the '{profile_name}' agent profile. Tool access is limited to the tools exposed in this prompt. """
     )
-
-
-def _scheduling_guidance() -> str:
-    return (
-        """## Scheduling and cron jobs
-Treat your schedule_subgaent tool as the user's calendar and background task system.
-
-Use it to create reminders, recurring checks, follow-ups, and delayed autonomous work. When the user asks about their schedule, reminders, upcoming events, or planned tasks, inspect the schedule with schedule_subagent before answering. Scheduled tasks are persisted in the config.
-
-Schedule reminders for 1 hr before the actual event, unless otherwise specified. If it isn't clear from the prompt whether a job should be recurrent or one-time, ask the user to clarify. Include unambiguous, step-by-step instructions in the prompt for the agent to follow.
-
-Determine whether creating a new event-driven task, scheduling a subagent, or editing memory.md is the best way to accomplish the user's underlying goal."""
-        )

@@ -63,6 +63,18 @@ class BaseService(ABC):
             if isinstance(value, (dict, list)):
                 setattr(cls, attr, value.copy())
 
+    # --- Agent system-prompt contribution ---
+    # Static guidance injected into the agent's system prompt when this service
+    # is loaded. Override agent_prompt_for() instead for dynamic text.
+    agent_prompt: str = ""
+
+    def agent_prompt_for(self, ctx) -> str:
+        """Guidance for the agent system prompt, or '' to contribute nothing.
+
+        ``ctx`` is a PromptContext (db/services/orchestrator/config/scope/...).
+        Default returns the static ``agent_prompt``; override for dynamic text."""
+        return self.agent_prompt
+
     def __init__(self):
         """Initialize the base service."""
         self._loaded = False

@@ -274,56 +274,47 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             return out
         return (prompt or "") + "\n\n" + extra
 
-    effective_profile = profile_for(runtime, session)
-    global_profile = runtime.config.get("active_agent_profile") or "default"
-    if session.profile_override or effective_profile != global_profile:
-        from agent.system_prompt import build_prompt_sections
-        profile = effective_profile
-        scope = scope_for_profile(runtime, profile)
+    # A live session always builds a frontend- and profile-aware prompt: the
+    # effective profile/scope shape the tool view, and the session's frontend
+    # contributes its own guidance + command-policy filter. The frontend-agnostic
+    # base prompt (runtime.system_prompt) is only the no-session fallback above.
+    from agent.system_prompt import build_prompt_sections
+    profile = profile_for(runtime, session)
+    scope = scope_for_profile(runtime, profile)
 
-        def _session_prompt():
-            """Internal helper to handle session prompt."""
-            prompt_extras = dict(session.system_prompt_extras or {})
-            sections = build_prompt_sections(
-                runtime.db,
-                getattr(runtime, "_orchestrator_ref", None) or runtime.services.get("orchestrator"),
-                active_tool_registry(runtime, session), runtime.services,
-                scope=scope,
-                profile_name=profile,
-                commands=getattr(runtime, "command_registry", None) or runtime.commands,
-                config=runtime.config,
-                conversation_metadata=_conversation_meta(),
-                prompt_extras=prompt_extras,
-                notification_suffix=_notify_suffix(),
-            )
-            return _append_dynamic(sections, _account_suffix())
-        return _session_prompt
-
-    base = runtime.system_prompt
-
-    def _user_prompt():
-        """Internal helper to handle user prompt."""
-        text = base() if callable(base) else (base or "")
-        return _append_dynamic(
-            text,
-            _conversation_extra(_conversation_meta()),
-            *(v for v in (session.system_prompt_extras or {}).values() if isinstance(v, str) and v),
-            _notify_suffix(),
-            _account_suffix(),
+    def _session_prompt():
+        """Internal helper to handle session prompt."""
+        frontend, command_filter = _session_frontend_filter(runtime, session)
+        sections = build_prompt_sections(
+            runtime.db,
+            getattr(runtime, "_orchestrator_ref", None) or runtime.services.get("orchestrator"),
+            active_tool_registry(runtime, session), runtime.services,
+            scope=scope,
+            profile_name=profile,
+            commands=getattr(runtime, "command_registry", None) or runtime.commands,
+            config=runtime.config,
+            conversation_metadata=_conversation_meta(),
+            prompt_extras=dict(session.system_prompt_extras or {}),
+            notification_suffix=_notify_suffix(),
+            frontend_name=session.frontend_name,
+            frontend=frontend,
+            command_filter=command_filter,
         )
-    return _user_prompt
+        return _append_dynamic(sections, _account_suffix())
+    return _session_prompt
 
 
-def _conversation_extra(row: dict[str, Any] | None) -> str:
-    """Format current conversation metadata for legacy/base prompts."""
-    if not row:
-        return ""
-    return "\n".join([
-        "## Current conversation",
-        f"Number: {row.get('id')}",
-        f"Category: {(row.get('category') or '').strip() or 'Main'}",
-        f"Title: {(row.get('title') or '').strip() or 'New Conversation'}",
-    ])
+def _session_frontend_filter(runtime, session):
+    """Resolve the active frontend instance and its command-policy predicate.
+
+    The frontend instance contributes its own ``agent_prompt``; the predicate
+    filters the command catalog/statements to what the frontend's profile allows.
+    """
+    name = getattr(session, "frontend_name", None)
+    manager = getattr(runtime, "frontend_manager", None)
+    frontend = (getattr(manager, "adapters", {}) or {}).get(name) if (name and manager is not None) else None
+    from plugins.frontends.helpers.command_registry import frontend_command_filter
+    return frontend, frontend_command_filter(runtime.config, name)
 
 
 # ──────────────────────────────────────────────────────────────────────

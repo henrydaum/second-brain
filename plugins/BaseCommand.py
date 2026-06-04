@@ -15,6 +15,18 @@ class BaseCommand:
     approval_actor_id: str | None = None
     config_settings: list = []
 
+    # --- Agent system-prompt contribution ---
+    # Static guidance injected into the agent's system prompt when this command
+    # is in scope. Override agent_prompt_for() instead for dynamic text.
+    agent_prompt: str = ""
+
+    def agent_prompt_for(self, ctx) -> str:
+        """Guidance for the agent system prompt, or '' to contribute nothing.
+
+        ``ctx`` is a PromptContext (db/services/orchestrator/config/scope/...).
+        Default returns the static ``agent_prompt``; override for dynamic text."""
+        return self.agent_prompt
+
     def form(self, args: dict, context) -> list[FormStep]:
         """Handle form."""
         return []
