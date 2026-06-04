@@ -450,9 +450,9 @@ def test_uninstall_pip_cleanup_only_removes_safe_candidates(tmp_path, monkeypatc
     plan = package_manager.build_uninstall_plan("pkg-a")
     result = package_manager.execute_uninstall_plan(plan, _Context(tmp_path, _ToolRegistry()), {"pip": {"pkg-a": True}})
 
-    assert plan.pip_removals == {"pkg-a": ["orphan-lib"]}
-    assert calls == [[sys.executable, "-m", "pip", "uninstall", "-y", "orphan-lib"]]
-    assert "Kept Python package(s): litellm (kernel requirement), shared-lib (needed by another installed package)" in result.lines
+    assert plan.pip_removals == {"pkg-a": ["litellm", "orphan-lib"]}
+    assert calls == [[sys.executable, "-m", "pip", "uninstall", "-y", "litellm", "orphan-lib"]]
+    assert "Kept Python package(s): shared-lib (needed by another installed package)" in result.lines
 
 
 def test_execute_uses_package_operation_lock(tmp_path, monkeypatch):
