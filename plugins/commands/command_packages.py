@@ -31,7 +31,9 @@ class PackagesCommand(BaseCommand):
         action = args.get("action") or "list"
         try:
             if action == "search":
-                return _format_index(package_manager.search_packages(context.root_dir, args.get("query", "")))
+                items = package_manager.search_packages(context.root_dir, args.get("query", ""))
+                installed = {p.get("id") for p in package_manager.installed_packages()}
+                return _format_index(items, installed)
             if action == "list":
                 return _format_installed(package_manager.installed_packages())
             if action == "info":
@@ -45,15 +47,37 @@ class PackagesCommand(BaseCommand):
             return f"Package {action} failed: {e}"
 
 
-def _format_index(items: list[dict]) -> str:
+def _is_bundle(item: dict) -> bool:
+    return "bundle" in (item.get("tags") or [])
+
+
+def _format_index(items: list[dict], installed: set[str] = frozenset()) -> str:
     if not items:
         return "No packages found."
-    lines = ["Available packages:"]
-    for item in items:
+
+    def line(item: dict) -> str:
+        mark = "✓" if item.get("id") in installed else " "
         desc = item.get("description") or ""
-        suffix = f" - {desc}" if desc else ""
-        lines.append(f"  {item.get('id', '')}{suffix}")
-    return "\n".join(lines)
+        tags = [t for t in (item.get("tags") or []) if t != "bundle"]
+        tagstr = ("   " + " ".join(f"#{t}" for t in tags)) if tags else ""
+        return f"  {mark} {item.get('id', '')}{(' — ' + desc) if desc else ''}{tagstr}"
+
+    # Bundles are the curated front door — list them first and apart.
+    bundles = [i for i in items if _is_bundle(i)]
+    rest = [i for i in items if not _is_bundle(i)]
+    out: list[str] = []
+    if bundles:
+        out.append("Bundles — install one to get a curated set:")
+        out.extend(line(i) for i in bundles)
+    if rest:
+        if out:
+            out.append("")
+        out.append("Packages:")
+        out.extend(line(i) for i in rest)
+    out.append("")
+    out.append("✓ = installed.  Tip: search matches names, descriptions, and tags — "
+               "try a category like `email`, `search`, `ocr`, or `bundle`.")
+    return "\n".join(out)
 
 
 def _format_installed(items: list[dict]) -> str:
