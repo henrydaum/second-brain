@@ -23,8 +23,8 @@ from plugins.commands.helpers.store_backend import GitStoreBackend
 PACKAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 ALLOWED_ROOTS = {family for family, _prefix in PLUGIN_FAMILIES.values()} | {"helpers"}
 RECEIPTS_DIR = PACKAGES_DIR / "receipts"
-INTERNAL_IMPORTS = {"agent", "config", "events", "helpers", "installed_plugins", "paths", "pipeline", "plugins", "runtime", "sandbox_plugins", "state_machine", "templates", *ALLOWED_ROOTS}
-PIP_NAMES = {"PIL": "Pillow", "bs4": "beautifulsoup4", "cv2": "opencv-python", "docx": "python-docx", "fitz": "PyMuPDF", "googleapiclient": "google-api-python-client", "pptx": "python-pptx", "sklearn": "scikit-learn", "yaml": "PyYAML"}
+INTERNAL_IMPORTS = {"agent", "attachments", "config", "events", "helpers", "installed_plugins", "paths", "pipeline", "plugins", "runtime", "sandbox_plugins", "state_machine", "templates", *ALLOWED_ROOTS}
+PIP_NAMES = {"PIL": "Pillow", "bs4": "beautifulsoup4", "cv2": "opencv-python", "docx": "python-docx", "fitz": "PyMuPDF", "google": "google-api-python-client", "googleapiclient": "google-api-python-client", "pptx": "python-pptx", "sklearn": "scikit-learn", "telegram": "python-telegram-bot", "yaml": "PyYAML"}
 
 
 class PackageError(RuntimeError):
@@ -115,7 +115,7 @@ def _install(package_id: str, backend, context, *, requested: bool, active: set[
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(content)
                 written.append(target)
-            pip_installed = _install_missing_imports(file_bytes)
+            pip_installed = _install_missing_imports(file_bytes, manifest.get("pip"))
             loaded = _load_entrypoints(entrypoints, context)
             _reload_parser_service_if_needed(file_bytes, context, lines)
             receipt = {
@@ -269,8 +269,17 @@ def _refresh_commands(context):
         runtime.refresh_session_specs()
 
 
-def _install_missing_imports(file_bytes: dict[str, bytes]) -> list[str]:
-    packages = _missing_pip_packages(file_bytes)
+def _install_missing_imports(file_bytes: dict[str, bytes], declared_pip: list[str] | None = None) -> list[str]:
+    # An explicit manifest `pip` list is authoritative: it overrides the import
+    # scan entirely. This is the escape hatch for packages whose imports the
+    # scan can't read correctly — optional/alternative/platform-specific deps
+    # that are lazily imported (e.g. the OCR service's per-OS engines). pip is
+    # idempotent, so already-satisfied declarations are cheap no-ops. An empty
+    # declared list means "install nothing" without falling back to the scan.
+    if declared_pip is not None:
+        packages = sorted(set(declared_pip))
+    else:
+        packages = _missing_pip_packages(file_bytes)
     if not packages:
         return []
     result = subprocess.run([sys.executable, "-m", "pip", "install", *packages], capture_output=True, text=True, timeout=600)
@@ -437,11 +446,16 @@ def _validate_manifest(manifest: dict) -> dict:
         raise PackageError("Manifest files must be a list of relative paths.")
     if entrypoints is not None and (not isinstance(entrypoints, list) or any(not isinstance(path, str) for path in entrypoints)):
         raise PackageError("Manifest entrypoints must be a list of relative paths.")
+    pip = manifest.get("pip", None)
+    if pip is not None and (not isinstance(pip, list) or any(not isinstance(name, str) for name in pip)):
+        raise PackageError("Manifest pip must be a list of PyPI package names.")
     normalized = dict(manifest)
     normalized["requires"] = requires
     normalized["files"] = [_validate_rel_path(path) for path in files]
     if entrypoints is not None:
         normalized["entrypoints"] = [_validate_rel_path(path) for path in entrypoints]
+    if pip is not None:
+        normalized["pip"] = pip
     return normalized
 
 

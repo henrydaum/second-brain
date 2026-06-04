@@ -99,7 +99,10 @@ the difference between a microkernel and a pile of assumptions:
   store, commits, and pushes without switching or dirtying the current branch.
 - **pip dependencies**: install auto-detects third-party imports in a package's
   `.py` files and `pip install`s the missing ones (mapping import roots to PyPI
-  names via `PIP_NAMES`, e.g. `fitz`→PyMuPDF). Uninstall does not pip-uninstall.
+  names via `PIP_NAMES`, e.g. `fitz`→PyMuPDF). A manifest may instead declare an
+  authoritative `pip` list (publisher `--pip`/`--no-pip`), which overrides the
+  scan — the escape hatch for optional/alternative/platform deps the scan can't
+  read (e.g. `service-ocr`'s per-OS engines). Uninstall does not pip-uninstall.
 - **Bundles (meta-packages)**: a package may ship **no files** and only a
   `requires` list — installing it pulls its members, uninstalling prunes the
   auto-installed ones. Used for the curated bundles (`all-parsers`, `plan-mode`,

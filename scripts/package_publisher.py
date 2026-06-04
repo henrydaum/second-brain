@@ -51,6 +51,7 @@ def publish_package(args) -> None:
             requires=args.require,
             tags=args.tag,
             entrypoints=[] if args.no_entrypoints else args.entrypoint,
+            pip=[] if args.no_pip else args.pip,
             update=args.update,
         )
         validate_store(worktree)
@@ -82,6 +83,7 @@ def write_package(
     tags: list[str],
     entrypoints: list[str] | None,
     update: bool,
+    pip: list[str] | None = None,
 ) -> dict:
     package_manager._validate_package_id(package_id)
     package_dir = store_root / "packages" / package_id
@@ -106,6 +108,8 @@ def write_package(
     }
     if entrypoints is not None:
         manifest["entrypoints"] = [package_manager._validate_rel_path(path) for path in entrypoints]
+    if pip is not None:
+        manifest["pip"] = sorted(set(pip))
     package_dir.mkdir(parents=True, exist_ok=True)
     (package_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     update_index(store_root, package_id, name, description, tags)
@@ -264,6 +268,8 @@ def _parse_args(argv: list[str] | None):
     publish.add_argument("--tag", action="append", default=[])
     publish.add_argument("--entrypoint", action="append", default=None)
     publish.add_argument("--no-entrypoints", action="store_true", help="Write entrypoints: [] for file-only packages.")
+    publish.add_argument("--pip", action="append", default=None, help="PyPI package to install on install, repeatable. Authoritative — overrides the import scan. Use for optional/platform-specific deps the scan can't read.")
+    publish.add_argument("--no-pip", action="store_true", help="Declare pip: [] — install no Python deps and skip the import scan.")
     publish.add_argument("--update", action="store_true")
     publish.add_argument("--dry-run", action="store_true")
     publish.add_argument("--message")
