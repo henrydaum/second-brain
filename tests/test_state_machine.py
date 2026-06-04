@@ -175,6 +175,19 @@ def test_frontend_unknown_slash_command_does_not_submit(capsys):
     assert seen == []
 
 
+def test_frontend_busy_session_does_not_parse_slash_command_args():
+    cs = ConversationState([Participant("user", "user", commands={})])
+    seen = []
+    repl = ReplFrontend()
+    repl.runtime = SimpleNamespace(get_session=lambda _key: SimpleNamespace(cs=cs, busy=True))
+    repl.commands = SimpleNamespace(parse_args=lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not parse while busy")))
+    repl.submit = lambda _key, action_type, payload=None: seen.append((action_type, payload))
+
+    repl.submit_text("default", "/packages uninstall all-parsers")
+
+    assert seen == [("send_text", "/packages uninstall all-parsers")]
+
+
 def test_frontend_unknown_slash_command_in_form_does_not_submit(capsys):
     cs = ConversationState([
         Participant("user", "user", commands={"agent": CallableSpec("agent", form=[FormStep("profile_name", "Select an agent profile.", True)])}),

@@ -2,6 +2,8 @@
 
 import logging
 import json
+import os
+import threading
 from pathlib import Path
 
 from paths import DATA_DIR
@@ -25,6 +27,7 @@ _LIST_KEYS = {name for _, name, _, default, info in SETTINGS_DATA if isinstance(
 _DEFAULT_CONFIG_PATH = str(DATA_DIR / "config.json")
 _DEFAULT_PLUGIN_CONFIG_PATH = str(DATA_DIR / "plugin_config.json")
 _SUPPORTED_FRONTENDS = ("repl", "telegram")
+_CONFIG_LOCK = threading.RLock()
 USER_CONFIG_KEYS = {
     name for _, name, _, _, info in SETTINGS_DATA
     if isinstance(info, dict) and info.get("scope") == "user"
@@ -128,8 +131,16 @@ def load_plugin_config(path: str = None) -> dict:
     p = Path(path)
     if not p.exists():
         return {}
-    with open(p, "r") as f:
-        return json.load(f)
+    with _CONFIG_LOCK:
+        text = p.read_text(encoding="utf-8")
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            value, end = json.JSONDecoder().raw_decode(text)
+            if text[end:].strip():
+                logger.warning(f"Plugin config had trailing data; rewriting clean JSON at {p}: {e}")
+                save_plugin_config(value, path)
+            return value
 
 
 def save_plugin_config(plugin_values: dict, path: str = None):
@@ -138,8 +149,10 @@ def save_plugin_config(plugin_values: dict, path: str = None):
         path = _DEFAULT_PLUGIN_CONFIG_PATH
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, "w") as f:
-        json.dump(plugin_values, f, indent=4)
+    with _CONFIG_LOCK:
+        tmp = p.with_name(f"{p.name}.tmp-{os.getpid()}-{threading.get_ident()}")
+        tmp.write_text(json.dumps(plugin_values, indent=4), encoding="utf-8")
+        os.replace(tmp, p)
     logger.info(f"Plugin config saved to {p}")
 
 

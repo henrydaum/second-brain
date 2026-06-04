@@ -130,3 +130,22 @@ def test_save_strips_user_config_keys(tmp_path):
     assert "last_active_conversation_id" not in on_disk
     assert "active_agent_profile" not in on_disk
     assert "skip_permissions" not in on_disk
+
+
+def test_load_plugin_config_repairs_trailing_data(tmp_path):
+    path = str(tmp_path / "plugin_config.json")
+    (tmp_path / "plugin_config.json").write_text('{"one": 1}\n{"stale": 2}', encoding="utf-8")
+
+    loaded = config_manager.load_plugin_config(path)
+
+    assert loaded == {"one": 1}
+    assert json.loads((tmp_path / "plugin_config.json").read_text(encoding="utf-8")) == {"one": 1}
+
+
+def test_save_plugin_config_uses_atomic_temp_file(tmp_path):
+    path = str(tmp_path / "plugin_config.json")
+
+    config_manager.save_plugin_config({"one": 1}, path)
+
+    assert json.loads((tmp_path / "plugin_config.json").read_text(encoding="utf-8")) == {"one": 1}
+    assert not list(tmp_path.glob("plugin_config.json.tmp-*"))

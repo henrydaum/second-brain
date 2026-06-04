@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from plugins.commands.helpers import package_manager
+from plugins.commands.command_packages import PackagesCommand
 from plugins.commands.helpers.store_backend import GitStoreBackend
 from plugins import plugin_discovery
 
@@ -220,6 +221,32 @@ def test_install_auto_installs_dependency(tmp_path, monkeypatch):
     assert receipts["echo-tool"]["requires"] == ["base"]
 
 
+def test_bundle_install_reloads_parser_once_for_multiple_helpers(tmp_path, monkeypatch):
+    _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {
+            "bundle": {"id": "bundle", "requires": ["parser-one", "parser-two"], "files": []},
+            "parser-one": {"id": "parser-one", "requires": [], "files": ["services/helpers/parse_one.py"], "entrypoints": []},
+            "parser-two": {"id": "parser-two", "requires": [], "files": ["services/helpers/parse_two.py"], "entrypoints": []},
+        },
+        {
+            ("parser-one", "services/helpers/parse_one.py"): b"",
+            ("parser-two", "services/helpers/parse_two.py"): b"",
+        },
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+    parser = type("Parser", (), {"loaded": True, "loads": 0, "unloads": 0})()
+    parser.load = lambda: setattr(parser, "loads", parser.loads + 1)
+    parser.unload = lambda: setattr(parser, "unloads", parser.unloads + 1)
+
+    context = _Context(tmp_path, _ToolRegistry())
+    context.services = {"parser": parser}
+    result = package_manager.install_package(tmp_path, "bundle", context)
+
+    assert parser.loads == 1
+    assert result.lines.count("Reloaded parser service; file parsers are now active.") == 1
+
+
 def test_install_refuses_unowned_file_collision(tmp_path, monkeypatch):
     installed, _receipts = _patch_install_root(monkeypatch, tmp_path)
     target = installed / "tools" / "tool_echo.py"
@@ -362,3 +389,28 @@ def test_uninstall_without_approval_keeps_cleanup_data(tmp_path, monkeypatch):
     result = package_manager.uninstall_package("pkg", context)
 
     assert "Cleanup available but no approval session is available; kept package config/table data." in result.lines
+
+
+def test_packages_uninstall_form_collects_pruned_dependency_cleanup(tmp_path, monkeypatch):
+    _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {
+            "starter": {"id": "starter", "requires": ["task-owned"], "files": []},
+            "task-owned": {"id": "task-owned", "requires": [], "files": ["tasks/task_owned.py"], "entrypoints": []},
+        },
+        {("task-owned", "tasks/task_owned.py"): b"config_settings = [('Owned', 'owned_key', '', 'x', {})]\n"},
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+    context = _Context(tmp_path, _ToolRegistry())
+    package_manager.install_package(tmp_path, "starter", context)
+
+    command = PackagesCommand()
+    steps = command.form({"action": "uninstall", "package_id": "starter"}, context)
+
+    assert [step.name for step in steps] == ["action", "package_id", "cleanup__task_owned"]
+    assert "Config settings: owned_key" in steps[-1].prompt
+    context.request_user_input = lambda *a, **k: pytest.fail("cleanup should be collected by the command form")
+    result = command.run({"action": "uninstall", "package_id": "starter", "cleanup__task_owned": False}, context)
+
+    assert "Kept package config/table data." in result
+    assert not package_manager.installed_packages()

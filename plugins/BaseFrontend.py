@@ -383,6 +383,8 @@ class BaseFrontend:
         stripped = (text or "").lstrip()
         if stripped == "/cancel":
             return self.cancel(session_key)
+        if getattr(self.runtime.get_session(session_key), "busy", False):
+            return self.submit(session_key, ACTION_SEND_TEXT, text)
         if stripped.startswith("/"):
             name, _, arg = stripped[1:].partition(" ")
             cmd = next((c for c in self.commands.all_commands() if c.name == name), None) if name and self.commands else None

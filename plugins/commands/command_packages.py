@@ -1,5 +1,7 @@
 """Slash command plugin for `/packages`."""
 
+import re
+
 from plugins.BaseCommand import BaseCommand
 from plugins.commands.helpers import package_manager
 from plugins.commands.helpers.store_backend import StoreBackendError
@@ -36,6 +38,9 @@ class PackagesCommand(BaseCommand):
             steps.append(FormStep("package_id", "Enter the package id.", True))
         if action == "uninstall":
             steps.append(FormStep("package_id", "Choose the package to uninstall.", True, enum=[p["id"] for p in package_manager.installed_packages()], columns=2))
+            if args.get("package_id"):
+                for package_id, cleanup in package_manager.uninstall_cleanup_plans(args["package_id"]):
+                    steps.append(FormStep(_cleanup_arg(package_id), package_manager.cleanup_prompt(cleanup), True, "boolean"))
         return steps
 
     def run(self, args, context):
@@ -54,7 +59,8 @@ class PackagesCommand(BaseCommand):
             if action == "install":
                 return package_manager.install_package(context.root_dir, args.get("package_id", ""), context).text()
             if action == "uninstall":
-                return package_manager.uninstall_package(args.get("package_id", ""), context).text()
+                approvals = {pkg: bool(args.get(_cleanup_arg(pkg))) for pkg, _cleanup in package_manager.uninstall_cleanup_plans(args.get("package_id", "")) if _cleanup_arg(pkg) in args}
+                return package_manager.uninstall_package(args.get("package_id", ""), context, cleanup_approvals=approvals).text()
             return f"Unknown action: {action}"
         except (package_manager.PackageError, StoreBackendError) as e:
             return f"Package {action} failed: {e}"
@@ -62,6 +68,10 @@ class PackagesCommand(BaseCommand):
 
 def _is_bundle(item: dict) -> bool:
     return "bundle" in (item.get("tags") or [])
+
+
+def _cleanup_arg(package_id: str) -> str:
+    return "cleanup__" + re.sub(r"[^a-zA-Z0-9_]", "_", package_id)
 
 
 def _format_index(items: list[dict], installed: set[str] = frozenset()) -> str:

@@ -90,23 +90,54 @@ def install_package(root_dir: str | Path, package_id: str, context=None, *, requ
     backend = GitStoreBackend(root_dir)
     lines: list[str] = []
     installed: list[str] = []
-    _install(package_id, backend, context, requested=requested, active=set(), installed=installed, lines=lines)
+    parser_rels: list[str] = []
+    _install(package_id, backend, context, requested=requested, active=set(), installed=installed, lines=lines, parser_rels=parser_rels)
+    _reload_parser_service_if_needed(parser_rels, context, lines)
     if not installed:
         lines.append("Nothing installed.")
     return PackageActionResult(True, lines)
 
 
-def uninstall_package(package_id: str, context=None) -> PackageActionResult:
+def uninstall_package(package_id: str, context=None, cleanup_approvals: dict[str, bool] | None = None) -> PackageActionResult:
     """Uninstall a package and prune unneeded auto-installed dependencies."""
     lines: list[str] = []
     pruned: list[str] = []
-    _uninstall(package_id, context, lines=lines, pruned=pruned, explicit=True)
+    _uninstall(package_id, context, lines=lines, pruned=pruned, explicit=True, cleanup_approvals=cleanup_approvals or {})
     if pruned:
         lines.append(f"Pruned auto-installed dependencies: {', '.join(pruned)}")
     return PackageActionResult(True, lines)
 
 
-def _install(package_id: str, backend, context, *, requested: bool, active: set[str], installed: list[str], lines: list[str]):
+def uninstall_cleanup_plans(package_id: str) -> list[tuple[str, dict]]:
+    """Return cleanup prompts needed by uninstall, including pruned deps."""
+    removed: set[str] = set()
+    plans: list[tuple[str, dict]] = []
+
+    def collect(pid: str):
+        _validate_package_id(pid)
+        receipt_path = _receipt_path(pid)
+        if not receipt_path.exists():
+            raise PackageError(f"Package is not installed: {pid}")
+        dependents = [dep for dep in _dependents(pid) if dep not in removed]
+        if dependents:
+            raise PackageError(f"Cannot uninstall {pid}; required by: {', '.join(dependents)}")
+        receipt = _load_receipt(receipt_path)
+        cleanup = _cleanup_plan(receipt)
+        if cleanup["settings"] or cleanup["tables"]:
+            plans.append((pid, cleanup))
+        removed.add(pid)
+        for dep in receipt.get("requires", []):
+            dep_path = _receipt_path(dep)
+            if not dep_path.exists() or [item for item in _dependents(dep) if item not in removed]:
+                continue
+            if not _load_receipt(dep_path).get("requested"):
+                collect(dep)
+
+    collect(package_id)
+    return plans
+
+
+def _install(package_id: str, backend, context, *, requested: bool, active: set[str], installed: list[str], lines: list[str], parser_rels: list[str]):
     _validate_package_id(package_id)
     if package_id in active:
         raise PackageError(f"Dependency cycle includes {package_id}.")
@@ -122,7 +153,7 @@ def _install(package_id: str, backend, context, *, requested: bool, active: set[
         if manifest["id"] != package_id:
             raise PackageError(f"Manifest id mismatch: requested {package_id}, got {manifest['id']}.")
         for dep in manifest["requires"]:
-            _install(dep, backend, context, requested=False, active=active, installed=installed, lines=lines)
+            _install(dep, backend, context, requested=False, active=active, installed=installed, lines=lines, parser_rels=parser_rels)
 
         files = _validated_files(manifest)
         entrypoints = _entrypoints(manifest, files)
@@ -138,7 +169,7 @@ def _install(package_id: str, backend, context, *, requested: bool, active: set[
                 written.append(target)
             pip_installed = _install_missing_imports(file_bytes, manifest.get("pip"))
             loaded = _load_entrypoints(entrypoints, context)
-            _reload_parser_service_if_needed(file_bytes, context, lines)
+            parser_rels.extend(file_bytes)
             receipt = {
                 "id": package_id,
                 "name": manifest.get("name", package_id),
@@ -165,7 +196,7 @@ def _install(package_id: str, backend, context, *, requested: bool, active: set[
         active.remove(package_id)
 
 
-def _uninstall(package_id: str, context, *, lines: list[str], pruned: list[str], explicit: bool):
+def _uninstall(package_id: str, context, *, lines: list[str], pruned: list[str], explicit: bool, cleanup_approvals: dict[str, bool]):
     _validate_package_id(package_id)
     receipt_path = _receipt_path(package_id)
     if not receipt_path.exists():
@@ -175,7 +206,7 @@ def _uninstall(package_id: str, context, *, lines: list[str], pruned: list[str],
         raise PackageError(f"Cannot uninstall {package_id}; required by: {', '.join(dependents)}")
     receipt = _load_receipt(receipt_path)
     cleanup = _cleanup_plan(receipt)
-    approved_cleanup = _approve_cleanup(context, package_id, cleanup, lines)
+    approved_cleanup = _approve_cleanup(context, package_id, cleanup, lines, cleanup_approvals)
     for ep in receipt.get("entrypoints", []):
         _unload_entrypoint(ep, context)
     removed_paths = [item["path"] for item in receipt.get("files", [])]
@@ -196,7 +227,7 @@ def _uninstall(package_id: str, context, *, lines: list[str], pruned: list[str],
         dep_receipt = _load_receipt(dep_path)
         if dep_receipt.get("requested"):
             continue
-        _uninstall(dep, context, lines=lines, pruned=pruned, explicit=False)
+        _uninstall(dep, context, lines=lines, pruned=pruned, explicit=False, cleanup_approvals=cleanup_approvals)
         pruned.append(dep)
 
 
@@ -303,9 +334,9 @@ def _install_missing_imports(file_bytes: dict[str, bytes], declared_pip: list[st
         packages = _missing_pip_packages(file_bytes)
     if not packages:
         return []
-    result = subprocess.run([sys.executable, "-m", "pip", "install", *packages], capture_output=True, text=True, timeout=600)
+    result = subprocess.run([sys.executable, "-m", "pip", "install", *packages], text=True, timeout=600)
     if result.returncode:
-        raise PackageError(f"pip install failed for {', '.join(packages)}:\n{result.stderr or result.stdout}")
+        raise PackageError(f"pip install failed for {', '.join(packages)}:\n{getattr(result, 'stderr', '') or getattr(result, 'stdout', '')}")
     return packages
 
 
@@ -358,23 +389,31 @@ def _cleanup_plan(receipt: dict) -> dict[str, list[str]]:
     }
 
 
-def _approve_cleanup(context, package_id: str, cleanup: dict, lines: list[str]) -> bool:
+def cleanup_prompt(cleanup: dict) -> str:
+    prompt = "Delete package-owned data?\n\n"
+    if cleanup["settings"]:
+        prompt += "Config settings: " + ", ".join(cleanup["settings"]) + "\n"
+    if cleanup["tables"]:
+        prompt += "Tables: " + ", ".join(cleanup["tables"]) + "\n"
+    return prompt.strip()
+
+
+def _approve_cleanup(context, package_id: str, cleanup: dict, lines: list[str], cleanup_approvals: dict[str, bool]) -> bool:
     if cleanup["kept_settings"]:
         lines.append(f"Kept config setting(s) still declared by other plugins: {', '.join(cleanup['kept_settings'])}")
     if cleanup["kept_tables"]:
         lines.append(f"Kept table(s) still used by remaining tasks; their data may now be stale: {', '.join(cleanup['kept_tables'])}")
     if not cleanup["settings"] and not cleanup["tables"]:
         return False
+    if package_id in cleanup_approvals:
+        if not cleanup_approvals[package_id]:
+            lines.append("Kept package config/table data.")
+        return bool(cleanup_approvals[package_id])
     ask = getattr(context, "request_user_input", None)
     if ask is None:
         lines.append("Cleanup available but no approval session is available; kept package config/table data.")
         return False
-    prompt = "Delete package-owned data?\n\n"
-    if cleanup["settings"]:
-        prompt += "Config settings: " + ", ".join(cleanup["settings"]) + "\n"
-    if cleanup["tables"]:
-        prompt += "Tables: " + ", ".join(cleanup["tables"]) + "\n"
-    req = ask(f"Uninstall {package_id}", prompt.strip(), type="boolean")
+    req = ask(f"Uninstall {package_id}", cleanup_prompt(cleanup), type="boolean")
     if not req.wait(timeout=300.0) or not req.approved:
         lines.append("Kept package config/table data.")
         return False
