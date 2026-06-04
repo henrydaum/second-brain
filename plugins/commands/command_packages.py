@@ -6,8 +6,20 @@ from plugins.commands.helpers.store_backend import StoreBackendError
 from state_machine.conversation import FormStep
 
 
-ACTIONS = ["search", "list", "info", "install", "uninstall"]
-ACTION_LABELS = ["Search available", "List installed", "Package info", "Install package", "Uninstall package"]
+ACTIONS = ["search", "categories", "list", "info", "install", "uninstall"]
+ACTION_LABELS = ["Search available", "Browse categories", "List installed", "Package info", "Install package", "Uninstall package"]
+
+_FAMILY_ORDER = ["bundle", "service", "tool", "task", "command", "frontend", "parser", "helper", "other"]
+_FAMILY_BLURB = {
+    "bundle": "curated sets — install one, get many",
+    "service": "long-lived backends (LLMs, OCR, embeddings, integrations)",
+    "tool": "agent-callable tools",
+    "task": "pipeline tasks",
+    "command": "slash commands",
+    "frontend": "chat frontends",
+    "parser": "file parsers",
+    "helper": "shared helper modules pulled in by other packages",
+}
 
 
 class PackagesCommand(BaseCommand):
@@ -34,6 +46,8 @@ class PackagesCommand(BaseCommand):
                 items = package_manager.search_packages(context.root_dir, args.get("query", ""))
                 installed = {p.get("id") for p in package_manager.installed_packages()}
                 return _format_index(items, installed)
+            if action == "categories":
+                return _format_categories(package_manager.search_packages(context.root_dir))
             if action == "list":
                 return _format_installed(package_manager.installed_packages())
             if action == "info":
@@ -75,8 +89,23 @@ def _format_index(items: list[dict], installed: set[str] = frozenset()) -> str:
         out.append("Packages:")
         out.extend(line(i) for i in rest)
     out.append("")
-    out.append("✓ = installed.  Tip: search matches names, descriptions, and tags — "
-               "try a category like `email`, `search`, `ocr`, or `bundle`.")
+    out.append("✓ = installed.  Tip: /packages categories to browse by family, or "
+               "search a family (`tool`, `parser`, `bundle`) or any term (`email`, `ocr`).")
+    return "\n".join(out)
+
+
+def _format_categories(items: list[dict]) -> str:
+    from collections import Counter
+    counts = Counter(package_manager.package_family(i) for i in items)
+    if not counts:
+        return "No packages found."
+    out = ["Categories — /packages search <name> to list one:"]
+    for family in _FAMILY_ORDER:
+        n = counts.get(family)
+        if not n:
+            continue
+        blurb = _FAMILY_BLURB.get(family, "")
+        out.append(f"  {family:9} {n:>3}{('  — ' + blurb) if blurb else ''}")
     return "\n".join(out)
 
 

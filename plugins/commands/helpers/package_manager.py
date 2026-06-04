@@ -41,14 +41,34 @@ class PackageActionResult:
         return "\n".join(self.lines) if self.lines else ("OK" if self.ok else "Failed")
 
 
+# Structural families a package can belong to. A package's family is *derived*,
+# not stored: bundles carry the "bundle" tag; every other package's id follows
+# the `<family>-<name>` convention, so the id prefix is the family. Deriving it
+# means it can't drift and works retroactively on the whole store.
+PACKAGE_FAMILIES = ("bundle", "service", "tool", "task", "command", "frontend", "parser", "helper")
+
+
+def package_family(item: dict) -> str:
+    """Derive a package's structural family from its index entry."""
+    if "bundle" in (item.get("tags") or []):
+        return "bundle"
+    prefix = (item.get("id") or "").split("-", 1)[0]
+    return prefix if prefix in PACKAGE_FAMILIES else "other"
+
+
 def search_packages(root_dir: str | Path, query: str = "") -> list[dict]:
-    """Return packages from the store index matching query."""
+    """Return packages from the store index matching query.
+
+    The derived family is folded into the match text, so a family name like
+    `tool` or `bundle` works as a facet even for packages that don't tag it.
+    """
     items = GitStoreBackend(root_dir).get_index()
     q = (query or "").strip().lower()
     if not q:
         return sorted(items, key=lambda item: item.get("id", ""))
     def hay(item):
-        return " ".join(str(item.get(k, "")) for k in ("id", "name", "description", "tags")).lower()
+        fields = " ".join(str(item.get(k, "")) for k in ("id", "name", "description", "tags"))
+        return f"{fields} {package_family(item)}".lower()
     return sorted([item for item in items if q in hay(item)], key=lambda item: item.get("id", ""))
 
 
