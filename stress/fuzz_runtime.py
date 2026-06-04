@@ -58,7 +58,16 @@ class RuntimeStateMachine(RuleBasedStateMachine):
     def __init__(self):
         super().__init__()
         self._baseline_threads = thread_names()
-        self.kernel = boot_kernel(llm=MonkeyLLM(seed=1234))
+        self.kernel = boot_kernel(
+            llm=MonkeyLLM(seed=1234),
+            # Real agent profiles so profile-switching exercises scope/spec
+            # rebinding rather than no-opping. Both route to the fake LLM.
+            config_overrides={"agent_profiles": {
+                "default": {"llm": "default"},
+                "terse": {"llm": "default"},
+                "research": {"llm": "default"},
+            }},
+        )
         self.rt = self.kernel.runtime
         # External-id -> user_id, lazily minted. The base user (1) is implicit.
         self.users: dict[str, int] = {}
@@ -175,6 +184,71 @@ class RuntimeStateMachine(RuleBasedStateMachine):
     @rule(session_key=st.sampled_from(SESSION_KEYS))
     def close_session(self, session_key):
         self.rt.close_session(session_key)
+
+    @rule(session_key=st.sampled_from(SESSION_KEYS), login=st.sampled_from(USER_LOGINS),
+          profile=st.sampled_from(["default", "terse", "research"]))
+    def switch_agent_profile(self, session_key, login, profile):
+        """Switch the agent profile on a (possibly fresh) session and keep using it."""
+        self._bind(session_key, login)
+        # Ensure the session exists for set_agent_profile to act on.
+        self.rt.iterate_agent_turn(session_key, "warm up")
+        ok = self.rt.set_agent_profile(session_key, profile)
+        assert ok is True
+        sess = self.rt.sessions.get(session_key)
+        assert sess is not None and sess.profile_override == profile
+        # A turn under the new profile must still complete.
+        self.rt.iterate_agent_turn(session_key, "go")
+
+    @rule(session_key=st.sampled_from(SESSION_KEYS), login=st.sampled_from(USER_LOGINS),
+          plugin=st.sampled_from(["notes", "search", "x"]),
+          key=st.sampled_from(["a", "b", "c"]),
+          value=st.one_of(st.integers(-3, 9), st.text(max_size=12), st.booleans(), st.none()))
+    def session_plugin_state(self, session_key, login, plugin, key, value):
+        """Round-trip session plugin state through update/get/clear (+ persist)."""
+        self._bind(session_key, login)
+        self.rt.iterate_agent_turn(session_key, "warm up")
+        assert self.rt.update_session_plugin_state(session_key, plugin, {key: value}) is True
+        assert self.rt.get_session_plugin_state(session_key, plugin, key) == value
+        assert self.rt.clear_session_plugin_state(session_key, plugin, key) is True
+        assert self.rt.get_session_plugin_state(session_key, plugin, key, "_gone") == "_gone"
+
+    @rule(session_key=st.sampled_from(SESSION_KEYS), login=st.sampled_from(USER_LOGINS),
+          key=st.sampled_from(["persona", "rules"]),
+          value=st.one_of(st.text(max_size=20), st.none()))
+    def system_prompt_extra(self, session_key, login, key, value):
+        """Attach/clear a system-prompt overlay; must never desync the session."""
+        self._bind(session_key, login)
+        self.rt.iterate_agent_turn(session_key, "warm up")
+        self.rt.add_system_prompt_extra(session_key, key, value)
+
+    @rule(session_key=st.sampled_from(SESSION_KEYS), login=st.sampled_from(USER_LOGINS))
+    def persist_and_reload(self, session_key, login):
+        """Crash-recovery path: persist a live conversation, drop the in-memory
+        session, reload it from the DB as its owner, and confirm the restored
+        session is healthy and keeps working — the provider history must survive
+        the round-trip intact.
+        """
+        self._bind(session_key, login)
+        self.rt.iterate_agent_turn(session_key, "remember this")
+        sess = self.rt.sessions.get(session_key)
+        if sess is None or sess.conversation_id is None:
+            return
+        cid = sess.conversation_id
+        owner = self.owner.get(cid, self.rt.session_user_id(session_key))
+        before = list(sess.history)
+
+        self.rt.close_session(session_key)
+        self.rt.set_session_user(session_key, owner)
+        self.rt.load_conversation(session_key, cid)
+
+        restored = self.rt.sessions.get(session_key)
+        assert restored is not None and restored.conversation_id == cid
+        # History round-trips through the DB unchanged.
+        assert restored.history == before, (
+            f"history drift on reload of {cid}: {len(before)} -> {len(restored.history)}"
+        )
+        # And the restored session still drives a turn.
+        self.rt.iterate_agent_turn(session_key, "still there?")
 
     @rule(cid=conversations)
     def raw_delete_then_drive(self, cid):
