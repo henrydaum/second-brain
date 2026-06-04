@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from plugins.commands.helpers import package_manager
-from plugins.commands.command_packages import PackagesCommand
+from plugins.commands.command_packages import PackagesCommand, _cleanup_choices
 from plugins.commands.helpers.store_backend import GitStoreBackend, StoreBackendError
 from plugins import plugin_discovery
 
@@ -78,14 +78,6 @@ def _patch_install_root(monkeypatch, tmp_path):
     monkeypatch.setattr(package_manager, "RECEIPTS_DIR", receipts)
     monkeypatch.setattr(plugin_discovery, "PLUGIN_ROOTS", roots)
     return installed, receipts
-
-
-class _Approval:
-    def __init__(self, approved=True):
-        self.approved = approved
-
-    def wait(self, timeout=None):
-        return True
 
 
 class _Db:
@@ -155,14 +147,16 @@ def test_install_copies_loads_and_writes_receipt(tmp_path, monkeypatch):
     registry = _ToolRegistry()
     context = _Context(tmp_path, registry)
     monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+    monkeypatch.setattr(plugin_discovery, "load_single_plugin", lambda *a, **k: pytest.fail("package install should not register plugins"))
 
     result = package_manager.install_package(tmp_path, "echo-tool", context)
 
     assert result.ok
-    assert registry.tools["echo"].run(None).llm_summary == "echo ok"
+    assert registry.tools == {}
     receipt = package_manager.installed_packages()[0]
     assert receipt["id"] == "echo-tool"
     assert receipt["entrypoints"][0]["path"] == "tools/tool_echo.py"
+    assert receipt["entrypoints"][0]["type"] == "tool"
 
 
 def test_install_pip_installs_missing_imports_in_current_python(tmp_path, monkeypatch):
@@ -197,6 +191,26 @@ def test_install_pip_failure_aborts_package_install(tmp_path, monkeypatch):
         package_manager.install_package(tmp_path, "bad", _Context(tmp_path, _ToolRegistry()))
 
     assert not (installed / "tools" / "tool_bad.py").exists()
+    assert not package_manager.installed_packages()
+
+
+def test_install_resolves_full_graph_before_writing_files(tmp_path, monkeypatch):
+    installed, _receipts = _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {
+            "bundle": {"id": "bundle", "requires": ["missing-file", "echo-tool"], "files": []},
+            "missing-file": {"id": "missing-file", "requires": [], "files": ["helpers/missing.txt"]},
+            "echo-tool": {"id": "echo-tool", "requires": [], "files": ["tools/tool_echo.py"]},
+        },
+        {("echo-tool", "tools/tool_echo.py"): _tool_source()},
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+
+    with pytest.raises(package_manager.PackageError, match="missing file"):
+        package_manager.install_package(tmp_path, "bundle", _Context(tmp_path, _ToolRegistry()))
+
+    assert not (installed / "tools" / "tool_echo.py").exists()
+    assert not package_manager.installed_packages()
 
 
 def test_install_auto_installs_dependency(tmp_path, monkeypatch):
@@ -253,13 +267,14 @@ def test_install_refuses_unowned_file_collision(tmp_path, monkeypatch):
     target.parent.mkdir(parents=True)
     target.write_text("mine", encoding="utf-8")
     backend = _Backend(
-        {"echo-tool": {"id": "echo-tool", "requires": [], "files": ["tools/tool_echo.py"]}},
-        {("echo-tool", "tools/tool_echo.py"): _tool_source()},
+        {"echo-tool": {"id": "echo-tool", "requires": [], "files": ["tools/tool_echo.py", "helpers/new.txt"]}},
+        {("echo-tool", "tools/tool_echo.py"): _tool_source(), ("echo-tool", "helpers/new.txt"): b"new"},
     )
     monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
 
     with pytest.raises(package_manager.PackageError):
         package_manager.install_package(tmp_path, "echo-tool", _Context(tmp_path, _ToolRegistry()))
+    assert not (installed / "helpers" / "new.txt").exists()
 
 
 def test_uninstall_removes_files_receipt_and_prunes_auto_dependency(tmp_path, monkeypatch):
@@ -279,13 +294,14 @@ def test_uninstall_removes_files_receipt_and_prunes_auto_dependency(tmp_path, mo
     registry = _ToolRegistry()
     context = _Context(tmp_path, registry)
     package_manager.install_package(tmp_path, "echo-tool", context)
+    monkeypatch.setattr(plugin_discovery, "unload_plugin", lambda *a, **k: pytest.fail("package uninstall should not unload plugins"))
 
     result = package_manager.uninstall_package("echo-tool", context)
 
     assert result.ok
     assert not (installed / "tools" / "tool_echo.py").exists()
     assert not package_manager.installed_packages()
-    assert "echo" in registry.unloaded
+    assert registry.unloaded == []
 
 
 def test_uninstall_refuses_when_another_package_depends_on_target(tmp_path, monkeypatch):
@@ -327,12 +343,11 @@ def test_uninstall_can_delete_owned_config_and_tables_after_approval(tmp_path, m
     monkeypatch.setattr("config.config_manager.save_plugin_config", lambda data: saved.update(data))
     context = _Context(tmp_path, _ToolRegistry())
     context.config = {"owned_key": "secret"}
-    context.request_user_input = lambda *a, **k: _Approval(True)
     context.db = _Db()
     context.db.conn.execute("CREATE TABLE owned_table (id INTEGER)")
     package_manager.install_package(tmp_path, "pkg", context)
 
-    result = package_manager.uninstall_package("pkg", context)
+    result = package_manager.uninstall_package("pkg", context, cleanup_choices={"config": {"pkg": True}, "tables": {"pkg": True}, "pip": {}})
 
     assert "Deleted config setting(s): owned_key" in result.lines
     assert "Deleted table(s): owned_table" in result.lines
@@ -388,7 +403,7 @@ def test_uninstall_without_approval_keeps_cleanup_data(tmp_path, monkeypatch):
 
     result = package_manager.uninstall_package("pkg", context)
 
-    assert "Cleanup available but no approval session is available; kept package config/table data." in result.lines
+    assert "Kept package config setting(s)." in result.lines
 
 
 def test_packages_uninstall_form_collects_pruned_dependency_cleanup(tmp_path, monkeypatch):
@@ -407,13 +422,110 @@ def test_packages_uninstall_form_collects_pruned_dependency_cleanup(tmp_path, mo
     command = PackagesCommand()
     steps = command.form({"action": "uninstall", "package_id": "starter"}, context)
 
-    assert [step.name for step in steps] == ["action", "package_id", "cleanup__task_owned"]
+    assert [step.name for step in steps] == ["action", "package_id", "cleanup_config"]
+    assert steps[-1].enum == ["all", "none", "specific"]
+    assert steps[-1].enum_labels == ["All", "None", "Specific"]
+    assert steps[-1].default == "all"
+    plan = package_manager.build_uninstall_plan("starter")
+    assert _cleanup_choices(plan, {})["config"] == {"starter": False, "task-owned": True}
+    assert _cleanup_choices(plan, {"cleanup_config": "none"})["config"] == {"starter": False, "task-owned": False}
+    assert _cleanup_choices(plan, {"cleanup_config": "specific", "cleanup_config__task_owned": True})["config"] == {"starter": False, "task-owned": True}
+    steps = command.form({"action": "uninstall", "package_id": "starter", "cleanup_config": "specific"}, context)
+    assert [step.name for step in steps] == ["action", "package_id", "cleanup_config", "cleanup_config__task_owned"]
     assert "Config settings: owned_key" in steps[-1].prompt
     context.request_user_input = lambda *a, **k: pytest.fail("cleanup should be collected by the command form")
-    result = command.run({"action": "uninstall", "package_id": "starter", "cleanup__task_owned": False}, context)
+    result = command.run({"action": "uninstall", "package_id": "starter", "cleanup_config": "none"}, context)
 
-    assert "Kept package config/table data." in result
+    assert "Kept package config setting(s)." in result
     assert not package_manager.installed_packages()
+
+
+def test_uninstall_pip_cleanup_only_removes_safe_candidates(tmp_path, monkeypatch):
+    _patch_install_root(monkeypatch, tmp_path)
+    package_manager._write_receipt({"id": "pkg-a", "requested": True, "requires": [], "files": [], "entrypoints": [], "pip_packages": ["orphan-lib", "litellm", "shared-lib"]})
+    package_manager._write_receipt({"id": "pkg-b", "requested": True, "requires": [], "files": [], "entrypoints": [], "pip_packages": ["shared-lib"]})
+    calls = []
+    monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", ""))
+
+    plan = package_manager.build_uninstall_plan("pkg-a")
+    result = package_manager.execute_uninstall_plan(plan, _Context(tmp_path, _ToolRegistry()), {"pip": {"pkg-a": True}})
+
+    assert plan.pip_removals == {"pkg-a": ["orphan-lib"]}
+    assert calls == [[sys.executable, "-m", "pip", "uninstall", "-y", "orphan-lib"]]
+    assert "Kept Python package(s): litellm (kernel requirement), shared-lib (needed by another installed package)" in result.lines
+
+
+def test_execute_uses_package_operation_lock(tmp_path, monkeypatch):
+    _patch_install_root(monkeypatch, tmp_path)
+
+    class Lock:
+        entered = 0
+
+        def __enter__(self):
+            self.entered += 1
+
+        def __exit__(self, *_exc):
+            return False
+
+    lock = Lock()
+    monkeypatch.setattr(package_manager, "_PACKAGE_LOCK", lock)
+    plan = package_manager.InstallPlan("empty", ["empty"], [], [], [], [], False, [])
+
+    result = package_manager.execute_install_plan(plan, _Context(tmp_path, _ToolRegistry()))
+
+    assert result.ok
+    assert lock.entered == 1
+
+
+def test_legacy_receipt_entrypoint_names_do_not_block_uninstall(tmp_path, monkeypatch):
+    installed, _receipts = _patch_install_root(monkeypatch, tmp_path)
+    target = installed / "tools" / "tool_legacy.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("class Legacy: pass\n", encoding="utf-8")
+    package_manager._write_receipt({
+        "id": "legacy",
+        "requested": True,
+        "requires": [],
+        "files": [{"path": "tools/tool_legacy.py", "sha256": ""}],
+        "entrypoints": [{"path": "tools/tool_legacy.py", "type": "tool", "name": "legacy_name"}],
+        "pip_packages": [],
+    })
+    monkeypatch.setattr(plugin_discovery, "unload_plugin", lambda *a, **k: pytest.fail("legacy uninstall should not call plugin unload"))
+
+    result = package_manager.uninstall_package("legacy", _Context(tmp_path, _ToolRegistry()))
+
+    assert result.ok
+    assert not target.exists()
+    assert not package_manager.installed_packages()
+
+
+def test_install_plan_uses_one_store_cache_per_operation(tmp_path, monkeypatch):
+    _patch_install_root(monkeypatch, tmp_path)
+
+    class CountingBackend(_Backend):
+        def __init__(self):
+            super().__init__(
+                {"pkg": {"id": "pkg", "requires": [], "files": ["tools/tool_echo.py"], "entrypoints": []}},
+                {("pkg", "tools/tool_echo.py"): _tool_source()},
+            )
+            self.manifest_bytes_calls = 0
+            self.file_calls = 0
+
+        def get_manifest_bytes(self, package_id):
+            self.manifest_bytes_calls += 1
+            return super().get_manifest_bytes(package_id)
+
+        def get_file_bytes(self, package_id, rel_path):
+            self.file_calls += 1
+            return super().get_file_bytes(package_id, rel_path)
+
+    backend = CountingBackend()
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+
+    package_manager.build_install_plan(tmp_path, "pkg")
+
+    assert backend.manifest_bytes_calls == 1
+    assert backend.file_calls == 1
 
 
 def test_packages_install_missing_package_hides_git_manifest_error(tmp_path, monkeypatch):

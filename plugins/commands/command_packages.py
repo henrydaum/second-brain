@@ -10,6 +10,8 @@ from state_machine.conversation import FormStep
 
 ACTIONS = ["search", "categories", "list", "info", "install", "uninstall"]
 ACTION_LABELS = ["Search available", "Browse categories", "List installed", "Package info", "Install package", "Uninstall package"]
+CLEANUP_MODES = ["all", "none", "specific"]
+CLEANUP_MODE_LABELS = ["All", "None", "Specific"]
 
 _FAMILY_BLURB = {
     "bundle": "curated sets — install one, get many",
@@ -39,8 +41,25 @@ class PackagesCommand(BaseCommand):
         if action == "uninstall":
             steps.append(FormStep("package_id", "Choose the package to uninstall.", True, enum=[p["id"] for p in package_manager.installed_packages()], columns=2))
             if args.get("package_id"):
-                for package_id, cleanup in package_manager.uninstall_cleanup_plans(args["package_id"]):
-                    steps.append(FormStep(_cleanup_arg(package_id), package_manager.cleanup_prompt(cleanup), True, "boolean"))
+                plan = package_manager.build_uninstall_plan(args["package_id"])
+                if any(pkg.cleanup["settings"] for pkg in plan.packages):
+                    steps.append(FormStep("cleanup_config", "Remove package-owned config settings?", True, enum=CLEANUP_MODES, enum_labels=CLEANUP_MODE_LABELS, default="all"))
+                if any(pkg.cleanup["tables"] for pkg in plan.packages):
+                    steps.append(FormStep("cleanup_tables", "Drop package-owned SQL tables?", True, enum=CLEANUP_MODES, enum_labels=CLEANUP_MODE_LABELS, default="all"))
+                if any(plan.pip_removals.values()):
+                    steps.append(FormStep("cleanup_pip", "Uninstall safe package-owned Python deps?", True, enum=CLEANUP_MODES, enum_labels=CLEANUP_MODE_LABELS, default="all"))
+                if _cleanup_mode(args.get("cleanup_config")) == "specific":
+                    for pkg in plan.packages:
+                        if pkg.cleanup["settings"]:
+                            steps.append(FormStep(_cleanup_arg("config", pkg.id), _cleanup_prompt(pkg.id, "Remove config settings", "Config settings", pkg.cleanup["settings"]), True, "boolean"))
+                if _cleanup_mode(args.get("cleanup_tables")) == "specific":
+                    for pkg in plan.packages:
+                        if pkg.cleanup["tables"]:
+                            steps.append(FormStep(_cleanup_arg("tables", pkg.id), _cleanup_prompt(pkg.id, "Drop SQL tables", "Tables", pkg.cleanup["tables"]), True, "boolean"))
+                if _cleanup_mode(args.get("cleanup_pip")) == "specific":
+                    for pkg in plan.packages:
+                        if plan.pip_removals.get(pkg.id):
+                            steps.append(FormStep(_cleanup_arg("pip", pkg.id), package_manager.cleanup_pip_prompt(plan.pip_removals[pkg.id]), True, "boolean"))
         return steps
 
     def run(self, args, context):
@@ -57,10 +76,10 @@ class PackagesCommand(BaseCommand):
             if action == "info":
                 return _format_manifest(package_manager.package_info(context.root_dir, args.get("package_id", "")))
             if action == "install":
-                return package_manager.install_package(context.root_dir, args.get("package_id", ""), context).text()
+                return package_manager.install_package(context.root_dir, args.get("package_id", ""), context, progress=_progress).text()
             if action == "uninstall":
-                approvals = {pkg: bool(args.get(_cleanup_arg(pkg))) for pkg, _cleanup in package_manager.uninstall_cleanup_plans(args.get("package_id", "")) if _cleanup_arg(pkg) in args}
-                return package_manager.uninstall_package(args.get("package_id", ""), context, cleanup_approvals=approvals).text()
+                plan = package_manager.build_uninstall_plan(args.get("package_id", ""))
+                return package_manager.execute_uninstall_plan(plan, context, _cleanup_choices(plan, args), progress=_progress).text()
             return f"Unknown action: {action}"
         except (package_manager.PackageError, StoreBackendError) as e:
             if action in {"install", "info"} and _is_missing_manifest(e, args.get("package_id", "")):
@@ -72,8 +91,48 @@ def _is_bundle(item: dict) -> bool:
     return "bundle" in (item.get("tags") or [])
 
 
-def _cleanup_arg(package_id: str) -> str:
-    return "cleanup__" + re.sub(r"[^a-zA-Z0-9_]", "_", package_id)
+def _progress(message: str) -> None:
+    print(message, flush=True)
+
+
+def _cleanup_arg(kind: str, package_id: str) -> str:
+    return "cleanup_" + kind + "__" + re.sub(r"[^a-zA-Z0-9_]", "_", package_id)
+
+
+def _cleanup_prompt(package_id: str, action: str, label: str, values: list[str]) -> str:
+    return f"{action} for {package_id}?\n\n{label}: " + ", ".join(values)
+
+
+def _cleanup_choices(plan, args) -> dict[str, dict[str, bool]]:
+    return {
+        "config": _cleanup_kind_choices(plan, args, "config", lambda pkg: bool(pkg.cleanup["settings"])),
+        "tables": _cleanup_kind_choices(plan, args, "tables", lambda pkg: bool(pkg.cleanup["tables"])),
+        "pip": _cleanup_kind_choices(plan, args, "pip", lambda pkg: bool(plan.pip_removals.get(pkg.id))),
+    }
+
+
+def _cleanup_kind_choices(plan, args, kind: str, relevant) -> dict[str, bool]:
+    mode = _cleanup_mode(args.get(f"cleanup_{kind}"))
+    if mode == "all":
+        return {pkg.id: bool(relevant(pkg)) for pkg in plan.packages}
+    if mode == "none":
+        return {pkg.id: False for pkg in plan.packages}
+    return {pkg.id: _truthy(args.get(_cleanup_arg(kind, pkg.id))) for pkg in plan.packages}
+
+
+def _cleanup_mode(value) -> str:
+    if value in (None, ""):
+        return "all"
+    if isinstance(value, bool):
+        return "all" if value else "none"
+    text = str(value).strip().lower()
+    if text in CLEANUP_MODES:
+        return text
+    return "all" if _truthy(text) else "none"
+
+
+def _truthy(value) -> bool:
+    return value if isinstance(value, bool) else str(value).strip().lower() in {"true", "yes", "1", "y"}
 
 
 def _is_missing_manifest(error: Exception, package_id: str) -> bool:

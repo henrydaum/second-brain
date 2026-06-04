@@ -1,4 +1,4 @@
-"""Install and uninstall packages into DATA_DIR/installed_plugins."""
+"""Plan and execute package-store install/uninstall operations."""
 
 from __future__ import annotations
 
@@ -9,15 +9,15 @@ import json
 import re
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Callable
 
-from paths import INSTALLED_PLUGINS, PACKAGES_DIR
-from plugins.helpers.plugin_paths import PLUGIN_FAMILIES, plugin_dirs, plugin_info
-from plugins.plugin_discovery import load_single_plugin, unload_plugin
+from paths import INSTALLED_PLUGINS, PACKAGES_DIR, ROOT_DIR
 from plugins.commands.helpers.store_backend import GitStoreBackend
+from plugins.helpers.plugin_paths import PLUGIN_FAMILIES, plugin_dirs
 
 
 PACKAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -25,10 +25,11 @@ ALLOWED_ROOTS = {family for family, _prefix in PLUGIN_FAMILIES.values()} | {"hel
 RECEIPTS_DIR = PACKAGES_DIR / "receipts"
 INTERNAL_IMPORTS = {"agent", "attachments", "config", "events", "helpers", "installed_plugins", "paths", "pipeline", "plugins", "runtime", "sandbox_plugins", "state_machine", "templates", *ALLOWED_ROOTS}
 PIP_NAMES = {"PIL": "Pillow", "bs4": "beautifulsoup4", "cv2": "opencv-python", "docx": "python-docx", "fitz": "PyMuPDF", "google": "google-api-python-client", "googleapiclient": "google-api-python-client", "pptx": "python-pptx", "sklearn": "scikit-learn", "telegram": "python-telegram-bot", "yaml": "PyYAML"}
+_PACKAGE_LOCK = threading.RLock()
 
 
 class PackageError(RuntimeError):
-    """Raised for package validation or install failures."""
+    """Raised for package validation or execution failures."""
 
 
 @dataclass
@@ -41,15 +42,65 @@ class PackageActionResult:
         return "\n".join(self.lines) if self.lines else ("OK" if self.ok else "Failed")
 
 
-def package_family(item: dict) -> str:
-    """Derive a package's structural family from its index entry.
+@dataclass
+class PlannedFile:
+    package_id: str
+    path: str
+    content: bytes
+    sha256: str
 
-    Bundles are tagged; every other package follows the `<family>-<name>` id
-    convention, so the family is simply the first id token. Deriving it from the
-    name — rather than a fixed allowlist — means a brand-new family shows up in
-    search and the categories view the moment its first package is published,
-    with no code change.
-    """
+
+@dataclass
+class PlannedPackage:
+    id: str
+    manifest: dict
+    requested: bool
+    files: list[PlannedFile]
+    entrypoints: list[dict]
+    pip_packages: list[str]
+    manifest_hash: str
+
+
+@dataclass
+class InstallPlan:
+    package_id: str
+    requested_packages: list[str]
+    auto_packages: list[str]
+    packages: list[PlannedPackage]
+    existing_dependencies: list[str]
+    pip_packages: list[str]
+    parser_reload_needed: bool
+    progress_steps: list[str]
+
+
+@dataclass
+class UninstallPackagePlan:
+    id: str
+    receipt: dict
+    explicit: bool
+    files: list[str]
+    entrypoints: list[dict]
+    cleanup: dict[str, list[str]]
+    pip_candidates: list[str]
+
+
+@dataclass
+class UninstallPlan:
+    package_id: str
+    requested_packages: list[str]
+    auto_packages: list[str]
+    packages: list[UninstallPackagePlan]
+    pip_removals: dict[str, list[str]]
+    kept_pip_packages: dict[str, str]
+    parser_reload_needed: bool
+    progress_steps: list[str]
+
+
+Progress = Callable[[str], None]
+
+
+def package_family(item: dict) -> str:
+    """Derive a package's structural family from its index entry."""
     if "bundle" in (item.get("tags") or []):
         return "bundle"
     parts = re.split(r"[-_]", (item.get("id") or "").strip(), maxsplit=1)
@@ -57,19 +108,15 @@ def package_family(item: dict) -> str:
 
 
 def search_packages(root_dir: str | Path, query: str = "") -> list[dict]:
-    """Return packages from the store index matching query.
-
-    A case-insensitive substring match over id + name + description + tags —
-    effectively a bag of words. Family names work as facets for free (`tool` is
-    in every `tool-*` id; `bundle` is a tag), so search needs no notion of
-    family of its own; that concept exists only for the categories view.
-    """
+    """Return packages from the store index matching query."""
     items = GitStoreBackend(root_dir).get_index()
     q = (query or "").strip().lower()
     if not q:
         return sorted(items, key=lambda item: item.get("id", ""))
+
     def hay(item):
         return " ".join(str(item.get(k, "")) for k in ("id", "name", "description", "tags")).lower()
+
     return sorted([item for item in items if q in hay(item)], key=lambda item: item.get("id", ""))
 
 
@@ -81,223 +128,278 @@ def installed_packages() -> list[dict]:
 def package_info(root_dir: str | Path, package_id: str) -> dict:
     """Return one package manifest."""
     _validate_package_id(package_id)
-    manifest = GitStoreBackend(root_dir).get_manifest(package_id)
-    return _validate_manifest(manifest)
+    return _validate_manifest(_CachedStore(GitStoreBackend(root_dir)).get_manifest(package_id))
 
 
-def install_package(root_dir: str | Path, package_id: str, context=None, *, requested: bool = True) -> PackageActionResult:
-    """Install a package and its dependencies."""
-    backend = GitStoreBackend(root_dir)
-    lines: list[str] = []
-    installed: list[str] = []
-    parser_rels: list[str] = []
-    _install(package_id, backend, context, requested=requested, active=set(), installed=installed, lines=lines, parser_rels=parser_rels)
-    _reload_parser_service_if_needed(parser_rels, context, lines)
-    if not installed:
-        lines.append("Nothing installed.")
-    return PackageActionResult(True, lines)
+def install_package(root_dir: str | Path, package_id: str, context=None, *, requested: bool = True, progress: Progress | None = None) -> PackageActionResult:
+    """Build and execute an install plan."""
+    return execute_install_plan(build_install_plan(root_dir, package_id, requested=requested), context, progress=progress)
 
 
-def uninstall_package(package_id: str, context=None, cleanup_approvals: dict[str, bool] | None = None) -> PackageActionResult:
-    """Uninstall a package and prune unneeded auto-installed dependencies."""
-    lines: list[str] = []
-    pruned: list[str] = []
-    _uninstall(package_id, context, lines=lines, pruned=pruned, explicit=True, cleanup_approvals=cleanup_approvals or {})
-    if pruned:
-        lines.append(f"Pruned auto-installed dependencies: {', '.join(pruned)}")
-    return PackageActionResult(True, lines)
+def uninstall_package(package_id: str, context=None, cleanup_choices: dict[str, dict[str, bool]] | None = None, progress: Progress | None = None, cleanup_approvals: dict[str, bool] | None = None) -> PackageActionResult:
+    """Build and execute an uninstall plan."""
+    plan = build_uninstall_plan(package_id)
+    if cleanup_choices is None and cleanup_approvals is not None:
+        cleanup_choices = {"config": cleanup_approvals, "tables": cleanup_approvals, "pip": {}}
+    return execute_uninstall_plan(plan, context, cleanup_choices or {}, progress=progress)
 
 
-def uninstall_cleanup_plans(package_id: str) -> list[tuple[str, dict]]:
-    """Return cleanup prompts needed by uninstall, including pruned deps."""
-    removed: set[str] = set()
-    plans: list[tuple[str, dict]] = []
+def build_install_plan(root_dir: str | Path, package_id: str, *, requested: bool = True) -> InstallPlan:
+    """Resolve a complete install graph before mutating files, receipts, or pip."""
+    _validate_package_id(package_id)
+    store = _CachedStore(GitStoreBackend(root_dir))
+    packages: list[PlannedPackage] = []
+    existing: list[str] = []
+    active: list[str] = []
+    planned_paths: dict[str, str] = {}
 
-    def collect(pid: str):
+    def collect(pid: str, is_requested: bool):
         _validate_package_id(pid)
-        receipt_path = _receipt_path(pid)
-        if not receipt_path.exists():
+        if pid in active:
+            raise PackageError(f"Dependency cycle includes {pid}.")
+        if _receipt_path(pid).exists():
+            if is_requested:
+                raise PackageError(f"Package already installed: {pid}")
+            existing.append(pid)
+            return
+        if any(pkg.id == pid for pkg in packages):
+            return
+        active.append(pid)
+        try:
+            manifest = _validate_manifest(store.get_manifest(pid))
+            if manifest["id"] != pid:
+                raise PackageError(f"Manifest id mismatch: requested {pid}, got {manifest['id']}.")
+            for dep in manifest["requires"]:
+                collect(dep, False)
+            files = _validated_files(manifest)
+            entrypoints = _entrypoint_metadata(_entrypoints(manifest, files))
+            planned_files = [PlannedFile(pid, rel, store.get_file_bytes(pid, rel), "") for rel in files]
+            planned_files = [PlannedFile(f.package_id, f.path, f.content, _sha256(f.content)) for f in planned_files]
+            for file in planned_files:
+                owner = planned_paths.setdefault(file.path, pid)
+                if owner != pid:
+                    raise PackageError(f"File appears in multiple package manifests: {file.path}")
+            pip_packages = _packages_to_install({f.path: f.content for f in planned_files}, manifest.get("pip"))
+            packages.append(PlannedPackage(pid, manifest, bool(is_requested), planned_files, entrypoints, pip_packages, _sha256(store.get_manifest_bytes(pid))))
+        finally:
+            active.pop()
+
+    collect(package_id, requested)
+    _preflight_collisions({file.path: file.content for pkg in packages for file in pkg.files})
+    pip_packages = _unique(name for pkg in packages for name in pkg.pip_packages)
+    parser_reload_needed = any(_is_parser_helper(file.path) for pkg in packages for file in pkg.files)
+    steps = ["Resolving package plan"]
+    if pip_packages:
+        steps.append(f"Installing Python package(s): {', '.join(pip_packages)}")
+    if packages:
+        steps += ["Writing package files", "Writing receipts"]
+    if parser_reload_needed:
+        steps.append("Reloading parser service")
+    return InstallPlan(package_id, [package_id], [pkg.id for pkg in packages if not pkg.requested], packages, _unique(existing), pip_packages, parser_reload_needed, steps)
+
+
+def execute_install_plan(plan: InstallPlan, context=None, progress: Progress | None = None) -> PackageActionResult:
+    """Execute a prebuilt install plan without registering plugins."""
+    lines: list[str] = []
+    written: list[Path] = []
+    receipts: list[Path] = []
+    with _PACKAGE_LOCK:
+        _progress(progress, "Resolving package plan")
+        for dep in plan.existing_dependencies:
+            lines.append(f"Dependency already installed: {dep}")
+        _preflight_collisions({file.path: file.content for pkg in plan.packages for file in pkg.files})
+        _install_python_packages(plan.pip_packages, progress)
+        try:
+            if plan.packages:
+                _progress(progress, "Writing package files")
+            for pkg in plan.packages:
+                for file in pkg.files:
+                    target = _target(file.path)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(file.content)
+                    written.append(target)
+            if plan.packages:
+                _progress(progress, "Writing receipts")
+            for pkg in plan.packages:
+                receipt = {
+                    "id": pkg.id,
+                    "name": pkg.manifest.get("name", pkg.id),
+                    "description": pkg.manifest.get("description", ""),
+                    "installed_at": time.time(),
+                    "requested": pkg.requested,
+                    "requires": pkg.manifest["requires"],
+                    "manifest_hash": pkg.manifest_hash,
+                    "files": [{"path": f.path, "sha256": f.sha256} for f in pkg.files],
+                    "entrypoints": pkg.entrypoints,
+                    "pip_packages": pkg.pip_packages,
+                }
+                _write_receipt(receipt)
+                receipts.append(_receipt_path(pkg.id))
+        except Exception:
+            for path in reversed(written):
+                path.unlink(missing_ok=True)
+            for path in reversed(receipts):
+                path.unlink(missing_ok=True)
+            _remove_empty_dirs()
+            raise
+        if plan.parser_reload_needed:
+            _progress(progress, "Reloading parser service")
+            _reload_parser_service_if_needed([file.path for pkg in plan.packages for file in pkg.files], context, lines)
+        for pkg in plan.packages:
+            if pkg.pip_packages:
+                lines.append(f"Installed Python package(s): {', '.join(pkg.pip_packages)}")
+            lines.append(f"Installed {pkg.id}: {len(pkg.files)} file(s), {len(pkg.entrypoints)} plugin entrypoint(s).")
+        if not plan.packages:
+            lines.append("Nothing installed.")
+    return PackageActionResult(True, lines)
+
+
+def build_uninstall_plan(package_id: str) -> UninstallPlan:
+    """Resolve package/file/config/table/pip cleanup before deleting anything."""
+    _validate_package_id(package_id)
+    order: list[tuple[str, bool, dict]] = []
+    removed: set[str] = set()
+
+    def collect(pid: str, explicit: bool):
+        _validate_package_id(pid)
+        path = _receipt_path(pid)
+        if not path.exists():
             raise PackageError(f"Package is not installed: {pid}")
         dependents = [dep for dep in _dependents(pid) if dep not in removed]
         if dependents:
             raise PackageError(f"Cannot uninstall {pid}; required by: {', '.join(dependents)}")
-        receipt = _load_receipt(receipt_path)
-        cleanup = _cleanup_plan(receipt)
-        if cleanup["settings"] or cleanup["tables"]:
-            plans.append((pid, cleanup))
+        receipt = _load_receipt(path)
+        order.append((pid, explicit, receipt))
         removed.add(pid)
         for dep in receipt.get("requires", []):
             dep_path = _receipt_path(dep)
             if not dep_path.exists() or [item for item in _dependents(dep) if item not in removed]:
                 continue
-            if not _load_receipt(dep_path).get("requested"):
-                collect(dep)
+            dep_receipt = _load_receipt(dep_path)
+            if not dep_receipt.get("requested"):
+                collect(dep, False)
 
-    collect(package_id)
-    return plans
-
-
-def _install(package_id: str, backend, context, *, requested: bool, active: set[str], installed: list[str], lines: list[str], parser_rels: list[str]):
-    _validate_package_id(package_id)
-    if package_id in active:
-        raise PackageError(f"Dependency cycle includes {package_id}.")
-    existing = _receipt_path(package_id)
-    if existing.exists():
-        if requested:
-            raise PackageError(f"Package already installed: {package_id}")
-        lines.append(f"Dependency already installed: {package_id}")
-        return
-    active.add(package_id)
-    try:
-        manifest = _validate_manifest(backend.get_manifest(package_id))
-        if manifest["id"] != package_id:
-            raise PackageError(f"Manifest id mismatch: requested {package_id}, got {manifest['id']}.")
-        for dep in manifest["requires"]:
-            _install(dep, backend, context, requested=False, active=active, installed=installed, lines=lines, parser_rels=parser_rels)
-
-        files = _validated_files(manifest)
-        entrypoints = _entrypoints(manifest, files)
-        file_bytes = {rel: backend.get_file_bytes(package_id, rel) for rel in files}
-        _preflight_collisions(package_id, file_bytes)
-
-        written = []
-        try:
-            for rel, content in file_bytes.items():
-                target = _target(rel)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(content)
-                written.append(target)
-            pip_installed = _install_missing_imports(file_bytes, manifest.get("pip"))
-            loaded = _load_entrypoints(entrypoints, context)
-            parser_rels.extend(file_bytes)
-            receipt = {
-                "id": package_id,
-                "name": manifest.get("name", package_id),
-                "description": manifest.get("description", ""),
-                "installed_at": time.time(),
-                "requested": bool(requested),
-                "requires": manifest["requires"],
-                "manifest_hash": _sha256(backend.get_manifest_bytes(package_id)),
-                "files": [{"path": rel, "sha256": _sha256(content)} for rel, content in file_bytes.items()],
-                "entrypoints": loaded,
-                "pip_packages": pip_installed,
-            }
-            _write_receipt(receipt)
-        except Exception:
-            for target in reversed(written):
-                target.unlink(missing_ok=True)
-            _remove_empty_dirs()
-            raise
-        installed.append(package_id)
-        if pip_installed:
-            lines.append(f"Installed Python package(s): {', '.join(pip_installed)}")
-        lines.append(f"Installed {package_id}: {len(files)} file(s), {len(loaded)} plugin entrypoint(s).")
-    finally:
-        active.remove(package_id)
+    collect(package_id, True)
+    removed_paths = {_target(file["path"]).resolve() for _pid, _explicit, receipt in order for file in receipt.get("files", [])}
+    packages = [
+        UninstallPackagePlan(
+            pid,
+            receipt,
+            explicit,
+            [file["path"] for file in receipt.get("files", [])],
+            list(receipt.get("entrypoints", [])),
+            _cleanup_plan(receipt, removed_paths),
+            sorted(set(receipt.get("pip_packages", [])), key=str.lower),
+        )
+        for pid, explicit, receipt in order
+    ]
+    pip_removals, kept_pip = _safe_pip_removals(packages)
+    parser_reload_needed = any(_is_parser_helper(rel) for pkg in packages for rel in pkg.files)
+    steps = ["Resolving package plan", "Deleting package files", "Writing receipts"]
+    if parser_reload_needed:
+        steps.append("Reloading parser service")
+    if any(pip_removals.values()):
+        steps.append("Uninstalling Python package(s): " + ", ".join(_unique(pkg for pkgs in pip_removals.values() for pkg in pkgs)))
+    return UninstallPlan(package_id, [package_id], [pkg.id for pkg in packages if not pkg.explicit], packages, pip_removals, kept_pip, parser_reload_needed, steps)
 
 
-def _uninstall(package_id: str, context, *, lines: list[str], pruned: list[str], explicit: bool, cleanup_approvals: dict[str, bool]):
-    _validate_package_id(package_id)
-    receipt_path = _receipt_path(package_id)
-    if not receipt_path.exists():
-        raise PackageError(f"Package is not installed: {package_id}")
-    dependents = _dependents(package_id)
-    if dependents:
-        raise PackageError(f"Cannot uninstall {package_id}; required by: {', '.join(dependents)}")
-    receipt = _load_receipt(receipt_path)
-    cleanup = _cleanup_plan(receipt)
-    approved_cleanup = _approve_cleanup(context, package_id, cleanup, lines, cleanup_approvals)
-    for ep in receipt.get("entrypoints", []):
-        _unload_entrypoint(ep, context)
-    removed_paths = [item["path"] for item in receipt.get("files", [])]
-    for item in sorted(receipt.get("files", []), key=lambda f: f.get("path", ""), reverse=True):
-        target = _target(item["path"])
-        target.unlink(missing_ok=True)
-    receipt_path.unlink(missing_ok=True)
-    _remove_empty_dirs()
-    _reload_parser_service_if_needed(removed_paths, context, lines)
-    if approved_cleanup:
-        _apply_cleanup(context, cleanup, lines)
-    lines.append(f"Uninstalled {package_id}.")
-
-    for dep in receipt.get("requires", []):
-        dep_path = _receipt_path(dep)
-        if not dep_path.exists() or _dependents(dep):
-            continue
-        dep_receipt = _load_receipt(dep_path)
-        if dep_receipt.get("requested"):
-            continue
-        _uninstall(dep, context, lines=lines, pruned=pruned, explicit=False, cleanup_approvals=cleanup_approvals)
-        pruned.append(dep)
-
-
-def _load_entrypoints(entrypoints: list[str], context) -> list[dict]:
-    loaded = []
-    try:
-        for rel in entrypoints:
-            path = _target(rel)
-            info, err = plugin_info(path)
-            if err:
-                raise PackageError(err)
-            name, error = load_single_plugin(
-                info.plugin_type,
-                path,
-                tool_registry=getattr(context, "tool_registry", None),
-                orchestrator=getattr(context, "orchestrator", None),
-                services=getattr(context, "services", None),
-                config=getattr(context, "config", None),
-                command_registry=getattr(context, "command_registry", None),
-                frontend_manager=getattr(getattr(context, "runtime", None), "frontend_manager", None),
-                runtime=getattr(context, "runtime", None),
-            )
-            if error:
-                raise PackageError(f"Failed to load {rel}: {error}")
-            loaded.append({"path": rel, "type": info.plugin_type, "name": name or ""})
-            if info.plugin_type == "command":
-                _refresh_commands(context)
-    except Exception:
-        for entrypoint in reversed(loaded):
-            _unload_entrypoint(entrypoint, context)
-        raise
-    return loaded
+def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices: dict[str, dict[str, bool]] | None = None, progress: Progress | None = None) -> PackageActionResult:
+    """Execute a prebuilt uninstall plan without unloading plugins."""
+    choices = cleanup_choices or {}
+    lines: list[str] = []
+    with _PACKAGE_LOCK:
+        _progress(progress, "Resolving package plan")
+        for pkg in plan.packages:
+            if pkg.cleanup["kept_settings"]:
+                lines.append(f"Kept config setting(s) still declared by other plugins: {', '.join(pkg.cleanup['kept_settings'])}")
+            if pkg.cleanup["kept_tables"]:
+                lines.append(f"Kept table(s) still used by remaining tasks; their data may now be stale: {', '.join(pkg.cleanup['kept_tables'])}")
+        _progress(progress, "Deleting package files")
+        removed_rels = [rel for pkg in plan.packages for rel in pkg.files]
+        for pkg in plan.packages:
+            _apply_selected_cleanup(context, pkg.cleanup, choices, pkg.id, lines)
+            for rel in sorted(pkg.files, reverse=True):
+                _target(rel).unlink(missing_ok=True)
+            _receipt_path(pkg.id).unlink(missing_ok=True)
+            lines.append(f"Uninstalled {pkg.id}.")
+        _remove_empty_dirs()
+        if plan.parser_reload_needed:
+            _progress(progress, "Reloading parser service")
+            _reload_parser_service_if_needed(removed_rels, context, lines)
+        selected_pip = _unique(name for pkg in plan.packages for name in plan.pip_removals.get(pkg.id, []) if choices.get("pip", {}).get(pkg.id))
+        _uninstall_python_packages(selected_pip, progress, lines)
+        if plan.kept_pip_packages:
+            kept = ", ".join(f"{name} ({reason})" for name, reason in sorted(plan.kept_pip_packages.items(), key=lambda item: item[0].lower()))
+            lines.append(f"Kept Python package(s): {kept}")
+        pruned = [pkg.id for pkg in plan.packages if not pkg.explicit]
+        if pruned:
+            lines.append(f"Pruned auto-installed dependencies: {', '.join(pruned)}")
+    return PackageActionResult(True, lines)
 
 
-def _unload_entrypoint(entrypoint: dict, context):
-    unload_plugin(
-        entrypoint.get("type", ""),
-        entrypoint.get("name", ""),
-        tool_registry=getattr(context, "tool_registry", None),
-        orchestrator=getattr(context, "orchestrator", None),
-        services=getattr(context, "services", None),
-        source_path=str(_target(entrypoint["path"])),
-        command_registry=getattr(context, "command_registry", None),
-        frontend_manager=getattr(getattr(context, "runtime", None), "frontend_manager", None),
-    )
-    if entrypoint.get("type") == "command":
-        _refresh_commands(context)
+def uninstall_cleanup_plans(package_id: str) -> list[tuple[str, dict]]:
+    """Compatibility helper for callers/tests that need cleanup plan summaries."""
+    plan = build_uninstall_plan(package_id)
+    return [(pkg.id, pkg.cleanup) for pkg in plan.packages if pkg.cleanup["settings"] or pkg.cleanup["tables"]]
+
+
+def cleanup_prompt(cleanup: dict) -> str:
+    prompt = "Delete package-owned data?\n\n"
+    if cleanup["settings"]:
+        prompt += "Config settings: " + ", ".join(cleanup["settings"]) + "\n"
+    if cleanup["tables"]:
+        prompt += "Tables: " + ", ".join(cleanup["tables"]) + "\n"
+    return prompt.strip()
+
+
+def cleanup_pip_prompt(packages: list[str]) -> str:
+    return "Uninstall safe package-owned Python deps?\n\nPython packages: " + ", ".join(packages)
+
+
+def _progress(progress: Progress | None, message: str) -> None:
+    if progress:
+        progress(message)
+
+
+class _CachedStore:
+    def __init__(self, backend):
+        self.backend = backend
+        self.manifest_bytes: dict[str, bytes] = {}
+        self.files: dict[tuple[str, str], bytes] = {}
+
+    def get_manifest(self, package_id: str) -> dict:
+        return json.loads(self.get_manifest_bytes(package_id).decode("utf-8"))
+
+    def get_manifest_bytes(self, package_id: str) -> bytes:
+        if package_id not in self.manifest_bytes:
+            self.manifest_bytes[package_id] = self.backend.get_manifest_bytes(package_id)
+        return self.manifest_bytes[package_id]
+
+    def get_file_bytes(self, package_id: str, rel_path: str) -> bytes:
+        key = (package_id, rel_path)
+        if key not in self.files:
+            self.files[key] = self.backend.get_file_bytes(package_id, rel_path)
+        return self.files[key]
+
+
+def _entrypoint_metadata(entrypoints: list[str]) -> list[dict]:
+    return [{"path": rel, "type": _entrypoint_type(rel), "name": ""} for rel in entrypoints]
+
+
+def _entrypoint_type(rel: str) -> str:
+    p = PurePosixPath(rel)
+    for plugin_type, (family, prefix) in PLUGIN_FAMILIES.items():
+        if p.parts and p.parts[0] == family and p.name.startswith(prefix):
+            return plugin_type
+    raise PackageError(f"Invalid plugin entrypoint path: {rel}")
 
 
 def _is_parser_helper(rel: str) -> bool:
-    """Whether a package file is a parser-discovery helper (services/helpers/parse_*.py).
-
-    Such files aren't plugin entrypoints — they register (extension, modality)
-    parsers when the parser service scans its helper dirs — so installing or
-    removing one only takes effect on a parser-service reload.
-    """
     p = PurePosixPath(rel)
-    return (
-        len(p.parts) == 3
-        and p.parts[0] == "services"
-        and p.parts[1] == "helpers"
-        and p.suffix == ".py"
-        and p.name.startswith("parse_")
-    )
+    return len(p.parts) == 3 and p.parts[0] == "services" and p.parts[1] == "helpers" and p.suffix == ".py" and p.name.startswith("parse_")
 
 
 def _reload_parser_service_if_needed(file_rels, context, lines: list[str]) -> None:
-    """Reload the parser service so newly written/removed parser helpers take
-    effect live, without an app restart. Non-fatal: a reload failure is noted
-    but never fails the install/uninstall."""
     if not any(_is_parser_helper(rel) for rel in file_rels):
         return
     parser = (getattr(context, "services", None) or {}).get("parser")
@@ -312,33 +414,30 @@ def _reload_parser_service_if_needed(file_rels, context, lines: list[str]) -> No
         lines.append(f"Parser service reload failed (restart to apply): {e}")
 
 
-def _refresh_commands(context):
-    runtime = getattr(context, "runtime", None)
-    registry = getattr(context, "command_registry", None)
-    if runtime and registry and hasattr(registry, "to_callable_specs"):
-        runtime.commands = registry.to_callable_specs()
-    if runtime and hasattr(runtime, "refresh_session_specs"):
-        runtime.refresh_session_specs()
-
-
-def _install_missing_imports(file_bytes: dict[str, bytes], declared_pip: list[str] | None = None) -> list[str]:
-    # An explicit manifest `pip` list is authoritative: it overrides the import
-    # scan entirely. This is the escape hatch for packages whose imports the
-    # scan can't read correctly — optional/alternative/platform-specific deps
-    # that are lazily imported (e.g. the OCR service's per-OS engines). pip is
-    # idempotent, so already-satisfied declarations are cheap no-ops. An empty
-    # declared list means "install nothing" without falling back to the scan.
-    if declared_pip is not None:
-        packages = sorted(set(declared_pip))
-    else:
-        packages = _missing_pip_packages(file_bytes)
+def _install_python_packages(packages: list[str], progress: Progress | None) -> None:
     if not packages:
-        return []
-    print(f"Installing Python package(s): {', '.join(packages)}. This may take a while.", flush=True)
+        return
+    _progress(progress, f"Installing Python package(s): {', '.join(packages)}. This may take a while.")
     result = subprocess.run([sys.executable, "-m", "pip", "install", *packages], capture_output=True, text=True, timeout=600)
     if result.returncode:
         raise PackageError(f"pip install failed for {', '.join(packages)}:\n{result.stderr or result.stdout}")
-    return packages
+
+
+def _uninstall_python_packages(packages: list[str], progress: Progress | None, lines: list[str]) -> None:
+    if not packages:
+        return
+    _progress(progress, f"Uninstalling Python package(s): {', '.join(packages)}. This may take a while.")
+    result = subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", *packages], capture_output=True, text=True, timeout=600)
+    if result.returncode:
+        lines.append(f"Python package uninstall failed for {', '.join(packages)}: {result.stderr or result.stdout}")
+    else:
+        lines.append(f"Uninstalled Python package(s): {', '.join(packages)}")
+
+
+def _packages_to_install(file_bytes: dict[str, bytes], declared_pip: list[str] | None = None) -> list[str]:
+    if declared_pip is not None:
+        return sorted(set(declared_pip), key=str.lower)
+    return _missing_pip_packages(file_bytes)
 
 
 def _missing_pip_packages(file_bytes: dict[str, bytes]) -> list[str]:
@@ -347,12 +446,7 @@ def _missing_pip_packages(file_bytes: dict[str, bytes]) -> list[str]:
         if rel.endswith(".py"):
             roots.update(_import_roots(content))
     stdlib = set(getattr(sys, "stdlib_module_names", set())) | set(sys.builtin_module_names)
-    missing = []
-    for root in sorted(roots):
-        if root in stdlib or root in INTERNAL_IMPORTS or _module_available(root):
-            continue
-        missing.append(PIP_NAMES.get(root, root))
-    return sorted(set(missing), key=str.lower)
+    return sorted({PIP_NAMES.get(root, root) for root in roots if root not in stdlib and root not in INTERNAL_IMPORTS and not _module_available(root)}, key=str.lower)
 
 
 def _module_available(name: str) -> bool:
@@ -376,68 +470,78 @@ def _import_roots(content: bytes) -> set[str]:
     return roots
 
 
-def _cleanup_plan(receipt: dict) -> dict[str, list[str]]:
+def _safe_pip_removals(packages: list[UninstallPackagePlan]) -> tuple[dict[str, list[str]], dict[str, str]]:
+    removed_ids = {pkg.id for pkg in packages}
+    kernel = _kernel_requirements()
+    remaining = {_normalize_pip(name) for receipt in installed_packages() if receipt.get("id") not in removed_ids for name in receipt.get("pip_packages", [])}
+    removals: dict[str, list[str]] = {}
+    kept: dict[str, str] = {}
+    for pkg in packages:
+        safe: list[str] = []
+        for name in pkg.pip_candidates:
+            norm = _normalize_pip(name)
+            if not norm:
+                kept[name] = "unknown ownership"
+            elif norm in kernel:
+                kept[name] = "kernel requirement"
+            elif norm in remaining:
+                kept[name] = "needed by another installed package"
+            else:
+                safe.append(name)
+        removals[pkg.id] = sorted(set(safe), key=str.lower)
+    return removals, kept
+
+
+def _kernel_requirements() -> set[str]:
+    req = ROOT_DIR / "requirements.txt"
+    if not req.exists():
+        return set()
+    return {_normalize_pip(name) for name in (_requirement_name(line) for line in req.read_text(encoding="utf-8").splitlines()) if name}
+
+
+def _requirement_name(line: str) -> str | None:
+    line = line.split("#", 1)[0].strip()
+    if not line or line.startswith("-"):
+        return None
+    return re.split(r"[<>=!~;]", line, maxsplit=1)[0].split("[", 1)[0].strip() or None
+
+
+def _normalize_pip(name: str | None) -> str:
+    return re.sub(r"[-_.]+", "-", (name or "").strip().lower())
+
+
+def _cleanup_plan(receipt: dict, removed_paths: set[Path] | None = None) -> dict[str, list[str]]:
     owned_paths = {_target(item["path"]).resolve() for item in receipt.get("files", [])}
     owned = _declared_state(owned_paths)
-    used_elsewhere = _declared_state(_other_plugin_files(owned_paths))
+    used_elsewhere = _declared_state(_other_plugin_files(removed_paths or owned_paths))
     settings = sorted(owned["settings"] - used_elsewhere["settings"])
     tables = sorted(owned["writes"] - (used_elsewhere["reads"] | used_elsewhere["writes"]))
-    return {
-        "settings": settings,
-        "tables": tables,
-        "kept_settings": sorted(owned["settings"] - set(settings)),
-        "kept_tables": sorted(owned["writes"] - set(tables)),
-    }
+    return {"settings": settings, "tables": tables, "kept_settings": sorted(owned["settings"] - set(settings)), "kept_tables": sorted(owned["writes"] - set(tables))}
 
 
-def cleanup_prompt(cleanup: dict) -> str:
-    prompt = "Delete package-owned data?\n\n"
-    if cleanup["settings"]:
-        prompt += "Config settings: " + ", ".join(cleanup["settings"]) + "\n"
-    if cleanup["tables"]:
-        prompt += "Tables: " + ", ".join(cleanup["tables"]) + "\n"
-    return prompt.strip()
-
-
-def _approve_cleanup(context, package_id: str, cleanup: dict, lines: list[str], cleanup_approvals: dict[str, bool]) -> bool:
-    if cleanup["kept_settings"]:
-        lines.append(f"Kept config setting(s) still declared by other plugins: {', '.join(cleanup['kept_settings'])}")
-    if cleanup["kept_tables"]:
-        lines.append(f"Kept table(s) still used by remaining tasks; their data may now be stale: {', '.join(cleanup['kept_tables'])}")
-    if not cleanup["settings"] and not cleanup["tables"]:
-        return False
-    if package_id in cleanup_approvals:
-        if not cleanup_approvals[package_id]:
-            lines.append("Kept package config/table data.")
-        return bool(cleanup_approvals[package_id])
-    ask = getattr(context, "request_user_input", None)
-    if ask is None:
-        lines.append("Cleanup available but no approval session is available; kept package config/table data.")
-        return False
-    req = ask(f"Uninstall {package_id}", cleanup_prompt(cleanup), type="boolean")
-    if not req.wait(timeout=300.0) or not req.approved:
-        lines.append("Kept package config/table data.")
-        return False
-    return True
-
-
-def _apply_cleanup(context, cleanup: dict, lines: list[str]) -> None:
-    if cleanup["settings"]:
+def _apply_selected_cleanup(context, cleanup: dict, choices: dict[str, dict[str, bool]], package_id: str, lines: list[str]) -> None:
+    settings = cleanup["settings"] if choices.get("config", {}).get(package_id) else []
+    tables = cleanup["tables"] if choices.get("tables", {}).get(package_id) else []
+    if cleanup["settings"] and not settings:
+        lines.append("Kept package config setting(s).")
+    if cleanup["tables"] and not tables:
+        lines.append("Kept package SQL table(s).")
+    if settings:
         from config import config_manager
         saved = config_manager.load_plugin_config()
-        for key in cleanup["settings"]:
+        for key in settings:
             saved.pop(key, None)
             if getattr(context, "config", None) is not None:
                 context.config.pop(key, None)
         config_manager.save_plugin_config(saved)
-        lines.append(f"Deleted config setting(s): {', '.join(cleanup['settings'])}")
-    if cleanup["tables"] and getattr(context, "db", None) is not None:
+        lines.append(f"Deleted config setting(s): {', '.join(settings)}")
+    if tables and getattr(context, "db", None) is not None:
         with context.db.lock:
-            for table in cleanup["tables"]:
+            for table in tables:
                 context.db._validate_identifier(table)
                 context.db.conn.execute(f'DROP TABLE IF EXISTS "{table}"')
             context.db.conn.commit()
-        lines.append(f"Deleted table(s): {', '.join(cleanup['tables'])}")
+        lines.append(f"Deleted table(s): {', '.join(tables)}")
 
 
 def _other_plugin_files(excluded: set[Path]) -> set[Path]:
@@ -460,8 +564,7 @@ def _declared_state(paths: set[Path]) -> dict[str, set[str]]:
             continue
         for node in ast.walk(tree):
             if isinstance(node, (ast.ClassDef, ast.Module)):
-                assigns = [item for item in getattr(node, "body", []) if isinstance(item, ast.Assign)]
-                for assign in assigns:
+                for assign in [item for item in getattr(node, "body", []) if isinstance(item, ast.Assign)]:
                     names = [target.id for target in assign.targets if isinstance(target, ast.Name)]
                     if "config_settings" in names:
                         state["settings"].update(_setting_keys(assign.value))
@@ -522,17 +625,13 @@ def _validate_manifest(manifest: dict) -> dict:
 
 def _validated_files(manifest: dict) -> list[str]:
     files = manifest["files"]
-    # A file-less package is a bundle/meta-package: it ships no plugin files of
-    # its own and exists purely to pull in its `requires`. Allowed as long as it
-    # actually depends on something.
     if not files and not manifest.get("requires"):
         raise PackageError("Manifest must include at least one file or dependency.")
     return files
 
 
 def _entrypoints(manifest: dict, files: list[str]) -> list[str]:
-    explicit = manifest.get("entrypoints")
-    entrypoints = explicit if explicit is not None else [path for path in files if _is_entrypoint(path)]
+    entrypoints = manifest.get("entrypoints") if manifest.get("entrypoints") is not None else [path for path in files if _is_entrypoint(path)]
     file_set = set(files)
     for path in entrypoints:
         if path not in file_set:
@@ -546,10 +645,7 @@ def _is_entrypoint(path: str) -> bool:
     p = PurePosixPath(path)
     if len(p.parts) != 2 or p.suffix != ".py":
         return False
-    for family, prefix in PLUGIN_FAMILIES.values():
-        if p.parts[0] == family and p.name.startswith(prefix):
-            return True
-    return False
+    return any(p.parts[0] == family and p.name.startswith(prefix) for family, prefix in PLUGIN_FAMILIES.values())
 
 
 def _validate_rel_path(path: str) -> str:
@@ -561,22 +657,11 @@ def _validate_rel_path(path: str) -> str:
     return p.as_posix()
 
 
-def _preflight_collisions(package_id: str, file_bytes: dict[str, bytes]):
+def _preflight_collisions(file_bytes: dict[str, bytes]):
     for rel, content in file_bytes.items():
         target = _target(rel)
-        if not target.exists():
-            continue
-        owner = _file_owner(rel)
-        if owner == package_id and _sha256(target.read_bytes()) == _sha256(content):
-            continue
-        raise PackageError(f"Refusing to overwrite existing file: {target}")
-
-
-def _file_owner(rel_path: str) -> str | None:
-    for receipt in installed_packages():
-        if any(item.get("path") == rel_path for item in receipt.get("files", [])):
-            return receipt.get("id")
-    return None
+        if target.exists():
+            raise PackageError(f"Refusing to overwrite existing file: {target}")
 
 
 def _dependents(package_id: str) -> list[str]:
@@ -613,6 +698,10 @@ def _remove_empty_dirs():
             path.rmdir()
         except OSError:
             pass
+
+
+def _unique(items) -> list:
+    return list(dict.fromkeys(items))
 
 
 def _validate_package_id(package_id: str):
