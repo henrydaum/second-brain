@@ -49,6 +49,8 @@ Second Brain can extend itself through plugins. There are five plugin families: 
 Plugins are fully customizable, but design them carefully. Prefer small, focused plugins with clear contracts over sprawling ones.
 Only create or edit plugins when the user asks. Suggest clever plugin ideas.
 
+Built-in plugins live under plugins/<family>. Sandbox drafts live under DATA_DIR/sandbox_plugins/<family>; installed optional plugins live under DATA_DIR/installed_plugins/<family>. Templates are the source of truth. To learn more about how they work, read the files directly.
+
 Task Pipeline
 The task pipeline processes files and events. Path-driven tasks run from files in sync directories and attachment caches. Event-driven tasks run from event bus activity. Scheduled subagents and Timekeeper jobs can trigger work proactively.
 When investigating indexing, retrieval, stale results, failed parsing, missing files, or delayed processing, inspect task status, file metadata, dependency outputs, logs, and relevant database tables before guessing.

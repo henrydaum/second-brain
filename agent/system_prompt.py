@@ -83,7 +83,6 @@ def build_prompt_sections(
     semi = [
         _tool_catalog(r),
         _command_catalog(commands, command_filter),
-        _plugin_contracts(),
         _collect(_visible_tools_for_prompt(r), pctx),
         _collect(_loaded_services_for_prompt(services), pctx),
         _collect(_tasks_for_prompt(orchestrator), pctx),
@@ -225,15 +224,6 @@ def _form_hint(form, commands=None) -> str:
     except Exception:
         steps = []
     return " ".join(f"<{s.name}>" if getattr(s, "required", True) else f"[{s.name}]" for s in steps)
-
-
-def _plugin_contracts() -> str:
-    return (
-        """## Plugin contracts
-Second Brain has five plugin families: tools, tasks, services, commands, and frontends.
-
-Built-in plugins live under plugins/<family>. Sandbox drafts live under DATA_DIR/sandbox_plugins/<family>; installed optional plugins live under DATA_DIR/installed_plugins/<family>. Templates are the source of truth. To learn more about how they work, read the files directly."""
-    )
 
 
 def _pipeline_status(db, orchestrator) -> str:
