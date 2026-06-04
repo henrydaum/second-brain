@@ -245,6 +245,23 @@ def main():
 	)
 	_bind_runtime_services(services, tool_registry, orchestrator, scaffold.frontend_runtime)
 
+	# --- 10b. DEBUG: dump the full base system prompt at startup ---
+	# Quick-and-dirty: prints the no-session base prompt (frontend statements and
+	# per-frontend command filtering are added per session at turn time, so they
+	# aren't shown here). Delete this block when you're done eyeballing it.
+	try:
+		_rt = scaffold.frontend_runtime
+		_sp = getattr(_rt, "system_prompt", None)
+		_sections = _sp() if callable(_sp) else _sp
+		if not isinstance(_sections, list):
+			_sections = [{"role": "system", "content": str(_sections)}]
+		print("\n" + "=" * 80 + "\nFULL SYSTEM PROMPT (startup dump)\n" + "=" * 80)
+		for _m in _sections:
+			print(f"\n----- role: {_m.get('role')} -----\n{_m.get('content', '')}")
+		print("=" * 80 + "\n")
+	except Exception:
+		logger.exception("System prompt debug dump failed")
+
 	# --- 11. Main thread idles until shutdown ---
 	while not _shutdown.is_set():
 		_shutdown.wait(timeout=1.0)

@@ -272,7 +272,7 @@ def _agent_memory() -> str:
     return (
         f"""## Memory (from memory.md)
 Path: {path}
-Contains durable notes that persist across sessions. When the user asks Second Brain to remember something, write it down here. Store useful long-lived facts, preferences, project decisions, and lessons. Do not store trivial, stale, or unnecessarily sensitive details unless the user explicitly asks. Nightly, dream_memory may rewrite memory.md with reusable lessons and preferences.
+Contains durable notes that persist across sessions.
 
 Current contents:
 {content}"""
