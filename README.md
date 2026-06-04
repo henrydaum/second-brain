@@ -55,3 +55,23 @@ python scripts/package_publisher.py publish <id> --name "…" --description "…
 Omit `--file` and pass only `--require` to publish a bundle. The script runs in a
 throwaway worktree of this branch, validates the whole store, commits, and pushes
 — without touching your checkout. `package_publisher.py validate` checks integrity.
+
+## Python dependencies
+
+By default install **auto-detects** a package's third-party imports and
+`pip install`s the missing ones (mapping import names to PyPI names where they
+differ, e.g. `fitz`→PyMuPDF). **Most packages need to declare nothing.**
+
+Only override this when the scan can't read your real deps — typically
+optional, alternative, or platform-specific imports that are lazily imported and
+shouldn't all be force-installed:
+
+- `--pip <name>` (repeatable) — an **authoritative** dependency list that
+  replaces the scan entirely. Supports PEP 508 markers, e.g.
+  `--pip "pyobjc-framework-Vision; sys_platform=='darwin'"`.
+- `--no-pip` — declare an empty list: install nothing and skip the scan.
+
+Example: `service-ocr` declares `--pip pillow-heif` because its OCR engines
+(`torch`, `winrt`, the macOS `pyobjc` frameworks) are optional per-platform
+choices the user installs themselves — the scan would otherwise try to install
+all of them and fail.
