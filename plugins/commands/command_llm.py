@@ -108,7 +108,7 @@ class LlmCommand(BaseCommand):
 
 def _profile(args):
     """Internal helper to handle profile."""
-    profile = {f: _coerce(f, args.get(f)) for f in PROFILE_FIELDS}
+    profile = {f: _coerce(f, args.get(f)) for f in PROFILE_FIELDS if f not in CAPABILITY_FIELDS}
     caps = {cap: _coerce(field, args.get(field)) for field, cap in CAPABILITY_FIELDS.items() if field in args and args.get(field) is not None}
     if caps:
         profile["llm_capabilities"] = caps

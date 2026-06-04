@@ -55,8 +55,8 @@ def test_llm_command_add_stores_declared_capabilities(monkeypatch):
     assert [s.name for s in steps][-3:] == ["llm_capability_image", "llm_capability_audio", "llm_capability_video"]
     assert result == "Added LLM profile: openai/gpt-4o"
     assert profile["llm_capabilities"] == {"image": True, "audio": False}
+    assert not any(k.startswith("llm_capability_") for k in profile)
     assert saved[-1]["llm_profiles"]["openai/gpt-4o"] == profile
-
 
 def test_llm_command_can_rename_profile(monkeypatch):
     saved, removed, added = [], [], []
