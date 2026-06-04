@@ -19,6 +19,23 @@ except ImportError:
 logger = logging.getLogger("OCRClass")
 
 
+def _engine_missing_msg(engine: str, install: str, err: Exception) -> str:
+    """Actionable message when the platform OCR engine isn't installed.
+
+    OCR ships without a bundled engine (they're platform-specific and/or
+    heavy), so the user installs the one for their machine. This turns a bare
+    ImportError into a clear next step.
+    """
+    return (
+        f"OCR is installed but its engine isn't available on this machine "
+        f"({engine}: {err}).\n"
+        f"Install it yourself with:\n"
+        f"    pip install {install}\n"
+        f"or ask the agent to run that for you with the run_command tool. "
+        f"Then reload the OCR service via /services (or restart)."
+    )
+
+
 def _create_optimized_temp_file(original_path):
     """Resize/normalize the image to a temp PNG so the OCR engine doesn't
     choke on huge or unusual files. Shared by all OCR backends."""
@@ -50,10 +67,14 @@ class WindowsOCR(BaseService):
         self.shared = True
 
     def _load(self):
-        """Just imports stuff and checks if library is present and enables the flag."""
+        """Verify the engine is present, with an actionable error if it isn't."""
         # Torch must be imported before winrt — its greedy DLL loading
         # conflicts with winrt's DLLs if loaded second, causing crashes.
-        import torch  # noqa: F401
+        try:
+            import torch  # noqa: F401
+            from winrt.windows.media.ocr import OcrEngine  # noqa: F401
+        except ImportError as e:
+            raise RuntimeError(_engine_missing_msg("Windows OCR via winrt", "winrt torch", e))
 
         self.loaded = True
         return True
@@ -141,10 +162,17 @@ class MacOCR(BaseService):
         self.shared = True
 
     def _load(self):
-        # Verify the frameworks import; the OCR model is OS-resident.
-        """Internal helper to load mac OCR."""
-        import Vision  # noqa: F401
-        import Quartz  # noqa: F401
+        """Verify the frameworks import; the OCR model is OS-resident."""
+        try:
+            import Vision  # noqa: F401
+            import Quartz  # noqa: F401
+            from Foundation import NSURL  # noqa: F401
+        except ImportError as e:
+            raise RuntimeError(_engine_missing_msg(
+                "macOS Vision",
+                "pyobjc-framework-Vision pyobjc-framework-Quartz pyobjc-framework-Cocoa",
+                e,
+            ))
         self.loaded = True
         return True
 
@@ -225,8 +253,11 @@ class EasyOCR(BaseService):
 
     def _load(self):
         """Load EasyOCR and prepare the reader."""
-        import torch
-        import easyocr
+        try:
+            import torch
+            import easyocr
+        except ImportError as e:
+            raise RuntimeError(_engine_missing_msg("EasyOCR", "easyocr torch", e))
 
         gpu_available = torch.cuda.is_available()
         self.reader = easyocr.Reader(["en"], gpu=gpu_available)
