@@ -103,6 +103,27 @@ class SQLQuery(BaseTool):
     requires_services = []
     max_calls = 6  # Failed queries are common, so allow a few extra calls.
 
+    def agent_prompt_for(self, ctx) -> str:
+        """Point the agent at the attachment cache and the live table list."""
+        from paths import ATTACHMENT_CACHE
+        try:
+            names = [row[0] for row in ctx.db.query(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            )["rows"]] if ctx.db else []
+        except Exception:
+            names = []
+        tables = ", ".join(names) if names else "No tables yet."
+        return (
+            f"""## Attachments
+Files sent through frontends are saved to the attachment cache and indexed by the normal task pipeline. If they can be parsed into text, they will be added to the user message directly using a separate attachment parser system. You can extend this system by following the structure within attachments/parsers/.
+
+To find recent attachments with sql_query:
+SELECT path, file_name, mtime FROM files WHERE path LIKE '{ATTACHMENT_CACHE}%' ORDER BY mtime DESC LIMIT 10
+
+## Database tables (inspect with sql_query)
+{tables}"""
+        )
+
     def run(self, context, **kwargs):
         """Run sqlquery."""
         sql = kwargs.get("sql", "").strip()

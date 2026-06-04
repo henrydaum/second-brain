@@ -34,6 +34,18 @@ class ScheduleSubagent(BaseTool):
     }
     requires_services = []
     background_safe = False
+    agent_prompt = (
+        "## Scheduling and cron jobs\n"
+        "Treat your schedule_subagent tool as the user's calendar and background task system.\n\n"
+        "Use it to create reminders, recurring checks, follow-ups, and delayed autonomous work. "
+        "When the user asks about their schedule, reminders, upcoming events, or planned tasks, "
+        "inspect the schedule with schedule_subagent before answering. Scheduled tasks are persisted in the config.\n\n"
+        "Schedule reminders for 1 hr before the actual event, unless otherwise specified. If it isn't clear "
+        "from the prompt whether a job should be recurrent or one-time, ask the user to clarify. Include "
+        "unambiguous, step-by-step instructions in the prompt for the agent to follow.\n\n"
+        "Determine whether creating a new event-driven task, scheduling a subagent, or editing memory.md is "
+        "the best way to accomplish the user's underlying goal."
+    )
 
     def run(self, context, **kwargs):
         """Run schedule subagent."""

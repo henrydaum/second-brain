@@ -30,6 +30,43 @@ class TestPlugin(BaseTool):
     max_calls = 5
     background_safe = False
 
+    def agent_prompt_for(self, ctx) -> str:
+        """Plugin-authoring workflow plus a live listing of sandbox drafts."""
+        from paths import ROOT_DIR, SANDBOX_PLUGINS
+        sandbox = []
+        for sd in (SANDBOX_PLUGINS / "tools", SANDBOX_PLUGINS / "tasks", SANDBOX_PLUGINS / "services",
+                   SANDBOX_PLUGINS / "commands", SANDBOX_PLUGINS / "frontends"):
+            if sd.exists():
+                sandbox.extend(f"  {p}" for p in sorted(sd.glob("*.py")) if not p.name.startswith("_"))
+        sandbox_block = "\n".join(sandbox) if sandbox else (
+            "None yet. When new sandbox plugins are made, they will show up here."
+        )
+        return (
+            f"""## Building plugins
+You can extend Second Brain by authoring tools, tasks, services, commands, and frontends.
+
+Read the matching template in templates/, then write the plugin into {SANDBOX_PLUGINS}/<family>/ with the required prefix, e.g. tool_foo.py in {SANDBOX_PLUGINS}/tools/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
+
+Workflow:
+1. Understand the user's intended behavior. Ask clarifying questions when a missing decision would materially change the design.
+2. Read the relevant template with read_file.
+3. Read a similar built-in or sandbox plugin when one exists.
+4. Write the file into the correct sandbox directory using the file-editing tools.
+5. Call test_plugin(plugin_path=...) after edits for naming, import, contract, and diagnostic feedback.
+6. Treat pytest output as broad regression context, not proof that the plugin's behavior is correct.
+7. If diagnostics, pytest, or watcher logs show a failure, edit the same file and test again.
+
+Valid plugin files are loaded, reloaded, or unloaded as they change when plugin_watcher is loaded.
+To remove a plugin from the live runtime, delete its file with the run_command tool.
+
+Names must be unique across built-in, sandbox, and installed plugins. Import kernel APIs with absolute plugins.* imports; import plugin helpers with relative imports such as from .helpers.foo import bar or from ..helpers.shared import thing. Config settings use (title, variable_name, description, default, type_info), are stored in plugin_config.json, and are read with context.config.get(key).
+
+The context object is passed to every plugin and contains relevant runtime information and helper methods. Read its definition in runtime/context.py if you have questions about how to use it effectively in your plugin code.
+
+## Sandbox plugins
+{sandbox_block}"""
+        )
+
     def run(self, context, **kwargs) -> ToolResult:
         """Run test plugin."""
         path, err = resolve_plugin_path((kwargs.get("plugin_path") or "").strip())

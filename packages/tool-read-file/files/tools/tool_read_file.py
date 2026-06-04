@@ -46,6 +46,27 @@ class ReadFile(BaseTool):
     requires_services = []
     max_calls = 10
 
+    def agent_prompt_for(self, ctx) -> str:
+        """Tell the agent what is indexed and which file types are parseable."""
+        try:
+            stats = ctx.db.get_system_stats().get("files", {}) if ctx.db else {}
+        except Exception:
+            stats = {}
+        total = sum(stats.values()) if stats else 0
+        lines = [
+            "## File inventory",
+            (", ".join(f"{c} {m}" for m, c in sorted(stats.items())) + f" ({total} total)")
+            if stats else "No files indexed yet.",
+        ]
+        try:
+            from plugins.services.helpers.parser_registry import get_supported_extensions
+            exts = sorted(get_supported_extensions())
+        except Exception:
+            exts = []
+        if exts:
+            lines.append("Supported extensions: " + " ".join(exts))
+        return "\n".join(lines)
+
     def run(self, context, **kwargs) -> ToolResult:
         """Run read file."""
         raw_path = kwargs.get("path", "").strip()
