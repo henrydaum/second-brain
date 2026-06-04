@@ -56,7 +56,7 @@ SETTINGS_DATA = [
     # --- Services ---
     ("Auto-load Services", "autoload_services",
      "Managed service names to load automatically on startup. Extension services auto-load when installed.",
-     ["timekeeper", "compactor", "parser", "plugin_watcher", "LLM Router"],
+     ["llm"],
      {"type": "json_list"}),
 
     # --- Frontends ---

@@ -2,7 +2,7 @@
 
 import logging
 
-from plugins.BaseService import BaseService
+from plugins.BaseService import BaseService, EXTENSION
 
 logger = logging.getLogger("CompactorService")
 
@@ -11,18 +11,12 @@ class CompactorService(BaseService):
     """Summarize conversation history when the active LLM context is tight."""
 
     model_name = "Conversation Compactor"
+    lifecycle = EXTENSION
 
     SYSTEM_PROMPT = (
         "Summarize this Second Brain conversation so the assistant can continue "
         "with minimal loss."
     )
-
-    def _load(self) -> bool:
-        self.loaded = True
-        return True
-
-    def unload(self):
-        self.loaded = False
 
     def compact(self, *, runtime, session_key: str | None, transcript: str) -> str | None:
         """Return a continuation summary for a rendered transcript."""

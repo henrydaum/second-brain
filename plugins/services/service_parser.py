@@ -18,7 +18,7 @@ delegate to peers (e.g. parse_gdoc -> google_drive, parse_audio -> whisper).
 
 import logging
 
-from plugins.BaseService import BaseService
+from plugins.BaseService import BaseService, EXTENSION
 from plugins.services.helpers import parser_registry
 
 logger = logging.getLogger("ParserService")
@@ -29,6 +29,7 @@ class ParserService(BaseService):
 
     model_name = "parser"
     shared = True
+    lifecycle = EXTENSION
     config_settings: list = []
 
     def _load(self) -> bool:
@@ -36,13 +37,6 @@ class ParserService(BaseService):
         self._discover_parsers()
         self.loaded = True
         return True
-
-    def unload(self):
-        # The registry itself is just a dict of callables — no heavyweight
-        # resources to release. A subsequent load() rebuilds it from scratch
-        # via _discover_parsers(), so there's nothing to tear down here.
-        """Handle unload."""
-        self.loaded = False
 
     def _discover_parsers(self) -> None:
         """Clear the registry and (re)import every parse_*.py helper module.

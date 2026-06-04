@@ -9,7 +9,7 @@ from watchdog.observers import Observer
 
 from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED
-from plugins.BaseService import BaseService
+from plugins.BaseService import BaseService, EXTENSION
 from plugins.helpers.plugin_paths import iter_plugin_dirs, plugin_info
 from plugins.plugin_discovery import get_plugin_settings, load_single_plugin, unload_plugin, wire_peer_services
 
@@ -20,6 +20,7 @@ class PluginWatcherService(BaseService):
     """Plugin watcher service."""
     model_name = "Plugin Watcher"
     shared = True
+    lifecycle = EXTENSION
 
     def __init__(self, config: dict):
         """Initialize the plugin watcher service."""
