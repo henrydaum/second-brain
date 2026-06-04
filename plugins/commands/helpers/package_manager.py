@@ -41,34 +41,35 @@ class PackageActionResult:
         return "\n".join(self.lines) if self.lines else ("OK" if self.ok else "Failed")
 
 
-# Structural families a package can belong to. A package's family is *derived*,
-# not stored: bundles carry the "bundle" tag; every other package's id follows
-# the `<family>-<name>` convention, so the id prefix is the family. Deriving it
-# means it can't drift and works retroactively on the whole store.
-PACKAGE_FAMILIES = ("bundle", "service", "tool", "task", "command", "frontend", "parser", "helper")
-
-
 def package_family(item: dict) -> str:
-    """Derive a package's structural family from its index entry."""
+    """Derive a package's structural family from its index entry.
+
+    Bundles are tagged; every other package follows the `<family>-<name>` id
+    convention, so the family is simply the first id token. Deriving it from the
+    name — rather than a fixed allowlist — means a brand-new family shows up in
+    search and the categories view the moment its first package is published,
+    with no code change.
+    """
     if "bundle" in (item.get("tags") or []):
         return "bundle"
-    prefix = (item.get("id") or "").split("-", 1)[0]
-    return prefix if prefix in PACKAGE_FAMILIES else "other"
+    parts = re.split(r"[-_]", (item.get("id") or "").strip(), maxsplit=1)
+    return parts[0] if parts and parts[0] else "other"
 
 
 def search_packages(root_dir: str | Path, query: str = "") -> list[dict]:
     """Return packages from the store index matching query.
 
-    The derived family is folded into the match text, so a family name like
-    `tool` or `bundle` works as a facet even for packages that don't tag it.
+    A case-insensitive substring match over id + name + description + tags —
+    effectively a bag of words. Family names work as facets for free (`tool` is
+    in every `tool-*` id; `bundle` is a tag), so search needs no notion of
+    family of its own; that concept exists only for the categories view.
     """
     items = GitStoreBackend(root_dir).get_index()
     q = (query or "").strip().lower()
     if not q:
         return sorted(items, key=lambda item: item.get("id", ""))
     def hay(item):
-        fields = " ".join(str(item.get(k, "")) for k in ("id", "name", "description", "tags"))
-        return f"{fields} {package_family(item)}".lower()
+        return " ".join(str(item.get(k, "")) for k in ("id", "name", "description", "tags")).lower()
     return sorted([item for item in items if q in hay(item)], key=lambda item: item.get("id", ""))
 
 

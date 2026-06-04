@@ -9,7 +9,6 @@ from state_machine.conversation import FormStep
 ACTIONS = ["search", "categories", "list", "info", "install", "uninstall"]
 ACTION_LABELS = ["Search available", "Browse categories", "List installed", "Package info", "Install package", "Uninstall package"]
 
-_FAMILY_ORDER = ["bundle", "service", "tool", "task", "command", "frontend", "parser", "helper", "other"]
 _FAMILY_BLURB = {
     "bundle": "curated sets — install one, get many",
     "service": "long-lived backends (LLMs, OCR, embeddings, integrations)",
@@ -99,13 +98,13 @@ def _format_categories(items: list[dict]) -> str:
     counts = Counter(package_manager.package_family(i) for i in items)
     if not counts:
         return "No packages found."
+    # Whatever families exist, derived from the names: bundle first, then by
+    # descending count, then alphabetical. New families appear here for free.
+    families = sorted(counts, key=lambda f: (f != "bundle", -counts[f], f))
     out = ["Categories — /packages search <name> to list one:"]
-    for family in _FAMILY_ORDER:
-        n = counts.get(family)
-        if not n:
-            continue
+    for family in families:
         blurb = _FAMILY_BLURB.get(family, "")
-        out.append(f"  {family:9} {n:>3}{('  — ' + blurb) if blurb else ''}")
+        out.append(f"  {family:9} {counts[family]:>3}{('  — ' + blurb) if blurb else ''}")
     return "\n".join(out)
 
 
