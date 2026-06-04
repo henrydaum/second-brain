@@ -39,7 +39,7 @@ class PackagesCommand(BaseCommand):
         if action in {"install", "info"}:
             steps.append(FormStep("package_id", "Enter the package id.", True))
         if action == "uninstall":
-            steps.append(FormStep("package_id", "Choose the package to uninstall.", True, enum=[p["id"] for p in package_manager.installed_packages()], columns=2))
+            steps.append(FormStep("package_id", "Choose the package to uninstall.", True, enum=[p["id"] for p in package_manager.removable_packages()], columns=2))
             if args.get("package_id"):
                 plan = package_manager.build_uninstall_plan(args["package_id"])
                 if any(pkg.cleanup["settings"] for pkg in plan.packages):

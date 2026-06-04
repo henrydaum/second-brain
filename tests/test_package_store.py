@@ -213,6 +213,153 @@ def test_install_resolves_full_graph_before_writing_files(tmp_path, monkeypatch)
     assert not package_manager.installed_packages()
 
 
+def test_install_rejects_dependency_cycle(tmp_path, monkeypatch):
+    """A requires-cycle is detected during planning — nothing is written."""
+    installed, _receipts = _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {
+            "cyc-a": {"id": "cyc-a", "requires": ["cyc-b"], "files": ["tools/tool_a.py"]},
+            "cyc-b": {"id": "cyc-b", "requires": ["cyc-a"], "files": ["tools/tool_b.py"]},
+        },
+        {("cyc-a", "tools/tool_a.py"): _tool_source(), ("cyc-b", "tools/tool_b.py"): _tool_source()},
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+
+    with pytest.raises(package_manager.PackageError, match="cycle"):
+        package_manager.install_package(tmp_path, "cyc-a", _Context(tmp_path, _ToolRegistry()))
+
+    assert not package_manager.installed_packages()
+    assert not (installed / "tools" / "tool_a.py").exists()
+    assert not (installed / "tools" / "tool_b.py").exists()
+
+
+def test_install_rejects_file_collision_across_manifests(tmp_path, monkeypatch):
+    """Two packages in one install graph claiming the same file path is refused
+    during planning, before any file is written."""
+    installed, _receipts = _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {
+            "dup-bundle": {"id": "dup-bundle", "requires": ["dup-x", "dup-y"], "files": []},
+            "dup-x": {"id": "dup-x", "requires": [], "files": ["tools/tool_dup.py"]},
+            "dup-y": {"id": "dup-y", "requires": [], "files": ["tools/tool_dup.py"]},
+        },
+        {("dup-x", "tools/tool_dup.py"): _tool_source(), ("dup-y", "tools/tool_dup.py"): _tool_source()},
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+
+    with pytest.raises(package_manager.PackageError, match="multiple package manifests"):
+        package_manager.install_package(tmp_path, "dup-bundle", _Context(tmp_path, _ToolRegistry()))
+
+    assert not package_manager.installed_packages()
+    assert not (installed / "tools" / "tool_dup.py").exists()
+
+
+def test_uninstall_form_only_offers_removable_packages(tmp_path, monkeypatch):
+    """The uninstall picker excludes packages required by another installed one
+    (they're only removable via their dependent) — so it never offers a choice
+    whose plan would just be refused with "required by …"."""
+    _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {
+            "bundle": {"id": "bundle", "requires": ["echo-tool"], "files": []},
+            "echo-tool": {"id": "echo-tool", "requires": [], "files": ["tools/tool_echo.py", "tools/helpers/echo_format.py"]},
+        },
+        {
+            ("echo-tool", "tools/tool_echo.py"): _tool_source(),
+            ("echo-tool", "tools/helpers/echo_format.py"): b"def fmt(value):\n    return value\n",
+        },
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+    package_manager.install_package(tmp_path, "bundle", _Context(tmp_path, _ToolRegistry()))
+
+    # echo-tool is on disk only as bundle's dependency → not removable on its own.
+    assert sorted(p["id"] for p in package_manager.removable_packages()) == ["bundle"]
+
+    steps = PackagesCommand().form({"action": "uninstall"}, _Context(tmp_path, _ToolRegistry()))
+    pkg_step = next(s for s in steps if s.name == "package_id")
+    assert pkg_step.enum == ["bundle"]
+
+
+def test_uninstall_tolerates_missing_dependency_and_clears_rest(tmp_path, monkeypatch):
+    """If a dependency has gone missing, uninstalling the package still clears
+    the remaining members instead of crashing."""
+    installed, _receipts = _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {
+            "bundle": {"id": "bundle", "requires": ["dep1", "dep2"], "files": []},
+            "dep1": {"id": "dep1", "requires": [], "files": ["helpers/d1.txt"]},
+            "dep2": {"id": "dep2", "requires": [], "files": ["tools/tool_d2.py"]},
+        },
+        {("dep1", "helpers/d1.txt"): b"d1", ("dep2", "tools/tool_d2.py"): _tool_source()},
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+    package_manager.install_package(tmp_path, "bundle", _Context(tmp_path, _ToolRegistry()))
+
+    # dep1 vanishes out of band (receipt + file).
+    (installed / "helpers" / "d1.txt").unlink()
+    package_manager._receipt_path("dep1").unlink()
+
+    result = package_manager.uninstall_package("bundle", _Context(tmp_path, _ToolRegistry()))
+
+    assert result.ok
+    assert not package_manager.installed_packages()
+    assert not (installed / "tools" / "tool_d2.py").exists()
+
+
+def test_reinstall_after_uninstall_restores_package_and_deps(tmp_path, monkeypatch):
+    """Uninstalling a package then reinstalling it restores the package and its
+    dependencies (files back on disk, receipts back)."""
+    installed, _receipts = _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {
+            "tool-a": {"id": "tool-a", "requires": ["base"], "files": ["tools/tool_a.py"]},
+            "base": {"id": "base", "requires": [], "files": ["helpers/base.txt"]},
+        },
+        {("tool-a", "tools/tool_a.py"): _tool_source(), ("base", "helpers/base.txt"): b"base"},
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+    package_manager.install_package(tmp_path, "tool-a", _Context(tmp_path, _ToolRegistry()))
+    package_manager.uninstall_package("tool-a", _Context(tmp_path, _ToolRegistry()))
+    assert not package_manager.installed_packages()
+
+    result = package_manager.install_package(tmp_path, "tool-a", _Context(tmp_path, _ToolRegistry()))
+
+    assert result.ok
+    assert {p["id"] for p in package_manager.installed_packages()} == {"tool-a", "base"}
+    assert (installed / "tools" / "tool_a.py").exists()
+    assert (installed / "helpers" / "base.txt").exists()
+
+
+def test_individually_installed_member_survives_bundle_uninstall(tmp_path, monkeypatch):
+    """A plugin installed in its own right stays installed when a bundle that
+    also depends on it is uninstalled — and can't be removed while the bundle
+    needs it. So a bundle is never left missing a required member."""
+    installed, _receipts = _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {
+            "bundle": {"id": "bundle", "requires": ["tool-a"], "files": []},
+            "tool-a": {"id": "tool-a", "requires": [], "files": ["tools/tool_a.py"]},
+        },
+        {("tool-a", "tools/tool_a.py"): _tool_source()},
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+
+    # Install the plugin individually first (requested), then the bundle.
+    package_manager.install_package(tmp_path, "tool-a", _Context(tmp_path, _ToolRegistry()))
+    package_manager.install_package(tmp_path, "bundle", _Context(tmp_path, _ToolRegistry()))
+    receipts = {r["id"]: r for r in package_manager.installed_packages()}
+    assert receipts["tool-a"]["requested"] is True  # not downgraded by the bundle
+
+    # The member can't be pulled out from under the bundle.
+    with pytest.raises(package_manager.PackageError, match="required by"):
+        package_manager.uninstall_package("tool-a", _Context(tmp_path, _ToolRegistry()))
+
+    # Uninstalling the bundle keeps the individually-requested member.
+    package_manager.uninstall_package("bundle", _Context(tmp_path, _ToolRegistry()))
+    assert {r["id"] for r in package_manager.installed_packages()} == {"tool-a"}
+    assert (installed / "tools" / "tool_a.py").exists()
+
+
 def test_install_auto_installs_dependency(tmp_path, monkeypatch):
     _patch_install_root(monkeypatch, tmp_path)
     backend = _Backend(

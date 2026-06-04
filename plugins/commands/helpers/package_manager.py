@@ -125,6 +125,18 @@ def installed_packages() -> list[dict]:
     return sorted((_load_receipt(path) for path in RECEIPTS_DIR.glob("*.json")), key=lambda receipt: receipt.get("id", "")) if RECEIPTS_DIR.exists() else []
 
 
+def removable_packages() -> list[dict]:
+    """Installed packages that can be uninstalled on their own.
+
+    Excludes any package required by another *installed* package — those are only
+    removable by uninstalling their dependent (which prunes them). Used to build
+    the ``/packages uninstall`` picker so it never offers a package whose plan
+    would just be refused with "required by …"."""
+    receipts = installed_packages()
+    required = {dep for receipt in receipts for dep in (receipt.get("requires") or [])}
+    return [receipt for receipt in receipts if receipt["id"] not in required]
+
+
 def package_info(root_dir: str | Path, package_id: str) -> dict:
     """Return one package manifest."""
     _validate_package_id(package_id)

@@ -13,6 +13,7 @@ Install dev deps once: `pip install -r requirements-dev.txt`
 | **Sanitizer** | `invariants.py` | KASAN/KMSAN | Latent corruption made loud: broken DB integrity, orphaned messages, **cross-user ownership**, leaked phase frames / threads, registry drift. |
 | **Fuzzer** | `fuzz_runtime.py` | syzkaller/syzbot | Bugs in *orderings* of lifecycle ops against the runtime (the 940-line dispatcher): conversations, users/identity, profile switches, plugin/session state, system-prompt extras, persist→reload round-trip. Oracle = `invariants` after every step. |
 | **Fuzzer** | `fuzz_packages.py` | syzkaller/syzbot | Install/uninstall *orderings* against the package store with a fake catalog (deps, shared deps, bundles). Oracle = store integrity (files↔receipts, no orphans, no dangling `requires`). |
+| **Fuzzer** | `fuzz_packages_cleanup.py` | syzkaller/syzbot | The hairy uninstall **cleanup form** (all/none/specific × per-package config/tables/pip), driven through the *real* `PackagesCommand` form. Oracle = shared config/tables/pip declared by a still-installed package are never collateral, and kernel-requirement pip is never removed. |
 | **Driver** | `driver.py` | (no kernel analog) | Semantic/UX bugs a blind fuzzer can't reach — an intelligent agent (MiniMax) as the brain, a human/Claude as the adversarial user. |
 | **Real-LLM stress** | `stress_compaction.py` | — | Drives a real MiniMax conversation with a tiny `context_size` so the compactor service fires; asserts compaction happens, invariants hold across it, and a fact planted pre-compaction survives the summary. |
 
@@ -88,6 +89,21 @@ k.close()
   it. Fix: `close_session` clears `active_session_key` when it names the closed
   session. Regression test:
   `tests/test_user_isolation.py::test_close_session_clears_dangling_active_session_key`.
+
+### Observations (not bugs, worth a design decision)
+
+- **Uninstall form offers un-removable packages.** The `package_id` step lists
+  *every* installed package, including ones another installed package depends on.
+  Selecting such a package makes `form()` call `build_uninstall_plan`, which
+  raises `PackageError("Cannot uninstall …; required by …")`. It does **not**
+  crash — `Action.enact` catches it and surfaces the message — but the UX would
+  be cleaner if the step filtered to standalone-removable packages (or showed
+  the dependents up front). Found by `fuzz_packages_cleanup`.
+- **`litellm` is not a kernel requirement.** It's commented out of
+  `requirements.txt` (kernel-minimal), so `_safe_pip_removals` does not protect
+  it — uninstalling `service-litellm` will pip-remove `litellm`. Defensible (it's
+  one of several possible backends), but since the kernel can't run without *a*
+  backend, you may want a "protected pip" list independent of `requirements.txt`.
 
 ### Structural net: the write-path backstop
 
