@@ -111,6 +111,51 @@ def test_last_active_conversation_is_per_user(tmp_path):
     assert rt2.sessions["alice"].conversation_id == other_cid
 
 
+def test_set_session_user_switches_account_and_never_crosses_ownership(tmp_path):
+    """Changing identity on a *live* session behaves like an account switch.
+
+    Regression for a hazard the stateful fuzzer surfaced: ``set_session_user``
+    used to overwrite ``session.user_id`` while the session still held the old
+    user's conversation, leaving the new identity able to read/append to a
+    conversation it does not own. It must instead detach the departing user's
+    conversation (remembering it as their last-active) and load the new user's
+    own last-active.
+    """
+    db = Database(str(tmp_path / "switch.db"))
+    alice = db.upsert_user("web", "alice")
+    base_cid = db.create_conversation(title="base", user_id=DEFAULT_USER_ID)
+    alice_cid = db.create_conversation(title="alice", user_id=alice)
+    db.set_user_config(alice, {"last_active_conversation_id": alice_cid})
+
+    rt = ConversationRuntime(db=db, services={}, config={})
+    rt.set_session_user("s", DEFAULT_USER_ID)
+    rt.load_conversation("s", base_cid)
+    assert rt.sessions["s"].conversation_id == base_cid
+
+    # Switch the live session to alice.
+    rt.set_session_user("s", alice)
+
+    # Identity moved, and the session is no longer holding base's conversation.
+    assert rt.session_user_id("s") == alice
+    assert rt.sessions["s"].conversation_id != base_cid
+    # Alice is dropped into her own last-active conversation.
+    assert rt.sessions["s"].conversation_id == alice_cid
+    # The departing base user's conversation was remembered for switch-back.
+    assert db.get_user_config(DEFAULT_USER_ID)["last_active_conversation_id"] == base_cid
+
+
+def test_set_session_user_with_no_prior_conversation_is_a_plain_bind(tmp_path):
+    """The up-front bind path (no conversation yet) stays a simple identity set."""
+    db = Database(str(tmp_path / "bind.db"))
+    alice = db.upsert_user("web", "alice")
+    rt = ConversationRuntime(db=db, services={}, config={})
+
+    rt.set_session_user("s", alice)  # no session/conversation existed yet
+
+    assert rt.session_user_id("s") == alice
+    assert rt.sessions["s"].conversation_id is None
+
+
 def test_agent_switch_persists_active_profile_per_user(tmp_path):
     db = Database(str(tmp_path / "agent-profile.db"))
     uid = db.upsert_user("web", "alice")

@@ -13,3 +13,5 @@ database.db*
 .DS_Store
 .git
 .vscode
+.stress_driver/
+.hypothesis/

@@ -505,8 +505,34 @@ class ConversationRuntime:
 
         Creates the session if it doesn't exist yet, so a frontend can bind
         identity up-front — before any conversation is created — and the first
-        conversation gets stamped with the right owner."""
+        conversation gets stamped with the right owner.
+
+        **Identity switch on a live session behaves like logging into another
+        account.** If the session already holds a conversation and the user
+        actually changes, the departing user's conversation is remembered as
+        *their* last-active, then detached — a session must never keep holding a
+        conversation its new identity does not own (the ownership guard runs on
+        load/mutate-by-id paths, not on identity reassignment, so without this a
+        re-identified session could read/append to the previous user's thread).
+        The new identity is then dropped into *their* last-active conversation
+        (from ``user_config``); if they have none, the session is left unbound
+        and the next turn lazily creates a fresh conversation for them.
+        """
+        session = self.sessions.get(session_key)
+        prev_uid = session.user_id if session is not None else None
+        prev_conv = session.conversation_id if session is not None else None
+        identity_changed = session is not None and prev_uid != user_id
+
+        if identity_changed and prev_conv is not None:
+            self._remember_last_active(
+                prev_uid if prev_uid is not None else DEFAULT_USER_ID, prev_conv
+            )
+            self.close_session(session_key)
+
         _persist.get_or_create_session(self, session_key).user_id = user_id
+
+        if identity_changed and prev_conv is not None:
+            self._load_last_active(session_key)
 
     def session_user_id(self, session_key: str) -> int:
         """The session's *effective* user — its frontend-bound user, or the base
@@ -567,6 +593,14 @@ class ConversationRuntime:
         self._restore_consumed_keys.add(session_key)
         if self.config and not self.config.get("startup_restore_conversation", True):
             return None
+        return self._load_last_active(session_key)
+
+    def _load_last_active(self, session_key: str) -> str | None:
+        """Load the current user's last-active conversation into the session.
+
+        Shared by startup restore and identity-switch (``set_session_user``).
+        No-ops (returns ``None``) when there is nothing accessible to restore or
+        the session is already bound to a conversation."""
         conv_id = self._last_active_conversation_id(session_key)
         try:
             conv_id = int(conv_id) if conv_id not in (None, "") else None
@@ -592,11 +626,20 @@ class ConversationRuntime:
         return f"Loaded last conversation{suffix}.\nAgent: {profile}"
 
     def _persist_active_conversation(self, conv_id: int | None) -> None:
-        """Remember the active conversation ID for this session's user."""
+        """Remember the active conversation ID for the active session's user."""
         session_key = self.active_session_key
         if not session_key or self.db is None:
             return
-        user_id = self.session_user_id(session_key)
+        self._remember_last_active(self.session_user_id(session_key), conv_id)
+
+    def _remember_last_active(self, user_id: int | None, conv_id: int | None) -> None:
+        """Persist ``conv_id`` as ``user_id``'s last-active conversation.
+
+        Split out from :meth:`_persist_active_conversation` so identity changes
+        (``set_session_user``) can stamp the *departing* user's last-active even
+        though that user is no longer the active session's user."""
+        if self.db is None or user_id is None:
+            return
         if self._persisted_active_conv_by_user.get(user_id) == conv_id:
             return
         cfg = self.db.get_user_config(user_id)
