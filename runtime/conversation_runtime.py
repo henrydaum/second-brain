@@ -422,7 +422,30 @@ class ConversationRuntime:
             return False
         if self.db is not None:
             self.db.delete_conversation(conversation_id)
+        self._detach_deleted_conversation(conversation_id)
         return True
+
+    def _detach_deleted_conversation(self, conversation_id: int) -> None:
+        """Unbind any live session still holding a now-deleted conversation.
+
+        A conversation can be deleted from a *different* session than the one
+        viewing it (another tab, another frontend, the agent itself, or simply
+        ``/conversations`` deleting the conversation that is currently open).
+        The holding session would otherwise keep ``conversation_id`` pointing at
+        a row that no longer exists and crash on its next write with a FOREIGN
+        KEY violation. Detaching to ``None`` is safe: the no-conversation guard
+        in ``handle_action`` then routes the user through ``/conversations``
+        (the new-conversation model), and any stale per-user last-active pointer
+        is dropped so startup restore doesn't trip over it either.
+        """
+        with self._sessions_lock:
+            holders = [s for s in self.sessions.values()
+                       if getattr(s, "conversation_id", None) == conversation_id]
+        for session in holders:
+            session.conversation_id = None
+        for user_id, conv in list(self._persisted_active_conv_by_user.items()):
+            if conv == conversation_id:
+                self._persisted_active_conv_by_user.pop(user_id, None)
 
     def set_conversation_category(self, session_key: str, conversation_id: int, category: str | None, *, override: bool = False) -> bool:
         """Re-category a conversation the session's effective user owns. Returns

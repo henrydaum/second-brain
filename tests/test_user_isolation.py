@@ -144,6 +144,31 @@ def test_set_session_user_switches_account_and_never_crosses_ownership(tmp_path)
     assert db.get_user_config(DEFAULT_USER_ID)["last_active_conversation_id"] == base_cid
 
 
+def test_delete_conversation_detaches_live_sessions(tmp_path):
+    """Deleting a conversation must reconcile any session still holding it.
+
+    Regression for a bug of the same class as the identity-switch one: a
+    conversation can be deleted from a different session than the one viewing it
+    (another tab/frontend, the agent, or ``/conversations`` deleting the
+    currently-open conversation). The holding session used to keep
+    ``conversation_id`` pointing at the deleted row and crash on its next write
+    with a FOREIGN KEY violation. It must be detached to ``None`` instead.
+    """
+    db = Database(str(tmp_path / "del.db"))
+    rt = ConversationRuntime(db=db, services={}, config={})
+    rt.set_session_user("A", DEFAULT_USER_ID)
+    cid = db.create_conversation(title="x", user_id=DEFAULT_USER_ID)
+    rt.load_conversation("A", cid)
+    assert rt.sessions["A"].conversation_id == cid
+
+    # Delete from a *different* session owned by the same user.
+    rt.set_session_user("B", DEFAULT_USER_ID)
+    assert rt.delete_conversation("B", cid) is True
+
+    assert db.get_conversation(cid) is None
+    assert rt.sessions["A"].conversation_id is None  # detached, not dangling
+
+
 def test_set_session_user_with_no_prior_conversation_is_a_plain_bind(tmp_path):
     """The up-front bind path (no conversation yet) stays a simple identity set."""
     db = Database(str(tmp_path / "bind.db"))
