@@ -4,33 +4,15 @@
 # (search, embeddings, OCR, audio, integrations, Telegram, …) are installed from
 # the store, and each store plugin declares its own extra dependencies.
 
-# --- LLM backend (service_litellm) ---
-litellm
-
 # --- File watcher (pipeline/watcher) ---
 watchdog
 
-# --- Images: attachment handling + standard raster image parsing (parse_image) ---
-# Pillow is a hard kernel dependency: it backs attachment image routing and the
-# built-in image parser. HEIC/HEIF support is optional (pillow-heif, lazy).
+# --- Timekeeper (services/timekeeper) ---
+cron-descriptor
+croniter
+
+# --- Images: parse_image + LLM service's get_image_bytes() ---
 Pillow
 
 # --- Pytest ---
 pytest
-
-# --- Built-in parsers (plugins/services/helpers) ---
-# Only two parsers ship in the kernel, and both are dependency-light:
-#   parse_text   — UTF-8 / code / CSV / TSV (stdlib only)
-#   parse_image  — standard rasters via Pillow (above); HEIC via pillow-heif (lazy)
-#
-# Every richer parser is an installable store package that drops its own
-# services/helpers/parse_*.py and is picked up by the parser service's
-# discovery scan. Each pip dependency below is auto-installed by the package
-# manager when its package is installed — listed here only as a reference map:
-#   parser-pdf        -> PyMuPDF            (imported as `fitz`)
-#   parser-office     -> python-docx, python-pptx
-#   parser-tabular    -> pandas (+ openpyxl / pyarrow for xlsx / parquet)
-#   parser-audio      -> soundfile, librosa
-#   parser-video      -> av (PyAV)
-#   parser-gdoc       -> (none; needs the google_drive service)
-#   parser-container  -> stdlib for zip/tar/eml; py7zr / rarfile for 7z / rar
