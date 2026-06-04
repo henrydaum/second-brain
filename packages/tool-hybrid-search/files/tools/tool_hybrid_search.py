@@ -58,6 +58,15 @@ class HybridSearch(BaseTool):
         "required": ["query"],
     }
     requires_services = []
+    agent_prompt = (
+        "## Searching indexed files\n"
+        "Three retrieval tools search the indexed corpus — your sync_directories plus dropped-in attachments. "
+        "Files outside the index are not searchable; use read_file for a path you already know.\n"
+        "- hybrid_search: fuses keyword + semantic ranking. Default choice for finding local files or excerpts.\n"
+        "- lexical_search: exact keyword/identifier/code matching. Use for error strings, function names, rare terms.\n"
+        "- semantic_search: meaning-based retrieval. Use for paraphrased or conceptual questions where exact wording won't match.\n"
+        "Results are excerpts (chunks) grouped by document; follow up with read_file for full context."
+    )
 
     def run(self, context, **kwargs):
         """Run hybrid search."""

@@ -77,6 +77,13 @@ class TelegramFrontend(BaseFrontend):
         ("Telegram Bot Token", "telegram_bot_token", "Bot token from @BotFather. Required for Telegram frontend.", "", {"type": "text"}),
         ("Telegram Allowed User ID", "telegram_allowed_user_id", "Your Telegram user ID (integer). Only this user can interact with the bot. Send /start to @userinfobot to find yours.", 0, {"type": "text"}),
     ]
+    agent_prompt = (
+        "## Talking over Telegram\n"
+        "This conversation is on Telegram, a mobile chat app. Keep replies concise and skimmable. Only a "
+        "subset of formatting renders: **bold**, *italic*, `inline code`, and ```fenced code blocks```. "
+        "Markdown headings, tables, and link syntax do NOT render — avoid them and write plainly instead. "
+        "Long messages are split across multiple sends, and file uploads are capped at 50 MB."
+    )
 
     def __init__(self, shutdown_event: threading.Event | None = None, services: dict | None = None):
         """Initialize the Telegram frontend."""

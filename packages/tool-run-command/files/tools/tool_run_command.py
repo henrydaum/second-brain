@@ -243,6 +243,16 @@ class RunCommand(BaseTool):
     requires_services = []
     max_calls = 10
     background_safe = False
+    agent_prompt = (
+        "## Running shell commands\n"
+        "run_command runs shell commands scoped to the project root and the Second Brain data directory. "
+        "Read-only commands run automatically: ls/dir, rg/grep/findstr, tree, cat/type, pwd, "
+        "git status/log/diff/show/branch/ls-files/rev-parse, and pip list/show/freeze plus --version checks. "
+        "Everything else — including pip install/uninstall and any non-whitelisted command — pauses for user "
+        "approval, so you may freely propose installing a needed package; the user decides whether it runs. "
+        "Large output is truncated inline and the full text is written to a temp file whose path is returned "
+        "(spill_path) — read_file that path when you need everything."
+    )
 
     def run(self, context, **kwargs) -> ToolResult:
         """Execute `/tool_run_command` for the active session."""
