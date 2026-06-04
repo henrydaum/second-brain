@@ -117,6 +117,7 @@ class ConversationRuntime:
     def handle_action(self, session_key: str, action_type: str, payload: dict | str | None = None, *, user_driven: bool = True) -> RuntimeResult:
         """Route one frontend action through guards, dispatch, and optional agent follow-up."""
         session = self.get_session(session_key)
+        self._reconcile_session_binding(session)
         if user_driven:
             self.active_session_key = session_key
             prior_conv = getattr(self, "_persisted_active_conv_id", None)
@@ -446,6 +447,37 @@ class ConversationRuntime:
         for user_id, conv in list(self._persisted_active_conv_by_user.items()):
             if conv == conversation_id:
                 self._persisted_active_conv_by_user.pop(user_id, None)
+
+    def _reconcile_session_binding(self, session) -> None:
+        """Self-heal a session whose conversation binding has gone stale.
+
+        Defence-in-depth backstop for the whole "a mutation skipped an invariant
+        a guard relies on" class. Before *any* action writes against
+        ``session.conversation_id``, verify that row still exists and is still
+        owned by the session's user. If not — deleted out from under it, or an
+        ownership desync that slipped past some future mutator — detach to
+        ``None`` so the no-conversation guard / lazy-create take over, instead of
+        a FOREIGN KEY crash or a cross-user write. This catches desyncs no
+        individual mutator remembered to reconcile, including ones not yet
+        written; point fixes on the mutation side remain (cheaper, earlier), but
+        this is the structural net under them.
+        """
+        cid = getattr(session, "conversation_id", None)
+        if cid is None or self.db is None:
+            return
+        row = self.db.get_conversation(cid)
+        if row is None:
+            logger.warning(f"Session {session.key!r} held deleted conversation {cid}; detaching.")
+            session.conversation_id = None
+            return
+        owner = row["user_id"] if "user_id" in row.keys() else DEFAULT_USER_ID
+        eff = self.session_user_id(session.key)
+        if owner != eff:
+            logger.warning(
+                f"Session {session.key!r} (user {eff}) held conversation {cid} "
+                f"owned by user {owner}; detaching."
+            )
+            session.conversation_id = None
 
     def set_conversation_category(self, session_key: str, conversation_id: int, category: str | None, *, override: bool = False) -> bool:
         """Re-category a conversation the session's effective user owns. Returns

@@ -73,3 +73,24 @@ k.close()
   no-conversation guard / lazily creates a fresh one) and drops stale last-active
   pointers. Regression test:
   `tests/test_user_isolation.py::test_delete_conversation_detaches_live_sessions`.
+
+- **Dangling `active_session_key` after `close_session`** — *fixed*. Surfaced by
+  the fuzzer's `raw_delete_then_drive` rule. `close_session` removed the session
+  but left `runtime.active_session_key` pointing at it; since `is_attended`
+  compares against that pointer, every *other* live session read as unattended
+  (replies → notifications, interactive tools refused) until some action reset
+  it. Fix: `close_session` clears `active_session_key` when it names the closed
+  session. Regression test:
+  `tests/test_user_isolation.py::test_close_session_clears_dangling_active_session_key`.
+
+### Structural net: the write-path backstop
+
+Rather than only point-fixing each mutator, `runtime.handle_action` now calls
+`_reconcile_session_binding(session)` at entry: before any action writes against
+`session.conversation_id`, it verifies the row still exists and is still owned by
+the session's user, detaching to `None` otherwise. This catches desyncs **no
+individual mutator remembered to reconcile — including ones not yet written** —
+turning a FOREIGN KEY crash / cross-user write into a clean re-route. The point
+fixes above remain (cheaper, and they preserve context); this is the net under
+them. The fuzzer's `raw_delete_then_drive` rule exercises it on every run by
+deleting through the raw `db` path that bypasses the runtime's own detach.

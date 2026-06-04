@@ -357,6 +357,12 @@ def close_session(runtime, session_key: str) -> bool:
     """Close session."""
     with runtime._sessions_lock:
         existed = runtime.sessions.pop(session_key, None) is not None
+    # Don't leave active_session_key dangling at a closed session: is_attended()
+    # compares against it, so a stale pointer would mark every *other* live
+    # session unattended (replies become notifications, interactive tools
+    # refused) until some action happens to reset it.
+    if runtime.active_session_key == session_key:
+        runtime.active_session_key = None
     if existed:
         bus.emit(SESSION_CLOSED, {"session_key": session_key})
     return existed

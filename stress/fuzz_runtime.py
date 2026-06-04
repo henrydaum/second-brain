@@ -176,6 +176,23 @@ class RuntimeStateMachine(RuleBasedStateMachine):
     def close_session(self, session_key):
         self.rt.close_session(session_key)
 
+    @rule(cid=conversations)
+    def raw_delete_then_drive(self, cid):
+        """Delete a conversation via the *raw* db path (bypassing the runtime's
+        own detach), then drive a benign action on every session so the
+        write-path backstop must self-heal any session that was holding it —
+        rather than dangle (invariant) or crash on the trailing persist_marker.
+        """
+        if cid is None:
+            return
+        self.kernel.db.delete_conversation(cid)
+        self.owner.pop(cid, None)
+        # Drive a no-op through handle_action on each session: the backstop runs
+        # at entry and detaches stale holders before persist_marker writes.
+        for key in SESSION_KEYS:
+            if key in self.rt.sessions:
+                self.rt.handle_action(key, "cancel")
+
     # ── oracle ──────────────────────────────────────────────────────
 
     @invariant()

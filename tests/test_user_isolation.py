@@ -169,6 +169,50 @@ def test_delete_conversation_detaches_live_sessions(tmp_path):
     assert rt.sessions["A"].conversation_id is None  # detached, not dangling
 
 
+def test_handle_action_self_heals_stale_binding_from_raw_delete(tmp_path):
+    """The write-path backstop detaches a stale binding even when the deletion
+    bypassed ``runtime.delete_conversation`` entirely.
+
+    Simulates any future mutator that forgets to reconcile holding sessions: we
+    delete the row straight through ``db`` (the documented system path), leaving
+    the live session dangling. The next action must self-heal rather than crash
+    with a FOREIGN KEY violation when ``persist_marker`` runs.
+    """
+    db = Database(str(tmp_path / "heal.db"))
+    rt = ConversationRuntime(db=db, services={}, config={})
+    rt.set_session_user("A", DEFAULT_USER_ID)
+    cid = db.create_conversation(title="x", user_id=DEFAULT_USER_ID)
+    rt.load_conversation("A", cid)
+    assert rt.sessions["A"].conversation_id == cid
+
+    # Raw delete — bypasses runtime.delete_conversation's own detach helper.
+    db.delete_conversation(cid)
+
+    # A benign action drives handle_action; the backstop heals the binding and
+    # the trailing persist_marker no-ops on a None conversation (no FK crash).
+    rt.handle_action("A", "cancel")
+    assert rt.sessions["A"].conversation_id is None
+
+
+def test_close_session_clears_dangling_active_session_key(tmp_path):
+    """Closing the active session must not leave ``active_session_key`` dangling.
+
+    ``is_attended`` compares against ``active_session_key``; a pointer to a
+    closed session would mark every other live session unattended until some
+    action reset it. Same bug class — a mutation (session removal) that skipped
+    reconciling state a guard relies on.
+    """
+    db = Database(str(tmp_path / "active.db"))
+    rt = ConversationRuntime(db=db, services={}, config={})
+    rt.set_session_user("A", DEFAULT_USER_ID)
+    rt.active_session_key = "A"
+
+    rt.close_session("A")
+
+    assert rt.active_session_key is None
+    assert rt.is_attended("B") is False  # no stale "A is active" leaking through
+
+
 def test_set_session_user_with_no_prior_conversation_is_a_plain_bind(tmp_path):
     """The up-front bind path (no conversation yet) stays a simple identity set."""
     db = Database(str(tmp_path / "bind.db"))
