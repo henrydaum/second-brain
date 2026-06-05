@@ -30,9 +30,11 @@ def test_write_package_copies_file_and_dir_updates_index_and_validates(tmp_path)
     )
 
     assert manifest["files"] == ["tools/tool_echo.py", "tools/helpers/echo_format.py"]
-    assert (tmp_path / "store" / "packages" / "echo-tool" / "files" / "tools" / "helpers" / "echo_format.py").exists()
-    index = json.loads((tmp_path / "store" / "packages" / "index.json").read_text(encoding="utf-8"))
+    # Ships a tool entrypoint (+ its own helper) -> grouped under tools/ at the store root.
+    assert (tmp_path / "store" / "tools" / "echo-tool" / "files" / "tools" / "helpers" / "echo_format.py").exists()
+    index = json.loads((tmp_path / "store" / "index.json").read_text(encoding="utf-8"))
     assert index["packages"][0]["id"] == "echo-tool"
+    assert index["packages"][0]["family"] == "tools"
     package_publisher.validate_store(tmp_path / "store")
 
 
@@ -72,15 +74,15 @@ def test_write_package_can_record_no_entrypoints(tmp_path):
         update=False,
     )
 
-    manifest = json.loads((tmp_path / "store" / "packages" / "tool-special" / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((tmp_path / "store" / "tools" / "tool-special" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["entrypoints"] == []
 
 
 def test_validate_store_rejects_manifest_file_mismatch(tmp_path):
-    package_dir = tmp_path / "store" / "packages" / "echo-tool"
+    package_dir = tmp_path / "store" / "tools" / "echo-tool"
     (package_dir / "files" / "tools").mkdir(parents=True)
-    (tmp_path / "store" / "packages" / "index.json").write_text(
-        json.dumps({"packages": [{"id": "echo-tool", "name": "Echo", "description": "", "tags": []}]}),
+    (tmp_path / "store" / "index.json").write_text(
+        json.dumps({"packages": [{"id": "echo-tool", "name": "Echo", "description": "", "tags": [], "family": "tools"}]}),
         encoding="utf-8",
     )
     (package_dir / "manifest.json").write_text(

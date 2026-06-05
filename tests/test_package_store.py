@@ -121,9 +121,14 @@ def test_store_backend_reads_store_branch_without_checkout(tmp_path):
     subprocess.run(["git", "commit", "-m", "main"], cwd=repo, check=True, stdout=subprocess.PIPE)
     main_branch = subprocess.check_output(["git", "branch", "--show-current"], cwd=repo, text=True).strip()
     subprocess.run(["git", "checkout", "-b", "store"], cwd=repo, check=True, stdout=subprocess.PIPE)
-    (repo / "packages" / "echo-tool").mkdir(parents=True)
-    (repo / "packages" / "index.json").write_text('{"packages":[{"id":"echo-tool"}]}', encoding="utf-8")
-    (repo / "packages" / "echo-tool" / "manifest.json").write_text('{"id":"echo-tool","files":[],"requires":[]}', encoding="utf-8")
+    # Family-grouped layout at the store root: <family>/<id>/, family in the index.
+    (repo / "tools" / "echo-tool").mkdir(parents=True)
+    (repo / "index.json").write_text(
+        '{"packages":[{"id":"echo-tool","family":"tools"},{"id":"legacy-tool"}]}', encoding="utf-8")
+    (repo / "tools" / "echo-tool" / "manifest.json").write_text('{"id":"echo-tool","files":[],"requires":[]}', encoding="utf-8")
+    # A family-less index entry must still resolve via the flat (root) path.
+    (repo / "legacy-tool").mkdir(parents=True)
+    (repo / "legacy-tool" / "manifest.json").write_text('{"id":"legacy-tool","files":[],"requires":[]}', encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-m", "store"], cwd=repo, check=True, stdout=subprocess.PIPE)
     subprocess.run(["git", "checkout", main_branch], cwd=repo, check=True, stdout=subprocess.PIPE)
@@ -131,8 +136,10 @@ def test_store_backend_reads_store_branch_without_checkout(tmp_path):
     backend = GitStoreBackend(repo, ref="store")
 
     assert backend.get_index()[0]["id"] == "echo-tool"
+    # Family entry resolves under tools/; family-less entry falls back to flat root.
     assert backend.get_manifest("echo-tool")["id"] == "echo-tool"
-    assert not (repo / "packages").exists()
+    assert backend.get_manifest("legacy-tool")["id"] == "legacy-tool"
+    assert not (repo / "tools").exists()
 
 
 def test_install_copies_loads_and_writes_receipt(tmp_path, monkeypatch):

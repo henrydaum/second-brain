@@ -18,6 +18,29 @@ from plugins.commands.helpers import package_manager
 SKIP_DIRS = {".git", "__pycache__"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}
 
+# Top-level folders the store is grouped into (5 plugin families + helpers + bundles).
+STORE_FAMILIES = {"tools", "tasks", "services", "commands", "frontends", "helpers", "bundles"}
+
+
+def family_for(rel_paths: list[str]) -> str:
+    """The family folder a package belongs in, from the files it ships.
+
+    - no files (meta-package / bundle) -> ``bundles``
+    - has an installable entrypoint (``<family>/<prefix>*.py``, e.g.
+      ``frontends/frontend_telegram.py``) -> that entrypoint's family (so a
+      frontend that also ships a helper still lands in ``frontends``)
+    - entrypoint-less (helper-only, e.g. a parser) -> ``helpers``
+    - otherwise the top-level dir of its files.
+    """
+    if not rel_paths:
+        return "bundles"
+    entrypoint_families = sorted({path.split("/", 1)[0] for path in rel_paths if package_manager._is_entrypoint(path)})
+    if entrypoint_families:
+        return entrypoint_families[0]
+    if any("/helpers/" in path for path in rel_paths):
+        return "helpers"
+    return sorted({path.split("/", 1)[0] for path in rel_paths})[0]
+
 
 class StorePublishError(RuntimeError):
     """Raised when package publishing cannot proceed."""
@@ -63,7 +86,7 @@ def publish_package(args) -> None:
         if args.dry_run:
             print("Dry run: not committing or pushing.")
             return
-        git(worktree, "add", "packages")
+        git(worktree, "add", "-A")
         message = args.message or f"Publish package {args.package_id}"
         git(worktree, "commit", "-m", message)
         git(worktree, "push", args.remote, f"HEAD:refs/heads/{args.branch}")
@@ -86,14 +109,16 @@ def write_package(
     pip: list[str] | None = None,
 ) -> dict:
     package_manager._validate_package_id(package_id)
-    package_dir = store_root / "packages" / package_id
-    if package_dir.exists():
-        if not update:
-            raise StorePublishError(f"Package already exists: {package_id}. Use --update to replace it.")
-        shutil.rmtree(package_dir)
     files = expand_file_specs(file_specs)
     if not files and not requires:
         raise StorePublishError("A package needs at least one --file, or --require for a meta-package bundle.")
+    family = family_for([dest.as_posix() for _source, dest in files])
+    package_dir = store_root / family / package_id
+    existing = _existing_package_dirs(store_root, package_id)
+    if existing and not update:
+        raise StorePublishError(f"Package already exists: {package_id}. Use --update to replace it.")
+    for stale in existing:
+        shutil.rmtree(stale)  # also clears a copy in a different family if the family changed
     package_files = package_dir / "files"
     for source, dest in files:
         target = package_files / dest
@@ -112,12 +137,41 @@ def write_package(
         manifest["pip"] = sorted(set(pip))
     package_dir.mkdir(parents=True, exist_ok=True)
     (package_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    update_index(store_root, package_id, name, description, tags)
+    update_index(store_root, package_id, name, description, tags, family)
     return manifest
 
 
-def update_index(store_root: Path, package_id: str, name: str, description: str, tags: list[str]) -> None:
-    index_path = store_root / "packages" / "index.json"
+def _existing_package_dirs(store_root: Path, package_id: str) -> list[Path]:
+    """Every dir currently holding this package, across the flat and family layouts."""
+    out: list[Path] = []
+    flat = store_root / package_id
+    if (flat / "manifest.json").exists():
+        out.append(flat)
+    for family in STORE_FAMILIES:
+        grouped = store_root / family / package_id
+        if (grouped / "manifest.json").exists():
+            out.append(grouped)
+    return out
+
+
+def _scan_package_dirs(packages_dir: Path) -> dict[str, Path]:
+    """Map ``package_id -> dir`` across flat (``<id>``) and grouped
+    (``<family>/<id>``) layouts. A package dir is any dir with a manifest.json."""
+    found: dict[str, Path] = {}
+    for child in packages_dir.iterdir():
+        if not child.is_dir():
+            continue
+        if (child / "manifest.json").exists():  # flat legacy package
+            found[child.name] = child
+            continue
+        for sub in child.iterdir():  # family folder -> its package dirs
+            if sub.is_dir() and (sub / "manifest.json").exists():
+                found[sub.name] = sub
+    return found
+
+
+def update_index(store_root: Path, package_id: str, name: str, description: str, tags: list[str], family: str) -> None:
+    index_path = store_root / "index.json"
     index_path.parent.mkdir(parents=True, exist_ok=True)
     if index_path.exists():
         data = json.loads(index_path.read_text(encoding="utf-8"))
@@ -125,7 +179,7 @@ def update_index(store_root: Path, package_id: str, name: str, description: str,
     else:
         items = []
     items = [item for item in items if item.get("id") != package_id]
-    items.append({"id": package_id, "name": name, "description": description, "tags": sorted(set(tags))})
+    items.append({"id": package_id, "name": name, "description": description, "tags": sorted(set(tags)), "family": family})
     items.sort(key=lambda item: item["id"])
     index_path.write_text(json.dumps({"packages": items}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -158,10 +212,9 @@ def parse_file_spec(spec: str) -> tuple[Path, Path]:
 
 
 def validate_store(store_root: Path) -> None:
-    packages_dir = store_root / "packages"
-    index_path = packages_dir / "index.json"
+    index_path = store_root / "index.json"
     if not index_path.exists():
-        raise StorePublishError("Missing packages/index.json.")
+        raise StorePublishError("Missing index.json.")
     data = json.loads(index_path.read_text(encoding="utf-8"))
     items = data.get("packages", data) if isinstance(data, dict) else data
     if not isinstance(items, list):
@@ -170,13 +223,16 @@ def validate_store(store_root: Path) -> None:
     if len(ids) != len(set(ids)):
         raise StorePublishError("Duplicate package id in index.")
     indexed = set(ids)
-    actual = {path.name for path in packages_dir.iterdir() if path.is_dir()}
-    if indexed != actual:
+    # Resolve each package's dir across both layouts: a flat ``<id>`` or a
+    # grouped ``<family>/<id>`` at the store root (detected by a manifest.json).
+    actual = _scan_package_dirs(store_root)
+    if indexed != set(actual):
         raise StorePublishError(f"Index/package dirs differ. Index={sorted(indexed)} dirs={sorted(actual)}")
     manifests = {}
     for package_id in sorted(indexed):
         package_manager._validate_package_id(package_id)
-        manifest_path = packages_dir / package_id / "manifest.json"
+        package_dir = actual[package_id]
+        manifest_path = package_dir / "manifest.json"
         if not manifest_path.exists():
             raise StorePublishError(f"Missing manifest for {package_id}.")
         manifest = package_manager._validate_manifest(json.loads(manifest_path.read_text(encoding="utf-8")))
@@ -188,8 +244,8 @@ def validate_store(store_root: Path) -> None:
         package_manager._entrypoints(manifest, files)
         listed = set(files)
         actual_files = {
-            path.relative_to(packages_dir / package_id / "files").as_posix()
-            for path in (packages_dir / package_id / "files").rglob("*")
+            path.relative_to(package_dir / "files").as_posix()
+            for path in (package_dir / "files").rglob("*")
             if path.is_file()
         }
         if listed != actual_files:
