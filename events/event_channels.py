@@ -28,6 +28,18 @@ Payload:
     form:        dict — the descriptor render_form_field expects (see
                         runtime/dispatch.py decorate_form)"""
 
+TASK_STARTED = "task_started"
+"""A task run was dispatched to a worker — completes the triad with
+TASK_COMPLETED / TASK_FAILED for a live pipeline view. Emitted unconditionally
+(even with no subscribers) so a plugin can observe the pipeline by subscribing,
+never by editing the kernel.
+Payload (path-triggered tasks):
+    task_name: str
+    paths:     list[str]   — the batch dispatched together
+Payload (event-triggered tasks):
+    task_name: str
+    run_id:    str"""
+
 TASK_COMPLETED = "task_completed"
 """A task finished successfully.
 Payload (path-triggered tasks):
@@ -233,10 +245,41 @@ Payload:
     key:         str
     value:       str | None  (None on removal)"""
 
+CONVERSATION_CHANGED = "conversation_changed"
+"""The conversation *catalog* changed, as opposed to a live session (SESSION_*).
+Lets a frontend refresh a conversation list/sidebar without polling. The kernel
+emits created/deleted/recategorized; a retitling plugin (e.g. update_titles)
+emits its own 'retitled'. Emitted unconditionally so a plugin can subscribe
+without kernel edits.
+Payload:
+    action:          str — 'created' | 'deleted' | 'recategorized' | 'retitled'
+    conversation_id: int
+    user_id:         int (optional) — owner, when known
+    category:        str | None (optional) — for created / recategorized"""
+
+
+# ── Configuration ──────────────────────────────────────────────────
+
+CONFIG_CHANGED = "config_changed"
+"""Persisted configuration was written. Lets multi-client frontends resync a
+settings panel without polling. Emitted unconditionally so a plugin can
+subscribe without kernel edits.
+Payload:
+    scope: str — 'core' | 'plugin'  (user-scoped settings live in the users
+                 table, written elsewhere, and are not covered here)"""
+
 
 # ── Reserved (not yet emitted) ─────────────────────────────────────
 # Documented here so future work has an obvious home instead of inventing
 # new strings. Add emissions/subscriptions as needs arise.
 #
-# TABLE_WRITTEN    — after DB.write_outputs, enables reactive aggregate tasks
-# SCHEDULE_TICK    — time-based trigger for scheduled tasks
+# These have no kernel producer yet, so they cannot be emitted here — the
+# component that gains the producer (a store plugin, or a future tool API) emits
+# them. Documented so that work has an obvious home instead of a new ad-hoc name.
+#
+# TABLE_WRITTEN        — after DB.write_outputs; finer-grained than TASK_COMPLETED
+#                        (which already carries rows_written), for reactive
+#                        aggregate tasks that key off a specific table
+# SCHEDULE_TICK        — time-based trigger; emitted by the scheduling store plugin
+# TOOL_CALL_PROGRESSED — symmetry with COMMAND_CALL_PROGRESSED, once tools can
+#                        report incremental progress for a long-running call

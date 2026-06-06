@@ -44,6 +44,7 @@ from typing import Any, Callable
 from events.event_bus import bus
 from events.event_channels import (
     CHAT_MESSAGE_PUSHED,
+    CONVERSATION_CHANGED,
     SESSION_AGENT_PROFILE_CHANGED,
     SESSION_CLOSED,
     SYSTEM_PROMPT_EXTRA_CHANGED,
@@ -366,7 +367,10 @@ class ConversationRuntime:
 
     def create_conversation(self, title: str = "New Conversation", *, kind: str = "user", category: str | None = None, user_id: int = DEFAULT_USER_ID) -> int | None:
         """Create a persisted conversation row (owned by ``user_id``) and return its ID."""
-        return _persist.create_conversation(self, title, kind=kind, category=category, user_id=user_id)
+        cid = _persist.create_conversation(self, title, kind=kind, category=category, user_id=user_id)
+        if cid is not None:
+            bus.emit(CONVERSATION_CHANGED, {"action": "created", "conversation_id": cid, "user_id": user_id, "category": category})
+        return cid
 
     def load_conversation(self, session_key: str, conversation_id: int, *, agent_profile: str | None = None, system_prompt_extras: dict[str, Any] | None = None, override: bool = False) -> RuntimeSession:
         """Load a persisted conversation into a runtime session.
@@ -424,6 +428,7 @@ class ConversationRuntime:
         if self.db is not None:
             self.db.delete_conversation(conversation_id)
         self._detach_deleted_conversation(conversation_id)
+        bus.emit(CONVERSATION_CHANGED, {"action": "deleted", "conversation_id": conversation_id, "user_id": self.session_user_id(session_key)})
         return True
 
     def _detach_deleted_conversation(self, conversation_id: int) -> None:
@@ -486,6 +491,7 @@ class ConversationRuntime:
             return False
         if self.db is not None:
             self.db.set_conversation_category(conversation_id, category)
+        bus.emit(CONVERSATION_CHANGED, {"action": "recategorized", "conversation_id": conversation_id, "user_id": self.session_user_id(session_key), "category": category})
         return True
 
     def set_conversation_notification_mode(self, session_key: str, conversation_id: int, mode: str, *, override: bool = False) -> str | None:

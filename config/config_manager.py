@@ -91,6 +91,18 @@ def load(path: str = None) -> dict:
     return merged
 
 
+def _emit_config_changed(scope: str) -> None:
+    """Announce a persisted config change so frontends can resync without
+    polling. Defensive: a config write must never fail because of an emit, and
+    the bus is imported lazily to keep this foundational module import-light."""
+    try:
+        from events.event_bus import bus
+        from events.event_channels import CONFIG_CHANGED
+        bus.emit(CONFIG_CHANGED, {"scope": scope})
+    except Exception:
+        pass
+
+
 def save(config: dict, path: str = None):
     """Save config dict to JSON file."""
     if path is None:
@@ -111,6 +123,7 @@ def save(config: dict, path: str = None):
     with open(path, "w") as f:
         json.dump(to_save, f, indent=4)
     logger.info(f"Config saved to {path}")
+    _emit_config_changed("core")
 
 
 # ── Plugin config ───────────────────────────────────────────────────
@@ -154,6 +167,7 @@ def save_plugin_config(plugin_values: dict, path: str = None):
         tmp.write_text(json.dumps(plugin_values, indent=4), encoding="utf-8")
         os.replace(tmp, p)
     logger.info(f"Plugin config saved to {p}")
+    _emit_config_changed("plugin")
 
 
 def load_plugin_config_early(config: dict):

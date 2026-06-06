@@ -26,7 +26,7 @@ from plugins.services.helpers.parser_registry import get_modality
 from plugins.helpers.plugin_paths import is_builtin_path
 from plugins.BaseTask import BaseTask, TaskResult
 from events.event_bus import bus
-from events.event_channels import TASK_COMPLETED, TASK_FAILED, SERVICE_LOADED, TASKS_CHANGED
+from events.event_channels import TASK_STARTED, TASK_COMPLETED, TASK_FAILED, SERVICE_LOADED, TASKS_CHANGED
 
 logger = logging.getLogger("Orchestrator")
 
@@ -717,6 +717,7 @@ class Orchestrator:
 
 		t0 = time.time()
 		source = getattr(task, "_source_path", "")
+		bus.emit(TASK_STARTED, {"task_name": task.name, "run_id": run_id})
 		res = run_supervised(
 			lambda: task.run_event(run_id, payload, context),
 			timeout=task.timeout, plugin_key=source, kind="task",
@@ -808,6 +809,7 @@ class Orchestrator:
 
 		t0 = time.time()
 		source = getattr(task, "_source_path", "")
+		bus.emit(TASK_STARTED, {"task_name": task.name, "paths": list(paths)})
 		res = run_supervised(
 			lambda: task.run(paths, context),
 			timeout=task.timeout, plugin_key=source, kind="task",
