@@ -261,38 +261,62 @@ class PluginWatcherService(BaseService):
         refresh_llm_profile_services(self.services, self.config)
 
 
+# Load priority: services must register before the tasks that require them, so
+# a batch install (many files landing at once) doesn't leave tasks warning about
+# missing services. Lower number = loaded first. Unknown types load last.
+_LOAD_PRIORITY = {"service": 0, "task": 1, "tool": 2, "command": 3, "frontend": 4}
+
+
 class _PluginEventHandler(FileSystemEventHandler):
-    """Plugin event handler."""
+    """Plugin event handler.
+
+    Filesystem events are coalesced into a single debounced batch. When the
+    batch fires, all pending paths are loaded **on one thread, in priority
+    order** (services first) — never concurrently. Serializing the loads is
+    what keeps registry mutation off the dispatch/registration critical paths,
+    and ordering is what spares dependent tasks the 'missing service' churn.
+    """
     def __init__(self, watcher: PluginWatcherService):
         """Initialize the plugin event handler."""
         self.watcher = watcher
-        self.pending: dict[str, threading.Timer] = {}
+        self.pending: set[str] = set()
         self.lock = threading.Lock()
         self.debounce_interval = 1.0
+        self._timer: threading.Timer | None = None
 
     def _debounce(self, path: str):
-        """Internal helper to handle debounce."""
+        """Coalesce a create/modify into the next batch, resetting the timer."""
         with self.lock:
-            timer = self.pending.pop(path, None)
-            if timer:
-                timer.cancel()
-            timer = threading.Timer(self.debounce_interval, self._fire, [path])
-            timer.daemon = True
-            self.pending[path] = timer
-            timer.start()
+            self.pending.add(path)
+            if self._timer:
+                self._timer.cancel()
+            self._timer = threading.Timer(self.debounce_interval, self._fire_batch)
+            self._timer.daemon = True
+            self._timer.start()
 
     def cancel_pending(self):
         """Cancel pending."""
         with self.lock:
-            for timer in self.pending.values():
-                timer.cancel()
+            if self._timer:
+                self._timer.cancel()
+                self._timer = None
             self.pending.clear()
 
-    def _fire(self, path: str):
-        """Internal helper to handle fire."""
+    def _fire_batch(self):
+        """Drain the pending set and load each plugin in priority order."""
         with self.lock:
-            self.pending.pop(path, None)
-        self.watcher.handle_create_or_modify(path)
+            paths = list(self.pending)
+            self.pending.clear()
+            self._timer = None
+
+        def _priority(raw_path: str) -> int:
+            info, err = plugin_info(Path(raw_path))
+            return _LOAD_PRIORITY.get(info.plugin_type, len(_LOAD_PRIORITY)) if info and not err else len(_LOAD_PRIORITY)
+
+        # Stable sort: services before tasks before everything else, ties keep
+        # discovery order. Loads run one at a time on this single thread.
+        for path in sorted(paths, key=_priority):
+            self.watcher.handle_create_or_modify(path)
 
     def on_created(self, event):
         """Handle on created."""

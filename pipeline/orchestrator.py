@@ -45,7 +45,9 @@ class Orchestrator:
 
 		# Task registry: name -> BaseTask instance
 		self.tasks: dict[str, BaseTask] = {}
-		self._task_lock = threading.Lock()
+		# Reentrant so a writer holding the lock (register_task) can call
+		# _build_graph()/refresh while still excluding concurrent readers.
+		self._task_lock = threading.RLock()
 
 		# Paused tasks — skipped during dispatch, work stays PENDING
 		self.paused: set[str] = set()
@@ -92,6 +94,17 @@ class Orchestrator:
 	# TASK REGISTRATION
 	# =================================================================
 
+	def _tasks_snapshot(self) -> list:
+		"""Atomically snapshot the task list for safe iteration.
+
+		Every read-side loop over ``self.tasks`` goes through here: building a
+		private list under ``_task_lock`` is what prevents 'dictionary changed
+		size during iteration' when a plugin (un)registers a task concurrently
+		with the dispatch loop or another load thread.
+		"""
+		with self._task_lock:
+			return list(self.tasks.values())
+
 	def register_task(self, task: BaseTask):
 		"""Register task."""
 		task.setup(self.config)
@@ -112,8 +125,10 @@ class Orchestrator:
 			self.tasks[task.name] = task
 			max_w = task.max_workers if task.max_workers > 0 else self.max_workers
 			self.task_semaphores[task.name] = threading.Semaphore(max_w)
-		self._build_graph()
-		self.refresh_event_subscriptions()
+			# Held across the graph rebuild: _build_graph iterates self.tasks,
+			# so concurrent (un)registration must be excluded here.
+			self._build_graph()
+			self.refresh_event_subscriptions()
 		logger.info(f"Registered task: {task.name}")
 		bus.emit(TASKS_CHANGED, {"name": task.name, "action": "registered"})
 
@@ -122,9 +137,10 @@ class Orchestrator:
 		with self._task_lock:
 			removed = self.tasks.pop(name, None)
 			self.task_semaphores.pop(name, None)
+			if removed:
+				self._build_graph()
+				self.refresh_event_subscriptions()
 		if removed:
-			self._build_graph()
-			self.refresh_event_subscriptions()
 			logger.info(f"Unregistered task: {name}")
 			bus.emit(TASKS_CHANGED, {"name": name, "action": "unregistered"})
 
@@ -182,7 +198,7 @@ class Orchestrator:
 		Event tasks are never backfilled; they only run when triggered.
 		"""
 		total_enqueued = 0
-		for task in self.tasks.values():
+		for task in self._tasks_snapshot():
 			if getattr(task, "trigger", "path") != "path":
 				continue
 			enqueued = 0
@@ -237,7 +253,7 @@ class Orchestrator:
 			if current_task is None:
 				continue
 			for table in current_task.writes:
-				for task in self.tasks.values():
+				for task in self._tasks_snapshot():
 					if getattr(task, "trigger", "path") != "path":
 						continue
 					if table in task.reads and task.name not in downstream:
@@ -291,7 +307,7 @@ class Orchestrator:
 
 	def on_file_discovered(self, path: str, extension: str, modality: str):
 		"""Handle on file discovered."""
-		for task in self.tasks.values():
+		for task in self._tasks_snapshot():
 			if getattr(task, "trigger", "path") != "path":
 				continue
 			if modality in task.modalities:
@@ -303,7 +319,7 @@ class Orchestrator:
 	def on_file_deleted(self, path: str):
 		"""Handle on file deleted."""
 		all_tables = []
-		for task in self.tasks.values():
+		for task in self._tasks_snapshot():
 			all_tables.extend(task.writes)
 		self.db.clean_output_tables(path, all_tables)
 
@@ -345,7 +361,7 @@ class Orchestrator:
 			return
 		triggered = []
 		for table in completed_task.writes:
-			for task in self.tasks.values():
+			for task in self._tasks_snapshot():
 				if getattr(task, "trigger", "path") != "path":
 					continue
 				if table in task.reads:
@@ -360,7 +376,7 @@ class Orchestrator:
 	def on_also_contains(self, path: str, modalities: list[str]):
 		"""Handle on also contains."""
 		for modality in modalities:
-			for task in self.tasks.values():
+			for task in self._tasks_snapshot():
 				if getattr(task, "trigger", "path") != "path":
 					continue
 				if modality in task.modalities:
@@ -433,7 +449,7 @@ class Orchestrator:
 		self._backfill_tasks()
 		logger.debug(f"Backfill scan completed in {time.time() - t0:.3f}s")
 
-		for task in self.tasks.values():
+		for task in self._tasks_snapshot():
 			if getattr(task, "trigger", "path") == "event":
 				count = self.db.reset_stuck_runs_for(task.name, task.timeout)
 			else:
@@ -462,14 +478,14 @@ class Orchestrator:
 		# Detect shared tables written by multiple path tasks. Cascade
 		# triggers assume a `path` column and a single logical writer.
 		table_writers: dict[str, list[str]] = {}
-		for task in self.tasks.values():
+		for task in self._tasks_snapshot():
 			if getattr(task, "trigger", "path") != "path":
 				continue
 			for table in task.writes:
 				table_writers.setdefault(table, []).append(task.name)
 		shared_tables = {t for t, writers in table_writers.items() if len(writers) > 1}
 
-		for task in self.tasks.values():
+		for task in self._tasks_snapshot():
 			if getattr(task, "trigger", "path") != "path":
 				continue
 			if not task.reads:
@@ -497,7 +513,7 @@ class Orchestrator:
 
 		lines = ["Path Pipeline:"]
 		path_tasks = {
-			name: task for name, task in self.tasks.items()
+			task.name: task for task in self._tasks_snapshot()
 			if getattr(task, "trigger", "path") == "path"
 		}
 		if not path_tasks:
@@ -562,9 +578,10 @@ class Orchestrator:
 			self._service_loaded_unsub()
 			self._service_loaded_unsub = None
 		# Pause all tasks so queued futures flush back to PENDING (see _execute check)
-		self.paused.update(self.tasks.keys())
+		snapshot = self._tasks_snapshot()
+		self.paused.update(task.name for task in snapshot)
 		self.executor.shutdown(wait=False, cancel_futures=True)
-		for task in self.tasks.values():
+		for task in snapshot:
 			task.teardown()
 		logger.info("Orchestrator stopped")
 
@@ -580,7 +597,7 @@ class Orchestrator:
 
 			now = time.time()
 			if now - last_stuck_check >= stuck_check_interval:
-				for task in self.tasks.values():
+				for task in self._tasks_snapshot():
 					if getattr(task, "trigger", "path") == "event":
 						count = self.db.reset_stuck_runs_for(task.name, task.timeout)
 					else:
@@ -592,7 +609,7 @@ class Orchestrator:
 						)
 				last_stuck_check = now
 
-			for task in self.tasks.values():
+			for task in self._tasks_snapshot():
 				# Event tasks are dispatched in the second pass below.
 				if getattr(task, "trigger", "path") == "event":
 					continue
@@ -646,7 +663,7 @@ class Orchestrator:
 	def _dispatch_event_runs(self) -> bool:
 		"""Dispatch event-task runs using the same gating logic as path tasks."""
 		dispatched = False
-		for task in self.tasks.values():
+		for task in self._tasks_snapshot():
 			if getattr(task, "trigger", "path") != "event":
 				continue
 			if task.name in self.paused:
@@ -748,7 +765,7 @@ class Orchestrator:
 		import json as _json
 		from uuid import uuid4
 		for table in parent_task.writes:
-			for task in self.tasks.values():
+			for task in self._tasks_snapshot():
 				if getattr(task, "trigger", "path") != "event":
 					continue
 				if task.name == parent_task.name:
