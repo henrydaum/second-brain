@@ -1,11 +1,21 @@
 """
-Event channel registry.
+Kernel event channel registry.
 
 Declaring channels in one place is the discipline that keeps the event bus
 from becoming a dumping ground. If adding a channel feels like it needs
 justification, that's the point — use the bus only when the producer and
 consumer are architecturally far apart. For anything tightly coupled or on
 the hot path, call the function directly.
+
+**Scope: this file documents channels the *kernel* produces or consumes.**
+The bus itself needs no registration (a channel is just a string), so a plugin
+owns its own channels — it defines the constant + payload doc at the top of its
+module (relative-imported by siblings in the same family) and emits/subscribes
+there. A plugin channel must NOT be declared here, even speculatively: the
+kernel must not carry contracts for code it doesn't contain (uninstall the
+plugin and its channel should vanish with it). Kernel-produced channels may, of
+course, be *subscribed to* by plugins — that's the whole point of emitting them
+unconditionally.
 
 Payload shapes are documented here, not enforced at runtime.
 """
@@ -85,25 +95,6 @@ output table via ensure_output_table, so agents rebuild their prompt context.
 Payload:
     name:   str — task name
     action: str — 'registered' or 'unregistered'"""
-
-UPDATE_TITLES = "update_titles"
-"""Periodic trigger asking the title-update task to re-evaluate conversation
-titles whose message count has advanced beyond the last-checked threshold.
-Payload: empty (the task pulls candidates from the DB)."""
-
-DREAM_MEMORY = "dream_memory"
-"""Nightly trigger asking the memory dream task to distill recent human-facing
-conversations into DATA_DIR/memory.md.
-Payload: empty (the task pulls recent conversations from the DB)."""
-
-SPAWN_SUBAGENT = "subagent.spawn"
-"""A scheduled or delegated inactive conversation should run one agent turn.
-Payload:
-    conversation_id: int (optional; task creates/repairs one when missing)
-    title:           str (optional)
-    prompt:          str
-    attachments:     list[str] (optional)
-    _timekeeper:     dict (optional)"""
 
 CHAT_MESSAGE_PUSHED = "chat_message_pushed"
 """Something in the system wants to proactively surface a message in the user's
@@ -269,17 +260,13 @@ Payload:
                  table, written elsewhere, and are not covered here)"""
 
 
-# ── Reserved (not yet emitted) ─────────────────────────────────────
-# Documented here so future work has an obvious home instead of inventing
-# new strings. Add emissions/subscriptions as needs arise.
-#
-# These have no kernel producer yet, so they cannot be emitted here — the
-# component that gains the producer (a store plugin, or a future tool API) emits
-# them. Documented so that work has an obvious home instead of a new ad-hoc name.
+# ── Reserved (kernel-owned, not yet emitted) ───────────────────────
+# Future *kernel* channels — the producer would live in the kernel but doesn't
+# exist yet. Documented so the work has an obvious home instead of an ad-hoc
+# name. (Plugin-owned futures are not listed here; they belong to the plugin.)
 #
 # TABLE_WRITTEN        — after DB.write_outputs; finer-grained than TASK_COMPLETED
 #                        (which already carries rows_written), for reactive
 #                        aggregate tasks that key off a specific table
-# SCHEDULE_TICK        — time-based trigger; emitted by the scheduling store plugin
 # TOOL_CALL_PROGRESSED — symmetry with COMMAND_CALL_PROGRESSED, once tools can
 #                        report incremental progress for a long-running call
