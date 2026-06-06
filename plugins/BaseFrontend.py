@@ -27,6 +27,7 @@ from events.event_channels import (
     COMMAND_CALL_FINISHED,
     COMMAND_CALL_PROGRESSED,
     COMMAND_CALL_STARTED,
+    FORM_REQUESTED,
     TASKS_CHANGED,
     TOOL_CALL_FINISHED,
     TOOL_CALL_STARTED,
@@ -302,6 +303,7 @@ class BaseFrontend:
         self.config = config or {}
         self._unsubs = [
             bus.subscribe(APPROVAL_REQUESTED, self.on_bus_approval_requested),
+            bus.subscribe(FORM_REQUESTED, self.on_bus_form_requested),
             bus.subscribe(CHAT_MESSAGE_PUSHED, self.on_bus_message_pushed),
             bus.subscribe(COMMAND_CALL_STARTED, self.on_bus_command_call_started),
             bus.subscribe(COMMAND_CALL_PROGRESSED, self.on_bus_command_call_progressed),
@@ -537,6 +539,25 @@ class BaseFrontend:
                 self.render_approval_request(key, req)
             except Exception:
                 logger.exception(f"render_approval_request failed for '{self.name}'")
+
+    def on_bus_form_requested(self, payload) -> None:
+        """Re-prompt a form restored onto a session after a restart.
+
+        Mirrors ``on_bus_approval_requested``: in normal flow the form rides
+        back as ``RuntimeResult.form`` on a live submit(); this path only fires
+        when restore re-emits one with no submit() in flight."""
+        payload = payload or {}
+        form = payload.get("form")
+        if not form:
+            return
+        target = payload.get("session_key")
+        live = self._live_session_keys()
+        keys = [target] if target in live else live
+        for key in keys:
+            try:
+                self.render_form_field(key, dict(form))
+            except Exception:
+                logger.exception(f"render_form_field failed for '{self.name}'")
 
     def resolve_approval(self, session_key: str, request_id: str, value, resolved_by: str | None = None) -> bool:
         """Resolve approval."""

@@ -7,6 +7,7 @@ reusable state and give the rest of the system a consistent lifecycle.
 """
 
 import logging
+import threading
 import time
 from abc import ABC
 
@@ -48,6 +49,13 @@ class BaseService(ABC):
     shared: bool = True
     is_llm_backend: bool = False
     lifecycle: str = MANAGED
+
+    # Wall-clock seconds before load() abandons a hung _load() and reports
+    # failure. Generous by default because heavy services download models on
+    # first run — a timeout short enough to catch a real deadlock would wrongly
+    # kill a legitimate slow load. Set to 0 to disable, or raise it for a
+    # known-slow service.
+    load_timeout: float = 600.0
 
     # --- Config settings this plugin needs ---
     # Each entry is a tuple:
@@ -91,10 +99,36 @@ class BaseService(ABC):
         self._loaded = value
 
     def load(self) -> bool:
-        """Wraps _load() with automatic timing. Subclasses override _load()."""
+        """Wraps _load() with automatic timing and a wall-clock timeout.
+
+        Subclasses override _load(). A hung _load() is abandoned after
+        ``load_timeout`` seconds (the daemon worker can't be killed, but it
+        stops blocking whatever serialized loader called us) and reported as a
+        failed load. ``load_timeout = 0`` runs inline with no timeout."""
         name = self.model_name or self.__class__.__name__
         logger.info(f"Loading service: {name}...")
         t0 = time.time()
+        if not self.load_timeout or self.load_timeout <= 0:
+            return self._load_timed(name, t0)
+
+        box: dict = {}
+        def _run():
+            try:
+                box["result"] = self._load_timed(name, t0)
+            except Exception as e:
+                box["error"] = e
+        worker = threading.Thread(target=_run, daemon=True, name=f"load-{name}")
+        worker.start()
+        worker.join(self.load_timeout)
+        if worker.is_alive():
+            logger.error(f"Service load timed out after {self.load_timeout:.0f}s and was abandoned: {name}")
+            return False
+        if "error" in box:
+            raise box["error"]
+        return box.get("result", False)
+
+    def _load_timed(self, name: str, t0: float) -> bool:
+        """Run _load() with timing + logging. Exceptions propagate to load()."""
         try:
             result = self._load()
             elapsed = time.time() - t0

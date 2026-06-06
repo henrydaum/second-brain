@@ -42,6 +42,8 @@ import hypothesis.strategies as st
 from stress.boot import boot_kernel
 from stress.fake_llm import MonkeyLLM
 from stress.invariants import check_invariants, thread_names
+from state_machine.conversation_phases import BASE_PHASE
+from state_machine.serialization import save_state_marker
 
 # Bounded populations keep the search space tractable and the shrinker fast.
 SESSION_KEYS = ["s0", "s1", "s2"]
@@ -249,6 +251,23 @@ class RuntimeStateMachine(RuleBasedStateMachine):
         )
         # And the restored session still drives a turn.
         self.rt.iterate_agent_turn(session_key, "still there?")
+
+    @rule(session_key=st.sampled_from(SESSION_KEYS), login=st.sampled_from(USER_LOGINS))
+    def stale_busy_reload(self, session_key, login):
+        self._bind(session_key, login)
+        self.rt.iterate_agent_turn(session_key, "warm up")
+        sess = self.rt.sessions.get(session_key)
+        if sess is None or sess.conversation_id is None:
+            return
+        cid = sess.conversation_id
+        marker = {**sess.to_marker(), "busy": True, "turn_priority": "agent", "phase": BASE_PHASE}
+        marker["cache"] = {**(marker.get("cache") or {}), "phases": []}
+        save_state_marker(self.kernel.db, cid, marker)
+        self.rt.close_session(session_key)
+        self._bind(session_key, login)
+        self.rt.load_conversation(session_key, cid)
+        restored = self.rt.sessions[session_key]
+        assert restored.cs.turn_priority == "user" and restored.cs.phase == BASE_PHASE
 
     @rule(cid=conversations)
     def raw_delete_then_drive(self, cid):

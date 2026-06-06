@@ -44,6 +44,8 @@ class ReplFrontend(BaseFrontend):
             notice = self.runtime.restore_last_active(key)
             if notice:
                 self.render_messages(key, [notice])
+            # A restored form/approval re-prompts itself via the FORM_REQUESTED /
+            # APPROVAL_REQUESTED bus events emitted during restore_last_active.
         except Exception:
             logger.exception("REPL restore_last_active failed")
         while not self.shutdown_event.is_set():

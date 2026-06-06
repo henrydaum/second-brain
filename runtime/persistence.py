@@ -27,7 +27,7 @@ from events.event_channels import (
     SESSION_TURN_COMPLETED,
 )
 from state_machine.approval import StateMachineApprovalRequest
-from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
+from state_machine.conversation_phases import BASE_PHASE, PHASE_APPROVING_REQUEST
 from state_machine.serialization import latest_compaction, latest_state, messages_to_history, save_history_message, save_state_marker
 from runtime.runtime_config import new_state, refresh_specs
 from runtime.session import RuntimeSession, SessionConflict
@@ -150,7 +150,7 @@ def load_conversation(
         raise SessionConflict(session_key, existing.conversation_id, conversation_id)
 
     rows = runtime.db.get_conversation_messages(conversation_id) if runtime.db else []
-    marker = latest_state(rows) or {}
+    marker, restore_notices, marker_changed = recover_marker(latest_state(rows) or {})
     saved_profile = agent_profile or marker.get("profile_override") or marker.get("active_agent_profile")
     profile = saved_profile or runtime.user_setting(session_key, "active_agent_profile", "default") or "default"
     saved_mode = normalize_notification_mode(
@@ -168,6 +168,7 @@ def load_conversation(
         plugin_state=dict(marker.get("plugin_state") or {}),
         notification_mode=saved_mode,
         has_compaction_checkpoint=latest_compaction(rows) is not None,
+        restore_notices=restore_notices,
     )
     session.frontend_name = marker.get("frontend_name")
     # Identity is a live frontend binding, not conversation state — carry it from
@@ -181,12 +182,15 @@ def load_conversation(
     _sync_notification_mode(session)
     with runtime._sessions_lock:
         runtime.sessions[session_key] = session
+    if marker_changed:
+        persist_marker(runtime, session)
     bus.emit(SESSION_CREATED, {
         "session_key": session_key,
         "agent_profile": profile,
         "notification_mode": saved_mode,
     })
     restore_pending_requests(runtime, session)
+    restore_pending_form(runtime, session)
     return session
 
 
@@ -212,6 +216,8 @@ def load_history(runtime, session_key: str, conversation_id: int):
     msg = f"Loaded conversation: {title}\nAgent: {new_profile}"
     if old_profile != new_profile:
         msg += f"\nSwitched agent: {old_profile} -> {new_profile}"
+    if session.restore_notices:
+        msg += "\n" + "\n".join(session.restore_notices)
 
     return RuntimeResult(
         messages=[msg],
@@ -381,11 +387,13 @@ def restore_pending_requests(runtime, session: RuntimeSession) -> None:
         if getattr(frame, "phase", None) != PHASE_APPROVING_REQUEST:
             continue
         data = getattr(frame, "data", {}) or {}
+        if not data.get("request_id"):
+            data["request_id"] = f"approve_{uuid.uuid4().hex}"
         req = StateMachineApprovalRequest(
             title=data.get("title") or frame.name or "Input required",
             body=data.get("prompt") or "",
             pending_action=data.get("pending"),
-            id=data.get("request_id") or f"approve_{uuid.uuid4().hex}",
+            id=data["request_id"],
             type=data.get("type", "boolean"),
             enum=data.get("enum"),
             default=data.get("default"),
@@ -393,6 +401,70 @@ def restore_pending_requests(runtime, session: RuntimeSession) -> None:
         req.metadata.update({"session_key": session.key, "conversation_id": session.conversation_id})
         runtime._approval_requests.setdefault(req.id, req)
         runtime.emit_event("approval_requested", req)
+
+
+def restore_pending_form(runtime, session: RuntimeSession) -> None:
+    """Re-emit a ``form_requested`` event if the restored session is sitting on
+    a suspended command/tool form, so the frontend can re-prompt the current
+    field. The return-value render path only fires on a live submit(); after a
+    restart there is none, so this mirrors ``restore_pending_requests``."""
+    if not runtime.emit_event:
+        return
+    from runtime.dispatch import decorate_form
+    from runtime.session import RuntimeResult
+
+    out = RuntimeResult()
+    decorate_form(session, out)
+    if out.form:
+        runtime.emit_event("form_requested", {"session_key": session.key, "form": dict(out.form)})
+
+
+def recover_marker(marker: dict[str, Any]) -> tuple[dict[str, Any], list[str], bool]:
+    """Normalize stale persisted runtime state before rebuilding a session."""
+    marker = dict(marker or {})
+    cache = dict(marker.get("cache") or {})
+    phases = list(cache.get("phases") or [])
+    notices: list[str] = []
+    changed = False
+
+    if marker.get("busy"):
+        notices.append("Recovered from an interrupted agent turn. I did not replay it automatically; send the message again if you want me to continue.")
+        marker.update({"busy": False, "turn_priority": "user", "phase": BASE_PHASE})
+        cache["phases"] = []
+        changed = True
+    else:
+        kept = []
+        expired = 0
+        for frame in phases:
+            if _frame_phase(frame) == PHASE_APPROVING_REQUEST and not _replayable_pending(_frame_data(frame).get("pending")):
+                expired += 1
+                continue
+            kept.append(frame)
+        if expired:
+            notices.append("Recovered by expiring an input request from a previous process. Please retry that action if you still need it.")
+            cache["phases"] = kept
+            marker["phase"] = _frame_phase(kept[-1]) if kept else BASE_PHASE
+            marker["turn_priority"] = _frame_actor(kept[-1]) if kept else "user"
+            changed = True
+
+    marker["cache"] = cache
+    return marker, notices, changed
+
+
+def _frame_phase(frame) -> str | None:
+    return frame.get("phase") if isinstance(frame, dict) else getattr(frame, "phase", None)
+
+
+def _frame_actor(frame) -> str:
+    return (frame.get("actor_id") if isinstance(frame, dict) else getattr(frame, "actor_id", None)) or "user"
+
+
+def _frame_data(frame) -> dict[str, Any]:
+    return (frame.get("data") if isinstance(frame, dict) else getattr(frame, "data", None)) or {}
+
+
+def _replayable_pending(pending) -> bool:
+    return isinstance(pending, dict) and pending.get("type") and pending.get("actor_id") and isinstance(pending.get("content"), dict)
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -16,6 +16,18 @@ APPROVAL_REQUESTED = "approval_requested"
 """A conversation session is waiting for user approval or typed input.
 Payload: a StateMachineApprovalRequest object."""
 
+FORM_REQUESTED = "form_requested"
+"""A restored session is sitting on a suspended command/tool form and needs the
+current field re-prompted. Used only on restore: in normal flow the form rides
+back as ``RuntimeResult.form`` on the submit() that produced it (tightly
+coupled), but after a process restart there is no submit() in flight, so the
+producer (runtime restore) and consumer (frontend) are far apart — same reason
+APPROVAL_REQUESTED is re-emitted on restore.
+Payload:
+    session_key: str
+    form:        dict — the descriptor render_form_field expects (see
+                        runtime/dispatch.py decorate_form)"""
+
 TASK_COMPLETED = "task_completed"
 """A task finished successfully.
 Payload (path-triggered tasks):

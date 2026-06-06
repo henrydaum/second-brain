@@ -678,7 +678,10 @@ class ConversationRuntime:
         title = (self.db.get_conversation(conv_id) or {}).get("title") or ""
         profile = session.profile_override or session.active_agent_profile or "default"
         suffix = f": {title.strip()}" if title.strip() else ""
-        return f"Loaded last conversation{suffix}.\nAgent: {profile}"
+        msg = f"Loaded last conversation{suffix}.\nAgent: {profile}"
+        if session.restore_notices:
+            msg += "\n" + "\n".join(session.restore_notices)
+        return msg
 
     def _persist_active_conversation(self, conv_id: int | None) -> None:
         """Remember the active conversation ID for the active session's user."""

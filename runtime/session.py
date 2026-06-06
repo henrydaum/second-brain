@@ -81,6 +81,7 @@ class RuntimeSession:
     # fields. Persisted with the marker.
     plugin_state: dict[str, dict] = field(default_factory=dict)
     notification_mode: str = DEFAULT_NOTIFICATION_MODE
+    restore_notices: list[str] = field(default_factory=list)
     # Whether a human is present at this session right now (can answer an
     # interactive prompt and see output). None = defer to the kernel's global
     # single-active rule (REPL/Telegram, background drivers). True/False = the
