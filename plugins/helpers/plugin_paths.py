@@ -61,6 +61,26 @@ PLUGIN_CONFIG = {
 }
 ALLOWED_ROOTS = tuple(p.resolve() for p in (ROOT_DIR, DATA_DIR))
 
+_BUILTIN_ROOT = next((r.path.resolve() for r in PLUGIN_ROOTS if r.built_in), None)
+
+
+def is_builtin_path(path) -> bool:
+    """Whether a plugin source path lives under the built-in (kernel) tree.
+
+    Used by the supervisor to decide quarantine eligibility: only sandbox /
+    installed plugins are quarantinable. An empty or unresolvable path is
+    treated as built-in (conservative — never auto-disable something we can't
+    locate)."""
+    if not path:
+        return True
+    try:
+        resolved = Path(path).resolve()
+    except Exception:
+        return True
+    if _BUILTIN_ROOT is None:
+        return True
+    return resolved == _BUILTIN_ROOT or _BUILTIN_ROOT in resolved.parents
+
 
 def resolve_plugin_path(raw: str) -> tuple[Path | None, str | None]:
     """Resolve plugin path."""

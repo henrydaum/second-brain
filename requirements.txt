@@ -14,5 +14,8 @@ croniter
 # --- Images: parse_image + LLM service's get_image_bytes() ---
 Pillow
 
+# --- Plugin supervisor memory watchdog (degrades to no-op if absent) ---
+psutil
+
 # --- Pytest ---
 pytest

@@ -8,10 +8,15 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from events.event_bus import bus
-from events.event_channels import CHAT_MESSAGE_PUSHED
+from events.event_channels import (
+    CHAT_MESSAGE_PUSHED,
+    PLUGIN_QUARANTINE_REQUESTED,
+    PLUGIN_QUARANTINED,
+)
 from plugins.BaseService import BaseService, EXTENSION
 from plugins.helpers.plugin_paths import iter_plugin_dirs, plugin_info
 from plugins.plugin_discovery import get_plugin_settings, load_single_plugin, unload_plugin, wire_peer_services
+from runtime.supervisor import supervisor
 
 logger = logging.getLogger("PluginWatcher")
 
@@ -31,6 +36,7 @@ class PluginWatcherService(BaseService):
         self._known_mtimes: dict[str, float] = {}
         self._runtime = {}
         self._lock = threading.RLock()
+        self._unsub_quarantine = None
 
     def bind_runtime(self, *, tool_registry=None, orchestrator=None, command_registry=None, frontend_manager=None, runtime=None, **_):
         """Bind runtime. Accepts (and ignores) ``runtime`` so the shared
@@ -55,12 +61,18 @@ class PluginWatcherService(BaseService):
             watched += 1
         self._scan_existing()
         self.observer.start()
+        # The supervisor (runtime/supervisor.py) decides which plugins are
+        # unhealthy; the watcher owns the mechanism (unload).
+        self._unsub_quarantine = bus.subscribe(PLUGIN_QUARANTINE_REQUESTED, self._on_quarantine)
         self.loaded = True
         logger.info(f"Plugin watcher started on {watched} folder(s).")
         return True
 
     def unload(self):
         """Handle unload."""
+        if self._unsub_quarantine:
+            self._unsub_quarantine()
+            self._unsub_quarantine = None
         if self._handler:
             self._handler.cancel_pending()
         observer = self.observer
@@ -112,6 +124,9 @@ class PluginWatcherService(BaseService):
 
     def _load_plugin(self, path: Path, edited: bool = False):
         """Internal helper to load plugin."""
+        # A (re)load is a fresh start: forget any prior strikes/quarantine so a
+        # fixed-and-resaved plugin gets a clean strike budget.
+        supervisor.health.clear(str(path))
         info, err = plugin_info(path)
         if err:
             logger.warning(f"Plugin watcher skipped {path}: {err}")
@@ -167,6 +182,38 @@ class PluginWatcherService(BaseService):
         for name in names:
             self._notify(f"Unregistered plugin: {name}")
         logger.info(f"Plugin watcher unloaded deleted {info.plugin_type}: {path.name}")
+
+    def _on_quarantine(self, payload: dict):
+        """Unload a plugin the supervisor's circuit breaker has condemned.
+
+        Quarantine unregisters the plugin from its registry (the file stays on
+        disk); editing and re-saving it brings it back with a fresh strike
+        budget via ``_load_plugin``."""
+        plugin_type = (payload or {}).get("plugin_type")
+        source_path = (payload or {}).get("source_path")
+        name = (payload or {}).get("name") or source_path
+        reason = (payload or {}).get("reason", "")
+        if not plugin_type or not source_path:
+            return
+        try:
+            unload_plugin(
+                plugin_type, "",
+                tool_registry=self._runtime.get("tool_registry"),
+                orchestrator=self._runtime.get("orchestrator"),
+                services=self.services,
+                source_path=source_path,
+                command_registry=self._runtime.get("command_registry"),
+                frontend_manager=self._runtime.get("frontend_manager"),
+            )
+        except Exception as e:
+            logger.error(f"Quarantine of {plugin_type} '{name}' failed: {e}")
+            return
+        logger.error(f"Quarantined {plugin_type} '{name}' ({source_path}): {reason}")
+        self._notify(f"Quarantined plugin: {name} — {reason}")
+        bus.emit(PLUGIN_QUARANTINED, {
+            "plugin_type": plugin_type, "source_path": source_path,
+            "name": name, "reason": reason,
+        })
 
     def _notify(self, message: str):
         """Internal helper to handle notify."""

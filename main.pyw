@@ -37,6 +37,7 @@ from pipeline.watcher import Watcher
 from pipeline.event_trigger import EventTrigger
 from agent.tool_registry import ToolRegistry
 from runtime.bootstrap import start_frontends
+from runtime.supervisor import supervisor
 from plugins.BaseService import should_autoload_service
 from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
 
@@ -82,6 +83,9 @@ def main():
 	# --- 1c. Load existing plugin config into runtime config ---
 	config_manager.load_plugin_config_early(config)
 
+	# --- 1d. Bind the plugin supervisor to the live config ---
+	supervisor.configure(config)
+
 	# --- 2. Initialize database ---
 	t0 = time.time()
 	database = Database(config["db_path"])
@@ -104,6 +108,9 @@ def main():
 	for svc_name in config.get("autoload_services", []):
 		if svc_name not in services:
 			logger.warning(f"Auto-load: unknown service '{svc_name}', skipping.")
+
+	# --- 3c. Start the memory watchdog (Phase-1 stopgap; no-op without psutil) ---
+	supervisor.start_memory_watchdog()
 
 	# --- 4. Initialize orchestrator ---
 	orchestrator = Orchestrator(database, config, services)
@@ -155,6 +162,7 @@ def main():
 		_shutdown.set()
 		logger.info("-----------------------------")
 		logger.info("Shutting down...")
+		supervisor.stop_memory_watchdog()
 		event_trigger.stop()
 		watcher.stop()
 		orchestrator.stop()

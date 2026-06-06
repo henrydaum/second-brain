@@ -6,13 +6,14 @@ BaseTool.py so the base contract stays lightweight and the tool template
 can focus on authoring guidance instead of runtime plumbing.
 """
 
-import concurrent.futures
 import logging
 import threading
 import time
 
 from runtime.context import build_context
+from runtime.supervisor import run_supervised
 from plugins.BaseTool import BaseTool, ToolResult
+from plugins.helpers.plugin_paths import is_builtin_path
 from events.event_bus import bus
 from events.event_channels import TOOLS_CHANGED
 
@@ -122,33 +123,28 @@ class ToolRegistry:
                 return ToolResult.failed(str(e))
 
         timeout = int(self.config.get("tool_timeout", 600))
-        executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix=f"sb-tool-{tool_name}")
 
         def _run_with_flag():
-            """Internal helper to run with flag."""
+            """Internal helper to run with flag (sets the reentrancy flag in the
+            supervised worker thread so nested call_tool runs inline)."""
             _exec_state.in_tool = True
             try:
                 return tool.run(context, **kwargs)
             finally:
                 _exec_state.in_tool = False
 
-        try:
-            future = executor.submit(_run_with_flag)
-            try:
-                result = future.result(timeout=timeout)
-                logger.debug(f"Tool '{tool_name}' completed in {time.time() - t0:.3f}s")
-                return result
-            except concurrent.futures.TimeoutError:
-                logger.error(f"Tool '{tool_name}' timed out after {timeout}s — abandoning thread")
-                # Don't wait for the zombie thread — it may never finish.
-                return ToolResult.failed(
-                    f"Tool '{tool_name}' timed out after {timeout}s and was abandoned.")
-            except Exception as e:
-                logger.error(f"Tool '{tool_name}' failed after {time.time() - t0:.3f}s: {e}")
-                return ToolResult.failed(str(e))
-        finally:
-            executor.shutdown(wait=False)
+        source = getattr(tool, "_source_path", "")
+        res = run_supervised(
+            _run_with_flag, timeout=timeout, plugin_key=source,
+            kind="tool", name=tool_name, eligible=not is_builtin_path(source))
+        if res.ok:
+            logger.debug(f"Tool '{tool_name}' completed in {time.time() - t0:.3f}s")
+            return res.value
+        if res.timed_out:
+            logger.error(f"Tool '{tool_name}' timed out after {timeout}s — abandoning thread")
+        else:
+            logger.error(f"Tool '{tool_name}' failed after {time.time() - t0:.3f}s: {res.error}")
+        return ToolResult.failed(res.error)
 
     @property
     def max_tool_calls(self) -> int:

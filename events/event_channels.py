@@ -136,6 +136,28 @@ Payload:
     error:        str (optional)"""
 
 
+# ── Plugin supervision ─────────────────────────────────────────────
+# The supervisor (runtime/supervisor.py) detects misbehaving plugins; the
+# plugin watcher executes the unload. Kept apart via the bus so the supervisor
+# carries no plugin imports.
+
+PLUGIN_QUARANTINE_REQUESTED = "plugin_quarantine_requested"
+"""The circuit breaker tripped for a plugin and wants it unloaded.
+Payload:
+    plugin_type: str — 'tool' | 'task' (the family to unregister)
+    source_path: str — resolved file path of the offending plugin
+    name:        str — plugin name (for the notification)
+    reason:      str — why it tripped (last strike's error / timeout)"""
+
+PLUGIN_QUARANTINED = "plugin_quarantined"
+"""A plugin was successfully quarantined (unloaded) by the watcher.
+Payload:
+    plugin_type: str
+    source_path: str
+    name:        str
+    reason:      str"""
+
+
 # ── Conversation lifecycle ─────────────────────────────────────────
 # Plugins (tools, tasks, services) subscribe to these to react to what
 # is happening inside the state machine without having to reach into

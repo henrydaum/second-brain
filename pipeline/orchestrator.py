@@ -21,7 +21,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from runtime.context import build_context
+from runtime.supervisor import run_supervised
 from plugins.services.helpers.parser_registry import get_modality
+from plugins.helpers.plugin_paths import is_builtin_path
 from plugins.BaseTask import BaseTask, TaskResult
 from events.event_bus import bus
 from events.event_channels import TASK_COMPLETED, TASK_FAILED, SERVICE_LOADED, TASKS_CHANGED
@@ -697,14 +699,18 @@ class Orchestrator:
 		)
 
 		t0 = time.time()
-		try:
-			result = task.run_event(run_id, payload, context)
-		except Exception as e:
+		source = getattr(task, "_source_path", "")
+		res = run_supervised(
+			lambda: task.run_event(run_id, payload, context),
+			timeout=task.timeout, plugin_key=source, kind="task",
+			name=task.name, eligible=not is_builtin_path(source))
+		if not res.ok:
 			elapsed = time.time() - t0
-			logger.error(f"Event task '{task.name}' (run {run_id}) failed after {elapsed:.2f}s: {e}")
-			self.db.fail_run(run_id, str(e))
-			bus.emit(TASK_FAILED, {"task_name": task.name, "run_id": run_id, "error": str(e)})
+			logger.error(f"Event task '{task.name}' (run {run_id}) failed after {elapsed:.2f}s: {res.error}")
+			self.db.fail_run(run_id, res.error)
+			bus.emit(TASK_FAILED, {"task_name": task.name, "run_id": run_id, "error": res.error})
 			return
+		result = res.value
 
 		elapsed = time.time() - t0
 
@@ -784,15 +790,19 @@ class Orchestrator:
 		)
 
 		t0 = time.time()
-		try:
-			results = task.run(paths, context)
-		except Exception as e:
-			logger.error(f"Task '{task.name}' batch failed after {time.time() - t0:.2f}s: {e}")
+		source = getattr(task, "_source_path", "")
+		res = run_supervised(
+			lambda: task.run(paths, context),
+			timeout=task.timeout, plugin_key=source, kind="task",
+			name=task.name, eligible=not is_builtin_path(source))
+		if not res.ok:
+			logger.error(f"Task '{task.name}' batch failed after {time.time() - t0:.2f}s: {res.error}")
 			for path in paths:
-				self.db.fail_task(path, task.name, str(e))
-				bus.emit(TASK_FAILED, {"task_name": task.name, "path": path, "error": str(e)})
+				self.db.fail_task(path, task.name, res.error)
+				bus.emit(TASK_FAILED, {"task_name": task.name, "path": path, "error": res.error})
 			self._invalidate_downstream(task.name, paths)
 			return
+		results = res.value
 
 		elapsed = time.time() - t0
 		per_path = elapsed / len(paths) if paths else 0.0
