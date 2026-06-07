@@ -7,6 +7,7 @@ import html
 import logging
 import re
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -25,6 +26,57 @@ from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
 logger = logging.getLogger("TelegramFrontend")
 
 _MAX_FILE_SIZE = 50 * 1024 * 1024
+
+
+class _NetworkErrorThrottle(logging.Filter):
+    """Collapse repeated Telegram polling network errors into one log per window.
+
+    When DNS/connectivity drops, python-telegram-bot's updater retries forever and
+    logs a full traceback every cycle — overnight that floods the log with the same
+    ``getaddrinfo failed`` stack. This filter lets the first failure through (as a
+    terse one-liner, no traceback), suppresses matching records for a cooldown, and
+    notes how many it swallowed when the next one is allowed through.
+    """
+
+    _MARKERS = ("networkerror", "getaddrinfo", "connecterror", "httpx.connect",
+                "pool timeout", "timed out", "connection reset")
+
+    def __init__(self, cooldown: float = 300.0):
+        super().__init__()
+        self.cooldown = cooldown
+        self._suppress_until = 0.0
+        self._suppressed = 0
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno < logging.ERROR or not any(m in record.getMessage().lower() for m in self._MARKERS):
+            return True
+        now = time.time()
+        if now < self._suppress_until:
+            self._suppressed += 1
+            return False
+        # Allowed through: drop the giant traceback and summarize any backlog.
+        record.exc_info = None
+        record.exc_text = None
+        if self._suppressed:
+            record.msg = f"{record.getMessage()} (+{self._suppressed} more suppressed in the last {int(self.cooldown)}s)"
+            record.args = ()
+        self._suppress_until = now + self.cooldown
+        self._suppressed = 0
+        return True
+
+
+_NETWORK_THROTTLE_INSTALLED = False
+
+
+def _install_network_log_throttle() -> None:
+    """Attach the network-error throttle to the noisy PTB polling loggers once."""
+    global _NETWORK_THROTTLE_INSTALLED
+    if _NETWORK_THROTTLE_INSTALLED:
+        return
+    throttle = _NetworkErrorThrottle()
+    for name in ("telegram.ext.Updater", "telegram.ext.ExtBot", "telegram.request"):
+        logging.getLogger(name).addFilter(throttle)
+    _NETWORK_THROTTLE_INSTALLED = True
 
 
 def _md_to_tg_html(text: str) -> str:
@@ -116,10 +168,14 @@ class TelegramFrontend(BaseFrontend):
         try:
             from telegram import BotCommand, Update
             from telegram.constants import ChatAction
+            from telegram.error import NetworkError, TimedOut
             from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filters
         except ImportError:
             logger.warning("Telegram frontend not available; install python-telegram-bot.")
             return
+
+        # Keep transient connectivity loss from flooding the log overnight.
+        _install_network_log_throttle()
 
         async def handle_text(update: Update, _ctx):
             """Handle one incoming Telegram text message."""
@@ -171,6 +227,15 @@ class TelegramFrontend(BaseFrontend):
             self.app.add_handler(MessageHandler(filters.COMMAND | (filters.TEXT & ~filters.COMMAND), handle_text))
             self.app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL | filters.VOICE | filters.AUDIO, handle_attachment))
             self.app.add_handler(CallbackQueryHandler(handle_callback))
+
+            async def on_error(_update, ctx):
+                """Swallow transient network errors quietly; log the rest once."""
+                err = getattr(ctx, "error", None)
+                if isinstance(err, (NetworkError, TimedOut)):
+                    return  # the throttle already covers the updater's own retries
+                logger.error(f"Telegram handler error: {err}")
+            self.app.add_error_handler(on_error)
+
             await self.app.initialize()
             await self.app.start()
             await self.app.updater.start_polling()
