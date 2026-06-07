@@ -148,6 +148,7 @@ def main():
 	watcher = Watcher(orchestrator, database, config)
 	watcher.start()
 	scaffold.watcher = watcher
+	orchestrator.watcher = watcher
 
 	# --- 8b. Start event trigger (bus-driven run enqueue for event tasks) ---
 	event_trigger = EventTrigger(orchestrator, database, config)

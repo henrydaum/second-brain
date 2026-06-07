@@ -25,14 +25,12 @@ DEFAULT_SCHEDULED_JOBS: dict = {}
 SETTINGS_DATA = [
     # --- Directories ---
     ("Sync Directories", "sync_directories",
-     "Folders to monitor for new and changed files. Sub-folders are included. "
-     "Each folder must already exist; / and \\ are both accepted.",
+     "Folders to monitor for new and changed files. Sub-folders are included.",
      [str(ATTACHMENT_CACHE)],
      {"type": "path_list"}),
 
     ("Database Path", "db_path",
-     "Path to the SQLite database file. Requires app restart to take effect. "
-     "The parent folder must exist; / and \\ are both accepted.",
+     "Path to the SQLite database file. Requires app restart to take effect.",
      str(DATA_DIR / "database.db"),
      {"type": "path"}),
 

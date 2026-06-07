@@ -17,6 +17,18 @@ def _hidden(info):
 CORE = {name: (title, desc) for title, name, desc, _, info in SETTINGS_DATA if not _hidden(info)}
 ACTIONS = ["edit"]
 
+# Global settings the filesystem watcher reads. Changing any of these triggers a
+# live watcher rescan so the sync starts immediately rather than after a restart.
+_WATCHER_KEYS = {"sync_directories", "ignored_extensions", "ignored_folders", "skip_hidden_folders"}
+
+
+def _rescan_watcher(context):
+    """Trigger a live watcher rescan if the watcher is reachable from context."""
+    orchestrator = getattr(context, "orchestrator", None)
+    watcher = getattr(orchestrator, "watcher", None)
+    if watcher is not None and hasattr(watcher, "rescan"):
+        watcher.rescan()
+
 
 class ConfigCommand(BaseCommand):
     """Slash-command handler for `/config`."""
@@ -60,7 +72,7 @@ class ConfigCommand(BaseCommand):
             runtime = getattr(context, "runtime", None)
             if key == "active_agent_profile" and runtime and hasattr(runtime, "refresh_session_specs"):
                 runtime.refresh_session_specs()
-            return f"Set {key} = {value}" if value != old else f"Set {key} = {value}"
+            return f"Set {key} = {_format_value(value)}"
 
         old = config.get(key)
         config[key] = value
@@ -76,9 +88,13 @@ class ConfigCommand(BaseCommand):
             runtime.config[key] = value
         if runtime and value != old and hasattr(runtime, "refresh_session_specs"):
             runtime.refresh_session_specs()
+        # Watch-affecting keys take effect live: re-read directories and run a
+        # fresh scan so the database starts syncing without a restart.
+        if value != old and key in _WATCHER_KEYS:
+            _rescan_watcher(context)
         if value != old and get_plugin_setting_type(key) == "frontend":
-            return f"Set {key} = {value}. Restart required."
-        return f"Set {key} = {value}"
+            return f"Set {key} = {_format_value(value)}. Restart required."
+        return f"Set {key} = {_format_value(value)}"
 
 
 def _settings():
@@ -144,8 +160,7 @@ def _value_prompt(key):
     """Internal helper to handle value prompt."""
     vtype = _value_type(key)
     if vtype == "path_list":
-        return ("Enter one folder path per line. / and \\ are both accepted; "
-                "each folder must already exist.\n\nC:\\Users\\you\\Notes\nD:\\Archive")
+        return ("Enter one folder path per line. / and \\ are both accepted; each folder must already exist. Example:\n\nC:\\Users\\you\\Notes\nD:\\Archive")
     if vtype == "path":
         return "Enter a path. / and \\ are both accepted; the parent folder must exist."
     if vtype == "array":
@@ -153,16 +168,28 @@ def _value_prompt(key):
     return "Enter the new value."
 
 
+def _format_value(value):
+    """Render a setting value for display without Python repr artifacts —
+    list brackets/quotes and the doubled backslashes that str(list) produces
+    on Windows paths. Each list item is shown via str(), so a stored
+    'C:\\Users\\me' displays with single separators."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return "(none)" if not value else ", ".join(str(item) for item in value)
+    return str(value)
+
+
 def _describe(context, key):
     """Internal helper to handle describe."""
     title, desc = _settings().get(key, (key, ""))
     tag = " (per-user)" if _scope(key) == "user" else ""
-    return f"{title}{tag}\n{key} = {_current_value(context, key)}\n{desc}"
+    return f"{title}{tag}\n{key} = {_format_value(_current_value(context, key))}\n{desc}"
 
 
 def _list(context):
     """Internal helper to list config."""
-    return "Settings:\n" + "\n".join(f"  {k} = {_current_value(context, k)}" for k in sorted(_settings()))
+    return "Settings:\n" + "\n".join(f"  {k} = {_format_value(_current_value(context, k))}" for k in sorted(_settings()))
 
 
 def _parse(value, key=None):

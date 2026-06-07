@@ -75,6 +75,10 @@ class Orchestrator:
 		self.event_upstream: dict[str, list[str]] = {} # event-keyed: task -> upstream event tasks
 		self.event_trigger = None
 		self.tool_registry = None
+		# Filesystem watcher ref, populated by bootstrap (main.pyw). Commands that
+		# change watch-affecting config (sync_directories, ignored_*) reach it via
+		# context.orchestrator.watcher to trigger a live rescan.
+		self.watcher = None
 
 		# Re-check service-blocked tasks whenever a service finishes loading.
 		self._service_loaded_unsub = bus.subscribe(SERVICE_LOADED, lambda payload: self.clear_skip_cache())
