@@ -574,10 +574,7 @@
       "family": "tools",
       "id": "tool-run-command",
       "name": "Run Command Tool",
-      "tags": [
-        "terminal",
-        "tool"
-      ]
+      "tags": []
     },
     {
       "description": "Manage Timekeeper-backed scheduled subagent jobs.",

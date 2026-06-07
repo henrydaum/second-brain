@@ -13,6 +13,7 @@ Allowed commands:
 """
 
 import logging
+import re
 import shlex
 import subprocess
 import sys
@@ -58,6 +59,27 @@ _VERSION_COMMANDS = {"python --version", "python3 --version", "pip --version"}
 
 # Directories the agent is allowed to target
 _ALLOWED_ROOTS = {Path(ROOT_DIR).resolve(), Path(DATA_DIR).resolve()}
+
+# Shell control operators that chain, redirect, or substitute commands. The
+# classifier only inspects the *first* token, but the whole string is handed to
+# a shell — so any of these can smuggle a second, unvetted command past the
+# read-only whitelist (e.g. `ls && pip install evil`, `cat x > file.py`,
+# `rg foo; rm bar`). Their presence forces the approval path regardless of how
+# the leading command classifies.
+_SHELL_OP_RE = re.compile(r"\|\||&&|\$\(|[;|&<>`\n]")
+
+
+def _strip_quoted(command: str) -> str:
+    """Remove single/double-quoted spans so operators *inside* a quoted argument
+    (e.g. a ripgrep regex "foo|bar") don't trip the operator guard — only
+    operators in the unquoted shell context should."""
+    return re.sub(r"\"[^\"]*\"|'[^']*'", "", command)
+
+
+def _has_shell_operators(command: str) -> bool:
+    """True if the unquoted portion of ``command`` contains a shell control
+    operator (chaining, piping, redirection, or command substitution)."""
+    return bool(_SHELL_OP_RE.search(_strip_quoted(command)))
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -162,6 +184,12 @@ def _classify(command: str) -> tuple[str, bool, str | None]:
     if not base:
         return "blocked", False, "Empty command."
 
+    # Chained / redirected / substituted commands run a shell beyond the single
+    # token we classify, so they can never be auto-approved — force the approval
+    # path. (Quoted operators, e.g. a regex argument, are ignored.)
+    if _has_shell_operators(command):
+        return "shell", True, None
+
     # Pip commands
     is_pip, sub = _is_pip_command(tokens)
     if is_pip:
@@ -208,7 +236,9 @@ class RunCommand(BaseTool):
         "- dir / ls / tree / cat / type / pwd — inspect project files\n"
         "- git status / diff / show / log / branch / ls-files / grep — inspect git state\n"
         "\n"
-        "All other commands are allowed only after the user approves the exact command."
+        "All other commands are allowed only after the user approves the exact command. "
+        "Any command that chains, pipes, redirects, or substitutes (&&, ||, ;, |, >, <, `, $()) "
+        "also requires approval, even if it starts with a read-only command."
     )
     parameters = {
         "type": "object",
@@ -248,8 +278,9 @@ class RunCommand(BaseTool):
         "run_command runs shell commands scoped to the project root and the Second Brain data directory. "
         "Read-only commands run automatically: ls/dir, rg/grep/findstr, tree, cat/type, pwd, "
         "git status/log/diff/show/branch/ls-files/rev-parse, and pip list/show/freeze plus --version checks. "
-        "Everything else — including pip install/uninstall and any non-whitelisted command — pauses for user "
-        "approval, so you may freely propose installing a needed package; the user decides whether it runs. "
+        "Everything else — including pip install/uninstall, any non-whitelisted command, and any command that "
+        "chains/pipes/redirects (&&, ||, ;, |, >, <, `, $()) even when it leads with a read-only command — pauses "
+        "for user approval, so you may freely propose installing a needed package; the user decides whether it runs. "
         "Large output is truncated inline and the full text is written to a temp file whose path is returned "
         "(spill_path) — read_file that path when you need everything."
     )
