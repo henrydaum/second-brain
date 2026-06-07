@@ -820,6 +820,42 @@ class Database:
 				"truncated": truncated,
 			}
 
+	def execute_write(self, sql: str) -> dict:
+		"""
+		Execute a single mutating SQL statement (INSERT/UPDATE/DELETE/DDL) and
+		commit it.
+
+		This is the deliberate counterpart to ``query()``: it carries **no**
+		read-only guard. The kernel never calls it — it exists solely so an
+		explicitly approved agent/operator action can write. Every caller MUST
+		gate this behind active user approval (see the sql_query tool).
+
+		``conn.execute`` runs exactly one statement; a multi-statement script
+		raises sqlite3's "one statement at a time" error, by design. A
+		``RETURNING`` clause surfaces through ``columns``/``rows``.
+
+		Returns:
+			{
+				"rowcount":  int — rows affected (-1 when sqlite can't report it),
+				"lastrowid": int | None — rowid of the inserted row, if any,
+				"columns":   list[str] — populated only for RETURNING,
+				"rows":      list[tuple] — RETURNING rows, else empty,
+			}
+
+		Raises sqlite3.Error for invalid SQL.
+		"""
+		with self.lock:
+			cur = self.conn.execute(sql)
+			columns = [desc[0] for desc in cur.description] if cur.description else []
+			rows = [tuple(row) for row in cur.fetchall()] if columns else []
+			self.conn.commit()
+			return {
+				"rowcount": cur.rowcount,
+				"lastrowid": cur.lastrowid,
+				"columns": columns,
+				"rows": rows,
+			}
+
 	# =================================================================
 	# USERS
 	# =================================================================
