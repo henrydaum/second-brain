@@ -38,8 +38,9 @@ class _NetworkErrorThrottle(logging.Filter):
     notes how many it swallowed when the next one is allowed through.
     """
 
-    _MARKERS = ("networkerror", "getaddrinfo", "connecterror", "httpx.connect",
-                "pool timeout", "timed out", "connection reset")
+    _MARKERS = ("polling", "networkerror", "getaddrinfo", "connecterror",
+                "readerror", "httpx.connect", "pool timeout", "timed out",
+                "connection reset", "remoteprotocolerror")
 
     def __init__(self, cooldown: float = 300.0):
         super().__init__()
@@ -48,7 +49,13 @@ class _NetworkErrorThrottle(logging.Filter):
         self._suppressed = 0
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.levelno < logging.ERROR or not any(m in record.getMessage().lower() for m in self._MARKERS):
+        # The updater's polling error logs a generic message ("Exception happened
+        # while polling for updates.") and stashes the real cause (getaddrinfo /
+        # NetworkError / ReadError) in exc_info — so match against both.
+        text = record.getMessage().lower()
+        if record.exc_info and record.exc_info[1] is not None:
+            text += " " + repr(record.exc_info[1]).lower()
+        if record.levelno < logging.ERROR or not any(m in text for m in self._MARKERS):
             return True
         now = time.time()
         if now < self._suppress_until:
