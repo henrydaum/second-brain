@@ -44,7 +44,6 @@ from typing import Any, Callable
 from events.event_bus import bus
 from events.event_channels import (
     CHAT_MESSAGE_PUSHED,
-    CONFIG_CHANGED,
     CONVERSATION_CHANGED,
     SESSION_AGENT_PROFILE_CHANGED,
     SESSION_CLOSED,
@@ -112,32 +111,6 @@ class ConversationRuntime:
         self._legacy_restore_conv_id = self.config.get("last_active_conversation_id") if self.config else None
         self._restore_consumed_keys: set[str] = set()
         self._persisted_active_conv_by_user: dict[int, int | None] = {}
-        # Keep the canonical config dict fresh when a command (e.g. /config or
-        # /frontends) persists a change. ``build_context`` hands every call a
-        # *copy* of this dict, so without this the running config would lag the
-        # on-disk file and re-displays would show stale values. Refresh in place
-        # (never reassign) so every holder of this dict sees the update.
-        self._config_changed_unsub = bus.subscribe(CONFIG_CHANGED, self._on_config_changed)
-
-    def _on_config_changed(self, payload: dict | None = None) -> None:
-        """Re-read the persisted config into the canonical dict, in place.
-
-        Fired whenever ``config_manager.save``/``save_plugin_config`` persists a
-        change. We mutate ``self.config`` instead of reassigning it so the shared
-        object every other component (and every future ``build_context`` copy)
-        holds reflects the new values immediately — no restart, no stale reads.
-        Transient runtime keys (``_root`` and anything not on disk) are preserved
-        because we update rather than clear.
-        """
-        from config import config_manager
-        try:
-            scope = (payload or {}).get("scope")
-            if scope in (None, "core"):
-                self.config.update(config_manager.load())
-            if scope in (None, "plugin"):
-                self.config.update(config_manager.load_plugin_config())
-        except Exception:
-            logger.exception("Failed to refresh runtime config after CONFIG_CHANGED")
 
     # ──────────────────────────────────────────────────────────────────
     # Public entrypoint — every action a frontend can take ends up here.

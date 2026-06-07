@@ -70,6 +70,10 @@ class ConfigCommand(BaseCommand):
             saved[key] = value
             config_manager.save_plugin_config(saved)
         runtime = getattr(context, "runtime", None)
+        # context.config is a per-call copy; write through to the canonical
+        # runtime config so the next /config (a fresh copy) shows the new value.
+        if runtime is not None and getattr(runtime, "config", None) is not None:
+            runtime.config[key] = value
         if runtime and value != old and hasattr(runtime, "refresh_session_specs"):
             runtime.refresh_session_specs()
         if value != old and get_plugin_setting_type(key) == "frontend":

@@ -442,6 +442,12 @@ def _set_enabled_frontends(context, add: list[str], remove: list[str], lines: li
     config["enabled_frontends"] = kept + added
     from config import config_manager
     config_manager.save(config)
+    # config is a per-call copy; keep the canonical runtime config in step so
+    # /frontends reflects the change without a restart (the frontend still starts
+    # on restart).
+    runtime = getattr(context, "runtime", None)
+    if runtime is not None and getattr(runtime, "config", None) is not None:
+        runtime.config["enabled_frontends"] = config["enabled_frontends"]
     if added:
         lines.append(f"Enabled frontend(s): {', '.join(added)} — restart to activate.")
     dropped = [n for n in enabled if n in remove]

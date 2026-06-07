@@ -48,14 +48,28 @@ class FrontendsCommand(BaseCommand):
         if not name:
             return _show(context)
         if action in ("enable", "disable"):
-            return _toggle(context.config, name, action)
+            return _toggle(context, name, action)
         if action == "configure":
-            return _configure(context.config, name, args.get("field"), args.get("value"))
+            return _configure(context, name, args.get("field"), args.get("value"))
         return f"Unknown action: {action}"
 
 
-def _toggle(config, name, action):
-    """Enable or disable a frontend (requires restart)."""
+def _write_through(context, key, value):
+    """Persist a config change and update the canonical runtime config in place.
+
+    context.config is a per-call copy used only to build the save payload; the
+    canonical dict on the runtime is what later /frontends calls copy from, so
+    update it too or the change won't show until restart.
+    """
+    config_manager.save(context.config)
+    runtime = getattr(context, "runtime", None)
+    if runtime is not None and getattr(runtime, "config", None) is not None:
+        runtime.config[key] = value
+
+
+def _toggle(context, name, action):
+    """Enable or disable a frontend (the frontend itself starts on restart)."""
+    config = context.config
     names = set((config or {}).get("enabled_frontends", []))
     if action == "enable":
         names.add(name)
@@ -64,12 +78,13 @@ def _toggle(config, name, action):
             return "Cannot disable the last enabled frontend."
         names.discard(name)
     config["enabled_frontends"] = sorted(names)
-    config_manager.save(config)
+    _write_through(context, "enabled_frontends", config["enabled_frontends"])
     return f"{'Enabled' if action == 'enable' else 'Disabled'} frontend: {name}. Restart required."
 
 
-def _configure(config, name, field, value):
+def _configure(context, name, field, value):
     """Write one frontend-profile field. Takes effect on the next turn."""
+    config = context.config
     if field not in FIELDS:
         return f"Unknown field: {field}"
     profiles = config.setdefault("frontend_profiles", {})
@@ -77,7 +92,7 @@ def _configure(config, name, field, value):
     if field == "whitelist_or_blacklist_commands" and value not in ("whitelist", "blacklist"):
         return "Command mode must be 'whitelist' or 'blacklist'."
     profile[field] = _coerce(field, value)
-    config_manager.save(config)
+    _write_through(context, "frontend_profiles", config["frontend_profiles"])
     note = ""
     if field == "whitelist_or_blacklist_commands" and value == "whitelist" and not profile.get("commands_list"):
         note = "\nNote: whitelist is empty — every command is now blocked on this frontend."
