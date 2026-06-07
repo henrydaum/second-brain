@@ -1,7 +1,8 @@
 {
   "description": "Speech transcription service backed by Faster Whisper.",
   "files": [
-    "services/service_whisper.py"
+    "services/service_whisper.py",
+    "services/helpers/parse_voice.py"
   ],
   "id": "service-whisper",
   "name": "Whisper Service",
