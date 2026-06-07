@@ -54,7 +54,7 @@ class ToolRegistry:
         bus.emit(TOOLS_CHANGED, {"name": tool.name, "action": "registered"})
 
     def unregister(self, name: str):
-        """Remove a tool from the registry (used by build_plugin on delete)."""
+        """Remove a tool from the registry during plugin unload/delete."""
         with self._lock:
             removed = self.tools.pop(name, None)
         if removed:

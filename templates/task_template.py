@@ -4,22 +4,30 @@ TASK TEMPLATE
 This file is a self-contained reference for creating new tasks.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
+Second Brain Lite ships the pipeline substrate, not a built-in indexing stack.
+Tasks are normally sandbox drafts or installed package files; add one to
+plugins/tasks/ only when it is true kernel behavior.
+
 Write tasks in a practical, explicit style. A task should make its trigger,
 inputs, outputs, and failure modes easy to inspect from code and database rows.
 
 Task authoring flow:
-  1. Read this template, then read one similar built-in task for style.
-  2. Create sandbox_plugins/tasks/task_<your_name>.py with edit_file.
+  1. Read this template, then read one similar installed or built-in task for style.
+  2. Create sandbox_plugins/tasks/task_<your_name>.py using whatever file-editing
+     capability is installed and in scope.
   3. The code MUST inherit from BaseTask and include:
        from plugins.BaseTask import BaseTask, TaskResult
   4. Fill in the class attributes and implement run() or run_event().
-  5. Call test_plugin(plugin_path="sandbox_plugins/tasks/task_<your_name>.py").
+  5. If a test_plugin tool is installed, call
+     test_plugin(plugin_path="sandbox_plugins/tasks/task_<your_name>.py").
+     Otherwise run focused pytest/compile checks from outside the runtime.
   6. If testing fails, read the error, edit the same file, and retry.
   7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
   8. To update: edit the file; plugin_watcher reloads it when enabled.
   9. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
- 10. If the task needs extra packages, install them first with
-     run_command(command="pip install <pkg>", justification="...", timeout=300).
+ 10. If the task needs extra packages, prefer a package manifest. For sandbox
+     experiments, install dependencies only through an installed shell/package
+     tool or out-of-band user action.
 
 test_plugin diagnostics cover:
   - Correct import (from plugins.BaseTask import BaseTask, TaskResult)
@@ -86,8 +94,8 @@ Every task receives a `context` object with:
 
   context.config    Global settings dict (from config.json).
 
-  context.services  Dict of {name: service_instance}. Access shared models:
-                      embedder = context.services.get("text_embedder")
+  context.services  Dict of {name: service_instance}. Check optional services:
+                      embedder = context.services.get("text_embedder")  # package-installed
                       if embedder and embedder.loaded:
                           embedder.encode(texts)
 

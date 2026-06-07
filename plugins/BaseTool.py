@@ -1,7 +1,7 @@
 """
 Tool interface.
 
-Tools are the on-demand action and retrieval layer of Second Brain.
+Tools are the on-demand capability layer of Second Brain.
 A tool accepts structured input, inspects local state or external systems,
 and returns a ToolResult that is useful both to frontends and to the LLM.
 
@@ -14,7 +14,8 @@ Tool schemas map directly into LLM function calling:
     - description -> function description
     - parameters  -> JSON schema for arguments
 
-The same tool contract is used everywhere: REPL, Telegram, HTTP, and agent.
+The same tool contract is used everywhere: REPL, installed frontends, package
+commands, and agent turns.
 """
 
 import logging

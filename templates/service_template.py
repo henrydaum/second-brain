@@ -4,12 +4,18 @@ SERVICE TEMPLATE
 This file is a self-contained reference for creating new services.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
+Second Brain Lite keeps long-lived capability behind services but keeps the
+kernel dependency-light. Services are normally sandbox drafts or installed
+package files; add one to plugins/services/ only when it is true kernel
+infrastructure.
+
 Write services so their role is obvious: what capability they provide, what
 config they need, when they are loaded, and how callers should access them.
 
 Service authoring flow:
-  1. Read this template, then read one similar built-in service for style.
-  2. Create sandbox_plugins/services/service_<your_name>.py with edit_file.
+  1. Read this template, then read one similar installed or built-in service for style.
+  2. Create sandbox_plugins/services/service_<your_name>.py using whatever
+     file-editing capability is installed and in scope.
   3. The code MUST inherit from BaseService and include:
        from plugins.BaseService import BaseService
   4. Choose lifecycle:
@@ -17,13 +23,16 @@ Service authoring flow:
        - extension: runtime hook/prompt/scope helper, set lifecycle = "extension".
   5. Implement your service methods. Override _load()/unload() only when real setup/cleanup is needed.
   6. Add a build_services(config) factory function at the bottom.
-  7. Call test_plugin(plugin_path="sandbox_plugins/services/service_<your_name>.py").
+  7. If a test_plugin tool is installed, call
+     test_plugin(plugin_path="sandbox_plugins/services/service_<your_name>.py").
+     Otherwise run focused pytest/compile checks from outside the runtime.
   8. If testing fails, read the error, edit the same file, and retry.
   9. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
  10. To update: edit the file; plugin_watcher reloads it when enabled.
  11. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
- 12. If the service needs extra packages, install them first with
-     run_command(command="pip install <pkg>", justification="...", timeout=300).
+ 12. If the service needs extra packages, prefer a package manifest. For sandbox
+     experiments, install dependencies only through an installed shell/package
+     tool or out-of-band user action.
 
 test_plugin diagnostics cover:
   - Correct import (from plugins.BaseService import BaseService)
@@ -65,6 +74,10 @@ Lifecycle modes:
       autoload_services. /services shows it as an extension but does not offer
       load/unload controls. Use for hook carriers, policy plugins, prompt/scope
       modifiers, and other tiny runtime add-ons.
+
+Services that need runtime objects such as the tool registry, orchestrator,
+command registry, frontend manager, or runtime should implement bind_runtime()
+and make it idempotent. load() can run before those objects exist.
 
 If your service does not own resources, do not override _load() or unload();
 BaseService marks it loaded/unloaded for you. Override only for real setup or

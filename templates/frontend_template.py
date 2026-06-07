@@ -8,15 +8,21 @@ Frontends are transports: REPL, Telegram, HTTP, desktop UI, etc. They turn
 user input into state-machine actions and render RuntimeResult/events back to
 the user. Prefer commands/tools/tasks for app behavior; create a frontend only
 when adding a new transport or presentation layer.
+The Lite kernel ships the REPL. Other transports are normally installed
+packages or sandbox drafts; add one to plugins/frontends/ only when it is true
+kernel infrastructure.
 
 Frontend authoring flow:
-  1. Read this template, then read plugins/frontends/frontend_repl.py or
-     frontend_telegram.py for the closest existing transport.
-  2. Create sandbox_plugins/frontends/frontend_<your_name>.py with edit_file.
+  1. Read this template, then read plugins/frontends/frontend_repl.py or the
+     closest installed frontend for style.
+  2. Create sandbox_plugins/frontends/frontend_<your_name>.py using whatever
+     file-editing capability is installed and in scope.
   3. The code MUST inherit from BaseFrontend and include:
        from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
   4. Fill in name, description, capabilities, lifecycle, session_key(), and render_* methods.
-  5. Call test_plugin(plugin_path="sandbox_plugins/frontends/frontend_<your_name>.py").
+  5. If a test_plugin tool is installed, call
+     test_plugin(plugin_path="sandbox_plugins/frontends/frontend_<your_name>.py").
+     Otherwise run focused pytest/compile checks from outside the runtime.
   6. If testing fails, read the error, edit the same file, and retry.
   7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
   8. To update: edit the file; plugin_watcher reloads it when enabled.
@@ -61,7 +67,7 @@ The base auto-binds each new session to ``default_user_id`` (only while it is
 still unbound), so you usually declare attributes and nothing else. There are
 exactly THREE pathways, built from those two attributes:
 
-  1. ONE FIXED USER  (REPL, Telegram, single-operator tools)
+  1. ONE FIXED USER  (REPL, installed Telegram, single-operator tools)
         user_binding = "single"            # default
         default_user_id = DEFAULT_USER_ID  # the base user (1)
      Every session is the base user. No per-session code. This is pathway (1).

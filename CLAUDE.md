@@ -1,7 +1,8 @@
 # Second Brain — Architecture Notes
 
-Local-first file intelligence pipeline with REPL + Telegram frontends. Python /
-SQLite. Solo dev (Henry). The Flet GUI was removed; do not reintroduce.
+Local-first AI kernel with SQLite persistence, a REPL frontend, package
+install/uninstall, and live plugin loading. Python / SQLite. Solo dev (Henry).
+The Flet GUI was removed; do not reintroduce.
 
 ---
 
@@ -9,10 +10,11 @@ SQLite. Solo dev (Henry). The Flet GUI was removed; do not reintroduce.
 
 **You are on the `lite` branch.** This branch is a deliberate strip-down of
 Second Brain into a **microkernel**: a minimal, reliable core that boots, runs
-the conversation loop + agent turn, and loads/unloads plugins — with *everything
-else* destined to be installed from a **plugin store** (the agentskills.io model:
-a registry you browse, install, and uninstall from). `main` remains the full
-product. Do not port heavy features back into the kernel; they belong in the store.
+the conversation loop + agent turn, persists conversations, and loads/unloads
+plugins. Product capabilities arrive through a **package store** (the
+agentskills.io model: a registry you browse, install, and uninstall from).
+`main` remains the full product. Do not port heavy features back into the
+kernel; they belong in packages.
 
 > Goal in priority order: (1) the kernel works **flawlessly and reliably**, then
 > (2) build install/uninstall against a cloud store, then (3) versioning and
@@ -26,15 +28,21 @@ staging catalog that mirrors `plugins/`, preserved via `git mv` to seed the
 future store) — *not* by deleting them. What remains:
 
 - **Services:** `service_llm`, `service_compactor` (context-safety),
-  `service_parser` (text + image — see below), and `service_plugin_watcher`
-  (hot-reload = the install/uninstall substrate).
+  `service_parser` (text + image helper discovery), and
+  `service_plugin_watcher` (hot-reload = the install/uninstall substrate).
+  If another tracked service remains, treat it as kernel-boundary debt unless
+  the user explicitly keeps it.
 - **Tasks:** none.
-- **Tools:** `tool_read_file` and `tool_ask_user_question`.
+- **Tools:** none in the tracked kernel tree. `tool_read_file`,
+  `tool_ask_user_question`, shell/file-editing tools, SQL tools, and plugin
+  authoring tools are package capabilities unless discovery shows they are
+  installed.
 - **Frontend:** `frontend_repl` only. Telegram moved to `store/frontends/`.
 - **Commands:** REPL UX + introspection only — `config`, `setup` (LLM onboarding
-  wizard), `llm`, `conversations`, `clear`, `cancel`, `debug`,
-  `locations`, `commands`, `tools`, `services`, `tasks`. Moved out: `mcp`,
-  `agent`, `schedule`, `update`.
+  wizard), `llm`, `conversations`, `clear`, `cancel`, `debug`, `frontends`,
+  `locations`, `commands`, `tools`, `services`, `tasks`, `packages`.
+  Profile/scheduling/MCP/update commands are package capabilities unless the
+  tracked tree still carries a transitional command.
 
 The pipeline substrate (`pipeline/` — orchestrator, watcher, event_trigger) still
 boots, but ships **zero pipeline tasks**: it idles until a pipeline plugin
@@ -82,9 +90,10 @@ the difference between a microkernel and a pile of assumptions:
 - **`config/config_data.py`** — `autoload_services` trimmed to
   `["llm", "compactor", "parser", "plugin_watcher"]`; `enabled_frontends` → `["repl"]`;
   `DEFAULT_SCHEDULED_JOBS` → `{}` (jobs/timekeeper are store plugins now).
-- **`requirements.txt`** — kernel-minimal (`litellm`, `watchdog`, `Pillow`;
-  optional doc-parsing deps commented). The full per-plugin
-  dependency map is documented in that file's footer.
+- **`requirements.txt`** — kernel-minimal. Optional parser, scheduler,
+  frontend, LLM backend, search, and integration dependencies belong to package
+  manifests. If `requirements.txt` grows, check whether the dependency is truly
+  kernel infrastructure.
 
 ## Package store V1
 
@@ -122,18 +131,20 @@ c=config_manager.load(); db=Database(c['db_path']); s=discover_services(_R,c); \
 o=Orchestrator(db,c,s); discover_tasks(_R,o,c); t=ToolRegistry(db,c,s); t.orchestrator=o; \
 discover_tools(_R,t,c); print(sorted(s), sorted(o.tasks), sorted(t.tools))"
 ```
-Expect services `[compactor, llm, parser, plugin_watcher]`, tasks `[]`, tools
-`[ask_user_question, read_file]`. Then `python main.py`, run `/setup` to configure
-an LLM, and confirm a REPL round-trip + clean compaction on a long conversation.
+For a hermetic smoke, point DATA_DIR at an empty temporary location first;
+otherwise local installed packages will appear in discovery and hide kernel
+boundary drift. Expect kernel services, no tasks, and no built-in tools. Then
+`python main.py`, run `/setup` to install/configure starter capability, and
+confirm a REPL round-trip + clean compaction on a long conversation.
 
 ---
 
 ## Recent work — state machine unification
 
 The conversation layer was unified around a single state machine
-(`ConversationState` in [state_machine/conversationClass.py](state_machine/conversationClass.py))
-driven by [state_machine/runtime.py](state_machine/runtime.py)
-(`ConversationRuntime`). Every frontend action — REPL, Telegram, future
+(`ConversationState` in [state_machine/conversation.py](state_machine/conversation.py))
+driven by [runtime/conversation_runtime.py](runtime/conversation_runtime.py)
+(`ConversationRuntime`). Every frontend action — REPL, installed Telegram, future
 background drivers — flows through one labeled `cs.enact(...)` site in
 `_dispatch`, mirroring PokerMonster's `run_game`. Agent turns hand off to
 `ConversationLoop.drive()`, which has its own labeled enact site for the
@@ -143,7 +154,7 @@ The same primitives now back commands and tools: a `CallableSpec` has a
 handler, an optional form (list of `FormStep`), and an optional
 `form_factory(args, cs)` for dynamic forms. Forms suspend into a `PhaseFrame` on
 the cache stack, surviving restarts via the persistence layer
-([state_machine/persistence.py](state_machine/persistence.py)).
+([runtime/persistence.py](runtime/persistence.py)).
 
 The runtime exposes `runtime.active_session_key` / `active_conversation_id`
 so background drivers can identify themselves: anything with a session key
@@ -163,7 +174,7 @@ rule), but a frontend can override it per session — `RuntimeSession.attended`
 `mark_unattended` helpers. This is the kernel's hook for **concurrent
 multi-user frontends** (e.g. a website marking a session attended on socket
 connect, unattended on disconnect): the kernel only *reads* attendance, the
-frontend *owns* the policy. Single-user frontends (REPL, Telegram) set
+frontend *owns* the policy. Single-user frontends (REPL, installed Telegram) set
 nothing and keep `attended=None`, inheriting the global behavior unchanged.
 
 ### The user dimension
@@ -204,31 +215,31 @@ a form will be filled afterward) and `COMMAND_CALL_FINISHED` (after the
 handler runs, or on cancel during a form). Same `call_id` across the
 lifecycle — pinned to the form's `PhaseFrame.data["call_id"]` so STARTED
 and FINISHED match up. See
-[state_machine/actionClass.py](state_machine/actionClass.py)
+[state_machine/action.py](state_machine/action.py)
 `_CallableAction.execute` and `_run`.
 
 `BaseFrontend` ([plugins/BaseFrontend.py](plugins/BaseFrontend.py)) subscribes
 both events and routes them through `render_tool_status(session_key,
-payload)`. Telegram edits a single message in place: `⋯ /name` →
-`✓ /name` or `✕ /name` with error. REPL prints the same shapes to stdout.
+payload)`. Rich frontends such as installed Telegram can edit a single status
+message in place; the REPL prints the same shapes to stdout.
 
 ## Where to plug in
 
-- **Add a slash command**: drop a `BaseCommand` subclass into
-  [plugins/commands/](plugins/commands/) as `command_*.py`, or into
-  `DATA_DIR/sandbox_plugins/commands/` via `build_plugin`. Commands receive `SecondBrainContext`
-  in both `form(args, context)` and `run(args, context)`.
-- **Add a tool**: drop a `BaseTool` subclass into [plugins/tools/](plugins/tools/);
-  it's discovered automatically. Tools receive `SecondBrainContext` from
+- **Add a slash command**: write a `BaseCommand` subclass as `command_*.py` in
+  the sandbox, installed package tree, or deliberately in [plugins/commands/](plugins/commands/)
+  when it is true kernel behavior. Commands receive `SecondBrainContext` in both
+  `form(args, context)` and `run(args, context)`.
+- **Add a tool**: write a `BaseTool` subclass as `tool_*.py` in the sandbox,
+  installed package tree, or deliberately in [plugins/tools/](plugins/tools/)
+  when it is true kernel behavior. Tools receive `SecondBrainContext` from
   [runtime/context.py](runtime/context.py).
 - **Drive an agent from a task**: call `context.runtime.iterate_agent_turn(...)`
   on a session key. The runtime persists history and markers atomically
   for you. Background drivers should keep their session key distinct from
   the active one so the registry's `background_safe` gate kicks in.
-- **Let an agent run a slash command**: the `slash_command` tool
-  ([plugins/tools/tool_slash_command.py](plugins/tools/tool_slash_command.py))
-  dispatches with a structured dict, skipping the form. Same
-  COMMAND_CALL_STARTED/FINISHED events as a human run.
+- **Let an agent run a slash command**: use an installed command/tool bridge if
+  one is present in the current tool catalog. The kernel should not hardcode
+  command-running tools for packages it may not ship.
 
 ## Command plugins
 
@@ -242,21 +253,21 @@ input mechanically, and dispatches structured dict args.
 
 ## Sandbox plugin system
 
-The agent can author its own tools/tasks/services/commands into
-`DATA_DIR/sandbox_plugins/<family>/` via the `build_plugin` tool. The
-`run_command` tool gates pip install/uninstall behind user approval. Sandbox and
-installed plugins are auto-discovered alongside first-party ones in
+The agent can author tools/tasks/services/commands/frontends into
+`DATA_DIR/sandbox_plugins/<family>/` when an editing/package-authoring tool is
+installed and in scope. Shell and file-editing tools are not kernel guarantees.
+Sandbox and installed plugins are auto-discovered alongside first-party ones in
 [plugins/](plugins/). Plugin helpers should use relative imports so files can
-move between the built-in, sandbox, and installed trees.
+move between built-in, sandbox, and installed trees.
 
 ## Files that matter most
 
 - [runtime/context.py](runtime/context.py) — `SecondBrainContext`, the
   shared bag tools/tasks receive.
-- [state_machine/runtime.py](state_machine/runtime.py) —
-  `ConversationRuntime`, the single dispatcher. ~940 lines and growing; this
-  is the accepted "ugly duckling" of the codebase.
-- [state_machine/actionClass.py](state_machine/actionClass.py) — every
+- [runtime/conversation_runtime.py](runtime/conversation_runtime.py) —
+  `ConversationRuntime`, the single dispatcher. This is the accepted "ugly
+  duckling" of the codebase.
+- [state_machine/action.py](state_machine/action.py) — every
   user/agent action type lives here; one class per action.
 - [pipeline/orchestrator.py](pipeline/orchestrator.py) — task scheduling and
   the dependency-pipeline DAG. `runtime` is wired in

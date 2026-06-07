@@ -16,7 +16,7 @@ Second Brain Lite is the kernel of Second Brain: a small local-first AI runtime 
 This branch is intentionally stripped down. The full Second Brain product can search files, schedule agents, talk through Telegram, index media, use integrations, and run many tools. Lite keeps the host that makes those things possible:
 
 - a durable conversation state machine
-- an agent turn loop with tool calling
+- an agent turn loop that uses whatever tools are installed
 - SQLite persistence
 - the five plugin families
 - a REPL frontend
@@ -46,12 +46,9 @@ Built-in frontend:
 |---|---|
 | `repl` | Local terminal chat interface |
 
-Built-in tools:
-
-| Tool | Role |
-|---|---|
-| `read_file` | Read exact UTF-8 text from local files |
-| `ask_user_question` | Ask the user for clarification during an agent turn |
+Built-in tools: none in the tracked kernel tree. Everyday tools such as
+`read_file`, `ask_user_question`, file editing, shell, SQL, retrieval, and plugin
+authoring arrive through packages such as `starter`.
 
 The pipeline substrate still exists, but the lite kernel ships no indexing tasks. Install parser, extraction, chunking, embedding, search, scheduling, Gmail, Telegram, MCP, or other packages from the store when you want those capabilities.
 
@@ -137,7 +134,7 @@ python main.py
 Run tests:
 
 ```bash
-python -m pytest -q
+python -m pytest -q --basetemp .pytest_tmp_full
 ```
 
 The kernel dependencies are intentionally small. Optional capabilities bring their own dependencies through the store.
@@ -222,7 +219,7 @@ The runtime:
 5. Runs the agent turn when priority passes to the agent.
 6. Returns a `RuntimeResult` for the frontend to render.
 
-That shape lets a terminal, Telegram bot, scheduled task, or future HTTP frontend use the same conversation rules.
+That shape lets the REPL, an installed Telegram bot, an installed scheduled task, or a future HTTP frontend use the same conversation rules.
 
 ## Extension Authoring
 
@@ -238,7 +235,7 @@ Recommended loop:
 
 1. Read the matching template.
 2. Read a similar built-in or installed plugin.
-3. Write the plugin into the sandbox tree.
+3. Write the plugin into the sandbox tree with the editing capability available in your environment.
 4. Let `plugin_watcher` load it.
 5. Use `/tools`, `/services`, `/commands`, or `/tasks` to inspect it.
 6. Move stable capabilities into the store when they belong outside the kernel.

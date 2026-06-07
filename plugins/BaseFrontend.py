@@ -1,8 +1,8 @@
 """
 Frontend interface.
 
-Frontends are the user-facing transports of Second Brain (REPL, Telegram, HTTP,
-future GUIs). They are first-class plugins, like tools/tasks/services: each
+Frontends are the user-facing transports of Second Brain (REPL, installed
+Telegram, HTTP, future presentation layers). They are first-class plugins, like tools/tasks/services: each
 subclass declares its identity and capabilities, and implements two halves of
 the contract:
 
@@ -245,7 +245,7 @@ class BaseFrontend:
     def render_form_field(self, session_key: str, form: dict) -> None:
         """Render a form prompt.
 
-        ``form`` shape (from state_machine/runtime.py:_decorate_form):
+        ``form`` shape (from runtime/conversation_runtime.py form rendering):
             {
                 "name":      str,        # command/tool name
                 "field":     dict,       # FormStep.to_dict() — name, prompt,

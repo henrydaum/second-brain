@@ -7,15 +7,20 @@ It is NOT imported by the running system — it exists for LLM consumption only.
 Commands are user-facing conversation actions. They are invoked with `/name`,
 can collect form fields, and return text to the frontend. Use commands for
 interactive UI/workflow control; use tools for agent-callable capabilities.
+In Lite, commands are normally sandbox drafts or installed package files; add
+one to plugins/commands/ only when it is true kernel operation or introspection.
 
 Command authoring flow:
-  1. Read this template, then read one similar built-in command for style.
-  2. Create sandbox_plugins/commands/command_<your_name>.py with edit_file.
+  1. Read this template, then read one similar installed or built-in command for style.
+  2. Create sandbox_plugins/commands/command_<your_name>.py using whatever
+     file-editing capability is installed and in scope.
   3. The code MUST inherit from BaseCommand and include:
        from plugins.BaseCommand import BaseCommand
        from state_machine.conversation import FormStep
   4. Fill in name, description, category, optional form(), and run().
-  5. Call test_plugin(plugin_path="sandbox_plugins/commands/command_<your_name>.py").
+  5. If a test_plugin tool is installed, call
+     test_plugin(plugin_path="sandbox_plugins/commands/command_<your_name>.py").
+     Otherwise run focused pytest/compile checks from outside the runtime.
   6. If testing fails, read the error, edit the same file, and retry.
   7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
   8. To update: edit the file; plugin_watcher reloads it when enabled.
@@ -84,8 +89,8 @@ class BaseCommand:
 #
 # class NoteCommand(BaseCommand):
 #     name = "note"
-#     description = "Append a short note to memory.md"
-#     category = "Memory"
+#     description = "Echo a short note back to the current frontend"
+#     category = "Other"
 #
 #     def form(self, args, context):
 #         return [FormStep("text", "Enter the note text to append.", True)]
@@ -94,8 +99,7 @@ class BaseCommand:
 #         text = (args.get("text") or "").strip()
 #         if not text:
 #             return "No note provided."
-#         result = context.tool_registry.call("update_memory", search_block="", replace_block=f"- {text}\n")
-#         return result.llm_summary if result.success else result.error
+#         return f"Note: {text}"
 
 
 # =====================================================================

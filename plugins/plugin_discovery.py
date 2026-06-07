@@ -1,9 +1,9 @@
 """
 Plugin discovery — unified loader for tools, tasks, services, and commands.
 
-Handles both baked-in (read-only, in source tree) and sandbox (mutable,
-in DATA_DIR) plugins. Used at startup for bulk discovery and by
-build_plugin for single-file load/unload at runtime.
+Handles built-in, sandbox, and installed-package plugins. Used at startup for
+bulk discovery and by the watcher/package manager for single-file load/unload
+at runtime.
 
 Public API:
     discover_all()          — startup convenience, discovers everything
@@ -329,7 +329,7 @@ def wire_peer_services(services: dict):
             svc.set_peer_services(services)
 
 
-# ── Single-plugin load/unload (used by build_plugin) ────────────────
+# ── Single-plugin load/unload (watcher/package manager path) ─────────
 
 def load_single_plugin(plugin_type: str, file_path: Path,
                        tool_registry=None, orchestrator=None,

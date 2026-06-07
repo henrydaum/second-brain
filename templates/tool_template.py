@@ -4,6 +4,10 @@ TOOL TEMPLATE
 This file is a self-contained reference for creating new tools.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
+Second Brain Lite keeps the kernel small. Tools are normally sandbox drafts or
+installed package files; add one to plugins/tools/ only when the capability is
+true kernel behavior.
+
 Write tools in the same voice the system expects elsewhere:
 - grounded and practical
 - explicit about what the tool does
@@ -11,18 +15,22 @@ Write tools in the same voice the system expects elsewhere:
 - clear about important limits or safety constraints
 
 Tool authoring flow:
-  1. Read this template, then read one similar built-in tool for style.
-  2. Create sandbox_plugins/tools/tool_<your_name>.py with edit_file.
+  1. Read this template, then read one similar installed or built-in tool for style.
+  2. Create sandbox_plugins/tools/tool_<your_name>.py using whatever file-editing
+     capability is installed and in scope.
   3. The code MUST inherit from BaseTool and include:
        from plugins.BaseTool import BaseTool, ToolResult
   4. Fill in the class attributes and implement run().
-  5. Call test_plugin(plugin_path="sandbox_plugins/tools/tool_<your_name>.py").
+  5. If a test_plugin tool is installed, call
+     test_plugin(plugin_path="sandbox_plugins/tools/tool_<your_name>.py").
+     Otherwise run focused pytest/compile checks from outside the runtime.
   6. If testing fails, read the error, edit the same file, and retry.
   7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
   8. To update: edit the file; plugin_watcher reloads it when enabled.
   9. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
- 10. If the tool needs extra packages, install them first with
-     run_command(command="pip install <pkg>", justification="...", timeout=300).
+ 10. If the tool needs extra packages, prefer a package manifest. For sandbox
+     experiments, install dependencies only through an installed shell/package
+     tool or out-of-band user action.
 
 test_plugin diagnostics cover:
   - Correct import (from plugins.BaseTool import BaseTool, ToolResult)
@@ -49,7 +57,7 @@ Tools are called on-demand and return results immediately.
 
 Tools can be called by:
   - The LLM agent (subject to the active agent_profile's tool mode and tools_list)
-  - The user via CLI: /call tool_name {"arg": "value"}
+  - The user via /tools or an installed command bridge
   - Other tools via context.call_tool("tool_name", arg="value")
 
 
@@ -77,13 +85,13 @@ Every tool receives a `context` object with:
 
   context.config    Global settings dict (from config.json).
 
-  context.services  Dict of {name: service_instance}. Access shared models:
+  context.services  Dict of {name: service_instance}. Check service presence:
                       llm = context.services.get("llm")
-                      embedder = context.services.get("text_embedder")
+                      embedder = context.services.get("text_embedder")  # package-installed
 
   context.call_tool Call another tool (tool-to-tool chaining):
                       result = context.call_tool("lexical_search", query="hello")
-                    Returns a ToolResult.
+                    Returns a ToolResult. Only call tools that are registered.
 
 
 WRITING GOOD TOOL DESCRIPTIONS
@@ -97,9 +105,8 @@ Write it like short operational documentation:
 - avoid vague hype or trigger-word instructions
 
 Good pattern:
-  "Search indexed files using both keyword and semantic retrieval. Use this
-   when you need the best default search over local files. Optional filters
-   can narrow the search."
+  "Read a UTF-8 text file by exact path. Use this when the user has named a
+   specific local file. Fails if the path is missing or is not readable text."
 
 
 TOOL RESULT
