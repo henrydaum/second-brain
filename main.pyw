@@ -12,6 +12,7 @@ from paths import DATA_DIR
 logging.getLogger("PIL").setLevel(logging.WARNING)
 logging.getLogger("fitz").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("faster_whisper").setLevel(logging.WARNING)
 
 _LOG_FORMAT = "%(asctime)s | %(name)-12s | %(levelname)-5s | %(message)s"
 _LOG_DATEFMT = "%I:%M%p"

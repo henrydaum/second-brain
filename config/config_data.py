@@ -10,6 +10,8 @@ Each entry: (title, variable_name, description, default, type_info)
                    {"type": "text"}       — single-line text field
                    {"type": "bool"}       — boolean toggle control
                    {"type": "json_list"}  — multiline text field expecting a JSON array
+                   {"type": "path"}       — single filesystem path (normalized; parent must exist)
+                   {"type": "path_list"}  — multiline list of folder paths (normalized; each must exist)
                    {"type": "slider", "range": (min, max, divisions), "is_float": bool}
 """
 
@@ -23,14 +25,16 @@ DEFAULT_SCHEDULED_JOBS: dict = {}
 SETTINGS_DATA = [
     # --- Directories ---
     ("Sync Directories", "sync_directories",
-     "Folders to monitor for new and changed files. Sub-folders are included.",
+     "Folders to monitor for new and changed files. Sub-folders are included. "
+     "Each folder must already exist; / and \\ are both accepted.",
      [str(ATTACHMENT_CACHE)],
-     {"type": "json_list"}),
+     {"type": "path_list"}),
 
     ("Database Path", "db_path",
-     "Path to the SQLite database file. Requires app restart to take effect.",
+     "Path to the SQLite database file. Requires app restart to take effect. "
+     "The parent folder must exist; / and \\ are both accepted.",
      str(DATA_DIR / "database.db"),
-     {"type": "text"}),
+     {"type": "path"}),
 
     ("Attachment Cache Size (GB)", "attachment_cache_size_gb",
      "Maximum size of the attachment cache folder. When exceeded, oldest files are evicted (LRU by modification time).",

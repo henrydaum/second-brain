@@ -137,7 +137,7 @@ def test_plugin_watcher_emits_registered_and_edit_messages(monkeypatch):
         service._known_mtimes[str(path.resolve())] = path.stat().st_mtime - 1
         service.handle_create_or_modify(str(path))
 
-        assert messages == ["Registered plugin: demo", "Registered plugin edit: demo"]
+        assert messages == ["✓ Registered plugin: demo", "✓ Registered plugin edit: demo"]
     finally:
         unsub()
         path.unlink(missing_ok=True)
@@ -270,7 +270,7 @@ def test_plugin_watcher_accepts_llm_backend_provider(monkeypatch):
         service.handle_create_or_modify(str(path))
 
         assert services["model-x"].loaded
-        assert messages == ["Registered plugin: LLM backends"]
+        assert messages == ["✓ Registered plugin: LLM backends"]
         path.unlink()
         service.handle_delete(str(path))
         assert "model-x" not in services

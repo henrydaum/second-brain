@@ -155,7 +155,7 @@ class PluginWatcherService(BaseService):
         if info.plugin_type == "command":
             self._refresh_commands()
         self._reconcile_plugin_config()
-        self._notify(f"Registered plugin{' edit' if edited else ''}: {name}")
+        self._notify(f"✓ Registered plugin{' edit' if edited else ''}: {name}")
         logger.info(f"Plugin watcher loaded {info.plugin_type}: {name}")
 
     def _unload_plugin(self, path: Path):

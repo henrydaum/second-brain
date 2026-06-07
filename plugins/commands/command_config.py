@@ -123,6 +123,8 @@ def _value_type(key):
     entry = _setting_data(key) or (None, None, None, None, {})
     default, info = entry[3], entry[4] if isinstance(entry[4], dict) else {}
     type_ = info.get("type")
+    if type_ in {"path", "path_list"}:
+        return type_
     if type_ == "json_list":
         return "array"
     if type_ == "json_dict":
@@ -136,7 +138,15 @@ def _value_type(key):
 
 def _value_prompt(key):
     """Internal helper to handle value prompt."""
-    return "Enter a list of items, one on each line, like so:\n\nitem 1\nitem 2" if _value_type(key) == "array" else "Enter the new value."
+    vtype = _value_type(key)
+    if vtype == "path_list":
+        return ("Enter one folder path per line. / and \\ are both accepted; "
+                "each folder must already exist.\n\nC:\\Users\\you\\Notes\nD:\\Archive")
+    if vtype == "path":
+        return "Enter a path. / and \\ are both accepted; the parent folder must exist."
+    if vtype == "array":
+        return "Enter a list of items, one on each line, like so:\n\nitem 1\nitem 2"
+    return "Enter the new value."
 
 
 def _describe(context, key):

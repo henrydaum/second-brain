@@ -312,6 +312,13 @@ class Orchestrator:
 				continue
 			if modality in task.modalities:
 				if self._deps_met(path, task):
+					# Don't disturb work that's already queued or running for this
+					# file — the watcher only reports new or genuinely-changed files,
+					# but the startup scan and a live event can both report the same
+					# arrival, which would otherwise reset an in-flight task and
+					# re-dispatch it. Only (re)enqueue when idle, done, or failed.
+					if self.db.get_task_status(path, task.name) in ("PENDING", "PROCESSING"):
+						continue
 					self.db.re_enqueue_task(path, task.name)
 					# Task is being re-queued — invalidate downstream tasks
 					self._invalidate_downstream(task.name, [path])

@@ -377,6 +377,16 @@ class Database:
 			row = cur.fetchone()
 			return row["status"] == "DONE" if row else False
 
+	def get_task_status(self, path, task_name):
+		"""Return the queue status for one (path, task) pair, or None if absent."""
+		with self.lock:
+			cur = self.conn.execute("""
+				SELECT status FROM task_queue
+				WHERE path = ? AND task_name = ?
+			""", (path, task_name))
+			row = cur.fetchone()
+			return row["status"] if row else None
+
 	def get_pending_tasks(self, task_name=None):
 		"""Get all pending tasks, optionally filtered by task name."""
 		with self.lock:

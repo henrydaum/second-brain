@@ -404,14 +404,15 @@ class SubmitFormText(Action):
         if not frame or not frame.step:
             raise self.error(ERROR_INVALID_ACTION, "No form is awaiting input.")
         text = self.content if isinstance(self.content, str) else (self.content or {}).get("text")
+        # validate() runs coercion, the field validator, and type-specific checks
+        # (e.g. path existence) so a bad value is rejected here, on entry.
+        ok, reason = frame.step.validate(text)
+        if not ok:
+            raise self.error(ERROR_INVALID_INPUT, reason or f"Invalid {frame.step.name}.", field=frame.step.name)
         try:
             value = frame.step.coerce(text)
         except Exception as e:
             raise self.error(ERROR_INVALID_INPUT, f"{frame.step.name} must be {frame.step.type}: {e}", field=frame.step.name)
-        if frame.step.validator:
-            ok, reason = frame.step.validator(value)
-            if not ok:
-                raise self.error(ERROR_INVALID_INPUT, reason or "Invalid input.", field=frame.step.name)
         frame.data.setdefault("args", {})[frame.step.name] = value
         _record_form_field(frame)
         _emit_command_progress(self.cs, frame)

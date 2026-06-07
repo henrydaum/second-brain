@@ -8,6 +8,7 @@ current phase decides what is legal, and multi-step flows live in `cache`.
 from __future__ import annotations
 
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -17,6 +18,42 @@ from state_machine.conversation_phases import BASE_PHASE, PHASE_AWAITING_INPUT
 Validator = Callable[[Any], tuple[bool, str | None]]
 Handler = Callable[["ConversationState", str, dict[str, Any]], Any]
 FormFactory = Callable[[dict[str, Any], Any], list["FormStep"]]
+
+
+def normalize_path(value: Any) -> str:
+    """Normalize a single filesystem path for storage.
+
+    Accepts the separators a user might type on any platform (``/``, ``\\``, or
+    escaped ``\\\\``), strips wrapping quotes, expands ``~``, and collapses the
+    path with ``os.path.normpath`` so it lands in the OS-native form. Pure
+    stdlib; safe to call on already-clean paths.
+    """
+    s = str(value).strip().strip('"').strip("'")
+    if not s:
+        return s
+    return os.path.normpath(os.path.expanduser(s))
+
+
+def validate_existing_dir(path: str) -> tuple[bool, str | None]:
+    """A path that must already be an existing directory (e.g. a sync folder)."""
+    p = Path(path)
+    if p.is_dir():
+        return True, None
+    if p.exists():
+        return False, f"Not a directory: {path}"
+    return False, f"Directory does not exist: {path}"
+
+
+def validate_path_or_parent(path: str) -> tuple[bool, str | None]:
+    """A file/dir path that may not exist yet, but whose parent must exist.
+
+    Lets a not-yet-created target through (e.g. a new ``db_path`` file) while
+    still catching a typo'd or non-existent parent directory immediately.
+    """
+    p = Path(path)
+    if p.exists() or p.parent.is_dir():
+        return True, None
+    return False, f"Parent directory does not exist: {p.parent}"
 
 
 @dataclass
@@ -46,7 +83,7 @@ class FormStep:
             value = float(value)
         if self.type == "boolean":
             value = value if isinstance(value, bool) else str(value).strip().lower() in {"true", "yes", "1", "y"}
-        if self.type == "array" and isinstance(value, str):
+        if self.type in {"array", "path_list"} and isinstance(value, str):
             import json
             try:
                 value = json.loads(value)
@@ -54,6 +91,10 @@ class FormStep:
                 value = [line.strip() for line in value.splitlines() if line.strip()]
             if not isinstance(value, list):
                 value = [value]
+        if self.type == "path" and isinstance(value, str):
+            value = normalize_path(value)
+        if self.type == "path_list" and isinstance(value, list):
+            value = [normalize_path(item) for item in value]
         if self.type == "object" and isinstance(value, str):
             import json
             value = json.loads(value)
@@ -72,6 +113,15 @@ class FormStep:
             value = self.coerce(value)
         except Exception as e:
             return False, str(e)
+        if self.type == "path" and value:
+            ok, msg = validate_path_or_parent(value)
+            if not ok:
+                return False, msg
+        if self.type == "path_list":
+            for item in value or []:
+                ok, msg = validate_existing_dir(item)
+                if not ok:
+                    return False, msg
         return self.validator(value) if self.validator else (True, None)
 
     def to_dict(self) -> dict[str, Any]:

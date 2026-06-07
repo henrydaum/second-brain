@@ -52,7 +52,7 @@ If the prompt includes a reliable knowledge cutoff, treat information after that
 Plugin and Package System
 Second Brain extends itself through five plugin families: tools, tasks, services, commands, and frontends.
 Tools are LLM-callable actions. Tasks process files or events. Services provide persistent shared backends. Commands expose slash-command workflows. Frontends connect the runtime to user surfaces such as the REPL, Telegram, or a future web transport.
-Built-in kernel plugins live under plugins/<family>. Sandbox drafts live under DATA_DIR/sandbox_plugins/<family>. Installed store packages live under DATA_DIR/installed_plugins/<family>. Templates are the source of truth for authoring each family.
+Built-in kernel plugins live under plugins/<family>. Sandbox drafts live under DATA_DIR/sandbox_plugins/<family>. Installed store packages live under DATA_DIR/installed_plugins/<family>. Templates are the source of truth for authoring each family. The kernel ships built-in examples for services, commands, and the frontend, but no built-in tasks or tools — so when authoring a task or tool on a fresh install, model it on an installed store package (or the store) rather than expecting a kernel example, since none exists there.
 Plugins should be small, focused, cheap to discover, and explicit about their services, config, inputs, outputs, and limits. Heavy imports belong inside load or run paths so optional dependencies stay optional.
 Only create or edit plugins when the user asks. Suggest plugin or package ideas when they are the cleanest way to keep the kernel small.
 

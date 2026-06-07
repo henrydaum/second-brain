@@ -257,6 +257,10 @@ def execute_install_plan(plan: InstallPlan, context=None, progress: Progress | N
         if plan.parser_reload_needed:
             _progress(progress, "Reloading parser service")
             _reload_parser_service_if_needed([file.path for pkg in plan.packages for file in pkg.files], context, lines)
+        if context is not None:
+            frontends = _unique(name for pkg in plan.packages for name in _frontend_names(pkg.entrypoints))
+            if frontends:
+                _set_enabled_frontends(context, add=frontends, remove=[], lines=lines)
         for pkg in plan.packages:
             if pkg.pip_packages:
                 lines.append(f"Installed Python package(s): {', '.join(pkg.pip_packages)}")
@@ -338,6 +342,10 @@ def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices: d
         if plan.parser_reload_needed:
             _progress(progress, "Reloading parser service")
             _reload_parser_service_if_needed(removed_rels, context, lines)
+        if context is not None:
+            frontends = _unique(name for pkg in plan.packages for name in _frontend_names(pkg.entrypoints))
+            if frontends:
+                _set_enabled_frontends(context, add=[], remove=frontends, lines=lines)
         selected_pip = _unique(name for pkg in plan.packages for name in plan.pip_removals.get(pkg.id, []) if choices.get("pip", {}).get(pkg.id))
         _uninstall_python_packages(selected_pip, progress, lines)
         if plan.kept_pip_packages:
@@ -396,6 +404,49 @@ class _CachedStore:
 
 def _entrypoint_metadata(entrypoints: list[str]) -> list[dict]:
     return [{"path": rel, "type": _entrypoint_type(rel), "name": ""} for rel in entrypoints]
+
+
+def _frontend_names(entrypoints: list[dict]) -> list[str]:
+    """Frontend transport names contributed by these entrypoints.
+
+    A frontend ships as ``frontends/frontend_<name>.py`` and registers under
+    ``<name>``, so the transport name is the filename stem minus the ``frontend_``
+    prefix — the same convention discovery keys on.
+    """
+    prefix = PLUGIN_FAMILIES["frontend"][1]
+    names = []
+    for ep in entrypoints:
+        if ep.get("type") != "frontend":
+            continue
+        stem = PurePosixPath(ep["path"]).stem
+        names.append(stem[len(prefix):] if stem.startswith(prefix) else stem)
+    return names
+
+
+def _set_enabled_frontends(context, add: list[str], remove: list[str], lines: list[str]) -> None:
+    """Add/remove frontend names in ``enabled_frontends`` and persist.
+
+    Installing a frontend should activate it without the user hunting through
+    ``/frontends`` — but frontends only start at boot, so we update config and
+    tell the user to restart. The ``config_manager.save`` emits ``CONFIG_CHANGED``,
+    which refreshes the running config in place (see ConversationRuntime).
+    """
+    config = getattr(context, "config", None)
+    if config is None:
+        return
+    enabled = list(config.get("enabled_frontends", []) or [])
+    added = [n for n in add if n not in enabled]
+    kept = [n for n in enabled if n not in remove]
+    if not added and kept == enabled:
+        return
+    config["enabled_frontends"] = kept + added
+    from config import config_manager
+    config_manager.save(config)
+    if added:
+        lines.append(f"Enabled frontend(s): {', '.join(added)} — restart to activate.")
+    dropped = [n for n in enabled if n in remove]
+    if dropped:
+        lines.append(f"Disabled frontend(s): {', '.join(dropped)}.")
 
 
 def _entrypoint_type(rel: str) -> str:
