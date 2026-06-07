@@ -609,14 +609,11 @@
       ]
     },
     {
-      "description": "Run read-only SQLite queries against Second Brain data.",
+      "description": "Run read-only SQL (SELECT/PRAGMA/EXPLAIN) immediately; mutating SQL (INSERT/UPDATE/DELETE/DDL) runs only after user approval.",
       "family": "tools",
       "id": "tool-sql-query",
       "name": "SQL Query Tool",
-      "tags": [
-        "database",
-        "tool"
-      ]
+      "tags": []
     },
     {
       "description": "Run focused diagnostics against a plugin file.",
