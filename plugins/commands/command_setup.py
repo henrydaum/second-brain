@@ -28,9 +28,9 @@ DEFAULT_ENV_VAR = "ATLAS_API_KEY"
 DEFAULT_CONTEXT_SIZE = 0
 DEFAULT_BACKEND = "LiteLLMService"
 
-STARTER_BUNDLE = "starter"
-FULL_BUNDLE = "full"
-TELEGRAM_PACKAGE = "frontend-telegram"
+STARTER_BUNDLE = "bundle_starter"
+FULL_BUNDLE = "bundle_full"
+TELEGRAM_PACKAGE = "frontend_telegram"
 
 WELCOME_PROMPT = (
     "Welcome to Second Brain.\n\n"

@@ -31,9 +31,6 @@ _CATEGORY_BLURB = {
     "helpers": "shared modules",
 }
 
-# plugin_type (an entrypoint's "type") -> family folder, e.g. "service" -> "services".
-_TYPE_TO_FAMILY = {plugin_type: family for plugin_type, (family, _prefix) in PLUGIN_FAMILIES.items()}
-
 
 class PackagesCommand(BaseCommand):
     """Install and uninstall package-store plugins."""
@@ -52,6 +49,10 @@ class PackagesCommand(BaseCommand):
             steps.append(FormStep("package_id", "Choose the package to uninstall.", True, enum=[p["id"] for p in package_manager.removable_packages()], columns=2))
             if args.get("package_id"):
                 plan = package_manager.build_uninstall_plan(args["package_id"])
+                if plan.needs_confirm:
+                    steps.append(FormStep("confirm", _confirm_prompt(plan), True, "boolean", default=False))
+                    if not _truthy(args.get("confirm")):
+                        return steps  # settle the confirm before asking about cleanup
                 if any(pkg.cleanup["settings"] for pkg in plan.packages):
                     steps.append(FormStep("cleanup_config", "Remove package-owned config settings?", True, enum=CLEANUP_MODES, enum_labels=CLEANUP_MODE_LABELS, default="all"))
                 if any(pkg.cleanup["tables"] for pkg in plan.packages):
@@ -83,6 +84,8 @@ class PackagesCommand(BaseCommand):
                 return package_manager.install_package(context.root_dir, args.get("package_id", ""), context, progress=_progress).text()
             if action == "uninstall":
                 plan = package_manager.build_uninstall_plan(args.get("package_id", ""))
+                if plan.needs_confirm and not _truthy(args.get("confirm")):
+                    return "Uninstall cancelled."
                 return package_manager.execute_uninstall_plan(plan, context, _cleanup_choices(plan, args), progress=_progress).text()
             return f"Unknown action: {action}"
         except (package_manager.PackageError, StoreBackendError) as e:
@@ -104,16 +107,18 @@ def _item_family(item: dict) -> str:
 
 
 def _receipt_family(receipt: dict) -> str:
-    """Derive an installed package's category from its receipt.
+    """An installed package's browse category, read from its id prefix.
 
-    Mirrors the publisher's ``family_for``: an entrypoint pins the family, an
-    entrypoint-less package with files is a helper bundle, and a fileless
-    package is a meta-bundle.
+    ``bundle_*`` ⇒ bundles, a plugin family prefix (``tool_``/``task_``/…) ⇒
+    that family, anything else ⇒ a shared-helper package.
     """
-    types = sorted({ep.get("type") for ep in (receipt.get("entrypoints") or []) if ep.get("type")})
-    if types:
-        return _TYPE_TO_FAMILY.get(types[0], "helpers")
-    return "helpers" if receipt.get("files") else "bundles"
+    pid = receipt.get("id", "")
+    if pid.startswith("bundle_"):
+        return "bundles"
+    for plugin_type, (family, prefix) in PLUGIN_FAMILIES.items():
+        if pid.startswith(prefix):
+            return family
+    return "helpers"
 
 
 def _category_counts(context, action: str) -> Counter:
@@ -172,10 +177,9 @@ def _format_installed(context, category: str | None) -> str:
         return f"No {label} packages installed."
     lines = [f"Installed {label} packages:"]
     for item in receipts:
-        mode = "" if item.get("requested") else " [dependency]"
         deps = item.get("requires") or []
         suffix = f" (requires: {', '.join(deps)})" if deps else ""
-        lines.append(f"  *{item.get('id')}*{mode}{suffix}")
+        lines.append(f"  *{item.get('id')}*{suffix}")
     lines.append("")
     lines.append("Uninstall with /packages uninstall <id>.")
     return "\n".join(lines)
@@ -187,6 +191,14 @@ def _available_line(item: dict) -> str:
 
 
 # ── Uninstall cleanup form plumbing ──────────────────────────────────
+
+def _confirm_prompt(plan) -> str:
+    """Warn before a removal that would break something still installed."""
+    dependents = ", ".join(plan.broken_dependents)
+    if plan.raw_files:
+        return f"{', '.join(plan.raw_files)} is still listed by package(s): {dependents}. Delete the file anyway?"
+    return f"{plan.target} is still required by: {dependents}. Uninstall anyway — those plugins may break?"
+
 
 def _cleanup_arg(kind: str, package_id: str) -> str:
     return "cleanup_" + kind + "__" + re.sub(r"[^a-zA-Z0-9_]", "_", package_id)

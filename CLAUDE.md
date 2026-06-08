@@ -97,25 +97,52 @@ the difference between a microkernel and a pile of assumptions:
 
 ## Package store V1
 
+- **Package id == plugin name.** A package's **kind is read from its id prefix**
+  (`plugins/commands/helpers/package_manager.py::_package_kind`): `bundle_*` is a
+  soft collection (manifest only, no files); a plugin-family prefix
+  (`tool_`/`task_`/`service_`/`command_`/`frontend_`) is a plugin whose id equals
+  its entrypoint file's stem (`service_litellm` ships `services/service_litellm.py`);
+  anything unprefixed is a shared **helper package** (e.g. `parse_pdf`,
+  `search_result`). Ids are underscores only — no hyphens. The store keeps the
+  family subfolder layout (`services/service_litellm/`, `bundles/bundle_starter/`,
+  `helpers/parse_pdf/`); the `name` field carries the human display name.
 - **Local package store**: `/packages` reads explicit package manifests from the
   `origin/store` git ref with `git show`, copies package files into
-  `DATA_DIR/installed_plugins`, loads recorded entrypoints, and writes receipts
-  under `DATA_DIR/packages`. Uninstall mirrors install, refuses live dependents,
-  and prunes only unneeded auto-installed dependencies.
+  `DATA_DIR/installed_plugins`, and writes the **installed manifest** for each
+  package under `DATA_DIR/packages/receipts` (the manifest verbatim plus the two
+  install-time-resolved fields, `entrypoints` and `pip`). There are no integrity
+  receipts — uninstall is fully offline, reading those manifests.
+- **Uninstall is greedy with soft bundles.** `/packages uninstall <name>` resolves
+  `<name>` to an installed package id or, failing that, an installed file (the
+  escape hatch for deleting a private helper by filename). Uninstalling a bundle
+  removes every member that loses its last referrer; a member kept alive by a
+  package *outside* the removal set (another installed bundle, or an unrelated
+  plugin) survives. There is **no explicit-install flag** — membership alone never
+  preserves anything. Bundle membership is *soft*: it never blocks removing a
+  member, and a bundle whose member was individually removed simply lists a
+  now-missing member (tolerated). A removal that would break a *remaining
+  non-bundle* package (a hard dependency) or delete a file another manifest still
+  lists is allowed but **gated by a confirm** in the command.
 - **Publishing**: use `python scripts/package_publisher.py publish <id> --name ...`
   with repeatable `--file SOURCE=DEST`, `--require`, and `--update`.
   The script uses a temporary worktree for `origin/store`, validates the whole
-  store, commits, and pushes without switching or dirtying the current branch.
+  store (incl. the id-prefix contract above), commits, and pushes without
+  switching or dirtying the current branch. `scripts/migrate_store_ids.py` did the
+  one-time hyphen→underscore / `bundle_` rename of the existing catalog.
 - **pip dependencies**: install auto-detects third-party imports in a package's
   `.py` files and `pip install`s the missing ones (mapping import roots to PyPI
   names via `PIP_NAMES`, e.g. `fitz`→PyMuPDF). A manifest may instead declare an
   authoritative `pip` list (publisher `--pip`/`--no-pip`), which overrides the
   scan — the escape hatch for optional/alternative/platform deps the scan can't
-  read (e.g. `service-ocr`'s per-OS engines). Uninstall does not pip-uninstall.
-- **Bundles (meta-packages)**: a package may ship **no files** and only a
-  `requires` list — installing it pulls its members, uninstalling prunes the
-  auto-installed ones. Used for the curated bundles (`all-parsers`, `plan-mode`,
-  `scheduling`, `web-search`, `gmail`, `mcp`, `google-drive`, `indexing-search`).
+  read (e.g. `service_ocr`'s per-OS engines). Uninstall pip-uninstalls only the
+  package's own pip deps that are neither a kernel requirement nor still needed by
+  a remaining package (opt-in via the `/packages` cleanup form).
+- **Bundles (meta-packages)**: a `bundle_*` package ships **no files** and only a
+  `requires` list — installing it pulls its members, uninstalling greedily prunes
+  the now-orphaned ones. Used for the curated bundles (`bundle_all_parsers`,
+  `bundle_plan_mode`, `bundle_scheduling`, `bundle_web_search`, `bundle_gmail`,
+  `bundle_mcp`, `bundle_google_drive`, `bundle_indexing_search`, `bundle_starter`,
+  `bundle_full`).
 - **Deferred**: remote/GitHub fetch, versioning, package config cleanup,
   scheduled-job installs, and containerization.
 

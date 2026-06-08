@@ -10,7 +10,6 @@ import re
 import subprocess
 import sys
 import threading
-import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Callable
@@ -20,8 +19,14 @@ from plugins.commands.helpers.store_backend import GitStoreBackend
 from plugins.helpers.plugin_paths import PLUGIN_FAMILIES, plugin_dirs
 
 
-PACKAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+PACKAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_]*$")
 ALLOWED_ROOTS = {family for family, _prefix in PLUGIN_FAMILIES.values()} | {"helpers"}
+# A package's kind is read from its id: ``bundle_*`` is a soft collection
+# (manifest only), a plugin family prefix (``tool_``/``task_``/``service_``/
+# ``command_``/``frontend_``) is a plugin whose id equals its entrypoint stem,
+# and anything else is a shared helper package. See ``_package_kind``.
+BUNDLE_PREFIX = "bundle_"
+PLUGIN_PREFIXES = tuple(prefix for _family, prefix in PLUGIN_FAMILIES.values())
 RECEIPTS_DIR = PACKAGES_DIR / "receipts"
 INTERNAL_IMPORTS = {"agent", "attachments", "config", "events", "helpers", "installed_plugins", "paths", "pipeline", "plugins", "runtime", "sandbox_plugins", "state_machine", "templates", *ALLOWED_ROOTS}
 PIP_NAMES = {"PIL": "Pillow", "bs4": "beautifulsoup4", "cv2": "opencv-python", "docx": "python-docx", "fitz": "PyMuPDF", "google": "google-api-python-client", "googleapiclient": "google-api-python-client", "pptx": "python-pptx", "sklearn": "scikit-learn", "telegram": "python-telegram-bot", "yaml": "PyYAML"}
@@ -77,7 +82,6 @@ class InstallPlan:
 class UninstallPackagePlan:
     id: str
     receipt: dict
-    explicit: bool
     files: list[str]
     entrypoints: list[dict]
     cleanup: dict[str, list[str]]
@@ -86,13 +90,15 @@ class UninstallPackagePlan:
 
 @dataclass
 class UninstallPlan:
-    package_id: str
-    requested_packages: list[str]
-    auto_packages: list[str]
+    target: str
     packages: list[UninstallPackagePlan]
+    raw_files: list[str]
+    pruned: list[str]
     pip_removals: dict[str, list[str]]
     kept_pip_packages: dict[str, str]
     parser_reload_needed: bool
+    needs_confirm: bool
+    broken_dependents: list[str]
     progress_steps: list[str]
 
 
@@ -118,15 +124,14 @@ def installed_packages() -> list[dict]:
 
 
 def removable_packages() -> list[dict]:
-    """Installed packages that can be uninstalled on their own.
+    """Every installed package — all are individually removable.
 
-    Excludes any package required by another *installed* package — those are only
-    removable by uninstalling their dependent (which prunes them). Used to build
-    the ``/packages uninstall`` picker so it never offers a package whose plan
-    would just be refused with "required by …"."""
-    receipts = installed_packages()
-    required = {dep for receipt in receipts for dep in (receipt.get("requires") or [])}
-    return [receipt for receipt in receipts if receipt["id"] not in required]
+    Bundle membership is now *soft*, so a package required by an installed bundle
+    is still removable on its own (the bundle's manifest is simply left listing a
+    member that is gone, tolerated on the bundle's own uninstall). A package
+    hard-required by another *plugin* is still offered here; its plan flags
+    ``needs_confirm`` so the command can warn before breaking the dependent."""
+    return installed_packages()
 
 
 def package_info(root_dir: str | Path, package_id: str) -> dict:
@@ -155,7 +160,7 @@ def build_install_plan(root_dir: str | Path, package_id: str, *, requested: bool
     packages: list[PlannedPackage] = []
     existing: list[str] = []
     active: list[str] = []
-    planned_paths: dict[str, str] = {}
+    planned_paths: dict[str, bytes] = {}  # path -> content, for cross-package shared-file checks
 
     def collect(pid: str, is_requested: bool):
         _validate_package_id(pid)
@@ -180,9 +185,15 @@ def build_install_plan(root_dir: str | Path, package_id: str, *, requested: bool
             planned_files = [PlannedFile(pid, rel, store.get_file_bytes(pid, rel), "") for rel in files]
             planned_files = [PlannedFile(f.package_id, f.path, f.content, _sha256(f.content)) for f in planned_files]
             for file in planned_files:
-                owner = planned_paths.setdefault(file.path, pid)
-                if owner != pid:
-                    raise PackageError(f"File appears in multiple package manifests: {file.path}")
+                # Two packages may ship the *same* file (a shared plugin-level
+                # helper, e.g. tools/helpers/email_context.py co-owned by every
+                # email tool) as long as the bytes are identical — it installs
+                # once and is reference-counted on uninstall. Differing bytes for
+                # one path is a genuine conflict.
+                prior = planned_paths.get(file.path)
+                if prior is not None and prior != file.content:
+                    raise PackageError(f"Conflicting content for shared file across packages: {file.path}")
+                planned_paths[file.path] = file.content
             pip_packages = _packages_to_install({f.path: f.content for f in planned_files}, manifest.get("pip"))
             packages.append(PlannedPackage(pid, manifest, bool(is_requested), planned_files, entrypoints, pip_packages, _sha256(store.get_manifest_bytes(pid))))
         finally:
@@ -220,24 +231,30 @@ def execute_install_plan(plan: InstallPlan, context=None, progress: Progress | N
                 for file in pkg.files:
                     target = _target(file.path)
                     target.parent.mkdir(parents=True, exist_ok=True)
+                    if target.exists():
+                        # A co-owned shared helper already on disk (preflight
+                        # guaranteed identical bytes). Leave it; don't track it
+                        # for rollback — another package owns it too.
+                        continue
                     target.write_bytes(file.content)
                     written.append(target)
             if plan.packages:
                 _progress(progress, "Writing receipts")
             for pkg in plan.packages:
-                receipt = {
+                # The install record is the manifest itself plus the two fields
+                # only resolvable at install time: the concrete entrypoint
+                # metadata and the actual pip list (the store manifest's ``pip``
+                # is often null/auto-scanned). Uninstall reads these offline.
+                record = {
                     "id": pkg.id,
                     "name": pkg.manifest.get("name", pkg.id),
                     "description": pkg.manifest.get("description", ""),
-                    "installed_at": time.time(),
-                    "requested": pkg.requested,
                     "requires": pkg.manifest["requires"],
-                    "manifest_hash": pkg.manifest_hash,
-                    "files": [{"path": f.path, "sha256": f.sha256} for f in pkg.files],
+                    "files": [f.path for f in pkg.files],
                     "entrypoints": pkg.entrypoints,
-                    "pip_packages": pkg.pip_packages,
+                    "pip": pkg.pip_packages,
                 }
-                _write_receipt(receipt)
+                _write_receipt(record)
                 receipts.append(_receipt_path(pkg.id))
         except Exception:
             for path in reversed(written):
@@ -265,59 +282,116 @@ def execute_install_plan(plan: InstallPlan, context=None, progress: Progress | N
     return PackageActionResult(True, lines)
 
 
-def build_uninstall_plan(package_id: str) -> UninstallPlan:
-    """Resolve package/file/config/table/pip cleanup before deleting anything."""
-    _validate_package_id(package_id)
-    order: list[tuple[str, bool, dict]] = []
-    removed: set[str] = set()
+def build_uninstall_plan(name: str) -> UninstallPlan:
+    """Resolve an uninstall target into a concrete removal plan.
 
-    def collect(pid: str, explicit: bool):
-        if pid in removed:
-            # Already collected via another branch of the dependency diamond
-            # (e.g. a shared dependency reached through two requirers). The
-            # ``removed`` set only filters dependents below; without this guard
-            # the same package is appended to ``order`` once per path to it.
-            return
-        _validate_package_id(pid)
-        path = _receipt_path(pid)
-        if not path.exists():
-            raise PackageError(f"Package is not installed: {pid}")
-        dependents = [dep for dep in _dependents(pid) if dep not in removed]
-        if dependents:
-            raise PackageError(f"Cannot uninstall {pid}; required by: {', '.join(dependents)}")
-        receipt = _load_receipt(path)
-        order.append((pid, explicit, receipt))
-        removed.add(pid)
-        for dep in receipt.get("requires", []):
-            dep_path = _receipt_path(dep)
-            if not dep_path.exists() or [item for item in _dependents(dep) if item not in removed]:
-                continue
-            dep_receipt = _load_receipt(dep_path)
-            if not dep_receipt.get("requested"):
-                collect(dep, False)
+    ``name`` is matched, in order, against: an installed package id (a bundle, a
+    plugin, or a helper package), then an installed file (a private helper named
+    directly). A bundle is removed *greedily* — every member that loses its last
+    referrer goes with it, but a member kept alive by a package outside the
+    removal set survives (``_greedy_removal_set``). A direct package uninstall
+    removes that package unconditionally plus any deps it orphans; if a remaining
+    non-bundle package still hard-requires it, the plan flags ``needs_confirm``.
+    A raw-file target deletes just that file (``needs_confirm`` if a manifest
+    still lists it)."""
+    installed = {receipt["id"]: receipt for receipt in installed_packages()}
+    if name in installed:
+        return _plan_package_removal(name, installed)
+    rel = _find_installed_file(name)
+    if rel is not None:
+        return _plan_raw_file_removal(rel, installed)
+    raise PackageError(f"Package is not installed: {name}")
 
-    collect(package_id, True)
-    removed_paths = {_target(file["path"]).resolve() for _pid, _explicit, receipt in order for file in receipt.get("files", [])}
+
+def _plan_package_removal(target: str, installed: dict[str, dict]) -> UninstallPlan:
+    removal_ids = _greedy_removal_set(target, installed)
+    order = [pid for pid in installed if pid in removal_ids]
+    broken = sorted(
+        pid for pid, receipt in installed.items()
+        if pid not in removal_ids and _package_kind(pid) != "bundle"
+        and (set(receipt.get("requires") or []) & removal_ids)
+    )
+    removed_paths = {_target(rel).resolve() for pid in removal_ids for rel in installed[pid].get("files", [])}
     packages = [
         UninstallPackagePlan(
             pid,
-            receipt,
-            explicit,
-            [file["path"] for file in receipt.get("files", [])],
-            list(receipt.get("entrypoints", [])),
-            _cleanup_plan(receipt, removed_paths),
-            sorted(set(receipt.get("pip_packages", [])), key=str.lower),
+            installed[pid],
+            list(installed[pid].get("files", [])),
+            list(installed[pid].get("entrypoints", [])),
+            _cleanup_plan(installed[pid], removed_paths),
+            sorted(set(installed[pid].get("pip", [])), key=str.lower),
         )
-        for pid, explicit, receipt in order
+        for pid in order
     ]
     pip_removals, kept_pip = _safe_pip_removals(packages)
     parser_reload_needed = any(_is_parser_helper(rel) for pkg in packages for rel in pkg.files)
+    pruned = sorted(pid for pid in removal_ids if pid != target)
     steps = ["Resolving package plan", "Deleting package files", "Writing receipts"]
     if parser_reload_needed:
         steps.append("Reloading parser service")
     if any(pip_removals.values()):
         steps.append("Uninstalling Python package(s): " + ", ".join(_unique(pkg for pkgs in pip_removals.values() for pkg in pkgs)))
-    return UninstallPlan(package_id, [package_id], [pkg.id for pkg in packages if not pkg.explicit], packages, pip_removals, kept_pip, parser_reload_needed, steps)
+    return UninstallPlan(target, packages, [], pruned, pip_removals, kept_pip, parser_reload_needed, bool(broken), broken, steps)
+
+
+def _plan_raw_file_removal(rel: str, installed: dict[str, dict]) -> UninstallPlan:
+    """Delete a single installed file directly — the escape hatch for a private
+    helper named by file. Any manifest still listing it is reported (and gates a
+    confirm) but its receipt is left intact: a later package uninstall tolerates
+    the already-missing file."""
+    owners = sorted(pid for pid, receipt in installed.items() if rel in (receipt.get("files") or []))
+    parser_reload_needed = _is_parser_helper(rel)
+    steps = ["Resolving package plan", "Deleting file"]
+    if parser_reload_needed:
+        steps.append("Reloading parser service")
+    return UninstallPlan(rel, [], [rel], [], {}, {}, parser_reload_needed, bool(owners), owners, steps)
+
+
+def _greedy_removal_set(root: str, installed: dict[str, dict]) -> set[str]:
+    """``root`` plus every dependency it transitively orphans.
+
+    A package reachable from ``root`` through ``requires`` is removed once all of
+    its referrers are themselves in the removal set; a member kept alive by a
+    package outside the set (another installed bundle, or an unrelated plugin)
+    survives. There is no explicit-install flag — membership alone never
+    preserves anything (the greedy rule the user chose)."""
+    removal = {root}
+    closure = _requires_closure(root, installed)
+    changed = True
+    while changed:
+        changed = False
+        for pid in closure:
+            if pid not in removal and all(ref in removal for ref in _referrers(pid, installed)):
+                removal.add(pid)
+                changed = True
+    return removal
+
+
+def _requires_closure(root: str, installed: dict[str, dict]) -> set[str]:
+    """Installed packages transitively reachable from ``root`` via ``requires``."""
+    closure: set[str] = set()
+    stack = [root]
+    while stack:
+        for dep in installed.get(stack.pop(), {}).get("requires", []) or []:
+            if dep in installed and dep not in closure:
+                closure.add(dep)
+                stack.append(dep)
+    return closure
+
+
+def _referrers(pid: str, installed: dict[str, dict]) -> list[str]:
+    return [other for other, receipt in installed.items() if pid in (receipt.get("requires") or [])]
+
+
+def _find_installed_file(name: str) -> str | None:
+    """The rel path of an installed file whose name or stem equals ``name``."""
+    root = INSTALLED_PLUGINS
+    if not root.exists():
+        return None
+    for path in sorted(root.rglob("*.py")):
+        if path.is_file() and name in (path.name, path.stem):
+            return path.resolve().relative_to(root.resolve()).as_posix()
+    return None
 
 
 def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices: dict[str, dict[str, bool]] | None = None, progress: Progress | None = None) -> PackageActionResult:
@@ -332,13 +406,23 @@ def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices: d
             if pkg.cleanup["kept_tables"]:
                 lines.append(f"Kept table(s) still used by remaining tasks; their data may now be stale: {', '.join(pkg.cleanup['kept_tables'])}")
         _progress(progress, "Deleting package files")
-        removed_rels = [rel for pkg in plan.packages for rel in pkg.files]
+        removed_rels = [rel for pkg in plan.packages for rel in pkg.files] + list(plan.raw_files)
+        # A shared plugin-level helper may be co-owned by a package that survives
+        # this removal — keep such files on disk (reference-counted).
+        removed_ids = {pkg.id for pkg in plan.packages}
+        kept_by_others = {rel for receipt in installed_packages() if receipt.get("id") not in removed_ids for rel in receipt.get("files", [])}
         for pkg in plan.packages:
             _apply_selected_cleanup(context, pkg.cleanup, choices, pkg.id, lines)
             for rel in sorted(pkg.files, reverse=True):
-                _target(rel).unlink(missing_ok=True)
+                if rel not in kept_by_others:
+                    _target(rel).unlink(missing_ok=True)
             _receipt_path(pkg.id).unlink(missing_ok=True)
             lines.append(f"Uninstalled {pkg.id}.")
+        for rel in plan.raw_files:
+            _target(rel).unlink(missing_ok=True)
+            lines.append(f"Deleted file {rel}.")
+            if plan.broken_dependents:
+                lines.append(f"Warning: {rel} was still listed by package(s): {', '.join(plan.broken_dependents)}.")
         _remove_empty_dirs()
         if plan.parser_reload_needed:
             _progress(progress, "Reloading parser service")
@@ -355,9 +439,8 @@ def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices: d
         if plan.kept_pip_packages:
             kept = ", ".join(f"{name} ({reason})" for name, reason in sorted(plan.kept_pip_packages.items(), key=lambda item: item[0].lower()))
             lines.append(f"Kept Python package(s): {kept}")
-        pruned = [pkg.id for pkg in plan.packages if not pkg.explicit]
-        if pruned:
-            lines.append(f"Pruned auto-installed dependencies: {', '.join(pruned)}")
+        if plan.pruned:
+            lines.append(f"Also removed (no longer needed): {', '.join(plan.pruned)}")
     return PackageActionResult(True, lines)
 
 
@@ -596,7 +679,7 @@ def _import_roots(content: bytes) -> set[str]:
 def _safe_pip_removals(packages: list[UninstallPackagePlan]) -> tuple[dict[str, list[str]], dict[str, str]]:
     removed_ids = {pkg.id for pkg in packages}
     kernel = _kernel_requirements()
-    remaining = {_normalize_pip(name) for receipt in installed_packages() if receipt.get("id") not in removed_ids for name in receipt.get("pip_packages", [])}
+    remaining = {_normalize_pip(name) for receipt in installed_packages() if receipt.get("id") not in removed_ids for name in receipt.get("pip", [])}
     removals: dict[str, list[str]] = {}
     kept: dict[str, str] = {}
     for pkg in packages:
@@ -634,7 +717,7 @@ def _normalize_pip(name: str | None) -> str:
 
 
 def _cleanup_plan(receipt: dict, removed_paths: set[Path] | None = None) -> dict[str, list[str]]:
-    owned_paths = {_target(item["path"]).resolve() for item in receipt.get("files", [])}
+    owned_paths = {_target(rel).resolve() for rel in receipt.get("files", [])}
     owned = _declared_state(owned_paths)
     used_elsewhere = _declared_state(_other_plugin_files(removed_paths or owned_paths))
     settings = sorted(owned["settings"] - used_elsewhere["settings"])
@@ -743,7 +826,39 @@ def _validate_manifest(manifest: dict) -> dict:
         normalized["entrypoints"] = [_validate_rel_path(path) for path in entrypoints]
     if pip is not None:
         normalized["pip"] = pip
+    _validate_kind(normalized)
     return normalized
+
+
+def _package_kind(package_id: str) -> str:
+    """Classify a package id by its prefix: ``bundle`` | ``plugin`` | ``helper``."""
+    if package_id.startswith(BUNDLE_PREFIX):
+        return "bundle"
+    if package_id.startswith(PLUGIN_PREFIXES):
+        return "plugin"
+    return "helper"
+
+
+def _validate_kind(manifest: dict) -> None:
+    """Enforce the id-prefix contract: a ``bundle_`` package ships no files (it is
+    a soft collection); any other fileless meta-package is rejected (it must be
+    named ``bundle_*``); a plugin-prefixed package ships an entrypoint named
+    exactly after its id (``service_x`` ⇒ ``services/service_x.py``). Helper
+    packages (no prefix, with files) are otherwise unconstrained."""
+    package_id = manifest["id"]
+    kind = _package_kind(package_id)
+    files = manifest["files"]
+    if kind == "bundle":
+        if files:
+            raise PackageError(f"Bundle {package_id} must not ship files; it only lists requires.")
+        return
+    if not files:
+        raise PackageError(f"Fileless meta-package {package_id} must be named with the 'bundle_' prefix.")
+    if kind == "plugin":
+        family, _prefix = next((fam, pre) for fam, pre in PLUGIN_FAMILIES.values() if package_id.startswith(pre))
+        expected = f"{family}/{package_id}.py"
+        if expected not in files:
+            raise PackageError(f"Plugin package {package_id} must ship its entrypoint file {expected}.")
 
 
 def _validated_files(manifest: dict) -> list[str]:
@@ -783,12 +898,11 @@ def _validate_rel_path(path: str) -> str:
 def _preflight_collisions(file_bytes: dict[str, bytes]):
     for rel, content in file_bytes.items():
         target = _target(rel)
-        if target.exists():
-            raise PackageError(f"Refusing to overwrite existing file: {target}")
-
-
-def _dependents(package_id: str) -> list[str]:
-    return sorted(receipt["id"] for receipt in installed_packages() if package_id in (receipt.get("requires") or []))
+        # An existing file is fine only if it is byte-identical — a shared
+        # plugin-level helper already on disk from another co-owning package.
+        # Different content for the same path is a real overwrite, refused.
+        if target.exists() and target.read_bytes() != content:
+            raise PackageError(f"Refusing to overwrite existing file with different content: {target}")
 
 
 def _target(rel_path: str) -> Path:

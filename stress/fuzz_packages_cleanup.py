@@ -67,12 +67,12 @@ def _pkg(rel, *, settings=(), reads=(), writes=(), requires=(), pip=()):
 
 
 CATALOG = {
-    "p-alpha": _pkg("tools/tool_alpha.py", settings=["alpha_key"], writes=["alpha_tbl"], pip=["alpha-lib"]),
-    "p-beta":  _pkg("tasks/task_beta.py", settings=["beta_key", "shared_key"], writes=["shared_tbl"], pip=["beta-lib", "shared-lib"]),
-    "p-gamma": _pkg("tasks/task_gamma.py", settings=["shared_key"], reads=["shared_tbl"], pip=["shared-lib"]),
-    "p-delta": _pkg("tools/tool_delta.py", settings=["delta_key"], writes=["delta_tbl"], pip=["watchdog"]),  # watchdog is a real kernel requirement
-    # A bundle whose member shares nothing, to mix pruning into the flow.
-    "p-bundle": {"files": {}, "requires": ["p-alpha"], "pip": [], "settings": set(), "tables": set()},
+    "tool_alpha": _pkg("tools/tool_alpha.py", settings=["alpha_key"], writes=["alpha_tbl"], pip=["alpha-lib"]),
+    "task_beta":  _pkg("tasks/task_beta.py", settings=["beta_key", "shared_key"], writes=["shared_tbl"], pip=["beta-lib", "shared-lib"]),
+    "task_gamma": _pkg("tasks/task_gamma.py", settings=["shared_key"], reads=["shared_tbl"], pip=["shared-lib"]),
+    "tool_delta": _pkg("tools/tool_delta.py", settings=["delta_key"], writes=["delta_tbl"], pip=["watchdog"]),  # watchdog is a real kernel requirement
+    # A bundle whose member shares nothing, to mix greedy pruning into the flow.
+    "bundle_alpha": {"files": {}, "requires": ["tool_alpha"], "pip": [], "settings": set(), "tables": set()},
 }
 PACKAGE_IDS = sorted(CATALOG)
 CLEANUP_MODES = ["all", "none", "specific"]
@@ -192,10 +192,12 @@ class PackageCleanupStateMachine(RuleBasedStateMachine):
     def uninstall_via_form(self, pid, mode_cfg, mode_tbl, mode_pip, seed):
         if pid not in self._installed():
             return
-        # Packages with installed dependents can't be uninstalled standalone;
-        # refusal-ordering is covered by fuzz_packages.py. This fuzzer targets
-        # the cleanup flow, so skip that combination here.
-        if any(pid in CATALOG[d]["requires"] for d in self._installed() if d in CATALOG):
+        # A non-bundle dependent triggers a confirm step (covered in
+        # fuzz_packages.py); this fuzzer targets the cleanup flow, so skip that
+        # combination. Bundle membership is soft and does not gate, so a member
+        # held only by a bundle is still uninstallable here.
+        if any(pid in CATALOG[d]["requires"] for d in self._installed()
+               if d in CATALOG and not d.startswith("bundle_")):
             return
         rng = random.Random(seed)
         pip_before = len(self.pip_uninstalled)

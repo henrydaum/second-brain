@@ -2,26 +2,30 @@
 
 The store is the kernel's next big surface (browse → install → uninstall against
 a cloud catalog), and it's exactly where *ordering* bugs live: install a
-dependency, install something that needs it, refuse to uninstall the dependency,
-prune it once its dependents go away. So it gets the syzkaller treatment too.
+dependency, install something that needs it, greedily prune what a removal
+orphans, keep what a surviving bundle still holds. So it gets the syzkaller
+treatment too.
 
 Approach mirrors ``fuzz_runtime`` but against ``package_manager``:
 
-- A small fake catalog with files + ``requires`` edges (incl. a meta-package /
-  bundle that ships no files) backs a stub store backend — no git, no network.
+- A small fake catalog with files + ``requires`` edges (incl. ``bundle_*``
+  meta-packages that ship no files) backs a stub store backend — no git, no
+  network. Ids follow the kernel convention: a plugin id equals its entrypoint
+  stem, a ``bundle_`` id is a soft collection, an unprefixed id is a helper.
 - The install root, receipts dir, and plugin roots are redirected to a tempdir
   (the same redirection ``tests/test_package_store.py::_patch_install_root``
   uses), restored on teardown.
 - Rules: ``install`` and ``uninstall`` arbitrary catalog packages.
-- **Receipts on disk are the ground truth** — the oracle re-derives state from
+- **Records on disk are the ground truth** — the oracle re-derives state from
   them every step and checks store integrity:
-    * every file a receipt claims exists on disk, and
-    * every file on disk is owned by some receipt (no orphans), and
-    * every ``requires`` edge of an installed receipt points at another
-      installed package (no dangling dependency).
-- Per-op assertions cross-check the documented contract: install pulls the full
-  dependency closure; uninstall refuses while dependents remain and is rejected
-  for not-installed ids.
+    * every file a record claims exists on disk, and
+    * every file on disk is owned by some record (no orphans), and
+    * every ``requires`` edge of a *non-bundle* record points at an installed
+      package (a bundle may dangle: members are individually removable).
+- Per-op assertions cross-check the contract: install pulls the full dependency
+  closure; uninstalling a package greedily removes exactly what it orphans, a
+  hard-dependent removal is confirm-gated (modelled as declined), and an
+  uninstall of a not-installed id is rejected.
 
 Run: ``pytest stress/fuzz_packages.py -q``
 """
@@ -46,24 +50,34 @@ from stress.invariants import Violation
 # ── fake catalog ────────────────────────────────────────────────────────
 # id -> (files, requires). A file path must live under an allowed plugin root.
 CATALOG: dict[str, tuple[list[str], list[str]]] = {
-    "base":    (["helpers/base.txt"], []),
-    "lib":     (["helpers/lib.txt"], []),
-    "tool-a":  (["tools/tool_a.py"], ["base"]),
-    "tool-b":  (["tools/tool_b.py"], ["base"]),
-    "tool-c":  (["tools/tool_c.py"], ["lib"]),
-    "bundle":  ([], ["tool-a", "tool-c"]),          # meta-package, no files
-    "mega":    ([], ["bundle", "tool-b"]),          # bundle-of-bundles
+    "base":         (["helpers/base.txt"], []),
+    "lib":          (["helpers/lib.txt"], []),
+    "tool_a":       (["tools/tool_a.py"], ["base"]),
+    "tool_b":       (["tools/tool_b.py"], ["base"]),
+    "tool_c":       (["tools/tool_c.py"], ["lib"]),
+    "bundle_x":     ([], ["tool_a", "tool_c"]),       # meta-package, no files
+    "bundle_mega":  ([], ["bundle_x", "tool_b"]),     # bundle-of-bundles
 }
 PACKAGE_IDS = sorted(CATALOG)
 
 
-def _transitive_requires(pid: str, seen: set[str] | None = None) -> set[str]:
-    seen = seen if seen is not None else set()
-    for dep in CATALOG[pid][1]:
-        if dep not in seen:
-            seen.add(dep)
-            _transitive_requires(dep, seen)
-    return seen
+def _expected_after_install(pid: str, before: set[str]) -> set[str]:
+    """The installed set after installing ``pid`` into ``before``.
+
+    Mirrors ``build_install_plan``: it installs ``pid`` and recurses into its
+    requires, but *prunes at an already-installed dependency* (taken as
+    satisfied, not re-resolved). So an already-installed bundle that was
+    individually degraded earlier is **not** healed by installing something that
+    depends on it — the greedy/soft-bundle reality."""
+    new: set[str] = set()
+    stack = [pid]
+    while stack:
+        cur = stack.pop()
+        if cur in before or cur in new:
+            continue
+        new.add(cur)
+        stack.extend(CATALOG[cur][1])
+    return before | new
 
 
 class _FakeBackend:
@@ -157,17 +171,34 @@ class PackageStoreStateMachine(RuleBasedStateMachine):
             return
         result = pm.install_package(self.root_dir, pid, _context(self.root_dir))
         assert result.ok, f"install {pid} failed: {result.text}"
-        receipts = self._receipts()
-        # The package and its entire dependency closure must be installed.
-        assert pid in receipts
-        for dep in _transitive_requires(pid):
-            assert dep in receipts, f"install {pid} left dependency {dep} uninstalled"
+        # Exactly the package plus the dependencies that weren't already present
+        # become installed (recursion prunes at already-installed deps).
+        assert set(self._receipts()) == _expected_after_install(pid, set(before))
+
+    def _greedy_removal(self, root: str, installed: dict) -> set[str]:
+        """Mirror ``pm._greedy_removal_set`` over CATALOG within ``installed``."""
+        closure: set[str] = set()
+        stack = [root]
+        while stack:
+            for dep in CATALOG.get(stack.pop(), ([], []))[1]:
+                if dep in installed and dep not in closure:
+                    closure.add(dep)
+                    stack.append(dep)
+        removal = {root}
+        changed = True
+        while changed:
+            changed = False
+            for p in closure:
+                if p not in removal and all(r in removal for r in (o for o in installed if p in CATALOG[o][1])):
+                    removal.add(p)
+                    changed = True
+        return removal
 
     @rule(pid=st.sampled_from(PACKAGE_IDS))
     def uninstall(self, pid):
         before = self._receipts()
-        dependents = sorted(d for d in before if pid in (CATALOG[d][1]))
         if pid not in before:
+            # No package and (in this catalog) no installed file by that name.
             try:
                 pm.uninstall_package(pid, _context(self.root_dir))
                 raised = False
@@ -175,19 +206,19 @@ class PackageStoreStateMachine(RuleBasedStateMachine):
                 raised = True
             assert raised, f"uninstalling not-installed {pid} should raise"
             return
-        if dependents:
-            try:
-                pm.uninstall_package(pid, _context(self.root_dir))
-                raised = False
-            except pm.PackageError:
-                raised = True
-            assert raised, f"uninstall {pid} should be refused; depended on by {dependents}"
-            # Refusal must be a no-op.
-            assert self._receipts().keys() == before.keys()
+        plan = pm.build_uninstall_plan(pid)
+        if plan.needs_confirm:
+            # A remaining non-bundle plugin still hard-requires this. The command
+            # would gate on a confirm; model the user declining -> a no-op. (That
+            # keeps every non-bundle requires edge resolvable; only bundles, whose
+            # membership is soft, are allowed to dangle.)
+            assert plan.broken_dependents
             return
-        result = pm.uninstall_package(pid, _context(self.root_dir))
+        result = pm.execute_uninstall_plan(plan, _context(self.root_dir))
         assert result.ok
-        assert pid not in self._receipts()
+        after = self._receipts()
+        assert set(after) == set(before) - self._greedy_removal(pid, before)
+        assert pid not in after
 
     # ── oracle ───────────────────────────────────────────────────────
 
@@ -210,9 +241,11 @@ class PackageStoreStateMachine(RuleBasedStateMachine):
                 owned[rel] = pid
                 if not (self.installed_root / rel).exists():
                     out.append(Violation("store.missing_file", f"{pid} receipt claims absent file {rel}"))
-            # Every requires edge must resolve to an installed package.
+            # Every *non-bundle* requires edge must resolve to an installed
+            # package. A bundle's requires is a soft member list and may dangle
+            # after a member is individually uninstalled (tolerated partial bundle).
             for dep in receipt.get("requires", []):
-                if dep not in receipts:
+                if dep not in receipts and not pid.startswith("bundle_"):
                     out.append(Violation("store.dangling_requires", f"{pid} requires absent {dep}"))
 
         # No file on disk without an owning receipt.
