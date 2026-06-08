@@ -403,6 +403,49 @@ def test_discovery_precedence_prefers_sandbox_over_installed(tmp_path, monkeypat
     assert registry.tools["same_tool"].description == "sandbox"
 
 
+def test_load_single_tool_accepts_auto_register_false(tmp_path, monkeypatch):
+    """Installing a tool that opts out of auto-registration is a no-op, not a
+    failure: the file is on disk and something (e.g. plan mode) registers it on
+    demand. Mirrors boot discovery, which silently skips such tools."""
+    sandbox = tmp_path / "sandbox_plugins"
+    tools = sandbox / "tools"
+    tools.mkdir(parents=True)
+    (tools / "tool_deferred.py").write_text(
+        "from plugins.BaseTool import BaseTool, ToolResult\n\n"
+        "class Deferred(BaseTool):\n"
+        "    name = 'deferred'\n"
+        "    description = 'test'\n"
+        "    parameters = {}\n"
+        "    auto_register = False\n"
+        "    def run(self, context, **kwargs):\n"
+        "        return ToolResult(data={})\n",
+        encoding="utf-8",
+    )
+    _patch_tool_discovery(monkeypatch, (("sandbox", sandbox, "sandbox_plugins", False),))
+    registry = _ToolRegistry()
+
+    name, error = plugin_discovery._load_single_tool(tools / "tool_deferred.py", registry)
+
+    assert error is None
+    assert name == "deferred"
+    assert registry.tools == {}  # opted out of the global registry
+
+
+def test_load_single_tool_rejects_file_without_tool(tmp_path, monkeypatch):
+    """A file with no BaseTool subclass at all is still a real failure."""
+    sandbox = tmp_path / "sandbox_plugins"
+    tools = sandbox / "tools"
+    tools.mkdir(parents=True)
+    (tools / "tool_empty.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _patch_tool_discovery(monkeypatch, (("sandbox", sandbox, "sandbox_plugins", False),))
+    registry = _ToolRegistry()
+
+    name, error = plugin_discovery._load_single_tool(tools / "tool_empty.py", registry)
+
+    assert name is None
+    assert "No BaseTool subclass found" in error
+
+
 class _FakeHandler:
     """Fake handler."""
     cancelled = False

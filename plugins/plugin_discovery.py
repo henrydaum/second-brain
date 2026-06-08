@@ -442,6 +442,16 @@ def _load_single_tool(file_path: Path, tool_registry) -> tuple[str | None, str |
 
     instances = _find_subclass_instances(module, BaseTool, module_name)
     if not instances:
+        # A tool can opt out of global auto-registration (``auto_register =
+        # False``) because something instantiates it on demand instead — e.g.
+        # plan mode adds ``propose_plan`` through a hook when the user enters
+        # plan mode. Finding only such classes is a deliberate no-op (the file
+        # is installed, just not registered now), the same as boot discovery
+        # silently skipping it — not a failure. Only a file with no BaseTool
+        # subclass at all is an error.
+        deferred = [cls for cls in _find_subclasses(module, BaseTool, module_name) if getattr(cls, "name", "")]
+        if deferred:
+            return deferred[0].name, None
         return None, f"No BaseTool subclass found in {file_path.name}"
 
     instance = next((item for item in instances if getattr(item, "name", "")), None)
