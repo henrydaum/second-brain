@@ -1,9 +1,9 @@
-"""Publish packages to the remote package-store branch."""
+"""Publish files to the tree-based package-store branch."""
 
 from __future__ import annotations
 
 import argparse
-import json
+import ast
 import shutil
 import subprocess
 import sys
@@ -13,33 +13,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from plugins.commands.helpers import package_manager
+from plugins.commands.helpers import package_manager  # noqa: E402
 
 SKIP_DIRS = {".git", "__pycache__"}
 SKIP_SUFFIXES = {".pyc", ".pyo"}
-
-# Top-level folders the store is grouped into (5 plugin families + helpers + bundles).
-STORE_FAMILIES = {"tools", "tasks", "services", "commands", "frontends", "helpers", "bundles"}
-
-
-def family_for(rel_paths: list[str]) -> str:
-    """The family folder a package belongs in, from the files it ships.
-
-    - no files (meta-package / bundle) -> ``bundles``
-    - has an installable entrypoint (``<family>/<prefix>*.py``, e.g.
-      ``frontends/frontend_telegram.py``) -> that entrypoint's family (so a
-      frontend that also ships a helper still lands in ``frontends``)
-    - entrypoint-less (helper-only, e.g. a parser) -> ``helpers``
-    - otherwise the top-level dir of its files.
-    """
-    if not rel_paths:
-        return "bundles"
-    entrypoint_families = sorted({path.split("/", 1)[0] for path in rel_paths if package_manager._is_entrypoint(path)})
-    if entrypoint_families:
-        return entrypoint_families[0]
-    if any("/helpers/" in path for path in rel_paths):
-        return "helpers"
-    return sorted({path.split("/", 1)[0] for path in rel_paths})[0]
 
 
 class StorePublishError(RuntimeError):
@@ -53,19 +30,19 @@ def main(argv: list[str] | None = None) -> int:
             if args.path:
                 validate_store(Path(args.path))
             else:
-                with_store_worktree(args.remote, args.branch, lambda path: validate_store(path))
+                with_store_worktree(args.remote, args.branch, validate_store)
             print("Store valid.")
             return 0
         publish_package(args)
         return 0
-    except StorePublishError as e:
+    except (StorePublishError, package_manager.PackageError) as e:
         print(f"Package publish failed: {e}", file=sys.stderr)
         return 1
 
 
 def publish_package(args) -> None:
     def publish(worktree: Path):
-        manifest = write_package(
+        files = write_package(
             worktree,
             package_id=args.package_id,
             name=args.name,
@@ -86,10 +63,9 @@ def publish_package(args) -> None:
             print("Dry run: not committing or pushing.")
             return
         git(worktree, "add", "-A")
-        message = args.message or f"Publish package {args.package_id}"
-        git(worktree, "commit", "-m", message)
+        git(worktree, "commit", "-m", args.message or f"Publish {args.package_id}")
         git(worktree, "push", args.remote, f"HEAD:refs/heads/{args.branch}")
-        print(f"Published {manifest['id']} to {args.remote}/{args.branch}.")
+        print(f"Published {args.package_id}: {', '.join(files)}")
 
     with_store_worktree(args.remote, args.branch, publish)
 
@@ -98,88 +74,45 @@ def write_package(
     store_root: Path,
     *,
     package_id: str,
-    name: str,
-    description: str,
+    name: str = "",
+    description: str = "",
     file_specs: list[str],
     requires: list[str],
-    entrypoints: list[str] | None,
+    entrypoints: list[str] | None = None,
     update: bool,
     pip: list[str] | None = None,
-) -> dict:
+) -> list[str]:
     package_manager._validate_package_id(package_id)
     files = expand_file_specs(file_specs)
-    if not files and not requires:
-        raise StorePublishError("A package needs at least one --file, or --require for a meta-package bundle.")
-    family = family_for([dest.as_posix() for _source, dest in files])
-    package_dir = store_root / family / package_id
-    existing = _existing_package_dirs(store_root, package_id)
-    if existing and not update:
-        raise StorePublishError(f"Package already exists: {package_id}. Use --update to replace it.")
-    for stale in existing:
-        shutil.rmtree(stale)  # also clears a copy in a different family if the family changed
-    package_files = package_dir / "files"
+    if not files:
+        raise StorePublishError("A tree-store package needs at least one --file.")
+    written: list[str] = []
     for source, dest in files:
-        target = package_files / dest
+        target = store_root / dest
+        if target.exists() and not update and target.read_bytes() != source.read_bytes():
+            raise StorePublishError(f"Store file already exists with different bytes: {dest}")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
-    manifest = {
-        "id": package_id,
-        "name": name,
-        "description": description,
-        "requires": sorted(set(requires)),
-        "files": [dest.as_posix() for _source, dest in files],
-    }
-    if entrypoints is not None:
-        manifest["entrypoints"] = [package_manager._validate_rel_path(path) for path in entrypoints]
-    if pip is not None:
-        manifest["pip"] = sorted(set(pip))
-    package_dir.mkdir(parents=True, exist_ok=True)
-    (package_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    update_index(store_root, package_id, name, description, family)
-    return manifest
+        written.append(dest.as_posix())
+    primary = _primary_file(package_id, written)
+    if requires or pip is not None:
+        _write_deps(store_root / primary, requires, [] if pip is None else pip)
+    return written
 
 
-def _existing_package_dirs(store_root: Path, package_id: str) -> list[Path]:
-    """Every dir currently holding this package, across the flat and family layouts."""
-    out: list[Path] = []
-    flat = store_root / package_id
-    if (flat / "manifest.json").exists():
-        out.append(flat)
-    for family in STORE_FAMILIES:
-        grouped = store_root / family / package_id
-        if (grouped / "manifest.json").exists():
-            out.append(grouped)
-    return out
-
-
-def _scan_package_dirs(packages_dir: Path) -> dict[str, Path]:
-    """Map ``package_id -> dir`` across flat (``<id>``) and grouped
-    (``<family>/<id>``) layouts. A package dir is any dir with a manifest.json."""
-    found: dict[str, Path] = {}
-    for child in packages_dir.iterdir():
-        if not child.is_dir():
-            continue
-        if (child / "manifest.json").exists():  # flat legacy package
-            found[child.name] = child
-            continue
-        for sub in child.iterdir():  # family folder -> its package dirs
-            if sub.is_dir() and (sub / "manifest.json").exists():
-                found[sub.name] = sub
-    return found
-
-
-def update_index(store_root: Path, package_id: str, name: str, description: str, family: str) -> None:
-    index_path = store_root / "index.json"
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    if index_path.exists():
-        data = json.loads(index_path.read_text(encoding="utf-8"))
-        items = data.get("packages", data) if isinstance(data, dict) else data
-    else:
-        items = []
-    items = [item for item in items if item.get("id") != package_id]
-    items.append({"id": package_id, "name": name, "description": description, "family": family})
-    items.sort(key=lambda item: item["id"])
-    index_path.write_text(json.dumps({"packages": items}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+def validate_store(store_root: Path) -> None:
+    files = _tree_files(store_root)
+    stems: dict[str, str] = {}
+    for rel in files:
+        stem = Path(rel).stem
+        if stem in stems:
+            raise StorePublishError(f"Duplicate install stem {stem}: {stems[stem]}, {rel}")
+        stems[stem] = rel
+    for rel in files:
+        meta = package_manager.read_dependency_meta(rel, (store_root / rel).read_text(encoding="utf-8"))
+        for dep in meta.dependencies_files:
+            if dep not in files:
+                raise StorePublishError(f"{rel} depends on missing file: {dep}")
 
 
 def expand_file_specs(specs: list[str]) -> list[tuple[Path, Path]]:
@@ -191,8 +124,7 @@ def expand_file_specs(specs: list[str]) -> list[tuple[Path, Path]]:
             raise StorePublishError(f"Source does not exist: {source}")
         if source.is_dir():
             for child in sorted(p for p in source.rglob("*") if p.is_file() and not _skipped(p)):
-                rel = child.relative_to(source).as_posix()
-                files.append(_file_pair(child, f"{dest.as_posix().rstrip('/')}/{rel}", seen))
+                files.append(_file_pair(child, f"{dest.as_posix().rstrip('/')}/{child.relative_to(source).as_posix()}", seen))
         else:
             target = dest / source.name if dest.as_posix().endswith("/") else dest
             files.append(_file_pair(source, target.as_posix(), seen))
@@ -209,59 +141,11 @@ def parse_file_spec(spec: str) -> tuple[Path, Path]:
     return (ROOT / source).resolve() if not Path(source).is_absolute() else Path(source).resolve(), Path(_validate_package_dest(dest))
 
 
-def validate_store(store_root: Path) -> None:
-    index_path = store_root / "index.json"
-    if not index_path.exists():
-        raise StorePublishError("Missing index.json.")
-    data = json.loads(index_path.read_text(encoding="utf-8"))
-    items = data.get("packages", data) if isinstance(data, dict) else data
-    if not isinstance(items, list):
-        raise StorePublishError("packages/index.json must contain a package list.")
-    ids = [item.get("id") for item in items]
-    if len(ids) != len(set(ids)):
-        raise StorePublishError("Duplicate package id in index.")
-    indexed = set(ids)
-    # Resolve each package's dir across both layouts: a flat ``<id>`` or a
-    # grouped ``<family>/<id>`` at the store root (detected by a manifest.json).
-    actual = _scan_package_dirs(store_root)
-    if indexed != set(actual):
-        raise StorePublishError(f"Index/package dirs differ. Index={sorted(indexed)} dirs={sorted(actual)}")
-    manifests = {}
-    for package_id in sorted(indexed):
-        package_manager._validate_package_id(package_id)
-        package_dir = actual[package_id]
-        manifest_path = package_dir / "manifest.json"
-        if not manifest_path.exists():
-            raise StorePublishError(f"Missing manifest for {package_id}.")
-        manifest = package_manager._validate_manifest(json.loads(manifest_path.read_text(encoding="utf-8")))
-        if manifest["id"] != package_id:
-            raise StorePublishError(f"Manifest id mismatch in {package_id}.")
-        if package_id in manifest["requires"]:
-            raise StorePublishError(f"Package requires itself: {package_id}.")
-        files = package_manager._validated_files(manifest)
-        package_manager._entrypoints(manifest, files)
-        listed = set(files)
-        actual_files = {
-            path.relative_to(package_dir / "files").as_posix()
-            for path in (package_dir / "files").rglob("*")
-            if path.is_file()
-        }
-        if listed != actual_files:
-            raise StorePublishError(f"Manifest files differ for {package_id}. Manifest={sorted(listed)} files={sorted(actual_files)}")
-        manifests[package_id] = manifest
-    for package_id, manifest in manifests.items():
-        missing = [dep for dep in manifest["requires"] if dep not in manifests]
-        if missing:
-            raise StorePublishError(f"{package_id} requires missing package(s): {', '.join(missing)}")
-    _check_cycles(manifests)
-
-
 def with_store_worktree(remote: str, branch: str, callback) -> None:
     git(ROOT, "fetch", remote, f"refs/heads/{branch}:refs/remotes/{remote}/{branch}")
-    ref = f"refs/remotes/{remote}/{branch}"
     with tempfile.TemporaryDirectory(prefix="second-brain-store-") as tmp:
         worktree = Path(tmp) / "store"
-        git(ROOT, "worktree", "add", "--detach", str(worktree), ref)
+        git(ROOT, "worktree", "add", "--detach", str(worktree), f"refs/remotes/{remote}/{branch}")
         try:
             callback(worktree)
         finally:
@@ -275,6 +159,14 @@ def git(cwd: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
+def _tree_files(store_root: Path) -> set[str]:
+    return {
+        path.relative_to(store_root).as_posix()
+        for path in store_root.rglob("*.py")
+        if path.is_file() and package_manager._is_valid_tree_rel(path.relative_to(store_root).as_posix())
+    }
+
+
 def _file_pair(source: Path, dest: str, seen: set[str]) -> tuple[Path, Path]:
     dest = package_manager._validate_rel_path(dest)
     if dest in seen:
@@ -284,9 +176,7 @@ def _file_pair(source: Path, dest: str, seen: set[str]) -> tuple[Path, Path]:
 
 
 def _validate_package_dest(path: str) -> str:
-    """Validate a publisher destination, which may be a directory prefix."""
-    from pathlib import PurePosixPath
-    p = PurePosixPath(path.replace("\\", "/"))
+    p = Path(path.replace("\\", "/"))
     if p.is_absolute() or not p.parts or any(part in {"", ".", ".."} for part in p.parts):
         raise StorePublishError(f"Invalid package destination: {path}")
     if p.suffix == ".py":
@@ -296,46 +186,65 @@ def _validate_package_dest(path: str) -> str:
     return p.as_posix()
 
 
+def _primary_file(package_id: str, files: list[str]) -> str:
+    matches = [rel for rel in files if Path(rel).stem == package_id]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches and len(files) == 1:
+        return files[0]
+    raise StorePublishError(f"Could not choose primary file for {package_id}.")
+
+
+def _write_deps(path: Path, deps_files: list[str], deps_pip: list[str]) -> None:
+    deps_files = sorted(dict.fromkeys(package_manager._validate_rel_path(path) for path in deps_files))
+    deps_pip = sorted(dict.fromkeys(deps_pip))
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    remove = {
+        node.lineno
+        for node in tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and any(getattr(t, "id", None) in package_manager.DEPENDENCY_FIELDS for t in getattr(node, "targets", [getattr(node, "target", None)]))
+    }
+    lines = [line for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1) if i not in remove]
+    insert = 1
+    if tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(tree.body[0].value, ast.Constant) and isinstance(tree.body[0].value.value, str):
+        insert = tree.body[0].end_lineno + 1
+    while insert <= len(lines) and not lines[insert - 1].strip():
+        insert += 1
+    while insert <= len(lines) and lines[insert - 1].startswith("from __future__ import "):
+        insert += 1
+    while insert <= len(lines) and not lines[insert - 1].strip():
+        insert += 1
+    block = [f"dependencies_files = {deps_files!r}", f"dependencies_pip = {deps_pip!r}", ""]
+    lines[insert - 1:insert - 1] = block
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
 def _skipped(path: Path) -> bool:
     return any(part in SKIP_DIRS for part in path.parts) or path.suffix in SKIP_SUFFIXES
 
 
-def _check_cycles(manifests: dict[str, dict]) -> None:
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(package_id: str):
-        if package_id in visiting:
-            raise StorePublishError(f"Dependency cycle includes {package_id}.")
-        if package_id in visited:
-            return
-        visiting.add(package_id)
-        for dep in manifests[package_id]["requires"]:
-            visit(dep)
-        visiting.remove(package_id)
-        visited.add(package_id)
-
-    for package_id in manifests:
-        visit(package_id)
+def _scan_package_dirs(store_root: Path) -> dict[str, Path]:
+    return {Path(rel).stem: store_root / rel for rel in _tree_files(store_root)}
 
 
 def _parse_args(argv: list[str] | None):
-    parser = argparse.ArgumentParser(description="Publish Second Brain packages to origin/store.")
+    parser = argparse.ArgumentParser(description="Publish Second Brain package files to origin/store.")
     sub = parser.add_subparsers(dest="command", required=True)
     validate = sub.add_parser("validate", help="Validate the store branch or a checked-out store path.")
     validate.add_argument("--remote", default="origin")
     validate.add_argument("--branch", default="store")
     validate.add_argument("--path")
-    publish = sub.add_parser("publish", help="Write one package, commit it, and push it.")
-    publish.add_argument("package_id")
-    publish.add_argument("--name", required=True)
-    publish.add_argument("--description", required=True)
-    publish.add_argument("--file", action="append", default=[], help="SOURCE=DEST, repeatable. Directories are copied recursively. Omit for a meta-package bundle (requires-only).")
-    publish.add_argument("--require", action="append", default=[])
-    publish.add_argument("--entrypoint", action="append", default=None)
-    publish.add_argument("--no-entrypoints", action="store_true", help="Write entrypoints: [] for file-only packages.")
-    publish.add_argument("--pip", action="append", default=None, help="PyPI package to install on install, repeatable. Authoritative — overrides the import scan. Use for optional/platform-specific deps the scan can't read.")
-    publish.add_argument("--no-pip", action="store_true", help="Declare pip: [] — install no Python deps and skip the import scan.")
+    publish = sub.add_parser("publish", help="Copy files into the store tree, commit, and push.")
+    publish.add_argument("package_id", help="Stem of the primary plugin/helper file.")
+    publish.add_argument("--name", default="")
+    publish.add_argument("--description", default="")
+    publish.add_argument("--file", action="append", default=[], help="SOURCE=DEST, repeatable. Directories are copied recursively.")
+    publish.add_argument("--require", action="append", default=[], help="Store-relative .py dependency file, repeatable.")
+    publish.add_argument("--entrypoint", action="append", default=None, help="Ignored; kept for old command lines.")
+    publish.add_argument("--no-entrypoints", action="store_true", help="Ignored; tree store uses file stems.")
+    publish.add_argument("--pip", action="append", default=None, help="PyPI dependency, repeatable.")
+    publish.add_argument("--no-pip", action="store_true", help="Declare dependencies_pip = [].")
     publish.add_argument("--update", action="store_true")
     publish.add_argument("--dry-run", action="store_true")
     publish.add_argument("--message")
