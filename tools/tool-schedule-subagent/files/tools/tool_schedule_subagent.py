@@ -5,8 +5,9 @@ from datetime import datetime
 
 from croniter import croniter
 
-from events.event_channels import SPAWN_SUBAGENT
 from plugins.BaseTool import BaseTool, ToolResult
+
+from ..helpers.subagent_events import SPAWN_SUBAGENT
 
 
 SCHEDULED = "Scheduled"
