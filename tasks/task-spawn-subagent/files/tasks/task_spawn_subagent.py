@@ -8,7 +8,13 @@ from events.event_channels import CHAT_MESSAGE_PUSHED
 from plugins.BaseTask import BaseTask, TaskResult
 from state_machine.serialization import save_state_marker
 
-from ..helpers.subagent_events import SPAWN_SUBAGENT
+
+# Plugin-owned bus channel, shared with the schedule-subagent tool (which tags
+# Timekeeper jobs with it) and imported from here. The task owns the channel as
+# its subscriber and is the common dependency of the scheduling feature, so the
+# constant lives here rather than in a separate file. The kernel deliberately
+# does not reserve this channel.
+SPAWN_SUBAGENT = "subagent.spawn"
 
 
 class SpawnSubagent(BaseTask):
