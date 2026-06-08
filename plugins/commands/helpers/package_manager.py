@@ -472,13 +472,13 @@ def _set_config_list(context, key: str, add: list[str], remove: list[str], label
     config = getattr(context, "config", None)
     if config is None:
         return
-    current = list(config.get(key, []) or [])
+    from config import config_manager
+    current = _unique([*_config_list(config_manager.load().get(key)), *_config_list(config.get(key))])
     added = [name for name in add if name not in current]
     kept = [name for name in current if name not in remove]
     if not added and kept == current:
         return
     config[key] = kept + added
-    from config import config_manager
     config_manager.save(config)
     runtime = getattr(context, "runtime", None)
     if runtime is not None and getattr(runtime, "config", None) is not None:
@@ -489,6 +489,10 @@ def _set_config_list(context, key: str, add: list[str], remove: list[str], label
     dropped = [name for name in current if name in remove]
     if dropped:
         lines.append(f"Disabled {label}(s): {', '.join(dropped)}.")
+
+
+def _config_list(value) -> list:
+    return value if isinstance(value, list) else ([value] if value not in (None, "") else [])
 
 
 def _frontends(files: list[PlannedFile]) -> list[str]:

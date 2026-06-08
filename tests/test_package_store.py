@@ -125,6 +125,36 @@ def test_install_telegram_shape_copies_frontend_helper_and_pip(tmp_path, monkeyp
     assert calls == [[__import__("sys").executable, "-m", "pip", "install", "python-telegram-bot"]]
 
 
+def test_install_frontend_preserves_existing_saved_frontends(tmp_path, monkeypatch):
+    _patch_roots(monkeypatch, tmp_path)
+    files = {"frontends/frontend_telegram.py": b"from plugins.BaseFrontend import BaseFrontend\nclass Telegram(BaseFrontend): pass\n"}
+    saved = {"enabled_frontends": ["repl"], "autoload_services": ["llm"]}
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""))
+    monkeypatch.setattr("config.config_manager.load", lambda: dict(saved))
+    monkeypatch.setattr("config.config_manager.save", lambda config: saved.update(config))
+
+    result = package_manager.install_package(tmp_path, "frontend_telegram", _Context(tmp_path))
+
+    assert result.ok
+    assert saved["enabled_frontends"] == ["repl", "telegram"]
+
+
+def test_install_service_preserves_existing_saved_autoload_services(tmp_path, monkeypatch):
+    _patch_roots(monkeypatch, tmp_path)
+    files = {"services/service_mcp.py": b"from plugins.BaseService import BaseService\nclass MCP(BaseService): pass\n"}
+    saved = {"enabled_frontends": ["repl"], "autoload_services": ["llm", "parser"]}
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""))
+    monkeypatch.setattr("config.config_manager.load", lambda: dict(saved))
+    monkeypatch.setattr("config.config_manager.save", lambda config: saved.update(config))
+
+    result = package_manager.install_package(tmp_path, "service_mcp", _Context(tmp_path))
+
+    assert result.ok
+    assert saved["autoload_services"] == ["llm", "parser", "mcp"]
+
+
 def test_helper_can_be_installed_and_uninstalled_by_stem(tmp_path, monkeypatch):
     _patch_roots(monkeypatch, tmp_path)
     calls = []
