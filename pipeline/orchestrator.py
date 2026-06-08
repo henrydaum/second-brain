@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from runtime.context import build_context
 from runtime.supervisor import run_supervised
+from pipeline.database import set_thread_priority_low
 from plugins.services.helpers.parser_registry import get_modality
 from plugins.helpers.plugin_paths import is_builtin_path
 from plugins.BaseTask import BaseTask, TaskResult
@@ -54,8 +55,11 @@ class Orchestrator:
 
 		# Thread pool
 		self.max_workers = config.get("max_workers", 4)
+		# Worker threads run only background pipeline tasks, so their DB ops
+		# acquire the shared lock at low priority and yield to the conversation.
 		self.executor = ThreadPoolExecutor(
-			max_workers=self.max_workers, thread_name_prefix="Worker"
+			max_workers=self.max_workers, thread_name_prefix="Worker",
+			initializer=set_thread_priority_low,
 		)
 		self.task_semaphores: dict[str, threading.Semaphore] = {}
 

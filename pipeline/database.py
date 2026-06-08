@@ -6,6 +6,7 @@ import re
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 
 from paths import ATTACHMENT_CACHE
 
@@ -51,6 +52,79 @@ Dynamic output tables:
 """
 
 
+# ---------------------------------------------------------------------------
+# Priority lock
+# ---------------------------------------------------------------------------
+# Every DB call serializes on one connection + one mutex, so a churning
+# background scan (or pipeline workers) can starve the conversation thread:
+# threading.Lock isn't fair, so a thread re-acquiring in a tight loop keeps
+# winning. _PriorityLock fixes that deterministically — background work
+# acquires at LOW priority and always yields to a thread waiting at HIGH
+# priority. A high-priority (interactive/conversation) acquirer therefore waits
+# at most for the single critical section currently executing — a short
+# statement plus commit — never behind a queue of background ones, regardless
+# of how many files churn or how long their tasks run. Priority is read from a
+# thread-local, so the existing `with db.lock:` sites need no changes; the
+# calling thread's role decides.
+
+_HIGH_PRIORITY, _LOW_PRIORITY = 0, 1
+_priority_tls = threading.local()
+
+
+def set_thread_priority_low():
+	"""Mark the current thread as background — its DB ops yield to interactive
+	(high-priority) ones. Use as a ThreadPoolExecutor ``initializer`` or at the
+	top of a dedicated background thread."""
+	_priority_tls.priority = _LOW_PRIORITY
+
+
+@contextmanager
+def low_priority_section():
+	"""Scope a region of the current thread to background DB priority, restoring
+	the prior priority on exit (for threads that also do interactive work)."""
+	prev = getattr(_priority_tls, "priority", _HIGH_PRIORITY)
+	_priority_tls.priority = _LOW_PRIORITY
+	try:
+		yield
+	finally:
+		_priority_tls.priority = prev
+
+
+class _PriorityLock:
+	"""Mutex that always prefers high-priority acquirers. Non-reentrant, matching
+	the threading.Lock it replaces."""
+
+	def __init__(self):
+		self._cond = threading.Condition()
+		self._held = False
+		self._high_waiters = 0
+
+	def __enter__(self):
+		high = getattr(_priority_tls, "priority", _HIGH_PRIORITY) == _HIGH_PRIORITY
+		with self._cond:
+			if high:
+				# A high-priority waiter blocks only on the current holder.
+				self._high_waiters += 1
+				try:
+					while self._held:
+						self._cond.wait()
+				finally:
+					self._high_waiters -= 1
+			else:
+				# Low priority also defers to anyone waiting at high priority,
+				# so background work can never jump ahead of the conversation.
+				while self._held or self._high_waiters:
+					self._cond.wait()
+			self._held = True
+		return self
+
+	def __exit__(self, *exc):
+		with self._cond:
+			self._held = False
+			self._cond.notify_all()
+		return False
+
+
 class Database:
 	"""Database."""
 	def __init__(self, db_path: str):
@@ -58,7 +132,7 @@ class Database:
 		self.db_path = db_path
 		self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
 		self.conn.row_factory = sqlite3.Row  # dict-like access on rows
-		self.lock = threading.Lock()
+		self.lock = _PriorityLock()
 		self._setup()
 
 	@staticmethod

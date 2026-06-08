@@ -9,6 +9,7 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+from pipeline.database import set_thread_priority_low
 from plugins.services.helpers.parser_registry import get_modality, get_supported_extensions
 logger = logging.getLogger("Watcher")
 
@@ -65,15 +66,6 @@ class Watcher:
 		# Ignored folders
 		self.ignored_folders = set(config.get("ignored_folders", []))
 		self.skip_hidden = config.get("skip_hidden_folders", True)
-
-		# Background-scan throttle. A bulk scan (initial scan or a pasted-in
-		# folder) registers files through the single shared DB connection/lock,
-		# each upsert committing (fsync) while holding the lock. Left unchecked
-		# it monopolizes the GIL + lock and the conversation thread waits behind
-		# it. Pausing briefly every N registrations yields both so messaging
-		# stays responsive while the database churns. 0 (either knob) disables.
-		self.scan_yield_interval = int(config.get("scan_yield_interval", 50))
-		self.scan_yield_seconds = float(config.get("scan_yield_seconds", 0.005))
 
 	# =================================================================
 	# START / STOP
@@ -145,12 +137,13 @@ class Watcher:
 		Modified files -> upsert + notify orchestrator.
 		Deleted files (ghosts) -> remove from DB + notify orchestrator.
 		"""
+		# Background scan: its DB writes yield the shared lock to the conversation.
+		set_thread_priority_low()
 		t0 = time.time()
 		db_state = self.db.get_watched_files()  # {path: mtime} — watched only
 		disk_files = set()
 		new_count = 0
 		modified_count = 0
-		processed = 0  # files actually written this scan — drives the throttle
 
 		for watch_dir in valid_dirs:
 			if self._is_ignored(watch_dir):
@@ -173,20 +166,13 @@ class Watcher:
 					mtime = os.path.getmtime(path)
 					self._known_mtimes[path] = mtime
 
-					registered = False
 					if path not in db_state:
 						self._register_file(path, mtime)
 						new_count += 1
-						registered = True
 
 					elif abs(mtime - db_state[path]) > 1.0:
 						self._register_file(path, mtime)
 						modified_count += 1
-						registered = True
-
-					if registered:
-						processed += 1
-						self._throttle_scan(processed)
 
 		# Ghost cleanup — files in DB but not on disk
 		ghost_count = 0
@@ -195,8 +181,6 @@ class Watcher:
 				logger.info(f"[Scan] Removed: {Path(db_path).name}")
 				self.orchestrator.on_file_deleted(db_path)
 				ghost_count += 1
-				processed += 1
-				self._throttle_scan(processed)
 
 		elapsed = time.time() - t0
 		logger.info(
@@ -230,6 +214,8 @@ class Watcher:
 
 	def handle_create_or_modify(self, path: str):
 		"""Called by the debounced handler after events settle."""
+		# Live watcher writes are background — yield the DB lock to the conversation.
+		set_thread_priority_low()
 		if not os.path.exists(path):
 			return
 
@@ -238,7 +224,6 @@ class Watcher:
 			if self._is_ignored(path):
 				return
 			logger.info(f"[Live] Scanning directory: {Path(path).name}")
-			processed = 0
 			for root, dirs, files in os.walk(path):
 				if self._is_ignored(root):
 					continue
@@ -249,8 +234,6 @@ class Watcher:
 						mtime = os.path.getmtime(file_path)
 						self._known_mtimes[file_path] = mtime
 						self._register_file(file_path, mtime)
-						processed += 1
-						self._throttle_scan(processed)
 			return
 
 		# Single file
@@ -273,6 +256,7 @@ class Watcher:
 
 	def handle_delete(self, path: str):
 		"""Called immediately (no debounce) when a file or folder is deleted."""
+		set_thread_priority_low()
 		db_state = self.db.get_all_files()
 		deleted_path = str(Path(path))
 
@@ -322,13 +306,6 @@ class Watcher:
 			return False
 
 		return p.suffix.lower() in self.supported_extensions
-
-	def _throttle_scan(self, processed: int):
-		"""Briefly yield the GIL + DB lock during a bulk scan so the conversation
-		thread isn't starved while many files are being registered."""
-		if (self.scan_yield_interval > 0 and self.scan_yield_seconds > 0
-				and processed > 0 and processed % self.scan_yield_interval == 0):
-			time.sleep(self.scan_yield_seconds)
 
 	def _is_ignored(self, path: str) -> bool:
 		"""Return whether ignored."""
