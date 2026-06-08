@@ -175,7 +175,7 @@ def _format_installed(context, category: str | None) -> str:
         mode = "" if item.get("requested") else " [dependency]"
         deps = item.get("requires") or []
         suffix = f" (requires: {', '.join(deps)})" if deps else ""
-        lines.append(f"  {item.get('id')}{mode}{suffix}")
+        lines.append(f"  *{item.get('id')}*{mode}{suffix}")
     lines.append("")
     lines.append("Uninstall with /packages uninstall <id>.")
     return "\n".join(lines)
@@ -183,7 +183,7 @@ def _format_installed(context, category: str | None) -> str:
 
 def _available_line(item: dict) -> str:
     desc = item.get("description") or ""
-    return f"  {item.get('id', '')}{(' — ' + desc) if desc else ''}"
+    return f"  *{item.get('id', '')}*{(' — ' + desc) if desc else ''}"
 
 
 # ── Uninstall cleanup form plumbing ──────────────────────────────────
