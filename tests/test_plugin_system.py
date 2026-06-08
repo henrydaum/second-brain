@@ -159,7 +159,7 @@ def test_plugin_watcher_emits_registration_failed_message(monkeypatch):
 
         service.handle_create_or_modify(str(path))
 
-        assert messages == ["Plugin registration failed: tool_demo.py"]
+        assert messages == ["Plugin registration failed: tool_demo.py\nboom"]
     finally:
         unsub()
         path.unlink(missing_ok=True)

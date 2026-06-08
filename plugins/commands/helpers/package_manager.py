@@ -261,6 +261,9 @@ def execute_install_plan(plan: InstallPlan, context=None, progress: Progress | N
             frontends = _unique(name for pkg in plan.packages for name in _frontend_names(pkg.entrypoints))
             if frontends:
                 _set_enabled_frontends(context, add=frontends, remove=[], lines=lines)
+            services = _unique(name for pkg in plan.packages for name in _service_names(pkg.entrypoints))
+            if services:
+                _set_autoload_services(context, add=services, remove=[], lines=lines)
         for pkg in plan.packages:
             if pkg.pip_packages:
                 lines.append(f"Installed Python package(s): {', '.join(pkg.pip_packages)}")
@@ -346,6 +349,9 @@ def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices: d
             frontends = _unique(name for pkg in plan.packages for name in _frontend_names(pkg.entrypoints))
             if frontends:
                 _set_enabled_frontends(context, add=[], remove=frontends, lines=lines)
+            services = _unique(name for pkg in plan.packages for name in _service_names(pkg.entrypoints))
+            if services:
+                _set_autoload_services(context, add=[], remove=services, lines=lines)
         selected_pip = _unique(name for pkg in plan.packages for name in plan.pip_removals.get(pkg.id, []) if choices.get("pip", {}).get(pkg.id))
         _uninstall_python_packages(selected_pip, progress, lines)
         if plan.kept_pip_packages:
@@ -453,6 +459,56 @@ def _set_enabled_frontends(context, add: list[str], remove: list[str], lines: li
     dropped = [n for n in enabled if n in remove]
     if dropped:
         lines.append(f"Disabled frontend(s): {', '.join(dropped)}.")
+
+
+def _service_names(entrypoints: list[dict]) -> list[str]:
+    """Service registry names contributed by these entrypoints.
+
+    A service ships as ``services/service_<name>.py`` and registers under
+    ``<name>`` — the same filename convention discovery and ``autoload_services``
+    key on, mirroring ``_frontend_names``.
+    """
+    prefix = PLUGIN_FAMILIES["service"][1]
+    names = []
+    for ep in entrypoints:
+        if ep.get("type") != "service":
+            continue
+        stem = PurePosixPath(ep["path"]).stem
+        names.append(stem[len(prefix):] if stem.startswith(prefix) else stem)
+    return names
+
+
+def _set_autoload_services(context, add: list[str], remove: list[str], lines: list[str]) -> None:
+    """Add/remove service names in ``autoload_services`` and persist.
+
+    Installing a service should start it without the user editing config — the
+    plugin watcher hot-loads the freshly written file, and a service listed in
+    ``autoload_services`` loads on registration (see ``plugin_discovery``) and on
+    every future boot. Mirrors ``_set_enabled_frontends``; unlike frontends,
+    services hot-load, so no restart is needed.
+    """
+    config = getattr(context, "config", None)
+    if config is None:
+        return
+    enabled = list(config.get("autoload_services", []) or [])
+    added = [n for n in add if n not in enabled]
+    kept = [n for n in enabled if n not in remove]
+    if not added and kept == enabled:
+        return
+    config["autoload_services"] = kept + added
+    from config import config_manager
+    config_manager.save(config)
+    # config is a per-call copy; keep the canonical runtime config in step so the
+    # watcher (which shares the runtime config object) sees the new entry when it
+    # fires on the just-written file and loads the service live.
+    runtime = getattr(context, "runtime", None)
+    if runtime is not None and getattr(runtime, "config", None) is not None:
+        runtime.config["autoload_services"] = config["autoload_services"]
+    if added:
+        lines.append(f"Enabled service(s): {', '.join(added)} — loading now.")
+    dropped = [n for n in enabled if n in remove]
+    if dropped:
+        lines.append(f"Disabled service(s): {', '.join(dropped)}.")
 
 
 def _entrypoint_type(rel: str) -> str:

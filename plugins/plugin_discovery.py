@@ -529,6 +529,12 @@ def _load_single_task(file_path: Path, orchestrator, config: dict) -> tuple[str 
     return instance.name, None
 
 
+def _should_autoload(svc_name: str, svc, config: dict | None) -> bool:
+    """Whether a freshly registered service should be loaded immediately."""
+    from plugins.BaseService import should_autoload_service
+    return should_autoload_service(svc_name, svc, config or {})
+
+
 def _load_single_service(file_path: Path, services: dict, config: dict, bindings: dict | None = None) -> tuple[str | None, str | None]:
     """Internal helper to load single service."""
     info, err = plugin_info(file_path)
@@ -567,11 +573,15 @@ def _load_single_service(file_path: Path, services: dict, config: dict, bindings
         runtime_bindings = old_bindings.get(svc_name) or (bindings or {})
         if runtime_bindings and hasattr(svc, "bind_runtime"):
             svc.bind_runtime(**runtime_bindings)
-        if svc_name in was_loaded:
+        # Load on reload (it was live before) or on a fresh registration whose
+        # config says it should autoload — the latter is how an installed
+        # extension/autoload service comes up live instead of waiting for the
+        # next boot's autoload pass.
+        if svc_name in was_loaded or _should_autoload(svc_name, svc, config):
             try:
                 svc.load()
             except Exception as e:
-                return None, f"Reloaded service '{svc_name}' failed to load: {e}"
+                return None, f"Service '{svc_name}' failed to load: {e}"
 
     wire_peer_services(services)
     return ", ".join(names), None
