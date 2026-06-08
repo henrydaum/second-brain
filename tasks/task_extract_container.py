@@ -16,6 +16,7 @@ No services required — just calls the parser directly.
 
 
 dependencies_files = ['services/helpers/parse_container.py']
+dependencies_pip = []
 
 import logging
 import time

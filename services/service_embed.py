@@ -1,6 +1,7 @@
 """Service plugin for embed."""
 
 
+dependencies_files = []
 dependencies_pip = ['numpy', 'sentence-transformers', 'torch']
 
 import os

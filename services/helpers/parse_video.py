@@ -1,6 +1,7 @@
 """Attachment parsing helpers for video inputs."""
 
 
+dependencies_files = []
 dependencies_pip = ['av', 'numpy']
 
 import logging

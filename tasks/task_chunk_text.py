@@ -12,6 +12,7 @@ Config keys:
 
 
 dependencies_files = ['tasks/task_extract_text.py']
+dependencies_pip = []
 
 import logging
 import time

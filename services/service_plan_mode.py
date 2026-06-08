@@ -7,6 +7,9 @@ hooks.
 
 from __future__ import annotations
 
+dependencies_files = []
+dependencies_pip = []
+
 from events.event_channels import CHAT_MESSAGE_PUSHED
 from events.event_bus import bus
 from plugins.BaseService import BaseService, EXTENSION

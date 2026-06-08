@@ -1,6 +1,7 @@
 """LiteLLM backend for the LLM router."""
 
 
+dependencies_files = []
 dependencies_pip = ['litellm']
 
 import logging

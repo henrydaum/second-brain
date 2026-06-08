@@ -1,6 +1,7 @@
 """Service plugin for OCR."""
 
 
+dependencies_files = []
 dependencies_pip = ['pillow-heif']
 
 import asyncio

@@ -12,6 +12,9 @@ Allowed commands:
   everything else                — requires user approval
 """
 
+dependencies_files = []
+dependencies_pip = []
+
 import logging
 import re
 import shlex

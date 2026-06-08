@@ -16,6 +16,9 @@ empty string. Heavy transcription only happens inside ``transcribe`` on the
 Whisper service, so importing this helper stays cheap.
 """
 
+dependencies_files = ['services/service_whisper.py']
+dependencies_pip = []
+
 import logging
 from pathlib import Path
 

@@ -9,6 +9,7 @@ take effect immediately.
 
 
 dependencies_files = ['services/service_mcp.py']
+dependencies_pip = []
 
 import json
 

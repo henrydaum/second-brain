@@ -7,7 +7,8 @@ failing the parser-discovery scan.
 """
 
 
-dependencies_pip = ['python-docx', 'python-pptx']
+dependencies_files = []
+dependencies_pip = ['Pillow', 'python-docx', 'python-pptx']
 
 import logging
 import time

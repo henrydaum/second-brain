@@ -7,7 +7,8 @@ than failing the parser-discovery scan when PyMuPDF is absent.
 """
 
 
-dependencies_pip = ['pandas', 'PyMuPDF']
+dependencies_files = []
+dependencies_pip = ['Pillow', 'pandas', 'PyMuPDF']
 
 import logging
 import time

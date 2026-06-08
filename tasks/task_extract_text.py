@@ -6,6 +6,9 @@ This is the foundation that downstream tasks (embedding, summarization)
 depend on. No services required — just calls the parser directly.
 """
 
+dependencies_files = []
+dependencies_pip = []
+
 import logging
 import time
 from pathlib import Path

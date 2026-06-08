@@ -12,6 +12,9 @@ active approval dialog. Reads go through ``Database.query()`` (read-only guarded
 approved writes go through ``Database.execute_write()``.
 """
 
+dependencies_files = []
+dependencies_pip = []
+
 import logging
 import re
 from difflib import get_close_matches

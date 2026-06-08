@@ -1,6 +1,7 @@
 """Attachment parsing helpers for container and archive inputs."""
 
 
+dependencies_files = []
 dependencies_pip = ['py7zr', 'rarfile']
 
 import logging

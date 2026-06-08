@@ -2,6 +2,7 @@
 
 
 dependencies_files = ['tasks/task_spawn_subagent.py']
+dependencies_pip = ['croniter']
 
 import re
 from datetime import datetime

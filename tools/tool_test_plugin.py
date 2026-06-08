@@ -1,5 +1,8 @@
 """Tool plugin for test plugin."""
 
+dependencies_files = []
+dependencies_pip = []
+
 import subprocess
 import sys
 from pathlib import Path

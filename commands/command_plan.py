@@ -2,6 +2,7 @@
 
 
 dependencies_files = ['services/service_plan_mode.py', 'tools/tool_propose_plan.py']
+dependencies_pip = []
 
 from plugins.BaseCommand import BaseCommand
 

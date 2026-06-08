@@ -2,6 +2,7 @@
 
 
 dependencies_files = ['services/service_web_search.py']
+dependencies_pip = []
 
 from plugins.BaseTool import BaseTool, ToolResult
 

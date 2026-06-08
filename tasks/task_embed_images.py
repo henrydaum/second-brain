@@ -11,6 +11,7 @@ Requires the image_embedder service to be loaded.
 
 
 dependencies_files = ['services/service_embed.py']
+dependencies_pip = []
 
 import logging
 import time

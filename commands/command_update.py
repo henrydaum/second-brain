@@ -1,5 +1,8 @@
 """Slash command plugin for `/update`."""
 
+dependencies_files = []
+dependencies_pip = []
+
 import subprocess
 
 from plugins.BaseCommand import BaseCommand

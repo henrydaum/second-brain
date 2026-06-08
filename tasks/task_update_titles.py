@@ -7,6 +7,9 @@ short title and writes it back. The high-water mark is updated even when
 the LLM returns nothing, so a flaky reply does not replay every tick.
 """
 
+dependencies_files = ['services/service_litellm.py']
+dependencies_pip = []
+
 import json
 import logging
 

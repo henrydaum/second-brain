@@ -11,6 +11,7 @@ the system loads it before dispatching.
 
 
 dependencies_files = ['services/service_ocr.py']
+dependencies_pip = []
 
 import logging
 import time

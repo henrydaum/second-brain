@@ -15,9 +15,9 @@ client registration, PKCE, token refresh). We supply three things:
   worker thread) and returns the ``(code, state)`` the user pastes back.
 """
 
-
 from __future__ import annotations
 
+dependencies_files = []
 dependencies_pip = ['mcp']
 
 import asyncio

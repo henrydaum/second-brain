@@ -1,5 +1,8 @@
 """Slash command plugin for `/schedule`."""
 
+dependencies_files = []
+dependencies_pip = []
+
 import json
 
 from plugins.BaseCommand import BaseCommand

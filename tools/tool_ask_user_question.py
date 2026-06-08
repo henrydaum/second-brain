@@ -1,5 +1,8 @@
 """Ask the active user for typed input through the approval dialog flow."""
 
+dependencies_files = []
+dependencies_pip = []
+
 from plugins.BaseTool import BaseTool, ToolResult
 from state_machine.conversation import FormStep
 from state_machine.form_display import form_step_display

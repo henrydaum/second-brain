@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+dependencies_files = []
+dependencies_pip = ['Pillow']
+
 import html
 import io
 import json

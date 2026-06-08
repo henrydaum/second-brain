@@ -9,7 +9,7 @@ Requires: pip install faster-whisper
 """
 
 
-dependencies_files = ['services/helpers/parse_voice.py']
+dependencies_files = []
 dependencies_pip = ['faster-whisper', 'torch']
 
 import gc

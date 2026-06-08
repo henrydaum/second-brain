@@ -23,6 +23,7 @@ Scope: https://www.googleapis.com/auth/gmail.modify
 """
 
 
+dependencies_files = []
 dependencies_pip = ['google-api-python-client', 'google-auth-oauthlib', 'requests']
 
 import logging

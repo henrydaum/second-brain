@@ -10,6 +10,7 @@ Depends on chunk_text. Requires the text_embedder service to be loaded.
 
 
 dependencies_files = ['services/service_embed.py', 'tasks/task_chunk_text.py']
+dependencies_pip = []
 
 import logging
 import time

@@ -9,6 +9,9 @@ Every result carries universal fields (path, score, source, stream, modality)
 plus nullable modality-specific fields that are set when applicable.
 """
 
+dependencies_files = []
+dependencies_pip = []
+
 from dataclasses import dataclass, asdict
 from typing import Optional
 

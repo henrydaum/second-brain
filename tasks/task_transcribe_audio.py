@@ -9,6 +9,7 @@ Requires the "whisper" service to be loaded.
 
 
 dependencies_files = ['services/service_whisper.py']
+dependencies_pip = []
 
 import logging
 import time

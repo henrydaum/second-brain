@@ -10,6 +10,7 @@ Returns a list of SearchResult dicts, one per matching chunk.
 
 
 dependencies_files = ['tools/helpers/SearchResult.py']
+dependencies_pip = []
 
 import logging
 import re

@@ -1,5 +1,8 @@
 """Task plugin for spawn subagent."""
 
+dependencies_files = ['services/service_litellm.py']
+dependencies_pip = []
+
 from pathlib import Path
 
 from attachments import parse_attachment

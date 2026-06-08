@@ -1,5 +1,8 @@
 """Service plugin for web search."""
 
+dependencies_files = []
+dependencies_pip = []
+
 import os
 import json
 import gzip

@@ -1,5 +1,8 @@
 """Tool plugin for email context."""
 
+dependencies_files = []
+dependencies_pip = []
+
 def is_main_conversation(context) -> bool:
     """Return whether main conversation."""
     runtime, key = getattr(context, "runtime", None), getattr(context, "session_key", None)

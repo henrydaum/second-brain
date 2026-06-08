@@ -19,6 +19,7 @@ require_all_inputs = False means any one suffices.
 
 
 dependencies_files = ['tasks/task_chunk_text.py']
+dependencies_pip = []
 
 import logging
 import time

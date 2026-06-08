@@ -2,6 +2,7 @@
 
 
 dependencies_files = ['services/service_plan_mode.py']
+dependencies_pip = []
 
 from plugins.BaseTool import BaseTool, ToolResult
 

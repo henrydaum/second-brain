@@ -5,6 +5,9 @@ Gives the LLM agent a simple, direct way to read file contents by path.
 No shell commands, no timeouts, no syntax to remember.
 """
 
+dependencies_files = []
+dependencies_pip = []
+
 from pathlib import Path
 
 from plugins.BaseTool import BaseTool, ToolResult

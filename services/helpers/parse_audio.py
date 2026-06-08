@@ -1,6 +1,7 @@
 """Attachment parsing helpers for audio inputs."""
 
 
+dependencies_files = []
 dependencies_pip = ['librosa', 'numpy', 'soundfile']
 
 import logging

@@ -34,7 +34,6 @@ what anyio's cancel scopes require. Synchronous callers (tools, ``unload``)
 marshal into that loop via ``run_coroutine_threadsafe`` / ``call_soon_threadsafe``.
 """
 
-
 from __future__ import annotations
 
 dependencies_files = ['services/helpers/mcp_oauth.py']

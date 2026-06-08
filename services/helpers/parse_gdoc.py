@@ -9,6 +9,7 @@ the caller falls back to a pointer.
 
 
 dependencies_files = ['services/service_drive.py']
+dependencies_pip = []
 
 import json
 import logging

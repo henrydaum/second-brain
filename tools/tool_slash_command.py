@@ -1,5 +1,8 @@
 """Slash command tool — one-shot invocation of registered command plugins."""
 
+dependencies_files = []
+dependencies_pip = []
+
 import json
 import logging
 

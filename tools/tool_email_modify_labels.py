@@ -13,6 +13,7 @@ Common idioms:
 
 
 dependencies_files = ['services/service_gmail.py', 'tools/helpers/email_context.py']
+dependencies_pip = []
 
 import logging
 

@@ -1,5 +1,8 @@
 """Display files to the user in the chat."""
 
+dependencies_files = []
+dependencies_pip = []
+
 from pathlib import Path
 
 from plugins.BaseTool import BaseTool, ToolResult

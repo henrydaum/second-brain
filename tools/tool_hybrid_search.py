@@ -12,6 +12,7 @@ Modality-agnostic — works with whatever modalities the sub-tools return
 
 
 dependencies_files = ['tools/tool_lexical_search.py', 'tools/tool_semantic_search.py']
+dependencies_pip = []
 
 import logging
 import time

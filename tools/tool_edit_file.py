@@ -1,5 +1,8 @@
 """Small text-file CRUD tool for repo-native editing."""
 
+dependencies_files = []
+dependencies_pip = []
+
 from pathlib import Path
 
 from paths import DATA_DIR, ROOT_DIR

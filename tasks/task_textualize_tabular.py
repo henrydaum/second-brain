@@ -8,6 +8,7 @@ manageable. Stored in the tabular_text table for the metadata scraper.
 
 
 dependencies_files = ['services/helpers/parse_tabular.py']
+dependencies_pip = []
 
 import logging
 import time

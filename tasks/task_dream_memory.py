@@ -7,6 +7,9 @@ strict JSON rewrite, and replaces memory.md without a user approval step.
 
 from __future__ import annotations
 
+dependencies_files = ['services/service_litellm.py']
+dependencies_pip = []
+
 import json
 import logging
 import re
