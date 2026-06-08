@@ -57,6 +57,28 @@ class GitStoreBackend:
         path = prefix + (f"{base.strip('/')}/" if base else "") + rel_path.replace("\\", "/")
         return self._show_bytes(path)
 
+    def list_tree_files(self) -> list[str]:
+        """Return every file path on the store ref."""
+        proc = subprocess.run(
+            ["git", "-C", str(self.root_dir), "ls-tree", "-r", "--name-only", self.ref],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if proc.returncode:
+            raise StoreBackendError(proc.stderr.strip() or f"Could not list {self.ref}")
+        return [line.strip().replace("\\", "/") for line in proc.stdout.splitlines() if line.strip()]
+
+    def list_python_files(self) -> list[str]:
+        """Return tree-store plugin/helper Python files."""
+        from plugins.commands.helpers import package_manager
+        return [path for path in self.list_tree_files() if path.endswith(".py") and package_manager._is_valid_tree_rel(path)]
+
+    def get_tree_file_bytes(self, rel_path: str) -> bytes:
+        """Read a file from the tree-mirrored store layout."""
+        return self._show_bytes(rel_path.replace("\\", "/"))
+
     def _show_text(self, path: str) -> str:
         return self._show_bytes(path).decode("utf-8")
 

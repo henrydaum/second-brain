@@ -176,6 +176,8 @@ class BaseFrontend:
     # (title, variable_name, description, default, type_info)
     # Same format as SETTINGS_DATA in config_data.py.
     config_settings: list = []
+    dependencies_files: list[str] = []
+    dependencies_pip: list[str] = []
 
     # --- Agent system-prompt contribution ---
     # Static guidance injected into the agent's system prompt for sessions
@@ -194,6 +196,10 @@ class BaseFrontend:
         super().__init_subclass__(**kwargs)
         if isinstance(cls.config_settings, list):
             cls.config_settings = list(cls.config_settings)
+        if isinstance(cls.dependencies_files, list):
+            cls.dependencies_files = list(cls.dependencies_files)
+        if isinstance(cls.dependencies_pip, list):
+            cls.dependencies_pip = list(cls.dependencies_pip)
         if cls.user_binding not in _USER_BINDINGS:
             logger.warning(
                 f"Frontend '{cls.name or cls.__name__}' declared invalid "

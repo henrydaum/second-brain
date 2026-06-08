@@ -141,6 +141,8 @@ class BaseTool:
 
     # --- Service requirements ---
     requires_services: list[str] = []
+    dependencies_files: list[str] = []
+    dependencies_pip: list[str] = []
 
     # --- Agent controls ---
     max_calls: int = 3           # Max times the agent can call this tool per message
@@ -160,7 +162,7 @@ class BaseTool:
     def __init_subclass__(cls, **kwargs):
         """Internal helper to handle init subclass."""
         super().__init_subclass__(**kwargs)
-        for attr in ("parameters", "requires_services", "config_settings"):
+        for attr in ("parameters", "requires_services", "dependencies_files", "dependencies_pip", "config_settings"):
             value = getattr(cls, attr)
             if isinstance(value, (dict, list)):
                 setattr(cls, attr, value.copy())

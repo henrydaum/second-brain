@@ -45,8 +45,8 @@ style rather than reformatting.
   and backtick line-continuation — not bash syntax.
 - The app stores state in a per-OS **DATA_DIR** (see [paths.py](paths.py)):
   `%LOCALAPPDATA%/Second Brain/` on Windows. Config lives in `config.json` /
-  `plugin_config.json` there; the SQLite DB, package receipts, sandbox plugins,
-  installed plugins, and optional `memory.md` live there too.
+  `plugin_config.json` there; the SQLite DB, sandbox plugins, installed plugins,
+  and optional `memory.md` live there too.
   Don't hardcode DATA_DIR — import from `paths.py`.
 - An LLM profile is required for agent features. Tests stub the LLM, so they
   run without API keys.

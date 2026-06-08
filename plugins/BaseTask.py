@@ -150,6 +150,8 @@ class BaseTask:
 
 	# --- Service requirements ---
 	requires_services: list[str] = []
+	dependencies_files: list[str] = []
+	dependencies_pip: list[str] = []
 
 	# --- Schema ---
 	output_schema: str = ""
@@ -170,7 +172,7 @@ class BaseTask:
 		super().__init_subclass__(**kwargs)
 		# Prevent subclasses from sharing mutable class attributes.
 		# Without .copy(), every subclass would mutate the same list object.
-		for attr in ("modalities", "reads", "writes", "requires_services", "config_settings", "trigger_channels", "event_payload_schema"):
+		for attr in ("modalities", "reads", "writes", "requires_services", "dependencies_files", "dependencies_pip", "config_settings", "trigger_channels", "event_payload_schema"):
 			value = getattr(cls, attr)
 			if isinstance(value, (dict, list)):
 				setattr(cls, attr, value.copy())

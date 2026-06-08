@@ -62,11 +62,13 @@ class BaseService(ABC):
     # (title, variable_name, description, default, type_info)
     # Same format as SETTINGS_DATA in config_data.py.
     config_settings: list = []
+    dependencies_files: list[str] = []
+    dependencies_pip: list[str] = []
 
     def __init_subclass__(cls, **kwargs):
         """Internal helper to handle init subclass."""
         super().__init_subclass__(**kwargs)
-        for attr in ("config_settings",):
+        for attr in ("config_settings", "dependencies_files", "dependencies_pip"):
             value = getattr(cls, attr)
             if isinstance(value, (dict, list)):
                 setattr(cls, attr, value.copy())

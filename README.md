@@ -81,7 +81,7 @@ Everything user-extensible is one of five plugin families:
 | Commands | `BaseCommand` | `plugins/commands/` | `installed_plugins/commands/` | `command_*.py` |
 | Frontends | `BaseFrontend` | `plugins/frontends/` | `installed_plugins/frontends/` | `frontend_*.py` |
 
-Sandbox plugins live under the Second Brain data directory. Installed store packages live beside them and are tracked with package receipts.
+Sandbox plugins live under the Second Brain data directory. Installed store files live beside them in the same plugin-tree shape as the store.
 
 Service lifecycle matters:
 
@@ -90,29 +90,27 @@ Service lifecycle matters:
 
 ## Package Store
 
-Lite includes the local package-store client. Store packages are read from the `origin/store` git ref without switching branches. Installing a package:
+Lite includes the local package-store client. Store files are read from the `origin/store` git ref without switching branches. The store mirrors `installed_plugins/`: `tools/tool_*.py`, `services/service_*.py`, `frontends/frontend_*.py`, `commands/command_*.py`, `tasks/task_*.py`, plus family-local `helpers/`.
 
-1. Resolves package manifests and dependencies.
-2. Detects needed Python packages from third-party imports or manifest metadata.
-3. Installs missing Python packages with the current interpreter.
-4. Copies package files into `installed_plugins/`.
-5. Writes receipts under `DATA_DIR/packages/receipts/`.
-6. Reloads affected services when needed.
+Installing a plugin or helper:
 
-Uninstall reverses that path, refuses live dependents, and offers cleanup for package-owned config keys, tables, and safe Python dependencies.
+1. Resolves a file stem such as `frontend_telegram` or `parse_pdf`.
+2. Reads that file's literal `dependencies_files` and `dependencies_pip` metadata without importing it.
+3. Recursively follows file dependencies in the store tree.
+4. Installs collected Python packages with the current interpreter.
+5. Copies the selected tree slice into `installed_plugins/`.
 
-Useful starter packages include:
+Uninstall follows the same dependency metadata from the installed tree, scans built-in, sandbox, and installed plugin trees, and removes only files and pip packages no remaining plugin/helper still declares. Bundles and package-owned config/table cleanup are intentionally not part of this simple pass yet.
 
-- `starter`
-- `service-litellm`
-- `frontend-telegram`
-- `scheduling`
-- `web-search`
-- `gmail`
-- `mcp`
-- `google-drive`
-- `indexing-search`
-- parser packages such as `parser-pdf`, `parser-office`, `parser-audio`, and `parser-video`
+Useful install targets include:
+
+- `service_litellm`
+- `frontend_telegram`
+- `tool_read_file`
+- `tool_run_command`
+- `tool_web_search`
+- `service_web_search`
+- parser helpers such as `parse_pdf`, `parse_office`, `parse_audio`, and `parse_video`
 
 Use `/packages` from the REPL to browse (by category), install, and uninstall packages.
 

@@ -206,7 +206,7 @@ def parse_file_spec(spec: str) -> tuple[Path, Path]:
         source, dest = spec.rsplit(":", 1)
     else:
         raise StorePublishError("File specs must use SOURCE=DEST.")
-    return (ROOT / source).resolve() if not Path(source).is_absolute() else Path(source).resolve(), Path(package_manager._validate_rel_path(dest))
+    return (ROOT / source).resolve() if not Path(source).is_absolute() else Path(source).resolve(), Path(_validate_package_dest(dest))
 
 
 def validate_store(store_root: Path) -> None:
@@ -281,6 +281,19 @@ def _file_pair(source: Path, dest: str, seen: set[str]) -> tuple[Path, Path]:
         raise StorePublishError(f"Duplicate destination path: {dest}")
     seen.add(dest)
     return source, Path(dest)
+
+
+def _validate_package_dest(path: str) -> str:
+    """Validate a publisher destination, which may be a directory prefix."""
+    from pathlib import PurePosixPath
+    p = PurePosixPath(path.replace("\\", "/"))
+    if p.is_absolute() or not p.parts or any(part in {"", ".", ".."} for part in p.parts):
+        raise StorePublishError(f"Invalid package destination: {path}")
+    if p.suffix == ".py":
+        return package_manager._validate_rel_path(path)
+    if p.parts[0] not in package_manager.TREE_ROOTS:
+        raise StorePublishError(f"Package destination must start with one of {sorted(package_manager.TREE_ROOTS)}: {path}")
+    return p.as_posix()
 
 
 def _skipped(path: Path) -> bool:
