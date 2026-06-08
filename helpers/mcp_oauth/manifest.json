@@ -1,9 +1,0 @@
-{
-  "description": "OAuth token storage and provider helper for MCP servers.",
-  "files": [
-    "services/helpers/mcp_oauth.py"
-  ],
-  "id": "mcp_oauth",
-  "name": "MCP OAuth Helper",
-  "requires": []
-}

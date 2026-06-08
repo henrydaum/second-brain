@@ -1,9 +1,0 @@
-{
-  "description": "Web search provider service.",
-  "files": [
-    "services/service_web_search.py"
-  ],
-  "id": "service_web_search",
-  "name": "Web Search Service",
-  "requires": []
-}

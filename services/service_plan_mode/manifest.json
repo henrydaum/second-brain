@@ -1,9 +1,0 @@
-{
-  "description": "Runtime hooks for session-scoped plan mode.",
-  "files": [
-    "services/service_plan_mode.py"
-  ],
-  "id": "service_plan_mode",
-  "name": "Plan Mode Service",
-  "requires": []
-}

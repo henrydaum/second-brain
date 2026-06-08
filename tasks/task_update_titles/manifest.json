@@ -1,9 +1,0 @@
-{
-  "description": "Event task for conversation title generation.",
-  "files": [
-    "tasks/task_update_titles.py"
-  ],
-  "id": "task_update_titles",
-  "name": "Update Titles Task",
-  "requires": []
-}

@@ -1,9 +1,0 @@
-{
-  "description": "Parse text files into extracted text rows.",
-  "files": [
-    "tasks/task_extract_text.py"
-  ],
-  "id": "task_extract_text",
-  "name": "Extract Text Task",
-  "requires": []
-}

@@ -1,9 +1,0 @@
-{
-  "description": "Manage Timekeeper scheduled jobs from /schedule.",
-  "files": [
-    "commands/command_schedule.py"
-  ],
-  "id": "command_schedule",
-  "name": "Schedule Command",
-  "requires": []
-}
