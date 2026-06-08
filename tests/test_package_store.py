@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import json
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,9 @@ class _Backend:
         self.files = files
 
     def list_python_files(self):
+        return sorted(path for path in self.files if path.endswith(".py"))
+
+    def list_tree_files(self):
         return sorted(self.files)
 
     def get_tree_file_bytes(self, rel):
@@ -186,6 +190,38 @@ def test_recursive_helper_dependencies_are_collected(tmp_path, monkeypatch):
 
     assert [file.path for file in plan.files] == ["tools/tool_a.py", "tools/helpers/a.py", "tools/helpers/b.py"]
     assert plan.pip_packages == ["tool-lib", "a-lib", "b-lib"]
+
+
+def test_bundle_install_collects_each_root_once(tmp_path, monkeypatch):
+    _patch_roots(monkeypatch, tmp_path)
+    files = {
+        "bundles/bundle_search.json": json.dumps({"name": "Search", "files": ["tools/tool_a.py", "tools/tool_b.py"]}).encode(),
+        "tools/tool_a.py": _tool(deps=["tools/helpers/shared.py"], pip=["a-lib"]),
+        "tools/tool_b.py": _tool(deps=["tools/helpers/shared.py"], pip=["b-lib"]),
+        "tools/helpers/shared.py": _helper(pip=["shared-lib"]),
+    }
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+
+    plan = package_manager.build_install_plan(tmp_path, "bundle_search")
+
+    assert [file.path for file in plan.files] == ["tools/tool_a.py", "tools/helpers/shared.py", "tools/tool_b.py"]
+    assert plan.pip_packages == ["a-lib", "shared-lib", "b-lib"]
+
+
+def test_bundle_uninstall_skips_missing_roots_and_keeps_shared_refs(tmp_path, monkeypatch):
+    _patch_roots(monkeypatch, tmp_path)
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_a.py", _tool(deps=["tools/helpers/shared.py"]).decode())
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_c.py", _tool(deps=["tools/helpers/shared.py"]).decode())
+    _write(package_manager.INSTALLED_PLUGINS, "tools/helpers/shared.py", _helper().decode())
+    files = {"bundles/bundle_search.json": json.dumps({"files": ["tools/tool_a.py", "tools/tool_b.py"]}).encode()}
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""))
+
+    result = package_manager.uninstall_package("bundle_search", _Context(tmp_path), root_dir=tmp_path)
+
+    assert result.ok
+    assert not (package_manager.INSTALLED_PLUGINS / "tools" / "tool_a.py").exists()
+    assert (package_manager.INSTALLED_PLUGINS / "tools" / "helpers" / "shared.py").exists()
 
 
 def test_uninstall_keeps_file_and_pip_referenced_by_other_installed_plugin(tmp_path, monkeypatch):

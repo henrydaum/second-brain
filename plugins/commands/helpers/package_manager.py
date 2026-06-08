@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 import subprocess
 import sys
@@ -72,10 +73,19 @@ class UninstallPlan:
 def search_packages(root_dir: str | Path, query: str = "") -> list[dict]:
     """Return available store files matching a stem/name query."""
     q = (query or "").strip().lower()
-    items = [_item(rel, installed=False) for rel in GitStoreBackend(root_dir).list_python_files()]
+    items = [_item(rel, installed=False) for rel in GitStoreBackend(root_dir).list_python_files()] + search_bundles(root_dir)
     if q:
         items = [item for item in items if q in item["id"].lower() or q in item["path"].lower()]
     return sorted(items, key=lambda item: (item["family"], item["id"], item["path"]))
+
+
+def search_bundles(root_dir: str | Path) -> list[dict]:
+    """Return cloud-only bundle manifests."""
+    out = []
+    for rel in _bundle_manifest_files(GitStoreBackend(root_dir)):
+        manifest = _read_bundle_manifest(GitStoreBackend(root_dir), rel)
+        out.append({"id": PurePosixPath(rel).stem, "name": manifest.get("name") or PurePosixPath(rel).stem, "path": rel, "family": "bundles", "helper": False, "installed": False})
+    return out
 
 
 def installed_packages() -> list[dict]:
@@ -97,14 +107,21 @@ def install_package(root_dir: str | Path, target: str, context=None, *, requeste
     return execute_install_plan(build_install_plan(root_dir, target), context, progress=progress)
 
 
-def uninstall_package(target: str, context=None, cleanup_choices=None, progress: Progress | None = None, cleanup_approvals=None) -> PackageActionResult:
-    return execute_uninstall_plan(build_uninstall_plan(target), context, progress=progress)
+def uninstall_package(target: str, context=None, cleanup_choices=None, progress: Progress | None = None, cleanup_approvals=None, root_dir: str | Path | None = None) -> PackageActionResult:
+    return execute_uninstall_plan(build_uninstall_plan(target, root_dir=root_dir), context, progress=progress)
 
 
 def build_install_plan(root_dir: str | Path, target: str, *, requested: bool = True) -> InstallPlan:
     """Resolve target + recursive file deps from origin/store."""
     store = GitStoreBackend(root_dir)
-    target_rel = _resolve_store_target(root_dir, target)
+    bundle = _resolve_bundle_target(store, target)
+    if bundle:
+        manifest = _read_bundle_manifest(store, bundle)
+        return _install_plan_from_roots(store, manifest["files"], bundle)
+    return _install_plan_from_roots(store, [_resolve_store_target(root_dir, target)], _target_stem(target))
+
+
+def _install_plan_from_roots(store: GitStoreBackend, roots: list[str], target: str) -> InstallPlan:
     active: list[str] = []
     collected: dict[str, PlannedFile] = {}
     pip: list[str] = []
@@ -126,7 +143,8 @@ def build_install_plan(root_dir: str | Path, target: str, *, requested: bool = T
         finally:
             active.pop()
 
-    visit(target_rel)
+    for root in roots:
+        visit(root)
     _preflight_install({rel: file.content or b"" for rel, file in collected.items()})
     existing = [rel for rel in collected if _target(rel).exists()]
     pip_packages = _unique(pip)
@@ -136,7 +154,7 @@ def build_install_plan(root_dir: str | Path, target: str, *, requested: bool = T
     steps.append("Copying package files")
     if any(_is_parser_helper(rel) for rel in collected):
         steps.append("Reloading parser service")
-    return InstallPlan(target_rel, list(collected.values()), pip_packages, existing, any(_is_parser_helper(rel) for rel in collected), steps)
+    return InstallPlan(target, list(collected.values()), pip_packages, existing, any(_is_parser_helper(rel) for rel in collected), steps)
 
 
 def execute_install_plan(plan: InstallPlan, context=None, progress: Progress | None = None) -> PackageActionResult:
@@ -173,10 +191,22 @@ def execute_install_plan(plan: InstallPlan, context=None, progress: Progress | N
     return PackageActionResult(True, lines)
 
 
-def build_uninstall_plan(target: str) -> UninstallPlan:
+def build_uninstall_plan(target: str, *, root_dir: str | Path | None = None) -> UninstallPlan:
     """Resolve installed target + recursive deps, then keep externally referenced deps."""
-    target_rel = _resolve_installed_target(target)
-    candidates = _dependency_closure_from_installed(target_rel)
+    candidates: set[str]
+    bundle = _resolve_bundle_target(GitStoreBackend(root_dir), target) if root_dir is not None else None
+    if bundle:
+        candidates = set()
+        for rel in _read_bundle_manifest(GitStoreBackend(root_dir), bundle)["files"]:
+            candidates.update(_dependency_closure_from_installed(_validate_rel_path(rel)))
+        if not candidates:
+            return UninstallPlan(bundle, [], {}, [], {}, False, ["Resolving dependency plan"])
+    else:
+        candidates = _dependency_closure_from_installed(_resolve_installed_target(target))
+    return _uninstall_plan_from_candidates(target, candidates)
+
+
+def _uninstall_plan_from_candidates(target: str, candidates: set[str]) -> UninstallPlan:
     keep_files: dict[str, str] = {}
     kept_pip: dict[str, str] = {}
 
@@ -216,7 +246,7 @@ def build_uninstall_plan(target: str) -> UninstallPlan:
         steps.append("Uninstalling Python package(s): " + ", ".join(pip_remove))
     if any(_is_parser_helper(rel) for rel in candidates):
         steps.append("Reloading parser service")
-    return UninstallPlan(target_rel, remove_files, keep_files, pip_remove, kept_pip, any(_is_parser_helper(rel) for rel in candidates), steps)
+    return UninstallPlan(target, remove_files, keep_files, pip_remove, kept_pip, any(_is_parser_helper(rel) for rel in candidates), steps)
 
 
 def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices=None, progress: Progress | None = None) -> PackageActionResult:
@@ -361,6 +391,37 @@ def _resolve_store_target(root_dir: str | Path, target: str) -> str:
 
 def _resolve_installed_target(target: str) -> str:
     return _resolve_stem(target, _installed_rel_files(), "installed plugins")
+
+
+def _resolve_bundle_target(store: GitStoreBackend, target: str) -> str | None:
+    stem = _target_stem(target)
+    matches = [rel for rel in _bundle_manifest_files(store) if PurePosixPath(rel).stem == stem]
+    if len(matches) > 1:
+        raise PackageError(f"Ambiguous bundle target {stem}: {', '.join(sorted(matches))}")
+    return matches[0] if matches else None
+
+
+def _bundle_manifest_files(store: GitStoreBackend) -> list[str]:
+    return sorted(rel for rel in store.list_tree_files() if _is_bundle_manifest(rel))
+
+
+def _is_bundle_manifest(rel: str) -> bool:
+    p = PurePosixPath(rel.replace("\\", "/"))
+    return len(p.parts) == 2 and p.parts[0] == "bundles" and p.suffix == ".json"
+
+
+def _read_bundle_manifest(store: GitStoreBackend, rel: str) -> dict:
+    try:
+        manifest = json.loads(store.get_tree_file_bytes(rel).decode("utf-8"))
+    except json.JSONDecodeError as e:
+        raise PackageError(f"Invalid bundle manifest {rel}: {e}") from e
+    if not isinstance(manifest, dict):
+        raise PackageError(f"Bundle manifest must be an object: {rel}")
+    files = manifest.get("files", [])
+    if not isinstance(files, list) or not files:
+        raise PackageError(f"Bundle manifest needs a non-empty files list: {rel}")
+    manifest["files"] = [_validate_rel_path(path) for path in files]
+    return manifest
 
 
 def _resolve_stem(target: str, paths: list[str], label: str) -> str:

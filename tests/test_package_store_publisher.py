@@ -60,6 +60,21 @@ def test_validate_store_rejects_missing_dependency(tmp_path):
         package_publisher.validate_store(tmp_path / "store")
 
 
+def test_validate_store_checks_bundle_files(tmp_path):
+    tool = tmp_path / "store" / "tools" / "tool_echo.py"
+    bundle = tmp_path / "store" / "bundles" / "bundle_starter.json"
+    tool.parent.mkdir(parents=True)
+    bundle.parent.mkdir(parents=True)
+    tool.write_text("VALUE = 1\n", encoding="utf-8")
+    bundle.write_text('{"name": "Starter", "files": ["tools/tool_echo.py"]}\n', encoding="utf-8")
+
+    package_publisher.validate_store(tmp_path / "store")
+
+    bundle.write_text('{"files": ["tools/tool_missing.py"]}\n', encoding="utf-8")
+    with pytest.raises(package_publisher.StorePublishError):
+        package_publisher.validate_store(tmp_path / "store")
+
+
 def test_dependency_metadata_is_written_after_future_import(tmp_path):
     source = tmp_path / "tool_future.py"
     source.write_text('"""Doc."""\n\nfrom __future__ import annotations\n\nVALUE = 1\n', encoding="utf-8")

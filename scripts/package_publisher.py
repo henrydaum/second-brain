@@ -113,6 +113,16 @@ def validate_store(store_root: Path) -> None:
         for dep in meta.dependencies_files:
             if dep not in files:
                 raise StorePublishError(f"{rel} depends on missing file: {dep}")
+    bundle_stems: dict[str, str] = {}
+    for rel in sorted(_bundle_files(store_root)):
+        stem = Path(rel).stem
+        if stem in bundle_stems:
+            raise StorePublishError(f"Duplicate bundle stem {stem}: {bundle_stems[stem]}, {rel}")
+        bundle_stems[stem] = rel
+        manifest = package_manager._read_bundle_manifest(_PathStore(store_root), rel)
+        missing = [path for path in manifest["files"] if path not in files]
+        if missing:
+            raise StorePublishError(f"{rel} lists missing file(s): {', '.join(missing)}")
 
 
 def expand_file_specs(specs: list[str]) -> list[tuple[Path, Path]]:
@@ -165,6 +175,25 @@ def _tree_files(store_root: Path) -> set[str]:
         for path in store_root.rglob("*.py")
         if path.is_file() and package_manager._is_valid_tree_rel(path.relative_to(store_root).as_posix())
     }
+
+
+def _bundle_files(store_root: Path) -> set[str]:
+    return {
+        path.relative_to(store_root).as_posix()
+        for path in (store_root / "bundles").glob("*.json")
+        if path.is_file()
+    }
+
+
+class _PathStore:
+    def __init__(self, root: Path):
+        self.root = root
+
+    def list_tree_files(self) -> list[str]:
+        return sorted(rel for rel in [*_tree_files(self.root), *_bundle_files(self.root)])
+
+    def get_tree_file_bytes(self, rel: str) -> bytes:
+        return (self.root / rel).read_bytes()
 
 
 def _file_pair(source: Path, dest: str, seen: set[str]) -> tuple[Path, Path]:

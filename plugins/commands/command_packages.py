@@ -9,15 +9,16 @@ from state_machine.conversation import FormStep
 
 
 ACTIONS = ["available", "installed", "install", "uninstall"]
-ACTION_LABELS = ["Browse available", "Browse installed", "Install file", "Uninstall file"]
-CATEGORIES = ["tools", "tasks", "services", "commands", "frontends"]
-CATEGORY_LABELS = ["Tools", "Tasks", "Services", "Commands", "Frontends"]
+ACTION_LABELS = ["Browse available", "Browse installed", "Install", "Uninstall"]
+CATEGORIES = ["tools", "tasks", "services", "commands", "frontends", "bundles"]
+CATEGORY_LABELS = ["Tools", "Tasks", "Services", "Commands", "Frontends", "Bundles"]
 _BLURB = {
     "tools": "agent-callable tools",
     "tasks": "pipeline tasks",
     "services": "persistent backends and helpers",
     "commands": "slash commands",
     "frontends": "chat frontends and helpers",
+    "bundles": "named groups of store files",
 }
 
 
@@ -33,9 +34,10 @@ class PackagesCommand(BaseCommand):
         if action in {"available", "installed"}:
             steps.append(FormStep("category", _category_prompt(context, action), True, enum=CATEGORIES, enum_labels=CATEGORY_LABELS, columns=2))
         elif action == "install":
-            steps.append(FormStep("package_id", "Enter the plugin/helper file stem to install.", True))
+            steps.append(FormStep("package_id", "Enter the plugin, helper, or bundle stem to install.", True))
         elif action == "uninstall":
-            steps.append(FormStep("package_id", "Choose the plugin/helper file stem to uninstall.", True, enum=[p["id"] for p in package_manager.removable_packages()], columns=2))
+            items = package_manager.removable_packages() + package_manager.search_bundles(context.root_dir)
+            steps.append(FormStep("package_id", "Choose the plugin, helper, or bundle stem to uninstall.", True, enum=[p["id"] for p in items], columns=2))
         return steps
 
     def run(self, args, context):
@@ -48,7 +50,7 @@ class PackagesCommand(BaseCommand):
             if action == "install":
                 return package_manager.install_package(context.root_dir, args.get("package_id", ""), context, progress=_progress).text()
             if action == "uninstall":
-                return package_manager.uninstall_package(args.get("package_id", ""), context, progress=_progress).text()
+                return package_manager.uninstall_package(args.get("package_id", ""), context, progress=_progress, root_dir=context.root_dir).text()
             return f"Unknown action: {action}"
         except (package_manager.PackageError, StoreBackendError) as e:
             return f"Package {action} failed: {e}"
