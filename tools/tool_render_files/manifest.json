@@ -1,0 +1,9 @@
+{
+  "description": "Attach files for frontend rendering.",
+  "files": [
+    "tools/tool_render_files.py"
+  ],
+  "id": "tool_render_files",
+  "name": "Render Files Tool",
+  "requires": []
+}

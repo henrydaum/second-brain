@@ -1,0 +1,11 @@
+{
+  "description": "Search the web through the web search service.",
+  "files": [
+    "tools/tool_web_search.py"
+  ],
+  "id": "tool_web_search",
+  "name": "Web Search Tool",
+  "requires": [
+    "service_web_search"
+  ]
+}

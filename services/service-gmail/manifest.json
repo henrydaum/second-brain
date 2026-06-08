@@ -1,9 +1,0 @@
-{
-  "description": "Gmail API service for email tools.",
-  "files": [
-    "services/service_gmail.py"
-  ],
-  "id": "service-gmail",
-  "name": "Gmail Service",
-  "requires": []
-}

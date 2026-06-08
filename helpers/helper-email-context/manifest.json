@@ -1,9 +1,0 @@
-{
-  "description": "Shared conversation-scope helper for Gmail tools.",
-  "files": [
-    "tools/helpers/email_context.py"
-  ],
-  "id": "helper-email-context",
-  "name": "Email Context Helper",
-  "requires": []
-}

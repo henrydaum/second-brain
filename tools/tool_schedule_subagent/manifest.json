@@ -1,0 +1,11 @@
+{
+  "description": "Manage Timekeeper-backed scheduled subagent jobs.",
+  "files": [
+    "tools/tool_schedule_subagent.py"
+  ],
+  "id": "tool_schedule_subagent",
+  "name": "Schedule Subagent Tool",
+  "requires": [
+    "task_spawn_subagent"
+  ]
+}

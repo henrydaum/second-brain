@@ -1,0 +1,9 @@
+{
+  "description": "Google Drive OAuth service (registered as 'google_drive'); backs .gdoc and .gsheet parsing.",
+  "files": [
+    "services/service_drive.py"
+  ],
+  "id": "service_drive",
+  "name": "Google Drive Service",
+  "requires": []
+}

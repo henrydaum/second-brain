@@ -1,0 +1,9 @@
+{
+  "description": "Ask the user a structured follow-up question.",
+  "files": [
+    "tools/tool_ask_user_question.py"
+  ],
+  "id": "tool_ask_user_question",
+  "name": "Ask User Question Tool",
+  "requires": []
+}

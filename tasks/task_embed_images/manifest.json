@@ -1,0 +1,11 @@
+{
+  "description": "Write image embedding vectors for indexed images.",
+  "files": [
+    "tasks/task_embed_images.py"
+  ],
+  "id": "task_embed_images",
+  "name": "Embed Images Task",
+  "requires": [
+    "service_embed"
+  ]
+}

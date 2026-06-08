@@ -1,0 +1,9 @@
+{
+  "description": "Let the agent call safe slash commands.",
+  "files": [
+    "tools/tool_slash_command.py"
+  ],
+  "id": "tool_slash_command",
+  "name": "Slash Command Tool",
+  "requires": []
+}

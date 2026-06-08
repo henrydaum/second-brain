@@ -1,0 +1,10 @@
+{
+  "description": "PDF text, image, and table extraction via PyMuPDF (fitz).",
+  "entrypoints": [],
+  "files": [
+    "services/helpers/parse_pdf.py"
+  ],
+  "id": "parse_pdf",
+  "name": "PDF Parser",
+  "requires": []
+}

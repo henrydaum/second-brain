@@ -1,9 +1,0 @@
-{
-  "description": "Run focused diagnostics against a plugin file.",
-  "files": [
-    "tools/tool_test_plugin.py"
-  ],
-  "id": "tool-test-plugin",
-  "name": "Test Plugin Tool",
-  "requires": []
-}

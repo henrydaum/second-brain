@@ -1,0 +1,12 @@
+{
+  "description": "Send Gmail messages from configured aliases.",
+  "files": [
+    "tools/tool_email_send.py"
+  ],
+  "id": "tool_email_send",
+  "name": "Email Send Tool",
+  "requires": [
+    "email_context",
+    "service_gmail"
+  ]
+}

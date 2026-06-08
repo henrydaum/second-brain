@@ -1,0 +1,11 @@
+{
+  "description": "Bundle: plan-first workflow \u2014 the /plan command, plan-mode service, and propose_plan tool.",
+  "files": [],
+  "id": "bundle_plan_mode",
+  "name": "Plan Mode",
+  "requires": [
+    "command_plan",
+    "service_plan_mode",
+    "tool_propose_plan"
+  ]
+}

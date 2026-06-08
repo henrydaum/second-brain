@@ -1,0 +1,12 @@
+{
+  "description": "Mark Gmail messages read or unread.",
+  "files": [
+    "tools/tool_email_mark_read.py"
+  ],
+  "id": "tool_email_mark_read",
+  "name": "Email Mark Read Tool",
+  "requires": [
+    "email_context",
+    "service_gmail"
+  ]
+}

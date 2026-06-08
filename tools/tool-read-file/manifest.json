@@ -1,9 +1,0 @@
-{
-  "description": "Read UTF-8 text files from the local workspace.",
-  "files": [
-    "tools/tool_read_file.py"
-  ],
-  "id": "tool-read-file",
-  "name": "Read File Tool",
-  "requires": []
-}

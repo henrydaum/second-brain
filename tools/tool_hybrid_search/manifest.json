@@ -1,0 +1,12 @@
+{
+  "description": "Fuse lexical and semantic search results.",
+  "files": [
+    "tools/tool_hybrid_search.py"
+  ],
+  "id": "tool_hybrid_search",
+  "name": "Hybrid Search Tool",
+  "requires": [
+    "tool_lexical_search",
+    "tool_semantic_search"
+  ]
+}
