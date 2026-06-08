@@ -72,7 +72,6 @@ def publish_package(args) -> None:
             description=args.description,
             file_specs=args.file,
             requires=args.require,
-            tags=args.tag,
             entrypoints=[] if args.no_entrypoints else args.entrypoint,
             pip=[] if args.no_pip else args.pip,
             update=args.update,
@@ -103,7 +102,6 @@ def write_package(
     description: str,
     file_specs: list[str],
     requires: list[str],
-    tags: list[str],
     entrypoints: list[str] | None,
     update: bool,
     pip: list[str] | None = None,
@@ -137,7 +135,7 @@ def write_package(
         manifest["pip"] = sorted(set(pip))
     package_dir.mkdir(parents=True, exist_ok=True)
     (package_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    update_index(store_root, package_id, name, description, tags, family)
+    update_index(store_root, package_id, name, description, family)
     return manifest
 
 
@@ -170,7 +168,7 @@ def _scan_package_dirs(packages_dir: Path) -> dict[str, Path]:
     return found
 
 
-def update_index(store_root: Path, package_id: str, name: str, description: str, tags: list[str], family: str) -> None:
+def update_index(store_root: Path, package_id: str, name: str, description: str, family: str) -> None:
     index_path = store_root / "index.json"
     index_path.parent.mkdir(parents=True, exist_ok=True)
     if index_path.exists():
@@ -179,7 +177,7 @@ def update_index(store_root: Path, package_id: str, name: str, description: str,
     else:
         items = []
     items = [item for item in items if item.get("id") != package_id]
-    items.append({"id": package_id, "name": name, "description": description, "tags": sorted(set(tags)), "family": family})
+    items.append({"id": package_id, "name": name, "description": description, "family": family})
     items.sort(key=lambda item: item["id"])
     index_path.write_text(json.dumps({"packages": items}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -321,7 +319,6 @@ def _parse_args(argv: list[str] | None):
     publish.add_argument("--description", required=True)
     publish.add_argument("--file", action="append", default=[], help="SOURCE=DEST, repeatable. Directories are copied recursively. Omit for a meta-package bundle (requires-only).")
     publish.add_argument("--require", action="append", default=[])
-    publish.add_argument("--tag", action="append", default=[])
     publish.add_argument("--entrypoint", action="append", default=None)
     publish.add_argument("--no-entrypoints", action="store_true", help="Write entrypoints: [] for file-only packages.")
     publish.add_argument("--pip", action="append", default=None, help="PyPI package to install on install, repeatable. Authoritative — overrides the import scan. Use for optional/platform-specific deps the scan can't read.")

@@ -24,7 +24,6 @@ def test_write_package_copies_file_and_dir_updates_index_and_validates(tmp_path)
         description="Example package.",
         file_specs=[f"{tool}=tools/tool_echo.py", f"{helper_dir}=tools/helpers"],
         requires=[],
-        tags=["example", "tool"],
         entrypoints=None,
         update=False,
     )
@@ -48,7 +47,6 @@ def test_write_package_refuses_existing_package_without_update(tmp_path):
         description="Example package.",
         file_specs=[f"{source}=tools/tool_echo.py"],
         requires=[],
-        tags=[],
         entrypoints=None,
     )
 
@@ -69,7 +67,6 @@ def test_write_package_can_record_no_entrypoints(tmp_path):
         description="File-only special tool.",
         file_specs=[f"{source}=tools/tool_special.py"],
         requires=[],
-        tags=[],
         entrypoints=[],
         update=False,
     )
@@ -82,7 +79,7 @@ def test_validate_store_rejects_manifest_file_mismatch(tmp_path):
     package_dir = tmp_path / "store" / "tools" / "echo-tool"
     (package_dir / "files" / "tools").mkdir(parents=True)
     (tmp_path / "store" / "index.json").write_text(
-        json.dumps({"packages": [{"id": "echo-tool", "name": "Echo", "description": "", "tags": [], "family": "tools"}]}),
+        json.dumps({"packages": [{"id": "echo-tool", "name": "Echo", "description": "", "family": "tools"}]}),
         encoding="utf-8",
     )
     (package_dir / "manifest.json").write_text(

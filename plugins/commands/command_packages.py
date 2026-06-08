@@ -10,8 +10,8 @@ from plugins.helpers.plugin_paths import PLUGIN_FAMILIES
 from state_machine.conversation import FormStep
 
 
-ACTIONS = ["available", "installed", "info", "install", "uninstall"]
-ACTION_LABELS = ["Browse available", "Browse installed", "Package info", "Install package", "Uninstall package"]
+ACTIONS = ["available", "installed", "install", "uninstall"]
+ACTION_LABELS = ["Browse available", "Browse installed", "Install package", "Uninstall package"]
 CLEANUP_MODES = ["all", "none", "specific"]
 CLEANUP_MODE_LABELS = ["All", "None", "Specific"]
 
@@ -38,7 +38,7 @@ _TYPE_TO_FAMILY = {plugin_type: family for plugin_type, (family, _prefix) in PLU
 class PackagesCommand(BaseCommand):
     """Install and uninstall package-store plugins."""
     name = "packages"
-    description = "Browse, install, inspect, or uninstall packages by category"
+    description = "Browse, install, or uninstall packages by category"
     category = "System"
 
     def form(self, args, context):
@@ -46,7 +46,7 @@ class PackagesCommand(BaseCommand):
         action = args.get("action")
         if action in {"available", "installed"}:
             steps.append(FormStep("category", _category_prompt(context, action), True, enum=CATEGORIES, enum_labels=CATEGORY_LABELS, columns=2))
-        if action in {"install", "info"}:
+        if action == "install":
             steps.append(FormStep("package_id", "Enter the package id.", True))
         if action == "uninstall":
             steps.append(FormStep("package_id", "Choose the package to uninstall.", True, enum=[p["id"] for p in package_manager.removable_packages()], columns=2))
@@ -79,8 +79,6 @@ class PackagesCommand(BaseCommand):
                 return _format_available(context, args.get("category"))
             if action == "installed":
                 return _format_installed(context, args.get("category"))
-            if action == "info":
-                return _format_manifest(package_manager.package_info(context.root_dir, args.get("package_id", "")))
             if action == "install":
                 return package_manager.install_package(context.root_dir, args.get("package_id", ""), context, progress=_progress).text()
             if action == "uninstall":
@@ -88,7 +86,7 @@ class PackagesCommand(BaseCommand):
                 return package_manager.execute_uninstall_plan(plan, context, _cleanup_choices(plan, args), progress=_progress).text()
             return f"Unknown action: {action}"
         except (package_manager.PackageError, StoreBackendError) as e:
-            if action in {"install", "info"} and _is_missing_manifest(e, args.get("package_id", "")):
+            if action == "install" and _is_missing_manifest(e, args.get("package_id", "")):
                 return f"Package {action} failed: {args.get('package_id', '')!r} not found."
             return f"Package {action} failed: {e}"
 
@@ -185,9 +183,7 @@ def _format_installed(context, category: str | None) -> str:
 
 def _available_line(item: dict) -> str:
     desc = item.get("description") or ""
-    tags = [t for t in (item.get("tags") or []) if t != "bundle"]
-    tagstr = ("   " + " ".join(f"#{t}" for t in tags)) if tags else ""
-    return f"  {item.get('id', '')}{(' — ' + desc) if desc else ''}{tagstr}"
+    return f"  {item.get('id', '')}{(' — ' + desc) if desc else ''}"
 
 
 # ── Uninstall cleanup form plumbing ──────────────────────────────────
@@ -234,19 +230,3 @@ def _truthy(value) -> bool:
 
 def _is_missing_manifest(error: Exception, package_id: str) -> bool:
     return bool(package_id) and f"packages/{package_id}/manifest.json" in str(error) and "does not exist" in str(error)
-
-
-def _format_manifest(manifest: dict) -> str:
-    lines = [manifest.get("id", ""), manifest.get("description", "")]
-    requires = manifest.get("requires") or []
-    if requires:
-        lines.append(f"Requires: {', '.join(requires)}")
-    files = manifest.get("files") or []
-    if files:
-        lines.append("Files:")
-        lines.extend(f"  {path}" for path in files)
-    entrypoints = manifest.get("entrypoints")
-    if entrypoints:
-        lines.append("Entrypoints:")
-        lines.extend(f"  {path}" for path in entrypoints)
-    return "\n".join(line for line in lines if line)

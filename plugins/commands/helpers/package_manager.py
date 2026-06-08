@@ -99,14 +99,6 @@ class UninstallPlan:
 Progress = Callable[[str], None]
 
 
-def package_family(item: dict) -> str:
-    """Derive a package's structural family from its index entry."""
-    if "bundle" in (item.get("tags") or []):
-        return "bundle"
-    parts = re.split(r"[-_]", (item.get("id") or "").strip(), maxsplit=1)
-    return parts[0] if parts and parts[0] else "other"
-
-
 def search_packages(root_dir: str | Path, query: str = "") -> list[dict]:
     """Return packages from the store index matching query."""
     items = GitStoreBackend(root_dir).get_index()
@@ -115,7 +107,7 @@ def search_packages(root_dir: str | Path, query: str = "") -> list[dict]:
         return sorted(items, key=lambda item: item.get("id", ""))
 
     def hay(item):
-        return " ".join(str(item.get(k, "")) for k in ("id", "name", "description", "tags")).lower()
+        return " ".join(str(item.get(k, "")) for k in ("id", "name", "description")).lower()
 
     return sorted([item for item in items if q in hay(item)], key=lambda item: item.get("id", ""))
 
