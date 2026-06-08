@@ -1,9 +1,0 @@
-{
-  "description": "Run read-only SQLite queries against Second Brain data.",
-  "files": [
-    "tools/tool_sql_query.py"
-  ],
-  "id": "tool-sql-query",
-  "name": "SQL Query Tool",
-  "requires": []
-}

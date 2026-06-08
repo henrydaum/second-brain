@@ -1,9 +1,0 @@
-{
-  "description": "Event task for scheduled background subagent runs.",
-  "files": [
-    "tasks/task_spawn_subagent.py"
-  ],
-  "id": "task-spawn-subagent",
-  "name": "Spawn Subagent Task",
-  "requires": []
-}

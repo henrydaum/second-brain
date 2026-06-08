@@ -1,0 +1,9 @@
+{
+  "description": "Shared SearchResult data helper for search tools.",
+  "files": [
+    "tools/helpers/SearchResult.py"
+  ],
+  "id": "search_result",
+  "name": "Search Result Helper",
+  "requires": []
+}

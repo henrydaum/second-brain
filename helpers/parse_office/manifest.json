@@ -1,0 +1,10 @@
+{
+  "description": "Microsoft Office extraction \u2014 Word (.docx/.doc) and PowerPoint (.pptx) text and embedded images via python-docx and python-pptx.",
+  "entrypoints": [],
+  "files": [
+    "services/helpers/parse_office.py"
+  ],
+  "id": "parse_office",
+  "name": "Office Parser",
+  "requires": []
+}

@@ -1,0 +1,11 @@
+{
+  "description": "Split extracted text into searchable chunks.",
+  "files": [
+    "tasks/task_chunk_text.py"
+  ],
+  "id": "task_chunk_text",
+  "name": "Chunk Text Task",
+  "requires": [
+    "task_extract_text"
+  ]
+}

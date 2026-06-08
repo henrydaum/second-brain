@@ -1,0 +1,14 @@
+{
+  "description": "Bundle: Gmail integration \u2014 service plus check/send/mark-read/modify-labels tools.",
+  "files": [],
+  "id": "bundle_gmail",
+  "name": "Gmail",
+  "requires": [
+    "email_context",
+    "service_gmail",
+    "tool_email_check",
+    "tool_email_mark_read",
+    "tool_email_modify_labels",
+    "tool_email_send"
+  ]
+}

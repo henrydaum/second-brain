@@ -1,0 +1,10 @@
+{
+  "description": "LiteLLM LLM backend discovered by the LLM router.",
+  "entrypoints": [],
+  "files": [
+    "services/service_litellm.py"
+  ],
+  "id": "service_litellm",
+  "name": "LiteLLM Backend",
+  "requires": []
+}

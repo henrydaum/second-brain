@@ -1,0 +1,12 @@
+{
+  "description": "Write text embedding vectors for text chunks.",
+  "files": [
+    "tasks/task_embed_text.py"
+  ],
+  "id": "task_embed_text",
+  "name": "Embed Text Task",
+  "requires": [
+    "service_embed",
+    "task_chunk_text"
+  ]
+}

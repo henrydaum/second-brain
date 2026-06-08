@@ -1,0 +1,11 @@
+{
+  "description": "Bundle: Google Drive \u2014 the Drive service plus the parsers that use it (.gdoc, and .gsheet via parser-tabular).",
+  "files": [],
+  "id": "bundle_google_drive",
+  "name": "Google Drive",
+  "requires": [
+    "parse_gdoc",
+    "parse_tabular",
+    "service_drive"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "description": "Bundle: every file parser \u2014 PDF, Office, tabular, audio, video, Google Docs, containers \u2014 plus Whisper transcription and OCR.",
+  "files": [],
+  "id": "bundle_all_parsers",
+  "name": "All Parsers",
+  "requires": [
+    "parse_audio",
+    "parse_gdoc",
+    "parse_office",
+    "parse_pdf",
+    "parse_tabular",
+    "parse_video",
+    "service_ocr",
+    "service_whisper",
+    "task_extract_container"
+  ]
+}

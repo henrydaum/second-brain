@@ -1,0 +1,9 @@
+{
+  "description": "Event task for periodic memory dreaming.",
+  "files": [
+    "tasks/task_dream_memory.py"
+  ],
+  "id": "task_dream_memory",
+  "name": "Dream Memory Task",
+  "requires": []
+}
