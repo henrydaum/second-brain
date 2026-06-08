@@ -7,6 +7,9 @@ delegates to the ``google_drive`` peer service. When that service isn't loaded
 the caller falls back to a pointer.
 """
 
+
+dependencies_files = ['services/service_drive.py']
+
 import json
 import logging
 from pathlib import Path

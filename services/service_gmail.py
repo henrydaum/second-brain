@@ -22,6 +22,9 @@ Scope: https://www.googleapis.com/auth/gmail.modify
 (read, send, modify labels — needed to mark as read/unread)
 """
 
+
+dependencies_pip = ['google-api-python-client', 'google-auth-oauthlib', 'requests']
+
 import logging
 from plugins.BaseService import BaseService
 from paths import DATA_DIR

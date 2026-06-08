@@ -17,6 +17,9 @@ transcribe_audio) completes for a path.
 require_all_inputs = False means any one suffices.
 """
 
+
+dependencies_files = ['tasks/task_chunk_text.py']
+
 import logging
 import time
 from pathlib import Path

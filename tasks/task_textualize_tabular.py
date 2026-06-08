@@ -6,6 +6,9 @@ can reason about tabular data. Caps at 50 rows per sheet to keep output
 manageable. Stored in the tabular_text table for the metadata scraper.
 """
 
+
+dependencies_files = ['services/helpers/parse_tabular.py']
+
 import logging
 import time
 from pathlib import Path

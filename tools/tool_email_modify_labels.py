@@ -11,6 +11,9 @@ Common idioms:
     mark as spam      → add=["SPAM"], remove=["INBOX"]
 """
 
+
+dependencies_files = ['services/service_gmail.py', 'tools/helpers/email_context.py']
+
 import logging
 
 from plugins.BaseTool import BaseTool, ToolResult

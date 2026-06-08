@@ -1,5 +1,8 @@
 """Tool plugin for schedule subagent."""
 
+
+dependencies_files = ['tasks/task_spawn_subagent.py']
+
 import re
 from datetime import datetime
 

@@ -28,6 +28,9 @@ Hand out a fresh build() client per call via get_client().
 build() is cheap (~1ms) — the OAuth dance only happens in load().
 """
 
+
+dependencies_pip = ['google-api-python-client', 'google-auth-oauthlib', 'requests']
+
 import os
 import time
 from pathlib import Path

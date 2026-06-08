@@ -7,6 +7,9 @@ a dynamic form, plugin-config persistence, and a live service reload so changes
 take effect immediately.
 """
 
+
+dependencies_files = ['services/service_mcp.py']
+
 import json
 
 from config import config_manager

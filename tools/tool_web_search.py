@@ -1,5 +1,8 @@
 """Tool plugin for web search."""
 
+
+dependencies_files = ['services/service_web_search.py']
+
 from plugins.BaseTool import BaseTool, ToolResult
 
 import re

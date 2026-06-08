@@ -1,5 +1,8 @@
 """Slash command plugin for `/plan`."""
 
+
+dependencies_files = ['services/service_plan_mode.py', 'tools/tool_propose_plan.py']
+
 from plugins.BaseCommand import BaseCommand
 
 

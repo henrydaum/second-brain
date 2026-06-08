@@ -6,6 +6,9 @@ The ``fitz`` import is lazy so the module degrades to "not installed" rather
 than failing the parser-discovery scan when PyMuPDF is absent.
 """
 
+
+dependencies_pip = ['pandas', 'PyMuPDF']
+
 import logging
 import time
 from pathlib import Path

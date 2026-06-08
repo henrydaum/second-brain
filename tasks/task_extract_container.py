@@ -14,6 +14,9 @@ inside an archive.
 No services required — just calls the parser directly.
 """
 
+
+dependencies_files = ['services/helpers/parse_container.py']
+
 import logging
 import time
 from pathlib import Path

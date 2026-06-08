@@ -9,6 +9,9 @@ No upstream dependencies — images don't need text extraction first.
 Requires the image_embedder service to be loaded.
 """
 
+
+dependencies_files = ['services/service_embed.py']
+
 import logging
 import time
 from pathlib import Path

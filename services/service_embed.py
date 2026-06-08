@@ -1,5 +1,8 @@
 """Service plugin for embed."""
 
+
+dependencies_pip = ['numpy', 'sentence-transformers', 'torch']
+
 import os
 from pathlib import Path
 import gc

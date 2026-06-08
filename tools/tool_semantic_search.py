@@ -11,6 +11,10 @@ so the hybrid search tool can apply RRF fusion across them.
 Adding a new modality = one entry in EMBEDDING_STREAMS.
 """
 
+
+dependencies_files = ['services/service_embed.py', 'tools/helpers/SearchResult.py', 'tools/tool_lexical_search.py']
+dependencies_pip = ['numpy']
+
 import logging
 import os
 import time

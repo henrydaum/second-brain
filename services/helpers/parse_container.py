@@ -1,5 +1,8 @@
 """Attachment parsing helpers for container and archive inputs."""
 
+
+dependencies_pip = ['py7zr', 'rarfile']
+
 import logging
 import email
 import hashlib

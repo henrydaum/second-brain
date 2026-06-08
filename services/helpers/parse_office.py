@@ -6,6 +6,9 @@ imports are lazy so the module degrades to "not installed" rather than
 failing the parser-discovery scan.
 """
 
+
+dependencies_pip = ['python-docx', 'python-pptx']
+
 import logging
 import time
 from pathlib import Path

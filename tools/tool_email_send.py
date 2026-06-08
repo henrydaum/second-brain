@@ -19,6 +19,9 @@ Config (set in UI → Settings → Plugin Config):
                          Empty list = no agent send access.
 """
 
+
+dependencies_files = ['services/service_gmail.py', 'tools/helpers/email_context.py']
+
 import logging
 import os
 import re

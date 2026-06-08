@@ -9,6 +9,9 @@ sits in the queue until the user loads the OCR engine. In auto mode,
 the system loads it before dispatching.
 """
 
+
+dependencies_files = ['services/service_ocr.py']
+
 import logging
 import time
 import os

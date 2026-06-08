@@ -1,6 +1,10 @@
 """Telegram frontend plugin backed by the conversation runtime."""
 
+
 from __future__ import annotations
+
+dependencies_files = ['frontends/helpers/telegram_renderers.py']
+dependencies_pip = ['python-telegram-bot']
 
 import asyncio
 import html

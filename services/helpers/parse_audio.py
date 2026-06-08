@@ -1,5 +1,8 @@
 """Attachment parsing helpers for audio inputs."""
 
+
+dependencies_pip = ['librosa', 'numpy', 'soundfile']
+
 import logging
 import json
 import subprocess

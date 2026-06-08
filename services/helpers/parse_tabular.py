@@ -1,5 +1,9 @@
 """Attachment parsing helpers for tabular inputs."""
 
+
+dependencies_files = ['services/service_drive.py']
+dependencies_pip = ['pandas']
+
 import logging
 from pathlib import Path
 from plugins.services.helpers.ParseResult import ParseResult

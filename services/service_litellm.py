@@ -1,5 +1,8 @@
 """LiteLLM backend for the LLM router."""
 
+
+dependencies_pip = ['litellm']
+
 import logging
 import os
 import time

@@ -10,6 +10,9 @@ Config keys:
     embed_chunk_overlap Overlap between adjacent chunks (default 50)
 """
 
+
+dependencies_files = ['tasks/task_extract_text.py']
+
 import logging
 import time
 from pathlib import Path

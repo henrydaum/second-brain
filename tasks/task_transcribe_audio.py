@@ -7,6 +7,9 @@ in the audio_transcripts table. Mirrors the ocr_images pattern.
 Requires the "whisper" service to be loaded.
 """
 
+
+dependencies_files = ['services/service_whisper.py']
+
 import logging
 import time
 from pathlib import Path

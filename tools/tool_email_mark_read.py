@@ -2,6 +2,9 @@
 tool_email_mark_read — Mark a Gmail message as read or unread.
 """
 
+
+dependencies_files = ['services/service_gmail.py', 'tools/helpers/email_context.py']
+
 import logging
 
 from plugins.BaseTool import BaseTool, ToolResult

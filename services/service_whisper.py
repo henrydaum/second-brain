@@ -8,6 +8,10 @@ and cached locally.
 Requires: pip install faster-whisper
 """
 
+
+dependencies_files = ['services/helpers/parse_voice.py']
+dependencies_pip = ['faster-whisper', 'torch']
+
 import gc
 import logging
 import os

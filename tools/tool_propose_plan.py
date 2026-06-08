@@ -1,5 +1,8 @@
 """Tool for proposing a plan and leaving plan mode after approval."""
 
+
+dependencies_files = ['services/service_plan_mode.py']
+
 from plugins.BaseTool import BaseTool, ToolResult
 
 

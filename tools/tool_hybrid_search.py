@@ -10,6 +10,9 @@ Modality-agnostic — works with whatever modalities the sub-tools return
 (text, image, audio, tabular, etc.) without hardcoding any of them.
 """
 
+
+dependencies_files = ['tools/tool_lexical_search.py', 'tools/tool_semantic_search.py']
+
 import logging
 import time
 from collections import defaultdict
