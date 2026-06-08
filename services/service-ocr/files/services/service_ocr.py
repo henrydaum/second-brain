@@ -68,13 +68,24 @@ class WindowsOCR(BaseService):
 
     def _load(self):
         """Verify the engine is present, with an actionable error if it isn't."""
-        # Torch must be imported before winrt — its greedy DLL loading
-        # conflicts with winrt's DLLs if loaded second, causing crashes.
+        # torch's greedy DLL loading conflicts with winrt's DLLs if it loads
+        # second, so import it FIRST when it happens to be installed (e.g. the
+        # user also has the easyocr path). Windows OCR itself does not need
+        # torch, so its absence is fine — don't make it a hard requirement.
         try:
             import torch  # noqa: F401
+        except ImportError:
+            pass
+        # Modern PyWinRT ships one wheel per namespace under the ``winrt.*``
+        # import root; there is no package literally named ``winrt`` on PyPI.
+        try:
             from winrt.windows.media.ocr import OcrEngine  # noqa: F401
         except ImportError as e:
-            raise RuntimeError(_engine_missing_msg("Windows OCR via winrt", "winrt torch", e))
+            raise RuntimeError(_engine_missing_msg(
+                "Windows OCR via winrt",
+                "winrt-Windows.Media.Ocr winrt-Windows.Graphics.Imaging winrt-Windows.Storage",
+                e,
+            ))
 
         self.loaded = True
         return True
