@@ -4,647 +4,379 @@
       "description": "Bundle: every file parser \u2014 PDF, Office, tabular, audio, video, Google Docs, containers \u2014 plus Whisper transcription and OCR.",
       "family": "bundles",
       "id": "all-parsers",
-      "name": "All Parsers",
-      "tags": [
-        "bundle",
-        "parsers"
-      ]
+      "name": "All Parsers"
     },
     {
       "description": "Manage MCP server configuration from /mcp.",
       "family": "commands",
       "id": "command-mcp",
-      "name": "MCP Command",
-      "tags": [
-        "command",
-        "mcp"
-      ]
+      "name": "MCP Command"
     },
     {
       "description": "Toggle hook-backed plan mode for the active conversation.",
       "family": "commands",
       "id": "command-plan",
-      "name": "Plan Command",
-      "tags": [
-        "command",
-        "planning"
-      ]
+      "name": "Plan Command"
     },
     {
       "description": "Manage Timekeeper scheduled jobs from /schedule.",
       "family": "commands",
       "id": "command-schedule",
-      "name": "Schedule Command",
-      "tags": [
-        "command",
-        "scheduling"
-      ]
+      "name": "Schedule Command"
     },
     {
       "description": "Pull application updates from the configured git remote.",
       "family": "commands",
       "id": "command-update",
-      "name": "Update Command",
-      "tags": [
-        "command",
-        "maintenance"
-      ]
+      "name": "Update Command"
     },
     {
       "description": "Telegram transport frontend for Second Brain.",
       "family": "frontends",
       "id": "frontend-telegram",
-      "name": "Telegram Frontend",
-      "tags": [
-        "frontend",
-        "telegram"
-      ]
+      "name": "Telegram Frontend"
     },
     {
       "description": "Bundle of bundles: a complete instance \u2014 starter (frontend, LLM, core tools, memory) + all-parsers (every file parser, Whisper, OCR) + indexing-search (full ingest & retrieval).",
       "family": "bundles",
       "id": "full",
-      "name": "Full",
-      "tags": [
-        "bundle",
-        "full",
-        "recommended"
-      ]
+      "name": "Full"
     },
     {
       "description": "Bundle: Gmail integration \u2014 service plus check/send/mark-read/modify-labels tools.",
       "family": "bundles",
       "id": "gmail",
-      "name": "Gmail",
-      "tags": [
-        "bundle",
-        "email",
-        "gmail"
-      ]
+      "name": "Gmail"
     },
     {
       "description": "Bundle: Google Drive \u2014 the Drive service plus the parsers that use it (.gdoc, and .gsheet via parser-tabular).",
       "family": "bundles",
       "id": "google-drive",
-      "name": "Google Drive",
-      "tags": [
-        "bundle",
-        "google-drive"
-      ]
+      "name": "Google Drive"
     },
     {
       "description": "Shared conversation-scope helper for Gmail tools.",
       "family": "helpers",
       "id": "helper-email-context",
-      "name": "Email Context Helper",
-      "tags": [
-        "gmail",
-        "helper"
-      ]
+      "name": "Email Context Helper"
     },
     {
       "description": "OAuth token storage and provider helper for MCP servers.",
       "family": "helpers",
       "id": "helper-mcp-oauth",
-      "name": "MCP OAuth Helper",
-      "tags": [
-        "helper",
-        "mcp"
-      ]
+      "name": "MCP OAuth Helper"
     },
     {
       "description": "Shared SearchResult data helper for search tools.",
       "family": "helpers",
       "id": "helper-search-result",
-      "name": "Search Result Helper",
-      "tags": [
-        "helper",
-        "search"
-      ]
+      "name": "Search Result Helper"
     },
     {
       "description": "Bundle: full ingestion + retrieval \u2014 extract/chunk/embed/lexical-index tasks, OCR/transcribe/textualize tasks, embed & OCR & whisper services, and hybrid/lexical/semantic search tools.",
       "family": "bundles",
       "id": "indexing-search",
-      "name": "Indexing & Search",
-      "tags": [
-        "bundle",
-        "indexing",
-        "search"
-      ]
+      "name": "Indexing & Search"
     },
     {
       "description": "Bundle: Model Context Protocol support \u2014 the /mcp command, MCP service, and OAuth helper.",
       "family": "bundles",
       "id": "mcp",
-      "name": "MCP",
-      "tags": [
-        "bundle",
-        "mcp"
-      ]
+      "name": "MCP"
     },
     {
       "description": "Audio waveform loading via soundfile/librosa with ffprobe metadata.",
       "family": "helpers",
       "id": "parser-audio",
-      "name": "Audio Parser",
-      "tags": [
-        "audio",
-        "parser"
-      ]
+      "name": "Audio Parser"
     },
     {
       "description": "Archive and email extraction \u2014 ZIP/TAR/GZ/BZ2/EML (stdlib), 7Z/RAR (py7zr/rarfile when present) \u2014 bundled with the extract_container task that feeds extracted child files back into the pipeline.",
       "family": "tasks",
       "id": "parser-container",
-      "name": "Container Parser",
-      "tags": [
-        "archive",
-        "container",
-        "email",
-        "parser"
-      ]
+      "name": "Container Parser"
     },
     {
       "description": "Google Docs (.gdoc) shortcut parsing \u2014 fetches document text via the google_drive service.",
       "family": "helpers",
       "id": "parser-gdoc",
-      "name": "Google Docs Parser",
-      "tags": [
-        "gdoc",
-        "google-drive",
-        "parser"
-      ]
+      "name": "Google Docs Parser"
     },
     {
       "description": "Microsoft Office extraction \u2014 Word (.docx/.doc) and PowerPoint (.pptx) text and embedded images via python-docx and python-pptx.",
       "family": "helpers",
       "id": "parser-office",
-      "name": "Office Parser",
-      "tags": [
-        "document",
-        "docx",
-        "office",
-        "parser",
-        "pptx"
-      ]
+      "name": "Office Parser"
     },
     {
       "description": "PDF text, image, and table extraction via PyMuPDF (fitz).",
       "family": "helpers",
       "id": "parser-pdf",
-      "name": "PDF Parser",
-      "tags": [
-        "document",
-        "parser",
-        "pdf"
-      ]
+      "name": "PDF Parser"
     },
     {
       "description": "Tabular parsing \u2014 CSV/TSV, Excel, Parquet/Feather, SQLite, and Google Sheets \u2014 into pandas DataFrames.",
       "family": "helpers",
       "id": "parser-tabular",
-      "name": "Tabular Parser",
-      "tags": [
-        "data",
-        "parser",
-        "spreadsheet",
-        "tabular"
-      ]
+      "name": "Tabular Parser"
     },
     {
       "description": "Video container parsing and audio-track extraction via PyAV (av).",
       "family": "helpers",
       "id": "parser-video",
-      "name": "Video Parser",
-      "tags": [
-        "parser",
-        "video"
-      ]
+      "name": "Video Parser"
     },
     {
       "description": "Bundle: plan-first workflow \u2014 the /plan command, plan-mode service, and propose_plan tool.",
       "family": "bundles",
       "id": "plan-mode",
-      "name": "Plan Mode",
-      "tags": [
-        "bundle",
-        "planning"
-      ]
+      "name": "Plan Mode"
     },
     {
       "description": "Bundle: scheduled background agents \u2014 the /schedule command, spawn-subagent task, and schedule-subagent tool.",
       "family": "bundles",
       "id": "scheduling",
-      "name": "Scheduling",
-      "tags": [
-        "bundle",
-        "scheduling"
-      ]
+      "name": "Scheduling"
     },
     {
       "description": "Google Drive OAuth service (registered as 'google_drive'); backs .gdoc and .gsheet parsing.",
       "family": "services",
       "id": "service-drive",
-      "name": "Google Drive Service",
-      "tags": [
-        "google-drive",
-        "service"
-      ]
+      "name": "Google Drive Service"
     },
     {
       "description": "Text and image embedding services for indexed search.",
       "family": "services",
       "id": "service-embed",
-      "name": "Embedding Services",
-      "tags": [
-        "embedding",
-        "search",
-        "service"
-      ]
+      "name": "Embedding Services"
     },
     {
       "description": "Gmail API service for email tools.",
       "family": "services",
       "id": "service-gmail",
-      "name": "Gmail Service",
-      "tags": [
-        "gmail",
-        "service"
-      ]
+      "name": "Gmail Service"
     },
     {
       "description": "LiteLLM LLM backend discovered by the LLM router.",
       "family": "services",
       "id": "service-litellm",
-      "name": "LiteLLM Backend",
-      "tags": []
+      "name": "LiteLLM Backend"
     },
     {
       "description": "Connect to MCP servers and register their tools.",
       "family": "services",
       "id": "service-mcp",
-      "name": "MCP Service",
-      "tags": [
-        "mcp",
-        "service"
-      ]
+      "name": "MCP Service"
     },
     {
       "description": "Image-to-text OCR. Cross-platform install (pillow-heif for HEIC); the OCR engine itself is your choice and is loaded lazily per platform \u2014 Windows OCR (winrt), macOS Vision (pyobjc), or easyocr+torch. If no engine is installed, the service raises a clear message telling you what to pip install.",
       "family": "services",
       "id": "service-ocr",
-      "name": "OCR Service",
-      "tags": [
-        "ocr",
-        "service"
-      ]
+      "name": "OCR Service"
     },
     {
       "description": "Runtime hooks for session-scoped plan mode.",
       "family": "services",
       "id": "service-plan-mode",
-      "name": "Plan Mode Service",
-      "tags": [
-        "planning",
-        "service"
-      ]
+      "name": "Plan Mode Service"
     },
     {
       "description": "Web search provider service.",
       "family": "services",
       "id": "service-web-search",
-      "name": "Web Search Service",
-      "tags": [
-        "service",
-        "web-search"
-      ]
+      "name": "Web Search Service"
     },
     {
       "description": "Speech transcription service backed by Faster Whisper.",
       "family": "services",
       "id": "service-whisper",
-      "name": "Whisper Service",
-      "tags": [
-        "audio",
-        "service",
-        "whisper"
-      ]
+      "name": "Whisper Service"
     },
     {
       "description": "Bundle: a complete basic setup covering ~95% of everyday use \u2014 Telegram frontend, LiteLLM backend (most models), read/edit files, sql & shell tools, ask-user-question, plugin authoring (test_plugin), plus dream-memory and auto conversation titles.",
       "family": "bundles",
       "id": "starter",
-      "name": "Starter",
-      "tags": [
-        "basics",
-        "bundle",
-        "starter"
-      ]
+      "name": "Starter"
     },
     {
       "description": "Split extracted text into searchable chunks.",
       "family": "tasks",
       "id": "task-chunk-text",
-      "name": "Chunk Text Task",
-      "tags": [
-        "indexing",
-        "task"
-      ]
+      "name": "Chunk Text Task"
     },
     {
       "description": "Event task for periodic memory dreaming.",
       "family": "tasks",
       "id": "task-dream-memory",
-      "name": "Dream Memory Task",
-      "tags": [
-        "memory",
-        "task"
-      ]
+      "name": "Dream Memory Task"
     },
     {
       "description": "Write image embedding vectors for indexed images.",
       "family": "tasks",
       "id": "task-embed-images",
-      "name": "Embed Images Task",
-      "tags": [
-        "embedding",
-        "search",
-        "task"
-      ]
+      "name": "Embed Images Task"
     },
     {
       "description": "Write text embedding vectors for text chunks.",
       "family": "tasks",
       "id": "task-embed-text",
-      "name": "Embed Text Task",
-      "tags": [
-        "embedding",
-        "search",
-        "task"
-      ]
+      "name": "Embed Text Task"
     },
     {
       "description": "Parse text files into extracted text rows.",
       "family": "tasks",
       "id": "task-extract-text",
-      "name": "Extract Text Task",
-      "tags": [
-        "indexing",
-        "task"
-      ]
+      "name": "Extract Text Task"
     },
     {
       "description": "Write full-text lexical index rows for search.",
       "family": "tasks",
       "id": "task-lexical-index",
-      "name": "Lexical Index Task",
-      "tags": [
-        "indexing",
-        "search",
-        "task"
-      ]
+      "name": "Lexical Index Task"
     },
     {
       "description": "Pipeline task: OCR image files to text via the ocr service.",
       "family": "tasks",
       "id": "task-ocr-images",
-      "name": "OCR Images Task",
-      "tags": [
-        "ocr",
-        "search",
-        "task"
-      ]
+      "name": "OCR Images Task"
     },
     {
       "description": "Event task for scheduled background subagent runs.",
       "family": "tasks",
       "id": "task-spawn-subagent",
-      "name": "Spawn Subagent Task",
-      "tags": [
-        "scheduling",
-        "subagent",
-        "task"
-      ]
+      "name": "Spawn Subagent Task"
     },
     {
       "description": "Pipeline task: convert tabular files (parsed via parser-tabular) into searchable text.",
       "family": "tasks",
       "id": "task-textualize-tabular",
-      "name": "Textualize Tabular Task",
-      "tags": [
-        "search",
-        "tabular",
-        "task"
-      ]
+      "name": "Textualize Tabular Task"
     },
     {
       "description": "Pipeline task: transcribe audio files to text via the whisper service.",
       "family": "tasks",
       "id": "task-transcribe-audio",
-      "name": "Transcribe Audio Task",
-      "tags": [
-        "audio",
-        "search",
-        "task"
-      ]
+      "name": "Transcribe Audio Task"
     },
     {
       "description": "Event task for conversation title generation.",
       "family": "tasks",
       "id": "task-update-titles",
-      "name": "Update Titles Task",
-      "tags": [
-        "conversation",
-        "task"
-      ]
+      "name": "Update Titles Task"
     },
     {
       "description": "Ask the user a structured follow-up question.",
       "family": "tools",
       "id": "tool-ask-user-question",
-      "name": "Ask User Question Tool",
-      "tags": [
-        "interaction",
-        "tool"
-      ]
+      "name": "Ask User Question Tool"
     },
     {
       "description": "Create, edit, append, or delete UTF-8 text files.",
       "family": "tools",
       "id": "tool-edit-file",
-      "name": "Edit File Tool",
-      "tags": [
-        "files",
-        "tool"
-      ]
+      "name": "Edit File Tool"
     },
     {
       "description": "Read Gmail messages through the Gmail service.",
       "family": "tools",
       "id": "tool-email-check",
-      "name": "Email Check Tool",
-      "tags": [
-        "gmail",
-        "tool"
-      ]
+      "name": "Email Check Tool"
     },
     {
       "description": "Mark Gmail messages read or unread.",
       "family": "tools",
       "id": "tool-email-mark-read",
-      "name": "Email Mark Read Tool",
-      "tags": [
-        "gmail",
-        "tool"
-      ]
+      "name": "Email Mark Read Tool"
     },
     {
       "description": "Add or remove Gmail labels on messages.",
       "family": "tools",
       "id": "tool-email-modify-labels",
-      "name": "Email Modify Labels Tool",
-      "tags": [
-        "gmail",
-        "tool"
-      ]
+      "name": "Email Modify Labels Tool"
     },
     {
       "description": "Send Gmail messages from configured aliases.",
       "family": "tools",
       "id": "tool-email-send",
-      "name": "Email Send Tool",
-      "tags": [
-        "gmail",
-        "tool"
-      ]
+      "name": "Email Send Tool"
     },
     {
       "description": "Fuse lexical and semantic search results.",
       "family": "tools",
       "id": "tool-hybrid-search",
-      "name": "Hybrid Search Tool",
-      "tags": [
-        "search",
-        "tool"
-      ]
+      "name": "Hybrid Search Tool"
     },
     {
       "description": "Search indexed files with BM25 keyword matching.",
       "family": "tools",
       "id": "tool-lexical-search",
-      "name": "Lexical Search Tool",
-      "tags": [
-        "search",
-        "tool"
-      ]
+      "name": "Lexical Search Tool"
     },
     {
       "description": "Ask the user to approve a plan through the plan-mode service.",
       "family": "tools",
       "id": "tool-propose-plan",
-      "name": "Propose Plan Tool",
-      "tags": [
-        "planning",
-        "tool"
-      ]
+      "name": "Propose Plan Tool"
     },
     {
       "description": "Read UTF-8 text files from the local workspace.",
       "family": "tools",
       "id": "tool-read-file",
-      "name": "Read File Tool",
-      "tags": [
-        "files",
-        "tool"
-      ]
+      "name": "Read File Tool"
     },
     {
       "description": "Attach files for frontend rendering.",
       "family": "tools",
       "id": "tool-render-files",
-      "name": "Render Files Tool",
-      "tags": [
-        "files",
-        "tool"
-      ]
+      "name": "Render Files Tool"
     },
     {
       "description": "Run scoped terminal commands with approval-aware behavior.",
       "family": "tools",
       "id": "tool-run-command",
-      "name": "Run Command Tool",
-      "tags": []
+      "name": "Run Command Tool"
     },
     {
       "description": "Manage Timekeeper-backed scheduled subagent jobs.",
       "family": "tools",
       "id": "tool-schedule-subagent",
-      "name": "Schedule Subagent Tool",
-      "tags": [
-        "scheduling",
-        "subagent",
-        "tool"
-      ]
+      "name": "Schedule Subagent Tool"
     },
     {
       "description": "Search indexed files by embedding similarity.",
       "family": "tools",
       "id": "tool-semantic-search",
-      "name": "Semantic Search Tool",
-      "tags": [
-        "embedding",
-        "search",
-        "tool"
-      ]
+      "name": "Semantic Search Tool"
     },
     {
       "description": "Let the agent call safe slash commands.",
       "family": "tools",
       "id": "tool-slash-command",
-      "name": "Slash Command Tool",
-      "tags": [
-        "commands",
-        "tool"
-      ]
+      "name": "Slash Command Tool"
     },
     {
       "description": "Run read-only SQL (SELECT/PRAGMA/EXPLAIN) immediately; mutating SQL (INSERT/UPDATE/DELETE/DDL) runs only after user approval.",
       "family": "tools",
       "id": "tool-sql-query",
-      "name": "SQL Query Tool",
-      "tags": []
+      "name": "SQL Query Tool"
     },
     {
       "description": "Run focused diagnostics against a plugin file.",
       "family": "tools",
       "id": "tool-test-plugin",
-      "name": "Test Plugin Tool",
-      "tags": [
-        "plugins",
-        "tool"
-      ]
+      "name": "Test Plugin Tool"
     },
     {
       "description": "Search the web through the web search service.",
       "family": "tools",
       "id": "tool-web-search",
-      "name": "Web Search Tool",
-      "tags": [
-        "tool",
-        "web-search"
-      ]
+      "name": "Web Search Tool"
     },
     {
       "description": "Bundle: web search \u2014 the web-search service and its tool.",
       "family": "bundles",
       "id": "web-search",
-      "name": "Web Search",
-      "tags": [
-        "bundle",
-        "search",
-        "web"
-      ]
+      "name": "Web Search"
     }
   ]
 }
