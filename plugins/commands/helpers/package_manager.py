@@ -272,6 +272,12 @@ def build_uninstall_plan(package_id: str) -> UninstallPlan:
     removed: set[str] = set()
 
     def collect(pid: str, explicit: bool):
+        if pid in removed:
+            # Already collected via another branch of the dependency diamond
+            # (e.g. a shared dependency reached through two requirers). The
+            # ``removed`` set only filters dependents below; without this guard
+            # the same package is appended to ``order`` once per path to it.
+            return
         _validate_package_id(pid)
         path = _receipt_path(pid)
         if not path.exists():

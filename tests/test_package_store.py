@@ -367,6 +367,37 @@ def test_individually_installed_member_survives_bundle_uninstall(tmp_path, monke
     assert (installed / "tools" / "tool_a.py").exists()
 
 
+def test_uninstall_diamond_dependency_collected_once(tmp_path, monkeypatch):
+    """A shared dependency reachable through several requirers is collected once,
+    not once per path to it. Regression for the plan-mode bundle, whose diamond
+    (bundle→cmd→tool→svc, with bundle/cmd also requiring svc/tool directly) made
+    the plan list svc three times and tool twice."""
+    _patch_install_root(monkeypatch, tmp_path)
+    backend = _Backend(
+        {
+            "bundle": {"id": "bundle", "requires": ["cmd", "svc", "tool"], "files": []},
+            "cmd": {"id": "cmd", "requires": ["svc", "tool"], "files": ["helpers/cmd.txt"]},
+            "tool": {"id": "tool", "requires": ["svc"], "files": ["helpers/tool.txt"]},
+            "svc": {"id": "svc", "requires": [], "files": ["helpers/svc.txt"]},
+        },
+        {
+            ("cmd", "helpers/cmd.txt"): b"c",
+            ("tool", "helpers/tool.txt"): b"t",
+            ("svc", "helpers/svc.txt"): b"s",
+        },
+    )
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: backend)
+
+    package_manager.install_package(tmp_path, "bundle", _Context(tmp_path, _ToolRegistry()))
+
+    plan = package_manager.build_uninstall_plan("bundle")
+    ids = [pkg.id for pkg in plan.packages]
+
+    assert len(ids) == len(set(ids)), f"duplicates in uninstall plan: {ids}"
+    assert set(ids) == {"bundle", "cmd", "tool", "svc"}
+    assert sorted(plan.auto_packages) == ["cmd", "svc", "tool"]
+
+
 def test_install_auto_installs_dependency(tmp_path, monkeypatch):
     _patch_install_root(monkeypatch, tmp_path)
     backend = _Backend(
