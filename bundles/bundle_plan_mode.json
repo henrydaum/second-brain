@@ -1,0 +1,9 @@
+{
+  "description": "Plan-first workflow: /plan command, plan-mode service, and propose_plan tool.",
+  "files": [
+    "commands/command_plan.py",
+    "services/service_plan_mode.py",
+    "tools/tool_propose_plan.py"
+  ],
+  "name": "Plan Mode"
+}

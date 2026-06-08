@@ -1,0 +1,11 @@
+{
+  "description": "Gmail service plus check, send, mark-read, and modify-labels tools.",
+  "files": [
+    "services/service_gmail.py",
+    "tools/tool_email_check.py",
+    "tools/tool_email_mark_read.py",
+    "tools/tool_email_modify_labels.py",
+    "tools/tool_email_send.py"
+  ],
+  "name": "Gmail"
+}

@@ -1,0 +1,8 @@
+{
+  "description": "Web-search service and tool.",
+  "files": [
+    "services/service_web_search.py",
+    "tools/tool_web_search.py"
+  ],
+  "name": "Web Search"
+}

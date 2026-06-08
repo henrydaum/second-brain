@@ -1,0 +1,9 @@
+{
+  "description": "Scheduled background agents: /schedule command, spawn-subagent task, and schedule-subagent tool.",
+  "files": [
+    "commands/command_schedule.py",
+    "tasks/task_spawn_subagent.py",
+    "tools/tool_schedule_subagent.py"
+  ],
+  "name": "Scheduling"
+}

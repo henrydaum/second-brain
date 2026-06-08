@@ -1,0 +1,16 @@
+{
+  "description": "Basic everyday setup: Telegram, LiteLLM, read/edit/shell/SQL tools, ask-user-question, plugin authoring, dream-memory, and title updates.",
+  "files": [
+    "frontends/frontend_telegram.py",
+    "services/service_litellm.py",
+    "tasks/task_dream_memory.py",
+    "tasks/task_update_titles.py",
+    "tools/tool_ask_user_question.py",
+    "tools/tool_edit_file.py",
+    "tools/tool_read_file.py",
+    "tools/tool_run_command.py",
+    "tools/tool_sql_query.py",
+    "tools/tool_test_plugin.py"
+  ],
+  "name": "Starter"
+}

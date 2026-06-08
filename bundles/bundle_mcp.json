@@ -1,0 +1,8 @@
+{
+  "description": "Model Context Protocol command, service, and OAuth helper.",
+  "files": [
+    "commands/command_mcp.py",
+    "services/service_mcp.py"
+  ],
+  "name": "MCP"
+}

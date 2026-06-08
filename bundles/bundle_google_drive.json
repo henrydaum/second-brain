@@ -1,0 +1,9 @@
+{
+  "description": "Google Drive service plus the Google Docs and Google Sheets parser helpers.",
+  "files": [
+    "services/service_drive.py",
+    "services/helpers/parse_gdoc.py",
+    "services/helpers/parse_tabular.py"
+  ],
+  "name": "Google Drive"
+}

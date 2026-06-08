@@ -1,0 +1,20 @@
+{
+  "description": "Full ingestion and retrieval: extract, chunk, embed, lexical index, OCR/transcribe/textualize tasks, embedding/OCR/Whisper services, and hybrid search tools.",
+  "files": [
+    "services/service_embed.py",
+    "services/service_ocr.py",
+    "services/service_whisper.py",
+    "tasks/task_chunk_text.py",
+    "tasks/task_embed_images.py",
+    "tasks/task_embed_text.py",
+    "tasks/task_extract_text.py",
+    "tasks/task_lexical_index.py",
+    "tasks/task_ocr_images.py",
+    "tasks/task_textualize_tabular.py",
+    "tasks/task_transcribe_audio.py",
+    "tools/tool_hybrid_search.py",
+    "tools/tool_lexical_search.py",
+    "tools/tool_semantic_search.py"
+  ],
+  "name": "Indexing & Search"
+}
