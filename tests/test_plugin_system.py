@@ -211,7 +211,7 @@ def test_plugin_watcher_delete_unloads_by_source(monkeypatch):
 
         assert calls and calls[0][0][0] == "tool"
         assert calls[0][1]["source_path"] == str(path.resolve())
-        assert messages == ["Unregistered plugin: demo"]
+        assert messages == ["Deregistered plugin: demo"]
     finally:
         unsub()
         path.unlink(missing_ok=True)

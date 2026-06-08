@@ -180,7 +180,7 @@ class PluginWatcherService(BaseService):
             self._refresh_commands()
         self._reconcile_plugin_config()
         for name in names:
-            self._notify(f"Unregistered plugin: {name}")
+            self._notify(f"Deregistered plugin: {name}")
         logger.info(f"Plugin watcher unloaded deleted {info.plugin_type}: {path.name}")
 
     def _on_quarantine(self, payload: dict):
