@@ -6,10 +6,10 @@ import hashlib
 import os
 import shutil
 import tarfile
-import tempfile
 import time
 import zipfile
 from pathlib import Path
+from paths import DATA_DIR
 from plugins.services.helpers.ParseResult import ParseResult
 from plugins.services.helpers import parser_registry as registry
 
@@ -23,11 +23,11 @@ Container parsers.
 Returns ParseResult(modality="container", output=list[str]).
 
 The output is a list of absolute paths to extracted child files.
-These paths live in a temp directory managed by the system, not
-in the user's original folder. The user's filesystem is never modified.
+These paths live under the app's data directory (DATA_DIR/extracted),
+not in the user's original folder. The user's filesystem is never modified.
 
 Extraction directory structure:
-    /tmp/SecondBrain/extracted/<hash_of_archive_path>/
+    <DATA_DIR>/extracted/<hash_of_archive_path>/
         ├── report.pdf
         ├── images/
         │   ├── photo1.jpg
@@ -52,7 +52,7 @@ Supports: ZIP, TAR, GZ, BZ2, 7Z (if py7zr installed), EML
 # Safety limits
 MAX_EXTRACT_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB total extracted
 MAX_FILES = 10_000                           # max files per archive
-EXTRACT_BASE = os.path.join(tempfile.gettempdir(), "SecondBrain", "extracted")
+EXTRACT_BASE = os.path.join(DATA_DIR, "extracted")
 
 
 def _extract_dir(archive_path: str) -> str:
