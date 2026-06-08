@@ -4,9 +4,11 @@ from pathlib import Path
 
 from attachments import parse_attachment
 from events.event_bus import bus
-from events.event_channels import CHAT_MESSAGE_PUSHED, SPAWN_SUBAGENT
+from events.event_channels import CHAT_MESSAGE_PUSHED
 from plugins.BaseTask import BaseTask, TaskResult
 from state_machine.serialization import save_state_marker
+
+from ..helpers.subagent_events import SPAWN_SUBAGENT
 
 
 class SpawnSubagent(BaseTask):
