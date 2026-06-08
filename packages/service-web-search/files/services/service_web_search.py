@@ -10,7 +10,7 @@ import urllib.request
 import urllib.error
 import logging
 
-from plugins.BaseService import BaseService
+from plugins.BaseService import BaseService, EXTENSION
 
 logger = logging.getLogger("WebSearchService")
 
@@ -20,6 +20,7 @@ class WebSearchProvider(BaseService):
 
     model_name = "web_search_provider"
     shared = True
+    lifecycle = EXTENSION
 
     config_settings = [
         ("Brave Search API Key", "brave_search_api_key",
@@ -42,15 +43,6 @@ class WebSearchProvider(BaseService):
         super().__init__()
         self._search_key = search_key
         self._answers_key = answers_key
-
-    def _load(self) -> bool:
-        """Internal helper to load web search provider."""
-        self._loaded = True
-        return True
-
-    def unload(self):
-        """Handle unload."""
-        self._loaded = False
 
     # ── Key access ──────────────────────────────────────────────────
 

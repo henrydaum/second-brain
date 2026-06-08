@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from events.event_channels import CHAT_MESSAGE_PUSHED
 from events.event_bus import bus
-from plugins.BaseService import BaseService
+from plugins.BaseService import BaseService, EXTENSION
 from runtime.hooks import PermissionVerdict
 
 PLUGIN = "plan_mode"
@@ -70,6 +70,7 @@ class PlanModeService(BaseService):
 
     model_name = "Plan Mode"
     shared = True
+    lifecycle = EXTENSION
 
     def __init__(self, _config=None):
         super().__init__()
