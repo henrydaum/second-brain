@@ -7,7 +7,7 @@ from croniter import croniter
 
 from plugins.BaseTool import BaseTool, ToolResult
 
-from ..helpers.subagent_events import SPAWN_SUBAGENT
+from ..tasks.task_spawn_subagent import SPAWN_SUBAGENT
 
 
 SCHEDULED = "Scheduled"
