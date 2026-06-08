@@ -96,7 +96,7 @@ TELEGRAM_USER_PROMPT = (
 
 PACKAGES_SECTION = (
     "Get more with /packages:\n"
-    "  /packages search <query>   — browse the store\n"
+    "  /packages available        — browse the store by category\n"
     "  /packages install <id>     — install a package or bundle\n"
     "  Handy bundles: all-parsers, indexing-search, web-search, gmail, mcp, "
     "google-drive, scheduling, plan-mode (or `full` for everything)."
@@ -336,7 +336,7 @@ class SetupCommand(BaseCommand):
             "When you're ready:\n"
             f"  /packages install {STARTER_BUNDLE}   — the recommended baseline\n"
             f"  /packages install {FULL_BUNDLE}      — everything\n"
-            "  /packages search <query>   — browse the store\n\n"
+            "  /packages available        — browse the store by category\n\n"
             "Then run /setup again to configure your LLM and Telegram."
         )
 

@@ -114,7 +114,7 @@ Useful starter packages include:
 - `indexing-search`
 - parser packages such as `parser-pdf`, `parser-office`, `parser-audio`, and `parser-video`
 
-Use `/packages` from the REPL to search, install, inspect, and uninstall packages.
+Use `/packages` from the REPL to browse (by category), install, inspect, and uninstall packages.
 
 ## Setup
 
@@ -198,7 +198,7 @@ The kernel command set is intentionally operational:
 | `/llm` | Manage LLM profiles and defaults |
 | `/locations` | Show data, sandbox, installed package, and repo paths |
 | `/new` | Start a new conversation |
-| `/packages` | Search, install, list, inspect, or uninstall store packages |
+| `/packages` | Browse available/installed by category, install, inspect, or uninstall store packages |
 | `/services` | Inspect managed and extension services |
 | `/setup` | Install starter capabilities and configure the first LLM |
 | `/tasks` | Inspect task pipeline state |

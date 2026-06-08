@@ -1,41 +1,51 @@
 """Slash command plugin for `/packages`."""
 
 import re
+from collections import Counter
 
 from plugins.BaseCommand import BaseCommand
 from plugins.commands.helpers import package_manager
 from plugins.commands.helpers.store_backend import StoreBackendError
+from plugins.helpers.plugin_paths import PLUGIN_FAMILIES
 from state_machine.conversation import FormStep
 
 
-ACTIONS = ["search", "categories", "list", "info", "install", "uninstall"]
-ACTION_LABELS = ["Search available", "Browse categories", "List installed", "Package info", "Install package", "Uninstall package"]
+ACTIONS = ["available", "installed", "info", "install", "uninstall"]
+ACTION_LABELS = ["Browse available", "Browse installed", "Package info", "Install package", "Uninstall package"]
 CLEANUP_MODES = ["all", "none", "specific"]
 CLEANUP_MODE_LABELS = ["All", "None", "Specific"]
 
-_FAMILY_BLURB = {
-    "bundle": "curated sets — install one, get many",
-    "service": "long-lived backends (LLMs, OCR, embeddings, integrations)",
-    "tool": "agent-callable tools",
-    "task": "pipeline tasks",
-    "command": "slash commands",
-    "frontend": "chat frontends",
-    "parser": "file parsers",
-    "helper": "shared helper modules pulled in by other packages",
+# The seven structural families a package can belong to (5 plugin families +
+# meta-bundles + shared helpers), keyed the same way the store index and the
+# publisher's ``family_for`` are. This is the browse taxonomy.
+CATEGORIES = ["tools", "tasks", "services", "commands", "frontends", "bundles", "helpers"]
+CATEGORY_LABELS = ["Tools", "Tasks", "Services", "Commands", "Frontends", "Bundles", "Helpers"]
+
+_CATEGORY_BLURB = {
+    "tools": "agent-callable tools",
+    "tasks": "pipeline tasks",
+    "services": "persistent backends",
+    "commands": "slash commands",
+    "frontends": "chat frontends",
+    "bundles": "curated plugin sets",
+    "helpers": "shared modules",
 }
+
+# plugin_type (an entrypoint's "type") -> family folder, e.g. "service" -> "services".
+_TYPE_TO_FAMILY = {plugin_type: family for plugin_type, (family, _prefix) in PLUGIN_FAMILIES.items()}
 
 
 class PackagesCommand(BaseCommand):
     """Install and uninstall package-store plugins."""
     name = "packages"
-    description = "Search, install, list, inspect, or uninstall packages"
+    description = "Browse, install, inspect, or uninstall packages by category"
     category = "System"
 
     def form(self, args, context):
         steps = [FormStep("action", "Choose a package action.", True, enum=ACTIONS, enum_labels=ACTION_LABELS)]
         action = args.get("action")
-        if action == "search":
-            steps.append(FormStep("query", "Enter a package search query.", False, default=""))
+        if action in {"available", "installed"}:
+            steps.append(FormStep("category", _category_prompt(context, action), True, enum=CATEGORIES, enum_labels=CATEGORY_LABELS, columns=2))
         if action in {"install", "info"}:
             steps.append(FormStep("package_id", "Enter the package id.", True))
         if action == "uninstall":
@@ -63,16 +73,12 @@ class PackagesCommand(BaseCommand):
         return steps
 
     def run(self, args, context):
-        action = args.get("action") or "list"
+        action = args.get("action") or "installed"
         try:
-            if action == "search":
-                items = package_manager.search_packages(context.root_dir, args.get("query", ""))
-                installed = {p.get("id") for p in package_manager.installed_packages()}
-                return _format_index(items, installed)
-            if action == "categories":
-                return _format_categories(package_manager.search_packages(context.root_dir))
-            if action == "list":
-                return _format_installed(package_manager.installed_packages())
+            if action == "available":
+                return _format_available(context, args.get("category"))
+            if action == "installed":
+                return _format_installed(context, args.get("category"))
             if action == "info":
                 return _format_manifest(package_manager.package_info(context.root_dir, args.get("package_id", "")))
             if action == "install":
@@ -87,13 +93,104 @@ class PackagesCommand(BaseCommand):
             return f"Package {action} failed: {e}"
 
 
-def _is_bundle(item: dict) -> bool:
-    return "bundle" in (item.get("tags") or [])
-
-
 def _progress(message: str) -> None:
     print(message, flush=True)
 
+
+# ── Category browsing ────────────────────────────────────────────────
+
+def _item_family(item: dict) -> str:
+    """The category a store-index entry belongs to (carried in the index)."""
+    family = item.get("family")
+    return family if family in CATEGORIES else "helpers"
+
+
+def _receipt_family(receipt: dict) -> str:
+    """Derive an installed package's category from its receipt.
+
+    Mirrors the publisher's ``family_for``: an entrypoint pins the family, an
+    entrypoint-less package with files is a helper bundle, and a fileless
+    package is a meta-bundle.
+    """
+    types = sorted({ep.get("type") for ep in (receipt.get("entrypoints") or []) if ep.get("type")})
+    if types:
+        return _TYPE_TO_FAMILY.get(types[0], "helpers")
+    return "helpers" if receipt.get("files") else "bundles"
+
+
+def _category_counts(context, action: str) -> Counter:
+    if action == "installed":
+        return Counter(_receipt_family(r) for r in package_manager.installed_packages())
+    installed = {p.get("id") for p in package_manager.installed_packages()}
+    items = package_manager.search_packages(context.root_dir)
+    return Counter(_item_family(i) for i in items if i.get("id") not in installed)
+
+
+def _category_overview(context, action: str) -> str:
+    counts = _category_counts(context, action)
+    header = "Installed packages by category:" if action == "installed" else "Available packages by category:"
+    # Column widths derived from the data so the table stays aligned if labels
+    # or counts change: labels left-aligned, counts right-aligned in their own
+    # column (``{value:<w}`` / ``{value:>w}`` are Python's alignment specs).
+    name_w = max(len(label) for label in CATEGORY_LABELS)
+    count_w = max(len(str(n)) for n in counts.values()) if counts else 1
+    lines = [header]
+    for cat, label in zip(CATEGORIES, CATEGORY_LABELS):
+        blurb = _CATEGORY_BLURB.get(cat, "")
+        lines.append(f"  {label:<{name_w}}  {counts.get(cat, 0):>{count_w}}{('   — ' + blurb) if blurb else ''}")
+    return "\n".join(lines)
+
+
+def _category_prompt(context, action: str) -> str:
+    return _category_overview(context, action) + "\n\nChoose a category."
+
+
+def _category_label(category: str) -> str:
+    return CATEGORY_LABELS[CATEGORIES.index(category)] if category in CATEGORIES else (category or "")
+
+
+def _format_available(context, category: str | None) -> str:
+    if not category:
+        return _category_overview(context, "available") + "\n\nChoose a category with /packages available <category>."
+    installed = {p.get("id") for p in package_manager.installed_packages()}
+    items = [i for i in package_manager.search_packages(context.root_dir)
+             if _item_family(i) == category and i.get("id") not in installed]
+    label = _category_label(category).lower()
+    if not items:
+        return f"No available {label} packages — everything published is already installed."
+    lines = [f"Available {label} packages:"]
+    lines.extend(_available_line(i) for i in items)
+    lines.append("")
+    lines.append("Install with /packages install <id>.")
+    return "\n".join(lines)
+
+
+def _format_installed(context, category: str | None) -> str:
+    if not category:
+        return _category_overview(context, "installed") + "\n\nChoose a category with /packages installed <category>."
+    receipts = [r for r in package_manager.installed_packages() if _receipt_family(r) == category]
+    label = _category_label(category).lower()
+    if not receipts:
+        return f"No {label} packages installed."
+    lines = [f"Installed {label} packages:"]
+    for item in receipts:
+        mode = "" if item.get("requested") else " [dependency]"
+        deps = item.get("requires") or []
+        suffix = f" (requires: {', '.join(deps)})" if deps else ""
+        lines.append(f"  {item.get('id')}{mode}{suffix}")
+    lines.append("")
+    lines.append("Uninstall with /packages uninstall <id>.")
+    return "\n".join(lines)
+
+
+def _available_line(item: dict) -> str:
+    desc = item.get("description") or ""
+    tags = [t for t in (item.get("tags") or []) if t != "bundle"]
+    tagstr = ("   " + " ".join(f"#{t}" for t in tags)) if tags else ""
+    return f"  {item.get('id', '')}{(' — ' + desc) if desc else ''}{tagstr}"
+
+
+# ── Uninstall cleanup form plumbing ──────────────────────────────────
 
 def _cleanup_arg(kind: str, package_id: str) -> str:
     return "cleanup_" + kind + "__" + re.sub(r"[^a-zA-Z0-9_]", "_", package_id)
@@ -137,62 +234,6 @@ def _truthy(value) -> bool:
 
 def _is_missing_manifest(error: Exception, package_id: str) -> bool:
     return bool(package_id) and f"packages/{package_id}/manifest.json" in str(error) and "does not exist" in str(error)
-
-
-def _format_index(items: list[dict], installed: set[str] = frozenset()) -> str:
-    if not items:
-        return "No packages found."
-
-    def line(item: dict) -> str:
-        mark = "✓" if item.get("id") in installed else " "
-        desc = item.get("description") or ""
-        tags = [t for t in (item.get("tags") or []) if t != "bundle"]
-        tagstr = ("   " + " ".join(f"#{t}" for t in tags)) if tags else ""
-        return f"  {mark} {item.get('id', '')}{(' — ' + desc) if desc else ''}{tagstr}"
-
-    # Bundles are the curated front door — list them first and apart.
-    bundles = [i for i in items if _is_bundle(i)]
-    rest = [i for i in items if not _is_bundle(i)]
-    out: list[str] = []
-    if bundles:
-        out.append("Bundles — install one to get a curated set:")
-        out.extend(line(i) for i in bundles)
-    if rest:
-        if out:
-            out.append("")
-        out.append("Packages:")
-        out.extend(line(i) for i in rest)
-    out.append("")
-    out.append("✓ = installed.  Tip: /packages categories to browse by family, or "
-               "search a family (`tool`, `parser`, `bundle`) or any term (`email`, `ocr`).")
-    return "\n".join(out)
-
-
-def _format_categories(items: list[dict]) -> str:
-    from collections import Counter
-    counts = Counter(package_manager.package_family(i) for i in items)
-    if not counts:
-        return "No packages found."
-    # Whatever families exist, derived from the names: bundle first, then by
-    # descending count, then alphabetical. New families appear here for free.
-    families = sorted(counts, key=lambda f: (f != "bundle", -counts[f], f))
-    out = ["Categories — /packages search <name> to list one:"]
-    for family in families:
-        blurb = _FAMILY_BLURB.get(family, "")
-        out.append(f"  {family:9} {counts[family]:>3}{('  — ' + blurb) if blurb else ''}")
-    return "\n".join(out)
-
-
-def _format_installed(items: list[dict]) -> str:
-    if not items:
-        return "No packages installed.\nUse /packages search to browse available packages, then /packages install <id>."
-    lines = ["Installed packages:"]
-    for item in items:
-        mode = "" if item.get("requested") else " [dependency]"
-        deps = item.get("requires") or []
-        suffix = f" (requires: {', '.join(deps)})" if deps else ""
-        lines.append(f"  {item.get('id')}{mode}{suffix}")
-    return "\n".join(lines)
 
 
 def _format_manifest(manifest: dict) -> str:
