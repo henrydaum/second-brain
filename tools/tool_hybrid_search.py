@@ -62,6 +62,7 @@ class HybridSearch(BaseTool):
         "required": ["query"],
     }
     requires_services = []
+    dependencies_tools = ["lexical_search", "semantic_search"]
     agent_prompt = (
         "## Searching indexed files\n"
         "Three retrieval tools search the indexed corpus — your sync_directories plus dropped-in attachments. "
