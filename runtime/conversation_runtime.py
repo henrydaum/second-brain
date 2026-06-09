@@ -592,7 +592,11 @@ class ConversationRuntime:
 
         _persist.get_or_create_session(self, session_key).user_id = user_id
 
-        if identity_changed and prev_conv is not None:
+        # Restore on every identity *switch*, not only when the departing user
+        # held a conversation — the new user's landing spot shouldn't depend on
+        # what the previous user happened to have open. (_load_last_active
+        # no-ops when the session is already bound.)
+        if identity_changed:
             self._load_last_active(session_key)
 
     def session_user_id(self, session_key: str) -> int:
@@ -631,8 +635,11 @@ class ConversationRuntime:
         row = self.db.get_conversation(conversation_id)
         if row is None:
             return False
+        # A NULL owner belongs to the base user, never to everyone.
         owner = row.get("user_id")
-        return owner is None or owner == self.session_user_id(session_key)
+        if owner is None:
+            owner = DEFAULT_USER_ID
+        return owner == self.session_user_id(session_key)
 
     # ──────────────────────────────────────────────────────────────────
     # Reopen-where-you-left-off persistence.

@@ -257,6 +257,39 @@ def test_skip_permissions_persist_per_user(tmp_path):
     assert "skip_permissions" not in rt.config
 
 
+def test_open_session_binds_identity_prebound_session(tmp_path):
+    """Binding identity up-front then opening a specific conversation must not
+    raise SessionConflict — an unbound session (conversation_id None) is free
+    to bind; only a session on a *different* conversation conflicts."""
+    db = Database(str(tmp_path / "prebind.db"))
+    alice = db.upsert_user("web", "alice")
+    cid = db.create_conversation(title="alice", user_id=alice)
+    rt = ConversationRuntime(db=db, services={}, config={})
+
+    rt.set_session_user("s", alice)  # creates the session, conversation None
+    session = rt.open_session("s", conversation_id=cid)
+
+    assert session.conversation_id == cid
+    assert rt.session_user_id("s") == alice
+
+
+def test_identity_switch_restores_last_active_even_without_prior_conversation(tmp_path):
+    """An account switch lands the new user in their last-active conversation
+    regardless of whether the departing user had a conversation open."""
+    db = Database(str(tmp_path / "switch-empty.db"))
+    alice = db.upsert_user("web", "alice")
+    bob = db.upsert_user("web", "bob")
+    a_cid = db.create_conversation(title="alice", user_id=alice)
+    db.set_user_config(alice, {"last_active_conversation_id": a_cid})
+    rt = ConversationRuntime(db=db, services={}, config={})
+
+    rt.set_session_user("s", bob)    # bob bound, no conversation yet
+    rt.set_session_user("s", alice)  # switch with prev_conv None
+
+    assert rt.session_user_id("s") == alice
+    assert rt.sessions["s"].conversation_id == a_cid
+
+
 def test_frontend_identify_can_mint_user_type(tmp_path):
     class WebFrontend(BaseFrontend):
         name = "web"

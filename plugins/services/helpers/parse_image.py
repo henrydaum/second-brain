@@ -8,9 +8,9 @@ from plugins.services.helpers import parser_registry as registry
 
 logger = logging.getLogger("ParseImage")
 
-# Allow large images but keep a safety cap (500 megapixels) to prevent
-# decompression bombs from exhausting memory.
-Image.MAX_IMAGE_PIXELS = 500_000_000
+# Safety cap against decompression bombs. 200 MP covers the largest current
+# phone sensors (e.g. Samsung 200 MP) while bounding decode memory to ~800 MB.
+Image.MAX_IMAGE_PIXELS = 200_000_000
 
 # Returns standardized PIL object
 

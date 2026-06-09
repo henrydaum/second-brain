@@ -27,6 +27,7 @@ import threading
 from dataclasses import dataclass
 
 from pipeline.database import DEFAULT_USER_ID
+from state_machine.conversation_phases import FORM_PHASES
 
 
 @dataclass(frozen=True)
@@ -154,9 +155,13 @@ def _check_sessions(runtime, db, out: list[Violation]) -> None:
                                  f"session {key!r} turn_priority {tp!r} is not a participant"))
 
         # Idle hygiene: when the turn is back with the user and nothing is
-        # awaiting approval, the phase-frame stack must be fully unwound.
+        # awaiting approval or form input, the phase-frame stack must be fully
+        # unwound. A session mid-form (filling_tool_form / filling_command_form)
+        # is legitimately suspended awaiting the user — forms persist across
+        # restarts by design — so it is not idle.
         phases = (getattr(cs, "cache", {}) or {}).get("phases") or []
-        idle = tp == "user" and not _has_pending_approval(runtime, key)
+        awaiting_form = getattr(cs, "phase", None) in FORM_PHASES
+        idle = tp == "user" and not awaiting_form and not _has_pending_approval(runtime, key)
         if idle and phases:
             out.append(Violation("state.leaked_phase_frame",
                                  f"session {key!r} idle but {len(phases)} phase frame(s) remain"))

@@ -99,7 +99,11 @@ def open_session(
         if existing is not None:
             if conversation_id is None or existing.conversation_id == conversation_id:
                 return existing
-            raise SessionConflict(session_key, existing.conversation_id, conversation_id)
+            # A session that exists but holds no conversation (identity bound
+            # up-front via set_session_user) is free to bind — only a session
+            # already on a *different* conversation conflicts.
+            if existing.conversation_id is not None:
+                raise SessionConflict(session_key, existing.conversation_id, conversation_id)
 
     if conversation_id is None:
         if runtime.db is None:
