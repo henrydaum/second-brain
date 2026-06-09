@@ -4,7 +4,7 @@ SERVICE TEMPLATE
 This file is a self-contained reference for creating new services.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
-Second Brain Lite keeps long-lived capability behind services but keeps the
+Second Brain keeps long-lived capability behind services but keeps the
 kernel dependency-light. Services are normally sandbox drafts or installed
 package files; add one to plugins/services/ only when it is true kernel
 infrastructure.

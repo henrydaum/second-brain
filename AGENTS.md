@@ -5,19 +5,19 @@ working **on** the Second Brain codebase. Humans should read [README.md](README.
 this file is the agent-facing companion. If anything here conflicts with an
 explicit user instruction, the user wins.
 
-## ⚡ This is the `lite` branch (the kernel)
+## ⚡ This is a microkernel (the kernel)
 
-This branch is a **microkernel** strip-down: a minimal core that boots, runs the
+Second Brain is a **microkernel**: a minimal core that boots, runs the
 agent turn, persists conversations, and loads plugins. Most product capability
-arrives through installed packages. **Read the "LITE BRANCH — the kernel"
-section at the top of [CLAUDE.md](CLAUDE.md) before making changes.** On `lite`,
-search, scheduling, integrations, Telegram, file-editing tools, shell tools,
-memory tooling, and heavy parsers are package capabilities unless the runtime
-catalog proves they are installed.
+arrives through installed packages. **Read the "THE KERNEL" section at the top
+of [CLAUDE.md](CLAUDE.md) before making changes.** Search, scheduling,
+integrations, Telegram, file-editing tools, shell tools, memory tooling, and
+heavy parsers are package capabilities unless the runtime catalog proves they
+are installed.
 
 ## What this project is
 
-Second Brain Lite is the **local-first AI kernel** for Second Brain: a
+Second Brain is a **local-first AI kernel**: a
 programmable conversation runtime with SQLite persistence, an agent turn loop,
 five plugin families, package install/uninstall, and a live plugin watcher.
 Full-product capabilities such as indexing/retrieval, durable memory workflows,

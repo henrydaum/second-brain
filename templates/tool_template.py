@@ -4,7 +4,7 @@ TOOL TEMPLATE
 This file is a self-contained reference for creating new tools.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
-Second Brain Lite keeps the kernel small. Tools are normally sandbox drafts or
+Second Brain keeps the kernel small. Tools are normally sandbox drafts or
 installed package files; add one to plugins/tools/ only when the capability is
 true kernel behavior.
 

@@ -4,7 +4,7 @@ TASK TEMPLATE
 This file is a self-contained reference for creating new tasks.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
-Second Brain Lite ships the pipeline substrate, not a built-in indexing stack.
+Second Brain ships the pipeline substrate, not a built-in indexing stack.
 Tasks are normally sandbox drafts or installed package files; add one to
 plugins/tasks/ only when it is true kernel behavior.
 

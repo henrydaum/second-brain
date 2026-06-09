@@ -8,7 +8,7 @@ Frontends are transports: REPL, Telegram, HTTP, desktop UI, etc. They turn
 user input into state-machine actions and render RuntimeResult/events back to
 the user. Prefer commands/tools/tasks for app behavior; create a frontend only
 when adding a new transport or presentation layer.
-The Lite kernel ships the REPL. Other transports are normally installed
+The kernel ships the REPL. Other transports are normally installed
 packages or sandbox drafts; add one to plugins/frontends/ only when it is true
 kernel infrastructure.
 

@@ -6,15 +6,13 @@ The Flet GUI was removed; do not reintroduce.
 
 ---
 
-# ⚡ LITE BRANCH — the kernel (READ FIRST)
+# ⚡ THE KERNEL (READ FIRST)
 
-**You are on the `lite` branch.** This branch is a deliberate strip-down of
-Second Brain into a **microkernel**: a minimal, reliable core that boots, runs
+Second Brain is a **microkernel**: a minimal, reliable core that boots, runs
 the conversation loop + agent turn, persists conversations, and loads/unloads
 plugins. Product capabilities arrive through a **package store** (the
 agentskills.io model: a registry you browse, install, and uninstall from).
-`main` remains the full product. Do not port heavy features back into the
-kernel; they belong in packages.
+Do not bake heavy features into the kernel; they belong in packages.
 
 > Goal in priority order: (1) the kernel works **flawlessly and reliably**, then
 > (2) build install/uninstall against a cloud store, then (3) versioning and

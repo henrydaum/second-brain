@@ -19,7 +19,7 @@ def _cfg(tmp_path):
 # ── Kernel-minimal defaults ──────────────────────────────────────────
 
 def test_kernel_defaults_are_minimal():
-    """The lite kernel ships only the REPL frontend, managed LLM autoload,
+    """The kernel ships only the REPL frontend, managed LLM autoload,
     and no scheduled jobs. Guard against accidental reintroduction."""
     assert config_manager.DEFAULTS["autoload_services"] == ["llm"]
     assert config_manager.DEFAULTS["enabled_frontends"] == ["repl"]

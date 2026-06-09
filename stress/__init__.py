@@ -1,4 +1,4 @@
-"""Kernel stress-testing harness (lite branch).
+"""Kernel stress-testing harness.
 
 This package is **test/QA scaffolding**, not part of the kernel. It is the
 "syzkaller-for-an-agent-kernel" toolkit referred to in the testing notes:

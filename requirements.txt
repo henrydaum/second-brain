@@ -1,4 +1,4 @@
-# Second Brain — Lite kernel dependencies
+# Second Brain — kernel dependencies
 #
 # The kernel aims to stay close to pure Python. Capabilities beyond the core
 # (search, embeddings, OCR, audio, integrations, Telegram, …) are installed from

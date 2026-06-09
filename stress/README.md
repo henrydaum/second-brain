@@ -1,6 +1,6 @@
 # `stress/` — kernel stress-testing harness
 
-QA scaffolding for the lite kernel, modelled on how real kernels are tested
+QA scaffolding for the kernel, modelled on how real kernels are tested
 (layered: selftests → coverage-guided fuzzing → sanitizers + CI). Nothing here
 is imported by the kernel; it only imports *from* it.
 

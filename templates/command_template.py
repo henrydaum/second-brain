@@ -7,7 +7,7 @@ It is NOT imported by the running system — it exists for LLM consumption only.
 Commands are user-facing conversation actions. They are invoked with `/name`,
 can collect form fields, and return text to the frontend. Use commands for
 interactive UI/workflow control; use tools for agent-callable capabilities.
-In Lite, commands are normally sandbox drafts or installed package files; add
+Commands are normally sandbox drafts or installed package files; add
 one to plugins/commands/ only when it is true kernel operation or introspection.
 
 Command authoring flow:

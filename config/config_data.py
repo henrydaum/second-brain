@@ -17,7 +17,7 @@ Each entry: (title, variable_name, description, default, type_info)
 
 from paths import DATA_DIR, ATTACHMENT_CACHE
 
-# Lite kernel ships no scheduled jobs. The tasks they used to drive
+# The kernel ships no scheduled jobs. The tasks they used to drive
 # (update_titles, dream_memory) and the timekeeper service that fires them are
 # installable from the store; a plugin registers its own default jobs on install.
 DEFAULT_SCHEDULED_JOBS: dict = {}
@@ -63,7 +63,7 @@ SETTINGS_DATA = [
 
     # --- Frontends ---
     ("Enabled Frontends", "enabled_frontends",
-     "Frontend modules to start on launch. The lite kernel ships only the REPL; "
+     "Frontend modules to start on launch. The kernel ships only the REPL; "
      "the Telegram frontend is installable from the store. Requires app restart.",
      ["repl"],
      {"type": "json_list"}),
