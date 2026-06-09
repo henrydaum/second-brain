@@ -159,6 +159,20 @@ def test_install_service_preserves_existing_saved_autoload_services(tmp_path, mo
     assert saved["autoload_services"] == ["llm", "parser", "mcp"]
 
 
+def test_install_replaces_existing_file_with_store_copy(tmp_path, monkeypatch):
+    _patch_roots(monkeypatch, tmp_path)
+    files = {"tools/tool_a.py": b"STORE = True\n"}
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_a.py", "STORE = False\n")
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""))
+
+    result = package_manager.install_package(tmp_path, "tool_a", _Context(tmp_path))
+
+    assert result.ok
+    assert (package_manager.INSTALLED_PLUGINS / "tools" / "tool_a.py").read_text(encoding="utf-8") == "STORE = True\n"
+    assert "Updated file: tools/tool_a.py" in result.lines
+
+
 def test_helper_can_be_installed_and_uninstalled_by_stem(tmp_path, monkeypatch):
     _patch_roots(monkeypatch, tmp_path)
     calls = []
@@ -206,6 +220,25 @@ def test_bundle_install_collects_each_root_once(tmp_path, monkeypatch):
 
     assert [file.path for file in plan.files] == ["tools/tool_a.py", "tools/helpers/shared.py", "tools/tool_b.py"]
     assert plan.pip_packages == ["a-lib", "shared-lib", "b-lib"]
+
+
+def test_bundle_install_replaces_existing_files_and_continues(tmp_path, monkeypatch):
+    _patch_roots(monkeypatch, tmp_path)
+    files = {
+        "bundles/bundle_search.json": json.dumps({"files": ["tools/tool_a.py", "tools/tool_b.py"]}).encode(),
+        "tools/tool_a.py": b"STORE_A = True\n",
+        "tools/tool_b.py": b"STORE_B = True\n",
+    }
+    _write(package_manager.INSTALLED_PLUGINS, "tools/tool_a.py", "STORE_A = False\n")
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""))
+
+    result = package_manager.install_package(tmp_path, "bundle_search", _Context(tmp_path))
+
+    assert result.ok
+    assert (package_manager.INSTALLED_PLUGINS / "tools" / "tool_a.py").read_text(encoding="utf-8") == "STORE_A = True\n"
+    assert (package_manager.INSTALLED_PLUGINS / "tools" / "tool_b.py").exists()
+    assert "Updated file: tools/tool_a.py" in result.lines
 
 
 def test_bundle_uninstall_skips_missing_roots_and_keeps_shared_refs(tmp_path, monkeypatch):
@@ -271,4 +304,3 @@ def test_parser_helper_install_and_uninstall_reload_parser(tmp_path, monkeypatch
 
     assert parser.loads == 2
     assert parser.unloads == 2
-

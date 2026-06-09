@@ -145,7 +145,6 @@ def _install_plan_from_roots(store: GitStoreBackend, roots: list[str], target: s
 
     for root in roots:
         visit(root)
-    _preflight_install({rel: file.content or b"" for rel, file in collected.items()})
     existing = [rel for rel in collected if _target(rel).exists()]
     pip_packages = _unique(pip)
     steps = ["Resolving dependency plan"]
@@ -162,7 +161,6 @@ def execute_install_plan(plan: InstallPlan, context=None, progress: Progress | N
     written: list[Path] = []
     with _PACKAGE_LOCK:
         _progress(progress, "Resolving dependency plan")
-        _preflight_install({file.path: file.content or b"" for file in plan.files})
         _install_python_packages(plan.pip_packages, progress)
         try:
             _progress(progress, "Copying package files")
@@ -170,7 +168,12 @@ def execute_install_plan(plan: InstallPlan, context=None, progress: Progress | N
                 target = _target(file.path)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if target.exists():
-                    lines.append(f"Already installed: {file.path}")
+                    content = file.content or b""
+                    if target.read_bytes() == content:
+                        lines.append(f"Already installed: {file.path}")
+                    else:
+                        target.write_bytes(content)
+                        lines.append(f"Updated file: {file.path}")
                     continue
                 target.write_bytes(file.content or b"")
                 written.append(target)
@@ -465,13 +468,6 @@ def _is_valid_tree_rel(rel: str) -> bool:
     if len(p.parts) == 2:
         return any(p.parts[0] == family and p.name.startswith(prefix) for family, prefix in PLUGIN_FAMILIES.values())
     return len(p.parts) == 3 and p.parts[0] in TREE_ROOTS and p.parts[1] == "helpers" and p.suffix == ".py"
-
-
-def _preflight_install(files: dict[str, bytes]) -> None:
-    for rel, content in files.items():
-        target = _target(rel)
-        if target.exists() and target.read_bytes() != content:
-            raise PackageError(f"Refusing to overwrite existing file with different content: {target}")
 
 
 def _target(rel_path: str) -> Path:
