@@ -95,4 +95,4 @@ class EventTrigger:
         self._subscriptions.clear()
         if clear_started:
             self._started = False
-        logger.info("EventTrigger stopped.")
+            logger.info("EventTrigger stopped.")

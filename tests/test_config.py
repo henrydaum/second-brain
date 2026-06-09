@@ -118,6 +118,21 @@ def test_save_preserves_existing_unrelated_values(tmp_path):
     assert on_disk["poll_interval"] == 2.0
 
 
+def test_save_excludes_plugin_config_keys_even_when_unregistered(tmp_path, monkeypatch):
+    """Plugin values loaded into the runtime config from plugin_config.json (for
+    plugins not yet discovered) must never be duplicated into core config.json."""
+    plugin_path = str(tmp_path / "plugin_config.json")
+    (tmp_path / "plugin_config.json").write_text(json.dumps({"telegram_bot_token": "secret"}))
+    monkeypatch.setattr(config_manager, "_DEFAULT_PLUGIN_CONFIG_PATH", plugin_path)
+
+    path = _cfg(tmp_path)
+    config_manager.save({"max_workers": 8, "telegram_bot_token": "secret"}, path)
+
+    on_disk = json.loads((tmp_path / "config.json").read_text())
+    assert on_disk["max_workers"] == 8
+    assert "telegram_bot_token" not in on_disk
+
+
 def test_save_strips_user_config_keys(tmp_path):
     path = _cfg(tmp_path)
     config_manager.save({

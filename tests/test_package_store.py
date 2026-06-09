@@ -159,6 +159,39 @@ def test_install_service_preserves_existing_saved_autoload_services(tmp_path, mo
     assert saved["autoload_services"] == ["llm", "parser", "mcp"]
 
 
+def test_install_llm_backend_autoloads_llm_router_not_backend_stem(tmp_path, monkeypatch):
+    _patch_roots(monkeypatch, tmp_path)
+    files = {"services/service_litellm.py": b"from plugins.services.service_llm import BaseLLM\nclass LiteLLMService(BaseLLM):\n    is_llm_backend = True\n"}
+    saved = {"enabled_frontends": ["repl"], "autoload_services": ["llm", "parser"]}
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""))
+    monkeypatch.setattr("config.config_manager.load", lambda: dict(saved))
+    monkeypatch.setattr("config.config_manager.save", lambda config: saved.update(config))
+
+    result = package_manager.install_package(tmp_path, "service_litellm", _Context(tmp_path))
+
+    assert result.ok
+    # The backend maps to the kernel ``llm`` router (already present, idempotent),
+    # never adds a bogus ``litellm`` autoload entry.
+    assert saved["autoload_services"] == ["llm", "parser"]
+
+
+def test_uninstall_llm_backend_keeps_llm_in_autoload(tmp_path, monkeypatch):
+    _patch_roots(monkeypatch, tmp_path)
+    _write(package_manager.INSTALLED_PLUGINS, "services/service_litellm.py",
+           "from plugins.services.service_llm import BaseLLM\nclass LiteLLMService(BaseLLM):\n    is_llm_backend = True\n")
+    saved = {"enabled_frontends": ["repl"], "autoload_services": ["llm", "parser"]}
+    monkeypatch.setattr("config.config_manager.load", lambda: dict(saved))
+    monkeypatch.setattr("config.config_manager.save", lambda config: saved.update(config))
+
+    result = package_manager.uninstall_package("service_litellm", _Context(tmp_path), root_dir=tmp_path)
+
+    assert result.ok
+    assert not (package_manager.INSTALLED_PLUGINS / "services" / "service_litellm.py").exists()
+    # ``llm`` is the kernel-owned router and must survive uninstall of a backend.
+    assert saved["autoload_services"] == ["llm", "parser"]
+
+
 def test_install_replaces_existing_file_with_store_copy(tmp_path, monkeypatch):
     _patch_roots(monkeypatch, tmp_path)
     files = {"tools/tool_a.py": b"STORE = True\n"}

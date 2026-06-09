@@ -109,8 +109,12 @@ def save(config: dict, path: str = None):
     """Save config dict to JSON file."""
     if path is None:
         path = _DEFAULT_CONFIG_PATH
-    # Strip _root and plugin keys from persisted core config
-    plugin_keys = _get_plugin_keys()
+    # Strip _root and plugin keys from persisted core config. Include keys
+    # already living in plugin_config.json, not just currently-registered
+    # plugin settings: the runtime config carries plugin values loaded early
+    # (load_plugin_config_early) for plugins not yet discovered/installed, and
+    # those must never be duplicated into core config.json.
+    plugin_keys = _get_plugin_keys() | set(load_plugin_config().keys())
     existing = {}
     p = Path(path)
     if p.exists():

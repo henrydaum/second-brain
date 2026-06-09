@@ -544,7 +544,14 @@ def build_services(config: dict) -> dict:
     profiles = config.get("llm_profiles", {}) or {}
 
     for model_name, pconf in profiles.items():
-        services[model_name] = _build_llm_from_profile(model_name, pconf)
+        # A profile whose backend class is not installed yet (e.g. the LiteLLM
+        # backend before `/packages install`) must not abort the whole service
+        # build — the ``llm`` router still has to register so dependent tasks
+        # see it and so it lights up live once the backend lands.
+        try:
+            services[model_name] = _build_llm_from_profile(model_name, pconf)
+        except Exception as e:
+            logger.warning(f"LLM profile '{model_name}' unavailable: {e}")
 
     # Pick a default LLM if none is set.
     if not config.get("default_llm_profile") and profiles:
