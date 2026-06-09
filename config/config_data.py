@@ -94,6 +94,21 @@ SETTINGS_DATA = [
      [],
      {"type": "json_list", "scope": "user"}),
 
+    ("Restart On Crash", "restart_on_crash",
+     "Relaunch Second Brain automatically if the process crashes (including hard "
+     "native crashes). Clean exits (/quit, Ctrl+C) never restart. Checked at "
+     "launch, so enabling it takes effect on the next start.",
+     True,
+     {"type": "bool"}),
+
+    ("Stall Timeout", "stall_timeout",
+     "Stall watchdog: while healthy, the app touches a heartbeat file every few "
+     "seconds; if Restart On Crash is supervising and sees no heartbeat for this "
+     "many seconds, it kills and relaunches the app. 0 disables stall detection. "
+     "Checked at launch.",
+     120,
+     {"type": "slider", "range": (0, 600, 20), "is_float": False}),
+
     # --- Plugin Supervisor ---
     # Fully automatic: quarantines sandbox/installed plugins that repeatedly
     # crash or time out, and warns on runaway memory. Built-in kernel plugins are

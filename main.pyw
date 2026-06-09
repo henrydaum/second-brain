@@ -22,11 +22,164 @@ logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT, datefmt=_LOG_DATEFMT
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 (DATA_DIR / "memory.md").touch(exist_ok=True)
 LOG_FILE = DATA_DIR / "app.log"
+
+logger = logging.getLogger("Main")
+
+
+# ── Crash-restart launcher ───────────────────────────────────────────
+#
+# When ``restart_on_crash`` is enabled (the default), the process started by
+# the user becomes a tiny supervisor: it runs the real app as a child process
+# (marked with SB_SUPERVISED=1) and relaunches it whenever it dies with a
+# non-zero exit code — including hard native crashes (segfaults, OOM kills)
+# that no in-process supervision can survive. When ``stall_timeout`` > 0 it
+# also watches the child's heartbeat file (runtime/heartbeat.py): a child
+# that is alive but frozen stops beating, gets its process tree killed, and
+# is relaunched the same way. The persistence layer restores
+# conversations and suspended forms on the way back up, so a crash costs
+# seconds, not state. Clean exits (/quit, Ctrl+C) stop everything.
+#
+# This branch runs before the heavy imports below, so the supervisor process
+# stays a few-MB stdlib-only watchdog (runtime/heartbeat.py is stdlib+paths).
+
+_RESTART_EXIT_CODE = 42  # child asks the supervisor for an intentional relaunch
+# Exit codes that mean "the user stopped it", never "it crashed":
+# STATUS_CONTROL_C_EXIT on Windows (signed/unsigned), SIGINT death on POSIX.
+_CLEAN_STOP_CODES = {0, 0xC000013A, -1073741510, -2, 130}
+_SUPERVISE_POLL = 5.0          # seconds between child liveness polls
+_STALL_GIVE_UP = 5             # consecutive stall-kills before giving up
+_STALL_STREAK_RESET = 3600.0   # uptime (s) that forgives the stall streak
+
+
+def _restart_on_crash_enabled() -> bool:
+	"""Read restart_on_crash straight from config.json (default True).
+
+	The supervisor must not import the config package (it would drag in the
+	app), so this is a raw JSON peek. Missing file/key means the default.
+	"""
+	import json
+	try:
+		with open(DATA_DIR / "config.json", "r") as f:
+			return bool(json.load(f).get("restart_on_crash", True))
+	except Exception:
+		return True
+
+
+def _stall_timeout() -> float:
+	"""Read stall_timeout from config.json (raw JSON peek, like
+	_restart_on_crash_enabled). 0 disables stall detection; nonzero values are
+	floored so a hand-edited tiny value can never out-race the beat interval."""
+	import json
+	from runtime.heartbeat import clamp_stall_timeout, DEFAULT_STALL_TIMEOUT
+	try:
+		with open(DATA_DIR / "config.json", "r") as f:
+			return clamp_stall_timeout(json.load(f).get("stall_timeout", DEFAULT_STALL_TIMEOUT))
+	except Exception:
+		return DEFAULT_STALL_TIMEOUT
+
+
+def _supervise() -> int:
+	"""Run the app as a supervised child; relaunch on crash or stall.
+	Returns the launcher's exit code."""
+	import subprocess
+	from runtime.heartbeat import _StallMonitor, HEARTBEAT_FILE, kill_tree, read_mtime_ns
+
+	launcher_log = logging.getLogger("Launcher")
+	stop_requested = threading.Event()
+	signal.signal(signal.SIGINT, lambda *_: stop_requested.set())
+	signal.signal(signal.SIGTERM, lambda *_: stop_requested.set())
+
+	args = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]
+	env = {**os.environ, "SB_SUPERVISED": "1"}
+	rapid_failures = 0
+	consecutive_stalls = 0
+
+	while True:
+		# Re-peeked per generation so config toggles apply on the next restart.
+		stall_timeout = _stall_timeout()
+		baseline = read_mtime_ns(HEARTBEAT_FILE)  # previous run's file never arms the monitor
+		monitor = _StallMonitor(stall_timeout, baseline) if stall_timeout > 0 else None
+		started = time.time()
+		proc = subprocess.Popen(args, env=env, cwd=str(Path(__file__).parent))
+		stalled = False
+
+		while True:
+			try:
+				code = proc.wait(timeout=_SUPERVISE_POLL)
+				break  # a real exit always wins over the stall flag
+			except subprocess.TimeoutExpired:
+				pass
+			if stop_requested.is_set():
+				continue  # user is stopping: wait for the child, never stall-kill
+			if monitor and monitor.observe(read_mtime_ns(HEARTBEAT_FILE)):
+				stalled = True
+				launcher_log.error(
+					f"No heartbeat for {stall_timeout:.0f}s — app appears stalled. "
+					f"Killing process tree. Check {LOG_FILE} for which loop went "
+					f"silent (Heartbeat warnings name the stale probe).")
+				kill_tree(proc)
+				code = proc.wait()  # kill is prompt; no timeout games
+				break
+
+		uptime = time.time() - started
+
+		# Decision ladder — exit code FIRST, stall flag second. Our kills can
+		# never produce a clean code (TerminateProcess→1, SIGKILL→-9), so a
+		# clean code during a kill race means the child genuinely finished its
+		# own exit just before the kill landed — honor it.
+		if code == _RESTART_EXIT_CODE:
+			launcher_log.info("Restart requested — relaunching.")
+			rapid_failures = 0
+			consecutive_stalls = 0
+			continue
+		if stop_requested.is_set() or code in _CLEAN_STOP_CODES:
+			return 0
+		if not _restart_on_crash_enabled():
+			launcher_log.error(f"App exited with code {code}; restart_on_crash is disabled — not restarting.")
+			return code
+
+		if stalled:
+			# A stall ran >= stall_timeout, so it can never trip the <60s
+			# rapid-failure test — it gets its own give-up counter, forgiven
+			# by a long healthy run or any non-stall exit.
+			rapid_failures = 0
+			consecutive_stalls = 1 if uptime >= _STALL_STREAK_RESET else consecutive_stalls + 1
+			if consecutive_stalls >= _STALL_GIVE_UP:
+				launcher_log.error(
+					f"App stalled {consecutive_stalls} times in a row — "
+					f"giving up. Check {LOG_FILE} for the cause.")
+				return 1
+			delay = min(2 ** consecutive_stalls, 60)
+			launcher_log.error(f"App stalled after {uptime:.0f}s — restarting in {delay}s (Ctrl+C to stop).")
+		else:
+			# Backoff: a crash after a long healthy run restarts almost
+			# instantly; a boot-crash loop backs off and eventually gives up
+			# instead of spinning forever on a broken install or bad config.
+			consecutive_stalls = 0
+			rapid_failures = 0 if uptime >= 60 else rapid_failures + 1
+			if rapid_failures >= 5:
+				launcher_log.error(
+					f"App crashed {rapid_failures} times in quick succession (exit {code}) — "
+					f"giving up. Check {LOG_FILE} for the cause.")
+				return code
+			delay = min(2 ** rapid_failures, 60)
+			launcher_log.error(f"App exited with code {code} after {uptime:.0f}s — restarting in {delay}s (Ctrl+C to stop).")
+
+		for _ in range(delay):
+			if stop_requested.is_set():
+				return 0
+			time.sleep(1)
+
+
+if __name__ == "__main__" and os.environ.get("SB_SUPERVISED") != "1" and _restart_on_crash_enabled():
+	sys.exit(_supervise())
+
+
+# ── The real app (supervised child, or direct run when the launcher is off) ──
+
 _file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
 _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
 logging.getLogger().addHandler(_file_handler)
-
-logger = logging.getLogger("Main")
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -39,6 +192,7 @@ from pipeline.event_trigger import EventTrigger
 from agent.tool_registry import ToolRegistry
 from runtime.bootstrap import start_frontends
 from runtime.supervisor import supervisor
+from runtime.heartbeat import heartbeat
 from plugins.BaseService import should_autoload_service
 from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
 
@@ -86,6 +240,12 @@ def main():
 
 	# --- 1d. Bind the plugin supervisor to the live config ---
 	supervisor.configure(config)
+
+	# --- 1e. Start the stall-watchdog heartbeat ---
+	# Always beats when healthy regardless of stall_timeout (the knob gates
+	# only launcher enforcement), so a config mismatch between the two
+	# processes can never kill a healthy child.
+	heartbeat.start()
 
 	# --- 2. Initialize database ---
 	t0 = time.time()
@@ -162,6 +322,11 @@ def main():
 		if _shutdown.is_set():
 			return  # Already shutting down
 		_shutdown.set()
+		# Release all probes FIRST: zero probes => the beat thread keeps the
+		# heartbeat fresh while models unload, so a slow clean shutdown is
+		# never stall-killed. A genuinely hung shutdown is deliberately not
+		# covered (false-positive bias).
+		heartbeat.unregister_all()
 		logger.info("-----------------------------")
 		logger.info("Shutting down...")
 		supervisor.stop_memory_watchdog()
@@ -197,6 +362,11 @@ def main():
 		def _exec_self():
 			if not _restart_lock.acquire(blocking=False):
 				return
+			if os.environ.get("SB_SUPERVISED") == "1":
+				# Running under the crash-restart launcher: exit with the
+				# sentinel code and let it relaunch us in the same console.
+				logger.info("Restarting via launcher.")
+				os._exit(_RESTART_EXIT_CODE)
 			logger.info("Re-execing process now.")
 			args = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]
 			if sys.platform == "win32":
@@ -255,8 +425,10 @@ def main():
 	)
 	_bind_runtime_services(services, tool_registry, orchestrator, scaffold.frontend_runtime)
 
-	# --- 11. Main thread idles until shutdown ---
+	# --- 11. Main thread idles until shutdown, proving liveness as it goes ---
+	probe = heartbeat.register("main-loop")  # never unregistered: this loop only exits at process death
 	while not _shutdown.is_set():
+		probe.beat()
 		_shutdown.wait(timeout=1.0)
 
 def _bind_runtime_services(services, tool_registry, orchestrator, runtime):

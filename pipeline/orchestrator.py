@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from runtime.context import build_context
 from runtime.supervisor import run_supervised
+from runtime.heartbeat import heartbeat
 from pipeline.database import set_thread_priority_low
 from plugins.services.helpers.parser_registry import get_modality
 from plugins.helpers.plugin_paths import is_builtin_path
@@ -607,7 +608,20 @@ class Orchestrator:
 		stuck_check_interval = 60  # seconds between recovery sweeps
 		last_stuck_check = 0.0     # force an immediate first check
 
+		# Stall-watchdog probe: one beat per iteration suffices — the idle
+		# path sleeps poll_interval (~1s) and the busy path only does
+		# non-blocking executor submits (task bodies run on worker threads
+		# under run_supervised timeouts).
+		probe = heartbeat.register("dispatch")
+		try:
+			self._run_dispatch(probe, stuck_check_interval, last_stuck_check)
+		finally:
+			probe.unregister()  # stop()/restart must not strand a stale probe
+
+	def _run_dispatch(self, probe, stuck_check_interval, last_stuck_check):
+		"""Internal helper: dispatch iterations under the liveness probe."""
 		while self.running:
+			probe.beat()
 			dispatched_any = False
 
 			now = time.time()
