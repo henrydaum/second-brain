@@ -652,7 +652,7 @@ class ConversationRuntime:
         if session_key in self._restore_consumed_keys:
             return None
         self._restore_consumed_keys.add(session_key)
-        if self.config and not self.config.get("startup_restore_conversation", True):
+        if not self.user_setting(session_key, "startup_restore_conversation", True):
             return None
         return self._load_last_active(session_key)
 
