@@ -18,13 +18,15 @@ import time
 from pathlib import Path
 from typing import Any
 
-from events.event_channels import DREAM_MEMORY
 from paths import DATA_DIR
 from plugins.BaseTask import BaseTask, TaskResult
 from runtime.agent_scope import resolve_agent_llm
 from runtime.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("TaskDreamMemory")
+
+DREAM_MEMORY = "dream_memory"
+"""Plugin-owned event channel for the nightly memory distiller."""
 
 STATE_PATH = DATA_DIR / "memory_dream_state.json"
 MEMORY_PATH = DATA_DIR / "memory.md"

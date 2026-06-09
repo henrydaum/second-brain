@@ -13,12 +13,14 @@ dependencies_pip = []
 import json
 import logging
 
-from events.event_channels import UPDATE_TITLES
 from plugins.BaseTask import BaseTask, TaskResult
 from runtime.agent_scope import resolve_agent_llm
 from runtime.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("TaskUpdateTitles")
+
+UPDATE_TITLES = "update_titles"
+"""Plugin-owned event channel for periodic conversation retitling."""
 
 _MAX_LEN = 80
 _THRESHOLD = 4
