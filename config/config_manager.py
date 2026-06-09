@@ -74,7 +74,9 @@ def load(path: str = None) -> dict:
     # If new settings are added, this adds them to the existing config.json
     merged = dict(DEFAULTS)
     merged.update(user_config)
-    for key in _LIST_KEYS:
+    for key in USER_CONFIG_KEYS:
+        merged.pop(key, None)
+    for key in _LIST_KEYS - USER_CONFIG_KEYS:
         merged[key] = _normalize_list(merged.get(key, DEFAULTS[key]))
     merged["enabled_frontends"] = _normalize_frontends(
         merged.get("enabled_frontends", DEFAULTS["enabled_frontends"])

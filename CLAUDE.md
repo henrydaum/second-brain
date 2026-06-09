@@ -113,11 +113,12 @@ the difference between a microkernel and a pile of assumptions:
   for collected `dependencies_pip`, and copies the same relative paths into
   `DATA_DIR/installed_plugins`. It refuses to overwrite a different existing
   file, but skips byte-identical files.
-- **Uninstall scans live trees.** Receipts are not used. Uninstall follows the
-  installed target's dependency metadata, scans built-in, sandbox, and installed
-  plugin trees, and removes only candidate files/pip packages no remaining file
-  still declares. Kernel requirements are never pip-uninstalled. Config cleanup,
-  SQL table cleanup, bundles, versioning, and cloud fetch are deferred.
+- **Uninstall scans live trees.** Uninstall follows the installed target's
+  dependency metadata, scans built-in, sandbox, and installed plugin trees, and
+  removes only candidate files/pip packages no remaining file still declares.
+  Kernel requirements are never pip-uninstalled. Bundles are cloud-only
+  manifests in `origin/store` that list store-relative files and feed the same
+  resolver. Config cleanup, SQL table cleanup, and versioning are deferred.
 
 ## Verifying the kernel
 

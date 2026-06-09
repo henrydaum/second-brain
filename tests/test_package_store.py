@@ -272,11 +272,3 @@ def test_parser_helper_install_and_uninstall_reload_parser(tmp_path, monkeypatch
     assert parser.loads == 2
     assert parser.unloads == 2
 
-
-def test_existing_receipts_are_ignored(tmp_path, monkeypatch):
-    _patch_roots(monkeypatch, tmp_path)
-    receipts = tmp_path / "packages" / "receipts"
-    receipts.mkdir(parents=True)
-    (receipts / "ghost.json").write_text('{"id": "ghost"}', encoding="utf-8")
-
-    assert package_manager.installed_packages() == []

@@ -67,7 +67,7 @@ def test_load_strips_user_config_keys_from_disk(tmp_path):
 
     config = config_manager.load(path)
 
-    assert config["last_active_conversation_id"] == 12  # legacy value is still available for migration
+    assert "last_active_conversation_id" not in config
     on_disk = json.loads((tmp_path / "config.json").read_text())
     assert "last_active_conversation_id" not in on_disk
     assert "active_agent_profile" not in on_disk

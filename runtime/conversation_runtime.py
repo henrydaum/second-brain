@@ -108,7 +108,6 @@ class ConversationRuntime:
         # active conversation auto-restored, so the user lands back where
         # they left off. The id is persisted to config on every conversation
         # switch (see ``_persist_active_conversation``).
-        self._legacy_restore_conv_id = self.config.get("last_active_conversation_id") if self.config else None
         self._restore_consumed_keys: set[str] = set()
         self._persisted_active_conv_by_user: dict[int, int | None] = {}
 
@@ -720,24 +719,12 @@ class ConversationRuntime:
             logger.exception("Failed to persist last_active_conversation_id")
 
     def _last_active_conversation_id(self, session_key: str):
-        """Return the current user's remembered conversation id.
-
-        One-time legacy fallback reads the old global config key for the base user
-        so existing local installs restore once and then rewrite into user config.
-        """
+        """Return the current user's remembered conversation id."""
         if self.db is None:
             return None
-        user_id = self.session_user_id(session_key)
-        cfg = self.db.get_user_config(user_id)
+        cfg = self.db.get_user_config(self.session_user_id(session_key))
         if cfg.get("last_active_conversation_id") not in (None, ""):
             return cfg.get("last_active_conversation_id")
-        if user_id == DEFAULT_USER_ID and self._legacy_restore_conv_id not in (None, ""):
-            cfg["last_active_conversation_id"] = self._legacy_restore_conv_id
-            try:
-                self.db.set_user_config(user_id, cfg)
-            except Exception:
-                logger.exception("Failed to migrate last_active_conversation_id to user config")
-            return self._legacy_restore_conv_id
         return None
 
     # ──────────────────────────────────────────────────────────────────

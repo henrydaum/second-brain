@@ -618,40 +618,9 @@ def _unique(items) -> list:
     return list(dict.fromkeys(item for item in items if item))
 
 
-# Compatibility shims for old publisher/tests while the live store is tree-based.
 PACKAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_]*$")
 
 
 def _validate_package_id(package_id: str):
     if not isinstance(package_id, str) or not PACKAGE_ID_RE.match(package_id):
         raise PackageError(f"Invalid package id: {package_id!r}")
-
-
-def _is_entrypoint(path: str) -> bool:
-    p = PurePosixPath(path)
-    return len(p.parts) == 2 and any(p.parts[0] == family and p.name.startswith(prefix) for family, prefix in PLUGIN_FAMILIES.values())
-
-
-def _validate_manifest(manifest: dict) -> dict:
-    if not isinstance(manifest, dict):
-        raise PackageError("Manifest must be a JSON object.")
-    package_id = manifest.get("id", "")
-    _validate_package_id(package_id)
-    files = manifest.get("files", [])
-    requires = manifest.get("requires", [])
-    if not isinstance(files, list) or any(not isinstance(path, str) for path in files):
-        raise PackageError("Manifest files must be a list of relative paths.")
-    if not isinstance(requires, list) or any(not isinstance(dep, str) for dep in requires):
-        raise PackageError("Manifest requires must be a list of package ids.")
-    normalized = dict(manifest)
-    normalized["files"] = [_validate_rel_path(path) for path in files]
-    normalized["requires"] = requires
-    return normalized
-
-
-def _validated_files(manifest: dict) -> list[str]:
-    return list(manifest.get("files", []))
-
-
-def _entrypoints(manifest: dict, files: list[str]) -> list[str]:
-    return list(manifest.get("entrypoints") or [path for path in files if _is_entrypoint(path)])

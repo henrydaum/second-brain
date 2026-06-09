@@ -12,8 +12,6 @@ Install dev deps once: `pip install -r requirements-dev.txt`
 |---|---|---|---|
 | **Sanitizer** | `invariants.py` | KASAN/KMSAN | Latent corruption made loud: broken DB integrity, orphaned messages, **cross-user ownership**, leaked phase frames / threads, registry drift. |
 | **Fuzzer** | `fuzz_runtime.py` | syzkaller/syzbot | Bugs in *orderings* of lifecycle ops against the runtime (the 940-line dispatcher): conversations, users/identity, profile switches, plugin/session state, system-prompt extras, persist→reload round-trip. Oracle = `invariants` after every step. |
-| **Fuzzer** | `fuzz_packages.py` | syzkaller/syzbot | Install/uninstall *orderings* against the package store with a fake catalog (deps, shared deps, bundles). Oracle = store integrity (files↔receipts, no orphans, no dangling `requires`). |
-| **Fuzzer** | `fuzz_packages_cleanup.py` | syzkaller/syzbot | The hairy uninstall **cleanup form** (all/none/specific × per-package config/tables/pip), driven through the *real* `PackagesCommand` form. Oracle = shared config/tables/pip declared by a still-installed package are never collateral, and kernel-requirement pip is never removed. |
 | **Driver** | `driver.py` | (no kernel analog) | Semantic/UX bugs a blind fuzzer can't reach — an intelligent agent (MiniMax) as the brain, a human/Claude as the adversarial user. |
 | **Real-LLM stress** | `stress_compaction.py` | — | Drives a real MiniMax conversation with a tiny `context_size` so the compactor service fires; asserts compaction happens, invariants hold across it, and a fact planted pre-compaction survives the summary. |
 
@@ -24,10 +22,10 @@ persistent data dir, pluggable LLM) and `fake_llm.py` (network-free
 ## Running
 
 ```bash
-# Fuzz the runtime + the package store (deterministic, no network). Every
+# Fuzz the runtime (deterministic, no network). Every
 # failure shrinks to a minimal reproducing op-sequence — turn it into a tests/
 # regression test.
-pytest stress/fuzz_runtime.py stress/fuzz_packages.py -q
+pytest stress/fuzz_runtime.py -q
 pytest stress/fuzz_runtime.py -q --hypothesis-seed=random   # deeper search
 
 # Real-LLM compaction stress (uses MiniMax).

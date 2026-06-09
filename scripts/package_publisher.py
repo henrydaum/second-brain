@@ -45,11 +45,8 @@ def publish_package(args) -> None:
         files = write_package(
             worktree,
             package_id=args.package_id,
-            name=args.name,
-            description=args.description,
             file_specs=args.file,
             requires=args.require,
-            entrypoints=[] if args.no_entrypoints else args.entrypoint,
             pip=[] if args.no_pip else args.pip,
             update=args.update,
         )
@@ -74,11 +71,8 @@ def write_package(
     store_root: Path,
     *,
     package_id: str,
-    name: str = "",
-    description: str = "",
     file_specs: list[str],
     requires: list[str],
-    entrypoints: list[str] | None = None,
     update: bool,
     pip: list[str] | None = None,
 ) -> list[str]:
@@ -253,10 +247,6 @@ def _skipped(path: Path) -> bool:
     return any(part in SKIP_DIRS for part in path.parts) or path.suffix in SKIP_SUFFIXES
 
 
-def _scan_package_dirs(store_root: Path) -> dict[str, Path]:
-    return {Path(rel).stem: store_root / rel for rel in _tree_files(store_root)}
-
-
 def _parse_args(argv: list[str] | None):
     parser = argparse.ArgumentParser(description="Publish Second Brain package files to origin/store.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -266,12 +256,8 @@ def _parse_args(argv: list[str] | None):
     validate.add_argument("--path")
     publish = sub.add_parser("publish", help="Copy files into the store tree, commit, and push.")
     publish.add_argument("package_id", help="Stem of the primary plugin/helper file.")
-    publish.add_argument("--name", default="")
-    publish.add_argument("--description", default="")
     publish.add_argument("--file", action="append", default=[], help="SOURCE=DEST, repeatable. Directories are copied recursively.")
     publish.add_argument("--require", action="append", default=[], help="Store-relative .py dependency file, repeatable.")
-    publish.add_argument("--entrypoint", action="append", default=None, help="Ignored; kept for old command lines.")
-    publish.add_argument("--no-entrypoints", action="store_true", help="Ignored; tree store uses file stems.")
     publish.add_argument("--pip", action="append", default=None, help="PyPI dependency, repeatable.")
     publish.add_argument("--no-pip", action="store_true", help="Declare dependencies_pip = [].")
     publish.add_argument("--update", action="store_true")
