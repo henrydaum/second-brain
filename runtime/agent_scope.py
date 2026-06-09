@@ -122,17 +122,20 @@ def resolve_agent_llm(profile_name: str, config: dict, services: dict):
 
 
 def _expand_tool_dependencies(tools: dict, names: set[str]) -> set[str]:
-    """Internal helper to handle expand tool dependencies."""
+    """Close ``names`` over tool→tool dependencies so scoped-in tools keep
+    their helpers callable. Declared ``dependencies_tools`` is the contract;
+    the source regex is a fallback for tools that haven't declared them."""
     expanded, pending = set(names), list(names)
     while pending:
         tool = tools.get(pending.pop())
         if tool is None:
             continue
+        deps = list(getattr(tool, "dependencies_tools", None) or [])
         try:
-            source = inspect.getsource(tool.__class__)
+            deps += _CALL_TOOL_RE.findall(inspect.getsource(tool.__class__))
         except (OSError, TypeError):
-            continue
-        for dep in _CALL_TOOL_RE.findall(source):
+            pass
+        for dep in deps:
             if dep in tools and dep not in expanded:
                 expanded.add(dep)
                 pending.append(dep)

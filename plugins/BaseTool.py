@@ -143,6 +143,10 @@ class BaseTool:
     requires_services: list[str] = []
     dependencies_files: list[str] = []
     dependencies_pip: list[str] = []
+    # Tool names this tool invokes via context.call_tool. Declared deps stay
+    # callable (hidden) when this tool is whitelisted into an agent scope,
+    # even when the call site isn't a literal string the regex fallback can see.
+    dependencies_tools: list[str] = []
 
     # --- Agent controls ---
     max_calls: int = 3           # Max times the agent can call this tool per message
@@ -162,7 +166,7 @@ class BaseTool:
     def __init_subclass__(cls, **kwargs):
         """Internal helper to handle init subclass."""
         super().__init_subclass__(**kwargs)
-        for attr in ("parameters", "requires_services", "dependencies_files", "dependencies_pip", "config_settings"):
+        for attr in ("parameters", "requires_services", "dependencies_files", "dependencies_pip", "dependencies_tools", "config_settings"):
             value = getattr(cls, attr)
             if isinstance(value, (dict, list)):
                 setattr(cls, attr, value.copy())

@@ -109,8 +109,9 @@ the difference between a microkernel and a pile of assumptions:
 - **Install is a tree copy.** `/packages` reads the target file from
   `origin/store`, recursively follows `dependencies_files`, runs `pip install`
   for collected `dependencies_pip`, and copies the same relative paths into
-  `DATA_DIR/installed_plugins`. It refuses to overwrite a different existing
-  file, but skips byte-identical files.
+  `DATA_DIR/installed_plugins`. The store copy always wins: a differing
+  existing file is overwritten in place (no versioning yet — the store branch
+  is assumed to hold the newest version); byte-identical files are skipped.
 - **Uninstall scans live trees.** Uninstall follows the installed target's
   dependency metadata, scans built-in, sandbox, and installed plugin trees, and
   removes only candidate files/pip packages no remaining file still declares.

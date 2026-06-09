@@ -121,7 +121,7 @@ class ConversationRuntime:
         self._reconcile_session_binding(session)
         if user_driven:
             self.active_session_key = session_key
-            prior_conv = getattr(self, "_persisted_active_conv_id", None)
+            prior_conv = self._persisted_active_conv_by_user.get(self.session_user_id(session_key))
 
         # Cron-handoff guard: a non-user-driven send_text must never be
         # interpreted as form input. If the user is mid-form, refuse the turn.

@@ -8,8 +8,8 @@ from plugins.commands.helpers.store_backend import StoreBackendError
 from state_machine.conversation import FormStep
 
 
-ACTIONS = ["available", "installed", "install", "uninstall"]
-ACTION_LABELS = ["Browse available", "Browse installed", "Install", "Uninstall"]
+ACTIONS = ["available", "installed", "install", "uninstall", "update"]
+ACTION_LABELS = ["Browse available", "Browse installed", "Install", "Uninstall", "Update installed"]
 CATEGORIES = ["tools", "tasks", "services", "commands", "frontends", "bundles"]
 CATEGORY_LABELS = ["Tools", "Tasks", "Services", "Commands", "Frontends", "Bundles"]
 _BLURB = {
@@ -42,22 +42,35 @@ class PackagesCommand(BaseCommand):
 
     def run(self, args, context):
         action = args.get("action") or "installed"
+        progress = _progress_for(context)
         try:
             if action == "available":
                 return _format_available(context, args.get("category"))
             if action == "installed":
                 return _format_installed(args.get("category"))
             if action == "install":
-                return package_manager.install_package(context.root_dir, args.get("package_id", ""), context, progress=_progress).text()
+                return package_manager.install_package(context.root_dir, args.get("package_id", ""), context, progress=progress).text()
             if action == "uninstall":
-                return package_manager.uninstall_package(args.get("package_id", ""), context, progress=_progress, root_dir=context.root_dir).text()
+                return package_manager.uninstall_package(args.get("package_id", ""), context, progress=progress, root_dir=context.root_dir).text()
+            if action == "update":
+                return package_manager.update_packages(context.root_dir, context, progress=progress).text()
             return f"Unknown action: {action}"
         except (package_manager.PackageError, StoreBackendError) as e:
             return f"Package {action} failed: {e}"
 
 
-def _progress(message: str) -> None:
-    print(message, flush=True)
+def _progress_for(context):
+    """Progress sink that reaches the user's frontend, not just stdout.
+
+    Long steps (pip install can run minutes) need to surface in whatever
+    frontend issued the command; CHAT_MESSAGE_PUSHED via push_message does
+    that. Headless/test contexts fall back to printing.
+    """
+    runtime = getattr(context, "runtime", None)
+    session_key = getattr(context, "session_key", None)
+    if runtime is not None and session_key:
+        return lambda message: runtime.push_message(session_key, message, source="packages")
+    return lambda message: print(message, flush=True)
 
 
 def _category_prompt(context, action: str) -> str:

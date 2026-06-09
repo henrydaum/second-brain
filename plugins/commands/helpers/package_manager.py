@@ -194,6 +194,30 @@ def execute_install_plan(plan: InstallPlan, context=None, progress: Progress | N
     return PackageActionResult(True, lines)
 
 
+def outdated_packages(root_dir: str | Path) -> list[str]:
+    """Installed files whose store copy now differs (the store always wins)."""
+    store = GitStoreBackend(root_dir)
+    store.refresh(force=True)
+    store_files = set(store.list_python_files())
+    out = []
+    for rel in _installed_rel_files():
+        if rel in store_files and store.get_tree_file_bytes(rel) != _target(rel).read_bytes():
+            out.append(rel)
+    return sorted(out)
+
+
+def update_packages(root_dir: str | Path, context=None, progress: Progress | None = None) -> PackageActionResult:
+    """Re-copy every installed file whose store copy changed, plus any new
+    dependencies those updated files now declare."""
+    rels = outdated_packages(root_dir)
+    if not rels:
+        return PackageActionResult(True, ["All installed packages are up to date."])
+    plan = _install_plan_from_roots(GitStoreBackend(root_dir), rels, "update")
+    result = execute_install_plan(plan, context, progress=progress)
+    result.lines.insert(0, f"Updating {len(rels)} file(s): " + ", ".join(PurePosixPath(rel).stem for rel in rels))
+    return result
+
+
 def build_uninstall_plan(target: str, *, root_dir: str | Path | None = None) -> UninstallPlan:
     """Resolve installed target + recursive deps, then keep externally referenced deps."""
     candidates: set[str]
@@ -214,22 +238,22 @@ def _uninstall_plan_from_candidates(target: str, candidates: set[str]) -> Uninst
     kept_pip: dict[str, str] = {}
 
     refs = _external_references(candidates)
-    changed = True
-    while changed:
-        changed = False
-        for rel in list(candidates):
-            if rel in keep_files:
-                continue
-            reason = refs["files"].get(rel)
-            if reason:
-                keep_files[rel] = reason
-                changed = True
-                for dep in _meta_from_installed(rel).dependencies_files:
-                    if dep in candidates and dep not in keep_files:
-                        keep_files[dep] = f"needed by kept dependency {rel}"
-                        changed = True
-                for dep in _meta_from_installed(rel).dependencies_pip:
-                    kept_pip.setdefault(dep, f"needed by kept dependency {rel}")
+
+    def keep(rel: str, reason: str) -> None:
+        if rel in keep_files:
+            return
+        keep_files[rel] = reason
+        meta = _meta_from_installed(rel)
+        for dep in meta.dependencies_pip:
+            kept_pip.setdefault(dep, f"needed by kept dependency {rel}")
+        for dep in meta.dependencies_files:
+            if dep in candidates:
+                keep(dep, f"needed by kept dependency {rel}")
+
+    for rel in sorted(candidates):
+        reason = refs["files"].get(rel)
+        if reason:
+            keep(rel, reason)
 
     kernel = _kernel_requirements()
     pip_candidates = _unique(pip for rel in candidates for pip in _meta_from_installed(rel).dependencies_pip)

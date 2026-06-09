@@ -575,6 +575,7 @@ class Database:
 				WHERE run_id IN (
 					SELECT run_id FROM task_runs
 					WHERE task_name = ? AND status = 'PENDING'
+					ORDER BY created_at ASC
 					LIMIT ?
 				)
 				RETURNING run_id, payload_json

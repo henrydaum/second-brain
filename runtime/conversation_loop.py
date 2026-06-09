@@ -184,6 +184,7 @@ class ConversationLoop:
 
         new_messages: list[dict[str, Any]] = []
         attachments: list[str] = []
+        action_failed = False
 
         from attachments.attachment import AttachmentBundle
         bundle = AttachmentBundle.from_iterable(cs.pending_attachments)
@@ -227,11 +228,17 @@ class ConversationLoop:
 
                 self._absorb(result, action_type, content, history, new_messages, attachments, db, conversation_id)
 
-                if action_type == "end_turn" or not result.ok:
+                if not result.ok:
+                    action_failed = True
+                    break
+                if action_type == "end_turn":
                     break
 
             if cs.turn_priority == actor_id:
-                if not self._cancelled():
+                # Only nudge the LLM for a wrap-up when the loop genuinely ran
+                # out of budget/iterations — a failed action ending the turn
+                # would make the "you've hit the tool-call limit" premise false.
+                if not self._cancelled() and not action_failed:
                     self._over_budget_summary(cs, actor_id, history, new_messages, attachments, db, conversation_id)
                 cs.enact("end_turn", None, actor_id)
 
@@ -523,7 +530,10 @@ class ConversationLoop:
                 logger.warning("Compactor service is not loaded. History will not shrink via summary.")
                 return
             transcript = "\n".join(f"{m.get('role', '').upper()}: {(m.get('content') or '')[:1000]}" for m in history)
-            transcript = transcript[:20000]
+            # Keep head + tail so the summary covers both how the conversation
+            # started and what was most recently said, instead of silently
+            # dropping everything after the first 20k chars.
+            transcript = _truncate_middle(transcript, 20000)
             if self.on_notice:
                 self.on_notice("Compacting conversation...")
             summary = compactor.compact(runtime=self.runtime, session_key=self.session_key, transcript=transcript)

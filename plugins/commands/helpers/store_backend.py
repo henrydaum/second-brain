@@ -2,8 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
+import threading
+import time
 from pathlib import Path
+
+logger = logging.getLogger("Store")
+
+# How long a successful-or-attempted fetch keeps the ref "fresh enough".
+# Nothing else ever updates origin/store on this machine, so without this
+# the store would stay frozen at whatever the user last fetched manually.
+_FETCH_TTL_SECONDS = 300.0
+_fetch_times: dict[tuple[str, str], float] = {}
+_fetch_lock = threading.Lock()
 
 
 class StoreBackendError(RuntimeError):
@@ -17,8 +29,38 @@ class GitStoreBackend:
         self.root_dir = Path(root_dir)
         self.ref = ref
 
+    def refresh(self, force: bool = False) -> None:
+        """Fetch the store branch so the local ref reflects the remote.
+
+        Throttled by a TTL so browsing doesn't shell out to the network on
+        every call; failures (offline, no such remote) degrade silently to
+        the last-fetched ref.
+        """
+        if "/" not in self.ref:
+            return  # local ref, nothing to fetch
+        remote, branch = self.ref.split("/", 1)
+        key = (str(self.root_dir), self.ref)
+        with _fetch_lock:
+            if not force and time.monotonic() - _fetch_times.get(key, 0.0) < _FETCH_TTL_SECONDS:
+                return
+            # Stamp before fetching so an unreachable remote doesn't retry
+            # on every store read.
+            _fetch_times[key] = time.monotonic()
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(self.root_dir), "fetch", "--quiet", remote,
+                 f"refs/heads/{branch}:refs/remotes/{remote}/{branch}"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                check=False, timeout=30,
+            )
+            if proc.returncode:
+                logger.debug("Store fetch failed (using local ref): %s", proc.stderr.strip())
+        except (OSError, subprocess.TimeoutExpired) as e:
+            logger.debug("Store fetch failed (using local ref): %s", e)
+
     def list_tree_files(self) -> list[str]:
         """Return every file path on the store ref."""
+        self.refresh()
         proc = subprocess.run(
             ["git", "-C", str(self.root_dir), "ls-tree", "-r", "--name-only", self.ref],
             stdout=subprocess.PIPE,
