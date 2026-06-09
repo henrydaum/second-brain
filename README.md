@@ -13,13 +13,17 @@ Check out Atlas Cloud's new coding plan promotion for more budget-friendly API a
 
 # Second Brain
 
-Second Brain is a local-first AI runtime for your machine.
+Second Brain is a local-first AI runtime for your machine, built as a **microkernel**.
 
-It indexes your files, remembers durable context, searches the web, runs tools, schedules cron jobs, sends Telegram updates, and lets agents extend the system while it is running. It is not a fixed chatbot wrapped around a folder search. It is a programmable conversation runtime with memory, retrieval, automation, and live plugin authoring built in.
+The kernel is deliberately small: it boots, runs the agent turn, persists conversations in SQLite, loads and unloads plugins, and gets out of the way. Everything else — file indexing and retrieval, web search, cron scheduling, Telegram, durable memory, file-editing and shell tools, heavy file parsers — arrives as **packages** you install from a store. It is not a fixed chatbot wrapped around a folder search, and it is not a monolith either: it is a programmable conversation runtime that you (and agents) extend while it is running.
 
-The most important architectural shift is the conversation layer. Second Brain now routes conversations through a robust state machine: participants take actions, turns move between actors, phases suspend and resume multi-step flows, and frontends submit actions instead of owning conversation logic. Commands and frontends are plugins too, so the system can grow new user interfaces and slash-command workflows the same way it grows tools, tasks, and services.
+A fresh install starts almost empty. Run `/setup` and install the `starter` bundle to get a working assistant in one step — see [The Kernel And The Package Store](#the-kernel-and-the-package-store) below.
+
+The most important architectural shift is the conversation layer. Second Brain routes conversations through a robust state machine: participants take actions, turns move between actors, phases suspend and resume multi-step flows, and frontends submit actions instead of owning conversation logic. Commands and frontends are plugins too, so the system can grow new user interfaces and slash-command workflows the same way it grows tools, tasks, and services.
 
 ## What It Can Do
+
+With the right packages installed (the `full` bundle covers most of the list below), Second Brain can:
 
 - Index documents, code, PDFs, slides, spreadsheets, archives, images, audio, and video.
 - Search local files by keyword, semantics, or hybrid ranking.
@@ -34,6 +38,50 @@ The most important architectural shift is the conversation layer. Second Brain n
 - Author, test, and live-load new tools, tasks, services, commands, and frontends.
 
 The result is a private AI layer for your computer: part knowledge engine, part personal operator, part automation substrate.
+
+## The Kernel And The Package Store
+
+Second Brain ships as a microkernel plus a package store.
+
+**The kernel** is what lives in this repository's main tree. It boots the runtime, runs the conversation state machine and agent turn, persists conversations, manages config, and discovers and loads plugins. It ships only the plugins it cannot run without: the LLM service, the compactor (context safety), the parser registry (with lightweight text and image parsing), the plugin watcher (live install and reload), the REPL frontend, and a small set of REPL/introspection commands. There are **no built-in tools or tasks** — a fresh kernel can hold a conversation, but it cannot search your files or edit code until you install packages.
+
+**The store** is a parallel branch (`store`) that mirrors what a fully loaded install looks like: every optional tool, task, service, command, frontend, and parser helper, plus named *bundles* that group them. You browse and install from it with `/packages`, and the kernel copies the files into your data directory and live-loads them.
+
+### Getting started
+
+A fresh install has no LLM backend and no frontend beyond the REPL. The fastest path is the onboarding wizard:
+
+```
+/setup
+```
+
+It installs a bundle, configures an LLM profile, and optionally sets up Telegram. If you would rather drive it by hand, install the starter bundle directly:
+
+```
+/packages install bundle_starter
+```
+
+The **starter** bundle is the recommended first install: an LLM backend (LiteLLM, which reaches most providers), the Telegram frontend, file read/edit, SQL and shell tools, ask-user-question, plugin authoring, and durable-memory plus auto-title tasks. For everything — all file parsers, OCR, audio/video transcription, and the full indexing and search pipeline — install the larger **full** bundle:
+
+```
+/packages install bundle_full
+```
+
+Browse and manage packages anytime:
+
+```
+/packages                      # interactive: browse / install / uninstall
+/packages available tools      # list installable tools (or tasks/services/commands/frontends/bundles)
+/packages installed            # what you currently have
+/packages install <stem>       # install one file by stem, e.g. tool_web_search or parse_pdf
+/packages uninstall <stem>     # remove it, plus dependencies nothing else still needs
+```
+
+Install resolves each file's declared dependencies — other store files and pip packages — and copies them in. Uninstall removes only files and pip packages nothing else still needs, and never touches kernel requirements.
+
+### Contributing to the store
+
+The store is just a git branch, so adding a plugin is a pull request. Author and test your plugin as a sandbox plugin (see [Plugin System](#plugin-system) and the [Extension Authoring Guide](#extension-authoring-guide)), then open a pull request against the `store` branch that adds your `tool_*.py` / `task_*.py` / `service_*.py` / `command_*.py` / `frontend_*.py` (and any `helpers/`) under the matching family directory. Declare dependencies with the `dependencies_files` and `dependencies_pip` fields so the package manager can resolve them, and to group several files under one install, add a `bundles/<name>.json` manifest listing the store-relative files.
 
 ## Core Architecture
 
@@ -95,9 +143,9 @@ That loop matters. Second Brain can inspect its own templates, write a focused e
 
 ## File Indexing And Retrieval
 
-Point Second Brain at folders with `sync_directories` and it keeps a live SQLite knowledge base over those files.
+Indexing and retrieval are store capabilities — install the `full` bundle (or the indexing/search and parser bundles) to enable them. Once installed, point Second Brain at folders with `sync_directories` and it keeps a live SQLite knowledge base over those files. The kernel always ships the pipeline *substrate* (file watcher, task queue, orchestrator DAG); these packages add the processing stages that run on it.
 
-The built-in pipeline includes:
+The full pipeline includes:
 
 - file watching and debounced change detection
 - parser service dispatch by extension and modality
@@ -136,9 +184,9 @@ Supported modalities:
 
 ## Events, Cron Jobs, And Subagents
 
-Second Brain is proactive, not just reactive.
+Second Brain is proactive, not just reactive — once the scheduling package is installed.
 
-Path-driven tasks process files. Event-driven tasks respond to bus events. Timekeeper creates one-time and recurring jobs using cron expressions. Scheduled subagents can wake up, read their conversation history, run tools, and optionally send their final result back into chat.
+Path-driven tasks process files. Event-driven tasks respond to bus events. Timekeeper (a store service, in the `scheduling` bundle) creates one-time and recurring jobs using cron expressions. Scheduled subagents can wake up, read their conversation history, run tools, and optionally send their final result back into chat.
 
 This supports workflows like:
 
@@ -154,15 +202,7 @@ It is calendar-capable without being trapped in a traditional calendar UI. Jobs 
 
 ## Frontends
 
-Built-in frontends:
-
-- `repl` - local terminal interface
-- `telegram` - private mobile chat interface
-
-Both are plugins under `plugins/frontends/`:
-
-- `frontend_repl.py`
-- `frontend_telegram.py`
+The kernel ships one frontend, the REPL (`frontend_repl.py`, a local terminal interface). Telegram — a private mobile chat interface (`frontend_telegram.py`) — is a store package, installed with the `starter`/`full` bundles or directly via `/packages install frontend_telegram`. Both live under `plugins/frontends/` once present.
 
 `BaseFrontend` provides the shared runtime binding, command parsing path, form and approval submission, bus subscriptions, progress rendering hooks, session helpers, and `FrontendCapabilities` model. Each frontend implements only the transport-specific parts: receiving input, deriving a session key, rendering messages, sending attachments, showing buttons, and stopping cleanly.
 
@@ -175,9 +215,9 @@ Custom frontends are first-class plugins. A Discord bot, HTTP bridge, desktop sh
 ### Requirements
 
 - Python 3.11+
-- An LLM profile for agent features
-- Windows for the built-in native OCR service, or macOS for Apple Vision OCR
-- Telegram bot token and allowed user ID if you want the Telegram frontend
+- An LLM profile for agent features (installed and configured by `/setup`)
+- A Telegram bot token and allowed user ID if you install the Telegram frontend
+- For the OCR/transcription packages: Windows native OCR or macOS Apple Vision; audio/video transcription pulls `faster-whisper`
 
 ### Install
 
@@ -187,20 +227,7 @@ cd "Second Brain"
 pip install -r requirements.txt
 ```
 
-Key dependencies include:
-
-- `openai`
-- `lmstudio`
-- `sentence-transformers`
-- `faster-whisper`
-- `PyMuPDF`
-- `python-docx`
-- `python-pptx`
-- `pandas`
-- `watchdog`
-- `python-telegram-bot`
-- `croniter`
-- `cron-descriptor`
+`requirements.txt` is intentionally minimal — the kernel stays close to pure Python (`watchdog`, `Pillow`, `croniter`, `psutil`, and a few others). Heavier dependencies (`openai`/`litellm`, `sentence-transformers`, `faster-whisper`, `PyMuPDF`, `python-docx`, `python-pptx`, `pandas`, `python-telegram-bot`, …) belong to store packages and are installed automatically when you install the package that needs them.
 
 ### Configure
 
@@ -210,9 +237,11 @@ On first run, Second Brain creates its data directory automatically:
 - macOS: `~/Library/Application Support/Second Brain/`
 - Linux: `${XDG_DATA_HOME:-~/.local/share}/Second Brain/`
 
-The most important setting is `sync_directories`: the folders Second Brain should watch and index. The attachment cache is included by default so files sent through frontends can enter the same pipeline.
+You normally don't hand-edit config: `/setup` writes the LLM profile and Telegram settings for you, and installing packages extends `enabled_frontends`/`autoload_services` as needed. A fresh kernel starts with `enabled_frontends: ["repl"]` and `autoload_services: ["llm"]`.
 
-Minimal shape:
+The most important setting once indexing is installed is `sync_directories`: the folders Second Brain should watch and index. The attachment cache is included by default so files sent through frontends can enter the same pipeline.
+
+Illustrative shape after the `starter` bundle and `/setup` (LiteLLM backend, Telegram enabled):
 
 ```json
 {
@@ -221,18 +250,18 @@ Minimal shape:
     "C:/Users/you/AppData/Local/Second Brain/attachment_cache"
   ],
   "enabled_frontends": ["repl", "telegram"],
-  "autoload_services": ["web_search_provider", "timekeeper", "llm", "parser", "plugin_watcher"],
+  "autoload_services": ["llm"],
   "telegram_bot_token": "",
   "telegram_allowed_user_id": 0,
   "llm_profiles": {
-    "gpt-4.1-mini": {
-      "llm_endpoint": "",
-      "llm_api_key": "OPENAI_API_KEY",
+    "default": {
+      "llm_endpoint": "https://api.atlascloud.ai/v1",
+      "llm_api_key": "ATLAS_API_KEY",
       "llm_context_size": 0,
-      "llm_service_class": "OpenAILLM"
+      "llm_service_class": "LiteLLMService"
     }
   },
-  "default_llm_profile": "gpt-4.1-mini",
+  "default_llm_profile": "default",
   "agent_profiles": {
     "default": {
       "llm": "default",
@@ -246,13 +275,12 @@ Minimal shape:
 
 Notes:
 
-- Configure LLM profiles with `/llm`.
-- Configure agent profiles with `/agent`.
-- Configure app and plugin settings with `/config`.
-- Tool calling is not available with LM Studio.
+- Run `/setup` for guided onboarding; it installs a bundle and writes the LLM/Telegram config.
+- Configure LLM profiles with `/llm`, agent profiles with `/agent`, and app/plugin settings with `/config`.
 - `llm_context_size: 0` lets automatic compaction manage context.
-- Brave Search and Brave Answers are optional web-search providers configured through plugin settings.
+- `LiteLLMService` (from the `starter` bundle) reaches most providers; point `llm_endpoint`/`llm_api_key` at whichever you use.
 - Each `llm_profiles` entry is registered as its own service, and the `llm` router follows `default_llm_profile`.
+- Installed extension services auto-load when present; you don't need to list them in `autoload_services`.
 
 ### Run
 
@@ -275,42 +303,42 @@ Startup does the following:
 
 Commands are user-facing plugins. They are available in the REPL and Telegram as slash commands, and they can collect forms through the state machine.
 
-Built-in commands include:
+The kernel ships REPL UX and introspection commands only:
 
 | Command | Purpose |
 |---|---|
+| `/setup` | Guided onboarding: install a bundle, configure the LLM and Telegram |
+| `/packages` | Browse, install, and uninstall store packages and bundles |
 | `/agent` | Select, switch, edit, or remove agent profiles |
-| `/cancel` | Cancel the current interaction |
-| `/clear` | Clear the current conversation |
-| `/commands` | List available commands |
-| `/config` | Select and edit config settings |
-| `/conversations` | Browse, switch, and manage conversations |
-| `/frontends` | Enable or disable frontend plugins |
 | `/llm` | Select, edit, set default, or remove LLM profiles |
-| `/locations` | Show project and plugin directories |
-| `/new` | Start a conversation with default settings |
-| `/schedule` | Manage Timekeeper scheduled jobs |
+| `/config` | Select and edit config and plugin settings |
+| `/conversations` | Browse, switch, and manage conversations |
+| `/clear` | Clear the current conversation |
+| `/cancel` | Cancel the current interaction |
+| `/frontends` | Enable or disable frontend plugins |
 | `/services` | Select and load or unload services |
 | `/tasks` | Pause, resume, reset, retry, or trigger tasks |
 | `/tools` | Select and call tools |
-| `/update` | Pull latest changes from the repo |
+| `/commands` | List available commands |
+| `/locations` | Show project and plugin directories |
+| `/debug` | Inspect runtime state |
 
-Built-in tools include:
+Other commands (for example `/schedule` for cron jobs, `/update` to pull repo changes, or MCP commands) arrive with the packages that provide them.
 
-| Tool | Purpose |
-|---|---|
-| `edit_file` | Create, overwrite, replace, append to, or delete UTF-8 text files |
-| `hybrid_search` | Search local files with fused lexical and semantic ranking |
-| `lexical_search` | Search local files by exact terms and keywords |
-| `read_file` | Read exact text from files |
-| `render_files` | Send local files back through the frontend |
-| `run_command` | Run scoped terminal commands, with approval for broad actions |
-| `schedule_subagent` | List, add, edit, and remove scheduled background agents |
-| `semantic_search` | Search local files by embedding similarity |
-| `sql_query` | Query SQLite read-only |
-| `test_plugin` | Diagnose a plugin source file and summarize broad regression tests |
-| `update_memory` | Update durable memory |
-| `web_search` | Search the public web |
+The kernel ships **no built-in tools** — a fresh install can converse but has no agent-callable actions. Tools come from the store; the `starter` and `full` bundles install the common ones, and you can add others individually with `/packages install <stem>`. Frequently installed tools include:
+
+| Tool | Purpose | Bundle |
+|---|---|---|
+| `read_file` | Read exact text from files | starter |
+| `edit_file` | Create, overwrite, replace, append to, or delete UTF-8 text files | starter |
+| `run_command` | Run scoped terminal commands, with approval for broad actions | starter |
+| `sql_query` | Query SQLite read-only | starter |
+| `ask_user_question` | Ask the user a structured question | starter |
+| `test_plugin` | Diagnose a plugin source file and summarize broad regression tests | starter |
+| `hybrid_search` | Search local files with fused lexical and semantic ranking | full |
+| `lexical_search` | Search local files by exact terms and keywords | full |
+| `semantic_search` | Search local files by embedding similarity | full |
+| `web_search` | Search the public web | web_search |
 
 ## Project Layout
 
