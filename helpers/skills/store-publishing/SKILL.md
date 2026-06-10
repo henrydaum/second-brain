@@ -41,10 +41,12 @@ not their dependencies.
 
 - The store always wins on update: differing installed files are
   overwritten. Treat the branch as the newest version of everything.
-- Only `.py` files in 2–3-part family paths are installable
-  (`<family>/x.py` or `<family>/helpers/x.py`). Skills/markdown are not
-  store-distributable yet — they ship in the repo's `plugins/helpers/skills/`
-  or are authored in the sandbox.
+- Installable paths: `.py` files in 2–3-part family paths (`<family>/x.py`,
+  `<family>/helpers/x.py`) and **skill folders** (`helpers/skills/<name>/...`,
+  any file type). A skill installs/uninstalls as one unit: targeting its name
+  copies the whole folder. Declare plugin dependencies in the SKILL.md
+  frontmatter (`dependencies_files: tools/tool_use_skill.py`) so installing
+  the skill pulls the machinery it needs.
 - Never commit `__pycache__` to the branch (it has a `.gitignore` now).
 - All plugin PRs go through Henry — the store is trusted because it is
   reviewed, so review is the security boundary.
