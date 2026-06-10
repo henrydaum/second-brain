@@ -22,3 +22,76 @@ jobs:
         run: pytest tests -q
       - name: Runtime fuzzer (invariant oracle)
         run: pytest stress/fuzz_runtime.py -q
+
+  build:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+      - name: PyInstaller build
+        # main.pyw is the canonical entry (main.py reaches it via runpy, which
+        # static analysis can't follow), but PyInstaller hard-forces windowed
+        # mode for .pyw entries — and a windowed exe has no console/stdin for
+        # the REPL — so build from a .py copy. plugins/ ships as data files:
+        # discovery scans ROOT_DIR/plugins by file presence and imports by
+        # path, which hides both plugin third-party imports (croniter, PIL, …)
+        # and lazily-imported first-party modules from static analysis — hence
+        # the hidden-imports and first-party collect-submodules.
+        run: |
+          Copy-Item main.pyw entry_main.py
+          pyinstaller entry_main.py --name SecondBrain --onedir --console --noconfirm `
+            --add-data "plugins;plugins" `
+            --hidden-import croniter `
+            --hidden-import cron_descriptor `
+            --hidden-import PIL.Image `
+            --hidden-import psutil `
+            --collect-submodules watchdog `
+            --collect-submodules state_machine `
+            --collect-submodules runtime `
+            --collect-submodules agent `
+            --collect-submodules pipeline `
+            --collect-submodules events `
+            --collect-submodules config `
+            --collect-submodules attachments `
+            --collect-submodules plugins
+      - name: Smoke-test the frozen exe
+        # Boot-marker smoke: closing the REPL's stdin intentionally does NOT
+        # stop the kernel (unattended mode), so a clean-exit smoke would hang.
+        # Instead: boot against an isolated LOCALAPPDATA, wait for the started
+        # marker in app.log, then kill the process and fail on boot errors.
+        timeout-minutes: 5
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "sb_smoke"
+          $data = Join-Path $tmp "Second Brain"
+          $sync = Join-Path $tmp "sync"
+          New-Item -ItemType Directory -Force $data, $sync | Out-Null
+          # Minimal config: a sync dir (boot refuses without one) and no
+          # crash-restart launcher so there is exactly one process to kill.
+          @{ sync_directories = @($sync.Replace('\','/')); restart_on_crash = $false; enabled_frontends = @("repl") } |
+            ConvertTo-Json | Set-Content -Encoding ascii (Join-Path $data "config.json")
+          $env:LOCALAPPDATA = $tmp
+          $proc = Start-Process .\dist\SecondBrain\SecondBrain.exe -PassThru -WindowStyle Hidden
+          $log = Join-Path $data "app.log"
+          $booted = $false
+          foreach ($i in 1..60) {
+            Start-Sleep 1
+            if ((Test-Path $log) -and (Select-String -Path $log -Pattern "SecondBrain started" -Quiet)) { $booted = $true; break }
+          }
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          if (Test-Path $log) { Get-Content $log }
+          if (-not $booted) { throw "frozen exe never reached the started marker" }
+          if (Select-String -Path $log -Pattern "Could not import|registration failed|Traceback" -Quiet) {
+            throw "frozen exe booted with plugin/import errors (see log above)"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SecondBrain-windows
+          path: dist/SecondBrain
