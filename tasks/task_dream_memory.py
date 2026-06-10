@@ -5,8 +5,6 @@ conversations plus the current memory folder (MEMORY.md index + per-topic
 markdown files — see ``plugins/helpers/memory_paths.py`` in the kernel),
 asks the configured LLM for a strict JSON *patch* (topics to upsert, topics
 to forget, index hooks), and applies it without a user approval step.
-A legacy single ``memory.md`` (pre-folder installs) is fed in as input the
-first time, so its content migrates into topics organically.
 """
 
 from __future__ import annotations
@@ -23,7 +21,7 @@ from typing import Any
 
 from paths import DATA_DIR
 from plugins.BaseTask import BaseTask, TaskResult
-from plugins.helpers.memory_paths import INDEX_FILENAME, LEGACY_MEMORY_FILE, list_topics, memory_root, topic_path
+from plugins.helpers.memory_paths import INDEX_FILENAME, list_topics, memory_root, topic_path
 from runtime.agent_scope import resolve_agent_llm
 from runtime.token_stripper import strip_model_tokens
 
@@ -142,10 +140,8 @@ def _current_index() -> str:
 
 
 def _current_topics() -> str:
-    """Topic bodies as tagged blocks, plus the legacy memory.md until it migrates."""
+    """Topic bodies as tagged blocks."""
     blocks = []
-    if not memory_root().is_dir() and LEGACY_MEMORY_FILE.exists():
-        blocks.append(f'<topic name="legacy-memory">\n{LEGACY_MEMORY_FILE.read_text(encoding="utf-8").strip()}\n</topic>')
     for path in list_topics():
         blocks.append(f'<topic name="{path.stem}">\n{path.read_text(encoding="utf-8").strip()}\n</topic>')
     return "\n\n".join(blocks)[:MAX_MEMORY_CHARS]

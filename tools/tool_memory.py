@@ -50,7 +50,7 @@ class Memory(BaseTool):
 
     agent_prompt = (
         """## Remembering things (memory)
-The memory folder holds durable notes that persist across sessions, one markdown file per topic plus a MEMORY.md index (shown in this prompt). When the user asks you to remember something — or you learn a long-lived fact, preference, project decision, or lesson — save it to a fittingly named topic with the memory tool and give it a one-line description for the index. Update or forget topics that turn out wrong or stale. Do not store trivial, transient, or unnecessarily sensitive details unless the user explicitly asks."""
+The memory folder holds durable notes that persist across sessions, one markdown file per topic plus a MEMORY.md index (shown in this prompt). The index is a map, not the content: read a topic with the memory tool before answering from it. When the user asks you to remember something — or you learn a long-lived fact, preference, project decision, or lesson — save it to a fittingly named topic and give it a one-line description for the index. Update or forget topics that turn out wrong or stale. Do not store trivial, transient, or unnecessarily sensitive details unless the user explicitly asks."""
     )
 
     def run(self, context, **kwargs) -> ToolResult:
