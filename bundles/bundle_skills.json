@@ -3,7 +3,10 @@
   "files": [
     "commands/command_skills.py",
     "services/service_skills.py",
-    "tools/tool_use_skill.py"
+    "tools/tool_use_skill.py",
+    "helpers/skills/skill-creator/SKILL.md",
+    "helpers/skills/plugin-authoring/SKILL.md",
+    "helpers/skills/store-publishing/SKILL.md"
   ],
   "name": "Skills"
 }
