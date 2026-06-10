@@ -96,16 +96,20 @@ def write_package(
 
 def validate_store(store_root: Path) -> None:
     files = _tree_files(store_root)
+    skill_files = _skill_files(store_root)
+    skill_mds = {rel for rel in skill_files if package_manager._is_skill_md(rel)}
+    # Install ids must be unique: plugin/helper stems plus skill folder names.
     stems: dict[str, str] = {}
-    for rel in files:
-        stem = Path(rel).stem
+    for rel in sorted(files) + sorted(skill_mds):
+        stem = package_manager._rel_id(rel)
         if stem in stems:
             raise StorePublishError(f"Duplicate install stem {stem}: {stems[stem]}, {rel}")
         stems[stem] = rel
-    for rel in files:
+    installable = files | skill_files
+    for rel in sorted(files) + sorted(skill_mds):
         meta = package_manager.read_dependency_meta(rel, (store_root / rel).read_text(encoding="utf-8"))
         for dep in meta.dependencies_files:
-            if dep not in files:
+            if dep not in installable:
                 raise StorePublishError(f"{rel} depends on missing file: {dep}")
     bundle_stems: dict[str, str] = {}
     for rel in sorted(_bundle_files(store_root)):
@@ -114,7 +118,7 @@ def validate_store(store_root: Path) -> None:
             raise StorePublishError(f"Duplicate bundle stem {stem}: {bundle_stems[stem]}, {rel}")
         bundle_stems[stem] = rel
         manifest = package_manager._read_bundle_manifest(_PathStore(store_root), rel)
-        missing = [path for path in manifest["files"] if path not in files]
+        missing = [path for path in manifest["files"] if path not in files and path not in skill_files]
         if missing:
             raise StorePublishError(f"{rel} lists missing file(s): {', '.join(missing)}")
 
@@ -168,6 +172,17 @@ def _tree_files(store_root: Path) -> set[str]:
         path.relative_to(store_root).as_posix()
         for path in store_root.rglob("*.py")
         if path.is_file() and package_manager._is_valid_tree_rel(path.relative_to(store_root).as_posix())
+    }
+
+
+def _skill_files(store_root: Path) -> set[str]:
+    skills_root = store_root / "skills"
+    if not skills_root.is_dir():
+        return set()
+    return {
+        path.relative_to(store_root).as_posix()
+        for path in skills_root.rglob("*")
+        if path.is_file() and not _skipped(path)
     }
 
 

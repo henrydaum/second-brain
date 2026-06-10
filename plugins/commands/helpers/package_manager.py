@@ -73,10 +73,17 @@ class UninstallPlan:
 def search_packages(root_dir: str | Path, query: str = "") -> list[dict]:
     """Return available store files matching a stem/name query."""
     q = (query or "").strip().lower()
-    items = [_item(rel, installed=False) for rel in GitStoreBackend(root_dir).list_python_files()] + search_bundles(root_dir)
+    store = GitStoreBackend(root_dir)
+    rels = store.list_python_files() + _skill_md_files(store.list_tree_files())
+    items = [_item(rel, installed=False) for rel in rels] + search_bundles(root_dir)
     if q:
         items = [item for item in items if q in item["id"].lower() or q in item["path"].lower()]
     return sorted(items, key=lambda item: (item["family"], item["id"], item["path"]))
+
+
+def _skill_md_files(rels: list[str]) -> list[str]:
+    """Skill entry points (one per skill folder) from a tree listing."""
+    return sorted(rel for rel in rels if _is_skill_md(rel))
 
 
 def search_bundles(root_dir: str | Path) -> list[dict]:
@@ -89,8 +96,12 @@ def search_bundles(root_dir: str | Path) -> list[dict]:
 
 
 def installed_packages() -> list[dict]:
-    """Return installed plugin/helper files; the tree is the source of truth."""
-    return sorted((_item(rel, installed=True) for rel in _installed_rel_files()), key=lambda item: (item["family"], item["id"], item["path"]))
+    """Return installed plugin/helper/skill items; the tree is the source of truth.
+
+    Skill folders surface as one item (their SKILL.md), not one per file.
+    """
+    rels = [rel for rel in _installed_rel_files() if not _is_skill_rel(rel) or _is_skill_md(rel)]
+    return sorted((_item(rel, installed=True) for rel in rels), key=lambda item: (item["family"], item["id"], item["path"]))
 
 
 def removable_packages() -> list[dict]:
@@ -125,6 +136,15 @@ def _install_plan_from_roots(store: GitStoreBackend, roots: list[str], target: s
     active: list[str] = []
     collected: dict[str, PlannedFile] = {}
     pip: list[str] = []
+    tree_files: list[str] | None = None
+
+    def skill_siblings(rel: str) -> list[str]:
+        """Every store file inside the skill folder ``rel`` belongs to."""
+        nonlocal tree_files
+        if tree_files is None:
+            tree_files = store.list_tree_files()
+        prefix = _skill_folder_prefix(rel)
+        return [f for f in tree_files if f.startswith(prefix) and f != rel and _is_skill_rel(f)]
 
     def visit(rel: str):
         rel = _validate_rel_path(rel)
@@ -140,6 +160,10 @@ def _install_plan_from_roots(store: GitStoreBackend, roots: list[str], target: s
             pip.extend(meta.dependencies_pip)
             for dep in meta.dependencies_files:
                 visit(dep)
+            # A skill installs as one unit: its SKILL.md pulls the whole folder.
+            if _is_skill_md(rel):
+                for sib in skill_siblings(rel):
+                    visit(sib)
         finally:
             active.pop()
 
@@ -198,7 +222,8 @@ def outdated_packages(root_dir: str | Path) -> list[str]:
     """Installed files whose store copy now differs (the store always wins)."""
     store = GitStoreBackend(root_dir)
     store.refresh(force=True)
-    store_files = set(store.list_python_files())
+    tree = store.list_tree_files()
+    store_files = set(store.list_python_files()) | {rel for rel in tree if _is_skill_rel(rel)}
     out = []
     for rel in _installed_rel_files():
         if rel in store_files and store.get_tree_file_bytes(rel) != _target(rel).read_bytes():
@@ -303,6 +328,15 @@ def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices=No
 def read_dependency_meta(path: str | Path, content: bytes | str) -> DependencyMeta:
     """Parse dependency metadata without importing plugin code."""
     rel = _validate_rel_path(str(path))
+    if _is_skill_rel(rel):
+        # A skill's SKILL.md declares dependencies in its frontmatter (so a
+        # skill can pull the plugins it needs, e.g. tool_use_skill). All other
+        # skill-folder files are opaque content — their .py support scripts
+        # are never AST-parsed as plugins.
+        if _is_skill_md(rel):
+            text = content.decode("utf-8") if isinstance(content, bytes) else content
+            return _skill_dependency_meta(rel, text)
+        return DependencyMeta(rel)
     text = content.decode("utf-8") if isinstance(content, bytes) else content
     try:
         tree = ast.parse(text)
@@ -331,6 +365,35 @@ def read_dependency_meta(path: str | Path, content: bytes | str) -> DependencyMe
                 if isinstance(item, (ast.Assign, ast.AnnAssign)):
                     collect(item)
     return DependencyMeta(rel, tuple(_validate_rel_path(p) for p in found["dependencies_files"]), tuple(_unique(found["dependencies_pip"])))
+
+
+def _skill_dependency_meta(rel: str, text: str) -> DependencyMeta:
+    """Dependency metadata from a SKILL.md frontmatter header.
+
+    Frontmatter lists are comma-separated (optionally in ``[...]``)::
+
+        ---
+        name: my-skill
+        description: ...
+        dependencies_files: tools/tool_use_skill.py
+        dependencies_pip: [requests, lxml]
+        ---
+    """
+    fields = {name: [] for name in DEPENDENCY_FIELDS}
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        for line in lines[1:]:
+            if line.strip() == "---":
+                break
+            key, sep, value = line.partition(":")
+            key = key.strip().lower()
+            if sep and key in fields:
+                fields[key] = [item.strip() for item in value.strip().strip("[]").split(",") if item.strip()]
+    return DependencyMeta(
+        rel,
+        tuple(_validate_rel_path(p) for p in fields["dependencies_files"]),
+        tuple(_unique(fields["dependencies_pip"])),
+    )
 
 
 def _literal_str_list(node, field: str, rel: str) -> list[str]:
@@ -374,6 +437,12 @@ def _dependency_closure_from_installed(target_rel: str) -> set[str]:
             out.add(rel)
             for dep in _meta_from_installed(rel).dependencies_files:
                 visit(dep)
+            # A skill uninstalls as one unit: its SKILL.md pulls the folder.
+            if _is_skill_md(rel):
+                prefix = _skill_folder_prefix(rel)
+                for sib in _installed_rel_files():
+                    if sib.startswith(prefix) and sib != rel:
+                        visit(sib)
         finally:
             active.pop()
 
@@ -387,7 +456,9 @@ def _external_references(candidates: set[str]) -> dict[str, dict[str, str]]:
     for root in PLUGIN_ROOTS:
         if not root.path.exists():
             continue
-        for path in _tree_files(root.path):
+        skills_root = root.path / "skills"
+        skill_mds = sorted(skills_root.glob("*/SKILL.md")) if skills_root.is_dir() else []
+        for path in _tree_files(root.path) + skill_mds:
             rel = path.resolve().relative_to(root.path.resolve()).as_posix()
             if root.name == "installed" and rel in candidates:
                 continue
@@ -403,7 +474,11 @@ def _external_references(candidates: set[str]) -> dict[str, dict[str, str]]:
 
 
 def _installed_rel_files() -> list[str]:
-    return [path.relative_to(INSTALLED_PLUGINS).as_posix() for path in _tree_files(INSTALLED_PLUGINS)]
+    out = [path.relative_to(INSTALLED_PLUGINS).as_posix() for path in _tree_files(INSTALLED_PLUGINS)]
+    skills_root = INSTALLED_PLUGINS / "skills"
+    if skills_root.is_dir():
+        out += sorted(p.relative_to(INSTALLED_PLUGINS).as_posix() for p in skills_root.rglob("*") if p.is_file())
+    return out
 
 
 def _tree_files(root: Path) -> list[Path]:
@@ -413,7 +488,8 @@ def _tree_files(root: Path) -> list[Path]:
 
 
 def _resolve_store_target(root_dir: str | Path, target: str) -> str:
-    return _resolve_stem(target, GitStoreBackend(root_dir).list_python_files(), "store")
+    store = GitStoreBackend(root_dir)
+    return _resolve_stem(target, store.list_python_files() + _skill_md_files(store.list_tree_files()), "store")
 
 
 def _resolve_installed_target(target: str) -> str:
@@ -453,7 +529,7 @@ def _read_bundle_manifest(store: GitStoreBackend, rel: str) -> dict:
 
 def _resolve_stem(target: str, paths: list[str], label: str) -> str:
     stem = _target_stem(target)
-    matches = [rel for rel in paths if PurePosixPath(rel).stem == stem]
+    matches = [rel for rel in paths if _rel_id(rel) == stem]
     if not matches:
         raise PackageError(f"No {label} file named {stem}.")
     if len(matches) > 1:
@@ -471,12 +547,19 @@ def _target_stem(target: str) -> str:
 def _item(rel: str, *, installed: bool) -> dict:
     rel = _validate_rel_path(rel)
     parts = PurePosixPath(rel).parts
+    if _is_skill_md(rel):
+        name = _rel_id(rel)
+        return {"id": name, "name": name, "path": rel, "family": "skills", "helper": False, "installed": installed}
     return {"id": PurePosixPath(rel).stem, "name": PurePosixPath(rel).stem, "path": rel, "family": parts[0], "helper": len(parts) > 1 and parts[1] == "helpers", "installed": installed}
 
 
 def _validate_rel_path(path: str) -> str:
     p = PurePosixPath(str(path).replace("\\", "/"))
-    if p.is_absolute() or not p.parts or p.suffix != ".py" or any(part in {"", ".", ".."} for part in p.parts):
+    if p.is_absolute() or not p.parts or any(part in {"", ".", ".."} for part in p.parts):
+        raise PackageError(f"Invalid package file path: {path}")
+    if _is_skill_rel(p.as_posix()):
+        return p.as_posix()
+    if p.suffix != ".py":
         raise PackageError(f"Invalid package file path: {path}")
     if p.parts[0] not in TREE_ROOTS:
         raise PackageError(f"Package file path must start with one of {sorted(TREE_ROOTS)}: {path}")
@@ -485,6 +568,37 @@ def _validate_rel_path(path: str) -> str:
     if not _is_valid_tree_rel(p.as_posix()):
         raise PackageError(f"Invalid plugin/helper file path: {path}")
     return p.as_posix()
+
+
+def _is_skill_rel(rel: str) -> bool:
+    """Whether a path lives inside a skill folder (``skills/<name>/...``).
+
+    Skills are a top-level tree root of their own — folders of markdown +
+    support files installed as one unit; any file type and depth is allowed
+    inside the skill folder.
+    """
+    p = PurePosixPath(rel.replace("\\", "/"))
+    return (len(p.parts) >= 3 and p.parts[0] == "skills"
+            and all(part not in {"", ".", ".."} for part in p.parts))
+
+
+def _is_skill_md(rel: str) -> bool:
+    """Whether a path is a skill's entry point (``skills/<name>/SKILL.md``)."""
+    p = PurePosixPath(rel.replace("\\", "/"))
+    return _is_skill_rel(rel) and len(p.parts) == 3 and p.name == "SKILL.md"
+
+
+def _skill_folder_prefix(rel: str) -> str:
+    """``skills/<name>/`` for any path inside a skill folder."""
+    return "/".join(PurePosixPath(rel).parts[:2]) + "/"
+
+
+def _rel_id(rel: str) -> str:
+    """The id a user targets: the folder name for skills, the stem otherwise."""
+    p = PurePosixPath(rel)
+    if _is_skill_md(rel):
+        return p.parts[1]
+    return p.stem
 
 
 def _is_valid_tree_rel(rel: str) -> bool:
