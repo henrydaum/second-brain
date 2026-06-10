@@ -1,12 +1,24 @@
 {
-  "description": "Agent skills: markdown playbooks discovered across plugin trees, indexed in the system prompt, loaded on demand with use_skill, managed via /skills.",
+  "description": "Agent skills: the skills machinery (/skills, use_skill, prompt index) plus every dependency-light skill. Heavier skills (research, email, scheduled briefings) install individually.",
   "files": [
     "commands/command_skills.py",
     "services/service_skills.py",
     "tools/tool_use_skill.py",
     "skills/skill-creator/SKILL.md",
     "skills/plugin-authoring/SKILL.md",
-    "skills/store-publishing/SKILL.md"
+    "skills/store-publishing/SKILL.md",
+    "skills/changelog-writer/SKILL.md",
+    "skills/conversation-archaeology/SKILL.md",
+    "skills/data-analysis/SKILL.md",
+    "skills/document-digest/SKILL.md",
+    "skills/file-organizer/SKILL.md",
+    "skills/meeting-notes/SKILL.md",
+    "skills/personal-crm/SKILL.md",
+    "skills/sb-troubleshooting/SKILL.md",
+    "skills/system-cartographer/SKILL.md",
+    "skills/trip-planning/SKILL.md",
+    "skills/weekly-review/SKILL.md",
+    "skills/writing-editor/SKILL.md"
   ],
   "name": "Skills"
 }
