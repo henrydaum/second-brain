@@ -256,17 +256,35 @@ def _sync_dirs(config: dict | None) -> str:
 
 
 def _agent_memory() -> str:
-    from paths import DATA_DIR
-    path = DATA_DIR / "memory.md"
-    content = path.read_text() if path.exists() else "(empty)"
-    return (
-        f"""## Memory (from memory.md)
-Path: {path}
-Contains durable notes that persist across sessions.
+    """Memory section: the MEMORY.md index inlined, topics listed by name.
 
-Current contents:
-{content}"""
-    )
+    Memory is a folder of per-topic markdown files plus an index
+    (see ``plugins/helpers/memory_paths.py``). Only the index is inlined so
+    prompt cost stays flat. How to read/write topics is the installed memory
+    tool's business — its ``agent_prompt`` carries those instructions, keeping
+    plugin guidance out of the kernel.
+    """
+    from plugins.helpers.memory_paths import INDEX_FILENAME, list_topics, memory_root
+
+    root = memory_root()
+    index_path = root / INDEX_FILENAME
+    try:
+        index = index_path.read_text(encoding="utf-8").strip() if index_path.exists() else ""
+    except OSError:
+        index = ""
+    topics = [p.stem for p in list_topics()]
+
+    lines = [
+        "## Memory",
+        f"Path: {root}",
+        "Durable notes that persist across sessions. The index below is a map, not the content.",
+        "",
+        "Index (MEMORY.md):",
+        index or "(empty)",
+    ]
+    if topics:
+        lines += ["", "Topic files: " + ", ".join(topics)]
+    return "\n".join(lines)
 
 
 def _conversation_metadata(meta: dict[str, Any] | None) -> str:

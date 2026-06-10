@@ -72,9 +72,10 @@ two resolvable in any kernel:
 2. `parser_registry` — `pipeline/orchestrator.py`, `pipeline/watcher.py`,
    `agent/system_prompt.py`.
 
-Everything else is discovery-based. The agent system prompt gates every optional
-section behind `_has_tool(...)` in `agent/system_prompt.py`, so missing tools
-degrade silently and correctly.
+Everything else is discovery-based. The agent system prompt collects optional
+guidance from each in-scope plugin's `agent_prompt_for(ctx)` (see `_collect` in
+`agent/system_prompt.py`), so missing plugins degrade silently and correctly —
+uninstalling a package removes its prompt text with it.
 
 ## Hardening applied for kernel reliability
 
@@ -87,7 +88,8 @@ the difference between a microkernel and a pile of assumptions:
   friendly message pointing at `/setup` instead of an opaque error.
 - **`config/config_data.py`** — `autoload_services` trimmed to
   `["llm", "compactor", "parser", "plugin_watcher"]`; `enabled_frontends` → `["repl"]`;
-  `DEFAULT_SCHEDULED_JOBS` → `{}` (jobs/timekeeper are store plugins now).
+  `DEFAULT_SCHEDULED_JOBS` → `{}` (no default jobs; `service_timekeeper` ships
+  in the kernel tree, and scheduled-job *consumers* are store plugins).
 - **`requirements.txt`** — kernel-minimal. Optional parser, scheduler,
   frontend, LLM backend, search, and integration dependencies belong to package
   metadata. If `requirements.txt` grows, check whether the dependency is truly
@@ -160,9 +162,12 @@ The runtime exposes `runtime.active_session_key` / `active_conversation_id`
 so background drivers can identify themselves: anything with a session key
 that doesn't match the active one is, by definition, running unattended.
 The tool registry uses this to refuse `background_safe=False` tools from
-non-active sessions. The scheduled-subagent layer was deleted and is
-slated for a clean rebuild on top of these primitives — there is no
-`is_subagent` flag in the runtime.
+non-active sessions. The scheduled-subagent layer was rebuilt on these
+primitives and ships as the store Scheduling bundle (`command_schedule`,
+`task_spawn_subagent`, `tool_schedule_subagent`): timekeeper jobs emit a
+bus event, the spawn task opens its own `spawn_subagent:<cid>` session and
+drives `runtime.iterate_agent_turn(...)`. There is no `is_subagent` flag in
+the runtime — a subagent is just a session whose key isn't the active one.
 
 "Is a human present at this session right now?" is asked in exactly three
 places (interactive-tool gating, the notify-prompt block, background
