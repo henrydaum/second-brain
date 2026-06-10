@@ -104,8 +104,11 @@ class SkillsService(BaseService):
         if skill is None:
             return None
         text = skill.path.read_text(encoding="utf-8")
-        support = sorted(p.name for p in skill.path.parent.iterdir()
-                         if p.is_file() and p.name != SKILL_FILENAME)
+        support = sorted(
+            p.relative_to(skill.path.parent).as_posix()
+            for p in skill.path.parent.rglob("*")
+            if p.is_file() and p.name != SKILL_FILENAME
+        )[:50]
         if support:
             text += ("\n\n---\nSupport files in this skill's folder "
                      f"({skill.path.parent}): {', '.join(support)}. "
