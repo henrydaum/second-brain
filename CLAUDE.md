@@ -66,11 +66,16 @@ effect live. The attachment system is unified onto this one registry:
 ## The kernel boundary (the one rule)
 
 Core code (`pipeline/`, `runtime/`, `state_machine/`, `agent/`, `events/`,
-`config/`, `main.pyw`) hard-imports **exactly two** plugin modules. Keep these
-two resolvable in any kernel:
-1. `service_llm` — `runtime/agent_scope.py` + `runtime/conversation_loop.py`.
-2. `parser_registry` — `pipeline/orchestrator.py`, `pipeline/watcher.py`,
-   `agent/system_prompt.py`.
+`config/`, `attachments/`, `main.pyw`) hard-imports **exactly two** plugin
+modules. Keep these two resolvable in any kernel:
+1. `service_llm` — `runtime/conversation_loop.py`.
+2. `parser_registry` — `pipeline/orchestrator.py`, `pipeline/watcher.py`.
+
+This rule is executable: `tests/test_kernel_boundary.py` AST-walks every core
+module and pins the complete set of `plugins.*` import edges (the plugin
+substrate plus the two implementations above, including lazy function-local
+imports). Widening the boundary fails the suite until the test's allowlist —
+and this section — are updated deliberately.
 
 Everything else is discovery-based. The agent system prompt collects optional
 guidance from each in-scope plugin's `agent_prompt_for(ctx)` (see `_collect` in
@@ -86,8 +91,8 @@ the difference between a microkernel and a pile of assumptions:
   route a blocking request through the event task queue.
 - **`runtime/runtime_config.py` `build_loop`** — the "no LLM" path now raises a
   friendly message pointing at `/setup` instead of an opaque error.
-- **`config/config_data.py`** — `autoload_services` trimmed to
-  `["llm", "compactor", "parser", "plugin_watcher"]`; `enabled_frontends` → `["repl"]`;
+- **`config/config_data.py`** — `autoload_services` trimmed to `["llm"]`
+  (extension services auto-load when installed); `enabled_frontends` → `["repl"]`;
   `DEFAULT_SCHEDULED_JOBS` → `{}` (no default jobs; `service_timekeeper` ships
   in the kernel tree, and scheduled-job *consumers* are store plugins).
 - **`requirements.txt`** — kernel-minimal. Optional parser, scheduler,
