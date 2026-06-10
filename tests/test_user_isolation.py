@@ -144,6 +144,33 @@ def test_set_session_user_switches_account_and_never_crosses_ownership(tmp_path)
     assert db.get_user_config(DEFAULT_USER_ID)["last_active_conversation_id"] == base_cid
 
 
+def test_load_history_preserves_session_user_binding(tmp_path):
+    """Switching conversations via ``load_history`` must keep the session's
+    identity binding.
+
+    Regression for a bug the stateful fuzzer surfaced: when the session was
+    already on a different conversation, ``load_history`` closed the session
+    before reloading, so ``load_conversation``'s identity-carry found no
+    existing session and silently reset ``user_id`` to the base user — leaving
+    a base-user session bound to another user's conversation after the access
+    guard had already passed.
+    """
+    db = Database(str(tmp_path / "load-history.db"))
+    alice = db.upsert_user("web", "alice")
+    first = db.create_conversation(title="first", user_id=alice)
+    second = db.create_conversation(title="second", user_id=alice)
+
+    rt = ConversationRuntime(db=db, services={}, config={})
+    rt.set_session_user("s", alice)
+    rt.load_conversation("s", first)
+
+    result = rt.load_history("s", second)
+
+    assert result.ok
+    assert rt.sessions["s"].conversation_id == second
+    assert rt.session_user_id("s") == alice  # identity survived the switch
+
+
 def test_delete_conversation_detaches_live_sessions(tmp_path):
     """Deleting a conversation must reconcile any session still holding it.
 

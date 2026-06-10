@@ -139,6 +139,50 @@ class RuntimeStateMachine(RuleBasedStateMachine):
         )
 
     @rule(session_key=st.sampled_from(SESSION_KEYS), login=st.sampled_from(USER_LOGINS),
+          cid=conversations)
+    def load_history_guard(self, session_key, login, cid):
+        if cid is None:
+            return
+        uid = self._bind(session_key, login)
+        # Same clean-session discipline as load_conversation: rebinding a live
+        # session is the separately-covered SessionConflict path.
+        self.rt.close_session(session_key)
+        self._bind(session_key, login)
+        result = self.rt.load_history(session_key, cid)
+        expected = self.owner.get(cid) == uid
+        assert result.ok == expected, (
+            f"load_history guard mismatch: user {uid} on conversation {cid} "
+            f"owned by {self.owner.get(cid)} -> ok={result.ok}, expected={expected}"
+        )
+        if not expected:
+            # Refusal must not leak existence.
+            assert result.messages == ["No such conversation."]
+
+    @rule(session_key=st.sampled_from(SESSION_KEYS), login=st.sampled_from(USER_LOGINS),
+          cid=conversations, text=st.text(min_size=1, max_size=30))
+    def inject_user_message_guard(self, session_key, login, cid, text):
+        if cid is None:
+            return
+        uid = self._bind(session_key, login)
+        self.rt.close_session(session_key)
+        self._bind(session_key, login)
+        # Count only user-authored rows: loading a conversation may legitimately
+        # persist system marker rows alongside the injected message.
+        def _user_rows():
+            return sum(1 for m in self.kernel.db.get_conversation_messages(cid)
+                       if m["role"] == "user")
+        before = _user_rows()
+        result = self.rt.inject_user_message(session_key, text, conversation_id=cid)
+        after = _user_rows()
+        expected = self.owner.get(cid) == uid
+        assert result.ok == expected, (
+            f"inject guard mismatch: user {uid} into conversation {cid} "
+            f"owned by {self.owner.get(cid)} -> ok={result.ok}, expected={expected}"
+        )
+        # Owner's message lands; a refused non-owner writes nothing.
+        assert after == before + (1 if expected else 0)
+
+    @rule(session_key=st.sampled_from(SESSION_KEYS), login=st.sampled_from(USER_LOGINS),
           text=st.text(min_size=1, max_size=40))
     def turn(self, session_key, login, text):
         self._bind(session_key, login)
@@ -304,6 +348,9 @@ RuntimeStateMachine.TestCase.settings = settings(
     stateful_step_count=40,
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow, HealthCheck.data_too_large],
+    # CI failures print a reproduction blob (`@reproduce_failure(...)`) so a
+    # seed-dependent failure on the workflow runner can be replayed locally.
+    print_blob=True,
 )
 
 # pytest entrypoint

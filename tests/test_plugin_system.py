@@ -6,7 +6,6 @@ plugins by file presence. These tests fake the loader and assert the
 scan/add/edit/delete/ignore paths and the user-facing chat notices.
 """
 
-import shutil
 from pathlib import Path
 
 from events.event_bus import bus
@@ -29,6 +28,14 @@ class _ToolRegistry:
     def register(self, tool):
         """Register tool registry."""
         self.tools[tool.name] = tool
+
+
+def _watched_dir(tmp_path, monkeypatch, plugin_type="tool"):
+    """Create a watched plugin dir under tmp_path and patch it in."""
+    directory = tmp_path / "watched"
+    directory.mkdir()
+    _patch_plugin_dir(monkeypatch, directory, plugin_type)
+    return directory
 
 
 def _patch_plugin_dir(monkeypatch, directory, plugin_type="tool"):
@@ -78,57 +85,40 @@ class _CommandRegistry:
         return dict(self._commands)
 
 
-def test_plugin_watcher_initial_scan_records_mtimes(monkeypatch):
+def test_plugin_watcher_initial_scan_records_mtimes(tmp_path, monkeypatch):
     """Verify plugin watcher initial scan records mtimes."""
-    root_dir = Path(".codex_plugin_watcher")
-    path = root_dir / "tool_demo.py"
-    try:
-        root_dir.mkdir(exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-        _patch_plugin_dir(monkeypatch, root_dir)
-        service = PluginWatcherService({})
+    path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
+    path.write_text("x", encoding="utf-8")
+    service = PluginWatcherService({})
 
-        service._scan_existing()
+    service._scan_existing()
 
-        assert str(path.resolve()) in service._known_mtimes
-    finally:
-        path.unlink(missing_ok=True)
-        root_dir.rmdir()
+    assert str(path.resolve()) in service._known_mtimes
 
 
-def test_plugin_watcher_add_or_edit_loads_plugin(monkeypatch):
+def test_plugin_watcher_add_or_edit_loads_plugin(tmp_path, monkeypatch):
     """Verify plugin watcher add or edit loads plugin."""
     calls = []
-    root_dir = Path(".codex_plugin_watcher")
-    path = root_dir / "tool_demo.py"
-    try:
-        root_dir.mkdir(exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-        _patch_plugin_dir(monkeypatch, root_dir)
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: calls.append((a, k)) or ("demo", None))
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
-        service = PluginWatcherService({})
-        service.bind_runtime(tool_registry=_ToolRegistry())
+    path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
+    path.write_text("x", encoding="utf-8")
+    monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: calls.append((a, k)) or ("demo", None))
+    monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
+    service = PluginWatcherService({})
+    service.bind_runtime(tool_registry=_ToolRegistry())
 
-        service.handle_create_or_modify(str(path))
+    service.handle_create_or_modify(str(path))
 
-        assert calls and calls[0][0][0] == "tool"
-        assert calls[0][0][1] == path.resolve()
-    finally:
-        path.unlink(missing_ok=True)
-        root_dir.rmdir()
+    assert calls and calls[0][0][0] == "tool"
+    assert calls[0][0][1] == path.resolve()
 
 
-def test_plugin_watcher_emits_registered_and_edit_messages(monkeypatch):
+def test_plugin_watcher_emits_registered_and_edit_messages(tmp_path, monkeypatch):
     """Verify plugin watcher emits registered and edit messages."""
     messages = []
-    root_dir = Path(".codex_plugin_watcher")
-    path = root_dir / "tool_demo.py"
+    path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
+    path.write_text("x", encoding="utf-8")
     unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
     try:
-        root_dir.mkdir(exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-        _patch_plugin_dir(monkeypatch, root_dir)
         monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: ("demo", None))
         monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
         service = PluginWatcherService({})
@@ -140,20 +130,15 @@ def test_plugin_watcher_emits_registered_and_edit_messages(monkeypatch):
         assert messages == ["✓ Registered plugin: demo", "✓ Registered plugin edit: demo"]
     finally:
         unsub()
-        path.unlink(missing_ok=True)
-        root_dir.rmdir()
 
 
-def test_plugin_watcher_emits_registration_failed_message(monkeypatch):
+def test_plugin_watcher_emits_registration_failed_message(tmp_path, monkeypatch):
     """Verify plugin watcher emits registration failed message."""
     messages = []
-    root_dir = Path(".codex_plugin_watcher")
-    path = root_dir / "tool_demo.py"
+    path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
+    path.write_text("x", encoding="utf-8")
     unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
     try:
-        root_dir.mkdir(exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-        _patch_plugin_dir(monkeypatch, root_dir)
         monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: (None, "boom"))
         service = PluginWatcherService({})
 
@@ -162,42 +147,30 @@ def test_plugin_watcher_emits_registration_failed_message(monkeypatch):
         assert messages == ["✕ Plugin registration failed: tool_demo.py\nboom"]
     finally:
         unsub()
-        path.unlink(missing_ok=True)
-        root_dir.rmdir()
 
 
-def test_plugin_watcher_unchanged_mtime_is_ignored(monkeypatch):
+def test_plugin_watcher_unchanged_mtime_is_ignored(tmp_path, monkeypatch):
     """Verify plugin watcher unchanged mtime is ignored."""
     calls = []
-    root_dir = Path(".codex_plugin_watcher")
-    path = root_dir / "tool_demo.py"
-    try:
-        root_dir.mkdir(exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-        _patch_plugin_dir(monkeypatch, root_dir)
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: calls.append(a) or ("demo", None))
-        service = PluginWatcherService({})
-        service._known_mtimes[str(path.resolve())] = path.stat().st_mtime
+    path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
+    path.write_text("x", encoding="utf-8")
+    monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: calls.append(a) or ("demo", None))
+    service = PluginWatcherService({})
+    service._known_mtimes[str(path.resolve())] = path.stat().st_mtime
 
-        service.handle_create_or_modify(str(path))
+    service.handle_create_or_modify(str(path))
 
-        assert not calls
-    finally:
-        path.unlink(missing_ok=True)
-        root_dir.rmdir()
+    assert not calls
 
 
-def test_plugin_watcher_delete_unloads_by_source(monkeypatch):
+def test_plugin_watcher_delete_unloads_by_source(tmp_path, monkeypatch):
     """Verify plugin watcher delete unloads by source."""
     calls = []
     messages = []
-    root_dir = Path(".codex_plugin_watcher")
-    path = root_dir / "tool_demo.py"
+    path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
+    path.write_text("x", encoding="utf-8")
     unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
     try:
-        root_dir.mkdir(exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-        _patch_plugin_dir(monkeypatch, root_dir)
         service = PluginWatcherService({})
         registry = _ToolRegistry()
         registry.tools["demo"] = type("DemoTool", (), {"_source_path": str(path.resolve())})()
@@ -214,39 +187,28 @@ def test_plugin_watcher_delete_unloads_by_source(monkeypatch):
         assert messages == ["Deregistered plugin: demo"]
     finally:
         unsub()
-        path.unlink(missing_ok=True)
-        root_dir.rmdir()
 
 
-def test_plugin_watcher_wrong_name_does_not_load(monkeypatch):
+def test_plugin_watcher_wrong_name_does_not_load(tmp_path, monkeypatch):
     """Verify plugin watcher wrong name does not load."""
     calls = []
-    root_dir = Path(".codex_plugin_watcher")
-    path = root_dir / "demo.py"
-    try:
-        root_dir.mkdir(exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-        _patch_plugin_dir(monkeypatch, root_dir)
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: calls.append(a) or ("demo", None))
-        service = PluginWatcherService({})
+    path = _watched_dir(tmp_path, monkeypatch) / "demo.py"
+    path.write_text("x", encoding="utf-8")
+    monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: calls.append(a) or ("demo", None))
+    service = PluginWatcherService({})
 
-        service.handle_create_or_modify(str(path))
+    service.handle_create_or_modify(str(path))
 
-        assert not calls
-    finally:
-        path.unlink(missing_ok=True)
-        root_dir.rmdir()
+    assert not calls
 
 
-def test_plugin_watcher_accepts_llm_backend_provider(monkeypatch):
+def test_plugin_watcher_accepts_llm_backend_provider(tmp_path, monkeypatch):
     """Verify service-family LLM backend files refresh profiles instead of failing."""
     from plugins.services.service_llm import LLMRouter
     messages = []
-    root_dir = Path(".codex_plugin_watcher")
-    path = root_dir / "service_fake_llm.py"
+    path = _watched_dir(tmp_path, monkeypatch, "service") / "service_fake_llm.py"
     unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
     try:
-        root_dir.mkdir(exist_ok=True)
         path.write_text(
             "from plugins.services.service_llm import BaseLLM, LLMResponse\n\n"
             "class FakeBackend(BaseLLM):\n"
@@ -262,7 +224,6 @@ def test_plugin_watcher_accepts_llm_backend_provider(monkeypatch):
         config = {"llm_profiles": {"model-x": {"llm_service_class": "FakeBackend"}}, "default_llm_profile": "model-x"}
         services = {}
         services["llm"] = LLMRouter(config, services)
-        _patch_plugin_dir(monkeypatch, root_dir, "service")
         monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
         service = PluginWatcherService(config)
         service.services = services
@@ -276,69 +237,54 @@ def test_plugin_watcher_accepts_llm_backend_provider(monkeypatch):
         assert "model-x" not in services
     finally:
         unsub()
-        shutil.rmtree(root_dir, ignore_errors=True)
 
 
-def test_plugin_watcher_refreshes_runtime_commands_on_command_load(monkeypatch):
+def test_plugin_watcher_refreshes_runtime_commands_on_command_load(tmp_path, monkeypatch):
     """Verify command hot-load updates the runtime command snapshot."""
-    root_dir = Path(".codex_plugin_watcher")
-    path = root_dir / "command_agent.py"
-    try:
-        root_dir.mkdir(exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-        _patch_plugin_dir(monkeypatch, root_dir, "command")
-        registry = _CommandRegistry()
-        runtime = type("Runtime", (), {"commands": {}, "refreshes": 0})()
-        runtime.refresh_session_specs = lambda: setattr(runtime, "refreshes", runtime.refreshes + 1)
+    path = _watched_dir(tmp_path, monkeypatch, "command") / "command_agent.py"
+    path.write_text("x", encoding="utf-8")
+    registry = _CommandRegistry()
+    runtime = type("Runtime", (), {"commands": {}, "refreshes": 0})()
+    runtime.refresh_session_specs = lambda: setattr(runtime, "refreshes", runtime.refreshes + 1)
 
-        def fake_load(plugin_type, _path, **kwargs):
-            command = type("AgentCommand", (), {"name": "agent", "_source_path": str(path.resolve())})()
-            kwargs["command_registry"].register(command)
-            return "agent", None
-
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", fake_load)
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
-        service = PluginWatcherService({})
-        service.bind_runtime(command_registry=registry, runtime=runtime)
-
-        service.handle_create_or_modify(str(path))
-
-        assert "agent" in registry._commands
-        assert "agent" in runtime.commands
-        assert runtime.refreshes == 1
-    finally:
-        path.unlink(missing_ok=True)
-        root_dir.rmdir()
-
-
-def test_plugin_watcher_refreshes_runtime_commands_on_command_delete(monkeypatch):
-    """Verify command hot-unload updates the runtime command snapshot."""
-    root_dir = Path(".codex_plugin_watcher")
-    path = root_dir / "command_agent.py"
-    try:
-        root_dir.mkdir(exist_ok=True)
-        path.write_text("x", encoding="utf-8")
-        _patch_plugin_dir(monkeypatch, root_dir, "command")
+    def fake_load(plugin_type, _path, **kwargs):
         command = type("AgentCommand", (), {"name": "agent", "_source_path": str(path.resolve())})()
-        registry = _CommandRegistry()
-        registry.register(command)
-        runtime = type("Runtime", (), {"commands": {"agent": command}, "refreshes": 0})()
-        runtime.refresh_session_specs = lambda: setattr(runtime, "refreshes", runtime.refreshes + 1)
-        service = PluginWatcherService({})
-        service.bind_runtime(command_registry=registry, runtime=runtime)
-        service._known_mtimes[str(path.resolve())] = path.stat().st_mtime
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.unload_plugin", lambda *a, **k: registry.unregister("agent"))
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
+        kwargs["command_registry"].register(command)
+        return "agent", None
 
-        path.unlink()
-        service.handle_delete(str(path))
+    monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", fake_load)
+    monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
+    service = PluginWatcherService({})
+    service.bind_runtime(command_registry=registry, runtime=runtime)
 
-        assert "agent" not in registry._commands
-        assert "agent" not in runtime.commands
-        assert runtime.refreshes == 1
-    finally:
-        path.unlink(missing_ok=True)
-        root_dir.rmdir()
+    service.handle_create_or_modify(str(path))
+
+    assert "agent" in registry._commands
+    assert "agent" in runtime.commands
+    assert runtime.refreshes == 1
+
+
+def test_plugin_watcher_refreshes_runtime_commands_on_command_delete(tmp_path, monkeypatch):
+    """Verify command hot-unload updates the runtime command snapshot."""
+    path = _watched_dir(tmp_path, monkeypatch, "command") / "command_agent.py"
+    path.write_text("x", encoding="utf-8")
+    command = type("AgentCommand", (), {"name": "agent", "_source_path": str(path.resolve())})()
+    registry = _CommandRegistry()
+    registry.register(command)
+    runtime = type("Runtime", (), {"commands": {"agent": command}, "refreshes": 0})()
+    runtime.refresh_session_specs = lambda: setattr(runtime, "refreshes", runtime.refreshes + 1)
+    service = PluginWatcherService({})
+    service.bind_runtime(command_registry=registry, runtime=runtime)
+    service._known_mtimes[str(path.resolve())] = path.stat().st_mtime
+    monkeypatch.setattr("plugins.services.service_plugin_watcher.unload_plugin", lambda *a, **k: registry.unregister("agent"))
+    monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
+
+    path.unlink()
+    service.handle_delete(str(path))
+
+    assert "agent" not in registry._commands
+    assert "agent" not in runtime.commands
+    assert runtime.refreshes == 1
 
 
 def test_plugin_watcher_unload_cancels_pending_timers():

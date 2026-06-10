@@ -212,7 +212,11 @@ def load_history(runtime, session_key: str, conversation_id: int):
     old = runtime.sessions.get(session_key)
     old_profile = (old.profile_override or old.active_agent_profile) if old else runtime.user_setting(session_key, "active_agent_profile", "default") or "default"
     if old and old.conversation_id != conversation_id:
+        # Identity is a live frontend binding; closing the session must not
+        # reset it to the default user before the reload carries it over.
+        user_id = old.user_id
         close_session(runtime, session_key)
+        runtime.set_session_user(session_key, user_id)
     session = load_conversation(runtime, session_key, conversation_id)
     new_profile = session.profile_override or session.active_agent_profile
 
