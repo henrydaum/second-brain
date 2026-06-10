@@ -1,0 +1,9 @@
+{
+  "description": "Agent skills: markdown playbooks discovered across plugin trees, indexed in the system prompt, loaded on demand with use_skill, managed via /skills.",
+  "files": [
+    "commands/command_skills.py",
+    "services/service_skills.py",
+    "tools/tool_use_skill.py"
+  ],
+  "name": "Skills"
+}

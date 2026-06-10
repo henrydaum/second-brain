@@ -1,0 +1,8 @@
+{
+  "description": "Durable agent memory: per-topic markdown files with a MEMORY.md index, a memory read/save/forget tool, and nightly dream consolidation.",
+  "files": [
+    "tasks/task_dream_memory.py",
+    "tools/tool_memory.py"
+  ],
+  "name": "Memory"
+}

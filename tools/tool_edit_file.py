@@ -51,14 +51,6 @@ class EditFile(BaseTool):
     background_safe = False
     plan_mode_safe = False
 
-    def agent_prompt_for(self, ctx) -> str:
-        """Memory-writing guidance — only relevant when files can actually be edited."""
-        from paths import DATA_DIR
-        return (
-            f"""## Remembering things (memory.md)
-memory.md ({DATA_DIR / 'memory.md'}) holds durable notes that persist across sessions and is editable with this tool. When the user asks Second Brain to remember something, write it down there. Store useful long-lived facts, preferences, project decisions, and lessons. Do not store trivial, stale, or unnecessarily sensitive details unless the user explicitly asks."""
-        )
-
     def run(self, context, **kwargs) -> ToolResult:
         """Run edit file."""
         op = (kwargs.get("operation") or "").strip().lower()
