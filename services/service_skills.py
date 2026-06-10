@@ -147,6 +147,11 @@ class SkillsService(BaseService):
         return skill
 
 
+def build_services(config) -> dict:
+    """Build the skills service."""
+    return {"skills": SkillsService(config)}
+
+
 def _parse_skill(path: Path, root_name: str) -> Skill | None:
     """Parse one SKILL.md's frontmatter; folder name is the fallback name."""
     try:
