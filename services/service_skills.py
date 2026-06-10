@@ -9,11 +9,10 @@ specific kind of task, with a tiny frontmatter header::
     ---
     <instructions...>
 
-Skills live under the tree-level ``helpers/skills/`` folder of each plugin
-root (kernel ``plugins/``, sandbox, installed), mirroring the kernel tree's
-cross-family ``helpers/`` layout. Discovery scans all three roots the same
-way the parser service scans ``services/helpers/parse_*.py``; later roots
-win on name collision, matching plugin discovery precedence.
+Skills live under the top-level ``skills/`` folder of each plugin root
+(sandbox for drafts, installed for store-delivered ones; the kernel tree
+ships none). Discovery scans all roots; later roots win on name collision,
+matching plugin discovery precedence.
 
 Progressive disclosure: only each skill's name + description goes into the
 system prompt (via ``agent_prompt_for``); the agent pulls the full text with
@@ -49,7 +48,7 @@ class Skill:
 
 def skills_dir(root_path: Path) -> Path:
     """The skills folder inside one plugin root."""
-    return root_path / "helpers" / "skills"
+    return root_path / "skills"
 
 
 class SkillsService(BaseService):

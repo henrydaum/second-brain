@@ -15,9 +15,9 @@ is the playbook.
 ## Where to put it
 
 Author new skills in the sandbox tree:
-`<DATA_DIR>/sandbox_plugins/helpers/skills/<skill-name>/SKILL.md`
+`<DATA_DIR>/sandbox_plugins/skills/<skill-name>/SKILL.md`
 (`/skills create` scaffolds this, or write the file directly with a file
-tool). Built-in skills under `plugins/helpers/skills/` belong to the repo —
+tool). Built-in skills under the store `skills/` tree belong to the repo —
 do not edit those; create a sandbox skill instead, which wins on name
 collision.
 

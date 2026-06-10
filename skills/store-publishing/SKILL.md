@@ -42,7 +42,7 @@ not their dependencies.
 - The store always wins on update: differing installed files are
   overwritten. Treat the branch as the newest version of everything.
 - Installable paths: `.py` files in 2–3-part family paths (`<family>/x.py`,
-  `<family>/helpers/x.py`) and **skill folders** (`helpers/skills/<name>/...`,
+  `<family>/helpers/x.py`) and **skill folders** (`skills/<name>/...`,
   any file type). A skill installs/uninstalls as one unit: targeting its name
   copies the whole folder. Declare plugin dependencies in the SKILL.md
   frontmatter (`dependencies_files: tools/tool_use_skill.py`) so installing

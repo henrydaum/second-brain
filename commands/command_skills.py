@@ -56,7 +56,7 @@ class SkillsCommand(BaseCommand):
                 return "Skills service is not loaded."
             skills = service.list()
             if not skills:
-                return f"No skills installed. Create one with /skills, or drop a folder with a SKILL.md under {SANDBOX_PLUGINS / 'helpers' / 'skills'}."
+                return f"No skills installed. Create one with /skills, or drop a folder with a SKILL.md under {SANDBOX_PLUGINS / 'skills'}."
             return "Installed skills:\n" + "\n".join(f"- {s.name} ({s.root_name}): {s.description}" for s in skills)
         if action == CREATE:
             return _create(args)
@@ -66,7 +66,7 @@ class SkillsCommand(BaseCommand):
 
 
 def _sandbox_root():
-    return SANDBOX_PLUGINS / "helpers" / "skills"
+    return SANDBOX_PLUGINS / "skills"
 
 
 def _sandbox_skill_names() -> list[str]:
