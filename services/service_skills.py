@@ -173,15 +173,32 @@ def _parse_skill(path: Path, root_name: str) -> Skill | None:
 
 
 def _frontmatter(text: str) -> dict[str, str]:
-    """Minimal ``--- key: value ---`` header parser (no YAML dependency)."""
+    """Minimal ``--- key: value ---`` header parser (no YAML dependency).
+
+    Handles plain scalars, quoted strings, and block scalars (``|``/``>``
+    variants, folded to one line) — enough for real-world SKILL.md headers
+    without pulling in a YAML library.
+    """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}
     out: dict[str, str] = {}
-    for line in lines[1:]:
+    i = 1
+    while i < len(lines):
+        line = lines[i]
         if line.strip() == "---":
             return out
         key, sep, value = line.partition(":")
         if sep and key.strip() and not key.startswith(" "):
-            out[key.strip().lower()] = value.strip()
+            value = value.strip()
+            if value in {"|", "|-", "|+", ">", ">-", ">+"}:
+                block = []
+                while i + 1 < len(lines) and (lines[i + 1].startswith((" ", "\t")) or not lines[i + 1].strip()):
+                    if lines[i + 1].strip() == "---":
+                        break
+                    block.append(lines[i + 1].strip())
+                    i += 1
+                value = " ".join(part for part in block if part)
+            out[key.strip().lower()] = value.strip().strip('"').strip("'")
+        i += 1
     return {}
