@@ -99,7 +99,7 @@ SETTINGS_DATA = [
      "messages), action-ledger rows, and finished task-run records. Anything "
      "still in use is safe — a conversation's clock resets on every new "
      "message. 0 keeps everything forever.",
-     0,
+     90,
      {"type": "slider", "range": (0, 3650, 100), "is_float": False}),
 
     ("Restart On Crash", "restart_on_crash",

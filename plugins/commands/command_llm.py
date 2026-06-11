@@ -35,11 +35,11 @@ class LlmCommand(BaseCommand):
         if args.get("model_name") == "add":
             backends = llm_backend_names() or [DEFAULT_BACKEND]
             return steps + [
-                FormStep("new_model_name", "Enter the model name exactly, including provider prefix when needed (for example `openai/gpt-4o-mini` or `anthropic/claude-3-5-sonnet-latest`).", True),
                 FormStep("llm_service_class", "Choose how Second Brain should connect to this model.", True, enum=backends, default=backends[0]),
-                FormStep("llm_endpoint", "Optional provider base URL. Leave blank for the provider default.", False, default="", prompt_when_missing=True),
-                FormStep("llm_api_key", "API key value, or the environment variable name that contains it. Leave blank to let the backend read its own environment.", False, default="", prompt_when_missing=True),
-                FormStep("llm_context_size", "Optional context window size in tokens. Use 0 if unknown.", False, "integer", default=0, prompt_when_missing=True),
+                FormStep("new_model_name", "Enter the model name exactly, including provider prefix when needed (for example `openai/gpt-4o-mini` or `anthropic/claude-3-5-sonnet-latest`).", True),
+                FormStep("llm_endpoint", "Enter the provider base URL [optional]. Leave blank for the provider default.", False, default="", prompt_when_missing=True),
+                FormStep("llm_api_key", "Enter the API key, or the environment variable name that contains it. Leave blank to use the provider default.", False, default="", prompt_when_missing=True),
+                FormStep("llm_context_size", "Optional context window size in tokens. Use 0 for dynamic compaction or if unknown.", False, "integer", default=0, prompt_when_missing=True),
                 FormStep("llm_capability_image", "Can this model read images natively? Choose yes/no, or /skip if unsure.", False, "boolean", default=None, prompt_when_missing=True),
                 FormStep("llm_capability_audio", "Can this model read audio natively? Choose yes/no, or /skip if unsure.", False, "boolean", default=None, prompt_when_missing=True),
                 FormStep("llm_capability_video", "Can this model read video natively? Choose yes/no, or /skip if unsure.", False, "boolean", default=None, prompt_when_missing=True),
