@@ -21,6 +21,20 @@ Diagnose from evidence: the log, the status commands, the task queue.
    SELECT task_name, status, COUNT(*) FROM task_queue GROUP BY 1,2 —
    a pile of FAILED rows names the broken task; `task_runs` holds recent
    run errors.
+4. The action ledger via `sql_query`: `action_ledger` is the kernel's
+   flight recorder — one row per action, with `origin` ('user_enact' =
+   frontend actions, 'agent_enact' = agent moves, 'system' = installs,
+   config saves, conversation ops including *refused* ones), plus
+   action_type, name, ok, error_code, args_json, call_id, duration_ms.
+   It is write-optimized filler by volume: **never read it linearly, and
+   only open it when you already know what you're looking for.** Always
+   filter — by conversation_id, session_key, origin, ok=0, or a ts
+   window — and ORDER BY id DESC LIMIT 20. Good questions it answers:
+   "what exactly ran in this conversation and how long did each step
+   take", "what did that package install touch" (data_json carries the
+   store commit + file hashes), "which action was refused and why",
+   "what happened while no one was watching" (session_key not the
+   active frontend's).
 
 ## Common failures -> first move
 
