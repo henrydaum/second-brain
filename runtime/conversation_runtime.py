@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any, Callable
 
 from events.event_bus import bus
@@ -59,6 +60,7 @@ from runtime.session import RuntimeResult, RuntimeSession, SessionConflict
 from runtime import runtime_approvals as _approvals
 from runtime import runtime_config as _cfg
 from runtime import dispatch as _disp
+from runtime import ledger as _ledger
 from runtime import persistence as _persist
 from pipeline.database import DEFAULT_USER_ID
 
@@ -245,8 +247,16 @@ class ConversationRuntime:
 
         # ──────────────── THE enact() SITE (user-side) ────────────────
         request_id = _approvals.current_request_id(session, action_type)
+        enact_started = time.perf_counter()
         result = session.cs.enact(action_type, content, actor_id)
         # ──────────────────────────────────────────────────────────────
+        _ledger.record_enact(
+            self.db, origin="user_enact", session_key=session.key,
+            conversation_id=session.conversation_id,
+            user_id=self.session_user_id(session.key), actor_id=actor_id,
+            action_type=action_type, content=content, result=result,
+            duration_ms=int((time.perf_counter() - enact_started) * 1000),
+        )
 
         out.add_action_result(result)
         _approvals.resolve_answered_request(self, request_id, result)
@@ -369,6 +379,9 @@ class ConversationRuntime:
         """Create a persisted conversation row (owned by ``user_id``) and return its ID."""
         cid = _persist.create_conversation(self, title, kind=kind, category=category, user_id=user_id)
         if cid is not None:
+            _ledger.record_system(self.db, action_type="conversation_create", ok=True,
+                                  conversation_id=cid, user_id=user_id,
+                                  args={"title": title, "kind": kind, "category": category})
             bus.emit(CONVERSATION_CHANGED, {"action": "created", "conversation_id": cid, "user_id": user_id, "category": category})
         return cid
 
@@ -423,7 +436,12 @@ class ConversationRuntime:
         The access guard is the authorization — once it passes we delete by id
         (the ``db`` ``user_id`` scope is a separate defence-in-depth path for
         callers that bypass this guard)."""
-        if not self.assert_conversation_access(session_key, conversation_id, override=override):
+        allowed = self.assert_conversation_access(session_key, conversation_id, override=override)
+        _ledger.record_system(self.db, action_type="conversation_delete", ok=allowed,
+                              session_key=session_key, conversation_id=conversation_id,
+                              user_id=self.session_user_id(session_key),
+                              error_code=None if allowed else "access_denied")
+        if not allowed:
             return False
         if self.db is not None:
             self.db.delete_conversation(conversation_id)
@@ -487,7 +505,13 @@ class ConversationRuntime:
     def set_conversation_category(self, session_key: str, conversation_id: int, category: str | None, *, override: bool = False) -> bool:
         """Re-category a conversation the session's effective user owns. Returns
         False (refused) on a cross-user attempt."""
-        if not self.assert_conversation_access(session_key, conversation_id, override=override):
+        allowed = self.assert_conversation_access(session_key, conversation_id, override=override)
+        _ledger.record_system(self.db, action_type="conversation_recategorize", ok=allowed,
+                              session_key=session_key, conversation_id=conversation_id,
+                              user_id=self.session_user_id(session_key),
+                              args={"category": category},
+                              error_code=None if allowed else "access_denied")
+        if not allowed:
             return False
         if self.db is not None:
             self.db.set_conversation_category(conversation_id, category)
@@ -497,7 +521,13 @@ class ConversationRuntime:
     def set_conversation_notification_mode(self, session_key: str, conversation_id: int, mode: str, *, override: bool = False) -> str | None:
         """Update notification mode for a live or stored conversation. Returns the
         normalized mode, or None (refused) on a cross-user attempt."""
-        if not self.assert_conversation_access(session_key, conversation_id, override=override):
+        allowed = self.assert_conversation_access(session_key, conversation_id, override=override)
+        _ledger.record_system(self.db, action_type="conversation_notification_mode", ok=allowed,
+                              session_key=session_key, conversation_id=conversation_id,
+                              user_id=self.session_user_id(session_key),
+                              args={"mode": mode},
+                              error_code=None if allowed else "access_denied")
+        if not allowed:
             return None
         from runtime.notifications import notification_mode as normalize
         from state_machine.serialization import latest_state, save_state_marker

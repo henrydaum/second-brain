@@ -35,7 +35,13 @@ future store) — *not* by deleting them. What remains:
   `tool_ask_user_question`, shell/file-editing tools, SQL tools, and plugin
   authoring tools are package capabilities unless discovery shows they are
   installed.
-- **Frontend:** `frontend_repl` only. Telegram moved to `store/frontends/`.
+- **Frontend:** `frontend_repl` only. Telegram and the MCP server
+  (`frontend_mcp_server` — exposes Second Brain to external MCP clients over
+  streamable HTTP; tested from main via `tests/test_frontend_mcp.py`, which
+  loads it off the store ref) live on the store branch. `enabled_frontends`
+  is deliberately not whitelisted by the kernel: config normalization keeps
+  unknown names so installed store frontends survive load, and bootstrap
+  warns/skips what discovery can't resolve.
 - **Commands:** REPL UX + introspection only — `config`, `setup` (LLM onboarding
   wizard), `llm`, `conversations`, `clear`, `cancel`, `debug`, `frontends`,
   `locations`, `commands`, `tools`, `services`, `tasks`, `packages`.
@@ -99,6 +105,34 @@ the difference between a microkernel and a pile of assumptions:
   frontend, LLM backend, search, and integration dependencies belong to package
   metadata. If `requirements.txt` grows, check whether the dependency is truly
   kernel infrastructure.
+
+## The action ledger
+
+The kernel's flight recorder: an append-only `action_ledger` table
+(`pipeline/database.py`) recording **every action the system takes**, so
+unattended operation is auditable and anything is reconstructable after the
+fact. Three origins:
+
+- `user_enact` — written at the labeled enact site in
+  `ConversationRuntime._dispatch`.
+- `agent_enact` — written by `ConversationLoop._enact_logged`, the gateway
+  all agent-side enacts flow through (tool calls, send_text, end_turn,
+  over-budget summaries).
+- `system` — acts outside the state machine: package install/uninstall
+  (with provenance: store commit + per-file SHA-256, recorded by
+  `package_manager` — the seed of future versioning), `config_save`
+  (changed key **names** only, never values), and conversation lifecycle
+  ops including **refused** cross-user attempts (`ok=0, access_denied`).
+
+Failure policy: ledger writes are best-effort at every layer
+(`db.record_action` swallows + logs; `runtime/ledger.py` helpers tolerate
+missing/stubbed dbs) — the ledger observes the system and must never break
+it. Rows are capped (`LEDGER_JSON_CAP`, truncation wrapper stays valid
+JSON); no FKs on purpose so audit rows outlive what they describe.
+Retention via `ledger_max_rows` config (0 = keep everything). The stress
+oracle checks recent-row well-formedness (`_check_ledger` in
+`stress/invariants.py`); tests in `tests/test_ledger.py`. Query/inspection
+UX (`/ledger`) is deliberately a future store package, not kernel.
 
 ## Package store V1
 

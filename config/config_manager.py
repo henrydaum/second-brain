@@ -26,7 +26,6 @@ _LIST_KEYS = {name for _, name, _, default, info in SETTINGS_DATA if isinstance(
 
 _DEFAULT_CONFIG_PATH = str(DATA_DIR / "config.json")
 _DEFAULT_PLUGIN_CONFIG_PATH = str(DATA_DIR / "plugin_config.json")
-_SUPPORTED_FRONTENDS = ("repl", "telegram")
 _CONFIG_LOCK = threading.RLock()
 USER_CONFIG_KEYS = {
     name for _, name, _, _, info in SETTINGS_DATA
@@ -35,7 +34,12 @@ USER_CONFIG_KEYS = {
 
 
 def _normalize_frontends(value) -> list[str]:
-    """Normalize enabled_frontends to the supported runtime set."""
+    """Normalize enabled_frontends: lowercase, deduplicated strings.
+
+    Deliberately no existence whitelist — frontends are discovery-based store
+    packages, so the kernel cannot know the valid set (an installed frontend's
+    name must survive config load). Bootstrap warns and skips names discovery
+    can't resolve."""
     if not isinstance(value, list):
         return list(DEFAULTS["enabled_frontends"])
 
@@ -43,7 +47,7 @@ def _normalize_frontends(value) -> list[str]:
     seen = set()
     for item in value:
         name = str(item).strip().lower()
-        if name not in _SUPPORTED_FRONTENDS or name in seen:
+        if not name or name in seen:
             continue
         seen.add(name)
         normalized.append(name)
@@ -93,6 +97,31 @@ def load(path: str = None) -> dict:
     return merged
 
 
+# Optional action-ledger hook. The bootstrap wires the live Database in so
+# config saves leave an audit row; config/ itself stays db-free and fully
+# usable (and silent) without it.
+_LEDGER_DB = None
+
+
+def set_ledger_db(db) -> None:
+    """Wire the action ledger so config saves are recorded."""
+    global _LEDGER_DB
+    _LEDGER_DB = db
+
+
+def _record_config_save(scope: str, changed_keys: list) -> None:
+    """Append a config_save row to the action ledger — changed key NAMES
+    only, never values (config may hold tokens/secrets)."""
+    record = getattr(_LEDGER_DB, "record_action", None)
+    if record is None or not changed_keys:
+        return
+    try:
+        record(origin="system", action_type="config_save", ok=True, name=scope,
+               args={"changed": sorted(changed_keys)})
+    except Exception:
+        pass
+
+
 def _emit_config_changed(scope: str) -> None:
     """Announce a persisted config change so frontends can resync without
     polling. Defensive: a config write must never fail because of an emit, and
@@ -129,6 +158,7 @@ def save(config: dict, path: str = None):
     with open(path, "w") as f:
         json.dump(to_save, f, indent=4)
     logger.info(f"Config saved to {path}")
+    _record_config_save("core", [k for k in to_save if to_save.get(k) != existing.get(k)])
     _emit_config_changed("core")
 
 

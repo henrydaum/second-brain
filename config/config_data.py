@@ -94,6 +94,12 @@ SETTINGS_DATA = [
      [],
      {"type": "json_list", "scope": "user"}),
 
+    ("Action Ledger Max Rows", "ledger_max_rows",
+     "Retention cap for the action ledger (the append-only audit record of "
+     "every action). Oldest rows are pruned past the cap. 0 keeps everything.",
+     0,
+     {"type": "slider", "range": (0, 1000000, 100), "is_float": False}),
+
     ("Restart On Crash", "restart_on_crash",
      "Relaunch Second Brain automatically if the process crashes (including hard "
      "native crashes). Clean exits (/quit, Ctrl+C) never restart. Checked at "

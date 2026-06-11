@@ -181,6 +181,13 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
         registry_for_prompt = scoped_registry(tool_registry, scope, db=scaffold.db) if scope else tool_registry
         return build_prompt_sections(scaffold.db, scaffold.orchestrator, registry_for_prompt, services, scope=scope, profile_name=profile, commands=registry, config=config)
 
+    # Action-ledger wiring: config saves get audit rows, and retention is
+    # applied once at startup (then opportunistically on writes).
+    if scaffold.db is not None:
+        config_manager.set_ledger_db(scaffold.db)
+        scaffold.db.ledger_max_rows = int(config.get("ledger_max_rows") or 0)
+        scaffold.db.prune_action_ledger(scaffold.db.ledger_max_rows)
+
     runtime = ConversationRuntime(
         db=scaffold.db,
         services=services,

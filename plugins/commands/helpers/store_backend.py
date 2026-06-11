@@ -58,6 +58,16 @@ class GitStoreBackend:
         except (OSError, subprocess.TimeoutExpired) as e:
             logger.debug("Store fetch failed (using local ref): %s", e)
 
+    def resolve_commit(self) -> str | None:
+        """Commit hash the store ref currently points at, for install
+        provenance. None when the ref can't be resolved (no store yet)."""
+        proc = subprocess.run(
+            ["git", "-C", str(self.root_dir), "rev-parse", self.ref],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+        return proc.stdout.strip() or None if proc.returncode == 0 else None
+
     def list_tree_files(self) -> list[str]:
         """Return every file path on the store ref."""
         self.refresh()

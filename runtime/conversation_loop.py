@@ -6,8 +6,10 @@ loop. While turn priority belongs to a participant, repeatedly:
     2. enact it through the state machine       (`cs.enact(...)`)
     3. translate the action's events back into provider-shaped history rows
 
-There is exactly ONE `cs.enact(...)` call site in this file (in `drive`),
-labeled with a comment block so it is easy to find.
+There is exactly ONE labeled `cs.enact(...)` call site in this file — inside
+`_enact_logged`, the gateway every agent-side enact flows through so the
+action ledger records each move (the `end_turn` and over-budget enacts
+included).
 
 The class is named `ConversationLoop` (not `AgentMachine`) because the same
 shape supports user-user or agent-agent conversations in the future. Today
@@ -20,11 +22,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any, Callable
 
 from agent.system_prompt import SYSTEM_CONTEXT_MARKER
 from state_machine.serialization import save_compaction_marker, save_history_message
+from runtime.ledger import record_enact
 from runtime.token_stripper import strip_model_tokens
 
 logger = logging.getLogger("ConversationLoop")
@@ -218,9 +222,7 @@ class ConversationLoop:
                         continue
                 started = self._tool_started(action_type, content)
                 try:
-                    # ──────────────────── THE enact() SITE ────────────────────
-                    result = cs.enact(action_type, content, actor_id)
-                    # ──────────────────────────────────────────────────────────
+                    result = self._enact_logged(cs, action_type, content, actor_id)
                 except Exception as e:
                     self._tool_finished(started, error=str(e))
                     raise
@@ -240,13 +242,41 @@ class ConversationLoop:
                 # would make the "you've hit the tool-call limit" premise false.
                 if not self._cancelled() and not action_failed:
                     self._over_budget_summary(cs, actor_id, history, new_messages, attachments, db, conversation_id)
-                cs.enact("end_turn", None, actor_id)
+                self._enact_logged(cs, "end_turn", None, actor_id)
 
             return self._final_text, new_messages, attachments
         finally:
             self._active_db = None
             self._active_conversation_id = None
             self.running = False
+
+    def _enact_logged(self, cs, action_type: str, content: Any, actor_id: str):
+        """Gateway for every agent-side enact: run it, append the outcome to
+        the action ledger, re-raise on failure. Ledger writes are best-effort
+        and can never break the turn (see runtime/ledger.py)."""
+        enact_started = time.perf_counter()
+        try:
+            # ──────────────────── THE enact() SITE ────────────────────
+            result = cs.enact(action_type, content, actor_id)
+            # ──────────────────────────────────────────────────────────
+        except Exception as e:
+            self._record_ledger(action_type, content, actor_id, None, str(e), enact_started)
+            raise
+        self._record_ledger(action_type, content, actor_id, result, None, enact_started)
+        return result
+
+    def _record_ledger(self, action_type, content, actor_id, result, error_message, enact_started):
+        """Internal helper to append one agent-side enact to the ledger."""
+        session = (getattr(self.runtime, "sessions", {}) or {}).get(self.session_key) if self.runtime else None
+        record_enact(
+            self._active_db, origin="agent_enact",
+            session_key=self.session_key,
+            conversation_id=self._active_conversation_id,
+            user_id=getattr(session, "user_id", None),
+            actor_id=actor_id, action_type=action_type, content=content,
+            result=result, error_message=error_message,
+            duration_ms=int((time.perf_counter() - enact_started) * 1000),
+        )
 
     # ──────────────────────────────────────────────────────────────────────
     # Picking the next action (the LLM half of the loop)
@@ -576,7 +606,7 @@ class ConversationLoop:
         except Exception:
             text = self.OVER_BUDGET_MESSAGE
         self._final_text = text
-        self._absorb(cs.enact("send_text", text, actor_id), "send_text", text, history, new_messages, attachments, db, conversation_id)
+        self._absorb(self._enact_logged(cs, "send_text", text, actor_id), "send_text", text, history, new_messages, attachments, db, conversation_id)
 
     def _cancelled(self) -> bool:
         """Internal helper to handle cancelled."""

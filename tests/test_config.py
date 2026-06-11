@@ -77,13 +77,16 @@ def test_load_strips_user_config_keys_from_disk(tmp_path):
 def test_load_normalizes_enabled_frontends(tmp_path):
     path = _cfg(tmp_path)
     (tmp_path / "config.json").write_text(json.dumps({
-        "enabled_frontends": ["REPL", "telegram", "bogus", "repl"]
+        "enabled_frontends": ["REPL", "telegram", "mcp_server", "repl", ""]
     }))
 
     config = config_manager.load(path)
 
-    # Lowercased, unsupported dropped, deduped, order preserved.
-    assert config["enabled_frontends"] == ["repl", "telegram"]
+    # Lowercased, deduped, empties dropped, order preserved. Unknown names
+    # SURVIVE on purpose: frontends are store packages, so the kernel cannot
+    # know the valid set — an installed frontend's name must not be stripped
+    # by config load. Bootstrap warns and skips what discovery can't resolve.
+    assert config["enabled_frontends"] == ["repl", "telegram", "mcp_server"]
 
 
 def test_load_coerces_scalar_list_key_to_list(tmp_path):

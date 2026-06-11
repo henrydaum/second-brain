@@ -55,6 +55,7 @@ def check_invariants(kernel_or_runtime, *, baseline_threads: set[str] | None = N
     _check_referential(db, out)
     _check_sessions(runtime, db, out)
     _check_registry(runtime, out)
+    _check_ledger(db, out)
     _check_threads(baseline_threads, out)
     return out
 
@@ -187,6 +188,38 @@ def _has_pending_approval(runtime, key: str) -> bool:
         except Exception:
             return False
     return False
+
+
+# ── Action ledger ─────────────────────────────────────────────────────
+
+def _check_ledger(db, out: list[Violation]) -> None:
+    """Recent ledger rows are well-formed: required columns present, origin in
+    its enum, ok boolean, JSON columns valid JSON. Kept cheap (newest rows
+    only) so the oracle stays fast inside the fuzzer loop."""
+    if db is None or not hasattr(db, "get_ledger_rows"):
+        return
+    import json
+    try:
+        rows = db.get_ledger_rows(limit=50)
+    except Exception as e:
+        out.append(Violation("ledger.read", f"get_ledger_rows raised: {e!r}"))
+        return
+    for row in rows:
+        rid = row.get("id")
+        if not row.get("ts") or not row.get("action_type"):
+            out.append(Violation("ledger.malformed", f"row {rid} missing ts/action_type"))
+        if row.get("origin") not in {"user_enact", "agent_enact", "system"}:
+            out.append(Violation("ledger.origin", f"row {rid} origin {row.get('origin')!r}"))
+        if row.get("ok") not in (0, 1):
+            out.append(Violation("ledger.ok", f"row {rid} ok={row.get('ok')!r}"))
+        for col in ("args_json", "data_json"):
+            value = row.get(col)
+            if value is None:
+                continue
+            try:
+                json.loads(value)
+            except Exception:
+                out.append(Violation("ledger.json", f"row {rid} {col} is not valid JSON"))
 
 
 # ── Registry / threads ────────────────────────────────────────────────

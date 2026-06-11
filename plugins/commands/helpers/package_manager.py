@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import re
 import subprocess
@@ -57,6 +58,9 @@ class InstallPlan:
     existing_files: list[str]
     parser_reload_needed: bool
     progress_steps: list[str]
+    # Store commit the plan was resolved against — recorded in the action
+    # ledger on install as provenance (and the seed of future versioning).
+    store_commit: str | None = None
 
 
 @dataclass
@@ -177,10 +181,51 @@ def _install_plan_from_roots(store: GitStoreBackend, roots: list[str], target: s
     steps.append("Copying package files")
     if any(_is_parser_helper(rel) for rel in collected):
         steps.append("Reloading parser service")
-    return InstallPlan(target, list(collected.values()), pip_packages, existing, any(_is_parser_helper(rel) for rel in collected), steps)
+    # Provenance is best-effort: stub/test backends may not resolve a commit.
+    resolve_commit = getattr(store, "resolve_commit", lambda: None)
+    return InstallPlan(target, list(collected.values()), pip_packages, existing,
+                       any(_is_parser_helper(rel) for rel in collected), steps,
+                       store_commit=resolve_commit())
+
+
+def _sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _record_package_action(context, action_type: str, target: str, *, ok: bool,
+                           commit: str | None = None, files: dict[str, str] | None = None,
+                           pip: list[str] | None = None, error: str | None = None) -> None:
+    """Best-effort provenance row in the action ledger: which package, from
+    which store commit, with which per-file content hashes. No-op when the
+    context carries no ledger-capable db (e.g. plan-only unit tests)."""
+    db = getattr(context, "db", None) if context is not None else None
+    record = getattr(db, "record_action", None)
+    if record is None:
+        return
+    try:
+        record(origin="system", action_type=action_type, ok=ok, name=target,
+               user_id=getattr(context, "user_id", None),
+               data={"commit": commit, "files": files or {}, "pip": pip or []},
+               error_message=error)
+    except Exception:
+        pass
 
 
 def execute_install_plan(plan: InstallPlan, context=None, progress: Progress | None = None) -> PackageActionResult:
+    try:
+        result = _execute_install_plan(plan, context, progress)
+    except Exception as e:
+        _record_package_action(context, "package_install", plan.target, ok=False,
+                               commit=plan.store_commit, error=str(e))
+        raise
+    _record_package_action(
+        context, "package_install", plan.target, ok=True, commit=plan.store_commit,
+        files={f.path: _sha256(f.content or b"") for f in plan.files},
+        pip=plan.pip_packages)
+    return result
+
+
+def _execute_install_plan(plan: InstallPlan, context=None, progress: Progress | None = None) -> PackageActionResult:
     lines: list[str] = []
     written: list[Path] = []
     with _PACKAGE_LOCK:
@@ -302,6 +347,24 @@ def _uninstall_plan_from_candidates(target: str, candidates: set[str]) -> Uninst
 
 
 def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices=None, progress: Progress | None = None) -> PackageActionResult:
+    # Hash installed bytes up front — after execution the files are gone.
+    removed_hashes = {}
+    for rel in plan.remove_files:
+        try:
+            removed_hashes[rel] = _sha256(_target(rel).read_bytes())
+        except OSError:
+            removed_hashes[rel] = None
+    try:
+        result = _execute_uninstall_plan(plan, context, cleanup_choices, progress)
+    except Exception as e:
+        _record_package_action(context, "package_uninstall", plan.target, ok=False, error=str(e))
+        raise
+    _record_package_action(context, "package_uninstall", plan.target, ok=True,
+                           files=removed_hashes, pip=plan.pip_packages)
+    return result
+
+
+def _execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices=None, progress: Progress | None = None) -> PackageActionResult:
     lines: list[str] = []
     with _PACKAGE_LOCK:
         _progress(progress, "Resolving dependency plan")

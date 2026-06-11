@@ -133,6 +133,10 @@ class Database:
 		self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
 		self.conn.row_factory = sqlite3.Row  # dict-like access on rows
 		self.lock = _PriorityLock()
+		# Action-ledger retention: 0 = keep everything. Set from config at
+		# bootstrap; pruning happens opportunistically inside record_action.
+		self.ledger_max_rows = 0
+		self._ledger_inserts = 0
 		self._setup()
 
 	@staticmethod
@@ -299,6 +303,37 @@ class Database:
 			UPDATE users SET user_type = 'base'
 			WHERE id = ? AND frontend = 'base' AND external_id = 'base'
 		""", (DEFAULT_USER_ID,))
+
+		# Action ledger — append-only record of every action the system takes:
+		# the two labeled enact() chokepoints (origin 'user_enact'/'agent_enact')
+		# plus system-level acts such as package installs, config saves, and
+		# conversation lifecycle ops (origin 'system'). Deliberately no foreign
+		# keys: audit rows must outlive the conversations/users they describe.
+		self.conn.execute("""
+			CREATE TABLE IF NOT EXISTS action_ledger (
+				id              INTEGER PRIMARY KEY AUTOINCREMENT,
+				ts              REAL NOT NULL,
+				origin          TEXT NOT NULL,
+				session_key     TEXT,
+				conversation_id INTEGER,
+				user_id         INTEGER,
+				actor_id        TEXT,
+				action_type     TEXT NOT NULL,
+				name            TEXT,
+				args_json       TEXT,
+				ok              INTEGER NOT NULL,
+				error_code      TEXT,
+				error_message   TEXT,
+				call_id         TEXT,
+				duration_ms     INTEGER,
+				data_json       TEXT
+			)
+		""")
+		self.conn.execute("""
+			CREATE INDEX IF NOT EXISTS idx_ledger_conv
+			ON action_ledger(conversation_id, id)
+		""")
+		self.conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_ts ON action_ledger(ts)")
 
 		self.conn.commit()
 
@@ -1050,6 +1085,90 @@ class Database:
 		with self.lock:
 			self.conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
 			self.conn.commit()
+
+	# =================================================================
+	# ACTION LEDGER
+	# =================================================================
+
+	# Serialized args/data are capped so one huge tool result can't bloat the
+	# ledger; oversized payloads are wrapped (still valid JSON) with head+tail.
+	LEDGER_JSON_CAP = 4000
+
+	@classmethod
+	def _ledger_json(cls, value) -> str | None:
+		"""Serialize a ledger payload to capped, always-valid JSON (or None)."""
+		if value is None:
+			return None
+		try:
+			text = json.dumps(value, default=str)
+		except Exception:
+			text = json.dumps(str(value))
+		if len(text) <= cls.LEDGER_JSON_CAP:
+			return text
+		half = cls.LEDGER_JSON_CAP // 2
+		return json.dumps({
+			"_truncated_chars": len(text),
+			"head": text[:half],
+			"tail": text[-half:],
+		})
+
+	def record_action(self, *, origin, action_type, ok, session_key=None,
+					  conversation_id=None, user_id=None, actor_id=None,
+					  name=None, args=None, error_code=None, error_message=None,
+					  call_id=None, duration_ms=None, data=None) -> None:
+		"""Append one row to the action ledger.
+
+		Best-effort by design: the ledger observes the system and must never
+		break it. Any failure (serialization, lock, disk) is swallowed and
+		logged, so callers do not need their own try/except.
+		"""
+		try:
+			with self.lock:
+				self.conn.execute("""
+					INSERT INTO action_ledger
+					(ts, origin, session_key, conversation_id, user_id, actor_id,
+					 action_type, name, args_json, ok, error_code, error_message,
+					 call_id, duration_ms, data_json)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				""", (time.time(), str(origin), session_key, conversation_id,
+					  user_id, actor_id, str(action_type), name,
+					  self._ledger_json(args), 1 if ok else 0, error_code,
+					  str(error_message)[:1000] if error_message else None,
+					  call_id, duration_ms, self._ledger_json(data)))
+				self.conn.commit()
+			self._ledger_inserts += 1
+			if self.ledger_max_rows and self._ledger_inserts % 256 == 0:
+				self.prune_action_ledger(self.ledger_max_rows)
+		except Exception as e:
+			logger.warning(f"Action-ledger write failed (ignored): {e}")
+
+	def prune_action_ledger(self, max_rows: int) -> int:
+		"""Trim the ledger to its newest ``max_rows`` rows. Returns rows deleted."""
+		if not max_rows or max_rows <= 0:
+			return 0
+		with self.lock:
+			cur = self.conn.execute("""
+				DELETE FROM action_ledger WHERE id NOT IN
+				(SELECT id FROM action_ledger ORDER BY id DESC LIMIT ?)
+			""", (int(max_rows),))
+			self.conn.commit()
+			return cur.rowcount
+
+	def get_ledger_rows(self, conversation_id=None, origin=None, session_key=None, limit=100) -> list[dict]:
+		"""Read recent ledger rows, newest first. For tests and inspection UX."""
+		clauses, params = [], []
+		if conversation_id is not None:
+			clauses.append("conversation_id = ?"); params.append(conversation_id)
+		if origin is not None:
+			clauses.append("origin = ?"); params.append(origin)
+		if session_key is not None:
+			clauses.append("session_key = ?"); params.append(session_key)
+		where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+		with self.lock:
+			cur = self.conn.execute(
+				f"SELECT * FROM action_ledger{where} ORDER BY id DESC LIMIT ?",
+				(*params, int(limit)))
+			return [dict(row) for row in cur.fetchall()]
 
 	# =================================================================
 	# CONVERSATIONS
