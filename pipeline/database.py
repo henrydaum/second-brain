@@ -133,9 +133,11 @@ class Database:
 		self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
 		self.conn.row_factory = sqlite3.Row  # dict-like access on rows
 		self.lock = _PriorityLock()
-		# Action-ledger retention: 0 = keep everything. Set from config at
-		# bootstrap; pruning happens opportunistically inside record_action.
-		self.ledger_max_rows = 0
+		# The single retention knob (``data_retention_days`` config, days;
+		# 0 = keep everything). Set from config at bootstrap; a full prune
+		# runs at startup and ledger-only pruning happens opportunistically
+		# inside record_action.
+		self.retention_days = 0
 		self._ledger_inserts = 0
 		self._setup()
 
@@ -1137,22 +1139,45 @@ class Database:
 					  call_id, duration_ms, self._ledger_json(data)))
 				self.conn.commit()
 			self._ledger_inserts += 1
-			if self.ledger_max_rows and self._ledger_inserts % 256 == 0:
-				self.prune_action_ledger(self.ledger_max_rows)
+			if self.retention_days and self._ledger_inserts % 256 == 0:
+				self.prune_expired(self.retention_days, ledger_only=True)
 		except Exception as e:
 			logger.warning(f"Action-ledger write failed (ignored): {e}")
 
-	def prune_action_ledger(self, max_rows: int) -> int:
-		"""Trim the ledger to its newest ``max_rows`` rows. Returns rows deleted."""
-		if not max_rows or max_rows <= 0:
+	def prune_expired(self, days, *, ledger_only: bool = False) -> int:
+		"""Delete data older than ``days`` — the single retention knob.
+
+		Covers everything that accumulates without bound: action-ledger rows,
+		finished task runs, and idle conversations (their messages cascade).
+		A conversation's ``updated_at`` is bumped on every message, so
+		anything still in use is never eligible. ``ledger_only`` restricts to
+		the cheap ledger sweep (used opportunistically from record_action;
+		the full prune runs at bootstrap). Returns total rows deleted;
+		``days`` <= 0 keeps everything."""
+		if not days or days <= 0:
 			return 0
+		cutoff = time.time() - float(days) * 86400.0
+		deleted: dict[str, int] = {}
 		with self.lock:
-			cur = self.conn.execute("""
-				DELETE FROM action_ledger WHERE id NOT IN
-				(SELECT id FROM action_ledger ORDER BY id DESC LIMIT ?)
-			""", (int(max_rows),))
+			deleted["action_ledger"] = self.conn.execute(
+				"DELETE FROM action_ledger WHERE ts < ?", (cutoff,)).rowcount
+			if not ledger_only:
+				deleted["task_runs"] = self.conn.execute(
+					"DELETE FROM task_runs WHERE finished_at IS NOT NULL AND finished_at < ?",
+					(cutoff,)).rowcount
+				deleted["conversations"] = self.conn.execute(
+					"DELETE FROM conversations WHERE COALESCE(updated_at, created_at) < ?",
+					(cutoff,)).rowcount
 			self.conn.commit()
-			return cur.rowcount
+		total = sum(deleted.values())
+		if total:
+			logger.info(f"Retention prune ({days}d): {deleted}")
+			# Deleting data is itself an auditable act. Recorded outside the
+			# lock; the ledger row carries what was removed and why.
+			self.record_action(origin="system", action_type="retention_prune",
+							   ok=True, args={"days": days},
+							   data={k: v for k, v in deleted.items() if v})
+		return total
 
 	def get_ledger_rows(self, conversation_id=None, origin=None, session_key=None, limit=100) -> list[dict]:
 		"""Read recent ledger rows, newest first. For tests and inspection UX."""

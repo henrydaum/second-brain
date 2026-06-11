@@ -9,6 +9,7 @@ failure must never break an action path.
 """
 
 import json
+import time
 from types import SimpleNamespace
 
 from config import config_manager
@@ -71,16 +72,34 @@ def test_ledger_write_failure_never_raises(tmp_path, monkeypatch):
     db.record_action(origin="system", action_type="x", ok=True)  # must not raise
 
 
-def test_prune_keeps_newest_rows(tmp_path):
+def test_retention_prunes_ledger_conversations_and_task_runs(tmp_path):
     db = _db(tmp_path)
-    for i in range(10):
-        db.record_action(origin="system", action_type=f"op_{i}", ok=True)
+    old = time.time() - 30 * 86400
+    stale = db.create_conversation("stale")
+    db.save_message(stale, "user", "old news")
+    fresh = db.create_conversation("fresh")
+    db.save_message(fresh, "user", "current")
+    db.record_action(origin="system", action_type="ancient_op", ok=True)
+    with db.lock:
+        db.conn.execute("UPDATE conversations SET updated_at = ?, created_at = ? WHERE id = ?", (old, old, stale))
+        db.conn.execute("UPDATE action_ledger SET ts = ?", (old,))
+        db.conn.execute(
+            "INSERT INTO task_runs (run_id, task_name, status, created_at, finished_at) VALUES ('r1', 't', 'SUCCESS', ?, ?)",
+            (old, old))
+        db.conn.commit()
 
-    deleted = db.prune_action_ledger(3)
+    deleted = db.prune_expired(7)
 
-    assert deleted == 7
-    assert [r["action_type"] for r in db.get_ledger_rows()] == ["op_9", "op_8", "op_7"]
-    assert db.prune_action_ledger(0) == 0  # 0 = unlimited, no-op
+    assert deleted == 3  # ledger row + task run + stale conversation (cascades its messages)
+    assert db.get_conversation(stale) is None
+    assert db.get_conversation_messages(stale) == []  # messages cascaded
+    assert db.get_conversation(fresh) is not None
+    with db.lock:
+        assert db.conn.execute("SELECT COUNT(*) FROM task_runs").fetchone()[0] == 0
+    # The old ledger row is gone; the prune itself was recorded (deleting
+    # data is an auditable act).
+    assert [r["action_type"] for r in db.get_ledger_rows()] == ["retention_prune"]
+    assert db.prune_expired(0) == 0  # 0 = keep forever, no-op
 
 
 # ── User-side enacts (the _dispatch chokepoint) ──────────────────────

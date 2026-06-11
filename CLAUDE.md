@@ -129,10 +129,22 @@ Failure policy: ledger writes are best-effort at every layer
 missing/stubbed dbs) — the ledger observes the system and must never break
 it. Rows are capped (`LEDGER_JSON_CAP`, truncation wrapper stays valid
 JSON); no FKs on purpose so audit rows outlive what they describe.
-Retention via `ledger_max_rows` config (0 = keep everything). The stress
-oracle checks recent-row well-formedness (`_check_ledger` in
-`stress/invariants.py`); tests in `tests/test_ledger.py`. Query/inspection
-UX (`/ledger`) is deliberately a future store package, not kernel.
+
+Retention is the **single** `data_retention_days` setting (0 = keep
+forever): `Database.prune_expired` deletes everything that accumulates
+without bound — ledger rows, idle conversations (messages cascade; any new
+message resets a conversation's clock), finished `task_runs` — once at
+bootstrap plus a cheap ledger-only sweep on writes. The prune itself is
+ledger-recorded. Don't add per-table retention knobs; fold new unbounded
+tables into this one.
+
+The ledger is write-optimized filler by volume — read it *targeted*
+(by conversation_id / session_key / origin), never linearly; agent-facing
+guidance lives in the store `sb-troubleshooting` skill, not the kernel
+prompt. The stress oracle checks recent-row well-formedness
+(`_check_ledger` in `stress/invariants.py`); tests in
+`tests/test_ledger.py`. Query/inspection UX (`/ledger`) is deliberately a
+future store package, not kernel.
 
 ## Package store V1
 

@@ -94,11 +94,13 @@ SETTINGS_DATA = [
      [],
      {"type": "json_list", "scope": "user"}),
 
-    ("Action Ledger Max Rows", "ledger_max_rows",
-     "Retention cap for the action ledger (the append-only audit record of "
-     "every action). Oldest rows are pruned past the cap. 0 keeps everything.",
+    ("Data Retention (Days)", "data_retention_days",
+     "Delete data older than this many days: idle conversations (and their "
+     "messages), action-ledger rows, and finished task-run records. Anything "
+     "still in use is safe — a conversation's clock resets on every new "
+     "message. 0 keeps everything forever.",
      0,
-     {"type": "slider", "range": (0, 1000000, 100), "is_float": False}),
+     {"type": "slider", "range": (0, 3650, 100), "is_float": False}),
 
     ("Restart On Crash", "restart_on_crash",
      "Relaunch Second Brain automatically if the process crashes (including hard "
