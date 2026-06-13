@@ -90,9 +90,12 @@ def _supervise() -> int:
 	signal.signal(signal.SIGTERM, lambda *_: stop_requested.set())
 
 	args = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]
-	env = {**os.environ, "SB_SUPERVISED": "1"}
 	rapid_failures = 0
 	consecutive_stalls = 0
+	# Why the previous generation ended ("stall" / "crash" / "" for a first
+	# start, clean stop, or intentional /restart) — exported to the child so
+	# startup messaging can say "back online after a crash" vs plain "online".
+	restart_reason = ""
 
 	while True:
 		# Re-peeked per generation so config toggles apply on the next restart.
@@ -100,6 +103,7 @@ def _supervise() -> int:
 		baseline = read_mtime_ns(HEARTBEAT_FILE)  # previous run's file never arms the monitor
 		monitor = _StallMonitor(stall_timeout, baseline) if stall_timeout > 0 else None
 		started = time.time()
+		env = {**os.environ, "SB_SUPERVISED": "1", "SB_RESTART_REASON": restart_reason}
 		proc = subprocess.Popen(args, env=env, cwd=str(Path(__file__).parent))
 		stalled = False
 
@@ -115,8 +119,9 @@ def _supervise() -> int:
 				stalled = True
 				launcher_log.error(
 					f"No heartbeat for {stall_timeout:.0f}s — app appears stalled. "
-					f"Killing process tree. Check {LOG_FILE} for which loop went "
-					f"silent (Heartbeat warnings name the stale probe).")
+					f"Killing process tree. Check {LOG_FILE}.1 after the restart "
+					f"for which loop went silent (Heartbeat warnings name the "
+					f"stale probe; the restart rotates the log there).")
 				kill_tree(proc)
 				code = proc.wait()  # kill is prompt; no timeout games
 				break
@@ -131,6 +136,7 @@ def _supervise() -> int:
 			launcher_log.info("Restart requested — relaunching.")
 			rapid_failures = 0
 			consecutive_stalls = 0
+			restart_reason = ""  # intentional restart reads as a normal startup
 			continue
 		if stop_requested.is_set() or code in _CLEAN_STOP_CODES:
 			return 0
@@ -138,6 +144,7 @@ def _supervise() -> int:
 			launcher_log.error(f"App exited with code {code}; restart_on_crash is disabled — not restarting.")
 			return code
 
+		restart_reason = "stall" if stalled else "crash"
 		if stalled:
 			# A stall ran >= stall_timeout, so it can never trip the <60s
 			# rapid-failure test — it gets its own give-up counter, forgiven
@@ -176,6 +183,14 @@ if __name__ == "__main__" and os.environ.get("SB_SUPERVISED") != "1" and _restar
 
 
 # ── The real app (supervised child, or direct run when the launcher is off) ──
+
+# Preserve the previous run's log before truncating: a stall-kill restart must
+# not destroy the Heartbeat warning that names the wedged loop.
+try:
+	if LOG_FILE.exists():
+		os.replace(LOG_FILE, LOG_FILE.parent / (LOG_FILE.name + ".1"))
+except OSError:
+	pass
 
 _file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
 _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
@@ -220,6 +235,13 @@ _shutdown = threading.Event()
 
 def main():
 	t_start = time.time()
+
+	# --- 0. Note an unclean previous generation (set by the launcher) ---
+	_restart_reason = os.environ.get("SB_RESTART_REASON", "")
+	if _restart_reason:
+		logger.warning(
+			f"Recovering from a {'stall-kill' if _restart_reason == 'stall' else 'crash'} — "
+			f"the previous run's log was rotated to {LOG_FILE}.1.")
 
 	# --- 1. Load config ---
 	config = config_manager.load()

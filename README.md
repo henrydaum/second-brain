@@ -15,7 +15,7 @@ Check out Atlas Cloud's new coding plan promotion for more budget-friendly API a
 
 Second Brain is a local-first AI runtime for your machine, built as a **microkernel**.
 
-The kernel is deliberately small: it boots, runs the agent turn, persists conversations in SQLite, loads and unloads plugins, and gets out of the way. Everything else — file indexing and retrieval, web search, cron scheduling, Telegram, durable memory, file-editing and shell tools, heavy file parsers — arrives as **packages** you install from a store. It is not a fixed chatbot wrapped around a folder search, and it is not a monolith either: it is a programmable conversation runtime that you (and agents) extend while it is running.
+The kernel is deliberately small: it boots, runs the agent turn, persists conversations in SQLite, loads and unloads plugins, and gets out of the way. Everything else — file indexing and retrieval, web search, cron scheduling, Telegram, durable memory, file-editing and shell tools, heavy file parsers — arrives as **packages** you install from the store. It is not a fixed chatbot wrapped around a folder search, and it is not a monolith either: it is a programmable conversation runtime that you (and agents) extend while it is running.
 
 A fresh install starts almost empty. Run `/setup` and install the `starter` bundle to get a working assistant in one step — see [The Kernel And The Package Store](#the-kernel-and-the-package-store) below.
 
@@ -28,11 +28,12 @@ With the right packages installed (the `full` bundle covers most of the list bel
 - Index documents, code, PDFs, slides, spreadsheets, archives, images, audio, and video.
 - Search local files by keyword, semantics, or hybrid ranking.
 - Answer from your own corpus with citations and exact file reads.
-- Keep durable memory in `memory.md`.
+- Develop a robust memory library.
 - Store and resume conversation history in SQLite.
 - Search the public web when local knowledge is not enough.
 - Run path-driven indexing tasks and event-driven background jobs.
 - Schedule one-time and recurring subagents through Timekeeper cron jobs.
+- Use agentskills.io compatible skills.
 - Push reminders, findings, daily briefs, and alerts into Telegram.
 - Use REPL and Telegram frontends out of the box.
 - Author, test, and live-load new tools, tasks, services, commands, and frontends.
@@ -43,7 +44,7 @@ The result is a private AI layer for your computer: part knowledge engine, part 
 
 Second Brain ships as a microkernel plus a package store.
 
-**The kernel** is what lives in this repository's main tree. It boots the runtime, runs the conversation state machine and agent turn, persists conversations, manages config, and discovers and loads plugins. It ships only the plugins it cannot run without: the LLM service, the compactor (context safety), the parser registry (with lightweight text and image parsing), the plugin watcher (live install and reload), the REPL frontend, and a small set of REPL/introspection commands. There are **no built-in tools or tasks** — a fresh kernel can hold a conversation, but it cannot search your files or edit code until you install packages.
+**The kernel** is what lives in this repository's main tree. It is almost pure Python and boots *fast*. It boots the runtime, runs the conversation state machine and agent turn, persists conversations, manages config, and discovers and loads plugins. It ships only the plugins it cannot run without: the LLM service, the compactor (context safety), the parser registry (with lightweight text and image parsing), the plugin watcher (live install and reload), the REPL frontend, and a small set of REPL/introspection commands. There are **no built-in tools or tasks** — a fresh kernel can hold a conversation, but it cannot search your files or edit code until you install packages.
 
 **The store** is a parallel branch (`store`) that mirrors what a fully loaded install looks like: every optional tool, task, service, command, frontend, and parser helper, plus named *bundles* that group them. You browse and install from it with `/packages`, and the kernel copies the files into your data directory and live-loads them.
 
@@ -61,7 +62,7 @@ It installs a bundle, configures an LLM profile, and optionally sets up Telegram
 /packages install bundle_starter
 ```
 
-The **starter** bundle is the recommended first install: an LLM backend (LiteLLM, which reaches most providers), the Telegram frontend, file read/edit, SQL and shell tools, ask-user-question, plugin authoring, and durable-memory plus auto-title tasks. For everything — all file parsers, OCR, audio/video transcription, and the full indexing and search pipeline — install the larger **full** bundle:
+The **starter** bundle is the recommended first install: an LLM backend (LiteLLM, which reaches most providers), the Telegram frontend, file read/edit, SQL and shell tools, ask-user-question, plugin authoring, and durable-memory plus auto-title tasks. Note: you cannot chat with an LLM in Second Brain until you install an LLM backend (LiteLLM recommended). For everything else — all file parsers, OCR, audio/video transcription, and the full indexing and search pipeline — install the larger **full** bundle:
 
 ```
 /packages install bundle_full
@@ -77,11 +78,13 @@ Browse and manage packages anytime:
 /packages uninstall <stem>     # remove it, plus dependencies nothing else still needs
 ```
 
-Install resolves each file's declared dependencies — other store files and pip packages — and copies them in. Uninstall removes only files and pip packages nothing else still needs, and never touches kernel requirements.
+Install resolves each file's declared dependencies — other store files and pip packages — and copies them in. Uninstall removes only files and pip packages nothing else still needs, and never touches kernel requirements. The idea is to have a clean separation between the kernel and plugins that are installed into the kernel.
 
 ### Contributing to the store
 
 The store is just a git branch, so adding a plugin is a pull request. Author and test your plugin as a sandbox plugin (see [Plugin System](#plugin-system) and the [Extension Authoring Guide](#extension-authoring-guide)), then open a pull request against the `store` branch that adds your `tool_*.py` / `task_*.py` / `service_*.py` / `command_*.py` / `frontend_*.py` (and any `helpers/`) under the matching family directory. Declare dependencies with the `dependencies_files` and `dependencies_pip` fields so the package manager can resolve them, and to group several files under one install, add a `bundles/<name>.json` manifest listing the store-relative files.
+
+You can also simply send me an email at henrydaum8609@gmail.com with what you want to make :-)
 
 ## Core Architecture
 
@@ -103,7 +106,7 @@ The conversation runtime is the heart of the current system.
 
 `ConversationRuntime.handle_action(...)` is the adapter-facing entry point. A frontend, scheduled job, or other driver submits a labeled action such as `send_text`, `send_attachment`, `call_command`, `submit_form_text`, `answer_approval`, or `cancel`. The runtime loads the session, refreshes command and tool specs, enters the state machine, persists the marker, and drives the agent turn when the action hands priority to the agent.
 
-The state machine models conversations the same way a turn-based game models play:
+The state machine models conversations the same way a turn-based game does (think Magic: The Gathering):
 
 - participants have permissions and identities
 - one participant has turn priority
@@ -111,8 +114,6 @@ The state machine models conversations the same way a turn-based game models pla
 - forms and approvals suspend the current flow
 - phase frames are serializable, so interrupted flows can be restored
 - attachments are carried into the next agent turn with explicit lifecycle rules
-
-This was inspired by the same turn/phase/action model used in a turn-based card game. The important point is not the game; it is the shape. A chatbot conversation, a slash-command form, a tool approval, and a scheduled agent handoff are all stateful turn flows.
 
 Frontends do not own that flow. `BaseFrontend` turns transport input into runtime actions, then renders `RuntimeResult`, attachments, forms, approvals, buttons, errors, and progress events. This is why the REPL and Telegram can share command behavior, approval behavior, form behavior, cancellation, status updates, and session persistence without duplicating the core conversation logic.
 
@@ -130,16 +131,20 @@ Everything user-extensible is a plugin family:
 
 Built-in plugins are source-controlled. Sandbox plugins live in the Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; when `plugin_watcher` is in `autoload_services`, adds, edits, and deletes are synced live.
 
-The live authoring loop is:
+The agent can create new plugins on-the-fly. These are the instructions given to the agent for authoring new plugins:
 
 1. Read the relevant template in `templates/`.
 2. Read a similar built-in plugin.
 3. Create or edit the plugin file with `edit_file`.
 4. Let `plugin_watcher` auto-load the file when it is enabled, and call `test_plugin(plugin_path=...)` for purpose-built diagnostics.
-5. If testing fails, fix the same file and call `test_plugin` again.
+5. If testing fails, fix the same file and call `test_plugin` again. Repeat until it is fixed and the plugin loads.
 6. To remove it durably and from the live runtime, delete the sandbox file; `plugin_watcher` unloads it when enabled.
 
 That loop matters. Second Brain can inspect its own templates, write a focused extension, diagnose it, and use it immediately. `test_plugin` gives the plugin-specific signal; its pytest section is broad regression context, not proof that the new plugin's behavior is complete. A new command is not a special case. A new frontend is not a rewrite. They are plugins with contracts.
+
+## Security
+
+Second Brain has protections against rogue plugins and AIs. Tools, tasks, and service loads are given a timeout; if they can't get the job done within that timeframe, it gets cancelled. This fixes freezes. Second Brain also monitors memory usage through the Plugin Supervisor, which automatically quarantines plugins that exceed the threshold. However, all plugins run in-process, which means that there are no subprocesses. If a plugin calls `os._exit()`, it will take down the whole process. Make sure you trust plugins before adding them to your runtime. When writing new plugins for Second Brain, you should use an intelligent model that won't mess things up.
 
 ## File Indexing And Retrieval
 
@@ -151,7 +156,7 @@ The full pipeline includes:
 - parser service dispatch by extension and modality
 - text extraction
 - OCR for images
-- speech-to-text for audio and video
+- speech-to-text for audio and video (`service_whisper` + `parse_voice` enable Telegram speech-to-text)
 - archive/container extraction
 - tabular textualization
 - text chunking
@@ -184,9 +189,11 @@ Supported modalities:
 
 ## Events, Cron Jobs, And Subagents
 
-Second Brain is proactive, not just reactive — once the scheduling package is installed.
+Second Brain is proactive, not just reactive — once the scheduling package is installed:
 
-Path-driven tasks process files. Event-driven tasks respond to bus events. Timekeeper (a store service, in the `scheduling` bundle) creates one-time and recurring jobs using cron expressions. Scheduled subagents can wake up, read their conversation history, run tools, and optionally send their final result back into chat.
+`/packages install bundle_scheduling`
+
+Path-driven tasks process files. Event-driven tasks respond to bus events. The Timekeeper (a store service, in the `scheduling` bundle) creates one-time and recurring jobs using cron expressions. Scheduled subagents can wake up, read their conversation history, run tools, and optionally send their final result back into chat, depending on their notification mode.
 
 This supports workflows like:
 
@@ -198,11 +205,11 @@ This supports workflows like:
 - scheduled maintenance or database cleanup
 - background subagents that remember prior runs
 
-It is calendar-capable without being trapped in a traditional calendar UI. Jobs can run silently or notify the active frontend, and subagent conversations remain available through the conversation system.
+It is calendar-capable without being trapped in a traditional calendar UI. Jobs can run silently or notify the active frontend, and subagent conversations remain available through the conversation system. That doesn't mean Google/Apple Calendar can't be added to Second Brain — they can.
 
 ## Frontends
 
-The kernel ships one frontend, the REPL (`frontend_repl.py`, a local terminal interface). Telegram — a private mobile chat interface (`frontend_telegram.py`) — is a store package, installed with the `starter`/`full` bundles or directly via `/packages install frontend_telegram`. Both live under `plugins/frontends/` once present.
+The kernel ships one base frontend, the REPL (`frontend_repl.py`, a local terminal interface). Telegram — a private mobile chat interface (`frontend_telegram.py`) — is a store package, installed with the `bundle_starter`/`bundle_full` bundles or directly via `/packages install frontend_telegram`. Both live under `plugins/frontends/` once present.
 
 `BaseFrontend` provides the shared runtime binding, command parsing path, form and approval submission, bus subscriptions, progress rendering hooks, session helpers, and `FrontendCapabilities` model. Each frontend implements only the transport-specific parts: receiving input, deriving a session key, rendering messages, sending attachments, showing buttons, and stopping cleanly.
 
@@ -215,8 +222,8 @@ Custom frontends are first-class plugins. A Discord bot, HTTP bridge, desktop sh
 ### Requirements
 
 - Python 3.11+
-- An LLM profile for agent features (installed and configured by `/setup`)
-- A Telegram bot token and allowed user ID if you install the Telegram frontend
+- An LLM profile for agent features (installed and configured by `/setup`) — technically optional, but you won't be able to chat without it.
+- A Telegram bot token and allowed user ID if you install the Telegram frontend, which is highly recommended.
 - For the OCR/transcription packages: Windows native OCR or macOS Apple Vision; audio/video transcription pulls `faster-whisper`
 
 ### Install
@@ -237,9 +244,9 @@ On first run, Second Brain creates its data directory automatically:
 - macOS: `~/Library/Application Support/Second Brain/`
 - Linux: `${XDG_DATA_HOME:-~/.local/share}/Second Brain/`
 
-You normally don't hand-edit config: `/setup` writes the LLM profile and Telegram settings for you, and installing packages extends `enabled_frontends`/`autoload_services` as needed. A fresh kernel starts with `enabled_frontends: ["repl"]` and `autoload_services: ["llm"]`.
+From there, `/setup` writes the LLM profile and Telegram settings for you, and installing packages extends `enabled_frontends`/`autoload_services` as needed. A fresh kernel starts with `enabled_frontends: ["repl"]` and `autoload_services: ["llm"]`.
 
-The most important setting once indexing is installed is `sync_directories`: the folders Second Brain should watch and index. The attachment cache is included by default so files sent through frontends can enter the same pipeline.
+The most important setting once indexing is installed is `sync_directories`: the folders Second Brain should watch and index. The attachment cache is included by default so files sent through frontends can enter the same pipeline. You can add multiple folders here, and they all get synced automatically. As soon as you set a sync directory, the REPL and app.log will be flooded with task status messages. Don't worry — that's the sync working as intended. It'll stop once the sync is complete. (You can use Telegram if you prefer a cleaner chat experience.)
 
 Illustrative shape after the `starter` bundle and `/setup` (LiteLLM backend, Telegram enabled):
 
@@ -321,9 +328,10 @@ The kernel ships REPL UX and introspection commands only:
 | `/tools` | Select and call tools |
 | `/commands` | List available commands |
 | `/locations` | Show project and plugin directories |
-| `/debug` | Inspect runtime state |
+| `/debug` | Inspect runtime state & recent errors |
+| `/update` | Pull most recent Repo state |
 
-Other commands (for example `/schedule` for cron jobs, `/update` to pull repo changes, or MCP commands) arrive with the packages that provide them.
+Other commands (for example `/schedule` for cron jobs, or MCP commands) arrive with the packages that provide them.
 
 The kernel ships **no built-in tools** — a fresh install can converse but has no agent-callable actions. Tools come from the store; the `starter` and `full` bundles install the common ones, and you can add others individually with `/packages install <stem>`. Frequently installed tools include:
 
@@ -434,11 +442,7 @@ For source-controlled additions, move stable sandbox plugins into the matching b
 
 ## Philosophy
 
-Second Brain is built around a simple bet: an AI system should be fully customizable and easy to adapt and change, like LEGOs.
-
-Most software products are static, whereas Second Brain can write its own code and extend itself. The Second Brain core code is so versatile and strong that it can turn into almost any shape. 
-
-Although Second Brain is still a ways off from being like a human brain, it can still do quite a lot, and I think it is worthy of the name. The goal has always been to create something intelligent, adaptable, and useful. Those are the three things that have driven this from the start.
+Think of Second Brain like a blank canvas. It starts off plain and simple, with no tools or tasks involved, no bells and whistles. It's something you are meant to expand yourself. You can build on it and make it your own. It's fully open-source, so you could change the kernel however you want. The Second Brain core code is so versatile and strong that it can turn into almost any shape. What's cool is that Second Brain can change itself. It's not like a typical coding project, where all of the changes come from you. The agent has the power to change itself. Make it into a website, a shop, a robot backend, a highly personal assistant. All of this is possible because of how modular and extensible Second Brain is. And the name itself: Although Second Brain is still a ways off from being like a human brain, it can still do quite a lot, and I think it is worthy of the name. The goal has always been to create something intelligent, adaptable, and useful. Those are the three things that have driven this from the start.
 
 ## License
 
