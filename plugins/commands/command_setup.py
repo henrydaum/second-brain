@@ -98,8 +98,9 @@ PACKAGES_SECTION = (
     "Get more with /packages:\n"
     "  /packages available        — browse the store by category\n"
     "  /packages install <id>     — install a package or bundle\n"
-    "  Handy bundles: all-parsers, indexing-search, web-search, gmail, mcp, "
-    "google-drive, scheduling, plan-mode (or `full` for everything)."
+    "  Handy bundles: bundle_all_parsers, bundle_indexing_search, "
+    "bundle_web_search, bundle_gmail, bundle_mcp, bundle_google_drive, "
+    "bundle_scheduling, bundle_plan_mode, bundle_full."
 )
 
 

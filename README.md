@@ -15,7 +15,7 @@ Check out Atlas Cloud's new coding plan promotion for more budget-friendly API a
 
 Second Brain is a local-first AI runtime for your machine, built as a **microkernel**.
 
-The kernel is deliberately small: it boots, runs the agent turn, persists conversations in SQLite, loads and unloads plugins, and gets out of the way. Everything else — file indexing and retrieval, web search, cron scheduling, Telegram, durable memory, file-editing and shell tools, heavy file parsers — arrives as **packages** you install from the store. It is not a fixed chatbot wrapped around a folder search, and it is not a monolith either: it is a programmable conversation runtime that you (and agents) extend while it is running.
+The kernel is deliberately small: it boots, runs the agent turn, persists conversations in SQLite, loads and unloads plugins, keeps the lightweight Timekeeper event clock running, and gets out of the way. Everything else — file indexing and retrieval, web search, scheduling workflows, Telegram, durable memory, file-editing and shell tools, heavy file parsers — arrives as **packages** you install from the store. It is not a fixed chatbot wrapped around a folder search, and it is not a monolith either: it is a programmable conversation runtime that you (and agents) extend while it is running.
 
 A fresh install starts almost empty. Run `/setup` and install the `starter` bundle to get a working assistant in one step — see [The Kernel And The Package Store](#the-kernel-and-the-package-store) below.
 
@@ -44,7 +44,7 @@ The result is a private AI layer for your computer: part knowledge engine, part 
 
 Second Brain ships as a microkernel plus a package store.
 
-**The kernel** is what lives in this repository's main tree. It is almost pure Python and boots *fast*. It boots the runtime, runs the conversation state machine and agent turn, persists conversations, manages config, and discovers and loads plugins. It ships only the plugins it cannot run without: the LLM service, the compactor (context safety), the parser registry (with lightweight text and image parsing), the plugin watcher (live install and reload), the REPL frontend, and a small set of REPL/introspection commands. There are **no built-in tools or tasks** — a fresh kernel can hold a conversation, but it cannot search your files or edit code until you install packages.
+**The kernel** is what lives in this repository's main tree. It is almost pure Python and boots *fast*. It boots the runtime, runs the conversation state machine and agent turn, persists conversations, manages config, and discovers and loads plugins. It ships only the plugins it cannot run without: the LLM service, the compactor (context safety), the parser registry (with lightweight text and image parsing), Timekeeper (the event clock), the plugin watcher (live install and reload), the REPL frontend, and a small set of REPL/introspection commands. There are **no built-in tools or tasks** — a fresh kernel can hold a conversation, but it cannot search your files or edit code until you install packages.
 
 **The store** is a parallel branch (`store`) that mirrors what a fully loaded install looks like: every optional tool, task, service, command, frontend, and parser helper, plus named *bundles* that group them. You browse and install from it with `/packages`, and the kernel copies the files into your data directory and live-loads them.
 
@@ -193,7 +193,7 @@ Second Brain is proactive, not just reactive — once the scheduling package is 
 
 `/packages install bundle_scheduling`
 
-Path-driven tasks process files. Event-driven tasks respond to bus events. The Timekeeper (a store service, in the `scheduling` bundle) creates one-time and recurring jobs using cron expressions. Scheduled subagents can wake up, read their conversation history, run tools, and optionally send their final result back into chat, depending on their notification mode.
+Path-driven tasks process files. Event-driven tasks respond to bus events. Timekeeper is the kernel service that creates one-time and recurring event emissions using cron expressions; the `bundle_scheduling` package adds the `/schedule` command, scheduled-subagent task, and scheduling tool on top. Scheduled subagents can wake up, read their conversation history, run tools, and optionally send their final result back into chat, depending on their notification mode.
 
 This supports workflows like:
 
@@ -244,7 +244,7 @@ On first run, Second Brain creates its data directory automatically:
 - macOS: `~/Library/Application Support/Second Brain/`
 - Linux: `${XDG_DATA_HOME:-~/.local/share}/Second Brain/`
 
-From there, `/setup` writes the LLM profile and Telegram settings for you, and installing packages extends `enabled_frontends`/`autoload_services` as needed. A fresh kernel starts with `enabled_frontends: ["repl"]` and `autoload_services: ["llm"]`.
+From there, `/setup` writes the LLM profile and Telegram settings for you, and installing packages extends `enabled_frontends`/`autoload_services` as needed. A fresh kernel starts with `enabled_frontends: ["repl"]` and `autoload_services: ["llm", "timekeeper"]`.
 
 The most important setting once indexing is installed is `sync_directories`: the folders Second Brain should watch and index. The attachment cache is included by default so files sent through frontends can enter the same pipeline. You can add multiple folders here, and they all get synced automatically. As soon as you set a sync directory, the REPL and app.log will be flooded with task status messages. Don't worry — that's the sync working as intended. It'll stop once the sync is complete. (You can use Telegram if you prefer a cleaner chat experience.)
 
@@ -257,7 +257,7 @@ Illustrative shape after the `starter` bundle and `/setup` (LiteLLM backend, Tel
     "C:/Users/you/AppData/Local/Second Brain/attachment_cache"
   ],
   "enabled_frontends": ["repl", "telegram"],
-  "autoload_services": ["llm"],
+  "autoload_services": ["llm", "timekeeper"],
   "telegram_bot_token": "",
   "telegram_allowed_user_id": 0,
   "llm_profiles": {

@@ -17,9 +17,8 @@ Each entry: (title, variable_name, description, default, type_info)
 
 from paths import DATA_DIR, ATTACHMENT_CACHE
 
-# The kernel ships no scheduled jobs. The tasks they used to drive
-# (update_titles, dream_memory) and the timekeeper service that fires them are
-# installable from the store; a plugin registers its own default jobs on install.
+# The kernel ships Timekeeper as the lightweight event clock, but no scheduled
+# jobs. Store packages register their own jobs when they need recurring work.
 DEFAULT_SCHEDULED_JOBS: dict = {}
 
 SETTINGS_DATA = [
@@ -58,7 +57,7 @@ SETTINGS_DATA = [
     # --- Services ---
     ("Auto-load Services", "autoload_services",
      "Managed service names to load automatically on startup. Extension services auto-load when installed.",
-     ["llm"],
+     ["llm", "timekeeper"],
      {"type": "json_list"}),
 
     # --- Frontends ---

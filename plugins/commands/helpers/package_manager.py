@@ -256,8 +256,10 @@ def _execute_install_plan(plan: InstallPlan, context=None, progress: Progress | 
             _progress(progress, "Reloading parser service")
             _reload_parser_service(context, lines)
         if context is not None:
+            services = _services(plan.files)
             _set_enabled_frontends(context, add=_frontends(plan.files), remove=[], lines=lines)
-            _set_autoload_services(context, add=_services(plan.files), remove=[], lines=lines)
+            _set_autoload_services(context, add=services, remove=[], lines=lines)
+            _load_registered_services(context, services, lines)
         if plan.pip_packages:
             lines.append(f"Installed Python package(s): {', '.join(plan.pip_packages)}")
     return PackageActionResult(True, lines)
@@ -724,6 +726,19 @@ def _set_enabled_frontends(context, add: list[str], remove: list[str], lines: li
 
 def _set_autoload_services(context, add: list[str], remove: list[str], lines: list[str]) -> None:
     _set_config_list(context, "autoload_services", add, remove, "service", lines, restart=False)
+
+
+def _load_registered_services(context, names: list[str], lines: list[str]) -> None:
+    services = getattr(context, "services", None) or {}
+    for name in names:
+        svc = services.get(name)
+        if svc is None or getattr(svc, "loaded", False):
+            continue
+        try:
+            if svc.load():
+                lines.append(f"Loaded service: {name}")
+        except Exception as e:
+            lines.append(f"Service '{name}' is enabled but failed to load: {e}")
 
 
 def _set_config_list(context, key: str, add: list[str], remove: list[str], label: str, lines: list[str], *, restart: bool) -> None:

@@ -26,10 +26,10 @@ staging catalog that mirrors `plugins/`, preserved via `git mv` to seed the
 future store) — *not* by deleting them. What remains:
 
 - **Services:** `service_llm`, `service_compactor` (context-safety),
-  `service_parser` (text + image helper discovery), and
-  `service_plugin_watcher` (hot-reload = the install/uninstall substrate).
-  If another tracked service remains, treat it as kernel-boundary debt unless
-  the user explicitly keeps it.
+  `service_parser` (text + image helper discovery), `service_timekeeper`
+  (lightweight event clock), and `service_plugin_watcher` (hot-reload = the
+  install/uninstall substrate). If another tracked service remains, treat it as
+  kernel-boundary debt unless the user explicitly keeps it.
 - **Tasks:** none.
 - **Tools:** none in the tracked kernel tree. `tool_read_file`,
   `tool_ask_user_question`, shell/file-editing tools, SQL tools, and plugin
@@ -97,11 +97,12 @@ the difference between a microkernel and a pile of assumptions:
   route a blocking request through the event task queue.
 - **`runtime/runtime_config.py` `build_loop`** — the "no LLM" path now raises a
   friendly message pointing at `/setup` instead of an opaque error.
-- **`config/config_data.py`** — `autoload_services` trimmed to `["llm"]`
-  (extension services auto-load when installed); `enabled_frontends` → `["repl"]`;
+- **`config/config_data.py`** — `autoload_services` trimmed to
+  `["llm", "timekeeper"]` (extension services auto-load when installed);
+  `enabled_frontends` → `["repl"]`;
   `DEFAULT_SCHEDULED_JOBS` → `{}` (no default jobs; `service_timekeeper` ships
   in the kernel tree, and scheduled-job *consumers* are store plugins).
-- **`requirements.txt`** — kernel-minimal. Optional parser, scheduler,
+- **`requirements.txt`** — kernel-minimal. Optional parser, scheduling-consumer,
   frontend, LLM backend, search, and integration dependencies belong to package
   metadata. If `requirements.txt` grows, check whether the dependency is truly
   kernel infrastructure.
@@ -154,7 +155,7 @@ future store package, not kernel.
   `frontends/frontend_*.py`, `commands/command_*.py`, `tasks/task_*.py`, plus
   family-local `helpers/` files. `/packages install <stem>` and
   `/packages uninstall <stem>` target the file stem (`frontend_telegram`,
-  `parse_pdf`, etc.). Bundles are deferred.
+  `parse_pdf`, `bundle_starter`, etc.).
 - **Dependency metadata lives in code.** Plugin base classes expose
   `dependencies_files` and `dependencies_pip`; helpers use the same names as
   module-level literal lists. The package manager reads these fields with AST

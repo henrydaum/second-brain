@@ -10,10 +10,10 @@ explicit user instruction, the user wins.
 Second Brain is a **microkernel**: a minimal core that boots, runs the
 agent turn, persists conversations, and loads plugins. Most product capability
 arrives through installed packages. **Read the "THE KERNEL" section at the top
-of [CLAUDE.md](CLAUDE.md) before making changes.** Search, scheduling,
-integrations, Telegram, file-editing tools, shell tools, memory tooling, and
-heavy parsers are package capabilities unless the runtime catalog proves they
-are installed.
+of [CLAUDE.md](CLAUDE.md) before making changes.** Search, scheduling commands
+and subagents, integrations, Telegram, file-editing tools, shell tools, memory
+tooling, and heavy parsers are package capabilities unless the runtime catalog
+proves they are installed.
 
 ## What this project is
 
@@ -21,7 +21,8 @@ Second Brain is a **local-first AI kernel**: a
 programmable conversation runtime with SQLite persistence, an agent turn loop,
 five plugin families, package install/uninstall, and a live plugin watcher.
 Full-product capabilities such as indexing/retrieval, durable memory workflows,
-web search, scheduling, integrations, and Telegram belong in the store. Python +
+web search, scheduling workflows, integrations, and Telegram belong in the
+store; the lightweight Timekeeper event clock stays in the kernel. Python +
 SQLite. Solo-maintained (Henry). There is **no GUI** — a Flet GUI was removed;
 do not reintroduce one.
 

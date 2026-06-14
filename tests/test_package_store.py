@@ -51,6 +51,18 @@ class _Parser:
         self.unloads += 1
 
 
+class _ColdService:
+    loaded = False
+
+    def __init__(self):
+        self.loads = 0
+
+    def load(self):
+        self.loads += 1
+        self.loaded = True
+        return True
+
+
 def _patch_roots(monkeypatch, tmp_path):
     installed = tmp_path / "installed_plugins"
     sandbox = tmp_path / "sandbox_plugins"
@@ -157,6 +169,25 @@ def test_install_service_preserves_existing_saved_autoload_services(tmp_path, mo
 
     assert result.ok
     assert saved["autoload_services"] == ["llm", "parser", "mcp"]
+
+
+def test_install_loads_service_registered_before_autoload_update(tmp_path, monkeypatch):
+    _patch_roots(monkeypatch, tmp_path)
+    files = {"services/service_mcp.py": b"from plugins.BaseService import BaseService\nclass MCP(BaseService): pass\n"}
+    saved = {"enabled_frontends": ["repl"], "autoload_services": ["llm"]}
+    context = _Context(tmp_path)
+    context.services["mcp"] = _ColdService()
+    monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
+    monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""))
+    monkeypatch.setattr("config.config_manager.load", lambda: dict(saved))
+    monkeypatch.setattr("config.config_manager.save", lambda config: saved.update(config))
+
+    result = package_manager.install_package(tmp_path, "service_mcp", context)
+
+    assert result.ok
+    assert saved["autoload_services"] == ["llm", "mcp"]
+    assert context.services["mcp"].loads == 1
+    assert "Loaded service: mcp" in result.text()
 
 
 def test_install_llm_backend_autoloads_llm_router_not_backend_stem(tmp_path, monkeypatch):
