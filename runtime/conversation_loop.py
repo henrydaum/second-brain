@@ -325,7 +325,13 @@ class ConversationLoop:
 
         if getattr(response, "has_tool_calls", False):
             self._pending_tool_calls = list(response.tool_calls)
-            self._assistant_text_for_pending = getattr(response, "content", None)
+            text = getattr(response, "content", None)
+            self._assistant_text_for_pending = text
+            # Surface the model's mid-turn explanatory text to live frontends
+            # (display-only; it still rides on the first tool-call history row).
+            cleaned = _clean(text or "")
+            if cleaned and self.runtime is not None and self.session_key:
+                self.runtime.push_message(self.session_key, cleaned)
             self._compact_if_needed(response, history)
             # Recurse to immediately return the first call as an action.
             return self._next_action(cs, history, AttachmentBundle())
