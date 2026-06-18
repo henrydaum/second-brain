@@ -24,6 +24,7 @@ def test_kernel_defaults_are_minimal():
     assert config_manager.DEFAULTS["enabled_frontends"] == ["repl"]
     assert DEFAULT_SCHEDULED_JOBS == {}
     assert config_manager.DEFAULTS["scheduled_jobs"] == {}
+    assert config_manager.DEFAULTS["keep_attachments_available_across_turns"] is False
 
 
 def test_defaults_cover_every_settings_entry():

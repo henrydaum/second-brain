@@ -143,6 +143,7 @@ class ConversationLoop:
         # provider transcript keeps its assistant-text-with-tool-calls shape.
         self._assistant_text_for_pending: str | None = None
         self._final_text: str | None = None
+        self._used_attachments_for_last_action = False
         self._active_db = None
         self._active_conversation_id = None
 
@@ -204,10 +205,11 @@ class ConversationLoop:
                 if self._cancelled() or cs.turn_priority != actor_id:
                     break
 
+                self._used_attachments_for_last_action = False
                 action_type, content = self._next_action(cs, history, bundle)
                 if not action_type:
                     break
-                if bundle:
+                if self._used_attachments_for_last_action:
                     # Only the first LLM call of the turn sees the bundle.
                     bundle = AttachmentBundle()
 
@@ -229,6 +231,10 @@ class ConversationLoop:
                 self._tool_finished(started, result=result)
 
                 self._absorb(result, action_type, content, history, new_messages, attachments, db, conversation_id)
+                if action_type == "call_tool":
+                    staged = self._drain_hook_attachments()
+                    if staged:
+                        bundle = self._merge_bundles(bundle, staged)
 
                 if not result.ok:
                     action_failed = True
@@ -321,6 +327,7 @@ class ConversationLoop:
         # 3) Otherwise call the LLM for the next response.
         from attachments.attachment import AttachmentBundle
         schemas = self.tool_registry.get_all_schemas() if self.tool_registry else None
+        self._used_attachments_for_last_action = bool(bundle)
         response = self._invoke(self._messages(history), schemas or None, bundle, history)
 
         if getattr(response, "has_tool_calls", False):
@@ -419,6 +426,21 @@ class ConversationLoop:
             return _truncate_middle(text, self.MAX_TOOL_RESULT_CHARS), paths
         except (TypeError, ValueError) as e:
             return json.dumps({"error": f"Result serialization failed: {e}"}), []
+
+    def _drain_hook_attachments(self):
+        """Collect attachments staged by tools/services for the next LLM call."""
+        from attachments.attachment import AttachmentBundle
+        session = (getattr(self.runtime, "sessions", {}) or {}).get(self.session_key) if self.runtime else None
+        hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
+        return AttachmentBundle.from_iterable(hooks.drain_attachments(session)) if hooks and session else AttachmentBundle()
+
+    def _merge_bundles(self, current, staged):
+        """Append newly staged attachments without losing an existing bundle."""
+        from attachments.attachment import AttachmentBundle
+        bundle = AttachmentBundle.from_iterable(current)
+        for attachment in staged:
+            bundle.append(attachment)
+        return bundle
 
     # ──────────────────────────────────────────────────────────────────────
     # Helpers

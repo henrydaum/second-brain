@@ -88,6 +88,11 @@ SETTINGS_DATA = [
      600,
      {"type": "slider", "range": (30, 1800, 59), "is_float": False}),
 
+    ("Keep Attachments Available Across Turns", "keep_attachments_available_across_turns",
+     "Keep attached files available to the model after the first agent response. Useful for repeated media inspection, but native image/audio/video inputs may increase LLM cost.",
+     False,
+     {"type": "bool"}),
+
     ("Skip Permissions", "skip_permissions",
      "Tool names whose permission dialogs are automatically approved unless a permission plugin rejects them.",
      [],

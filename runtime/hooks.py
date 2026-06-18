@@ -1,10 +1,8 @@
 """Per-session extension hooks — the opt-in substrate for on-demand plugins.
 
-The kernel makes three decisions per session that a plugin might want to bend:
+The kernel makes several decisions per session that a plugin might want to bend:
 whether to allow a sensitive tool call (permission), which tools the agent can
-see (scope), and what extra text rides in the system prompt. The first two are
-hardcoded `if` branches in core today; this registry turns them into passive
-hook points so a plugin can opt in without core knowing the plugin exists.
+see (scope), and which files should ride along with the next model call.
 
 A plugin registers from its service ``_load()`` via ``runtime.hooks.add_*``.
 A plugin that never touches ``runtime.hooks`` behaves exactly as before — the
@@ -58,6 +56,7 @@ class HookRegistry:
         self._permission_gates: list[PermissionGate] = []
         self._scope_shapers: list[ScopeShaper] = []
         self._turn_finalizers: list[TurnFinalizer] = []
+        self._turn_attachments: dict[str, list[Any]] = {}
 
     # --- registration (called by plugins at load) ---
 
@@ -72,6 +71,14 @@ class HookRegistry:
     def add_turn_finalizer(self, finalizer: TurnFinalizer) -> None:
         """Register a callback run after each agent turn."""
         self._turn_finalizers.append(finalizer)
+
+    def stage_attachment(self, session, attachment: Any) -> bool:
+        """Queue one attachment for the next LLM call in this session."""
+        key = getattr(session, "key", None)
+        if not key:
+            return False
+        self._turn_attachments.setdefault(key, []).append(attachment)
+        return True
 
     def remove(self, fn: Callable) -> None:
         """Drop a previously registered gate or shaper (for plugin unload)."""
@@ -111,3 +118,8 @@ class HookRegistry:
                 finalizer(session)
             except Exception:
                 logger.exception("Turn finalizer raised; continuing")
+        self._turn_attachments.pop(getattr(session, "key", None), None)
+
+    def drain_attachments(self, session) -> list[Any]:
+        """Return and clear attachments staged for the next model call."""
+        return self._turn_attachments.pop(getattr(session, "key", None), [])

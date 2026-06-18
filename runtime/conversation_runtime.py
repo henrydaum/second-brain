@@ -898,6 +898,13 @@ class ConversationRuntime:
         """Remove system prompt extra."""
         return self.add_system_prompt_extra(session_key, key, None)
 
+    def add_turn_attachment(self, session_key: str, attachment) -> bool:
+        """Attach media to the next model call in this live session."""
+        session = self.sessions.get(session_key)
+        if session is None:
+            return False
+        return self.hooks.stage_attachment(session, attachment)
+
     def add_session_tool(self, session_key: str, tool_instance) -> bool:
         """Expose an extra tool instance to one live session."""
         session = self.sessions.get(session_key)

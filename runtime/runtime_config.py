@@ -153,7 +153,7 @@ def new_state(
         phase,
         cache,
         attachment_parser=lambda content: parse_attachment(runtime, content),
-        attachment_lifecycle=runtime.config.get("attachment_lifecycle", "per_turn"),
+        attachment_lifecycle="persistent" if runtime.config.get("keep_attachments_available_across_turns") else "per_turn",
     )
     # Restore persisted attachments (only present when lifecycle == "persistent"
     # and the marker was saved mid-conversation).

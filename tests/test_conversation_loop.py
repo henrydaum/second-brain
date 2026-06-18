@@ -14,8 +14,10 @@ from types import SimpleNamespace
 from state_machine.conversation import CallableSpec, ConversationState, Participant
 from state_machine.conversation_phases import BASE_PHASE
 
+from attachments.attachment import Attachment
 from plugins.BaseTool import ToolResult
 from runtime.conversation_loop import ConversationLoop
+from runtime.hooks import HookRegistry
 
 
 def _response(content="", tool_calls=None):
@@ -36,9 +38,11 @@ class _FakeLLM:
     def __init__(self, responses):
         self._responses = list(responses)
         self.calls = []
+        self.attachments = []
 
     def chat_with_tools(self, messages, tools, attachments=None):
         self.calls.append(messages)
+        self.attachments.append(attachments)
         return self._responses.pop(0)
 
 
@@ -135,6 +139,51 @@ def test_tool_failure_is_surfaced_to_the_model_as_error():
     tool_msg = next(m for m in new_messages if m["role"] == "tool")
     assert "kaboom" in tool_msg["content"]
     assert reply == "I hit an error."
+
+
+def test_tool_can_stage_attachment_for_followup_model_call():
+    runtime = SimpleNamespace(sessions={}, hooks=HookRegistry())
+    runtime.sessions["chat"] = SimpleNamespace(key="chat")
+
+    def inspect_handler(cs, actor, args):
+        runtime.hooks.stage_attachment(
+            runtime.sessions["chat"],
+            Attachment("C:/tmp/photo.png", ".png", "photo.png", "image"),
+        )
+        return ToolResult(llm_summary="Attached photo.png for inspection.")
+
+    def noop_handler(cs, actor, args):
+        return ToolResult(llm_summary="No-op done.")
+
+    tools = {
+        "inspect": CallableSpec("inspect", handler=inspect_handler),
+        "noop": CallableSpec("noop", handler=noop_handler),
+    }
+    cs = _agent_state(tools=tools)
+    llm = _FakeLLM([
+        _response(tool_calls=[
+            {"id": "c1", "name": "inspect", "arguments": "{}"},
+            {"id": "c2", "name": "noop", "arguments": "{}"},
+        ]),
+        _response(content="I can see it now."),
+    ])
+    loop = ConversationLoop(
+        llm,
+        _FakeRegistry([
+            {"type": "function", "function": {"name": "inspect", "parameters": {}}},
+            {"type": "function", "function": {"name": "noop", "parameters": {}}},
+        ]),
+        {"tool_timeout": 10},
+        "prompt",
+        runtime=runtime,
+        session_key="chat",
+    )
+
+    reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "inspect this"}])
+
+    assert reply == "I can see it now."
+    assert not llm.attachments[0]
+    assert [a.file_name for a in llm.attachments[1]] == ["photo.png"]
 
 
 def test_compaction_uses_compactor_service_directly():
