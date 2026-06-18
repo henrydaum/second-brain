@@ -175,7 +175,18 @@ def _model_status(services: dict) -> str:
     name = getattr(llm, "_active_name", None)
     inner = getattr(llm, "active", None)
     model = getattr(inner, "model_name", None) if inner else getattr(llm, "model_name", None)
-    return "Current model: " + (f"{name} ({model})." if name and model else f"{name or model or 'unknown'}.")
+    target = inner or llm
+    caps = getattr(target, "capabilities", {}) or {}
+    native = set(getattr(target, "native_attachment_modalities", set()) or set())
+    parts = []
+    for modality, label in (("image", "images"), ("audio", "audio"), ("video", "video")):
+        parts.append(f"{label}: {'yes' if caps.get(modality) and modality in native else 'no'}")
+    status = f"{name} ({model})." if name and model else f"{name or model or 'unknown'}."
+    return (
+        f"Current model: {status}\n"
+        f"Native attachment processing: {'; '.join(parts)}. "
+        "For unsupported modalities, rely only on parsed text or file pointers."
+    )
 
 
 def _profile_status(profile_name: str, scope: AgentScope | None) -> str:
