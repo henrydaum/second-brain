@@ -20,7 +20,7 @@ from state_machine.conversation import ConversationState, Participant
 
 def test_llm_command_can_set_default(monkeypatch):
     saved = []
-    monkeypatch.setattr("plugins.commands.command_llm._save", lambda config: saved.append(dict(config)))
+    monkeypatch.setattr("plugins.commands.command_llm._save", lambda context: saved.append(dict(context.config)))
     context = SimpleNamespace(config={"llm_profiles": {"a": {}, "b": {}}, "default_llm_profile": "a"}, services={})
 
     steps = LlmCommand().form({"model_name": "b"}, context)
@@ -34,9 +34,24 @@ def test_llm_command_can_set_default(monkeypatch):
     assert saved[-1]["default_llm_profile"] == "b"
 
 
+def test_llm_command_set_default_writes_through_to_runtime_config(monkeypatch):
+    saved = []
+    monkeypatch.setattr("plugins.commands.command_llm.config_manager.load_plugin_config", lambda: {"kept": True})
+    monkeypatch.setattr("plugins.commands.command_llm.config_manager.save_plugin_config", lambda values: saved.append(dict(values)))
+    runtime = SimpleNamespace(config={"llm_profiles": {"a": {}, "b": {}}, "default_llm_profile": ""})
+    context = SimpleNamespace(config={"llm_profiles": {"a": {}, "b": {}}, "default_llm_profile": ""}, services={}, runtime=runtime)
+
+    result = LlmCommand().run({"model_name": "b", "action": "set_default"}, context)
+
+    assert result == "Default LLM profile set to: b"
+    assert saved[-1]["kept"] is True
+    assert saved[-1]["default_llm_profile"] == "b"
+    assert runtime.config["default_llm_profile"] == "b"
+
+
 def test_llm_command_add_stores_declared_capabilities(monkeypatch):
     saved = []
-    monkeypatch.setattr("plugins.commands.command_llm._save", lambda config: saved.append(dict(config)))
+    monkeypatch.setattr("plugins.commands.command_llm._save", lambda context: saved.append(dict(context.config)))
     context = SimpleNamespace(config={"llm_profiles": {}, "default_llm_profile": ""}, services={})
 
     steps = LlmCommand().form({"model_name": "add"}, context)
@@ -62,7 +77,7 @@ def test_llm_command_add_stores_declared_capabilities(monkeypatch):
 
 def test_llm_command_can_rename_profile(monkeypatch):
     saved, removed, added = [], [], []
-    monkeypatch.setattr("plugins.commands.command_llm._save", lambda config: saved.append(dict(config)))
+    monkeypatch.setattr("plugins.commands.command_llm._save", lambda context: saved.append(dict(context.config)))
     router = SimpleNamespace(remove_llm=lambda name: removed.append(name), add_llm=lambda name, profile: added.append((name, profile)))
     context = SimpleNamespace(config={"llm_profiles": {"bad": {"llm_endpoint": "https://api.atlascloud.ai/v1"}}, "default_llm_profile": "bad"}, services={"llm": router})
 
@@ -80,7 +95,7 @@ def test_llm_command_can_rename_profile(monkeypatch):
 
 def test_llm_command_remove_default_selects_next_profile(monkeypatch):
     saved = []
-    monkeypatch.setattr("plugins.commands.command_llm._save", lambda config: saved.append(dict(config)))
+    monkeypatch.setattr("plugins.commands.command_llm._save", lambda context: saved.append(dict(context.config)))
     context = SimpleNamespace(config={"llm_profiles": {"a": {}, "b": {}, "c": {}}, "default_llm_profile": "b"}, services={})
 
     result = LlmCommand().run({"model_name": "b", "action": "remove"}, context)
@@ -92,7 +107,7 @@ def test_llm_command_remove_default_selects_next_profile(monkeypatch):
 
 def test_llm_command_add_does_not_replace_existing_default(monkeypatch):
     saved = []
-    monkeypatch.setattr("plugins.commands.command_llm._save", lambda config: saved.append(dict(config)))
+    monkeypatch.setattr("plugins.commands.command_llm._save", lambda context: saved.append(dict(context.config)))
     context = SimpleNamespace(config={"llm_profiles": {"a": {}}, "default_llm_profile": "a"}, services={})
 
     result = LlmCommand().run({"model_name": "add", "new_model_name": "b"}, context)
@@ -104,7 +119,7 @@ def test_llm_command_add_does_not_replace_existing_default(monkeypatch):
 
 def test_llm_command_remove_last_default_blanks_default(monkeypatch):
     saved = []
-    monkeypatch.setattr("plugins.commands.command_llm._save", lambda config: saved.append(dict(config)))
+    monkeypatch.setattr("plugins.commands.command_llm._save", lambda context: saved.append(dict(context.config)))
     context = SimpleNamespace(config={"llm_profiles": {"a": {}}, "default_llm_profile": "a"}, services={})
 
     result = LlmCommand().run({"model_name": "a", "action": "remove"}, context)

@@ -65,7 +65,7 @@ class LlmCommand(BaseCommand):
                 router.add_llm(name, profiles[name])
             if first_profile:
                 context.config["default_llm_profile"] = name
-            _save(context.config)
+            _save(context)
             return f"Added LLM profile: {name}"
         if name not in profiles:
             return "Unknown LLM profile."
@@ -91,11 +91,11 @@ class LlmCommand(BaseCommand):
                 profiles[name][field] = _coerce(field, args.get("value"))
             if field != "llm_model_name" and router and hasattr(router, "add_llm"):
                 router.add_llm(name, profiles[name])
-            _save(context.config)
+            _save(context)
             return f"Updated LLM profile: {name}"
         if args.get("action") == "set_default":
             context.config["default_llm_profile"] = name
-            _save(context.config)
+            _save(context)
             return f"Default LLM profile set to: {name}"
         if args.get("action") == "remove":
             names = sorted(profiles)
@@ -105,7 +105,7 @@ class LlmCommand(BaseCommand):
             if context.config.get("default_llm_profile") == name:
                 remaining = [n for n in names if n != name]
                 context.config["default_llm_profile"] = remaining[min(names.index(name), len(remaining) - 1)] if remaining else ""
-            _save(context.config)
+            _save(context)
             return f"Removed LLM profile: {name}"
         return f"Unknown action: {args.get('action')}"
 
@@ -171,8 +171,13 @@ def _value_prompt(field):
     }.get(field, "Enter the new value.")
 
 
-def _save(config):
+def _save(context):
     """Internal helper to save LLM."""
+    config = context.config
     saved = config_manager.load_plugin_config()
     saved.update({k: config.get(k) for k in ("llm_profiles", "default_llm_profile")})
     config_manager.save_plugin_config(saved)
+    runtime = getattr(context, "runtime", None)
+    if runtime is not None and getattr(runtime, "config", None) is not None:
+        runtime.config["llm_profiles"] = config.get("llm_profiles", {})
+        runtime.config["default_llm_profile"] = config.get("default_llm_profile", "")
