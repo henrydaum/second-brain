@@ -46,3 +46,20 @@ def test_litellm_injects_image_audio_and_video_blocks(tmp_path, monkeypatch):
     assert content[1]["image_url"]["url"] == "data:image/jpeg;base64,abc"
     assert content[2]["input_audio"] == {"data": base64.b64encode(b"audio-bytes").decode("utf-8"), "format": "wav"}
     assert content[3]["video_url"]["url"].startswith("data:video/mp4;base64,")
+
+
+def test_litellm_attachment_mismatch_falls_back_to_parsed_text(tmp_path):
+    LiteLLMService = _load_litellm_service()
+    llm = LiteLLMService("openai/test")
+    gif = tmp_path / "clip.gif"
+    gif.write_bytes(b"gif-bytes")
+
+    messages = llm._inject_attachments(
+        [{"role": "user", "content": "inspect"}],
+        AttachmentBundle([Attachment(str(gif), ".gif", "clip.gif", "video", parsed_text="animated frames summary")]),
+    )
+
+    assert len(messages[0]["content"]) == 1
+    assert messages[0]["content"][0]["type"] == "text"
+    assert "clip.gif" in messages[0]["content"][0]["text"]
+    assert "Parsed contents:\nanimated frames summary" in messages[0]["content"][0]["text"]
