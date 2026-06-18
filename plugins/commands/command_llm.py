@@ -59,10 +59,12 @@ class LlmCommand(BaseCommand):
             name = args.get("new_model_name", "").strip()
             if not name:
                 return "Model name is required."
+            first_profile = not profiles
             profiles[name] = _profile(args)
             if router and hasattr(router, "add_llm"):
                 router.add_llm(name, profiles[name])
-            context.config.setdefault("default_llm_profile", name)
+            if first_profile:
+                context.config["default_llm_profile"] = name
             _save(context.config)
             return f"Added LLM profile: {name}"
         if name not in profiles:
@@ -96,11 +98,13 @@ class LlmCommand(BaseCommand):
             _save(context.config)
             return f"Default LLM profile set to: {name}"
         if args.get("action") == "remove":
+            names = sorted(profiles)
             profiles.pop(name, None)
             if router and hasattr(router, "remove_llm"):
                 router.remove_llm(name)
             if context.config.get("default_llm_profile") == name:
-                context.config["default_llm_profile"] = next(iter(profiles), "")
+                remaining = [n for n in names if n != name]
+                context.config["default_llm_profile"] = remaining[min(names.index(name), len(remaining) - 1)] if remaining else ""
             _save(context.config)
             return f"Removed LLM profile: {name}"
         return f"Unknown action: {args.get('action')}"
