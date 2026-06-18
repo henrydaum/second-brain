@@ -2,9 +2,11 @@
 
 
 dependencies_files = []
-dependencies_pip = ['litellm']
+dependencies_pip = ['litellm', 'Pillow']
 
+import base64
 import logging
+import mimetypes
 import os
 import time
 from pathlib import Path
@@ -32,6 +34,7 @@ class LiteLLMService(BaseLLM):
     def __init__(self, model_name, api_key=None, base_url=None):
         super().__init__()
         self.model_name, self.api_key, self.base_url, self.loaded = model_name, api_key, base_url, False
+        self.native_attachment_modalities = {"image", "audio", "video"}
 
     def _load(self):
         try:
@@ -53,27 +56,61 @@ class LiteLLMService(BaseLLM):
         self.loaded = False
         logger.info("LiteLLM unloaded.")
 
-    def _inject_images(self, messages: list[dict], image_paths: list[str]) -> list[dict]:
-        import base64
-        image_blocks, valid_names = [], []
-        for path in image_paths:
+    def _inject_attachments(self, messages: list[dict], attachments) -> list[dict]:
+        blocks, labels = [], []
+        for att in attachments or []:
+            path = getattr(att, "path", "")
             if not os.path.exists(path):
-                logger.warning(f"Image not found, skipping: {path}")
+                logger.warning(f"Attachment not found, skipping: {path}")
                 continue
-            image_bytes = self.get_image_bytes(path)
-            if not image_bytes:
-                continue
-            image_blocks.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode('utf-8')}"}})
-            valid_names.append(Path(path).name)
-        if not image_blocks:
+            block = self._attachment_block(att)
+            if block:
+                blocks.append(block)
+                labels.append(f"<{att.modality.title()} {len(labels) + 1}: {att.file_name}>")
+        if not blocks:
             return messages
         messages = [msg.copy() for msg in messages]
         for i in range(len(messages) - 1, -1, -1):
             if messages[i]["role"] == "user":
-                text = f"{messages[i]['content']}\n\nThe following images are provided:\n" + "\n".join(f"<Image {j+1}: {n}>" for j, n in enumerate(valid_names))
-                messages[i]["content"] = [{"type": "text", "text": text}, *image_blocks]
+                note = "The following native attachments are provided:\n" + "\n".join(labels)
+                content = messages[i].get("content")
+                messages[i]["content"] = [*content, {"type": "text", "text": note}, *blocks] if isinstance(content, list) else [{"type": "text", "text": f"{content or ''}\n\n{note}".strip()}, *blocks]
                 break
         return messages
+
+    def _attachment_block(self, att):
+        if att.modality == "image":
+            url = self._image_data_url(att.path)
+            return {"type": "image_url", "image_url": {"url": url}} if url else None
+        if att.modality == "audio":
+            return {"type": "input_audio", "input_audio": {"data": base64.b64encode(Path(att.path).read_bytes()).decode("utf-8"), "format": Path(att.path).suffix.lower().lstrip(".")}}
+        if att.modality == "video":
+            return {"type": "video_url", "video_url": {"url": self._data_url(att.path)}}
+        return None
+
+    def _image_data_url(self, path: str) -> str | None:
+        from PIL import Image, ImageFile
+        import io
+        Image.MAX_IMAGE_PIXELS = 50_000_000
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        img = None
+        try:
+            img = Image.open(path)
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            img.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=80, optimize=True)
+            return f"data:image/jpeg;base64,{base64.b64encode(buffer.getvalue()).decode('utf-8')}"
+        except Exception as e:
+            logger.error(f"Failed to process image {path}: {e}")
+            return None
+        finally:
+            if img:
+                img.close()
+
+    def _data_url(self, path: str) -> str:
+        return f"data:{mimetypes.guess_type(path)[0] or 'application/octet-stream'};base64,{base64.b64encode(Path(path).read_bytes()).decode('utf-8')}"
 
     def _provider_kwargs(self, kwargs: dict) -> dict:
         kwargs = dict(kwargs)
@@ -102,8 +139,8 @@ class LiteLLMService(BaseLLM):
             _quiet_litellm()
             import litellm
             _quiet_litellm()
-            messages, native_paths = self._resolve_attachments(messages, attachments)
-            messages = self._inject_images(messages, native_paths)
+            messages, native_attachments = self._prepare_attachments(messages, attachments)
+            messages = self._inject_attachments(messages, native_attachments)
             logger.debug(f"LiteLLM invoke: {len(messages)} messages, tools={'yes' if kwargs.get('tools') else 'no'}, model={self.model_name}")
             t0 = time.time()
             response = litellm.completion(model=self._litellm_model_name(), messages=messages, **self._provider_kwargs(kwargs))
@@ -131,8 +168,8 @@ class LiteLLMService(BaseLLM):
             _quiet_litellm()
             import litellm
             _quiet_litellm()
-            messages, native_paths = self._resolve_attachments(messages, attachments)
-            for chunk in litellm.completion(model=self._litellm_model_name(), messages=self._inject_images(messages, native_paths), stream=True, **self._provider_kwargs(kwargs)):
+            messages, native_attachments = self._prepare_attachments(messages, attachments)
+            for chunk in litellm.completion(model=self._litellm_model_name(), messages=self._inject_attachments(messages, native_attachments), stream=True, **self._provider_kwargs(kwargs)):
                 content = getattr(chunk.choices[0].delta, "content", None)
                 if content:
                     yield content

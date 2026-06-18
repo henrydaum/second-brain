@@ -11,6 +11,7 @@
     "tools/tool_run_command.py",
     "tools/tool_sql_query.py",
     "tools/tool_test_plugin.py",
+    "services/helpers/parse_image.py",
     "services/helpers/parse_audio.py",
     "services/helpers/parse_gdoc.py",
     "services/helpers/parse_office.py",
