@@ -58,33 +58,57 @@ class LiteLLMService(BaseLLM):
 
     def _inject_attachments(self, messages: list[dict], attachments) -> list[dict]:
         blocks, labels = [], []
+        fallback = []
         for att in attachments or []:
             path = getattr(att, "path", "")
             if not os.path.exists(path):
                 logger.warning(f"Attachment not found, skipping: {path}")
+                fallback.append(self._attachment_pointer(att))
                 continue
-            block = self._attachment_block(att)
+            try:
+                block = self._attachment_block(att)
+            except Exception as e:
+                logger.warning(f"Failed to prepare native attachment {path}: {e}")
+                fallback.append(self._attachment_pointer(att))
+                continue
             if block:
                 blocks.append(block)
                 labels.append(f"<{att.modality.title()} {len(labels) + 1}: {att.file_name}>")
-        if not blocks:
+            else:
+                fallback.append(self._attachment_pointer(att))
+        if not blocks and not fallback:
             return messages
         messages = [msg.copy() for msg in messages]
         for i in range(len(messages) - 1, -1, -1):
             if messages[i]["role"] == "user":
-                note = "The following native attachments are provided:\n" + "\n".join(labels)
+                parts = []
+                if labels:
+                    parts.append("The following native attachments are provided:\n" + "\n".join(labels))
+                if fallback:
+                    parts.append("\n\n".join(fallback))
+                note = "\n\n".join(parts)
                 content = messages[i].get("content")
                 messages[i]["content"] = [*content, {"type": "text", "text": note}, *blocks] if isinstance(content, list) else [{"type": "text", "text": f"{content or ''}\n\n{note}".strip()}, *blocks]
                 break
         return messages
+
+    def _attachment_pointer(self, att) -> str:
+        parsed = (getattr(att, "parsed_text", None) or "").strip()
+        if parsed:
+            return f"The user attached a {getattr(att, 'modality', 'file')} file ({getattr(att, 'file_name', 'attachment')}). Parsed contents:\n{parsed}"
+        return f"The user attached a file: {getattr(att, 'file_name', 'attachment')}. It has been saved into {getattr(att, 'path', '')}."
 
     def _attachment_block(self, att):
         if att.modality == "image":
             url = self._image_data_url(att.path)
             return {"type": "image_url", "image_url": {"url": url}} if url else None
         if att.modality == "audio":
+            if not (mimetypes.guess_type(att.path)[0] or "").startswith("audio/"):
+                return None
             return {"type": "input_audio", "input_audio": {"data": base64.b64encode(Path(att.path).read_bytes()).decode("utf-8"), "format": Path(att.path).suffix.lower().lstrip(".")}}
         if att.modality == "video":
+            if not (mimetypes.guess_type(att.path)[0] or "").startswith("video/"):
+                return None
             return {"type": "video_url", "video_url": {"url": self._data_url(att.path)}}
         return None
 

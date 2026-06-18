@@ -33,7 +33,7 @@ def parse_standard_image(path: str, config: dict, services: dict = None) -> Pars
 
 registry.register([
     ".png", ".jpg", ".jpeg", ".webp",
-    ".tif", ".tiff", ".bmp", ".ico",
+    ".tif", ".tiff", ".bmp", ".ico", ".gif",
 ], "image", parse_standard_image)
 
 
