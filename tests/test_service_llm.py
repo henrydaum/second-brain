@@ -9,6 +9,7 @@ from plugins.services.service_llm import (
     is_context_limit_error,
     refresh_llm_profile_services,
 )
+from attachments.attachment import Attachment, AttachmentBundle
 
 
 class FakeBackend(BaseLLM):
@@ -127,3 +128,52 @@ def test_model_plan_error_is_not_context_limit():
 def test_prompt_token_limit_is_context_limit():
     err = "prompt tokens exceed model token limit"
     assert is_context_limit_error(err)
+
+
+def _attachment(modality, path="C:/tmp/file.bin", parsed_text=None):
+    return Attachment(path=path, extension=f".{modality}", file_name=f"file.{modality}", modality=modality, parsed_text=parsed_text)
+
+
+def test_prepare_attachments_returns_native_bundle_when_backend_supports_modality():
+    llm = FakeBackend("native")
+    llm.capabilities["image"] = True
+    llm.native_attachment_modalities = {"image"}
+
+    messages, native = llm._prepare_attachments(
+        [{"role": "user", "content": "look"}],
+        AttachmentBundle([_attachment("image", "C:/tmp/image.png")]),
+    )
+
+    assert messages == [{"role": "user", "content": "look"}]
+    assert [a.path for a in native] == ["C:/tmp/image.png"]
+
+
+def test_prepare_attachments_falls_back_when_backend_lacks_native_modality():
+    llm = FakeBackend("text-only")
+    llm.capabilities["image"] = True
+
+    messages, native = llm._prepare_attachments(
+        [{"role": "user", "content": "look"}],
+        AttachmentBundle([_attachment("image", "C:/tmp/image.png", "OCR text")]),
+    )
+
+    assert not native
+    assert "Parsed contents:\nOCR text" in messages[0]["content"]
+
+
+def test_prepare_attachments_splits_native_and_pointer_fallbacks():
+    llm = FakeBackend("mixed")
+    llm.capabilities.update({"image": True, "video": False})
+    llm.native_attachment_modalities = {"image", "video"}
+
+    messages, native = llm._prepare_attachments(
+        [{"role": "user", "content": [{"type": "text", "text": "inspect"}]}],
+        AttachmentBundle([
+            _attachment("image", "C:/tmp/image.png"),
+            _attachment("video", "C:/tmp/video.mp4"),
+        ]),
+    )
+
+    assert [a.modality for a in native] == ["image"]
+    assert messages[0]["content"][-1]["type"] == "text"
+    assert "video.mp4" in messages[0]["content"][-1]["text"]

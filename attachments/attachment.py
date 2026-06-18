@@ -48,23 +48,27 @@ class AttachmentBundle:
         """Handle append."""
         self.items.append(attachment)
 
-    def for_llm(self, capabilities: dict[str, bool | None] | None) -> tuple[list[str], str]:
+    def split_for_llm(
+        self,
+        capabilities: dict[str, bool | None] | None,
+        native_modalities: set[str] | frozenset[str] | None = None,
+    ) -> tuple["AttachmentBundle", str]:
         """Route each attachment by the LLM's capabilities dict.
 
-        Returns ``(native_paths, suffix_text)``:
-        - ``native_paths`` lists files the LLM can ingest directly (e.g.
-          images for a vision model). Caller inlines these via its
-          existing native-image path.
+        Returns ``(native_bundle, suffix_text)``:
+        - ``native_bundle`` carries files the model and backend can ingest
+          directly. Backend plugins serialize it into their own wire format.
         - ``suffix_text`` is appended to the last user message and carries
           parsed-text blurbs for non-native files plus pointer-fallback
           lines for files we couldn't parse.
         """
         caps = capabilities or {}
-        native_paths: list[str] = []
+        native_modalities = native_modalities or set()
+        native = AttachmentBundle()
         suffix_parts: list[str] = []
         for att in self.items:
-            if caps.get(att.modality):
-                native_paths.append(att.path)
+            if caps.get(att.modality) and att.modality in native_modalities:
+                native.append(att)
                 continue
             if att.parsed_text:
                 blurb = (
@@ -77,7 +81,7 @@ class AttachmentBundle:
                     f"It has been saved into {att.path}."
                 )
             suffix_parts.append(blurb)
-        return native_paths, "\n\n".join(suffix_parts)
+        return native, "\n\n".join(suffix_parts)
 
     def to_list(self) -> list[dict[str, Any]]:
         """Handle to list."""

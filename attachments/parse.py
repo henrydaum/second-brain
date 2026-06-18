@@ -6,7 +6,7 @@ LLM-readable text rendering both come from the unified parser service
 (``services["parser"]``), so anything the pipeline can parse, an attachment
 can too — and installing a parser package lights up both at once.
 
-Routing happens later in ``AttachmentBundle.for_llm(capabilities)``:
+Routing happens later in ``AttachmentBundle.split_for_llm(capabilities)``:
     1. Native  - the LLM has the capability for this modality -> raw path inlined.
     2. Parsed  - the parser produced a text blurb              -> appended as suffix.
     3. Pointer - neither                                       -> just file name + path.

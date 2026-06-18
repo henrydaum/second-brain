@@ -154,6 +154,7 @@ class BaseLLM(BaseService):
         """Initialize the base LLM."""
         super().__init__()
         self.shared = True  # LLM clients are typically thread-safe
+        self.native_attachment_modalities: set[str] = set()
         # Generalized capability dict so new modalities (image, audio,
         # video, ...) can be added without touching call sites. None
         # means "unknown" — treated as False for routing.
@@ -194,24 +195,25 @@ class BaseLLM(BaseService):
     # ATTACHMENT ROUTING
     # =================================================================
 
-    def _resolve_attachments(self, messages: list[dict], attachments) -> tuple[list[dict], list[str]]:
+    def _prepare_attachments(self, messages: list[dict], attachments):
         """Apply the 3-tier attachment routing for this LLM's capabilities.
 
-        Returns ``(messages, native_paths)``:
+        Returns ``(messages, native_bundle)``:
         - ``messages``: a copy of the input with the suffix appended to
           the last user message (only if a suffix was produced).
-        - ``native_paths``: file paths the caller should inline using its
-          provider-native image/audio/video plumbing.
+        - ``native_bundle``: attachments the model and backend can ingest
+          natively. Subclasses serialize these into provider-specific payloads.
         """
         if attachments is None:
-            return messages, []
+            from attachments.attachment import AttachmentBundle
+            return messages, AttachmentBundle()
         from attachments.attachment import AttachmentBundle
         bundle = attachments if isinstance(attachments, AttachmentBundle) else AttachmentBundle.from_iterable(attachments)
         if not bundle:
-            return messages, []
-        native_paths, suffix = bundle.for_llm(self.capabilities)
+            return messages, AttachmentBundle()
+        native_bundle, suffix = bundle.split_for_llm(self.capabilities, self.native_attachment_modalities)
         if not suffix:
-            return messages, native_paths
+            return messages, native_bundle
         out = [m.copy() for m in messages]
         for i in range(len(out) - 1, -1, -1):
             if out[i].get("role") == "user":
@@ -224,36 +226,12 @@ class BaseLLM(BaseService):
                 else:
                     out[i]["content"] = (str(content or "") + "\n\n" + suffix).strip()
                 break
-        return out, native_paths
+        return out, native_bundle
 
-    # =================================================================
-    # SHARED IMAGE UTILITIES
-    # =================================================================
 
-    @staticmethod
-    def get_image_bytes(path: str) -> bytes | None:
-        """Convert an image to JPEG bytes, resized to a safe max resolution."""
-        from PIL import Image, ImageFile
-        import io
-
-        Image.MAX_IMAGE_PIXELS = 50_000_000
-        ImageFile.LOAD_TRUNCATED_IMAGES = True
-
-        img = None
-        try:
-            img = Image.open(path)
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            img.thumbnail((2048, 2048), Image.Resampling.LANCZOS)
-            buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=80, optimize=True)
-            return buffer.getvalue()
-        except Exception as e:
-            logger.error(f"Failed to process image {path}: {e}")
-            return None
-        finally:
-            if img:
-                img.close()
+def _cached_prompt_tokens(usage) -> int | None:
+    details = getattr(usage, "prompt_tokens_details", None) if usage else None
+    return (details.get("cached_tokens") if isinstance(details, dict) else getattr(details, "cached_tokens", None)) if details else None
 
 
 def _llm_backend_classes() -> dict[str, type[BaseLLM]]:

@@ -234,7 +234,7 @@ cd "Second Brain"
 pip install -r requirements.txt
 ```
 
-`requirements.txt` is intentionally minimal — the kernel stays close to pure Python (`watchdog`, `Pillow`, `croniter`, `psutil`, and a few others). Heavier dependencies (`openai`/`litellm`, `sentence-transformers`, `faster-whisper`, `PyMuPDF`, `python-docx`, `python-pptx`, `pandas`, `python-telegram-bot`, …) belong to store packages and are installed automatically when you install the package that needs them.
+`requirements.txt` is intentionally minimal — the kernel stays close to pure Python (`watchdog`, `croniter`, `psutil`, and a few others). Heavier dependencies (`openai`/`litellm`, `Pillow`, `sentence-transformers`, `faster-whisper`, `PyMuPDF`, `python-docx`, `python-pptx`, `pandas`, `python-telegram-bot`, …) belong to store packages and are installed automatically when you install the package that needs them.
 
 ### Configure
 

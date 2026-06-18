@@ -52,14 +52,13 @@ The pipeline substrate (`pipeline/` — orchestrator, watcher, event_trigger) st
 boots, but ships **zero pipeline tasks**: it idles until a pipeline plugin
 (extract/chunk/index/embed) is installed.
 
-**Parsers.** The kernel keeps only the two dependency-light parsers:
-`parse_text` (UTF-8 / code / CSV / TSV, stdlib) and `parse_image` (standard
-rasters via Pillow, already a kernel dep; HEIC lazy). Shared text helpers live
-in `parsing_utils.py`. The registry (`parser_registry.py`) carries a static
+**Parsers.** The kernel keeps only the dependency-light `parse_text` parser
+(UTF-8 / code / CSV / TSV, stdlib). Shared text helpers live in
+`parsing_utils.py`. The registry (`parser_registry.py`) carries a static
 native-modality default map so `get_modality` resolves image/audio/video even
 with no parser installed (attachment routing relies on this). Every heavier
 parser is an installable store package (`parser-pdf`, `parser-office`,
-`parser-tabular`, `parser-audio`, `parser-video`, `parser-gdoc`,
+`parser-tabular`, `parser-image`, `parser-audio`, `parser-video`, `parser-gdoc`,
 `parser-container`) that ships a `services/helpers/parse_*.py` file —
 **not** a plugin entrypoint. `ParserService._load()` rebuilds the registry by
 discovery-scanning `services/helpers/parse_*.py` across the built-in, sandbox,

@@ -433,7 +433,7 @@ def parse_attachment(runtime, content: dict[str, Any]) -> dict[str, Any]:
     # History row text: caption plus a short pointer line so future
     # replays of the conversation still know a file existed. The full
     # parsed-text blurb is added to the prompt only when we hit the
-    # LLM (see AttachmentBundle.for_llm in the LLM service layer).
+    # LLM (see AttachmentBundle.split_for_llm in the LLM service layer).
     pointer = f"[Attached {attachment.modality} file: {file_name} (cached at {path})]"
     text = f"{caption}\n\n{pointer}".strip() if caption else pointer
 

@@ -11,7 +11,7 @@ class ParseResult:
     """
     output type by modality:
         text      -> str (UTF-8)
-        image     -> list[PIL.Image.Image]
+        image     -> parser-defined image objects
         audio     -> tuple(np.ndarray, int)  # (samples, sample_rate)
         video     -> av.Container
         tabular   -> dict[sheet_name or "default", pd.DataFrame]
