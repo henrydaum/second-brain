@@ -256,11 +256,6 @@ class BaseLLM(BaseService):
                 img.close()
 
 
-def _cached_prompt_tokens(usage) -> int | None:
-    details = getattr(usage, "prompt_tokens_details", None) if usage else None
-    return (details.get("cached_tokens") if isinstance(details, dict) else getattr(details, "cached_tokens", None)) if details else None
-
-
 def _llm_backend_classes() -> dict[str, type[BaseLLM]]:
     backends = {}
     for plugin_dir in plugin_dirs("service"):
