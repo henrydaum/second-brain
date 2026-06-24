@@ -15,11 +15,11 @@ Check out Atlas Cloud's new coding plan promotion for more budget-friendly API a
 
 Second Brain is a local-first AI runtime for your machine, built as a **microkernel**.
 
-The kernel is deliberately small: it boots, runs the agent turn, persists conversations in SQLite, loads and unloads plugins, keeps the lightweight Timekeeper event clock running, and gets out of the way. Everything else — file indexing and retrieval, web search, scheduling workflows, Telegram, durable memory, file-editing and shell tools, heavy file parsers — arrives as **packages** you install from the store. It is not a fixed chatbot wrapped around a folder search, and it is not a monolith either: it is a programmable conversation runtime that you (and agents) extend while it is running.
+The kernel is deliberately small: it boots, runs the agent turn, persists conversations in SQLite, loads and unloads plugins, keeps the lightweight Timekeeper event clock running, and gets out of the way. Everything else — file indexing and retrieval, web search, scheduling workflows, Telegram, durable memory, file-editing and shell tools, heavy file parsers — arrives as **packages** you install from the store. It is a programmable conversation runtime that you (and agents) extend while it is running. The kernel is like a brain, while plugins are like the body. The brain and body have a symbiotic relationship — it's the same way with plugins and the kernel.
 
 A fresh install starts almost empty. Run `/setup` and install the `starter` bundle to get a working assistant in one step — see [The Kernel And The Package Store](#the-kernel-and-the-package-store) below.
 
-The most important architectural shift is the conversation layer. Second Brain routes conversations through a robust state machine: participants take actions, turns move between actors, phases suspend and resume multi-step flows, and frontends submit actions instead of owning conversation logic. Commands and frontends are plugins too, so the system can grow new user interfaces and slash-command workflows the same way it grows tools, tasks, and services.
+Second Brain is designed to merge an LLM cleanly into a wide variety of workflows, and chat conversations are the basis of this. Second Brain routes conversations through a robust state machine: participants take actions, turns move between actors, multi-step flows follow resumable phases, and frontends submit actions instead of owning conversation logic. Everything evenutally runs through the conversation state machine; it's the bedrock of the system. Think of it like the spinal cord, connecting the brain (LLM) to the body (plugins).
 
 ## What It Can Do
 
@@ -30,23 +30,22 @@ With the right packages installed (the `full` bundle covers most of the list bel
 - Answer from your own corpus with citations and exact file reads.
 - Develop a robust memory library.
 - Store and resume conversation history in SQLite.
-- Search the public web when local knowledge is not enough.
-- Run path-driven indexing tasks and event-driven background jobs.
+- Search the public web.
+- Run path-driven indexing tasks and event-driven background jobs to develop a robust database.
 - Schedule one-time and recurring subagents through Timekeeper cron jobs.
 - Use agentskills.io compatible skills.
 - Push reminders, findings, daily briefs, and alerts into Telegram.
-- Use REPL and Telegram frontends out of the box.
-- Author, test, and live-load new tools, tasks, services, commands, and frontends.
+- Author, test, and live-load new tools, tasks, services, commands, and frontends. The possibilities are endless.
 
-The result is a private AI layer for your computer: part knowledge engine, part personal operator, part automation substrate.
+This might seem like a lot. However, Second Brain can only do what you tell it to do. It will never edit your files or share information unless you explicitly enable it to. Be careful with which plugins you enable. Although all of the built-in ones are highly tested, they still carry risk — and some more than others.
 
 ## The Kernel And The Package Store
 
 Second Brain ships as a microkernel plus a package store.
 
-**The kernel** is what lives in this repository's main tree. It is almost pure Python and boots *fast*. It boots the runtime, runs the conversation state machine and agent turn, persists conversations, manages config, and discovers and loads plugins. It ships only the plugins it cannot run without: the LLM service, the compactor (context safety), the parser registry (with lightweight text and image parsing), Timekeeper (the event clock), the plugin watcher (live install and reload), the REPL frontend, and a small set of REPL/introspection commands. There are **no built-in tools or tasks** — a fresh kernel can hold a conversation, but it cannot search your files or edit code until you install packages.
+**The kernel** is what lives in this repository's main tree. It is almost pure Python and boots *fast*. It holds the runtime, runs the conversation state machine and agent turn, persists conversations, manages config, and discovers and loads plugins. It ships only the plugins it cannot run without: the LLM service, the compactor (for LLM context size management), the Parser service (with lightweight UTF-8 text parsing), Timekeeper (the event clock), the plugin watcher (live install and reload), the REPL frontend, and a small set of REPL admin commands. There are **no built-in tools or tasks** — a fresh kernel can hold a conversation, but it cannot search your files or edit code until you install packages. *Even the LLM service is a plugin! LLMs involves heavy and unstable dependencies, so to ensure kernel stability it was best to make them plugins.*
 
-**The store** is a parallel branch (`store`) that mirrors what a fully loaded install looks like: every optional tool, task, service, command, frontend, and parser helper, plus named *bundles* that group them. You browse and install from it with `/packages`, and the kernel copies the files into your data directory and live-loads them.
+**The store** is a parallel branch (`store`) that mirrors what a fully loaded install looks like: every optional tool, task, service, command, frontend, and helper is there, plus named *bundles* that group them. You browse and install from it with `/packages`, and the kernel copies the files into your data directory and live-loads them with the Plugin Watcher.
 
 ### Getting started
 
@@ -56,7 +55,7 @@ A fresh install has no LLM backend and no frontend beyond the REPL. The fastest 
 /setup
 ```
 
-It installs a bundle, configures an LLM profile, and optionally sets up Telegram. If you would rather drive it by hand, install the starter bundle directly:
+It installs a bundle with basic plugins, configures an LLM profile, and optionally sets up Telegram. If you would rather drive it by hand, install the starter bundle directly:
 
 ```
 /packages install bundle_starter
@@ -78,7 +77,9 @@ Browse and manage packages anytime:
 /packages uninstall <stem>     # remove it, plus dependencies nothing else still needs
 ```
 
-Install resolves each file's declared dependencies — other store files and pip packages — and copies them in. Uninstall removes only files and pip packages nothing else still needs, and never touches kernel requirements. The idea is to have a clean separation between the kernel and plugins that are installed into the kernel.
+Install resolves each file's declared dependencies — other store files and pip packages — and copies them in. Uninstall removes only files and pip packages nothing else still needs, and never touches kernel requirements. You don't need to worry about managing helper files or Python packages (with one rare exception — OCR — which requires a manual pip install since it's platform/OS dependent). 
+
+The /packages command automatically maintains a clean separation between the kernel and plugins. All installed plugins and helpers will be within the installed_plugins folder of the DATA_DIR (data directory, see below). You don't have to use the /packages command to install or remove plugins. You can also simply drag and drop plugins and their helpers into this folder. It'll be automatically picked up by the Plugin Watcher service. However, if you do it this way you will have to pip install their Python dependencies as well, if you haven't got them already.
 
 ### Contributing to the store
 
@@ -98,11 +99,11 @@ Second Brain is built from a few durable pieces:
 - `events/` provides the pub/sub bus used by tasks, progress updates, notifications, and runtime signals.
 - `config/` owns core settings plus plugin setting persistence.
 
-The runtime is deliberately split this way so the state machine stays pure, frontends stay transport-specific, and plugins get a stable host API instead of reaching through the whole application.
+**It's a highly complex piece of machinery about 13,000 lines of code long.** But what's important is that your Second Brain agent can understand it for you! You do not need to understand how all of this works in order to have a Second Brain agent. Frankly, even I have trouble conceptualizing all of it. Simply ask Second Brain a question about its own code, and it'll use its available tools to dig in and find you an answer (of course, you'll need to have at least the read_file tool installed).
 
 ## Conversation Runtime
 
-The conversation runtime is the heart of the current system.
+The conversation runtime is the heart of the current system. It's like the spinal cord connecting the plugins/body to the LLM brain.
 
 `ConversationRuntime.handle_action(...)` is the adapter-facing entry point. A frontend, scheduled job, or other driver submits a labeled action such as `send_text`, `send_attachment`, `call_command`, `submit_form_text`, `answer_approval`, or `cancel`. The runtime loads the session, refreshes command and tool specs, enters the state machine, persists the marker, and drives the agent turn when the action hands priority to the agent.
 
@@ -112,7 +113,7 @@ The state machine models conversations the same way a turn-based game does (thin
 - one participant has turn priority
 - actions are legal or illegal depending on phase
 - forms and approvals suspend the current flow
-- phase frames are serializable, so interrupted flows can be restored
+- phase frames are serializable, so interrupted flows can be restored on crash
 - attachments are carried into the next agent turn with explicit lifecycle rules
 
 Frontends do not own that flow. `BaseFrontend` turns transport input into runtime actions, then renders `RuntimeResult`, attachments, forms, approvals, buttons, errors, and progress events. This is why the REPL and Telegram can share command behavior, approval behavior, form behavior, cancellation, status updates, and session persistence without duplicating the core conversation logic.
