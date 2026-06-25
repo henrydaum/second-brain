@@ -13,6 +13,8 @@ Check out Atlas Cloud's new coding plan promotion for more budget-friendly API a
 
 # Second Brain
 
+*For an example of what Second Brain can do, visit https://second-brain.art! It's an interactive art exhibition.*
+
 Second Brain is a local-first AI runtime for your machine, built as a **microkernel**.
 
 The kernel is deliberately small: it boots, runs the agent turn, persists conversations in SQLite, loads and unloads plugins, keeps the lightweight Timekeeper event clock running, and gets out of the way. Everything else — file indexing and retrieval, web search, scheduling workflows, Telegram, durable memory, file-editing and shell tools, heavy file parsers — arrives as **packages** you install from the store. It is a programmable conversation runtime that you (and agents) extend while it is running. The kernel is like a brain, while plugins are like the body. The brain and body have a symbiotic relationship — it's the same way with plugins and the kernel.
@@ -459,7 +461,7 @@ For source-controlled additions, move stable sandbox plugins into the matching b
 
 Second Brain is inspired by the human brain. Explorations into neurons turned into the creation of artificial neural networks, which then paved the way for attention mechanisms and transformers. From there came LLMs, and then came the agentic abilities: RAG, tool calls, and cron jobs. With each iteration, Second Brain became closer to its biological inspiration.
 
-This repository began on August, 2025. 
+Second Brain is still pretty far from the real brain, in many ways. However, it can also do many things better than the human brain ever could. Building it has helped me to better understand the role of AI in my life, and in society.
 
 ## License
 
