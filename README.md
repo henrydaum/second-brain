@@ -21,7 +21,7 @@ The kernel is deliberately small: it boots, runs the agent turn, persists conver
 
 A fresh install starts almost empty. Run `/setup` and install the `starter` bundle to get a working assistant in one step — see [The Kernel And The Package Store](#the-kernel-and-the-package-store) below.
 
-Second Brain is designed to merge an LLM cleanly into a wide variety of workflows, and chat conversations are the basis of this. Second Brain routes conversations through a robust state machine: participants take actions, turns move between actors, multi-step flows follow resumable phases, and frontends submit actions instead of owning conversation logic. Everything evenutally runs through the conversation state machine; it's the bedrock of the system. Think of it like the spinal cord, connecting the brain (LLM) to the body (plugins).
+Second Brain is designed to merge an LLM cleanly into a wide variety of workflows, and chat conversations are the basis of this. Second Brain routes conversations through a robust state machine: participants take actions, turns move between actors, multi-step flows follow resumable phases, and frontends submit actions instead of owning conversation logic. Everything eventually runs through the conversation state machine; it's the bedrock of the system. Think of it like the spinal cord, connecting the brain (LLM) to the body (plugins).
 
 ## What It Can Do
 
@@ -45,7 +45,7 @@ This might seem like a lot. However, Second Brain can only do what you tell it t
 
 Second Brain ships as a microkernel plus a package store.
 
-**The kernel** is what lives in this repository's main tree. It is almost pure Python and boots *fast*. It holds the runtime, runs the conversation state machine and agent turn, persists conversations, manages config, and discovers and loads plugins. It ships only the plugins it cannot run without: the LLM service, the compactor (for LLM context size management), the Parser service (with lightweight UTF-8 text parsing), Timekeeper (the event clock), the plugin watcher (live install and reload), the REPL frontend, and a small set of REPL admin commands. There are **no built-in tools or tasks** — a fresh kernel can hold a conversation, but it cannot search your files or edit code until you install packages. *Even the LLM service is a plugin! LLMs involves heavy and unstable dependencies, so to ensure kernel stability it was best to make them plugins.*
+**The kernel** is what lives in this repository's main tree. It is almost pure Python and boots *fast*. It holds the runtime, runs the conversation state machine and agent turn, persists conversations, manages config, and discovers and loads plugins. It ships only the plugins it cannot run without: the LLM service, the compactor (for LLM context size management), the Parser service (with lightweight UTF-8 text parsing), Timekeeper (the event clock), the plugin watcher (live install and reload), the REPL frontend, and a small set of REPL admin commands. There are **no built-in tools or tasks** — a fresh kernel can hold a conversation, but it cannot search your files or edit code until you install packages. *Even the LLM service is a plugin! LLMs involve heavy and unstable dependencies, so to ensure kernel stability it was best to make them plugins.*
 
 **The store** is a parallel branch (`store`) that mirrors what a fully loaded install looks like: every optional tool, task, service, command, frontend, and helper is there, plus named *bundles* that group them. You browse and install from it with `/packages`, and the kernel copies the files into your data directory and live-loads them with the Plugin Watcher.
 
@@ -303,7 +303,7 @@ Notes:
 - `LiteLLMService` (from the `starter` bundle) reaches most providers; point `llm_endpoint`/`llm_api_key` at whichever you use.
 - `LiteLLMService`: be careful with the model_name parameter. It may need to be prefixed (like 'openai/gpt-5.4'), but it depends on the cloud provider you are using. Look this up if not sure.
 - Each `llm_profiles` entry is registered as its own service, and the `llm` router follows `default_llm_profile`.
-- Installed 'extension'-type services auto-load when present; you don't need to list them in `autoload_services.
+- Installed 'extension'-type services auto-load when present; you don't need to list them in `autoload_services`.
 - You can edit config.json and plugin_config.json directly.
 
 ### Run
@@ -461,7 +461,9 @@ For source-controlled additions, move stable sandbox plugins into the matching b
 
 Second Brain is inspired by the human brain. Explorations into neurons turned into the creation of artificial neural networks, which then paved the way for attention mechanisms and transformers. From there came LLMs, and then came the agentic abilities: RAG, tool calls, and cron jobs. With each iteration, Second Brain became closer to its biological inspiration.
 
-Second Brain is still pretty far from the real brain, in many ways. However, it can also do many things better than the human brain ever could. Building it has helped me to better understand the role of AI in my life, and in society.
+Second Brain is still pretty far from the real brain, in many ways. However, it can also do many things better than the human brain ever could. Building it has helped me to better understand the role of AI in my life, and in society. I found the process of building to be extremely valuable, because I realized that the value of AI is that it can be built into so many things. The role of the person is to guide it into productive and creative areas.
+
+Second Brain ships as an unfinished product: a tiny, pure Python kernel. It's up to you to decide how you want to finish it.
 
 ## License
 
