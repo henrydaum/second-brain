@@ -77,7 +77,7 @@ Browse and manage packages anytime:
 /packages uninstall <stem>     # remove it, plus dependencies nothing else still needs
 ```
 
-Install resolves each file's declared dependencies — other store files and pip packages — and copies them in. Uninstall removes only files and pip packages nothing else still needs, and never touches kernel requirements. You don't need to worry about managing helper files or Python packages (with one rare exception — OCR — which requires a manual pip install since it's platform/OS dependent). 
+Install resolves each file's declared dependencies — other store files and pip packages — and copies them in. Uninstall removes only files and pip packages nothing else still needs, and never touches kernel requirements. You don't need to worry about managing helper files or Python packages (with one rare exception — OCR — which requires a manual pip install since it's platform/OS dependent).
 
 The /packages command automatically maintains a clean separation between the kernel and plugins. All installed plugins and helpers will be within the installed_plugins folder of the DATA_DIR (data directory, see below). You don't have to use the /packages command to install or remove plugins. You can also simply drag and drop plugins and their helpers into this folder. It'll be automatically picked up by the Plugin Watcher service. However, if you do it this way you will have to pip install their Python dependencies as well, if you haven't got them already.
 
@@ -120,7 +120,7 @@ Frontends do not own that flow. `BaseFrontend` turns transport input into runtim
 
 ## Plugin System
 
-Everything user-extensible is a plugin family:
+Everything user-extensible has its own plugin family:
 
 | Family | Built-in path | Sandbox path | Contract |
 |---|---|---|---|
@@ -130,9 +130,9 @@ Everything user-extensible is a plugin family:
 | Commands | `plugins/commands/` | `sandbox_commands/` | User slash commands via `BaseCommand` |
 | Frontends | `plugins/frontends/` | `sandbox_frontends/` | User transports via `BaseFrontend` |
 
-Built-in plugins are source-controlled. Sandbox plugins live in the Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; when `plugin_watcher` is in `autoload_services`, adds, edits, and deletes are synced live.
+Built-in plugins are source-controlled. Sandbox plugins live in the Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; and adds, edits, and deletes are synced live when `plugin_watcher` is loaded (which is always).
 
-The agent can create new plugins on-the-fly. These are the instructions given to the agent for authoring new plugins:
+The agent can create new plugins on-the-fly. When you ask Second Brain to make a new plugin (and test_plugin is installed), it'll follow these instructions:
 
 1. Read the relevant template in `templates/`.
 2. Read a similar built-in plugin.
@@ -141,15 +141,19 @@ The agent can create new plugins on-the-fly. These are the instructions given to
 5. If testing fails, fix the same file and call `test_plugin` again. Repeat until it is fixed and the plugin loads.
 6. To remove it durably and from the live runtime, delete the sandbox file; `plugin_watcher` unloads it when enabled.
 
-That loop matters. Second Brain can inspect its own templates, write a focused extension, diagnose it, and use it immediately. `test_plugin` gives the plugin-specific signal; its pytest section is broad regression context, not proof that the new plugin's behavior is complete. A new command is not a special case. A new frontend is not a rewrite. They are plugins with contracts.
+These instructions are found within the test_plugin tool, inside the def agent_prompt_for method. Yes: plugins can declare their own system prompt text. If the plugin isn't loaded, then this stuff won't take up precious context. This agent-facing text can also be written as static text: agent_prompt = "blah blah blah"; agent_prompt_for is for prompts that update based on the current information. The system prompt is recalculated with every step of the conversation, making it always completely up-to-date. To maintain prompt caching (and reduce costs $) the most volatile system prompt text is inserted at the bottom of the conversation, with stable and semi-stable at the start.
+
+In other words, the system prompt has been fully engineered.
 
 ## Security
 
-Second Brain has protections against rogue plugins and AIs. Tools, tasks, and service loads are given a timeout; if they can't get the job done within that timeframe, it gets cancelled. This fixes freezes. Second Brain also monitors memory usage through the Plugin Supervisor, which automatically quarantines plugins that exceed the threshold. However, all plugins run in-process, which means that there are no subprocesses. If a plugin calls `os._exit()`, it will take down the whole process. Make sure you trust plugins before adding them to your runtime. When writing new plugins for Second Brain, you should use an intelligent model that won't mess things up.
+Rogue plugins are the primary security issue for Second Brain. If a plugin gets an infection, it's important to prevent it from taking down the whole system. Second Brain monitors memory usage through the Plugin Supervisor, which automatically quarantines plugins that exceed the threshold. Also: tools, tasks, and service loads are given a timeout; if they can't get the job done within that timeframe, it gets cancelled. This fixes freezes. There's also a system fallback for crashes. If Second Brain crashes, then it will restart itself automatically. When this happens, all your conversations will be reloaded exactly where they were, even if you were in the middle of a command. Second Brain has a literal heartbeat which monitors for system-wide freezes. If there's no heartbeat for a long time, the system initiates a restart, like just discussed.
+
+The bad news: rogue plugins can still kill Second Brain. All plugins run in-process, which means that there are no subprocesses. If a plugin calls `os._exit()`, then it will take down the whole process. Like malware, a plugin can theoretically prompt the agent to mine for private information and share it. Although no plugins like this exist in the store (they have been vetted by me personally), you should make sure you trust plugins before adding them to your runtime. And when writing new plugins for Second Brain, you should use an intelligent model that won't mess things up. Consider using Codex or Claude Code for in-depth coding exercises.
 
 ## File Indexing And Retrieval
 
-Indexing and retrieval are store capabilities — install the `full` bundle (or the indexing/search and parser bundles) to enable them. Once installed, point Second Brain at folders with `sync_directories` and it keeps a live SQLite knowledge base over those files. The kernel always ships the pipeline *substrate* (file watcher, task queue, orchestrator DAG); these packages add the processing stages that run on it.
+Indexing and retrieval are store capabilities — install the `full` bundle (or the indexing/search and parser bundles) to enable them. Once installed, point Second Brain at folders with `sync_directories` and it keeps a live SQLite knowledge base over those files. The kernel ships the pipeline basics (file watcher, task queue, orchestrator DAG); these packages add the processing stages that run on it. You can set a `sync_directory` in the settings to create a database.
 
 The full pipeline includes:
 
@@ -177,6 +181,8 @@ Search tools include:
 | `read_file` | Exact text reads from source, docs, templates, or sandbox plugins |
 | `render_files` | Return local files to the frontend |
 
+These tools give Second Brain the ability to find a needle in a haystack.
+
 Supported modalities:
 
 | Modality | Examples |
@@ -187,6 +193,12 @@ Supported modalities:
 | Video | `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, `.wmv`, `.flv` |
 | Tabular | `.csv`, `.tsv`, `.xlsx`, `.xls`, `.parquet`, `.feather`, `.sqlite`, `.db` |
 | Container | `.zip`, `.tar`, `.gz`, `.7z`, `.rar` |
+
+To parse all of these, you'll need to install the full Parser bundle from the package store:
+
+`/packages install bundle_all_parsers`
+
+This will also give you the ability to process attachments with these file extensions.
 
 ## Events, Cron Jobs, And Subagents
 
@@ -206,15 +218,15 @@ This supports workflows like:
 - scheduled maintenance or database cleanup
 - background subagents that remember prior runs
 
-It is calendar-capable without being trapped in a traditional calendar UI. Jobs can run silently or notify the active frontend, and subagent conversations remain available through the conversation system. That doesn't mean Google/Apple Calendar can't be added to Second Brain — they can.
+It is calendar-capable. Jobs can run silently or notify the active frontend, and subagent conversations remain available through the conversation system. Google and Apple Calendar can be added to Second Brain as well with the right plugins.
 
 ## Frontends
 
-The kernel ships one base frontend, the REPL (`frontend_repl.py`, a local terminal interface). Telegram — a private mobile chat interface (`frontend_telegram.py`) — is a store package, installed with the `bundle_starter`/`bundle_full` bundles or directly via `/packages install frontend_telegram`. Both live under `plugins/frontends/` once present.
-
-`BaseFrontend` provides the shared runtime binding, command parsing path, form and approval submission, bus subscriptions, progress rendering hooks, session helpers, and `FrontendCapabilities` model. Each frontend implements only the transport-specific parts: receiving input, deriving a session key, rendering messages, sending attachments, showing buttons, and stopping cleanly.
+The kernel ships one base frontend, the REPL (`frontend_repl.py`, a local terminal interface). Telegram — a private mobile chat interface (`frontend_telegram.py`) — is a store package, installed with the `bundle_starter`/`bundle_full` bundles or directly via `/packages install frontend_telegram`. Both live under `plugins/frontends/` once present. Telegram is highly recommended for the ease of use, but it takes a hot second to set up (again, use /setup for this).
 
 Telegram is useful because the local runtime can reach you anywhere: approvals, proactive reminders, file delivery, scheduled-agent results, and mobile command menus all become part of the same conversation system.
+
+`BaseFrontend` provides the shared runtime binding, command parsing path, form and approval submission, bus subscriptions, progress rendering hooks, session helpers, and `FrontendCapabilities` model. Each frontend implements only the transport-specific parts: receiving input, deriving a session key, rendering messages, sending attachments, showing buttons, and stopping cleanly.
 
 Custom frontends are first-class plugins. A Discord bot, HTTP bridge, desktop shell, or narrow operational UI can be built as a sandbox frontend, tested with `test_plugin`, and live-loaded by `plugin_watcher` when enabled.
 
@@ -223,9 +235,9 @@ Custom frontends are first-class plugins. A Discord bot, HTTP bridge, desktop sh
 ### Requirements
 
 - Python 3.11+
-- An LLM profile for agent features (installed and configured by `/setup`) — technically optional, but you won't be able to chat without it.
+- An LLM subscription or local setup — technically optional, but you won't be able to chat without it. I recommend Atlas Cloud's token plan, it's cheap and has good models for this.
 - A Telegram bot token and allowed user ID if you install the Telegram frontend, which is highly recommended.
-- For the OCR/transcription packages: Windows native OCR or macOS Apple Vision; audio/video transcription pulls `faster-whisper`
+- A computer with a GPU for embedding models, if desired.
 
 ### Install
 
@@ -239,7 +251,7 @@ pip install -r requirements.txt
 
 ### Configure
 
-On first run, Second Brain creates its data directory automatically:
+On first run, Second Brain creates its data directory (the DATA_DIR) automatically:
 
 - Windows: `%LOCALAPPDATA%/Second Brain/`
 - macOS: `~/Library/Application Support/Second Brain/`
@@ -287,8 +299,10 @@ Notes:
 - Configure LLM profiles with `/llm`, agent profiles with `/agent`, and app/plugin settings with `/config`.
 - `llm_context_size: 0` lets automatic compaction manage context.
 - `LiteLLMService` (from the `starter` bundle) reaches most providers; point `llm_endpoint`/`llm_api_key` at whichever you use.
+- `LiteLLMService`: be careful with the model_name parameter. It may need to be prefixed (like 'openai/gpt-5.4'), but it depends on the cloud provider you are using. Look this up if not sure.
 - Each `llm_profiles` entry is registered as its own service, and the `llm` router follows `default_llm_profile`.
-- Installed extension services auto-load when present; you don't need to list them in `autoload_services`.
+- Installed 'extension'-type services auto-load when present; you don't need to list them in `autoload_services.
+- You can edit config.json and plugin_config.json directly.
 
 ### Run
 
@@ -443,7 +457,9 @@ For source-controlled additions, move stable sandbox plugins into the matching b
 
 ## Philosophy
 
-Think of Second Brain like a blank canvas. It starts off plain and simple, with no tools or tasks involved, no bells and whistles. It's something you are meant to expand yourself. You can build on it and make it your own. It's fully open-source, so you could change the kernel however you want. The Second Brain core code is so versatile and strong that it can turn into almost any shape. What's cool is that Second Brain can change itself. It's not like a typical coding project, where all of the changes come from you. The agent has the power to change itself. Make it into a website, a shop, a robot backend, a highly personal assistant. All of this is possible because of how modular and extensible Second Brain is. And the name itself: Although Second Brain is still a ways off from being like a human brain, it can still do quite a lot, and I think it is worthy of the name. The goal has always been to create something intelligent, adaptable, and useful. Those are the three things that have driven this from the start.
+Second Brain is inspired by the human brain. Explorations into neurons turned into the creation of artificial neural networks, which then paved the way for attention mechanisms and transformers. From there came LLMs, and then came the agentic abilities: RAG, tool calls, and cron jobs. With each iteration, Second Brain became closer to its biological inspiration.
+
+This repository began on August, 2025. 
 
 ## License
 
