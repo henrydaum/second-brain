@@ -126,10 +126,15 @@ def build_context(db, config: dict, services: dict, call_tool=None,
                     return verdict.allow
             if current_tool_name and current_tool_name in (effective_config.get("skip_permissions") or []):
                 return True
+            # The command is the thing being approved — set it off as code
+            # (a span when short, a fenced block for SQL/shell/multi-line)
+            # so it can't melt into the justification prose or be mangled
+            # by markdown rendering.
+            shown = f"```\n{command}\n```" if ("\n" in command or len(command) > 60) else f"`{command}`"
             req = runtime.request_input(
                 session_key,
                 "Agent requests approval",
-                f"{command}\n\n{justification}".strip(),
+                f"{shown}\n\n{justification}".strip(),
                 type="boolean",
             )
             if not req.wait(timeout=300.0):
