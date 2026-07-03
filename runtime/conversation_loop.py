@@ -120,6 +120,7 @@ class ConversationLoop:
         cancel_event=None,
         runtime=None,
         session_key: str | None = None,
+        on_delta=None,
     ):
         """Initialize the conversation loop."""
         self.llm = llm
@@ -129,6 +130,10 @@ class ConversationLoop:
         self.on_tool_start = on_tool_start
         self.on_tool_result = on_tool_result
         self.on_notice = on_notice
+        # Sink for streamed text-delta payloads (see AGENT_TEXT_DELTA in
+        # events/event_channels.py). None = streaming off; the loop then
+        # calls the blocking chat_with_tools exactly as before.
+        self.on_delta = on_delta
         self.cancel_event = cancel_event
         self.runtime = runtime
         self.session_key = session_key
@@ -146,6 +151,12 @@ class ConversationLoop:
         self._used_attachments_for_last_action = False
         self._active_db = None
         self._active_conversation_id = None
+        # Live-stream bookkeeping for the current LLM call (see _emit_delta /
+        # _finish_stream). A stream is "open" between the first delta and its
+        # done event; abnormal exits close it with aborted=True.
+        self._stream_id: str | None = None
+        self._stream_seq = 0
+        self._stream_emitted = False
 
     @property
     def max_tool_calls(self) -> int:
@@ -205,6 +216,7 @@ class ConversationLoop:
                 if self._cancelled() or cs.turn_priority != actor_id:
                     break
 
+                self._drain_queued_messages(history, new_messages)
                 self._used_attachments_for_last_action = False
                 action_type, content = self._next_action(cs, history, bundle)
                 if not action_type:
@@ -252,6 +264,9 @@ class ConversationLoop:
 
             return self._final_text, new_messages, attachments
         finally:
+            # Belt-and-braces: a cancel or unexpected exit can leave a stream
+            # open; close it so frontends drop the partial line.
+            self._finish_stream(aborted=True)
             self._active_db = None
             self._active_conversation_id = None
             self.running = False
@@ -337,6 +352,7 @@ class ConversationLoop:
             # Surface the model's mid-turn explanatory text to live frontends
             # (display-only; it still rides on the first tool-call history row).
             cleaned = _clean(text or "")
+            self._finish_stream(cleaned, "narration")
             if cleaned and self.runtime is not None and self.session_key:
                 self.runtime.push_message(self.session_key, cleaned)
             self._compact_if_needed(response, history)
@@ -345,6 +361,7 @@ class ConversationLoop:
 
         # Text-only response: emit `send_text` now; next iteration will end_turn.
         text = _clean(getattr(response, "content", ""))
+        self._finish_stream(text, "final")
         self._final_text = text
         self._compact_if_needed(response, history)
         return "send_text", text
@@ -493,14 +510,27 @@ class ConversationLoop:
         from plugins.services.service_llm import is_context_limit_error
 
         bundle = attachments or None
+        streaming = self.on_delta is not None and getattr(self.llm, "supports_streaming", False)
         try:
-            response = self.llm.chat_with_tools(messages, tools, attachments=bundle)
+            if streaming:
+                import uuid
+                self._stream_id = f"st_{uuid.uuid4().hex[:12]}"
+                self._stream_seq = 0
+                self._stream_emitted = False
+                response = self.llm.chat_with_tools_streaming(
+                    messages, tools, attachments=bundle, on_delta=self._emit_delta)
+            else:
+                response = self.llm.chat_with_tools(messages, tools, attachments=bundle)
         except Exception as e:
+            # Any deltas already shown are now stale — tell frontends to
+            # discard the partial line before the retry/raise.
+            self._finish_stream(aborted=True)
             if history is None or not is_context_limit_error(e):
                 raise
             logger.warning("Context limit hit, compacting and retrying: %s", e)
             response = self._retry_after_overflow(tools, history)
         if getattr(response, "is_error", False):
+            self._finish_stream(aborted=True)
             err = getattr(response, "error", None) or getattr(response, "content", None) or "LLM provider error."
             if history is not None and is_context_limit_error(err):
                 logger.warning("Context limit hit (response error), compacting and retrying: %s", err)
@@ -508,6 +538,50 @@ class ConversationLoop:
             else:
                 raise RuntimeError(err)
         return response
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Streaming (AGENT_TEXT_DELTA emission; only active when both on_delta
+    # is wired AND the backend advertises supports_streaming)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _emit_delta(self, fragment: str) -> bool:
+        """Backend-facing on_delta callback. Returns False to abort the stream."""
+        if fragment and self._stream_id is not None:
+            self._stream_seq += 1
+            self._stream_emitted = True
+            try:
+                self.on_delta({
+                    "stream_id": self._stream_id,
+                    "seq": self._stream_seq,
+                    "delta": fragment,
+                    "done": False,
+                    "aborted": False,
+                })
+            except Exception:
+                logger.exception("on_delta sink raised; continuing")
+        return not self._cancelled()
+
+    def _finish_stream(self, final_text: str | None = None, kind: str | None = None,
+                       aborted: bool = False) -> None:
+        """Close the open stream, if any. No-op unless deltas were emitted.
+
+        A clean close carries ``final_text`` — the CLEANED text, byte-identical
+        to what the whole-message path delivers — so frontends that rendered
+        the deltas can dedup the duplicate whole message.
+        """
+        emitted, stream_id, seq = self._stream_emitted, self._stream_id, self._stream_seq
+        self._stream_id, self._stream_seq, self._stream_emitted = None, 0, False
+        if not emitted:
+            return
+        payload = {"stream_id": stream_id, "seq": seq + 1, "delta": "",
+                   "done": True, "aborted": aborted}
+        if not aborted:
+            payload["final_text"] = final_text or ""
+            payload["kind"] = kind or "final"
+        try:
+            self.on_delta(payload)
+        except Exception:
+            logger.exception("on_delta sink raised on done; continuing")
 
     def _retry_after_overflow(self, tools, history):
         """Compact + retry. If retry still overflows, drop history down to
@@ -633,12 +707,49 @@ class ConversationLoop:
             text = _clean(getattr(response, "content", "")) or self.OVER_BUDGET_MESSAGE
         except Exception:
             text = self.OVER_BUDGET_MESSAGE
+        self._finish_stream(text, "final")
         self._final_text = text
         self._absorb(self._enact_logged(cs, "send_text", text, actor_id), "send_text", text, history, new_messages, attachments, db, conversation_id)
 
     def _cancelled(self) -> bool:
         """Internal helper to handle cancelled."""
         return self.cancelled or bool(self.cancel_event and self.cancel_event.is_set())
+
+    def _drain_queued_messages(self, history, new_messages) -> None:
+        """Absorb user messages queued while this turn was running.
+
+        The busy guard in ``ConversationRuntime.handle_action`` appends
+        mid-turn ``send_text`` payloads to ``session.pending_user_messages``.
+        At each loop boundary (never mid tool-call batch, which would split an
+        assistant/tool-result pair) they are written straight into history as
+        user rows — mirroring ``inject_user_message``, NOT ``cs.enact`` (a
+        user send_text is wrong-turn illegal while the agent holds priority,
+        and ``SendText`` would flip priority). Draining also clears
+        ``_final_text`` so the loop asks the LLM again instead of taking the
+        end_turn shortcut in ``_next_action``.
+        """
+        if self._pending_tool_calls:
+            return
+        session = (getattr(self.runtime, "sessions", {}) or {}).get(self.session_key) if self.runtime else None
+        if session is None or not getattr(session, "pending_user_messages", None):
+            return
+        with session.lock:
+            queued = list(session.pending_user_messages)
+            session.pending_user_messages.clear()
+        if not queued:
+            return
+        from events.event_bus import bus
+        from events.event_channels import SESSION_MESSAGE
+        for text in queued:
+            self._record({"role": "user", "content": text}, history, new_messages,
+                         self._active_db, self._active_conversation_id)
+            bus.emit(SESSION_MESSAGE, {
+                "session_key": self.session_key,
+                "role": "user",
+                "content": text,
+                "actor_id": "user",
+            })
+        self._final_text = None
 
     def _record(self, msg, history, new_messages, db, conversation_id):
         """Internal helper to handle record."""

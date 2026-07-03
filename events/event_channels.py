@@ -108,6 +108,26 @@ Payload:
                                show this as attribution
     source_id:str (optional) — producer-specific id"""
 
+AGENT_TEXT_DELTA = "agent_text_delta"
+"""A fragment of streamed assistant text (emitted only when the
+``stream_responses`` config setting is on and the active LLM backend supports
+streaming). Frontends that set ``FrontendCapabilities.supports_streaming``
+render deltas incrementally; everyone else ignores the channel and receives
+the same text as whole messages.
+Payload:
+    session_key: str
+    stream_id:   str  — unique per LLM call
+    seq:         int  — monotonically increasing per stream
+    delta:       str  — raw text fragment ("" on done events)
+    done:        bool — stream finished
+    aborted:     bool — done-only: stream ended without a usable final
+                        (error / cancel / compaction retry)
+    final_text:  str (optional) — clean done only: the CLEANED full text,
+                        byte-identical to what arrives via the whole-message
+                        path (RuntimeResult / CHAT_MESSAGE_PUSHED) — the
+                        dedup key for frontends that streamed it
+    kind:        str (optional) — clean done only: "final" | "narration" """
+
 TOOL_CALL_STARTED = "tool_call_started"
 """The agent started a tool call.
 Payload:

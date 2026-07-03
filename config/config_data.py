@@ -93,6 +93,13 @@ SETTINGS_DATA = [
      False,
      {"type": "bool"}),
 
+    ("Stream Responses", "stream_responses",
+     "Stream agent replies token-by-token to frontends that support it. "
+     "Backends and frontends without streaming support automatically fall "
+     "back to whole messages.",
+     True,
+     {"type": "bool"}),
+
     ("Skip Permissions", "skip_permissions",
      "Tool names whose permission dialogs are automatically approved unless a permission plugin rejects them.",
      [],

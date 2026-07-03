@@ -141,6 +141,174 @@ def test_tool_failure_is_surfaced_to_the_model_as_error():
     assert reply == "I hit an error."
 
 
+class _StreamingLLM(_FakeLLM):
+    """Streams each queued response's content in 4-char fragments, then
+    returns the same LLMResponse shape as the blocking call."""
+
+    supports_streaming = True
+
+    def chat_with_tools_streaming(self, messages, tools, attachments=None, on_delta=None):
+        response = self.chat_with_tools(messages, tools, attachments)
+        content = response.content or ""
+        for i in range(0, len(content), 4):
+            if on_delta and not on_delta(content[i:i + 4]):
+                break
+        return response
+
+
+def test_streaming_emits_deltas_and_clean_final_text():
+    events = []
+    cs = _agent_state()
+    # <think> tokens stream raw but the done event carries the CLEANED text —
+    # the dedup key must match what the whole-message path delivers.
+    llm = _StreamingLLM([_response(content="<think>hmm</think>Hello there!")])
+    loop = ConversationLoop(llm, _FakeRegistry([]), {"tool_timeout": 10}, "prompt",
+                            on_delta=events.append)
+
+    reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
+
+    assert reply == "Hello there!"
+    deltas = [e for e in events if not e["done"]]
+    assert "".join(e["delta"] for e in deltas) == "<think>hmm</think>Hello there!"
+    [done] = [e for e in events if e["done"]]
+    assert done["aborted"] is False
+    assert done["final_text"] == "Hello there!"
+    assert done["kind"] == "final"
+    assert {e["stream_id"] for e in events} == {done["stream_id"]}
+    assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
+
+
+def test_streaming_narration_done_precedes_tool_events():
+    timeline = []
+    tools = {"echo": CallableSpec("echo", handler=lambda cs, actor, args: ToolResult(llm_summary="ok"))}
+    cs = _agent_state(tools=tools)
+    schema = {"type": "function", "function": {"name": "echo", "parameters": {}}}
+    llm = _StreamingLLM([
+        _response(content="Let me check.", tool_calls=[{"id": "c1", "name": "echo", "arguments": "{}"}]),
+        _response(content="Done."),
+    ])
+    loop = ConversationLoop(
+        llm, _FakeRegistry([schema]), {"tool_timeout": 10}, "prompt",
+        on_tool_start=lambda *a, **k: timeline.append(("tool_start",)),
+        on_delta=lambda p: timeline.append(("done", p["kind"], p["final_text"]) if p["done"] else ("delta",)),
+    )
+
+    loop.drive(cs, "agent", [{"role": "user", "content": "go"}])
+
+    dones = [t for t in timeline if t[0] == "done"]
+    assert dones == [("done", "narration", "Let me check."), ("done", "final", "Done.")]
+    # Narration closes before the tool call starts.
+    assert timeline.index(dones[0]) < timeline.index(("tool_start",))
+
+
+def test_cancel_mid_stream_stops_backend_and_skips_send_text():
+    import threading
+
+    cancel = threading.Event()
+    events = []
+    wrapper_returns = []
+
+    class _CancellingLLM(_StreamingLLM):
+        def chat_with_tools_streaming(self, messages, tools, attachments=None, on_delta=None):
+            response = self.chat_with_tools(messages, tools, attachments)
+            wrapper_returns.append(on_delta("partial "))
+            cancel.set()
+            wrapper_returns.append(on_delta("text"))
+            return response
+
+    cs = _agent_state()
+    llm = _CancellingLLM([_response(content="partial text and more")])
+    loop = ConversationLoop(llm, _FakeRegistry([]), {"tool_timeout": 10}, "prompt",
+                            cancel_event=cancel, on_delta=events.append)
+
+    _, new_messages, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
+
+    assert wrapper_returns == [True, False]  # abort signalled to the backend
+    # The cancelled partial never entered the transcript.
+    assert not any(m.get("role") == "assistant" for m in new_messages)
+    assert events[-1]["done"] is True  # stream was closed
+
+
+def test_stream_error_emits_aborted_done_then_non_streaming_retry():
+    events = []
+
+    class _OverflowLLM:
+        context_size = 0
+        supports_streaming = True
+
+        def chat_with_tools_streaming(self, messages, tools, attachments=None, on_delta=None):
+            on_delta("par")
+            raise RuntimeError("prompt tokens exceed model token limit")
+
+        def chat_with_tools(self, messages, tools, attachments=None):
+            return _response(content="Recovered.")
+
+    cs = _agent_state()
+    loop = ConversationLoop(_OverflowLLM(), _FakeRegistry([]), {"tool_timeout": 10}, "prompt",
+                            on_delta=events.append)
+    history = [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": "b"},
+        {"role": "user", "content": "c"},
+    ]
+
+    reply, _, _ = loop.drive(cs, "agent", history)
+
+    assert reply == "Recovered."
+    dones = [e for e in events if e["done"]]
+    # One stream: the failed call, closed aborted. The retry answer arrives
+    # whole (no deltas), so no second done and no stale dedup entry.
+    assert len(dones) == 1 and dones[0]["aborted"] is True
+
+
+def test_no_on_delta_means_blocking_call_even_with_streaming_backend():
+    class _NeverStream(_StreamingLLM):
+        def chat_with_tools_streaming(self, *a, **k):
+            raise AssertionError("streaming path must not be used")
+
+    cs = _agent_state()
+    llm = _NeverStream([_response(content="Plain.")])
+    loop = _loop(llm, _FakeRegistry([]))
+
+    reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
+
+    assert reply == "Plain."
+
+
+def test_queued_message_is_absorbed_mid_turn():
+    """A user message queued while the turn runs is drained at the next loop
+    boundary as a real user history row, and the LLM is asked again instead
+    of the turn ending on the earlier final text."""
+    import threading
+
+    session = SimpleNamespace(key="chat", lock=threading.RLock(), pending_user_messages=[])
+    runtime = SimpleNamespace(sessions={"chat": session})
+
+    class _QueueingLLM(_FakeLLM):
+        def chat_with_tools(self, messages, tools, attachments=None):
+            if not self.calls:  # first call: simulate a mid-turn user message
+                session.pending_user_messages.append("wait, also do X")
+            return super().chat_with_tools(messages, tools, attachments)
+
+    cs = _agent_state()
+    llm = _QueueingLLM([_response(content="First answer."), _response(content="Second answer.")])
+    loop = ConversationLoop(llm, _FakeRegistry([]), {"tool_timeout": 10}, "prompt",
+                            runtime=runtime, session_key="chat")
+    history = [{"role": "user", "content": "hi"}]
+
+    reply, new_messages, _ = loop.drive(cs, "agent", history)
+
+    assert reply == "Second answer."
+    roles = [(m["role"], m.get("content")) for m in new_messages]
+    assert roles.index(("assistant", "First answer.")) \
+        < roles.index(("user", "wait, also do X")) \
+        < roles.index(("assistant", "Second answer."))
+    assert session.pending_user_messages == []
+    assert cs.turn_priority == "user"
+    # The second LLM call saw the queued message in its transcript.
+    assert any(m.get("content") == "wait, also do X" for m in llm.calls[1])
+
+
 def test_tool_can_stage_attachment_for_followup_model_call():
     runtime = SimpleNamespace(sessions={}, hooks=HookRegistry())
     runtime.sessions["chat"] = SimpleNamespace(key="chat")

@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from events.event_bus import bus
 from events.event_channels import (
+    AGENT_TEXT_DELTA,
     APPROVAL_REQUESTED,
     CHAT_MESSAGE_PUSHED,
     COMMAND_CALL_FINISHED,
@@ -100,6 +101,10 @@ class FrontendCapabilities:
     supports_inline_forms: bool = False
     supports_proactive_push: bool = False
     supports_rich_text: bool = False
+    # Frontend renders AGENT_TEXT_DELTA events incrementally (and implements
+    # render_stream_delta). False = ignore the channel; the same text arrives
+    # as whole messages exactly as before.
+    supports_streaming: bool = False
     max_message_chars: int | None = None
     max_upload_size: int | None = None
 
@@ -218,6 +223,13 @@ class BaseFrontend:
         self._approval_lock = threading.RLock()
         self._pending_approvals: dict[str, dict[str, object]] = {}
         self._pending_approval_order: dict[str, list[str]] = {}
+        # Streaming bookkeeping: which stream this frontend is currently
+        # rendering per session, and cleaned final texts already shown as
+        # deltas (so the duplicate whole message can be skipped). Written on
+        # the agent thread, consumed on the frontend thread — hence the lock.
+        self._stream_lock = threading.Lock()
+        self._active_stream_ids: dict[str, str] = {}
+        self._streamed_finals: dict[str, list[str]] = {}
 
     # ──────────────────────────────────────────────────────────────────────
     # Lifecycle — override these.
@@ -287,6 +299,15 @@ class BaseFrontend:
         """Default no-op; frontends with status affordances override."""
         return
 
+    def render_stream_delta(self, session_key: str, payload: dict) -> None:
+        """Default no-op; frontends with ``supports_streaming`` override.
+
+        Receives AGENT_TEXT_DELTA payloads for this frontend's sessions:
+        fragments while the stream runs, then one ``done`` event (aborted
+        streams have no ``final_text`` — discard the partial rendering and
+        let the whole-message path deliver whatever follows)."""
+        return
+
     # ──────────────────────────────────────────────────────────────────────
     # Wiring — provided by the base.
     # ──────────────────────────────────────────────────────────────────────
@@ -311,6 +332,7 @@ class BaseFrontend:
             bus.subscribe(APPROVAL_REQUESTED, self.on_bus_approval_requested),
             bus.subscribe(FORM_REQUESTED, self.on_bus_form_requested),
             bus.subscribe(CHAT_MESSAGE_PUSHED, self.on_bus_message_pushed),
+            bus.subscribe(AGENT_TEXT_DELTA, self.on_bus_agent_text_delta),
             bus.subscribe(COMMAND_CALL_STARTED, self.on_bus_command_call_started),
             bus.subscribe(COMMAND_CALL_PROGRESSED, self.on_bus_command_call_progressed),
             bus.subscribe(COMMAND_CALL_FINISHED, self.on_bus_command_call_finished),
@@ -614,10 +636,51 @@ class BaseFrontend:
         for key in keys:
             if key not in self._live_session_keys():
                 continue
+            if self._consume_streamed(key, body):
+                continue  # already rendered incrementally as a stream
             try:
                 self.render_messages(key, [body])
             except Exception:
                 logger.exception(f"render_messages (push) failed for '{self.name}'")
+
+    def on_bus_agent_text_delta(self, payload: dict) -> None:
+        """Route streamed text deltas to ``render_stream_delta`` with dedup
+        bookkeeping. Ignored entirely unless this frontend supports streaming
+        and owns the session."""
+        if not getattr(self.capabilities, "supports_streaming", False):
+            return
+        payload = payload or {}
+        key = payload.get("session_key")
+        stream_id = payload.get("stream_id")
+        if not key or not stream_id or key not in self._live_session_keys():
+            return
+        if payload.get("done"):
+            with self._stream_lock:
+                rendered_here = self._active_stream_ids.pop(key, None) == stream_id
+                if not rendered_here:
+                    return  # never saw this stream's deltas — nothing to close
+                if not payload.get("aborted") and payload.get("final_text"):
+                    finals = self._streamed_finals.setdefault(key, [])
+                    finals.append(payload["final_text"])
+                    del finals[:-8]  # cap: stale entries expire instead of leaking
+        else:
+            with self._stream_lock:
+                self._active_stream_ids[key] = stream_id
+        try:
+            self.render_stream_delta(key, dict(payload))
+        except Exception:
+            logger.exception(f"render_stream_delta failed for '{self.name}'")
+
+    def _consume_streamed(self, session_key: str, message: str) -> bool:
+        """True (and forget the entry) when ``message`` was already rendered
+        as a completed stream for this session — the whole-message duplicate
+        should be skipped."""
+        with self._stream_lock:
+            finals = self._streamed_finals.get(session_key)
+            if finals and message in finals:
+                finals.remove(message)
+                return True
+        return False
 
     def on_bus_tool_call_started(self, payload: dict) -> None:
         """Handle on bus tool call started."""
@@ -656,7 +719,9 @@ class BaseFrontend:
         if result is None:
             return
         if result.messages:
-            self.render_messages(session_key, list(result.messages))
+            messages = [m for m in result.messages if not self._consume_streamed(session_key, m)]
+            if messages:
+                self.render_messages(session_key, messages)
         if result.attachments:
             self.render_attachments(session_key, list(result.attachments))
         if result.form:

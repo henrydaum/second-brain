@@ -142,12 +142,27 @@ class ConversationRuntime:
         # proceed. Everything else is told to wait or cancel first.
         if session.busy or session.cs.phase in BUSY_PHASES:
             if action_type == "cancel" and session.cs.phase != PHASE_APPROVING_REQUEST:
+                # Cancel means "stop everything" — drop queued messages too.
+                with session.lock:
+                    session.pending_user_messages.clear()
                 session.cancel_event.set()
                 return RuntimeResult(messages=["Cancelled."])
             if action_type in {"answer_approval", "cancel"} and session.cs.phase == PHASE_APPROVING_REQUEST:
                 pass  # fall through and dispatch
             elif action_type == "send_text":
-                return RuntimeResult(messages=["Not your turn - I'm still working. Send /cancel to interrupt."])
+                # Queue mid-turn text instead of rejecting it. The running
+                # ConversationLoop drains the queue at its next boundary; if
+                # the turn ends first, handle_action starts a fresh turn with
+                # the leftovers (see the re-drive loop below).
+                text = _disp.text_of(payload)
+                if not text:
+                    return RuntimeResult(False, error={"code": "empty_input", "message": "No input."})
+                with session.lock:
+                    session.pending_user_messages.append(text)
+                return RuntimeResult(
+                    messages=["Got it — I'll read that as soon as I finish this step."],
+                    data={"queued": True},
+                )
             else:
                 return RuntimeResult(False, messages=["Still working. Send /cancel to interrupt."], error={"code": "busy", "message": "Still working."})
 
@@ -184,10 +199,36 @@ class ConversationRuntime:
         # round-trip. Per-mutation atomicity is preserved by the dispatch
         # lock above and the lock acquired in ``inject_user_message`` and
         # in ``iterate_agent_turn`` after the handle_action returns.
-        if out.data.pop("_drive_agent_turn", False):
+        drives = 0
+        while out.data.pop("_drive_agent_turn", False) and drives < 5:
+            drives += 1
             self._drive_agent_turn(session, out)
             with session.lock:
                 _persist.persist_marker(self, session)
+            # Closing-race check: a message queued after the loop's final
+            # drain (but before busy went False) would otherwise sit unread
+            # until the next user input. Start a fresh turn with the first
+            # leftover; the new turn's own drain absorbs any others. The
+            # drives bound keeps a pathological ping-pong finite.
+            with session.lock:
+                if not session.pending_user_messages:
+                    break
+                if session.cs.phase != BASE_PHASE or session.cs.turn_priority != "user":
+                    # Turn ended into a form/approval — a user send_text is
+                    # not legal here. Leave the queue; the next agent turn's
+                    # drain absorbs it.
+                    break
+                text = session.pending_user_messages.pop(0)
+                _cfg.refresh_specs(self, session)
+                follow = self._dispatch(session, "send_text", text)
+                _persist.persist_marker(self, session)
+            out.ok = out.ok and follow.ok
+            out.messages.extend(follow.messages)
+            out.attachments.extend(follow.attachments)
+            out.events.extend(follow.events)
+            if follow.error:
+                out.error = follow.error
+            out.data.update(follow.data)
 
         if user_driven:
             current_conv = self.active_conversation_id

@@ -120,6 +120,50 @@ def test_refresh_llm_profile_services_adds_and_removes_backend(monkeypatch):
     assert services["llm"].active is None
 
 
+def test_default_streaming_method_falls_back_to_blocking_call():
+    llm = FakeBackend("x")
+    llm._load()
+    deltas = []
+
+    resp = llm.chat_with_tools_streaming([], [], on_delta=deltas.append)
+
+    assert resp.content == "x:tools"
+    assert deltas == []  # the fallback never streams
+    assert BaseLLM.supports_streaming is False
+
+
+class StreamingBackend(FakeBackend):
+    supports_streaming = True
+
+    def chat_with_tools_streaming(self, messages, tools=None, on_delta=None, **kwargs):
+        for chunk in ("Hel", "lo"):
+            if on_delta and not on_delta(chunk):
+                break
+        return LLMResponse(content="Hello")
+
+
+def test_router_delegates_streaming_and_mirrors_capability():
+    config = {"llm_profiles": {"s": {}}, "default_llm_profile": "s"}
+    services = {"s": StreamingBackend("s")}
+    router = LLMRouter(config, services)
+
+    assert router.supports_streaming is False  # backend not loaded yet
+    router.load()
+    assert router.supports_streaming is True
+
+    got = []
+    resp = router.chat_with_tools_streaming([], [], on_delta=lambda d: got.append(d) or True)
+    assert resp.content == "Hello"
+    assert got == ["Hel", "lo"]
+
+
+def test_router_streaming_reports_not_loaded():
+    router = LLMRouter({"llm_profiles": {}, "default_llm_profile": ""}, {})
+
+    assert router.supports_streaming is False
+    assert router.chat_with_tools_streaming([], []).error_code == "not_loaded"
+
+
 def test_model_plan_error_is_not_context_limit():
     err = "your current token plan not support model, MiniMax-M2.7 (2061)"
     assert not is_context_limit_error(err)

@@ -20,6 +20,7 @@ class ReplFrontend(BaseFrontend):
     capabilities = FrontendCapabilities(
         supports_attachments_in=True,
         supports_proactive_push=True,
+        supports_streaming=True,
     )
     # Single local operator — every session acts as the base user. The terminal
     # has no login; authorization for the REPL is its frontend_profile, not a user.
@@ -31,6 +32,9 @@ class ReplFrontend(BaseFrontend):
         super().__init__()
         self.shutdown_fn = shutdown_fn
         self.shutdown_event = shutdown_event or threading.Event()
+        # Whether the current stream has written any characters to stdout —
+        # decides how the done event terminates the line.
+        self._stream_wrote = False
 
     def session_key(self, _ctx=None) -> str:
         """Return the singleton REPL session key."""
@@ -128,6 +132,24 @@ class ReplFrontend(BaseFrontend):
     def render_error(self, _session_key: str, error: dict) -> None:
         """Render error."""
         print(f"\n[error] {(error or {}).get('message') or error}")
+
+    def render_stream_delta(self, _session_key: str, payload: dict) -> None:
+        """Write streamed agent text to stdout as it arrives."""
+        if payload.get("done"):
+            if self._stream_wrote:
+                # Clean done: full blank line to match render_messages spacing
+                # (the duplicate whole message is skipped by base dedup).
+                # Aborted: just end the partial line — whatever follows
+                # (retry answer, "Cancelled.") renders as a whole message.
+                sys.stdout.write("\n\n" if not payload.get("aborted") else "\n")
+                sys.stdout.flush()
+            self._stream_wrote = False
+            return
+        delta = payload.get("delta") or ""
+        if delta:
+            self._stream_wrote = True
+            sys.stdout.write(delta)
+            sys.stdout.flush()
 
     def render_tool_status(self, _session_key: str, payload: dict) -> None:
         """Render tool status."""

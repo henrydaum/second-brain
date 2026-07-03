@@ -90,6 +90,14 @@ class RuntimeSession:
     # Ephemeral live state — deliberately NOT persisted in to_marker(), so it
     # resets to None (defer-to-global) across restarts.
     attended: bool | None = None
+    # User messages sent while the agent was mid-turn. The busy guard queues
+    # them here instead of rejecting; ConversationLoop drains the list at each
+    # loop boundary, and handle_action starts a fresh turn with any leftovers
+    # once the current turn ends. Guarded by ``lock``. Deliberately NOT
+    # persisted in to_marker(): crash recovery already tells the user their
+    # in-flight message was not replayed, and a queue that silently survives
+    # a restart would contradict that notice.
+    pending_user_messages: list[str] = field(default_factory=list)
     has_compaction_checkpoint: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)

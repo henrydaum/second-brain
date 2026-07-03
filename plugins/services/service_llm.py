@@ -191,6 +191,25 @@ class BaseLLM(BaseService):
         """Send messages with tool schemas. Returns tool calls or text."""
         raise NotImplementedError
 
+    # Backends that can stream text deltas set this True and override
+    # chat_with_tools_streaming. Callers must treat False as "use the
+    # blocking call" — the default below is only a structural fallback.
+    supports_streaming: bool = False
+
+    def chat_with_tools_streaming(self, messages: list[dict], tools: list[dict] = None,
+                                  on_delta=None, **kwargs) -> LLMResponse:
+        """Streaming variant of ``chat_with_tools``.
+
+        Implementations call ``on_delta(text_fragment) -> bool`` as assistant
+        text arrives; a falsy return aborts the stream (the backend stops
+        consuming and returns the partial accumulation). Tool-call deltas are
+        accumulated internally — the returned ``LLMResponse`` must be shaped
+        exactly like ``chat_with_tools``'s (content + tool_calls + usage), so
+        the conversation loop's logic is unchanged. The default falls back to
+        the blocking call and never invokes ``on_delta``.
+        """
+        return self.chat_with_tools(messages, tools, **kwargs)
+
     # =================================================================
     # ATTACHMENT ROUTING
     # =================================================================
@@ -506,6 +525,23 @@ class LLMRouter(BaseLLM):
                 error_code="not_loaded",
             )
         return a.chat_with_tools(messages, tools, **kwargs)
+
+    @property
+    def supports_streaming(self) -> bool:
+        """Mirror the active backend's streaming capability."""
+        a = self.active
+        return bool(a and a.loaded and getattr(a, "supports_streaming", False))
+
+    def chat_with_tools_streaming(self, messages, tools=None, on_delta=None, **kwargs):
+        """Handle chat with tools, streaming deltas via ``on_delta``."""
+        a = self.active
+        if not a or not a.loaded:
+            return LLMResponse(
+                content="Error: no LLM loaded",
+                error="no LLM loaded",
+                error_code="not_loaded",
+            )
+        return a.chat_with_tools_streaming(messages, tools, on_delta=on_delta, **kwargs)
 
 
 def build_services(config: dict) -> dict:

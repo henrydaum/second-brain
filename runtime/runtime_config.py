@@ -352,6 +352,14 @@ def build_loop(runtime, session_key: str | None = None) -> ConversationLoop:
                 "source": "runtime", "kind": "alert",
             })
 
+    on_delta = None
+    if session_key and runtime.config.get("stream_responses", True):
+        from events.event_channels import AGENT_TEXT_DELTA
+
+        def on_delta(payload: dict):
+            """Fan streamed text deltas out to frontends over the bus."""
+            bus.emit(AGENT_TEXT_DELTA, {"session_key": session_key, **payload})
+
     started, finished = tool_callbacks(runtime, session_key)
     return ConversationLoop(
         llm,
@@ -362,6 +370,7 @@ def build_loop(runtime, session_key: str | None = None) -> ConversationLoop:
         session.cancel_event if session else None,
         runtime=runtime,
         session_key=session_key,
+        on_delta=on_delta,
     )
 
 
