@@ -9,6 +9,7 @@ import uuid
 from typing import Callable
 
 from plugins.BaseCommand import BaseCommand
+from plugins.frontends.helpers.formatters import md_table
 from state_machine.conversation import CallableSpec, FormStep
 
 logger = logging.getLogger("Commands")
@@ -131,10 +132,11 @@ class CommandRegistry:
         lines = ["Commands:"]
         ctx = self.context(None)
         for cat in ordered:
-            lines += ["", f"{cat}:"]
+            rows = []
             for cmd in by_cat[cat]:
                 hint = _arg_hint_from_form(cmd.form({}, ctx))
-                lines.append(f"  {'/' + cmd.name + ((' ' + hint) if hint else ''):<26} {cmd.description}")
+                rows.append(("/" + cmd.name + ((" " + hint) if hint else ""), cmd.description))
+            lines += ["", f"**{cat}**", md_table(["Command", "Description"], rows)]
         return "\n".join(lines)
 
 

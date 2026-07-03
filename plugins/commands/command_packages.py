@@ -4,6 +4,7 @@ from collections import Counter
 
 from plugins.BaseCommand import BaseCommand
 from plugins.commands.helpers import package_manager
+from plugins.frontends.helpers.formatters import md_table
 from plugins.commands.helpers.store_backend import StoreBackendError
 from state_machine.conversation import FormStep
 
@@ -80,12 +81,8 @@ def _category_prompt(context, action: str) -> str:
 def _overview(context, action: str) -> str:
     counts = _counts(context, action)
     header = "Installed files by category:" if action == "installed" else "Available files by category:"
-    name_w = max(len(label) for label in CATEGORY_LABELS)
-    count_w = max(len(str(n)) for n in counts.values()) if counts else 1
-    lines = [header]
-    for cat, label in zip(CATEGORIES, CATEGORY_LABELS):
-        lines.append(f"  {label:<{name_w}}  {counts.get(cat, 0):>{count_w}}   - {_BLURB[cat]}")
-    return "\n".join(lines)
+    rows = [(label, counts.get(cat, 0), _BLURB[cat]) for cat, label in zip(CATEGORIES, CATEGORY_LABELS)]
+    return header + "\n\n" + md_table(["Category", "Count", "What"], rows)
 
 
 def _counts(context, action: str) -> Counter:
@@ -104,10 +101,8 @@ def _format_available(context, category: str | None) -> str:
     items = [item for item in _available_items(context) if item["family"] == category]
     if not items:
         return f"No available {_label(category).lower()} files."
-    lines = [f"Available {_label(category).lower()} files:"]
-    lines.extend(_line(item) for item in items)
-    lines += ["", "Install with /packages install <stem>."]
-    return "\n".join(lines)
+    return "\n\n".join([f"Available {_label(category).lower()} files:",
+                        _items_table(items), "Install with /packages install <stem>."])
 
 
 def _format_installed(category: str | None) -> str:
@@ -116,15 +111,13 @@ def _format_installed(category: str | None) -> str:
     items = [item for item in package_manager.installed_packages() if item["family"] == category]
     if not items:
         return f"No {_label(category).lower()} files installed."
-    lines = [f"Installed {_label(category).lower()} files:"]
-    lines.extend(_line(item) for item in items)
-    lines += ["", "Uninstall with /packages uninstall <stem>."]
-    return "\n".join(lines)
+    return "\n\n".join([f"Installed {_label(category).lower()} files:",
+                        _items_table(items), "Uninstall with /packages uninstall <stem>."])
 
 
-def _line(item: dict) -> str:
-    helper = " [helper]" if item.get("helper") else ""
-    return f"  *{item['id']}*{helper} - {item['path']}"
+def _items_table(items: list[dict]) -> str:
+    rows = [(item["id"], "helper" if item.get("helper") else "plugin", item["path"]) for item in items]
+    return md_table(["Name", "Kind", "Path"], rows)
 
 
 def _label(category: str) -> str:

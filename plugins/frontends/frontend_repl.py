@@ -7,6 +7,7 @@ import sys
 import threading
 
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
+from plugins.frontends.helpers.formatters import align_md_tables
 from pipeline.database import DEFAULT_USER_ID
 from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
 
@@ -102,7 +103,7 @@ class ReplFrontend(BaseFrontend):
         """Render messages."""
         for msg in messages:
             if msg:
-                print(f"{msg}\n")
+                print(f"{align_md_tables(msg)}\n")
 
     def render_attachments(self, _session_key: str, paths: list[str]) -> None:
         """Render attachments."""
@@ -115,12 +116,12 @@ class ReplFrontend(BaseFrontend):
         display = form.get("display") or {}
         prompt = display.get("prompt") or field.get("prompt") or field.get("name") or "Input required"
         hints = self._hints(display or field)
-        print(f"\n{prompt}{hints}")
+        print(f"\n{align_md_tables(str(prompt))}{hints}")
 
     def render_approval_request(self, _session_key: str, req) -> None:
         """Render approval request."""
         hints = self._hints({"type": getattr(req, "type", "boolean"), "enum": getattr(req, "enum", None), "default": getattr(req, "default", None)})
-        body = f"\n{req.body}" if getattr(req, "body", "") else ""
+        body = f"\n{align_md_tables(str(req.body))}" if getattr(req, "body", "") else ""
         print(f"\n{getattr(req, 'title', 'Approval requested')}{body}{hints}")
 
     def render_buttons(self, _session_key: str, buttons: list[dict]) -> None:

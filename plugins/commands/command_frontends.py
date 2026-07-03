@@ -4,6 +4,7 @@ import json
 
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
+from plugins.frontends.helpers.formatters import md_table
 from state_machine.conversation import FormStep
 
 
@@ -141,12 +142,9 @@ def _show(context):
     config = getattr(context, "config", {}) or {}
     enabled = set(config.get("enabled_frontends", []))
     profiles = config.get("frontend_profiles", {}) or {}
-    lines = ["Frontends:"]
-    for name in _frontends(context):
-        status = "Enabled" if name in enabled else "Disabled"
-        scope = _profile_summary(profiles.get(name))
-        lines.append(f"  {name:<10} {status:<9} {scope}")
-    return "\n".join(lines)
+    rows = [(name, "Enabled" if name in enabled else "Disabled", _profile_summary(profiles.get(name)))
+            for name in _frontends(context)]
+    return "Frontends:\n\n" + md_table(["Frontend", "Status", "Access"], rows)
 
 
 def _describe(config, name):

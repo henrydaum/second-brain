@@ -107,6 +107,34 @@ def test_draft_id_is_stable_and_nonzero(frontend_cls):
     assert frontend_cls._draft_id_for("not-hex!") > 0
 
 
+@pytest.fixture(scope="module")
+def tg_module(frontend_cls):
+    return sys.modules["tg_store_pkg.frontend_telegram"]
+
+
+_TABLE_MD = "Files:\n\n| Name | Count |\n| --- | --- |\n| Tools | 16 |\n| Frontends | 2 |\n\nPick one."
+
+
+def test_html_fallback_renders_tables_as_pre(tg_module):
+    out = tg_module._md_to_tg_html(_TABLE_MD)
+
+    assert "<pre>" in out and "</pre>" in out
+    pre = out.split("<pre>")[1].split("</pre>")[0]
+    assert "|" not in pre  # aligned columns, not raw markdown pipes
+    lines = pre.split("\n")
+    assert lines[0].startswith("Name")
+    assert lines[2].index("16") == lines[3].index("2")
+    assert out.startswith("Files:")
+    assert out.endswith("Pick one.")
+
+
+def test_form_prompt_renders_markdown(frontend_cls, tg_module):
+    fe = _frontend(frontend_cls, {})
+    prompt = fe._prompt({"field": {"prompt": _TABLE_MD}})
+    assert "<pre>" in prompt
+    assert "| Tools | 16 |" not in prompt
+
+
 def test_rich_refused_classifier(frontend_cls):
     fe = _frontend(frontend_cls, {})
     assert fe._rich_refused(Exception("404 Not Found"))

@@ -50,14 +50,13 @@ def test_services_command_does_not_offer_load_unload_for_extensions():
     assert blocked == "extension is an installed extension and is loaded automatically."
 
 
-def test_format_services_groups_extensions():
+def test_format_services_labels_lifecycles():
     text = format_services([
         {"name": "extension", "loaded": True, "model_name": "Extension", "lifecycle": "extension"},
         {"name": "managed", "loaded": True, "model_name": "Managed", "lifecycle": "managed"},
         {"name": "cold", "loaded": False, "model_name": "Cold", "lifecycle": "managed"},
     ])
 
-    assert "Extensions:" in text
-    assert "Loaded:" in text
-    assert "Unloaded:" in text
-    assert text.index("Extensions:") < text.index("Loaded:") < text.index("Unloaded:")
+    assert "| extension | Extension |" in text
+    assert "| managed | Loaded |" in text
+    assert "| cold | Unloaded |" in text

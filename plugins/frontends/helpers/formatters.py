@@ -6,6 +6,64 @@ Compact mode is used by the Telegram frontend for mobile-friendly output.
 """
 
 import json
+import re
+
+
+# ── Markdown tables ─────────────────────────────────────────────────
+# Commands emit GitHub-style markdown tables (the single source of truth);
+# each frontend renders them natively: rich frontends (Telegram Rich
+# Messages) parse the markdown into real tables, while monospace surfaces
+# (REPL, Telegram's <pre> fallback) run text through align_md_tables().
+
+def md_table(headers: list, rows: list) -> str:
+    """Build a GitHub-style markdown table from headers and row tuples."""
+    def cell(value) -> str:
+        return str("" if value is None else value).replace("\n", " ").replace("|", "\\|")
+    lines = ["| " + " | ".join(cell(h) for h in headers) + " |",
+             "|" + "|".join(" --- " for _ in headers) + "|"]
+    lines += ["| " + " | ".join(cell(v) for v in row) + " |" for row in rows]
+    return "\n".join(lines)
+
+
+_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
+_TABLE_SEPARATOR = re.compile(r"^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$")
+
+
+def _split_row(line: str) -> list[str]:
+    cells = re.split(r"(?<!\\)\|", line.strip().strip("|"))
+    return [c.strip().replace("\\|", "|") for c in cells]
+
+
+def align_md_tables(text: str) -> str:
+    """Render markdown tables in *text* as padded monospace columns.
+
+    Non-table lines pass through untouched, so the same message body works
+    on rich and plain surfaces alike.
+    """
+    lines = (text or "").split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        if (_TABLE_ROW.match(lines[i]) and i + 1 < len(lines)
+                and _TABLE_SEPARATOR.match(lines[i + 1])):
+            block = [lines[i]]
+            j = i + 2
+            while j < len(lines) and _TABLE_ROW.match(lines[j]):
+                block.append(lines[j])
+                j += 1
+            rows = [_split_row(line) for line in block]
+            n = max(len(r) for r in rows)
+            rows = [r + [""] * (n - len(r)) for r in rows]
+            widths = [max(len(r[c]) for r in rows) for c in range(n)]
+            def fmt(row):
+                return "  ".join(v.ljust(w) for v, w in zip(row, widths)).rstrip()
+            out.append(fmt(rows[0]))
+            out.append("  ".join("-" * w for w in widths))
+            out.extend(fmt(r) for r in rows[1:])
+            i = j
+        else:
+            out.append(lines[i])
+            i += 1
+    return "\n".join(out)
 
 
 # ── Canonical status labels ─────────────────────────────────────────
@@ -57,19 +115,10 @@ def format_tool_result(result) -> str:
         rows = data["rows"]
         if not rows:
             return "(no results)"
-        col_widths = [len(c) for c in columns]
-        for row in rows:
-            for i, val in enumerate(row):
-                col_widths[i] = max(col_widths[i], len(truncate_cell(str(val))))
-        header = "  ".join(c.ljust(w) for c, w in zip(columns, col_widths))
-        separator = "  ".join("-" * w for w in col_widths)
-        lines = [header, separator]
-        for row in rows:
-            line = "  ".join(truncate_cell(str(val)).ljust(w) for val, w in zip(row, col_widths))
-            lines.append(line)
+        table = md_table(columns, [[truncate_cell(str(val)) for val in row] for row in rows])
         if data.get("truncated"):
-            lines.append("  ... (results capped at 100 rows)")
-        return "\n".join(lines)
+            table += "\n... (results capped at 100 rows)"
+        return table
     if data is None:
         return result.llm_summary or "(no output)"
     if result.llm_summary:
@@ -95,31 +144,12 @@ def format_services(services: list[dict], compact: bool = False) -> str:
             lines.append(f"{s['name']}: {status}{model}")
         return "Services:\n" + "\n".join(lines)
 
-    extensions = [s for s in services if s.get("lifecycle") == "extension"]
-    managed = [s for s in services if s.get("lifecycle") != "extension"]
-    loaded = [s for s in managed if s["loaded"]]
-    unloaded = [s for s in managed if not s["loaded"]]
-    lines = ["Services:"]
-    if extensions:
-        lines.append("  Extensions:")
-        for s in extensions:
-            model = s['model_name'] or ""
-            lines.append(f"    {s['name']:<20} {model}")
-    if loaded:
-        if extensions:
-            lines.append("")
-        lines.append("  Loaded:")
-        for s in loaded:
-            model = s['model_name'] or ""
-            lines.append(f"    {s['name']:<20} {model}")
-    if unloaded:
-        if loaded or extensions:
-            lines.append("")
-        lines.append("  Unloaded:")
-        for s in unloaded:
-            model = s['model_name'] or ""
-            lines.append(f"    {s['name']:<20} {model}")
-    return "\n".join(lines)
+    rows = [(
+        s["name"],
+        "Extension" if s.get("lifecycle") == "extension" else status_badge(s["loaded"]),
+        s["model_name"] or "",
+    ) for s in services]
+    return "Services:\n\n" + md_table(["Service", "Status", "Model"], rows)
 
 
 def _task_sections(tasks) -> list[tuple[str, list[dict]]]:
@@ -207,20 +237,17 @@ def format_tasks(tasks: list[dict], compact: bool = False) -> str:
 
     for title, section in sections:
         lines.append("")
-        lines.append(f"{title}:")
+        lines.append(f"**{title}**")
         if not section:
-            lines.append("  (none)")
+            lines.append("(none)")
             continue
+        rows = []
         for task in section:
             counts = task["counts"]
-            lines.append(
-                f"  {task['name']}: "
-                f"{counts['PENDING']} pending, {counts['PROCESSING']} running, "
-                f"{counts['DONE']} done, {counts['FAILED']} failed"
-                f"{paused_suffix(task['paused'])}"
-            )
-            for detail in _task_detail_lines(task):
-                lines.append(f"    {detail}")
+            notes = "; ".join((["paused"] if task["paused"] else []) + _task_detail_lines(task))
+            rows.append((task["name"], counts["PENDING"], counts["PROCESSING"],
+                         counts["DONE"], counts["FAILED"], notes))
+        lines.append(md_table(["Task", "Pending", "Running", "Done", "Failed", "Notes"], rows))
     return "\n".join(lines)
 
 
@@ -236,21 +263,16 @@ def format_tools(tools: list[dict], compact: bool = False) -> str:
                 desc = desc[:97] + "..."
             lines.append(f"{t['name']}\n  {desc}")
         return "Tools:\n" + "\n".join(lines)
-    lines = []
+    rows = []
     for t in tools:
-        svc = f"  needs: {t['requires_services']}" if t["requires_services"] else ""
-        lines.append(f"  {t['name']}{svc}")
-        desc = t["description"]
-        if len(desc) > 200:
-            desc = desc[:197] + "..."
-        lines.append(f"    {desc}")
         params = t["parameters"].get("properties", {})
         required = set(t["parameters"].get("required", []))
-        if params:
-            parts = [f"{p}{'*' if p in required else ''}" for p in params]
-            lines.append(f"    args: {', '.join(parts)}")
-        lines.append("")
-    return "Tools:\n" + "\n".join(lines)
+        args = ", ".join(f"{p}{'*' if p in required else ''}" for p in params)
+        desc = truncate_cell(t["description"].split("\n")[0], 100)
+        if t["requires_services"]:
+            desc += f" (needs: {', '.join(t['requires_services'])})"
+        rows.append((t["name"], args, desc))
+    return "Tools:\n\n" + md_table(["Tool", "Args", "Description"], rows)
 
 
 def format_locations(data: dict) -> str:
@@ -311,15 +333,4 @@ def format_scheduled_jobs(jobs: dict, timekeeper=None) -> str:
         schedule = _format_schedule_summary(job, timekeeper)
         title = (job.get("payload", {}).get("title") or "").strip()
         rows.append((name, enabled_badge(enabled), schedule, title))
-
-    name_w = max((len(r[0]) for r in rows), default=4)
-    badge_w = max((len(r[1]) for r in rows), default=8)
-    sched_w = max((len(r[2]) for r in rows), default=16)
-
-    lines = ["Scheduled jobs:"]
-    for name, badge, schedule, title in rows:
-        suffix = f'  "{title}"' if title else ""
-        lines.append(
-            f"  {name:<{name_w}}  {badge:<{badge_w}}  {schedule:<{sched_w}}{suffix}"
-        )
-    return "\n".join(lines)
+    return "Scheduled jobs:\n\n" + md_table(["Job", "Status", "Schedule", "Title"], rows)
