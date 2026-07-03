@@ -15,6 +15,8 @@ Check out Atlas Cloud's new coding plan promotion for more budget-friendly API a
 
 *For an example of what Second Brain can do, visit https://second-brain.art! It's an interactive art exhibition.*
 
+*NEW!* Second Brain now has token streaming. Telegram now has silky smooth token streaming plus rich text.
+
 Second Brain is a local-first AI runtime for your machine, built as a **microkernel**.
 
 The kernel is deliberately small: it boots, runs the agent turn, persists conversations in SQLite, loads and unloads plugins, keeps the lightweight Timekeeper event clock running, and gets out of the way. Everything else — file indexing and retrieval, web search, scheduling workflows, Telegram, durable memory, file-editing and shell tools, heavy file parsers — arrives as **packages** you install from the store. It is a programmable conversation runtime that you (and agents) extend while it is running. The kernel is like a brain, while plugins are like the body. The brain and body have a symbiotic relationship — it's the same way with plugins and the kernel.
