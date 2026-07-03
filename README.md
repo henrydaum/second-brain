@@ -13,7 +13,7 @@ Check out Atlas Cloud's new coding plan promotion for more budget-friendly API a
 
 # Second Brain
 
-<mark>*For an example of what Second Brain can do, visit https://second-brain.art! It's an interactive art exhibition to make fascinating abstract art.*</mark>
+<mark>*For an example of what Second Brain can do, visit https://second-brain.art! It's an interactive art exhibition.*</mark>
 
 <mark>*NEW!* Second Brain now has token streaming. Telegram now has silky smooth token streaming plus rich text.</mark>
 
