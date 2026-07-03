@@ -152,6 +152,8 @@ class TelegramFrontend(BaseFrontend):
         ("Telegram Bot Token", "telegram_bot_token", "Bot token from @BotFather. Required for Telegram frontend.", "", {"type": "text"}),
         ("Telegram Allowed User ID", "telegram_allowed_user_id", "Your Telegram user ID (integer). Only this user can interact with the bot. Send /start to @userinfobot to find yours.", 0, {"type": "text"}),
     ]
+    # Fallback guidance for installs where Rich Messages are unavailable
+    # (old python-telegram-bot or pre-10.1 Bot API server).
     agent_prompt = (
         "## Talking over Telegram\n"
         "This conversation is on Telegram, a mobile chat app. Keep replies concise and skimmable. Only a "
@@ -159,6 +161,23 @@ class TelegramFrontend(BaseFrontend):
         "Markdown headings, tables, and link syntax do NOT render — avoid them and write plainly instead. "
         "Long messages are split across multiple sends, and file uploads are capped at 50 MB."
     )
+
+    _AGENT_PROMPT_RICH = (
+        "## Talking over Telegram\n"
+        "This conversation is on Telegram (a mobile chat app), rendered as native Rich Messages: standard "
+        "Markdown displays with full fidelity — headings, **bold**, *italic*, ~~strikethrough~~, "
+        "`inline code`, fenced code blocks with language tags, [links](https://example.com), bulleted and "
+        "numbered lists, tables, > blockquotes, and --- dividers. Use whatever structure serves the reply, "
+        "but it is still a phone screen: keep replies concise and skimmable. Long messages are split across "
+        "multiple sends, and file uploads are capped at 50 MB."
+    )
+
+    def agent_prompt_for(self, ctx) -> str:
+        """Advertise rich or basic formatting based on live capability.
+
+        Recomputed every prompt build, so a runtime downgrade (rich send
+        rejected by an older server) flips the guidance on the next turn."""
+        return self._AGENT_PROMPT_RICH if self._rich_capable() else self.agent_prompt
 
     def __init__(self, shutdown_event: threading.Event | None = None, services: dict | None = None):
         """Initialize the Telegram frontend."""
@@ -174,6 +193,9 @@ class TelegramFrontend(BaseFrontend):
         # One StreamTracker (+ pump task) per in-flight streamed reply,
         # keyed by (session_key, stream_id).
         self._streams: dict[tuple[str, str], StreamTracker] = {}
+        # Rich Messages (Bot API 10.1) capability: None = undetermined,
+        # False = confirmed unavailable (old PTB or pre-10.1 server).
+        self._rich: bool | None = None
 
     def session_key(self, ctx) -> str:
         """Build the per-user, per-chat, per-thread session key for Telegram traffic."""
@@ -313,10 +335,73 @@ class TelegramFrontend(BaseFrontend):
             return super().submit_text(session_key, text)
 
     def render_messages(self, session_key: str, messages: list[str]) -> None:
-        """Send plain chat messages to Telegram."""
+        """Send chat messages — native Rich Messages (Markdown) when available."""
         self._clear_last_keyboard(session_key)
+        chat_id = self._chat_id(session_key)
+        if not chat_id:
+            return
         for msg in messages:
-            self._send_text(session_key, _md_to_tg_html(msg), use_html=True)
+            self._send(self._deliver_message_async(chat_id, msg))
+
+    # ──────────────────────────────────────────────────────────────────
+    # Rich Messages (Bot API 10.1): InputRichMessage accepts raw Markdown,
+    # parsed server-side into headings/tables/lists/code — no local
+    # conversion needed. python-telegram-bot has no typed support yet
+    # (python-telegram-bot#5261), so calls go through the typed method when
+    # present and PTB's raw request layer otherwise.
+    # ──────────────────────────────────────────────────────────────────
+
+    def _rich_capable(self) -> bool:
+        """Whether Rich Message endpoints look reachable. Optimistic before
+        the transport is up (so the agent prompt starts rich); downgraded to
+        False the first time the API refuses."""
+        if self._rich is None:
+            bot = getattr(self.app, "bot", None)
+            if bot is None:
+                return True
+            self._rich = bool(hasattr(bot, "send_rich_message") or hasattr(bot, "do_api_request"))
+        return self._rich
+
+    async def _rich_request(self, endpoint: str, payload: dict) -> None:
+        """Call a Rich Message endpoint (typed PTB method or raw layer)."""
+        bot = self.app.bot
+        snake = re.sub(r"(?<!^)(?=[A-Z])", "_", endpoint).lower()
+        method = getattr(bot, snake, None)
+        if method is not None:
+            import telegram
+            InputRichMessage = getattr(telegram, "InputRichMessage", None)
+            if InputRichMessage is not None:
+                payload = {**payload, "rich_message": InputRichMessage(**payload["rich_message"])}
+            await method(**payload)
+            return
+        await bot.do_api_request(endpoint, api_kwargs=payload)
+
+    def _rich_refused(self, e: Exception) -> bool:
+        """True when the error means Rich Messages don't exist here at all."""
+        text = str(e).lower()
+        return "not found" in text or "unknown method" in text
+
+    async def _deliver_message_async(self, chat_id: int, text: str) -> None:
+        """Deliver one message: rich Markdown first, HTML pipeline fallback."""
+        chunks = _chunks(text, self.capabilities.max_message_chars or 4096)
+        sent = 0
+        if self._rich_capable():
+            try:
+                for chunk in chunks:
+                    await self._rich_request("sendRichMessage", {
+                        "chat_id": chat_id,
+                        "rich_message": {"markdown": chunk},
+                    })
+                    sent += 1
+                return
+            except Exception as e:
+                if self._rich_refused(e):
+                    self._rich = False
+                    logger.info("Rich Messages unavailable; using HTML rendering from now on.")
+                else:
+                    logger.warning(f"sendRichMessage failed ({e}); HTML fallback for this message.")
+        for chunk in chunks[sent:]:
+            await self._send_text_async(chat_id, _md_to_tg_html(chunk), True)
 
     def render_attachments(self, session_key: str, paths: list[str]) -> None:
         """Send rendered attachments back to Telegram."""
@@ -398,29 +483,42 @@ class TelegramFrontend(BaseFrontend):
     async def _stream_pump(self, stream_key: tuple[str, str], chat_id: int, tracker: StreamTracker):
         """Own one streamed reply, preferring native draft streaming.
 
-        Bot API 9.3+ ``sendMessageDraft``: repeated calls with the same
-        ``draft_id`` and progressively longer text render a smooth native
-        typing animation — no message edits, no flicker, cheap enough for a
-        sub-second cadence. Drafts are ephemeral 30s previews in private
-        chats, so the reply is still delivered by ``_finalize_stream`` as a
-        real message (the base dedup suppressed the whole-message copy, so
-        this pump IS the delivery path).
+        Mode ladder, downgrading in place when a call is refused:
+        1. ``rich``  — ``sendRichMessageDraft`` (Bot API 10.1): partial
+           Markdown streams with live rich formatting.
+        2. ``draft`` — ``sendMessageDraft`` (9.3+): plain-text native typing
+           animation.
+        3. ``edit``  — legacy placeholder message edited on a throttle.
 
-        Falls back to the edit-a-placeholder pump when the installed
-        python-telegram-bot predates drafts or the first draft call is
-        rejected (non-private chat, older server). Flood-control:
-        ``RetryAfter`` backs off and keeps buffering; a hard failure stops
-        rendering but the final is still delivered."""
+        Drafts are ephemeral 30s previews in private chats, so the reply is
+        still delivered by ``_finalize_stream`` as a real message (the base
+        dedup suppressed the whole-message copy, so this pump IS the delivery
+        path). Flood-control: ``RetryAfter`` backs off and keeps buffering;
+        a hard failure stops rendering but the final is still delivered."""
         from telegram.error import BadRequest, RetryAfter
-        draft = getattr(self.app.bot, "send_message_draft", None)
+        has_plain_draft = getattr(self.app.bot, "send_message_draft", None) is not None
+        mode = "rich" if self._rich_capable() else ("draft" if has_plain_draft else "edit")
         draft_id = self._draft_id_for(stream_key[1])
-        if draft is not None:
+        if mode != "edit":
             # Drafts are a dedicated streaming channel — much tighter cadence
             # than message edits without flirting with flood limits.
             tracker.edit_interval, tracker.burst_chars = 0.35, 64
         message_id = None
         next_allowed = 0.0
         broken = False
+
+        def _downgrade(reason: Exception):
+            nonlocal mode
+            if mode == "rich":
+                if self._rich_refused(reason):
+                    self._rich = False
+                mode = "draft" if has_plain_draft else "edit"
+            else:
+                mode = "edit"
+            if mode == "edit":
+                tracker.edit_interval, tracker.burst_chars = 1.75, 300
+            logger.info(f"Telegram stream downgraded to '{mode}' ({reason}).")
+
         try:
             while True:
                 done, aborted, final_text = tracker.state()
@@ -430,13 +528,20 @@ class TelegramFrontend(BaseFrontend):
                 if not broken and now >= next_allowed and tracker.should_edit(now):
                     finals, current = tracker.take_render()
                     try:
-                        if draft is not None:
+                        if mode in {"rich", "draft"}:
                             for head in finals:
                                 # Size-cap rollover: persist the head as a real
                                 # message, keep drafting the tail.
-                                await self.app.bot.send_message(chat_id, head, disable_notification=True)
+                                await self._deliver_message_async(chat_id, head)
                             if current is not None:
-                                await draft(chat_id=chat_id, draft_id=draft_id, text=current)
+                                if mode == "rich":
+                                    await self._rich_request("sendRichMessageDraft", {
+                                        "chat_id": chat_id,
+                                        "draft_id": draft_id,
+                                        "rich_message": {"markdown": current},
+                                    })
+                                else:
+                                    await self.app.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=current)
                                 tracker.mark_rendered(current, now)
                         else:
                             for head in finals:
@@ -455,19 +560,18 @@ class TelegramFrontend(BaseFrontend):
                     except RetryAfter as e:
                         next_allowed = time.time() + float(getattr(e, "retry_after", 3) or 3) + 0.5
                     except BadRequest as e:
-                        if draft is not None:
-                            # Drafts rejected here (e.g. not a private chat) —
-                            # drop to the edit pump for the rest of the stream.
-                            logger.info(f"sendMessageDraft unavailable ({e}); falling back to edit streaming.")
-                            draft = None
-                            tracker.edit_interval, tracker.burst_chars = 1.75, 300
+                        if mode in {"rich", "draft"}:
+                            _downgrade(e)
                             continue
                         if current is not None:
                             tracker.mark_rendered(current, now)  # "message is not modified"
                     except Exception as e:
+                        if mode == "rich" and self._rich_refused(e):
+                            _downgrade(e)
+                            continue
                         logger.warning(f"Telegram stream render failed; deferring to final delivery: {e}")
                         broken = True
-                await asyncio.sleep(0.12 if draft is not None else 0.3)
+                await asyncio.sleep(0.12 if mode != "edit" else 0.3)
             await self._finalize_stream(chat_id, message_id, tracker, aborted, final_text)
         except Exception:
             logger.exception("Telegram stream pump crashed")
@@ -480,7 +584,8 @@ class TelegramFrontend(BaseFrontend):
         if aborted:
             # Whatever follows (compaction retry answer, "Cancelled.") arrives
             # as a normal whole message; just drop the cursor or the empty
-            # placeholder.
+            # placeholder. (Draft modes: the ephemeral draft expires on its
+            # own — nothing to clean up.)
             if message_id is not None:
                 try:
                     if remainder:
@@ -489,6 +594,13 @@ class TelegramFrontend(BaseFrontend):
                         await self.app.bot.delete_message(chat_id, message_id)
                 except Exception:
                     pass
+            return
+        if message_id is None:
+            # Draft modes left no message behind — deliver the reply for real
+            # (rich Markdown with HTML fallback; rolled heads already sent).
+            text = remainder if tracker.rolled else (final_text or remainder)
+            if text:
+                await self._deliver_message_async(chat_id, text)
             return
         if tracker.rolled:
             # Rolled-over replies stay plain text; finalize the tail in place.
