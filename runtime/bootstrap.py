@@ -59,11 +59,14 @@ def _quit(shutdown_fn):
 class FrontendManager:
     """Holds running frontend instances. Supports register/unregister at runtime.
 
-    Each frontend's transport-specific constructor args come from a factory
-    registered via ``set_factory(name, factory)``. When ``register(cls)`` is
-    called for a known frontend name, the factory builds the instance, the
-    base class binds it to the runtime + command registry, and it's started
-    on a daemon thread.
+    Construction is plugin-agnostic: a frontend asks for host resources by
+    naming them as constructor parameters (``services``, ``shutdown_fn``,
+    ``shutdown_event``, ...), and ``register(cls)`` supplies whatever the
+    signature requests from ``host_kwargs`` — the kernel never needs to know
+    a specific frontend's name. ``set_factory(name, factory)`` remains as an
+    explicit override for kernel-owned frontends with bespoke wiring. After
+    construction the base class binds the instance to the runtime + command
+    registry and it's started on a daemon thread.
     """
 
     def __init__(self, runtime, command_registry, config: dict):
@@ -74,11 +77,28 @@ class FrontendManager:
         self._adapters: dict[str, object] = {}
         self._threads: list[threading.Thread] = []
         self._factories: dict[str, callable] = {}
+        # name -> zero-arg callable producing the value; callables so
+        # per-instance resources (e.g. a fresh shutdown Event) aren't shared.
+        self.host_kwargs: dict[str, callable] = {}
         self.available_frontends: set[str] = set()
 
     def set_factory(self, name: str, factory) -> None:
         """Set factory."""
         self._factories[name] = factory
+
+    def _construct(self, cls):
+        """Build a frontend by matching its constructor params to host_kwargs."""
+        import inspect
+        try:
+            params = inspect.signature(cls.__init__).parameters
+        except (TypeError, ValueError):
+            return cls()
+        kwargs = {}
+        for name, provide in self.host_kwargs.items():
+            param = params.get(name)
+            if param is not None and param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY):
+                kwargs[name] = provide()
+        return cls(**kwargs)
 
     @property
     def adapters(self) -> dict:
@@ -100,7 +120,7 @@ class FrontendManager:
             return f"Frontend '{name}' already running"
         factory = self._factories.get(name)
         try:
-            adapter = factory(cls) if factory else cls()
+            adapter = factory(cls) if factory else self._construct(cls)
         except Exception as e:
             logger.exception(f"Frontend '{name}' instantiation failed")
             return f"Frontend '{name}' instantiation failed: {e}"
@@ -142,10 +162,17 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
     manager = FrontendManager(runtime, runtime.command_registry, config)
     manager.available_frontends.update(classes)
 
-    # Transport-specific constructor args: discovery returns the class, the
-    # bootstrap supplies what each frontend needs to talk to the host.
+    # Host resources any frontend (kernel, sandbox, or installed) can request
+    # by naming them as constructor parameters. shutdown_event is a fresh
+    # per-instance Event so one frontend's stop() never signals another's.
+    manager.host_kwargs = {
+        "shutdown_fn": lambda: shutdown_fn,
+        "shutdown_event": lambda: threading.Event(),
+        "services": lambda: services,
+    }
+    # The REPL is kernel-owned and deliberately shares the app-wide shutdown
+    # event (it owns the terminal), so it keeps an explicit factory.
     manager.set_factory("repl", lambda cls: cls(shutdown_fn, shutdown_event))
-    manager.set_factory("telegram", lambda cls: cls(threading.Event(), services))
 
     for name in sorted(frontends):
         cls = classes.get(name)
