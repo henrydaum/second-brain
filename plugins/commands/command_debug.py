@@ -20,24 +20,22 @@ class DebugCommand(BaseCommand):
 
     def run(self, _args, context):
         """Execute `/debug` for the active session."""
-        sections = [
-            "Conversation state:",
-            _state_section(context),
-            "",
-            "Recent log warnings/errors:",
-            *_log_lines(DATA_DIR / "app.log"),
-        ]
-        return "\n".join(sections)
+        # Fenced blocks: rich renderers collapse single newlines in prose,
+        # so the multi-line dumps must travel as code to stay readable.
+        return (
+            "**Conversation state**\n```\n" + _state_section(context) + "\n```\n\n"
+            "**Recent log warnings/errors**\n```\n" + "\n".join(_log_lines(DATA_DIR / "app.log")) + "\n```"
+        )
 
 
 def _state_section(context) -> str:
-    """Return the active session's state-machine snapshot, indented."""
+    """Return the active session's state-machine snapshot."""
     runtime = getattr(context, "runtime", None)
     session_key = getattr(context, "session_key", None)
     session = (getattr(runtime, "sessions", {}) or {}).get(session_key) if runtime and session_key else None
     cs = getattr(session, "cs", None) if session else None
     if cs is None:
-        return "  (no active session)"
+        return "(no active session)"
 
     parts = [format_state(cs)]
     flags = [
@@ -51,16 +49,16 @@ def _state_section(context) -> str:
         parts.append("Session: agent turn in progress")
     parts.append(format_recent_events(cs))
 
-    return "\n".join(f"  {line}" for block in parts for line in block.splitlines())
+    return "\n".join(line for block in parts for line in block.splitlines())
 
 
 def _log_lines(path: Path, limit: int = 10) -> list[str]:
-    """Return recent warning/error/critical log lines, indented."""
+    """Return recent warning/error/critical log lines."""
     if not path.exists():
-        return [f"  No log file found at {path}."]
+        return [f"No log file found at {path}."]
     hits = [
         line.strip()
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
         if " | WARNING | " in line or " | ERROR | " in line or " | CRITICAL | " in line
     ]
-    return [f"  {line}" for line in hits[-limit:]] or ["  No warnings or errors in this run."]
+    return hits[-limit:] or ["No warnings or errors in this run."]

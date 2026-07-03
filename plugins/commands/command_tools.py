@@ -62,7 +62,8 @@ def _describe(tool, context=None):
         ("Skip permissions", "enabled" if skipped else "disabled"),
     ])
     desc = (schema.get("description") or "").strip()
-    return f"{card}\n\n{desc}" if desc else card
+    quoted = "\n".join(f"> {line}" if line.strip() else ">" for line in desc.splitlines())
+    return f"{card}\n\n{quoted}" if desc else card
 
 
 def _toggle_skip(context, tool_name: str, enabled: bool) -> str:

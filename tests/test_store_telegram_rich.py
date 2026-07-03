@@ -136,6 +136,16 @@ def test_html_fallback_renders_blockquotes(tg_module):
     assert out.endswith("Pick an action.")
 
 
+def test_detail_cards_compact_to_code_blocks_but_data_tables_stay(tg_module):
+    card = "| timekeeper |  |\n| --- | --- |\n| Status | Loaded |"
+    out = tg_module._compact_detail_cards(f"Pick:\n\n{card}\n\ntail")
+    assert "```" in out and "| Status | Loaded |" not in out
+    assert "timekeeper" in out
+
+    data = "| Name | Count |\n| --- | --- |\n| Tools | 16 |"
+    assert tg_module._compact_detail_cards(data) == data  # real table untouched
+
+
 def test_form_prompt_renders_markdown(frontend_cls, tg_module):
     fe = _frontend(frontend_cls, {})
     prompt = fe._prompt({"field": {"prompt": _TABLE_MD}})

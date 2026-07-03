@@ -188,13 +188,13 @@ def test_debug_reports_state_machine_snapshot_and_log_tail(tmp_path, monkeypatch
 
     out = DebugCommand().run({}, context)
 
-    assert "Conversation state:" in out
+    assert "**Conversation state**" in out
     assert "Turn: user (user)" in out
     assert f"Phase: {cs.phase}" in out
     assert "Participants: user(user), agent(agent)" in out
     assert "Session: sample extension" in out
     # The valuable part of the old /doctor: recent warnings/errors.
-    assert "Recent log warnings/errors:" in out
+    assert "**Recent log warnings/errors**" in out
     assert "Plugin registration failed: demo" in out
     assert "Auto-load failed for 'llm': boom" in out
     assert "INFO  | ok" not in out  # info lines are filtered out

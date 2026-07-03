@@ -7,7 +7,7 @@ surfaces render the markdown natively.
 
 import re
 
-from plugins.frontends.helpers.formatters import align_md_tables, detail_card, format_tasks, md_table
+from plugins.frontends.helpers.formatters import align_md_tables, detail_card, format_tasks, md_table, render_plain
 
 
 def _tables_start_their_own_block(text: str) -> bool:
@@ -58,6 +58,15 @@ def test_detail_card_title_becomes_header():
     assert lines[0] == "default (active)"
     assert lines[2].startswith("LLM")
     assert "(none)" in lines[3]
+
+
+def test_render_plain_strips_fence_markers_and_aligns():
+    text = "**State**\n```\nTurn: user\nPhase: base\n```\n\n" + md_table(["A", "B"], [(1, 2)])
+    out = render_plain(text)
+
+    assert "```" not in out
+    assert "Turn: user\nPhase: base" in out
+    assert "| 1 | 2 |" not in out  # table got aligned too
 
 
 def test_align_md_tables_leaves_prose_untouched():

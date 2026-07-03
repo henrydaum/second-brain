@@ -101,8 +101,8 @@ def _format_available(context, category: str | None) -> str:
     items = [item for item in _available_items(context) if item["family"] == category]
     if not items:
         return f"No available {_label(category).lower()} files."
-    return "\n\n".join([f"Available {_label(category).lower()} files:",
-                        _items_table(items), "Install with /packages install <stem>."])
+    return "\n\n".join([_heading("Available", category),
+                        _items_table(items), "Install with `/packages install <name>`."])
 
 
 def _format_installed(category: str | None) -> str:
@@ -111,13 +111,20 @@ def _format_installed(category: str | None) -> str:
     items = [item for item in package_manager.installed_packages() if item["family"] == category]
     if not items:
         return f"No {_label(category).lower()} files installed."
-    return "\n\n".join([f"Installed {_label(category).lower()} files:",
-                        _items_table(items), "Uninstall with /packages uninstall <stem>."])
+    return "\n\n".join([_heading("Installed", category),
+                        _items_table(items), "Uninstall with `/packages uninstall <name>`."])
 
 
 def _items_table(items: list[dict]) -> str:
-    rows = [(item["id"], "helper" if item.get("helper") else "plugin", item["path"]) for item in items]
-    return md_table(["Name", "Kind", "Path"], rows)
+    rows = [(item["id"] + (" (helper)" if item.get("helper") else ""), item["path"]) for item in items]
+    return md_table(["Name", "Path"], rows)
+
+
+def _heading(prefix: str, category: str) -> str:
+    if category == "bundles":
+        return f"{prefix} bundles:"
+    label = _label(category).lower()
+    return f"{prefix} {label[:-1] if label.endswith('s') else label} plugins:"
 
 
 def _label(category: str) -> str:

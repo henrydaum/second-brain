@@ -5,6 +5,7 @@ import json
 from config.config_data import SETTINGS_DATA
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
+from plugins.frontends.helpers.formatters import detail_card, md_table
 from plugins.plugin_discovery import get_plugin_setting_scope, get_plugin_setting_type, get_plugin_settings
 from state_machine.conversation import FormStep
 
@@ -184,12 +185,15 @@ def _describe(context, key):
     """Internal helper to handle describe."""
     title, desc = _settings().get(key, (key, ""))
     tag = " (per-user)" if _scope(key) == "user" else ""
-    return f"{title}{tag}\n{key} = {_format_value(_current_value(context, key))}\n{desc}"
+    card = detail_card(f"{title}{tag}", [(key, _format_value(_current_value(context, key)))])
+    quoted = "\n".join(f"> {line}" for line in desc.splitlines() if line.strip())
+    return card + (f"\n\n{quoted}" if quoted else "")
 
 
 def _list(context):
     """Internal helper to list config."""
-    return "Settings:\n" + "\n".join(f"  {k} = {_format_value(_current_value(context, k))}" for k in sorted(_settings()))
+    rows = [(k, _format_value(_current_value(context, k))) for k in sorted(_settings())]
+    return "Settings:\n\n" + md_table(["Setting", "Value"], rows)
 
 
 def _parse(value, key=None):

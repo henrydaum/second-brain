@@ -25,6 +25,13 @@ def md_table(headers: list, rows: list) -> str:
     return "\n".join(lines)
 
 
+def render_plain(text: str) -> str:
+    """Render markdown-ish output for a monospace terminal: align tables
+    and drop code-fence markers (the content already reads as plain text)."""
+    aligned = align_md_tables(text)
+    return "\n".join(line for line in aligned.split("\n") if not re.fullmatch(r"\s*```\w*\s*", line))
+
+
 def detail_card(title: str, pairs: list[tuple]) -> str:
     """A titled key/value block: a two-column markdown table whose header
     row carries the title, so describe-style prompts render as a card."""
@@ -283,34 +290,16 @@ def format_tools(tools: list[dict], compact: bool = False) -> str:
 
 
 def format_locations(data: dict) -> str:
-    """Format the locations data as a readable file tree."""
-    lines = []
+    """Format the locations data as fenced file trees (rich renderers
+    collapse the single newlines of a bare listing)."""
+    def section(label: str, path: str, tree: list[str]) -> str:
+        listing = "\n".join(tree) if tree else "(empty)"
+        return f"**{label}**\n`{path}`\n```\n{listing}\n```"
 
-    root_path = data.get("root_path", "")
-    data_path = data.get("data_path", "")
-    root_tree = data.get("root_tree", [])
-    data_tree = data.get("data_tree", [])
-
-    lines.append(f"Project root: {root_path}")
-    lines.append("")
-
-    if root_tree:
-        for f in root_tree:
-            lines.append(f"  {f}")
-    else:
-        lines.append("  (empty)")
-
-    lines.append("")
-    lines.append(f"Data directory: {data_path}")
-    lines.append("")
-
-    if data_tree:
-        for f in data_tree:
-            lines.append(f"  {f}")
-    else:
-        lines.append("  (empty)")
-
-    return "\n".join(lines)
+    return "\n\n".join([
+        section("Project root", data.get("root_path", ""), data.get("root_tree", [])),
+        section("Data directory", data.get("data_path", ""), data.get("data_tree", [])),
+    ])
 
 
 # ── Scheduled jobs ───────────────────────────────────────────────────
