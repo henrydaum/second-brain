@@ -4,25 +4,40 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from attachments.attachment import Attachment, AttachmentBundle
 
+_REPO = Path(__file__).resolve().parents[1]
+_STORE_REL = "services/service_litellm.py"
 
-def _load_litellm_service():
-    path = Path(__file__).resolve().parents[2] / "sb-store" / "services" / "service_litellm.py"
-    if not path.exists():
-        pytest.skip("sb-store worktree not present")
+
+def _load_litellm_service(tmp_path):
+    source = None
+    for ref in ("store", "origin/store"):
+        proc = subprocess.run(
+            ["git", "-C", str(_REPO), "show", f"{ref}:{_STORE_REL}"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+        if proc.returncode == 0:
+            source = proc.stdout
+            break
+    if source is None:
+        pytest.skip(f"{_STORE_REL} not present on a local store ref")
+    path = tmp_path / "service_litellm.py"
+    path.write_text(source, encoding="utf-8")
     spec = importlib.util.spec_from_file_location("store_service_litellm", path)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module.LiteLLMService
 
 
 def test_litellm_injects_image_audio_and_video_blocks(tmp_path, monkeypatch):
-    LiteLLMService = _load_litellm_service()
+    LiteLLMService = _load_litellm_service(tmp_path)
     llm = LiteLLMService("openai/test")
     image = tmp_path / "image.png"
     audio = tmp_path / "clip.wav"
@@ -49,7 +64,7 @@ def test_litellm_injects_image_audio_and_video_blocks(tmp_path, monkeypatch):
 
 
 def test_litellm_attachment_mismatch_falls_back_to_parsed_text(tmp_path):
-    LiteLLMService = _load_litellm_service()
+    LiteLLMService = _load_litellm_service(tmp_path)
     llm = LiteLLMService("openai/test")
     gif = tmp_path / "clip.gif"
     gif.write_bytes(b"gif-bytes")
