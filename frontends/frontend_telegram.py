@@ -94,11 +94,29 @@ def _md_to_tg_html(text: str) -> str:
     """Convert lightweight markdown-ish output into Telegram-safe HTML."""
     parts, last = [], 0
     for m in re.finditer(r"```(\w*)\n(.*?)```", text or "", re.DOTALL):
-        parts.append(_inline(text[last:m.start()]))
+        parts.append(_blocks(text[last:m.start()]))
         code = html.escape(m.group(2).rstrip())
         parts.append(f'<pre><code class="language-{html.escape(m.group(1))}">{code}</code></pre>' if m.group(1) else f"<pre>{code}</pre>")
         last = m.end()
-    return "".join(parts + [_inline((text or "")[last:])])
+    return "".join(parts + [_blocks((text or "")[last:])])
+
+
+_TABLE_BLOCK = re.compile(r"^[ \t]*\|.*\|[ \t]*\n[ \t]*\|(?:\s*:?-{3,}:?\s*\|)+[ \t]*\n(?:[ \t]*\|.*\|[ \t]*(?:\n|$))*", re.MULTILINE)
+
+
+def _blocks(text: str) -> str:
+    """Render markdown tables as aligned <pre> blocks; inline-format the rest.
+
+    Only the non-rich HTML fallback comes through here — the Rich Messages
+    path sends raw markdown and Telegram renders real tables server-side.
+    """
+    from plugins.frontends.helpers.formatters import align_md_tables
+    out, last = [], 0
+    for m in _TABLE_BLOCK.finditer(text or ""):
+        out.append(_inline(text[last:m.start()]))
+        out.append(f"<pre>{html.escape(align_md_tables(m.group(0).strip()))}</pre>")
+        last = m.end()
+    return "".join(out + [_inline((text or "")[last:])])
 
 
 def _inline(text: str) -> str:
@@ -414,7 +432,7 @@ class TelegramFrontend(BaseFrontend):
 
     def render_approval_request(self, session_key: str, req) -> None:
         """Render a pending approval request with Telegram controls."""
-        body = html.escape(f"{getattr(req, 'title', 'Approval requested')}\n\n{getattr(req, 'body', '')}".strip())
+        body = _md_to_tg_html(f"{getattr(req, 'title', 'Approval requested')}\n\n{getattr(req, 'body', '')}".strip())
         self._send_text(session_key, body, markup=self._approval_markup(session_key, req))
 
     def render_buttons(self, session_key: str, buttons: list[dict]) -> None:
@@ -824,7 +842,10 @@ class TelegramFrontend(BaseFrontend):
         field = form.get("field") or {}
         display = form.get("display") or {}
         prompt = display.get("prompt") or field.get("prompt") or field.get("name") or "Input required"
-        bits = [html.escape(str(prompt))]
+        # Form prompts can carry markdown tables (e.g. the /packages overview);
+        # inline keyboards can't ride on Rich Messages, so render via the HTML
+        # converter, which aligns tables into <pre> blocks.
+        bits = [_md_to_tg_html(str(prompt))]
         assist = display.get("assist")
         if assist:
             bits.append(f"<i>{html.escape(str(assist))}</i>")
