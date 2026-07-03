@@ -4,7 +4,7 @@ import json
 from uuid import uuid4
 
 from plugins.BaseCommand import BaseCommand
-from plugins.frontends.helpers.formatters import format_tasks
+from plugins.frontends.helpers.formatters import detail_card, format_tasks
 from state_machine.conversation import FormStep
 from state_machine.forms import schema_to_form_steps
 
@@ -94,7 +94,13 @@ def _describe(context, task_name):
     counts = (db.get_system_stats().get("tasks", {}) if db else {}) | (db.get_run_stats() if db and hasattr(db, "get_run_stats") else {})
     c = {"PENDING": 0, "PROCESSING": 0, "DONE": 0, "FAILED": 0} | counts.get(task_name, {})
     hint = _schedule_hint(context, orch.tasks[task_name])
-    return f"{task_name}\nPending: {c['PENDING']}      Running: {c['PROCESSING']}      Done: {c['DONE']}      Failed: {c['FAILED']}" + (f"\n\n{hint}" if hint else "")
+    card = detail_card(task_name, [
+        ("Pending", c["PENDING"]),
+        ("Running", c["PROCESSING"]),
+        ("Done", c["DONE"]),
+        ("Failed", c["FAILED"]),
+    ])
+    return card + (f"\n\n{hint}" if hint else "")
 
 
 def _task(context, name):

@@ -2,7 +2,7 @@
 
 from plugins.BaseCommand import BaseCommand
 from plugins.BaseService import is_extension_service, is_user_managed_service, service_lifecycle
-from plugins.frontends.helpers.formatters import format_services
+from plugins.frontends.helpers.formatters import detail_card, format_services
 from state_machine.conversation import FormStep
 
 
@@ -62,7 +62,10 @@ def _describe(services, name):
     if svc is None:
         return "Action"
     status = "Extension" if is_extension_service(svc) else ("Loaded" if getattr(svc, 'loaded', False) else "Unloaded")
-    return f"{name}\nStatus: {status}\nModel: {getattr(svc, 'model_name', '') or '-'}"
+    return detail_card(name, [
+        ("Status", status),
+        ("Model", getattr(svc, "model_name", "") or "-"),
+    ])
 
 
 def _clear_tasks(context):

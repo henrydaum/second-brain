@@ -4,6 +4,7 @@ import json
 
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
+from plugins.frontends.helpers.formatters import detail_card
 from state_machine.conversation import FormStep
 
 
@@ -106,7 +107,11 @@ def _describe(context, name):
     if not p:
         return "Action"
     active = " (active)" if context.config.get("active_agent_profile") == name else ""
-    return f"{name}{active}\nLLM: {p.get('llm', 'default')}\nTool mode: {p.get('whitelist_or_blacklist_tools', 'blacklist')}\nTool list: {', '.join(p.get('tools_list') or []) or '(none)'}"
+    return detail_card(f"{name}{active}", [
+        ("LLM", p.get("llm", "default")),
+        ("Tool mode", p.get("whitelist_or_blacklist_tools", "blacklist")),
+        ("Tool list", ", ".join(p.get("tools_list") or []) or "(none)"),
+    ])
 
 
 def _profile_label(context, name):

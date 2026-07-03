@@ -25,6 +25,12 @@ def md_table(headers: list, rows: list) -> str:
     return "\n".join(lines)
 
 
+def detail_card(title: str, pairs: list[tuple]) -> str:
+    """A titled key/value block: a two-column markdown table whose header
+    row carries the title, so describe-style prompts render as a card."""
+    return md_table([title, ""], pairs)
+
+
 _TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
 _TABLE_SEPARATOR = re.compile(r"^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$")
 

@@ -46,7 +46,7 @@ def test_services_command_does_not_offer_load_unload_for_extensions():
     blocked = ServicesCommand().run({"service_name": "extension", "action": "unload"}, context)
 
     assert [step.name for step in steps] == ["service_name"]
-    assert "Status: Extension" in result
+    assert "| Status | Extension |" in result
     assert blocked == "extension is an installed extension and is loaded automatically."
 
 

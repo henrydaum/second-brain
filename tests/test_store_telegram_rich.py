@@ -128,6 +128,14 @@ def test_html_fallback_renders_tables_as_pre(tg_module):
     assert out.endswith("Pick one.")
 
 
+def test_html_fallback_renders_blockquotes(tg_module):
+    out = tg_module._md_to_tg_html("Preview:\n\n> user: hi there\n> assistant: hello\n\nPick an action.")
+
+    assert "<blockquote>user: hi there\nassistant: hello</blockquote>" in out
+    assert out.startswith("Preview:")
+    assert out.endswith("Pick an action.")
+
+
 def test_form_prompt_renders_markdown(frontend_cls, tg_module):
     fe = _frontend(frontend_cls, {})
     prompt = fe._prompt({"field": {"prompt": _TABLE_MD}})

@@ -4,7 +4,7 @@ import json
 
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
-from plugins.frontends.helpers.formatters import md_table
+from plugins.frontends.helpers.formatters import detail_card, md_table
 from state_machine.conversation import FormStep
 
 
@@ -151,8 +151,10 @@ def _describe(config, name):
     """Internal helper to handle describe."""
     enabled = set((config or {}).get("enabled_frontends", []))
     profile = ((config or {}).get("frontend_profiles", {}) or {}).get(name)
-    status = "Enabled" if name in enabled else "Disabled"
-    return f"{name}\nStatus: {status}\nProfile: {_profile_summary(profile)}"
+    return detail_card(name, [
+        ("Status", "Enabled" if name in enabled else "Disabled"),
+        ("Profile", _profile_summary(profile)),
+    ])
 
 
 def _profile_summary(profile):

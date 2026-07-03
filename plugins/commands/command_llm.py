@@ -4,6 +4,7 @@ import json
 
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
+from plugins.frontends.helpers.formatters import detail_card
 from plugins.services.service_llm import llm_backend_names
 from state_machine.conversation import FormStep
 
@@ -143,7 +144,12 @@ def _describe(context, name):
     ctx = int(p.get("llm_context_size", 0) or 0)
     ctx_str = "0 (reactive compaction)" if ctx == 0 else f"{ctx:,}"
     caps = ", ".join(k for k, v in (p.get("llm_capabilities") or {}).items() if v) or "none declared"
-    return f"{name}{mark}\nStatus: {'Loaded' if loaded else 'Unloaded'}\nClass: {p.get('llm_service_class', DEFAULT_BACKEND)}\nContext: {ctx_str}\nNative attachments: {caps}"
+    return detail_card(f"{name}{mark}", [
+        ("Status", "Loaded" if loaded else "Unloaded"),
+        ("Class", p.get("llm_service_class", DEFAULT_BACKEND)),
+        ("Context", ctx_str),
+        ("Native attachments", caps),
+    ])
 
 
 def _model_label(context, name):

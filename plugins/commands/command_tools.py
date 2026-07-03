@@ -1,7 +1,7 @@
 """Slash command plugin for `/tools`."""
 
 from plugins.BaseCommand import BaseCommand
-from plugins.frontends.helpers.formatters import format_tool_result, format_tools
+from plugins.frontends.helpers.formatters import detail_card, format_tool_result, format_tools
 from state_machine.conversation import FormStep
 from state_machine.forms import schema_to_form_steps
 
@@ -57,7 +57,12 @@ def _describe(tool, context=None):
     required = set(params.get("required", []))
     fields = [f"{name}{'*' if name in required else ''}" for name in (params.get("properties") or {})]
     skipped = tool.name in ((getattr(context, "config", None) or {}).get("skip_permissions") or [])
-    return f"{tool.name}\n{schema.get('description', '')}\nArgs: {', '.join(fields) or '(none)'}\nSkip permissions: {'enabled' if skipped else 'disabled'}"
+    card = detail_card(tool.name, [
+        ("Args", ", ".join(fields) or "(none)"),
+        ("Skip permissions", "enabled" if skipped else "disabled"),
+    ])
+    desc = (schema.get("description") or "").strip()
+    return f"{card}\n\n{desc}" if desc else card
 
 
 def _toggle_skip(context, tool_name: str, enabled: bool) -> str:

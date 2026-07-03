@@ -7,7 +7,7 @@ surfaces render the markdown natively.
 
 import re
 
-from plugins.frontends.helpers.formatters import align_md_tables, format_tasks, md_table
+from plugins.frontends.helpers.formatters import align_md_tables, detail_card, format_tasks, md_table
 
 
 def _tables_start_their_own_block(text: str) -> bool:
@@ -47,6 +47,17 @@ def test_align_md_tables_round_trips_escaped_pipes():
     aligned = align_md_tables(md_table(["X"], [("a|b",)]))
     assert "a|b" in aligned
     assert "\\|" not in aligned
+
+
+def test_detail_card_title_becomes_header():
+    card = detail_card("default (active)", [("LLM", "default"), ("Tool list", "(none)")])
+    aligned = align_md_tables(card)
+    lines = aligned.split("\n")
+
+    assert card.startswith("| default (active) |  |")
+    assert lines[0] == "default (active)"
+    assert lines[2].startswith("LLM")
+    assert "(none)" in lines[3]
 
 
 def test_align_md_tables_leaves_prose_untouched():
