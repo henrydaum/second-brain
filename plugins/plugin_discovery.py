@@ -38,6 +38,11 @@ _plugin_setting_types: dict[str, str] = {}  # variable_name -> plugin type that 
 # Only populated for services (not tools/tasks), enabling targeted reloads.
 _setting_to_services: dict[str, set[str]] = {}
 
+# Reverse map for *all* plugin kinds: setting variable_name -> plugin names
+# that declare it. Accumulates every declarer (unlike the first-wins settings
+# list) so /config can show "Used by: x, y".
+_setting_to_plugins: dict[str, set[str]] = {}
+
 
 def get_plugin_settings() -> list:
     """Return the accumulated plugin config settings (read-only copy)."""
@@ -47,6 +52,11 @@ def get_plugin_settings() -> list:
 def get_setting_service_map() -> dict[str, set[str]]:
     """Return a copy of the setting_key -> {service_names} map."""
     return {k: set(v) for k, v in _setting_to_services.items()}
+
+
+def get_setting_plugin_names(setting_key: str) -> list[str]:
+    """Sorted plugin names (any kind) declaring a setting key."""
+    return sorted(_setting_to_plugins.get(setting_key, ()))
 
 
 def get_plugin_setting_type(setting_key: str) -> str | None:
@@ -85,9 +95,12 @@ def _collect_config_settings(source, service_names: list[str] | None = None,
             _plugin_settings.append(tuple(entry))
             if plugin_type:
                 _plugin_setting_types[var_name] = plugin_type
-        # Always record the service mapping (even if settings deduped)
+        # Always record the reverse mappings (even if settings deduped)
         if service_names:
             _setting_to_services.setdefault(var_name, set()).update(service_names)
+        owners = service_names or ([getattr(source, "name", "")] if getattr(source, "name", "") else [])
+        if owners:
+            _setting_to_plugins.setdefault(var_name, set()).update(owners)
 
 
 def _purge_plugin_settings(plugin_types: set[str]):
@@ -108,6 +121,7 @@ def _purge_plugin_settings(plugin_types: set[str]):
         owner_type = _plugin_setting_types.get(var_name)
         if owner_type in plugin_types:
             _setting_to_services.pop(var_name, None)
+            _setting_to_plugins.pop(var_name, None)
             continue
         kept.append(entry)
         kept_keys.add(var_name)

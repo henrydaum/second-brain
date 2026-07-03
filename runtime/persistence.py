@@ -22,6 +22,7 @@ from typing import Any
 from events.event_bus import bus
 from events.event_channels import (
     SESSION_CLOSED,
+    SESSION_CONVERSATION_CHANGED,
     SESSION_CREATED,
     SESSION_MESSAGE,
     SESSION_TURN_COMPLETED,
@@ -193,6 +194,7 @@ def load_conversation(
         "agent_profile": profile,
         "notification_mode": saved_mode,
     })
+    announce_session_conversation(runtime, session)
     restore_pending_requests(runtime, session)
     restore_pending_form(runtime, session)
     return session
@@ -502,6 +504,22 @@ def ensure_conversation(runtime, session: RuntimeSession, title_text: str = "") 
             (title_text or "New Conversation").replace("\n", " ")[:80] or "New Conversation",
             user_id=runtime.session_user_id(session.key),
         )
+        announce_session_conversation(runtime, session)
+
+
+def announce_session_conversation(runtime, session: RuntimeSession) -> None:
+    """Emit SESSION_CONVERSATION_CHANGED for a session's current conversation.
+
+    Frontends with a persistent surface (Telegram's pinned banner, a window
+    title) mirror this instead of polling.
+    """
+    if session.conversation_id is None:
+        return
+    bus.emit(SESSION_CONVERSATION_CHANGED, {
+        "session_key": session.key,
+        "conversation_id": session.conversation_id,
+        "title": conversation_title(runtime, session.conversation_id),
+    })
 
 
 # ──────────────────────────────────────────────────────────────────────

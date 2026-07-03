@@ -4,6 +4,7 @@ import json
 
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
+from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks
 from plugins.frontends.helpers.formatters import detail_card, md_table
 from state_machine.conversation import FormStep
 
@@ -35,7 +36,10 @@ class FrontendsCommand(BaseCommand):
         steps = [FormStep("frontend_name", "Select a frontend.", True, enum=names, columns=2)]
         name = args.get("frontend_name")
         if name:
-            steps.append(FormStep("action", f"What do you want to do with this frontend?\n\n{_describe(context.config, name)}", True, enum=ACTIONS, enum_labels=ACTION_LABELS))
+            adapter = (getattr(getattr(context, "runtime", None), "frontend_manager", None) or object())
+            links, link_labels = quicklinks(getattr(adapter, "adapters", {}).get(name))
+            steps.append(FormStep("action", f"What do you want to do with this frontend?\n\n{_describe(context.config, name)}", True, enum=ACTIONS + links, enum_labels=ACTION_LABELS + link_labels))
+        steps += quicklink_value_steps(args.get("action"), context)
         if args.get("action") == "configure":
             steps.append(FormStep("field", "Choose which part of the frontend profile to edit.", True, enum=FIELDS, enum_labels=FIELD_LABELS))
             field = args.get("field")
@@ -48,6 +52,9 @@ class FrontendsCommand(BaseCommand):
         action, name = args.get("action"), args.get("frontend_name")
         if not name:
             return _show(context)
+        handled = quicklink_run(action, args, context)
+        if handled is not None:
+            return handled
         if action in ("enable", "disable"):
             return _toggle(context, name, action)
         if action == "configure":

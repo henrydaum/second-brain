@@ -2,11 +2,9 @@
 
 from plugins.BaseCommand import BaseCommand
 from plugins.BaseService import is_extension_service, is_user_managed_service, service_lifecycle
+from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks
 from plugins.frontends.helpers.formatters import detail_card, format_services
 from state_machine.conversation import FormStep
-
-
-ACTIONS = ["load", "unload"]
 
 
 class ServicesCommand(BaseCommand):
@@ -19,8 +17,14 @@ class ServicesCommand(BaseCommand):
         """Handle form."""
         services = context.services or {}
         steps = [FormStep("service_name", "Select a service.", True, enum=sorted((context.services or {}).keys()), columns=2)]
-        if args.get("service_name") and is_user_managed_service(services.get(args["service_name"])):
-            steps.append(FormStep("action", f"What do you want to do with this service?\n\n{_describe(services, args['service_name'])}", True, enum=ACTIONS, enum_labels=["Load it", "Unload it"]))
+        name = args.get("service_name")
+        svc = services.get(name) if name else None
+        if svc is None:
+            return steps
+        actions, labels = _actions_for(context, name, svc)
+        if actions:
+            steps.append(FormStep("action", f"What do you want to do with this service?\n\n{_describe(services, name)}", True, enum=actions, enum_labels=labels))
+        steps += quicklink_value_steps(args.get("action"), context)
         return steps
 
     def run(self, args, context):
@@ -34,18 +38,53 @@ class ServicesCommand(BaseCommand):
             return "Unknown service."
         if not action:
             return _describe(services, name)
+        handled = quicklink_run(action, args, context)
+        if handled is not None:
+            return handled
         if not is_user_managed_service(svc):
             return f"{name} is an installed extension and is loaded automatically."
-        if action == "load":
-            if svc.load() is False:
-                return f"Failed to load service: {name}"
-            _clear_tasks(context)
-            return f"Loaded service: {name}"
-        if action == "unload":
+        if action in ("toggle_loaded", "load", "unload"):
+            load = not getattr(svc, "loaded", False) if action == "toggle_loaded" else action == "load"
+            if load:
+                if svc.load() is False:
+                    return f"Failed to load service: {name}"
+                _clear_tasks(context)
+                return f"Loaded service: {name}"
             svc.unload()
             _clear_tasks(context)
             return f"Unloaded service: {name}"
+        if action == "toggle_autoload":
+            return _toggle_autoload(context, name)
         return f"Unknown action: {action}"
+
+
+def _actions_for(context, name, svc):
+    """Action enum + labels for one service: lifecycle toggles for managed
+    services, plus Edit-setting quicklinks for anything declaring settings."""
+    actions, labels = [], []
+    if is_user_managed_service(svc):
+        loaded = getattr(svc, "loaded", False)
+        autoloaded = name in ((getattr(context, "config", None) or {}).get("autoload_services") or [])
+        actions += ["toggle_loaded", "toggle_autoload"]
+        labels += ["Unload it" if loaded else "Load it",
+                   "Don't autoload on startup" if autoloaded else "Autoload on startup"]
+    links, link_labels = quicklinks(svc)
+    return actions + links, labels + link_labels
+
+
+def _toggle_autoload(context, name):
+    """Add or remove a service from config's autoload_services."""
+    from config import config_manager
+    config = context.config
+    names = [str(n) for n in (config.get("autoload_services") or [])]
+    enabled = name not in names
+    names = sorted(set(names) | {name}) if enabled else [n for n in names if n != name]
+    config["autoload_services"] = names
+    config_manager.save(config)
+    runtime = getattr(context, "runtime", None)
+    if runtime is not None and getattr(runtime, "config", None) is not None:
+        runtime.config["autoload_services"] = names
+    return f"{name} will {'now' if enabled else 'no longer'} load automatically on startup."
 
 
 def _show(services):

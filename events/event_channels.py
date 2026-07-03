@@ -256,6 +256,16 @@ Payload:
     key:         str
     value:       str | None  (None on removal)"""
 
+SESSION_CONVERSATION_CHANGED = "session_conversation_changed"
+"""A live session switched to (or created) a conversation, or the one it is
+showing was retitled. Frontends with a persistent surface (pinned banner,
+window title, sidebar highlight) subscribe to mirror "where am I?" without
+polling. Emitted unconditionally.
+Payload:
+    session_key:     str
+    conversation_id: int
+    title:           str"""
+
 CONVERSATION_CHANGED = "conversation_changed"
 """The conversation *catalog* changed, as opposed to a live session (SESSION_*).
 Lets a frontend refresh a conversation list/sidebar without polling. The kernel

@@ -4,6 +4,7 @@ import json
 from uuid import uuid4
 
 from plugins.BaseCommand import BaseCommand
+from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks
 from plugins.frontends.helpers.formatters import detail_card, format_tasks
 from state_machine.conversation import FormStep
 from state_machine.forms import schema_to_form_steps
@@ -28,10 +29,13 @@ class TasksCommand(BaseCommand):
             return steps
         task = _task(context, args.get("task_name"))
         if task:
-            steps.append(FormStep("action", f"What do you want to do with this task?\n\n{_describe(context, args['task_name'])}", True, enum=EVENT_ACTIONS if getattr(task, "trigger", "path") == "event" else PATH_ACTIONS))
+            base = EVENT_ACTIONS if getattr(task, "trigger", "path") == "event" else PATH_ACTIONS
+            links, link_labels = quicklinks(task)
+            steps.append(FormStep("action", f"What do you want to do with this task?\n\n{_describe(context, args['task_name'])}", True, enum=base + links, enum_labels=list(base) + link_labels))
         action = args.get("action")
         if task and action == "trigger":
             steps += schema_to_form_steps(getattr(task, "event_payload_schema", {}) or {}, prompt_optional=True)
+        steps += quicklink_value_steps(action, context)
         return steps
 
     def run(self, args, context):
@@ -45,6 +49,9 @@ class TasksCommand(BaseCommand):
         task = _task(context, name)
         if not orch or not task:
             return "Unknown task."
+        handled = quicklink_run(action, args, context)
+        if handled is not None:
+            return handled
         if action == "pause":
             orch.paused.add(name)
             return f"Paused task: {name}"

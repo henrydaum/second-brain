@@ -28,7 +28,9 @@ from events.event_channels import (
     COMMAND_CALL_FINISHED,
     COMMAND_CALL_PROGRESSED,
     COMMAND_CALL_STARTED,
+    CONVERSATION_CHANGED,
     FORM_REQUESTED,
+    SESSION_CONVERSATION_CHANGED,
     TASKS_CHANGED,
     TOOL_CALL_FINISHED,
     TOOL_CALL_STARTED,
@@ -341,6 +343,8 @@ class BaseFrontend:
             bus.subscribe(TOOL_CALL_FINISHED, self.on_bus_tool_call_finished),
             bus.subscribe(TOOLS_CHANGED, self.on_tools_changed),
             bus.subscribe(TASKS_CHANGED, self.on_tasks_changed),
+            bus.subscribe(SESSION_CONVERSATION_CHANGED, self.on_bus_session_conversation_changed),
+            bus.subscribe(CONVERSATION_CHANGED, self.on_bus_conversation_catalog_changed),
         ]
         self._bound = True
 
@@ -396,7 +400,9 @@ class BaseFrontend:
                 if cmd and not self.command_allowed(name):
                     return self._command_not_allowed(session_key, name)
                 if cmd:
-                    args = self.commands.parse_args(name, arg, session_key=session_key) if arg.strip() else {}
+                    args, handled = self._parse_command_args(session_key, name, arg)
+                    if handled is not None:
+                        return handled
                     return self.submit(session_key, ACTION_CALL_COMMAND, {"name": name, "args": args})
                 return self._unknown_command(session_key, name)
             if not stripped and ACTION_SKIP_FORM in legal:
@@ -434,7 +440,9 @@ class BaseFrontend:
             if cmd and not self.command_allowed(name):
                 return self._command_not_allowed(session_key, name)
             if cmd:
-                args = self.commands.parse_args(name, arg, session_key=session_key) if arg.strip() else {}
+                args, handled = self._parse_command_args(session_key, name, arg)
+                if handled is not None:
+                    return handled
                 return self.submit(
                     session_key,
                     ACTION_CALL_COMMAND,
@@ -456,6 +464,21 @@ class BaseFrontend:
     def cancel(self, session_key: str):
         """Cancel base frontend."""
         return self.submit(session_key, ACTION_CANCEL)
+
+    def _parse_command_args(self, session_key: str, name: str, arg: str):
+        """Parse one-shot command args, rendering bad input instead of raising.
+
+        ``FormStep.coerce`` raises ``ValueError`` on invalid values (wrong
+        enum member, bad JSON, non-numeric numbers); an uncaught raise here
+        dies inside the transport's handler thread and the user sees nothing.
+        Returns ``(args, None)`` or ``(None, result)`` when already handled.
+        """
+        try:
+            return (self.commands.parse_args(name, arg, session_key=session_key) if arg.strip() else {}), None
+        except Exception as e:
+            result = RuntimeResult(False, messages=[f"Invalid arguments for `/{name}`: {e}\nType `/{name}` alone to fill them in step by step."])
+            self._render_result(session_key, result)
+            return None, result
 
     def _unknown_command(self, session_key: str, name: str):
         """Render an unknown slash-command message without waking the agent."""
@@ -702,6 +725,39 @@ class BaseFrontend:
     def on_bus_command_call_finished(self, payload: dict) -> None:
         """Handle on bus command call finished."""
         self._render_tool_status_event({**(payload or {}), "status": "finished", "kind": "command"})
+
+    def on_bus_session_conversation_changed(self, payload: dict) -> None:
+        """Route a session's conversation switch/retitle to the banner hook."""
+        payload = payload or {}
+        key = payload.get("session_key")
+        if not key or key not in self._live_session_keys():
+            return
+        try:
+            self.render_conversation_banner(key, dict(payload))
+        except Exception:
+            logger.exception(f"render_conversation_banner failed for '{self.name}'")
+
+    def on_bus_conversation_catalog_changed(self, payload: dict) -> None:
+        """Refresh banners when the conversation a live session shows is retitled."""
+        payload = payload or {}
+        if payload.get("action") != "retitled":
+            return
+        cid = payload.get("conversation_id")
+        if cid is None or self.runtime is None:
+            return
+        for key in self._live_session_keys():
+            session = self.runtime.sessions.get(key)
+            if session is None or session.conversation_id != cid:
+                continue
+            row = self.runtime.db.get_conversation(cid) if self.runtime.db else None
+            title = ((row or {}).get("title") or "").strip() or "New Conversation"
+            self.on_bus_session_conversation_changed(
+                {"session_key": key, "conversation_id": cid, "title": title})
+
+    def render_conversation_banner(self, session_key: str, info: dict) -> None:
+        """Default no-op; frontends with a persistent surface (pinned message,
+        window title) override to mirror the session's conversation title."""
+        return
 
     def on_tools_changed(self, _payload) -> None:
         """Handle on tools changed."""

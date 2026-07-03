@@ -6,7 +6,7 @@ from config.config_data import SETTINGS_DATA
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.formatters import detail_card, md_table
-from plugins.plugin_discovery import get_plugin_setting_scope, get_plugin_setting_type, get_plugin_settings
+from plugins.plugin_discovery import get_plugin_setting_scope, get_plugin_setting_type, get_plugin_settings, get_setting_plugin_names
 from state_machine.conversation import FormStep
 
 
@@ -43,12 +43,11 @@ class ConfigCommand(BaseCommand):
         if args.get("setting_name"):
             steps.append(FormStep("action", f"What do you want to do with this setting?\n\n{_describe(context, args['setting_name'])}", True, enum=ACTIONS, enum_labels=["Edit setting"]))
         if args.get("action") == "edit":
-            steps.append(FormStep("value", _value_prompt(args.get("setting_name")), True, _value_type(args.get("setting_name"))))
+            steps.append(value_step_for(args.get("setting_name"), context))
         return steps
 
     def run(self, args, context):
         """Execute `/config` for the active session."""
-        config = context.config if context.config is not None else {}
         key = args.get("setting_name")
         if not key:
             return _list(context)
@@ -56,46 +55,62 @@ class ConfigCommand(BaseCommand):
             return f"Unknown setting: {key}"
         if args.get("action") != "edit":
             return _describe(context, key)
-        value = _parse(args.get("value"), key)
+        return apply_edit(context, key, args.get("value"))
 
-        # User-scoped settings write only to the current user's config blob —
-        # never to global config.json / plugin_config.json.
-        if _scope(key) == "user":
-            db = getattr(context, "db", None)
-            if db is None:
-                return "User settings are not available in this context."
-            uid = getattr(context, "user_id", None)
-            user_cfg = db.get_user_config(uid)
-            old = user_cfg.get(key, _default_for(key))
-            user_cfg[key] = value
-            db.set_user_config(uid, user_cfg)
-            context.config[key] = value
-            runtime = getattr(context, "runtime", None)
-            if key == "active_agent_profile" and runtime and hasattr(runtime, "refresh_session_specs"):
-                runtime.refresh_session_specs()
-            return f"Set {key} = {_format_value(value)}"
 
-        old = config.get(key)
-        config[key] = value
-        config_manager.save(config)
-        if key in _plugin_keys():
-            saved = config_manager.load_plugin_config()
-            saved[key] = value
-            config_manager.save_plugin_config(saved)
+def value_step_for(key, _context=None) -> FormStep:
+    """The value-entry form step for one setting (shared with quicklinks)."""
+    return FormStep("value", _value_prompt(key), True, _value_type(key))
+
+
+def apply_edit(context, key, raw_value) -> str:
+    """Write one setting through the scope-aware persistence path.
+
+    Shared by /config and the Edit-setting quicklinks on /tools, /tasks,
+    /services, and /frontends.
+    """
+    config = context.config if context.config is not None else {}
+    if key not in _settings():
+        return f"Unknown setting: {key}"
+    value = _parse(raw_value, key)
+
+    # User-scoped settings write only to the current user's config blob —
+    # never to global config.json / plugin_config.json.
+    if _scope(key) == "user":
+        db = getattr(context, "db", None)
+        if db is None:
+            return "User settings are not available in this context."
+        uid = getattr(context, "user_id", None)
+        user_cfg = db.get_user_config(uid)
+        user_cfg[key] = value
+        db.set_user_config(uid, user_cfg)
+        context.config[key] = value
         runtime = getattr(context, "runtime", None)
-        # context.config is a per-call copy; write through to the canonical
-        # runtime config so the next /config (a fresh copy) shows the new value.
-        if runtime is not None and getattr(runtime, "config", None) is not None:
-            runtime.config[key] = value
-        if runtime and value != old and hasattr(runtime, "refresh_session_specs"):
+        if key == "active_agent_profile" and runtime and hasattr(runtime, "refresh_session_specs"):
             runtime.refresh_session_specs()
-        # Watch-affecting keys take effect live: re-read directories and run a
-        # fresh scan so the database starts syncing without a restart.
-        if value != old and key in _WATCHER_KEYS:
-            _rescan_watcher(context)
-        if value != old and get_plugin_setting_type(key) == "frontend":
-            return f"Set {key} = {_format_value(value)}. Restart required."
         return f"Set {key} = {_format_value(value)}"
+
+    old = config.get(key)
+    config[key] = value
+    config_manager.save(config)
+    if key in _plugin_keys():
+        saved = config_manager.load_plugin_config()
+        saved[key] = value
+        config_manager.save_plugin_config(saved)
+    runtime = getattr(context, "runtime", None)
+    # context.config is a per-call copy; write through to the canonical
+    # runtime config so the next /config (a fresh copy) shows the new value.
+    if runtime is not None and getattr(runtime, "config", None) is not None:
+        runtime.config[key] = value
+    if runtime and value != old and hasattr(runtime, "refresh_session_specs"):
+        runtime.refresh_session_specs()
+    # Watch-affecting keys take effect live: re-read directories and run a
+    # fresh scan so the database starts syncing without a restart.
+    if value != old and key in _WATCHER_KEYS:
+        _rescan_watcher(context)
+    if value != old and get_plugin_setting_type(key) == "frontend":
+        return f"Set {key} = {_format_value(value)}. Restart required."
+    return f"Set {key} = {_format_value(value)}"
 
 
 def _settings():
@@ -185,7 +200,11 @@ def _describe(context, key):
     """Internal helper to handle describe."""
     title, desc = _settings().get(key, (key, ""))
     tag = " (per-user)" if _scope(key) == "user" else ""
-    card = detail_card(f"{title}{tag}", [(key, _format_value(_current_value(context, key)))])
+    users = get_setting_plugin_names(key)
+    card = detail_card(f"{title}{tag}", [
+        (key, _format_value(_current_value(context, key))),
+        ("Used by", ", ".join(users) if users else "kernel"),
+    ])
     quoted = "\n".join(f"> {line}" for line in desc.splitlines() if line.strip())
     return card + (f"\n\n{quoted}" if quoted else "")
 

@@ -1,12 +1,14 @@
 """Slash command plugin for `/tools`."""
 
 from plugins.BaseCommand import BaseCommand
+from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks
 from plugins.frontends.helpers.formatters import detail_card, format_tool_result, format_tools
 from state_machine.conversation import FormStep
 from state_machine.forms import schema_to_form_steps
 
 
 ACTIONS = ["call", "toggle_skip_permissions"]
+ACTION_LABELS = ["Call tool", "Toggle skip permissions"]
 
 
 class ToolsCommand(BaseCommand):
@@ -22,9 +24,11 @@ class ToolsCommand(BaseCommand):
         steps = [FormStep("tool_name", "Select a tool to inspect or call.", True, enum=sorted(tools), columns=2)]
         tool = tools.get(args.get("tool_name"))
         if tool:
-            steps.append(FormStep("action", f"What do you want to do with this tool?\n\n{_describe(tool, context)}", True, enum=ACTIONS, enum_labels=["Call tool", "Toggle skip permissions"]))
+            links, link_labels = quicklinks(tool)
+            steps.append(FormStep("action", f"What do you want to do with this tool?\n\n{_describe(tool, context)}", True, enum=ACTIONS + links, enum_labels=ACTION_LABELS + link_labels))
         if tool and args.get("action") == "call":
             steps += schema_to_form_steps(tool.to_schema()["function"].get("parameters"), prompt_optional=True)
+        steps += quicklink_value_steps(args.get("action"), context)
         return steps
 
     def run(self, args, context):
@@ -34,6 +38,9 @@ class ToolsCommand(BaseCommand):
             tool = (getattr(registry, "tools", {}) or {}).get(args["tool_name"]) if registry else None
             if not tool:
                 return "Unknown tool."
+            handled = quicklink_run(args.get("action"), args, context)
+            if handled is not None:
+                return handled
             if args.get("action") == "call":
                 fields = tool.to_schema()["function"].get("parameters", {}).get("properties", {}).keys()
                 return format_tool_result(registry.call(args["tool_name"], _session_key=getattr(context, "session_key", None), _user_initiated=True, **{k: args[k] for k in fields if k in args}))
