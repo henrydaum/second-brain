@@ -159,7 +159,8 @@ class _StreamingLLM(_FakeLLM):
 def test_streaming_emits_deltas_and_clean_final_text():
     events = []
     cs = _agent_state()
-    # <think> tokens stream raw but the done event carries the CLEANED text —
+    # <think> tokens are filtered out of the streamed deltas (even split
+    # across 4-char fragments), and the done event carries the CLEANED text —
     # the dedup key must match what the whole-message path delivers.
     llm = _StreamingLLM([_response(content="<think>hmm</think>Hello there!")])
     loop = ConversationLoop(llm, _FakeRegistry([]), {"tool_timeout": 10}, "prompt",
@@ -169,7 +170,7 @@ def test_streaming_emits_deltas_and_clean_final_text():
 
     assert reply == "Hello there!"
     deltas = [e for e in events if not e["done"]]
-    assert "".join(e["delta"] for e in deltas) == "<think>hmm</think>Hello there!"
+    assert "".join(e["delta"] for e in deltas) == "Hello there!"
     [done] = [e for e in events if e["done"]]
     assert done["aborted"] is False
     assert done["final_text"] == "Hello there!"

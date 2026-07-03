@@ -29,7 +29,7 @@ from typing import Any, Callable
 from agent.system_prompt import SYSTEM_CONTEXT_MARKER
 from state_machine.serialization import save_compaction_marker, save_history_message
 from runtime.ledger import record_enact
-from runtime.token_stripper import strip_model_tokens
+from runtime.token_stripper import StreamingTokenFilter, strip_model_tokens
 
 logger = logging.getLogger("ConversationLoop")
 
@@ -157,6 +157,9 @@ class ConversationLoop:
         self._stream_id: str | None = None
         self._stream_seq = 0
         self._stream_emitted = False
+        # Streaming twin of the _clean() applied to whole responses: keeps
+        # <think> blocks and EOS tokens out of the displayed deltas.
+        self._stream_filter: StreamingTokenFilter | None = None
 
     @property
     def max_tool_calls(self) -> int:
@@ -517,6 +520,7 @@ class ConversationLoop:
                 self._stream_id = f"st_{uuid.uuid4().hex[:12]}"
                 self._stream_seq = 0
                 self._stream_emitted = False
+                self._stream_filter = StreamingTokenFilter()
                 response = self.llm.chat_with_tools_streaming(
                     messages, tools, attachments=bundle, on_delta=self._emit_delta)
             else:
@@ -545,21 +549,33 @@ class ConversationLoop:
     # ──────────────────────────────────────────────────────────────────────
 
     def _emit_delta(self, fragment: str) -> bool:
-        """Backend-facing on_delta callback. Returns False to abort the stream."""
+        """Backend-facing on_delta callback. Returns False to abort the stream.
+
+        Fragments pass through the streaming token filter so thinking blocks
+        and EOS tokens never reach frontends — matching the _clean() applied
+        to the whole response on the non-streaming path."""
         if fragment and self._stream_id is not None:
-            self._stream_seq += 1
-            self._stream_emitted = True
-            try:
-                self.on_delta({
-                    "stream_id": self._stream_id,
-                    "seq": self._stream_seq,
-                    "delta": fragment,
-                    "done": False,
-                    "aborted": False,
-                })
-            except Exception:
-                logger.exception("on_delta sink raised; continuing")
+            if self._stream_filter is not None:
+                fragment = self._stream_filter.feed(fragment)
+            self._send_delta(fragment)
         return not self._cancelled()
+
+    def _send_delta(self, fragment: str) -> None:
+        """Emit one already-filtered delta payload."""
+        if not fragment:
+            return
+        self._stream_seq += 1
+        self._stream_emitted = True
+        try:
+            self.on_delta({
+                "stream_id": self._stream_id,
+                "seq": self._stream_seq,
+                "delta": fragment,
+                "done": False,
+                "aborted": False,
+            })
+        except Exception:
+            logger.exception("on_delta sink raised; continuing")
 
     def _finish_stream(self, final_text: str | None = None, kind: str | None = None,
                        aborted: bool = False) -> None:
@@ -569,8 +585,13 @@ class ConversationLoop:
         to what the whole-message path delivers — so frontends that rendered
         the deltas can dedup the duplicate whole message.
         """
+        # Release any tail the filter was withholding as a possible partial
+        # tag (it wasn't one if we got here without more input).
+        if not aborted and self._stream_filter is not None and self._stream_id is not None:
+            self._send_delta(self._stream_filter.flush())
         emitted, stream_id, seq = self._stream_emitted, self._stream_id, self._stream_seq
         self._stream_id, self._stream_seq, self._stream_emitted = None, 0, False
+        self._stream_filter = None
         if not emitted:
             return
         payload = {"stream_id": stream_id, "seq": seq + 1, "delta": "",
