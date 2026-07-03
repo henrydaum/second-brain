@@ -10,6 +10,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The store lives on the `store` branch: the package manager reads
+          # origin/store, and the store-ref tests (test_store_*, MCP) skip
+          # without it. Fetch everything so those tests run instead of skip.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
