@@ -208,13 +208,14 @@ def _denial(context, fallback: str) -> ToolResult:
 
 def _approval_text(action: str, title: str, payload: dict, schedule: dict) -> str:
     """Internal helper to handle approval text."""
+    from plugins.frontends.helpers.formatters import detail_card
     mode = "one-time" if schedule.get("one_time") else "recurring"
     when = schedule.get("run_at") or schedule.get("cron")
+    quoted = "\n".join(f"> {line}" for line in _preview(payload.get("prompt") or "").splitlines())
     return (
         f"{action.title()} {mode} subagent schedule?\n\n"
-        f"Title: {title}\n"
-        f"When: {when}\n"
-        f"Prompt preview:\n{_preview(payload.get('prompt') or '')}"
+        + detail_card(title, [("When", when), ("Mode", mode)])
+        + f"\n\n**Prompt preview**\n{quoted}"
     )
 
 
