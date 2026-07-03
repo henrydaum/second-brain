@@ -13,9 +13,9 @@ Check out Atlas Cloud's new coding plan promotion for more budget-friendly API a
 
 # Second Brain
 
-*For an example of what Second Brain can do, visit https://second-brain.art! It's an interactive art exhibition.*
+<mark>*For an example of what Second Brain can do, visit https://second-brain.art! It's an interactive art exhibition to make fascinating abstract art.*</mark>
 
-*NEW!* Second Brain now has token streaming. Telegram now has silky smooth token streaming plus rich text.
+<mark>*NEW!* Second Brain now has token streaming. Telegram now has silky smooth token streaming plus rich text.</mark>
 
 Second Brain is a local-first AI runtime for your machine, built as a **microkernel**.
 
