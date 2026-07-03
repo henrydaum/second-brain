@@ -5,7 +5,20 @@ Telegram's <pre> fallback) align them with align_md_tables while rich
 surfaces render the markdown natively.
 """
 
-from plugins.frontends.helpers.formatters import align_md_tables, md_table
+import re
+
+from plugins.frontends.helpers.formatters import align_md_tables, format_tasks, md_table
+
+
+def _tables_start_their_own_block(text: str) -> bool:
+    """Every table must be preceded by a blank line, or GFM parsers fold it
+    into the previous paragraph and render the pipes inline."""
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        starts_table = line.startswith("|") and i + 1 < len(lines) and re.match(r"^\|(\s*-{3,}\s*\|)+$", lines[i + 1].replace(" ", " "))
+        if starts_table and i > 0 and lines[i - 1].strip() != "":
+            return False
+    return True
 
 
 def test_md_table_shape_and_escaping():
@@ -39,6 +52,15 @@ def test_align_md_tables_round_trips_escaped_pipes():
 def test_align_md_tables_leaves_prose_untouched():
     text = "Header text.\n\nNo table here | just a stray pipe.\n"
     assert align_md_tables(text) == text
+
+
+def test_task_section_tables_start_their_own_block():
+    text = format_tasks([
+        {"name": "index", "trigger": "path", "counts": {}, "paused": False},
+        {"name": "spawn", "trigger": "event", "counts": {}, "paused": True},
+    ])
+    assert _tables_start_their_own_block(text)
+    assert "**Path-driven tasks**\n\n|" in text
 
 
 def test_align_md_tables_handles_table_between_prose():

@@ -136,7 +136,9 @@ class CommandRegistry:
             for cmd in by_cat[cat]:
                 hint = _arg_hint_from_form(cmd.form({}, ctx))
                 rows.append(("/" + cmd.name + ((" " + hint) if hint else ""), cmd.description))
-            lines += ["", f"**{cat}**", md_table(["Command", "Description"], rows)]
+            # The blank line before the table matters: without it, markdown
+            # parsers fold the table into the heading's paragraph.
+            lines += ["", f"**{cat}**", "", md_table(["Command", "Description"], rows)]
         return "\n".join(lines)
 
 

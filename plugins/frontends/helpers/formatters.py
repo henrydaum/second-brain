@@ -238,6 +238,7 @@ def format_tasks(tasks: list[dict], compact: bool = False) -> str:
     for title, section in sections:
         lines.append("")
         lines.append(f"**{title}**")
+        lines.append("")  # tables must start their own block or parsers fold them inline
         if not section:
             lines.append("(none)")
             continue
