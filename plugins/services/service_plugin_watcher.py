@@ -164,6 +164,12 @@ class PluginWatcherService(BaseService):
         if err:
             logger.warning(f"Plugin watcher could not infer deleted plugin {path}: {err}")
             return
+        if info.plugin_type == "frontend" and info.built_in:
+            # git pull (e.g. /update) replaces files as delete+create; tearing
+            # down a kernel frontend mid-churn kills the surface the user is
+            # typing into. Built-in frontends only change on restart anyway.
+            logger.info(f"Plugin watcher ignoring delete of built-in frontend {path.name} (restart applies changes).")
+            return
         names = self._names_registered_from(info.plugin_type, path)
         unload_plugin(
             info.plugin_type, "",
