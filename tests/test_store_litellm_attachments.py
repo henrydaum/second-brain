@@ -21,7 +21,7 @@ def _load_litellm_service(tmp_path):
     for ref in ("store", "origin/store"):
         proc = subprocess.run(
             ["git", "-C", str(_REPO), "show", f"{ref}:{_STORE_REL}"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", check=False)
         if proc.returncode == 0:
             source = proc.stdout
             break
