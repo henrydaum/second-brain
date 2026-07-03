@@ -387,16 +387,37 @@ class TelegramFrontend(BaseFrontend):
             pass
         asyncio.run_coroutine_threadsafe(coro, self.loop)
 
-    async def _stream_pump(self, stream_key: tuple[str, str], chat_id: int, tracker: StreamTracker):
-        """Own one streamed reply: send the placeholder, edit on a throttle,
-        roll over at the size cap, finalize on done.
+    @staticmethod
+    def _draft_id_for(stream_id: str) -> int:
+        """Derive a stable non-zero draft id from the kernel's stream id."""
+        try:
+            return (int(stream_id.rpartition("_")[2], 16) & 0x7FFFFFFF) or 1
+        except ValueError:
+            return (abs(hash(stream_id)) & 0x7FFFFFFF) or 1
 
-        Flood-control: ``RetryAfter`` backs off and keeps buffering (the
-        tracker retries un-confirmed text next pass); a hard edit failure
-        stops editing but the final is still delivered here — the base
-        dedup has already suppressed the whole-message copy, so this pump
-        is the delivery path for a streamed reply."""
+    async def _stream_pump(self, stream_key: tuple[str, str], chat_id: int, tracker: StreamTracker):
+        """Own one streamed reply, preferring native draft streaming.
+
+        Bot API 9.3+ ``sendMessageDraft``: repeated calls with the same
+        ``draft_id`` and progressively longer text render a smooth native
+        typing animation — no message edits, no flicker, cheap enough for a
+        sub-second cadence. Drafts are ephemeral 30s previews in private
+        chats, so the reply is still delivered by ``_finalize_stream`` as a
+        real message (the base dedup suppressed the whole-message copy, so
+        this pump IS the delivery path).
+
+        Falls back to the edit-a-placeholder pump when the installed
+        python-telegram-bot predates drafts or the first draft call is
+        rejected (non-private chat, older server). Flood-control:
+        ``RetryAfter`` backs off and keeps buffering; a hard failure stops
+        rendering but the final is still delivered."""
         from telegram.error import BadRequest, RetryAfter
+        draft = getattr(self.app.bot, "send_message_draft", None)
+        draft_id = self._draft_id_for(stream_key[1])
+        if draft is not None:
+            # Drafts are a dedicated streaming channel — much tighter cadence
+            # than message edits without flirting with flood limits.
+            tracker.edit_interval, tracker.burst_chars = 0.35, 64
         message_id = None
         next_allowed = 0.0
         broken = False
@@ -409,28 +430,44 @@ class TelegramFrontend(BaseFrontend):
                 if not broken and now >= next_allowed and tracker.should_edit(now):
                     finals, current = tracker.take_render()
                     try:
-                        for head in finals:
-                            if message_id is None:
+                        if draft is not None:
+                            for head in finals:
+                                # Size-cap rollover: persist the head as a real
+                                # message, keep drafting the tail.
                                 await self.app.bot.send_message(chat_id, head, disable_notification=True)
-                            else:
-                                await self.app.bot.edit_message_text(head, chat_id=chat_id, message_id=message_id)
-                                message_id = None  # head finalized; the tail gets a fresh message
-                        if current is not None:
-                            if message_id is None:
-                                sent = await self.app.bot.send_message(chat_id, current + self._STREAM_CURSOR, disable_notification=True)
-                                message_id = sent.message_id
-                            else:
-                                await self.app.bot.edit_message_text(current + self._STREAM_CURSOR, chat_id=chat_id, message_id=message_id)
-                            tracker.mark_rendered(current, now)
+                            if current is not None:
+                                await draft(chat_id=chat_id, draft_id=draft_id, text=current)
+                                tracker.mark_rendered(current, now)
+                        else:
+                            for head in finals:
+                                if message_id is None:
+                                    await self.app.bot.send_message(chat_id, head, disable_notification=True)
+                                else:
+                                    await self.app.bot.edit_message_text(head, chat_id=chat_id, message_id=message_id)
+                                    message_id = None  # head finalized; the tail gets a fresh message
+                            if current is not None:
+                                if message_id is None:
+                                    sent = await self.app.bot.send_message(chat_id, current + self._STREAM_CURSOR, disable_notification=True)
+                                    message_id = sent.message_id
+                                else:
+                                    await self.app.bot.edit_message_text(current + self._STREAM_CURSOR, chat_id=chat_id, message_id=message_id)
+                                tracker.mark_rendered(current, now)
                     except RetryAfter as e:
                         next_allowed = time.time() + float(getattr(e, "retry_after", 3) or 3) + 0.5
-                    except BadRequest:
+                    except BadRequest as e:
+                        if draft is not None:
+                            # Drafts rejected here (e.g. not a private chat) —
+                            # drop to the edit pump for the rest of the stream.
+                            logger.info(f"sendMessageDraft unavailable ({e}); falling back to edit streaming.")
+                            draft = None
+                            tracker.edit_interval, tracker.burst_chars = 1.75, 300
+                            continue
                         if current is not None:
                             tracker.mark_rendered(current, now)  # "message is not modified"
                     except Exception as e:
-                        logger.warning(f"Telegram stream edit failed; deferring to final delivery: {e}")
+                        logger.warning(f"Telegram stream render failed; deferring to final delivery: {e}")
                         broken = True
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.12 if draft is not None else 0.3)
             await self._finalize_stream(chat_id, message_id, tracker, aborted, final_text)
         except Exception:
             logger.exception("Telegram stream pump crashed")
