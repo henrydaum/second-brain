@@ -101,12 +101,13 @@ class FrontendCapabilities:
     supports_inline_forms: bool = False
     supports_proactive_push: bool = False
     supports_rich_text: bool = False
-    # Frontend renders AGENT_TEXT_DELTA events incrementally (and implements
-    # render_stream_delta). False = ignore the channel; the same text arrives
-    # as whole messages exactly as before.
-    supports_streaming: bool = False
     max_message_chars: int | None = None
     max_upload_size: int | None = None
+    # Frontend renders AGENT_TEXT_DELTA events incrementally (and implements
+    # render_stream_delta). False = ignore the channel; the same text arrives
+    # as whole messages exactly as before. Kept LAST so existing positional
+    # FrontendCapabilities(...) constructions keep their meaning.
+    supports_streaming: bool = False
 
 
 class BaseFrontend:
