@@ -240,6 +240,8 @@ class TelegramFrontend(BaseFrontend):
         # Rich Messages (Bot API 10.1) capability: None = undetermined,
         # False = confirmed unavailable (old PTB or pre-10.1 server).
         self._rich: bool | None = None
+        # Pinned conversation banner per chat: chat_id -> (message_id, title).
+        self._banners: dict[int, tuple[int, str]] = {}
 
     def session_key(self, ctx) -> str:
         """Build the per-user, per-chat, per-thread session key for Telegram traffic."""
@@ -446,6 +448,37 @@ class TelegramFrontend(BaseFrontend):
                     logger.warning(f"sendRichMessage failed ({e}); HTML fallback for this message.")
         for chunk in chunks[sent:]:
             await self._send_text_async(chat_id, _md_to_tg_html(chunk), True)
+
+    def render_conversation_banner(self, session_key: str, info: dict) -> None:
+        """Mirror the session's conversation title in a pinned banner message."""
+        chat_id = self._chat_id(session_key)
+        title = (info.get("title") or "").strip()
+        if not chat_id or not title or self.app is None:
+            return
+        self._send_nowait(self._update_banner(chat_id, title))
+
+    async def _update_banner(self, chat_id: int, title: str) -> None:
+        """Create-or-edit the single pinned banner message for a chat."""
+        text = f"💬 {title}"
+        entry = self._banners.get(chat_id)
+        if entry and entry[1] == title:
+            return
+        try:
+            if entry:
+                await self.app.bot.edit_message_text(text, chat_id=chat_id, message_id=entry[0])
+                self._banners[chat_id] = (entry[0], title)
+                return
+        except Exception as e:
+            logger.debug(f"Banner edit failed ({e}); sending a fresh one.")
+            self._banners.pop(chat_id, None)
+        try:
+            sent = await self.app.bot.send_message(chat_id, text, disable_notification=True)
+            await self.app.bot.pin_chat_message(chat_id, sent.message_id, disable_notification=True)
+            self._banners[chat_id] = (sent.message_id, title)
+        except Exception as e:
+            # Pinning needs no special rights in private chats, but fail soft:
+            # a missing banner must never break message flow.
+            logger.info(f"Conversation banner unavailable: {e}")
 
     def render_attachments(self, session_key: str, paths: list[str]) -> None:
         """Send rendered attachments back to Telegram."""
