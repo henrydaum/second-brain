@@ -102,19 +102,26 @@ def _md_to_tg_html(text: str) -> str:
 
 
 _TABLE_BLOCK = re.compile(r"^[ \t]*\|.*\|[ \t]*\n[ \t]*\|(?:\s*:?-{3,}:?\s*\|)+[ \t]*\n(?:[ \t]*\|.*\|[ \t]*(?:\n|$))*", re.MULTILINE)
+_QUOTE_BLOCK = re.compile(r"^(?:>[ \t]?.*(?:\n|$))+", re.MULTILINE)
 
 
 def _blocks(text: str) -> str:
-    """Render markdown tables as aligned <pre> blocks; inline-format the rest.
+    """Render markdown tables (aligned <pre>) and > blockquotes; inline the rest.
 
     Only the non-rich HTML fallback comes through here — the Rich Messages
-    path sends raw markdown and Telegram renders real tables server-side.
+    path sends raw markdown and Telegram renders it server-side.
     """
     from plugins.frontends.helpers.formatters import align_md_tables
     out, last = [], 0
-    for m in _TABLE_BLOCK.finditer(text or ""):
+    pattern = re.compile(f"(?:{_TABLE_BLOCK.pattern})|(?:{_QUOTE_BLOCK.pattern})", re.MULTILINE)
+    for m in pattern.finditer(text or ""):
         out.append(_inline(text[last:m.start()]))
-        out.append(f"<pre>{html.escape(align_md_tables(m.group(0).strip()))}</pre>")
+        block = m.group(0)
+        if block.lstrip().startswith("|"):
+            out.append(f"<pre>{html.escape(align_md_tables(block.strip()))}</pre>")
+        else:
+            quoted = "\n".join(re.sub(r"^>[ \t]?", "", line) for line in block.strip().split("\n"))
+            out.append(f"<blockquote>{_inline(quoted)}</blockquote>")
         last = m.end()
     return "".join(out + [_inline((text or "")[last:])])
 
