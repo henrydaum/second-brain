@@ -170,8 +170,10 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
         "shutdown_event": lambda: threading.Event(),
         "services": lambda: services,
     }
-    # The REPL is kernel-owned and deliberately shares the app-wide shutdown
-    # event (it owns the terminal), so it keeps an explicit factory.
+    # The REPL is kernel-owned and observes the app-wide shutdown event (it
+    # owns the terminal and must exit with the app), so it keeps an explicit
+    # factory. It never sets that event itself: stop() uses a private signal
+    # so a hot-reload deregistration can't take the whole app down.
     manager.set_factory("repl", lambda cls: cls(shutdown_fn, shutdown_event))
 
     for name in sorted(frontends):

@@ -32,7 +32,11 @@ class ReplFrontend(BaseFrontend):
         """Initialize the REPL frontend."""
         super().__init__()
         self.shutdown_fn = shutdown_fn
+        # Observed, never set: the app-wide shutdown ends the loop, but
+        # stopping this frontend (e.g. a hot-reload after /update rewrites
+        # this file) must not shut down the whole app.
         self.shutdown_event = shutdown_event or threading.Event()
+        self._stop_event = threading.Event()
         # Whether the current stream has written any characters to stdout —
         # decides how the done event terminates the line.
         self._stream_wrote = False
@@ -53,7 +57,7 @@ class ReplFrontend(BaseFrontend):
             # APPROVAL_REQUESTED bus events emitted during restore_last_active.
         except Exception:
             logger.exception("REPL restore_last_active failed")
-        while not self.shutdown_event.is_set():
+        while not self.shutdown_event.is_set() and not self._stop_event.is_set():
             try:
                 raw = input("\n").strip()
             except KeyboardInterrupt:
@@ -95,8 +99,8 @@ class ReplFrontend(BaseFrontend):
         return super().submit_text(session_key, text)
 
     def stop(self) -> None:
-        """Stop REPL frontend."""
-        self.shutdown_event.set()
+        """Stop this frontend only — the app-wide shutdown event stays untouched."""
+        self._stop_event.set()
         self.unbind()
 
     def render_messages(self, _session_key: str, messages: list[str]) -> None:
