@@ -117,19 +117,28 @@ def _list_prompt(tk) -> str:
 
 def _describe(context, name: str, job: dict) -> str:
     """Internal helper to handle describe."""
+    from plugins.frontends.helpers.formatters import detail_card
     tk = _timekeeper(context)
     task = _task_for_job(context, job)
     next_fire = tk.get_next_fire_at(name) if tk else None
-    payload = json.dumps(job.get("payload") or {}, separators=(",", ":"), default=str)
-    return "\n".join([
-        name,
-        f"Status: {'Enabled' if job.get('enabled', True) else 'Disabled'}",
-        f"Task: {getattr(task, 'name', '') or '-'}",
-        f"Channel: {job.get('channel') or '-'}",
-        f"Schedule: {_schedule_text(tk, job)}",
-        f"Next: {next_fire.strftime('%Y-%m-%d %H:%M') if next_fire else 'disabled'}",
-        f"Payload: {_truncate(payload, 500)}",
-    ])
+    payload = dict(job.get("payload") or {})
+    rows = [
+        ("Status", "Enabled" if job.get("enabled", True) else "Disabled"),
+        ("Task", getattr(task, "name", "") or "-"),
+        ("Channel", job.get("channel") or "-"),
+        ("Schedule", _schedule_text(tk, job)),
+        ("Next", next_fire.strftime("%Y-%m-%d %H:%M") if next_fire else "disabled"),
+    ]
+    if payload.get("title"):
+        rows.append(("Title", str(payload.pop("title"))))
+    # The prompt reads as prose — quote it; any remaining payload keys
+    # travel as compact JSON on the quote's last line.
+    prompt = _truncate(str(payload.pop("prompt", "") or ""), 500)
+    rest = json.dumps(payload, separators=(",", ":"), default=str) if payload else ""
+    source = "\n".join(part for part in (prompt, rest) if part)
+    quoted = "\n".join(f"> {line}" if line.strip() else ">" for line in source.splitlines())
+    card = detail_card(name, rows)
+    return card + (f"\n\n**Payload**\n{quoted}" if quoted else "")
 
 
 def _schedule_text(tk, job: dict) -> str:
