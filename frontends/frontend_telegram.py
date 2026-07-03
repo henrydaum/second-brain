@@ -105,6 +105,25 @@ _TABLE_BLOCK = re.compile(r"^[ \t]*\|.*\|[ \t]*\n[ \t]*\|(?:\s*:?-{3,}:?\s*\|)+[
 _QUOTE_BLOCK = re.compile(r"^(?:>[ \t]?.*(?:\n|$))+", re.MULTILINE)
 
 
+def _compact_detail_cards(text: str) -> str:
+    """Turn detail cards (two-column tables with an empty second header cell,
+    the kernel's ``detail_card`` shape) into fenced code blocks.
+
+    Full-width rendered tables are overkill for a title + a few key/value
+    rows; the compact monospace card reads better on a phone. Real data
+    tables (non-empty headers) stay markdown and render natively.
+    """
+    from plugins.frontends.helpers.formatters import align_md_tables
+
+    def replace(m: "re.Match") -> str:
+        header = [c.strip() for c in m.group(0).split("\n", 1)[0].strip().strip("|").split("|")]
+        if len(header) == 2 and header[0] and not header[1]:
+            return f"```\n{align_md_tables(m.group(0).strip())}\n```\n"
+        return m.group(0)
+
+    return _TABLE_BLOCK.sub(replace, text or "")
+
+
 def _blocks(text: str) -> str:
     """Render markdown tables (aligned <pre>) and > blockquotes; inline the rest.
 
@@ -408,7 +427,7 @@ class TelegramFrontend(BaseFrontend):
 
     async def _deliver_message_async(self, chat_id: int, text: str) -> None:
         """Deliver one message: rich Markdown first, HTML pipeline fallback."""
-        chunks = _chunks(text, self.capabilities.max_message_chars or 4096)
+        chunks = _chunks(_compact_detail_cards(text), self.capabilities.max_message_chars or 4096)
         sent = 0
         if self._rich_capable():
             try:
