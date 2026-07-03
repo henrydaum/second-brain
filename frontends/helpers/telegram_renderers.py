@@ -9,6 +9,7 @@ import html
 import io
 import json
 import logging
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -146,6 +147,88 @@ def prepare_media_actions(paths: list[str], max_file_size: int = 50 * 1024 * 102
     if skipped:
         actions.append(SendAction("text", text_content="Skipped files:\n" + "\n".join(f"- {s}" for s in skipped)))
     return actions
+
+
+class StreamTracker:
+    """Pure-logic accumulator for one streamed agent reply.
+
+    Fed on the agent thread (``feed`` / ``finish``); drained by the frontend's
+    ``_stream_pump`` coroutine on the Telegram event loop. Deliberately
+    transport-free so the throttle/rollover logic is unit-testable without
+    python-telegram-bot.
+
+    Contract with the pump:
+    - ``should_edit(now)`` — is there unseen text AND has the edit throttle
+      (interval or char burst) been satisfied?
+    - ``take_render()`` — returns ``(finalized_heads, current_text)``. Heads
+      are popped permanently: each rolls into its own finalized message when
+      the buffer exceeds ``max_chars`` (Telegram's 4096 cap, with headroom
+      for the cursor suffix). ``current_text`` is a snapshot the pump must
+      confirm via ``mark_rendered`` after a successful edit — a throttled or
+      failed edit is simply retried on the next pass.
+    """
+
+    def __init__(self, max_chars: int = 4000, edit_interval: float = 1.75, burst_chars: int = 300):
+        self._lock = threading.Lock()
+        self.max_chars = max_chars
+        self.edit_interval = edit_interval
+        self.burst_chars = burst_chars
+        self._pending = ""      # text not yet finalized into an earlier message
+        self._rendered = ""     # what the current message is confirmed to show
+        self._last_edit = 0.0
+        self.rolled = False     # at least one size-cap rollover happened
+        self.done = False
+        self.aborted = False
+        self.final_text: str | None = None
+
+    def feed(self, delta: str) -> None:
+        """Append streamed text (agent thread)."""
+        with self._lock:
+            self._pending += delta
+
+    def finish(self, final_text: str | None, aborted: bool) -> None:
+        """Mark the stream complete (agent thread)."""
+        with self._lock:
+            self.done, self.aborted, self.final_text = True, aborted, final_text
+
+    def state(self) -> tuple[bool, bool, str | None]:
+        """Return (done, aborted, final_text) atomically."""
+        with self._lock:
+            return self.done, self.aborted, self.final_text
+
+    def remainder(self) -> str:
+        """Plain text belonging to the current (last) streamed message."""
+        with self._lock:
+            return self._pending
+
+    def should_edit(self, now: float) -> bool:
+        """Whether the pump should render this pass (dirty + throttle)."""
+        with self._lock:
+            if self._pending == self._rendered:
+                return False
+            grown = len(self._pending) - len(self._rendered)
+            return (now - self._last_edit) >= self.edit_interval or grown >= self.burst_chars
+
+    def take_render(self) -> tuple[list[str], str | None]:
+        """Pop finalized rollover heads and snapshot the current text."""
+        with self._lock:
+            finals = []
+            while len(self._pending) > self.max_chars:
+                split = self._pending.rfind("\n", self.max_chars // 2, self.max_chars)
+                if split < 0:
+                    split = self.max_chars
+                finals.append(self._pending[:split])
+                self._pending = self._pending[split:].lstrip("\n")
+                self._rendered = ""
+                self.rolled = True
+            current = self._pending if self._pending != self._rendered else None
+            return finals, current
+
+    def mark_rendered(self, text: str, now: float) -> None:
+        """Confirm a successful edit so the throttle restarts from it."""
+        with self._lock:
+            self._rendered = text
+            self._last_edit = now
 
 
 def _build_group_actions(files: list[Path], group_type: str) -> list[SendAction]:

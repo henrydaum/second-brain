@@ -19,6 +19,7 @@ from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
 from plugins.frontends.helpers.command_registry import format_command_call
 from .helpers.telegram_renderers import (
     VIDEO_EXTENSIONS,
+    StreamTracker,
     file_bytes,
     prepare_media_actions,
     prepare_photo_bytes,
@@ -134,7 +135,19 @@ class TelegramFrontend(BaseFrontend):
     """Frontend adapter for Telegram."""
     name = "telegram"
     description = "Telegram chat frontend backed by the conversation state machine."
-    capabilities = FrontendCapabilities(True, True, True, True, True, True, True, True, 4096, _MAX_FILE_SIZE)
+    capabilities = FrontendCapabilities(
+        supports_typing=True,
+        supports_buttons=True,
+        supports_message_edit=True,
+        supports_attachments_in=True,
+        supports_attachments_out=True,
+        supports_inline_forms=True,
+        supports_proactive_push=True,
+        supports_rich_text=True,
+        max_message_chars=4096,
+        max_upload_size=_MAX_FILE_SIZE,
+        supports_streaming=True,
+    )
     config_settings = [
         ("Telegram Bot Token", "telegram_bot_token", "Bot token from @BotFather. Required for Telegram frontend.", "", {"type": "text"}),
         ("Telegram Allowed User ID", "telegram_allowed_user_id", "Your Telegram user ID (integer). Only this user can interact with the bot. Send /start to @userinfobot to find yours.", 0, {"type": "text"}),
@@ -158,6 +171,9 @@ class TelegramFrontend(BaseFrontend):
         self._callbacks: dict[str, tuple[str, str, str | None]] = {}
         self._tool_messages: dict[str, tuple[int, int, str, str]] = {}
         self._last_keyboard: dict[str, tuple[int, int]] = {}
+        # One StreamTracker (+ pump task) per in-flight streamed reply,
+        # keyed by (session_key, stream_id).
+        self._streams: dict[tuple[str, str], StreamTracker] = {}
 
     def session_key(self, ctx) -> str:
         """Build the per-user, per-chat, per-thread session key for Telegram traffic."""
@@ -324,6 +340,155 @@ class TelegramFrontend(BaseFrontend):
         """Send an error message to Telegram."""
         self._clear_last_keyboard(session_key)
         self._send_text(session_key, html.escape(f"Error: {(error or {}).get('message') or error}"))
+
+    _STREAM_CURSOR = " ▍"
+
+    def render_stream_delta(self, session_key: str, payload: dict) -> None:
+        """Feed streamed agent text into the per-stream tracker.
+
+        Runs on the agent thread, so it never touches Telegram I/O — the
+        first delta schedules one ``_stream_pump`` task on the event loop,
+        which owns all sends/edits for that stream."""
+        stream_id = payload.get("stream_id") or ""
+        stream_key = (session_key, stream_id)
+        if payload.get("done"):
+            tracker = self._streams.get(stream_key)
+            if tracker:
+                tracker.finish(payload.get("final_text"), bool(payload.get("aborted")))
+            return
+        delta = payload.get("delta") or ""
+        if not delta:
+            return
+        tracker = self._streams.get(stream_key)
+        if tracker is None:
+            chat_id = self._chat_id(session_key)
+            if not chat_id or self.loop is None or self.app is None:
+                return
+            tracker = StreamTracker(max_chars=(self.capabilities.max_message_chars or 4096) - 96)
+            self._streams[stream_key] = tracker
+            tracker.feed(delta)
+            self._send_nowait(self._stream_pump(stream_key, chat_id, tracker))
+        else:
+            tracker.feed(delta)
+
+    def _send_nowait(self, coro) -> None:
+        """Schedule a coroutine onto the Telegram loop without blocking.
+
+        Unlike ``_send`` this never waits for the result — required on the
+        agent thread, where blocking on the event loop would stall the turn."""
+        if self.loop is None or self.app is None:
+            coro.close()
+            return
+        try:
+            if asyncio.get_running_loop() is self.loop:
+                self.loop.create_task(coro)
+                return
+        except RuntimeError:
+            pass
+        asyncio.run_coroutine_threadsafe(coro, self.loop)
+
+    async def _stream_pump(self, stream_key: tuple[str, str], chat_id: int, tracker: StreamTracker):
+        """Own one streamed reply: send the placeholder, edit on a throttle,
+        roll over at the size cap, finalize on done.
+
+        Flood-control: ``RetryAfter`` backs off and keeps buffering (the
+        tracker retries un-confirmed text next pass); a hard edit failure
+        stops editing but the final is still delivered here — the base
+        dedup has already suppressed the whole-message copy, so this pump
+        is the delivery path for a streamed reply."""
+        from telegram.error import BadRequest, RetryAfter
+        message_id = None
+        next_allowed = 0.0
+        broken = False
+        try:
+            while True:
+                done, aborted, final_text = tracker.state()
+                if done:
+                    break
+                now = time.time()
+                if not broken and now >= next_allowed and tracker.should_edit(now):
+                    finals, current = tracker.take_render()
+                    try:
+                        for head in finals:
+                            if message_id is None:
+                                await self.app.bot.send_message(chat_id, head, disable_notification=True)
+                            else:
+                                await self.app.bot.edit_message_text(head, chat_id=chat_id, message_id=message_id)
+                                message_id = None  # head finalized; the tail gets a fresh message
+                        if current is not None:
+                            if message_id is None:
+                                sent = await self.app.bot.send_message(chat_id, current + self._STREAM_CURSOR, disable_notification=True)
+                                message_id = sent.message_id
+                            else:
+                                await self.app.bot.edit_message_text(current + self._STREAM_CURSOR, chat_id=chat_id, message_id=message_id)
+                            tracker.mark_rendered(current, now)
+                    except RetryAfter as e:
+                        next_allowed = time.time() + float(getattr(e, "retry_after", 3) or 3) + 0.5
+                    except BadRequest:
+                        if current is not None:
+                            tracker.mark_rendered(current, now)  # "message is not modified"
+                    except Exception as e:
+                        logger.warning(f"Telegram stream edit failed; deferring to final delivery: {e}")
+                        broken = True
+                await asyncio.sleep(0.3)
+            await self._finalize_stream(chat_id, message_id, tracker, aborted, final_text)
+        except Exception:
+            logger.exception("Telegram stream pump crashed")
+        finally:
+            self._streams.pop(stream_key, None)
+
+    async def _finalize_stream(self, chat_id: int, message_id: int | None, tracker: StreamTracker, aborted: bool, final_text: str | None):
+        """Bring the streamed message(s) to their final state."""
+        remainder = tracker.remainder()
+        if aborted:
+            # Whatever follows (compaction retry answer, "Cancelled.") arrives
+            # as a normal whole message; just drop the cursor or the empty
+            # placeholder.
+            if message_id is not None:
+                try:
+                    if remainder:
+                        await self.app.bot.edit_message_text(remainder, chat_id=chat_id, message_id=message_id)
+                    else:
+                        await self.app.bot.delete_message(chat_id, message_id)
+                except Exception:
+                    pass
+            return
+        if tracker.rolled:
+            # Rolled-over replies stay plain text; finalize the tail in place.
+            text = remainder or final_text or ""
+            try:
+                if message_id is not None:
+                    await self.app.bot.edit_message_text(text, chat_id=chat_id, message_id=message_id)
+                elif text:
+                    await self.app.bot.send_message(chat_id, text)
+            except Exception:
+                logger.exception("Telegram stream tail finalize failed")
+            return
+        # Common case: re-render the whole reply as HTML into the streamed
+        # message, spilling extra chunks into fresh messages.
+        chunks = _chunks(_md_to_tg_html(final_text or remainder), self.capabilities.max_message_chars or 4096) or [""]
+        first, rest = chunks[0], chunks[1:]
+        delivered = False
+        if message_id is not None and first:
+            for text, mode in ((first, "HTML"), (html.unescape(first), None)):
+                try:
+                    await self.app.bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode=mode)
+                    delivered = True
+                    break
+                except Exception as e:
+                    if "not modified" in str(e).lower():
+                        delivered = True
+                        break
+        if not delivered and first:
+            rest = [first, *rest]  # streamed message unusable — send everything fresh
+        for chunk in rest:
+            try:
+                await self.app.bot.send_message(chat_id, chunk, parse_mode="HTML")
+            except Exception:
+                try:
+                    await self.app.bot.send_message(chat_id, html.unescape(chunk))
+                except Exception:
+                    logger.exception("Telegram stream final chunk send failed")
 
     def render_tool_status(self, session_key: str, payload: dict) -> None:
         """Keep Telegram's single progress banner in sync with tool events."""

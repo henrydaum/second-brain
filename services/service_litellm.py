@@ -204,3 +204,72 @@ class LiteLLMService(BaseLLM):
         if tools:
             kwargs["tools"] = tools
         return self.invoke(messages, **kwargs)
+
+    supports_streaming = True
+
+    def chat_with_tools_streaming(self, messages, tools=None, on_delta=None, **kwargs):
+        """Streaming twin of ``chat_with_tools``: forwards text fragments to
+        ``on_delta(fragment) -> bool`` (falsy return aborts the stream) and
+        accumulates tool-call deltas + usage into the same LLMResponse shape
+        the blocking call returns."""
+        if tools:
+            kwargs["tools"] = tools
+        if not self.loaded:
+            logger.error("LiteLLM not loaded. Call load() first.")
+            return LLMResponse(content="Error: model not loaded", error="model not loaded", error_code="not_loaded")
+        attachments = kwargs.pop("attachments", None)
+        try:
+            _quiet_litellm()
+            import litellm
+            _quiet_litellm()
+            messages, native_attachments = self._prepare_attachments(messages, attachments)
+            messages = self._inject_attachments(messages, native_attachments)
+            logger.debug(f"LiteLLM stream: {len(messages)} messages, tools={'yes' if kwargs.get('tools') else 'no'}, model={self.model_name}")
+            t0 = time.time()
+            # drop_params is on, so providers that reject stream_options degrade
+            # to a stream without the usage chunk (prompt_tokens stays None).
+            stream = litellm.completion(
+                model=self._litellm_model_name(), messages=messages,
+                stream=True, stream_options={"include_usage": True},
+                **self._provider_kwargs(kwargs))
+            text_parts: list[str] = []
+            calls_by_index: dict[int, dict] = {}
+            prompt_tok = cached_tok = None
+            for chunk in stream:
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    prompt_tok = getattr(usage, "prompt_tokens", None) or prompt_tok
+                    cached_tok = _cached_prompt_tokens(usage) or cached_tok
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                delta = choices[0].delta
+                content = getattr(delta, "content", None)
+                if content:
+                    text_parts.append(content)
+                    if on_delta is not None and not on_delta(content):
+                        break  # caller aborted (cancel) — return the partial
+                for tc in getattr(delta, "tool_calls", None) or []:
+                    idx = getattr(tc, "index", 0) or 0
+                    entry = calls_by_index.setdefault(idx, {"id": None, "name": None, "arguments": ""})
+                    entry["id"] = entry["id"] or getattr(tc, "id", None)
+                    fn = getattr(tc, "function", None)
+                    if fn is not None:
+                        entry["name"] = entry["name"] or getattr(fn, "name", None)
+                        entry["arguments"] += getattr(fn, "arguments", None) or ""
+            logger.debug(f"LiteLLM stream finished in {time.time() - t0:.2f}s")
+            self.last_prompt_tokens, self.last_cached_prompt_tokens = prompt_tok, cached_tok
+            calls = [
+                {"id": entry["id"] or f"call_{i}", "name": entry["name"], "arguments": entry["arguments"] or "{}"}
+                for i, entry in sorted(calls_by_index.items())
+                if entry["name"]
+            ]
+            return LLMResponse(content="".join(text_parts), tool_calls=calls,
+                               prompt_tokens=prompt_tok, cached_prompt_tokens=cached_tok)
+        except Exception as e:
+            message, code = extract_llm_error_text(e), self._classify_error(e)
+            logger.error(f"LiteLLM Stream Error: {message}")
+            if code == "context_limit":
+                # Must raise so the kernel's aborted-done + compaction retry runs.
+                raise LLMProviderError(message, code=code) from e
+            return LLMResponse(content=f"Error: {message}", error=message, error_code=code)
