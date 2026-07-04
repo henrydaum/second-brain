@@ -7,6 +7,7 @@ dependencies_pip = ['python-telegram-bot']
 
 import asyncio
 import html
+import json
 import logging
 import re
 import threading
@@ -196,6 +197,7 @@ class TelegramFrontend(BaseFrontend):
         ("Telegram Bot Token", "telegram_bot_token", "Bot token from @BotFather. Required for Telegram frontend.", "", {"type": "text"}),
         ("Telegram Allowed User ID", "telegram_allowed_user_id", "Your Telegram user ID (integer). Only this user can interact with the bot. Send /start to @userinfobot to find yours.", 0, {"type": "text"}),
         ("Telegram Conversation Banner", "telegram_pin_banner", "Keep a pinned message at the top of the chat showing the current conversation's title, updated on switch/retitle.", True, {"type": "bool"}),
+        ("Telegram Banner Messages", "telegram_banner_messages", "Pinned banner message ids per chat (internal bookkeeping).", {}, {"type": "text", "hidden": True}),
     ]
     # Fallback guidance for installs where Rich Messages are unavailable
     # (old python-telegram-bot or pre-10.1 Bot API server).
@@ -242,7 +244,10 @@ class TelegramFrontend(BaseFrontend):
         # False = confirmed unavailable (old PTB or pre-10.1 server).
         self._rich: bool | None = None
         # Pinned conversation banner per chat: chat_id -> (message_id, title).
-        self._banners: dict[int, tuple[int, str]] = {}
+        # Persisted (hidden config) so a restart edits the same pinned
+        # message instead of pinning a new banner every boot; None until
+        # first use because config is only bound after __init__.
+        self._banners: dict[int, tuple[int, str]] | None = None
         # Most recent inbound message per session, for reaction acks.
         self._inbound: dict[str, tuple[int, int]] = {}
 
@@ -493,25 +498,65 @@ class TelegramFrontend(BaseFrontend):
     async def _update_banner(self, chat_id: int, title: str) -> None:
         """Create-or-edit the single pinned banner message for a chat."""
         text = f"💬 {title}"
-        entry = self._banners.get(chat_id)
+        entry = self._banner_map().get(chat_id)
         if entry and entry[1] == title:
             return
         try:
             if entry:
                 await self.app.bot.edit_message_text(text, chat_id=chat_id, message_id=entry[0])
                 self._banners[chat_id] = (entry[0], title)
+                self._persist_banners()
                 return
         except Exception as e:
             logger.debug(f"Banner edit failed ({e}); sending a fresh one.")
-            self._banners.pop(chat_id, None)
         try:
             sent = await self.app.bot.send_message(chat_id, text, disable_notification=True)
             await self.app.bot.pin_chat_message(chat_id, sent.message_id, disable_notification=True)
+            if entry and entry[0] != sent.message_id:
+                # Replace, don't accumulate: drop the stale pin we could not edit.
+                try:
+                    await self.app.bot.unpin_chat_message(chat_id, message_id=entry[0])
+                except Exception:
+                    pass
             self._banners[chat_id] = (sent.message_id, title)
+            self._persist_banners()
         except Exception as e:
             # Pinning needs no special rights in private chats, but fail soft:
             # a missing banner must never break message flow.
             logger.info(f"Conversation banner unavailable: {e}")
+
+    def _banner_map(self) -> dict[int, tuple[int, str]]:
+        """The banner map, loaded once from persisted (hidden) config."""
+        if self._banners is None:
+            raw = (self.config or {}).get("telegram_banner_messages", {})
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw) if raw.strip() else {}
+                except json.JSONDecodeError:
+                    raw = {}
+            banners: dict[int, tuple[int, str]] = {}
+            if isinstance(raw, dict):
+                for chat_id, entry in raw.items():
+                    try:
+                        message_id, title = entry
+                        banners[int(chat_id)] = (int(message_id), str(title))
+                    except (TypeError, ValueError):
+                        continue
+            self._banners = banners
+        return self._banners
+
+    def _persist_banners(self) -> None:
+        """Write the banner map through to plugin config; failures are soft."""
+        try:
+            import config.config_manager as config_manager
+            serialized = {str(cid): [mid, title] for cid, (mid, title) in (self._banners or {}).items()}
+            values = config_manager.load_plugin_config()
+            values["telegram_banner_messages"] = serialized
+            config_manager.save_plugin_config(values)
+            if isinstance(self.config, dict):
+                self.config["telegram_banner_messages"] = serialized
+        except Exception as e:
+            logger.debug(f"Banner persistence failed: {e}")
 
     def render_attachments(self, session_key: str, paths: list[str]) -> None:
         """Send rendered attachments back to Telegram."""
