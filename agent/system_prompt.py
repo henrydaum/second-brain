@@ -144,8 +144,14 @@ def _visible_tools_for_prompt(registry):
 
 
 def _loaded_services_for_prompt(services: dict):
-    """Loaded service instances, sorted by registry name."""
-    return [svc for _, svc in sorted((services or {}).items()) if getattr(svc, "loaded", False)]
+    """Loaded service instances, sorted by registry name.
+
+    A service that sets ``prompt_when_unloaded = True`` contributes even while
+    unloaded, so it can tell the agent the capability exists but is off (e.g.
+    the store location service, which is consent-gated behind an explicit
+    load)."""
+    return [svc for _, svc in sorted((services or {}).items())
+            if getattr(svc, "loaded", False) or getattr(svc, "prompt_when_unloaded", False)]
 
 
 def _tasks_for_prompt(orchestrator):

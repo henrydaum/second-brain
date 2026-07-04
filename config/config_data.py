@@ -100,6 +100,14 @@ SETTINGS_DATA = [
      True,
      {"type": "bool"}),
 
+    ("Reveal User Commands to Agent", "reveal_user_commands",
+     "Mirror completed slash commands into the conversation as a note the "
+     "agent can see, so it knows when you changed state out-of-band (e.g. "
+     "/config, /services). Records the command name and argument names only "
+     "— never argument values, which can carry secrets.",
+     False,
+     {"type": "bool"}),
+
     ("Skip Permissions", "skip_permissions",
      "Tool names whose permission dialogs are automatically approved unless a permission plugin rejects them.",
      [],

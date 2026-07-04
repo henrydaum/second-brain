@@ -125,6 +125,34 @@ def absorb_user_action(
             "content": text,
             "actor_id": "user",
         })
+    note_user_command(runtime, session, result)
+
+
+def note_user_command(runtime, session: RuntimeSession, result: ActionResult) -> None:
+    """Mirror a completed slash command into provider history when the
+    ``reveal_user_commands`` kernel setting is on.
+
+    Keyed off a ``call_command``-typed event in the result so both direct
+    calls and form-completed calls (whose result is the replayed command's)
+    are noted, while form-start results (a ``form_step`` event) are not.
+    Records the command name and argument *names* only — argument values can
+    carry secrets (/setup API keys, /config values). No SESSION_MESSAGE is
+    emitted: the user already saw their own command.
+    """
+    if not (runtime.config or {}).get("reveal_user_commands"):
+        return
+    event = next((e for e in reversed(result.events or [])
+                  if e.get("type") == "call_command"), None)
+    if not event or not event.get("name"):
+        return
+    args = event.get("args") or {}
+    fields = f" (fields: {', '.join(sorted(args))})" if args else ""
+    msg = {"role": "user", "content": (
+        f"[SYSTEM NOTE] The user ran the slash command /{event['name']}{fields}. "
+        "Its output was shown directly to the user.")}
+    session.history.append(msg)
+    if runtime.db and session.conversation_id:
+        save_history_message(runtime.db, session.conversation_id, msg)
 
 
 def echo_callable_result(action_type: str, result: ActionResult, out: RuntimeResult) -> None:

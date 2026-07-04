@@ -1,6 +1,16 @@
 from types import SimpleNamespace
 
-from agent.system_prompt import _model_status
+from agent.system_prompt import _loaded_services_for_prompt, _model_status
+
+
+def test_unloaded_services_are_prompt_silent_unless_opted_in():
+    silent = SimpleNamespace(loaded=False)
+    speaking = SimpleNamespace(loaded=False, prompt_when_unloaded=True)
+    loaded = SimpleNamespace(loaded=True)
+
+    picked = _loaded_services_for_prompt({"a": silent, "b": speaking, "c": loaded})
+
+    assert picked == [speaking, loaded]
 
 
 def test_model_status_reports_effective_native_attachment_capabilities():
