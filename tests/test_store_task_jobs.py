@@ -116,6 +116,37 @@ def test_update_titles_emits_retitled(titles_mod):
         {k: p.get(k) for k in ("action", "conversation_id")} for p in seen]
 
 
+def test_needs_title_only_for_kernel_generated(titles_mod):
+    assert titles_mod._needs_title("New Conversation")
+    assert titles_mod._needs_title("New conversation (Main)")
+    assert titles_mod._needs_title("")
+    assert titles_mod._needs_title(None)
+    assert titles_mod._needs_title("Virginia Trip (cleared)")
+    assert not titles_mod._needs_title("Virginia Holiday")
+
+
+def test_run_event_titles_once(titles_mod, monkeypatch):
+    # A conversation that already has a real title is skipped without an
+    # LLM call, and its high-water mark advances so it leaves the sweep.
+    marks, writes = [], []
+    db = SimpleNamespace(
+        list_conversations_for_title_check=lambda threshold: [
+            {"id": 3, "title": "Virginia Holiday", "message_count": 9}],
+        update_conversation_title=lambda cid, title: writes.append((cid, title)),
+        update_conversation_title_check_count=lambda cid, count: marks.append((cid, count)),
+    )
+
+    def _never_invoke(*_a, **_k):
+        raise AssertionError("LLM must not be called for a titled conversation")
+
+    llm = SimpleNamespace(loaded=True, invoke=_never_invoke)
+    monkeypatch.setattr(titles_mod, "resolve_agent_llm", lambda *a, **k: llm)
+    result = titles_mod.UpdateTitles().run_event("run1", {}, SimpleNamespace(db=db, config={}, services={}))
+    assert result.success
+    assert writes == []
+    assert marks == [(3, 9)]
+
+
 def test_update_titles_declares_default_job(titles_mod):
     job = titles_mod.UpdateTitles.default_jobs["update_titles"]
     assert job["cron"] == "*/15 * * * *"
