@@ -32,6 +32,10 @@ class LocationService(BaseService):
     shared = True
     lifecycle = MANAGED
     load_timeout = 30.0
+    # Location sharing is consent-gated: the service ships unloaded (managed
+    # services only autoload when the user adds them to autoload_services),
+    # and while unloaded it still tells the agent the capability is off.
+    prompt_when_unloaded = True
 
     config_settings = [
         ("Manual Location", "location_manual",
@@ -91,7 +95,17 @@ class LocationService(BaseService):
         Cache-only: serves the last resolved location and kicks a
         background refresh when stale, so the semi-stable prompt block
         never waits on the network and stays byte-stable between turns.
+
+        While unloaded (the shipped default — location sharing is opt-in),
+        the block instead tells the agent the service is off so it can point
+        the user at loading it when a question needs their location.
         """
+        if not self.loaded:
+            return ("## Location\nThe location service is installed but "
+                    "unloaded, so the user's location is not shared. If the "
+                    "user asks something location-dependent, tell them they "
+                    "can load the location service (e.g. via /services) to "
+                    "share it.")
         manual = self._manual(getattr(ctx, "config", None))
         if manual:
             return f"## Location\nThe user's location (user-provided): {manual}"
