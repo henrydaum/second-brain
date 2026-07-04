@@ -86,6 +86,9 @@ class DreamMemory(BaseTask):
     writes = []
     timeout = 600
     event_payload_schema = {"type": "object", "properties": {}, "required": []}
+    default_jobs = {
+        "dream_memory": {"channel": DREAM_MEMORY, "cron": "0 4 * * *", "payload": {}},
+    }
     config_settings = [
         ("Memory Dream LLM Profile", "memory_dream_llm_profile",
          "Agent profile whose LLM rewrites the memory folder. 'default' follows the default LLM.",

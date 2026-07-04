@@ -1,10 +1,12 @@
 """Periodic conversation-title refresher.
 
-Fired by the ``update_titles`` cron job (default ``*/30 * * * *``). For
-every conversation whose message count has advanced by at least
-``_THRESHOLD`` since the last sweep, asks the configured LLM for a fresh
-short title and writes it back. The high-water mark is updated even when
-the LLM returns nothing, so a flaky reply does not replay every tick.
+Fired by the ``update_titles`` cron job (seeded ``*/15 * * * *`` by
+default via ``default_jobs``). For every conversation whose message count
+has advanced by at least ``_THRESHOLD`` since the last sweep, asks the
+configured LLM for a fresh short title and writes it back. The high-water
+mark is updated even when the LLM returns nothing, so a flaky reply does
+not replay every tick. Each write emits ``CONVERSATION_CHANGED`` with
+``action='retitled'`` so frontends refresh sidebars/banners live.
 """
 
 dependencies_files = ['services/service_litellm.py']
@@ -13,6 +15,8 @@ dependencies_pip = []
 import json
 import logging
 
+from events.event_bus import bus
+from events.event_channels import CONVERSATION_CHANGED
 from plugins.BaseTask import BaseTask, TaskResult
 from runtime.agent_scope import resolve_agent_llm
 from runtime.token_stripper import strip_model_tokens
@@ -56,6 +60,9 @@ class UpdateTitles(BaseTask):
     writes = []
     timeout = 600
     event_payload_schema = {"type": "object", "properties": {}, "required": []}
+    default_jobs = {
+        "update_titles": {"channel": UPDATE_TITLES, "cron": "*/15 * * * *", "payload": {}},
+    }
 
     config_settings = [
         ("Title Update LLM Profile", "title_update_llm_profile",
@@ -121,6 +128,9 @@ class UpdateTitles(BaseTask):
             title = _sanitize(getattr(response, "content", ""))
             if title:
                 db.update_conversation_title(conversation_id, title)
+                # Frontends (sidebars, pinned banners) refresh off this;
+                # the kernel only emits created/deleted/recategorized.
+                bus.emit(CONVERSATION_CHANGED, {"action": "retitled", "conversation_id": conversation_id})
                 logger.info("Updated conversation %s title to '%s'.", conversation_id, title)
         finally:
             db.update_conversation_title_check_count(conversation_id, message_count)
