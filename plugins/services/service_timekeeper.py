@@ -27,18 +27,6 @@ def _local_tz():
     return _now_local().tzinfo
 
 
-def _removed_from_config(config: dict) -> set[str]:
-    """Parse the persisted removed-job tombstone list (JSON string or list)."""
-    raw = config.get("removed_scheduled_jobs", [])
-    if isinstance(raw, str):
-        raw = raw.strip()
-        try:
-            raw = json.loads(raw) if raw else []
-        except json.JSONDecodeError:
-            raw = []
-    return {str(name) for name in raw} if isinstance(raw, list) else set()
-
-
 class TimekeeperService(BaseService):
     """Timekeeper service."""
     model_name = "Timekeeper"
@@ -49,14 +37,6 @@ class TimekeeperService(BaseService):
             "scheduled_jobs",
             "JSON object keyed by job name describing scheduled event emissions.",
             DEFAULT_SCHEDULED_JOBS,
-            {"type": "text", "hidden": True},
-        ),
-        (
-            "Removed Scheduled Jobs",
-            "removed_scheduled_jobs",
-            "Job names the user deliberately removed; tasks that declare these "
-            "as default jobs will not re-seed them.",
-            [],
             {"type": "text", "hidden": True},
         ),
     ]
@@ -71,8 +51,7 @@ class TimekeeperService(BaseService):
         self._poll_interval_s = 1.0
         self._jobs: dict[str, dict] = {}
         self._next_fire_at: dict[str, datetime | None] = {}
-        self._removed: set[str] = set()
-        self._load_jobs_from_config()  # also loads the removed-job tombstones
+        self._load_jobs_from_config()
 
     def _load(self) -> bool:
         """Internal helper to load timekeeper service."""
@@ -116,9 +95,6 @@ class TimekeeperService(BaseService):
             normalized = self._normalize_job(name, job_def)
             self._jobs[name] = normalized
             self._next_fire_at[name] = self._compute_next_fire(normalized, from_time=_now_local())
-            # Explicit creation revives a tombstoned name — the user (or a
-            # task seeding a fresh install) clearly wants the job back.
-            self._removed.discard(name)
             self._persist_jobs()
             return deepcopy(normalized)
 
@@ -137,22 +113,18 @@ class TimekeeperService(BaseService):
             return deepcopy(normalized)
 
     def remove_job(self, name: str) -> bool:
-        """Remove job."""
+        """Remove job.
+
+        A removed default job reappears when its task next registers (boot,
+        reinstall, hot-reload) — disabling is the durable way to silence one.
+        """
         with self._lock:
             removed = self._jobs.pop(name, None)
             self._next_fire_at.pop(name, None)
             if removed is None:
                 return False
-            # Tombstone the name so a task's default_jobs seeding does not
-            # resurrect a job the user deliberately deleted.
-            self._removed.add(name)
             self._persist_jobs()
             return True
-
-    def is_job_removed(self, name: str) -> bool:
-        """True if the user deliberately removed this job (do not re-seed)."""
-        with self._lock:
-            return name in self._removed
 
     def enable_job(self, name: str, enabled: bool = True) -> dict:
         """Handle enable job."""
@@ -242,7 +214,6 @@ class TimekeeperService(BaseService):
 
     def _load_jobs_from_config(self, purge_expired: bool = False):
         """Internal helper to load jobs from config."""
-        self._removed = _removed_from_config(self._config)
         raw = self._config.get("scheduled_jobs", {})
         if isinstance(raw, str):
             raw = raw.strip()
@@ -328,10 +299,8 @@ class TimekeeperService(BaseService):
         """Internal helper to persist jobs."""
         plugin_values = config_manager.load_plugin_config()
         plugin_values["scheduled_jobs"] = deepcopy(self._jobs)
-        plugin_values["removed_scheduled_jobs"] = sorted(self._removed)
         config_manager.save_plugin_config(plugin_values)
         self._config["scheduled_jobs"] = deepcopy(self._jobs)
-        self._config["removed_scheduled_jobs"] = sorted(self._removed)
 
     @staticmethod
     def _parse_datetime(value: str, job_name: str) -> datetime:

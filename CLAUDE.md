@@ -315,9 +315,10 @@ conversation title on a persistent surface; fed by the
   [runtime/context.py](runtime/context.py).
 - **Ship a task with a schedule**: declare `default_jobs` on the task
   (`{job_name: {"channel", "cron", "payload"}}`). The orchestrator seeds the
-  Timekeeper job at registration if absent; the timekeeper tombstones
-  user-deleted jobs (`removed_scheduled_jobs`) so re-registration never
-  resurrects them, and explicit re-creation revives the name.
+  Timekeeper job at registration if absent (disabled jobs count as existing)
+  and removes it at unregistration, so default jobs live exactly as long as
+  their task and a reinstall picks up an updated declaration. Disabling —
+  not deleting — is the durable way to silence a default job.
 - **Drive an agent from a task**: call `context.runtime.iterate_agent_turn(...)`
   on a session key. The runtime persists history and markers atomically
   for you. Background drivers should keep their session key distinct from
