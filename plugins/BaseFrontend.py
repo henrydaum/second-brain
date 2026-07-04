@@ -754,6 +754,15 @@ class BaseFrontend:
             self.on_bus_session_conversation_changed(
                 {"session_key": key, "conversation_id": cid, "title": title})
 
+    def render_queued_ack(self, session_key: str) -> bool:
+        """Acknowledge a mid-turn queued message out-of-band.
+
+        Return True to suppress the textual "Got it — I'll read that…" ack
+        (e.g. a Telegram message reaction took its place). Default False:
+        the text ack renders normally.
+        """
+        return False
+
     def render_conversation_banner(self, session_key: str, info: dict) -> None:
         """Default no-op; frontends with a persistent surface (pinned message,
         window title) override to mirror the session's conversation title."""
@@ -775,6 +784,8 @@ class BaseFrontend:
         """Internal helper to render result."""
         if result is None:
             return
+        if (result.data or {}).get("queued") and self.render_queued_ack(session_key):
+            return  # acknowledged out-of-band (e.g. a message reaction)
         if result.messages:
             messages = [m for m in result.messages if not self._consume_streamed(session_key, m)]
             if messages:

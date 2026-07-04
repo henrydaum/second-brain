@@ -45,6 +45,22 @@ def test_invalid_command_args_render_a_message():
     assert any("fifa_world_cup_daily_update" in m for m in fe.rendered)
 
 
+def test_queued_ack_hook_suppresses_the_text_ack():
+    from runtime.session import RuntimeResult
+
+    fe = _CaptureFrontend()
+    queued = RuntimeResult(messages=["Got it — I'll read that as soon as I finish this step."],
+                           data={"queued": True})
+
+    fe._render_result("s", queued)
+    assert fe.rendered  # default hook: text ack renders
+
+    fe.rendered.clear()
+    fe.render_queued_ack = lambda _key: True  # reaction-capable frontend
+    fe._render_result("s", queued)
+    assert fe.rendered == []
+
+
 # ── /services toggles ────────────────────────────────────────────────
 
 class _ManagedService:

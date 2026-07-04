@@ -15,7 +15,7 @@ from __future__ import annotations
 import time
 
 from plugins.BaseCommand import BaseCommand
-from plugins.frontends.helpers.formatters import detail_card
+from plugins.frontends.helpers.formatters import detail_card, quote_block
 from runtime.notifications import NOTIFICATION_MODES, notification_mode
 from state_machine.conversation import FormStep
 from state_machine.serialization import latest_state
@@ -247,8 +247,8 @@ def _preview_for(db, conversation_id) -> str:
             break
     snippets.reverse()
     card = detail_card(title or "(untitled)", [("Agent", agent), ("Notifications", mode)])
-    quoted = "\n".join(f"> {s}" for s in snippets)
-    return card + (f"\n\n{quoted}" if quoted else "")
+    quoted = quote_block("\n".join(snippets))
+    return card + (f"\n\n{quoted}" if snippets else "")
 
 
 def _truncate(text: str, limit: int) -> str:

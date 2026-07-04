@@ -2,7 +2,7 @@
 
 from plugins.BaseCommand import BaseCommand
 from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks
-from plugins.frontends.helpers.formatters import detail_card, format_tool_result, format_tools
+from plugins.frontends.helpers.formatters import detail_card, format_tool_result, format_tools, quote_block
 from state_machine.conversation import FormStep
 from state_machine.forms import schema_to_form_steps
 
@@ -69,8 +69,7 @@ def _describe(tool, context=None):
         ("Skip permissions", "enabled" if skipped else "disabled"),
     ])
     desc = (schema.get("description") or "").strip()
-    quoted = "\n".join(f"> {line}" if line.strip() else ">" for line in desc.splitlines())
-    return f"{card}\n\n{quoted}" if desc else card
+    return f"{card}\n\n{quote_block(desc)}" if desc else card
 
 
 def _toggle_skip(context, tool_name: str, enabled: bool) -> str:

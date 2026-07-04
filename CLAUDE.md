@@ -279,6 +279,30 @@ both events and routes them through `render_tool_status(session_key,
 payload)`. Rich frontends such as installed Telegram can edit a single status
 message in place; the REPL prints the same shapes to stdout.
 
+## Presentation convention: markdown on the wire
+
+Command/tool output is a **string of GitHub-flavored markdown**, built with
+the primitives in
+[plugins/frontends/helpers/formatters.py](plugins/frontends/helpers/formatters.py):
+`md_table` for data tables, `detail_card(title, pairs)` for describe-style
+key/value cards, `quote_block` for prose under a card (descriptions,
+previews, payloads), and fenced code blocks for multi-line technical dumps
+(/debug, /locations — rich renderers collapse single newlines in prose).
+Tables must start their own block (blank line before), or GFM parsers fold
+them into the preceding paragraph. Each frontend then renders by policy, not
+by sender: the REPL runs `render_plain` (aligns tables, strips fence
+markers); Telegram's rich path renders markdown natively but compacts
+detail-card-shaped tables into code blocks, and its HTML fallback renders
+tables/quotes as `<pre>`/`<blockquote>`. Don't invent a structured message
+type for this — markdown is deliberately the interchange format (it is also
+what the LLM emits, so frontends need exactly one rendering path).
+
+`BaseFrontend` also exposes optional per-frontend polish hooks:
+`render_queued_ack` (suppress the textual mid-turn ack in favor of e.g. a
+message reaction) and `render_conversation_banner` (mirror the session's
+conversation title on a persistent surface; fed by the
+`SESSION_CONVERSATION_CHANGED` bus channel).
+
 ## Where to plug in
 
 - **Add a slash command**: write a `BaseCommand` subclass as `command_*.py` in

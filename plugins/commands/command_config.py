@@ -5,7 +5,7 @@ import json
 from config.config_data import SETTINGS_DATA
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
-from plugins.frontends.helpers.formatters import detail_card, md_table
+from plugins.frontends.helpers.formatters import detail_card, md_table, quote_block
 from plugins.plugin_discovery import get_plugin_setting_scope, get_plugin_setting_type, get_plugin_settings, get_setting_plugin_names
 from state_machine.conversation import FormStep
 
@@ -205,8 +205,7 @@ def _describe(context, key):
         (key, _format_value(_current_value(context, key))),
         ("Used by", ", ".join(users) if users else "kernel"),
     ])
-    quoted = "\n".join(f"> {line}" for line in desc.splitlines() if line.strip())
-    return card + (f"\n\n{quoted}" if quoted else "")
+    return card + (f"\n\n{quote_block(desc)}" if desc.strip() else "")
 
 
 def _list(context):

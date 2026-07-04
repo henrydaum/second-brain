@@ -38,6 +38,12 @@ def detail_card(title: str, pairs: list[tuple]) -> str:
     return md_table([title, ""], pairs)
 
 
+def quote_block(text: str) -> str:
+    """Render *text* as a markdown blockquote (the house style for prose
+    under a detail card: descriptions, previews, payloads)."""
+    return "\n".join(f"> {line}" if line.strip() else ">" for line in (text or "").splitlines())
+
+
 _TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
 _TABLE_SEPARATOR = re.compile(r"^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$")
 
