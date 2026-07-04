@@ -195,6 +195,7 @@ class TelegramFrontend(BaseFrontend):
     config_settings = [
         ("Telegram Bot Token", "telegram_bot_token", "Bot token from @BotFather. Required for Telegram frontend.", "", {"type": "text"}),
         ("Telegram Allowed User ID", "telegram_allowed_user_id", "Your Telegram user ID (integer). Only this user can interact with the bot. Send /start to @userinfobot to find yours.", 0, {"type": "text"}),
+        ("Telegram Conversation Banner", "telegram_pin_banner", "Keep a pinned message at the top of the chat showing the current conversation's title, updated on switch/retitle.", True, {"type": "bool"}),
     ]
     # Fallback guidance for installs where Rich Messages are unavailable
     # (old python-telegram-bot or pre-10.1 Bot API server).
@@ -481,6 +482,8 @@ class TelegramFrontend(BaseFrontend):
 
     def render_conversation_banner(self, session_key: str, info: dict) -> None:
         """Mirror the session's conversation title in a pinned banner message."""
+        if not (self.config or {}).get("telegram_pin_banner", True):
+            return
         chat_id = self._chat_id(session_key)
         title = (info.get("title") or "").strip()
         if not chat_id or not title or self.app is None:
