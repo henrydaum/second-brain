@@ -1,5 +1,5 @@
 {
-  "description": "Basic everyday setup: Telegram, LiteLLM, read/edit/shell/SQL tools, ask-user-question, plugin authoring, memory, dream-memory, and title updates.",
+  "description": "Basic everyday setup: Telegram, LiteLLM, read/edit/shell/SQL tools, ask-user-question, plugin authoring, memory, dream-memory, title updates, and the location service.",
   "files": [
     "frontends/frontend_telegram.py",
     "services/service_litellm.py",
@@ -11,7 +11,8 @@
     "tools/tool_read_file.py",
     "tools/tool_run_command.py",
     "tools/tool_sql_query.py",
-    "tools/tool_test_plugin.py"
+    "tools/tool_test_plugin.py",
+    "services/service_location.py"
   ],
   "name": "Starter"
 }

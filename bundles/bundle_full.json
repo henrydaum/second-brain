@@ -32,7 +32,8 @@
     "tasks/task_transcribe_audio.py",
     "tools/tool_hybrid_search.py",
     "tools/tool_lexical_search.py",
-    "tools/tool_semantic_search.py"
+    "tools/tool_semantic_search.py",
+    "services/service_location.py"
   ],
   "name": "Full"
 }
