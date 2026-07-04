@@ -125,31 +125,89 @@ def test_needs_title_only_for_kernel_generated(titles_mod):
     assert not titles_mod._needs_title("Virginia Holiday")
 
 
-def test_run_event_titles_once(titles_mod, monkeypatch):
-    # A conversation that already has a real title is skipped without an
-    # LLM call, and its high-water mark advances so it leaves the sweep.
-    marks, writes = [], []
-    db = SimpleNamespace(
-        list_conversations_for_title_check=lambda threshold: [
-            {"id": 3, "title": "Virginia Holiday", "message_count": 9}],
+_TITLE_COLUMNS = ["id", "title", "total_count", "content_count", "first_agent_ts"]
+
+
+def _titles_db(rows, marks, writes, messages=None):
+    return SimpleNamespace(
+        query=lambda sql, max_rows=25: {"columns": _TITLE_COLUMNS, "rows": rows, "truncated": False},
+        get_conversation_messages=lambda cid: messages or [],
         update_conversation_title=lambda cid, title: writes.append((cid, title)),
         update_conversation_title_check_count=lambda cid, count: marks.append((cid, count)),
     )
 
+
+def _run_sweep(titles_mod, monkeypatch, db, llm=None, config=None):
+    llm = llm or SimpleNamespace(loaded=True, invoke=lambda messages: SimpleNamespace(
+        content="Virginia Holiday", error=None))
+    monkeypatch.setattr(titles_mod, "resolve_agent_llm", lambda *a, **k: llm)
+    return titles_mod.UpdateTitles().run_event(
+        "run1", {}, SimpleNamespace(db=db, config=config or {}, services={}))
+
+
+def test_run_event_titles_once(titles_mod, monkeypatch):
+    # A conversation that already has a real title is skipped without an
+    # LLM call, and its high-water mark advances so it leaves the sweep.
+    import time
+    marks, writes = [], []
+    db = _titles_db([(3, "Virginia Holiday", 9, 7, time.time() - 3600)], marks, writes)
+
     def _never_invoke(*_a, **_k):
         raise AssertionError("LLM must not be called for a titled conversation")
 
-    llm = SimpleNamespace(loaded=True, invoke=_never_invoke)
-    monkeypatch.setattr(titles_mod, "resolve_agent_llm", lambda *a, **k: llm)
-    result = titles_mod.UpdateTitles().run_event("run1", {}, SimpleNamespace(db=db, config={}, services={}))
+    result = _run_sweep(titles_mod, monkeypatch, db,
+                        llm=SimpleNamespace(loaded=True, invoke=_never_invoke))
     assert result.success
     assert writes == []
     assert marks == [(3, 9)]
 
 
+def test_unripe_conversation_waits_without_advancing_the_mark(titles_mod, monkeypatch):
+    # Young, quiet conversation: no title yet, and the mark must NOT advance
+    # so the row comes back next minute. Same for one the agent hasn't
+    # answered at all.
+    import time
+    marks, writes = [], []
+    db = _titles_db([
+        (1, "New Conversation", 3, 2, time.time() - 60),  # 1 min old, 2 msgs
+        (2, "New Conversation", 1, 1, None),              # no agent reply
+    ], marks, writes)
+
+    result = _run_sweep(titles_mod, monkeypatch, db)
+    assert result.success
+    assert writes == []
+    assert marks == []
+
+
+def test_ripe_by_age_or_by_traffic_gets_titled(titles_mod, monkeypatch):
+    import time
+    marks, writes = [], []
+    now = time.time()
+    db = _titles_db([
+        (1, "New Conversation", 4, 3, now - 700),  # first reply >10 min ago
+        (2, "New Conversation", 8, 6, now - 60),   # young but busy (6 msgs)
+    ], marks, writes, messages=[{"role": "user", "content": "plan my virginia holiday"}])
+
+    result = _run_sweep(titles_mod, monkeypatch, db)
+    assert result.success
+    assert writes == [(1, "Virginia Holiday"), (2, "Virginia Holiday")]
+    assert marks == [(1, 4), (2, 8)]
+
+
+def test_title_delay_zero_titles_after_first_reply(titles_mod, monkeypatch):
+    import time
+    marks, writes = [], []
+    db = _titles_db([(5, "", 2, 2, time.time() - 1)], marks, writes,
+                    messages=[{"role": "user", "content": "plan my virginia holiday"}])
+
+    result = _run_sweep(titles_mod, monkeypatch, db, config={"title_delay_minutes": 0})
+    assert result.success
+    assert writes == [(5, "Virginia Holiday")]
+
+
 def test_update_titles_declares_default_job(titles_mod):
     job = titles_mod.UpdateTitles.default_jobs["update_titles"]
-    assert job["cron"] == "*/15 * * * *"
+    assert job["cron"] == "* * * * *"
     assert job["channel"] == titles_mod.UPDATE_TITLES
 
 

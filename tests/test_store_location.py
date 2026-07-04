@@ -56,7 +56,6 @@ def test_declares_store_contract(location_module):
     svc = location_module.build_services({})["location"]
     assert svc.model_name == "location"
     assert svc.lifecycle == "managed"
-    assert svc.prompt_when_unloaded is True  # speaks even while off (consent gate)
     assert svc.dependencies_pip == []
     source = _store_module_source()
     assert "dependencies_pip = []" in source  # module-level literal for AST parsing
@@ -108,17 +107,6 @@ def test_provider_fallback_and_quiet_failure(location_module):
     svc._refresh()
     assert svc.agent_prompt_for(SimpleNamespace(config={})) == ""
     assert not svc._stale()
-
-
-def test_unloaded_service_tells_the_agent_it_is_off(location_module):
-    svc = _service(location_module, {"location_manual": "Seattle, WA"}, loaded=False)
-    svc._fetch_json = lambda url: pytest.fail("unloaded service must not hit the network")
-
-    prompt = svc.agent_prompt_for(SimpleNamespace(config={"location_manual": "Seattle, WA"}))
-
-    assert "unloaded" in prompt
-    assert "location service" in prompt
-    assert "Seattle" not in prompt  # nothing is shared without an explicit load
 
 
 def test_stale_cache_refreshes_in_background_not_inline(location_module):

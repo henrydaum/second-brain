@@ -78,11 +78,6 @@ class BaseService(ABC):
     # is loaded. Override agent_prompt_for() instead for dynamic text.
     agent_prompt: str = ""
 
-    # Set True to contribute prompt text even while unloaded — for services
-    # that should tell the agent the capability exists but is switched off
-    # (agent_prompt_for() must then branch on ``self.loaded``).
-    prompt_when_unloaded: bool = False
-
     def agent_prompt_for(self, ctx) -> str:
         """Guidance for the agent system prompt, or '' to contribute nothing.
 
