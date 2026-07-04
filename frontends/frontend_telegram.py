@@ -32,6 +32,17 @@ logger = logging.getLogger("TelegramFrontend")
 
 _MAX_FILE_SIZE = 50 * 1024 * 1024
 
+# Titles that still look kernel-generated: no topic pin is made for these
+# (mirrors the update_titles task's _needs_title). Covers "New Conversation",
+# "New conversation (Main)", empty, and "/clear"-stamped "... (cleared)".
+_DEFAULT_TITLE_RE = re.compile(r"^new conversation\b", re.IGNORECASE)
+
+
+def _is_default_title(title: str) -> bool:
+    """True while a conversation has no real, user-meaningful title yet."""
+    text = (title or "").strip()
+    return not text or bool(_DEFAULT_TITLE_RE.match(text)) or text.endswith("(cleared)")
+
 
 class _NetworkErrorThrottle(logging.Filter):
     """Collapse repeated Telegram polling network errors into one log per window.
@@ -243,11 +254,11 @@ class TelegramFrontend(BaseFrontend):
         # Rich Messages (Bot API 10.1) capability: None = undetermined,
         # False = confirmed unavailable (old PTB or pre-10.1 server).
         self._rich: bool | None = None
-        # Pinned conversation banner per chat: chat_id -> (message_id, title).
-        # Persisted (hidden config) so a restart edits the same pinned
-        # message instead of pinning a new banner every boot; None until
-        # first use because config is only bound after __init__.
-        self._banners: dict[int, tuple[int, str]] | None = None
+        # Pinned topic banners: chat_id -> {conversation_id: pinned_title}.
+        # Persisted (hidden config) so a conversation pins exactly once —
+        # restarts and switches never re-pin. None until first use because
+        # config is only bound after __init__.
+        self._banners: dict[int, dict[int, str]] | None = None
         # Most recent inbound message per session, for reaction acks.
         self._inbound: dict[str, tuple[int, int]] = {}
 
@@ -486,47 +497,41 @@ class TelegramFrontend(BaseFrontend):
             await self._deliver_message_async(chat_id, "Got it — I'll read that as soon as I finish this step.")
 
     def render_conversation_banner(self, session_key: str, info: dict) -> None:
-        """Mirror the session's conversation title in a pinned banner message."""
+        """Pin a fresh banner the first time a conversation earns a real title.
+
+        Pins are topic-based and immutable: one is created when a
+        conversation is (re)titled, never for a still-default "New
+        Conversation", and existing pins are never edited or re-pinned.
+        Dedup is per conversation id (persisted), so switches, retitle
+        echoes, and restarts don't create duplicate pins.
+        """
         if not (self.config or {}).get("telegram_pin_banner", True):
             return
         chat_id = self._chat_id(session_key)
         title = (info.get("title") or "").strip()
-        if not chat_id or not title or self.app is None:
+        conversation_id = info.get("conversation_id")
+        if not chat_id or not title or conversation_id is None or self.app is None:
             return
-        self._send_nowait(self._update_banner(chat_id, title))
+        if _is_default_title(title):
+            return  # not a real topic yet — wait for the retitle
+        if self._pinned_map().get(chat_id, {}).get(int(conversation_id)) == title:
+            return  # already pinned this topic
+        self._send_nowait(self._pin_topic(chat_id, int(conversation_id), title))
 
-    async def _update_banner(self, chat_id: int, title: str) -> None:
-        """Create-or-edit the single pinned banner message for a chat."""
-        text = f"💬 {title}"
-        entry = self._banner_map().get(chat_id)
-        if entry and entry[1] == title:
-            return
+    async def _pin_topic(self, chat_id: int, conversation_id: int, title: str) -> None:
+        """Send and pin a new topic banner, then record it so it pins once."""
         try:
-            if entry:
-                await self.app.bot.edit_message_text(text, chat_id=chat_id, message_id=entry[0])
-                self._banners[chat_id] = (entry[0], title)
-                self._persist_banners()
-                return
-        except Exception as e:
-            logger.debug(f"Banner edit failed ({e}); sending a fresh one.")
-        try:
-            sent = await self.app.bot.send_message(chat_id, text, disable_notification=True)
+            sent = await self.app.bot.send_message(chat_id, f"💬 {title}", disable_notification=True)
             await self.app.bot.pin_chat_message(chat_id, sent.message_id, disable_notification=True)
-            if entry and entry[0] != sent.message_id:
-                # Replace, don't accumulate: drop the stale pin we could not edit.
-                try:
-                    await self.app.bot.unpin_chat_message(chat_id, message_id=entry[0])
-                except Exception:
-                    pass
-            self._banners[chat_id] = (sent.message_id, title)
-            self._persist_banners()
+            self._pinned_map().setdefault(chat_id, {})[conversation_id] = title
+            self._persist_pinned()
         except Exception as e:
             # Pinning needs no special rights in private chats, but fail soft:
             # a missing banner must never break message flow.
             logger.info(f"Conversation banner unavailable: {e}")
 
-    def _banner_map(self) -> dict[int, tuple[int, str]]:
-        """The banner map, loaded once from persisted (hidden) config."""
+    def _pinned_map(self) -> dict[int, dict[int, str]]:
+        """Per-chat {conversation_id: pinned_title}, loaded once from config."""
         if self._banners is None:
             raw = (self.config or {}).get("telegram_banner_messages", {})
             if isinstance(raw, str):
@@ -534,22 +539,27 @@ class TelegramFrontend(BaseFrontend):
                     raw = json.loads(raw) if raw.strip() else {}
                 except json.JSONDecodeError:
                     raw = {}
-            banners: dict[int, tuple[int, str]] = {}
+            pinned: dict[int, dict[int, str]] = {}
             if isinstance(raw, dict):
-                for chat_id, entry in raw.items():
-                    try:
-                        message_id, title = entry
-                        banners[int(chat_id)] = (int(message_id), str(title))
-                    except (TypeError, ValueError):
-                        continue
-            self._banners = banners
+                for chat_id, topics in raw.items():
+                    if not isinstance(topics, dict):
+                        continue  # pre-topic shape ([msg_id, title]) — discard, start fresh
+                    for cid, title in topics.items():
+                        try:
+                            pinned.setdefault(int(chat_id), {})[int(cid)] = str(title)
+                        except (TypeError, ValueError):
+                            continue
+            self._banners = pinned
         return self._banners
 
-    def _persist_banners(self) -> None:
-        """Write the banner map through to plugin config; failures are soft."""
+    def _persist_pinned(self) -> None:
+        """Write the pinned-topic map through to plugin config; failures are soft."""
         try:
             import config.config_manager as config_manager
-            serialized = {str(cid): [mid, title] for cid, (mid, title) in (self._banners or {}).items()}
+            serialized = {
+                str(chat_id): {str(cid): title for cid, title in topics.items()}
+                for chat_id, topics in (self._banners or {}).items()
+            }
             values = config_manager.load_plugin_config()
             values["telegram_banner_messages"] = serialized
             config_manager.save_plugin_config(values)
