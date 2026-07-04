@@ -153,6 +153,22 @@ def test_form_prompt_renders_markdown(frontend_cls, tg_module):
     assert "| Tools | 16 |" not in prompt
 
 
+def test_banner_respects_config_toggle(frontend_cls):
+    fe = _frontend(frontend_cls, {})
+    fe.loop = object()
+    fe._chat_by_session["s"] = 42
+    scheduled = []
+    fe._send_nowait = lambda coro: (scheduled.append(coro), coro.close())
+
+    fe.config = {"telegram_pin_banner": False}
+    fe.render_conversation_banner("s", {"title": "FIFA Briefings"})
+    assert scheduled == []
+
+    fe.config = {}  # default: enabled
+    fe.render_conversation_banner("s", {"title": "FIFA Briefings"})
+    assert len(scheduled) == 1
+
+
 def test_rich_refused_classifier(frontend_cls):
     fe = _frontend(frontend_cls, {})
     assert fe._rich_refused(Exception("404 Not Found"))
