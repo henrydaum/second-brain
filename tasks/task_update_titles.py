@@ -1,16 +1,22 @@
 """One-shot conversation titler.
 
-Fired by the ``update_titles`` cron job (seeded ``*/15 * * * *`` by
-default via ``default_jobs``). For every conversation whose message count
-has advanced by at least ``_THRESHOLD`` since the last sweep *and* whose
-title still looks kernel-generated ("New Conversation", "New conversation
-(Main)", empty, or a "/clear"-stamped "... (cleared)"), asks the
-configured LLM for a short title and writes it back — once. A conversation
-with a real title (from us or from a user rename) is never overwritten,
-matching how the major chat providers handle titles. The high-water mark
-is updated even when the LLM returns nothing or the row is skipped, so
-nothing replays every tick. Each write emits ``CONVERSATION_CHANGED`` with
-``action='retitled'`` so frontends refresh sidebars/banners live.
+Fired by the ``update_titles`` cron job (seeded ``* * * * *`` — every
+minute — via ``default_jobs``; the sweep is one cheap SELECT and exits
+immediately when nothing is ripe). A conversation with new messages since
+the last sweep is titled once it is *ripe*: the agent has replied AND
+either the first agent reply is at least ``title_delay_minutes`` old
+(default 10 — the delay buys extra context so similar openers don't
+collapse into identical titles) or the conversation already carries
+``_EARLY_MESSAGES`` user/agent messages (busy conversations earn their
+title early). Only titles that still look kernel-generated ("New
+Conversation", "New conversation (Main)", empty, or a "/clear"-stamped
+"... (cleared)") are replaced, and only once — a real title (from us or a
+user rename) is never overwritten, matching the major chat providers. The
+high-water mark advances when a row is processed or already titled (so
+nothing replays every tick), but *not* while a row merely isn't ripe yet
+— it must come back next minute. Each write emits
+``CONVERSATION_CHANGED`` with ``action='retitled'`` so frontends refresh
+sidebars/banners live.
 """
 
 dependencies_files = ['services/service_litellm.py']
@@ -19,6 +25,7 @@ dependencies_pip = []
 import json
 import logging
 import re
+import time
 
 from events.event_bus import bus
 from events.event_channels import CONVERSATION_CHANGED
@@ -32,7 +39,9 @@ UPDATE_TITLES = "update_titles"
 """Plugin-owned event channel for periodic conversation retitling."""
 
 _MAX_LEN = 80
-_THRESHOLD = 4
+# A conversation with this many user/agent messages is titled without
+# waiting out the delay — it already carries enough context.
+_EARLY_MESSAGES = 6
 
 # Titles that still look kernel-generated and therefore may be replaced.
 # Covers "New Conversation", "New conversation (Main)" and friends.
@@ -76,7 +85,7 @@ class UpdateTitles(BaseTask):
     timeout = 600
     event_payload_schema = {"type": "object", "properties": {}, "required": []}
     default_jobs = {
-        "update_titles": {"channel": UPDATE_TITLES, "cron": "*/15 * * * *", "payload": {}},
+        "update_titles": {"channel": UPDATE_TITLES, "cron": "* * * * *", "payload": {}},
     }
 
     config_settings = [
@@ -84,7 +93,40 @@ class UpdateTitles(BaseTask):
          "Agent profile whose LLM is used to generate conversation titles. "
          "'default' follows the default LLM.",
          "default", {"type": "text"}),
+
+        ("Title Delay (minutes)", "title_delay_minutes",
+         "How long after the agent's first reply a conversation waits before "
+         "being titled — the wait accumulates context so similar openers get "
+         "distinct titles. Busy conversations are titled as soon as they "
+         "reach 6 user/agent messages. 0 titles right after the first reply.",
+         10, {"type": "slider", "range": (0, 60, 60), "is_float": False}),
     ]
+
+    # New-message gate (vs the high-water mark) lives in SQL so the
+    # every-minute sweep is one indexed SELECT that usually returns nothing.
+    _CANDIDATES_SQL = """
+        SELECT c.id    AS id,
+               c.title AS title,
+               (SELECT COUNT(*) FROM conversation_messages m
+                  WHERE m.conversation_id = c.id) AS total_count,
+               (SELECT COUNT(*) FROM conversation_messages m
+                  WHERE m.conversation_id = c.id
+                    AND m.role IN ('user', 'assistant')) AS content_count,
+               (SELECT MIN(m.timestamp) FROM conversation_messages m
+                  WHERE m.conversation_id = c.id
+                    AND m.role = 'assistant') AS first_agent_ts
+        FROM conversations c
+        WHERE (SELECT COUNT(*) FROM conversation_messages m
+                 WHERE m.conversation_id = c.id)
+              > COALESCE(c.last_title_check_message_count, 0)
+        ORDER BY c.updated_at DESC
+    """
+
+    def _candidates(self, db) -> list[dict]:
+        """Conversations with messages the sweep hasn't seen yet, as dicts."""
+        out = db.query(self._CANDIDATES_SQL, max_rows=100)
+        columns = out.get("columns") or []
+        return [dict(zip(columns, row)) for row in out.get("rows") or []]
 
     def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
         """Run event."""
@@ -99,17 +141,23 @@ class UpdateTitles(BaseTask):
             return TaskResult(success=True)
 
         try:
-            candidates = db.list_conversations_for_title_check(_THRESHOLD)
+            candidates = self._candidates(db)
         except Exception as e:
             return TaskResult.failed(f"Failed to list conversations for title check: {e}")
 
         if not candidates:
             return TaskResult(success=True)
 
+        try:
+            delay_minutes = float(context.config.get("title_delay_minutes", 10))
+        except (TypeError, ValueError):
+            delay_minutes = 10.0
+        now = time.time()
+
         updated = 0
         for row in candidates:
             conversation_id = row.get("id")
-            message_count = int(row.get("message_count") or 0)
+            message_count = int(row.get("total_count") or 0)
             if not _needs_title(row.get("title")):
                 # Titled once (by us or by the user) — never overwrite.
                 # Advance the mark so the row leaves the candidate list.
@@ -118,6 +166,13 @@ class UpdateTitles(BaseTask):
                 except Exception:
                     pass
                 continue
+            first_agent_ts = row.get("first_agent_ts")
+            if not first_agent_ts:
+                continue  # agent hasn't replied yet; revisit next tick
+            ripe = (now - float(first_agent_ts)) >= delay_minutes * 60 \
+                or int(row.get("content_count") or 0) >= _EARLY_MESSAGES
+            if not ripe:
+                continue  # don't advance the mark — it must come back
             try:
                 self._process_conversation(db, llm, conversation_id, message_count)
                 updated += 1
