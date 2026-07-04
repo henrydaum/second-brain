@@ -242,6 +242,8 @@ class TelegramFrontend(BaseFrontend):
         self._rich: bool | None = None
         # Pinned conversation banner per chat: chat_id -> (message_id, title).
         self._banners: dict[int, tuple[int, str]] = {}
+        # Most recent inbound message per session, for reaction acks.
+        self._inbound: dict[str, tuple[int, int]] = {}
 
     def session_key(self, ctx) -> str:
         """Build the per-user, per-chat, per-thread session key for Telegram traffic."""
@@ -278,6 +280,7 @@ class TelegramFrontend(BaseFrontend):
             key = self.session_key(update)
             text = re.sub(r"^/([A-Za-z0-9_]+)@[^\s]+", r"/\1", (update.message.text or "").strip())
             if text:
+                self._inbound[key] = (update.message.chat_id, update.message.message_id)
                 await self._with_typing(update.message.chat, lambda: self.submit_text(key, text), ChatAction)
 
         async def handle_attachment(update: Update, _ctx):
@@ -448,6 +451,33 @@ class TelegramFrontend(BaseFrontend):
                     logger.warning(f"sendRichMessage failed ({e}); HTML fallback for this message.")
         for chunk in chunks[sent:]:
             await self._send_text_async(chat_id, _md_to_tg_html(chunk), True)
+
+    def render_queued_ack(self, session_key: str) -> bool:
+        """Acknowledge a queued mid-turn message with a 👍 reaction.
+
+        Quieter than a whole "Got it" message. If the reaction can't be
+        delivered (old PTB / API refusal) the coroutine falls back to the
+        text ack, so the user always gets *some* acknowledgement.
+        """
+        entry = self._inbound.get(session_key)
+        if not entry or self.app is None or self.loop is None:
+            return False
+        self._send_nowait(self._react_ack(session_key, *entry))
+        return True
+
+    async def _react_ack(self, session_key: str, chat_id: int, message_id: int) -> None:
+        try:
+            set_reaction = getattr(self.app.bot, "set_message_reaction", None)
+            if set_reaction is not None:
+                await set_reaction(chat_id, message_id, reaction="👍")
+                return
+            await self.app.bot.do_api_request("setMessageReaction", api_kwargs={
+                "chat_id": chat_id, "message_id": message_id,
+                "reaction": [{"type": "emoji", "emoji": "👍"}],
+            })
+        except Exception as e:
+            logger.debug(f"Reaction ack failed ({e}); sending the text ack instead.")
+            await self._deliver_message_async(chat_id, "Got it — I'll read that as soon as I finish this step.")
 
     def render_conversation_banner(self, session_key: str, info: dict) -> None:
         """Mirror the session's conversation title in a pinned banner message."""

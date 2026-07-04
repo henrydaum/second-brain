@@ -117,7 +117,7 @@ def _list_prompt(tk) -> str:
 
 def _describe(context, name: str, job: dict) -> str:
     """Internal helper to handle describe."""
-    from plugins.frontends.helpers.formatters import detail_card
+    from plugins.frontends.helpers.formatters import detail_card, quote_block
     tk = _timekeeper(context)
     task = _task_for_job(context, job)
     next_fire = tk.get_next_fire_at(name) if tk else None
@@ -136,7 +136,7 @@ def _describe(context, name: str, job: dict) -> str:
     prompt = _truncate(str(payload.pop("prompt", "") or ""), 500)
     rest = json.dumps(payload, separators=(",", ":"), default=str) if payload else ""
     source = "\n".join(part for part in (prompt, rest) if part)
-    quoted = "\n".join(f"> {line}" if line.strip() else ">" for line in source.splitlines())
+    quoted = quote_block(source)
     card = detail_card(name, rows)
     return card + (f"\n\n**Payload**\n{quoted}" if quoted else "")
 
