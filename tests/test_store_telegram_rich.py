@@ -9,6 +9,7 @@ probe, the rich/basic agent-prompt switch, draft-id derivation, and the
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import subprocess
 import sys
@@ -160,88 +161,94 @@ def test_banner_respects_config_toggle(frontend_cls):
     scheduled = []
     fe._send_nowait = lambda coro: (scheduled.append(coro), coro.close())
 
+    info = {"title": "FIFA Briefings", "conversation_id": 1}
     fe.config = {"telegram_pin_banner": False}
-    fe.render_conversation_banner("s", {"title": "FIFA Briefings"})
+    fe.render_conversation_banner("s", info)
     assert scheduled == []
 
     fe.config = {}  # default: enabled
-    fe.render_conversation_banner("s", {"title": "FIFA Briefings"})
+    fe.render_conversation_banner("s", info)
     assert len(scheduled) == 1
 
 
 class _FakeBot:
-    def __init__(self, fail_edit=False):
-        self.fail_edit = fail_edit
-        self.edits, self.sent, self.pins, self.unpins = [], [], [], []
-
-    async def edit_message_text(self, text, chat_id=None, message_id=None):
-        if self.fail_edit:
-            raise RuntimeError("message to edit not found")
-        self.edits.append((chat_id, message_id, text))
+    def __init__(self):
+        self.sent, self.pins = [], []
+        self._next_id = 100
 
     async def send_message(self, chat_id, text, disable_notification=True):
+        self._next_id += 1
         self.sent.append((chat_id, text))
-        return SimpleNamespace(message_id=99)
+        return SimpleNamespace(message_id=self._next_id)
 
     async def pin_chat_message(self, chat_id, message_id, disable_notification=True):
         self.pins.append((chat_id, message_id))
 
-    async def unpin_chat_message(self, chat_id, message_id=None):
-        self.unpins.append((chat_id, message_id))
 
-
-def _banner_frontend(frontend_cls, monkeypatch, persisted=None, fail_edit=False):
-    import asyncio
-
+def _banner_frontend(frontend_cls, monkeypatch, persisted=None):
     fe = frontend_cls()
-    bot = _FakeBot(fail_edit=fail_edit)
+    bot = _FakeBot()
     fe.app = SimpleNamespace(bot=bot)
+    fe.loop = object()
+    fe._chat_by_session["s"] = 42
     fe.config = {"telegram_banner_messages": persisted or {}}
+    # Drive the scheduled coroutine synchronously so we can assert transport calls.
+    monkeypatch.setattr(fe, "_send_nowait", lambda coro: asyncio.run(coro))
     saved = {}
     monkeypatch.setattr("config.config_manager.load_plugin_config", lambda: {})
     monkeypatch.setattr("config.config_manager.save_plugin_config", lambda values: saved.update(values))
-    return fe, bot, saved, asyncio.run
+    return fe, bot, saved
 
 
-def test_banner_restart_with_same_title_does_not_repin(frontend_cls, monkeypatch):
-    # A fresh instance (restart) sees the persisted banner and does nothing —
-    # this is the bug where every restart pinned a duplicate banner.
-    fe, bot, _saved, run = _banner_frontend(
-        frontend_cls, monkeypatch, persisted={"42": [7, "FIFA Briefings"]})
-
-    run(fe._update_banner(42, "FIFA Briefings"))
-
-    assert bot.sent == [] and bot.pins == [] and bot.edits == []
+def _banner(fe, title, conversation_id=1):
+    fe.render_conversation_banner("s", {"title": title, "conversation_id": conversation_id})
 
 
-def test_banner_retitle_edits_in_place_and_persists(frontend_cls, monkeypatch):
-    fe, bot, saved, run = _banner_frontend(
-        frontend_cls, monkeypatch, persisted={"42": [7, "Old Title"]})
-
-    run(fe._update_banner(42, "New Title"))
-
-    assert bot.edits == [(42, 7, "\U0001f4ac New Title")]
+def test_default_title_never_pins(frontend_cls, monkeypatch):
+    fe, bot, _saved = _banner_frontend(frontend_cls, monkeypatch)
+    for title in ("New Conversation", "New conversation (Main)", "Virginia Trip (cleared)", ""):
+        _banner(fe, title)
     assert bot.pins == []
-    assert saved["telegram_banner_messages"] == {"42": [7, "New Title"]}
 
 
-def test_banner_edit_failure_replaces_and_unpins_stale(frontend_cls, monkeypatch):
-    # The old pinned message is gone (e.g. user deleted it): pin the fresh
-    # banner and unpin the stale id rather than accumulating pins.
-    fe, bot, saved, run = _banner_frontend(
-        frontend_cls, monkeypatch, persisted={"42": [7, "Old Title"]}, fail_edit=True)
+def test_retitle_pins_once_and_persists(frontend_cls, monkeypatch):
+    fe, bot, saved = _banner_frontend(frontend_cls, monkeypatch)
 
-    run(fe._update_banner(42, "New Title"))
+    _banner(fe, "New Conversation")   # start: no pin
+    _banner(fe, "FIFA Briefings")     # retitle: one pin
 
-    assert bot.pins == [(42, 99)]
-    assert bot.unpins == [(42, 7)]
-    assert saved["telegram_banner_messages"] == {"42": [99, "New Title"]}
+    assert bot.pins == [(42, 101)]
+    assert bot.sent == [(42, "\U0001f4ac FIFA Briefings")]
+    assert saved["telegram_banner_messages"] == {"42": {"1": "FIFA Briefings"}}
 
 
-def test_banner_map_tolerates_json_string_and_junk(frontend_cls):
+def test_switch_and_restart_do_not_repin(frontend_cls, monkeypatch):
+    # A conversation already pinned (persisted) must not re-pin when it is
+    # switched back to or after a restart — the reported duplicate-pin bug.
+    fe, bot, _saved = _banner_frontend(
+        frontend_cls, monkeypatch, persisted={"42": {"1": "FIFA Briefings"}})
+
+    _banner(fe, "FIFA Briefings", conversation_id=1)  # switch back / restart echo
+
+    assert bot.pins == []
+
+
+def test_distinct_conversations_each_pin_once(frontend_cls, monkeypatch):
+    fe, bot, _saved = _banner_frontend(frontend_cls, monkeypatch)
+
+    _banner(fe, "FIFA Briefings", conversation_id=1)
+    _banner(fe, "SQLite Migration Bug", conversation_id=2)
+    _banner(fe, "FIFA Briefings", conversation_id=1)  # switch back to #1
+
+    assert bot.pins == [(42, 101), (42, 102)]  # two topics, two pins, no repin
+
+
+def test_pinned_map_tolerates_json_string_and_old_shape(frontend_cls):
     fe = frontend_cls()
-    fe.config = {"telegram_banner_messages": '{"42": [7, "Title"], "bad": "junk"}'}
-    assert fe._banner_map() == {42: (7, "Title")}
+    # New shape from a JSON string, plus a legacy [msg_id, title] entry that
+    # must be discarded rather than crash the loader.
+    fe.config = {"telegram_banner_messages": '{"42": {"1": "Title"}, "9": [7, "old"]}'}
+    assert fe._pinned_map() == {42: {1: "Title"}}
 
 
 def test_rich_refused_classifier(frontend_cls):
