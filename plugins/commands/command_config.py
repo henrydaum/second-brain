@@ -18,6 +18,16 @@ def _hidden(info):
 CORE = {name: (title, desc) for title, name, desc, _, info in SETTINGS_DATA if not _hidden(info)}
 ACTIONS = ["edit"]
 
+# Browse gate: settings are shown one category at a time — there are too many
+# to pick from a single flat list. Values are stable tokens (usable one-shot:
+# `/config plugin`); labels explain where each category is stored.
+CATEGORIES = ["kernel", "plugin", "user"]
+_CATEGORY_LABELS = {
+    "kernel": "Kernel settings (config.json)",
+    "plugin": "Plugin settings (plugin_config.json)",
+    "user": "User settings (per-user)",
+}
+
 # Global settings the filesystem watcher reads. Changing any of these triggers a
 # live watcher rescan so the sync starts immediately rather than after a restart.
 _WATCHER_KEYS = {"sync_directories", "ignored_extensions", "ignored_folders", "skip_hidden_folders"}
@@ -39,7 +49,19 @@ class ConfigCommand(BaseCommand):
 
     def form(self, args, context):
         """Handle form."""
-        steps = [FormStep("setting_name", "Select a setting to inspect or edit.", True, enum=sorted(_settings()), columns=2)]
+        steps = []
+        if not args.get("setting_name"):
+            # Optional enum: interactively it gates the setting list by
+            # category; one-shot, a non-category first token falls through to
+            # setting_name (see parse_command_line's optional-enum skip), so
+            # `/config stream_responses` still works.
+            counts = _category_counts()
+            steps.append(FormStep(
+                "category", "Which settings do you want to browse?", False,
+                enum=CATEGORIES,
+                enum_labels=[f"{_CATEGORY_LABELS[c]} — {counts[c]}" for c in CATEGORIES]))
+        steps.append(FormStep("setting_name", "Select a setting to inspect or edit.", True,
+                              enum=sorted(_settings_for(args.get("category"))), columns=2))
         if args.get("setting_name"):
             steps.append(FormStep("action", f"What do you want to do with this setting?\n\n{_describe(context, args['setting_name'])}", True, enum=ACTIONS, enum_labels=["Edit setting"]))
         if args.get("action") == "edit":
@@ -50,7 +72,7 @@ class ConfigCommand(BaseCommand):
         """Execute `/config` for the active session."""
         key = args.get("setting_name")
         if not key:
-            return _list(context)
+            return _list(context, args.get("category"))
         if key not in _settings():
             return f"Unknown setting: {key}"
         if args.get("action") != "edit":
@@ -116,6 +138,29 @@ def apply_edit(context, key, raw_value) -> str:
 def _settings():
     """Internal helper to handle settings."""
     return CORE | {name: (title, desc) for title, name, desc, _, info in get_plugin_settings() if not _hidden(info)}
+
+
+def _category_of(key) -> str:
+    """Which /config browse category a setting belongs to."""
+    if _scope(key) == "user":
+        return "user"
+    return "plugin" if key in _plugin_keys() else "kernel"
+
+
+def _settings_for(category=None):
+    """The settings dict, filtered to one browse category when given."""
+    all_settings = _settings()
+    if category not in CATEGORIES:
+        return all_settings
+    return {k: v for k, v in all_settings.items() if _category_of(k) == category}
+
+
+def _category_counts() -> dict:
+    """Setting count per browse category, for the gate labels."""
+    counts = dict.fromkeys(CATEGORIES, 0)
+    for key in _settings():
+        counts[_category_of(key)] += 1
+    return counts
 
 
 def _scope(key) -> str:
@@ -208,10 +253,17 @@ def _describe(context, key):
     return card + (f"\n\n{quote_block(desc)}" if desc.strip() else "")
 
 
-def _list(context):
-    """Internal helper to list config."""
-    rows = [(k, _format_value(_current_value(context, k))) for k in sorted(_settings())]
-    return "Settings:\n\n" + md_table(["Setting", "Value"], rows)
+def _list(context, category=None):
+    """Internal helper to list config, grouped by browse category."""
+    sections = []
+    wanted = [category] if category in CATEGORIES else CATEGORIES
+    for cat in wanted:
+        keys = sorted(_settings_for(cat))
+        if not keys:
+            continue
+        rows = [(k, _format_value(_current_value(context, k))) for k in keys]
+        sections.append(f"{_CATEGORY_LABELS[cat]}:\n\n" + md_table(["Setting", "Value"], rows))
+    return "\n\n".join(sections) or "No settings found."
 
 
 def _parse(value, key=None):
