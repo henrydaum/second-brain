@@ -140,6 +140,13 @@ class BaseTask:
 	trigger_channels: list[str] = []   # bus channels this event task subscribes to
 	event_payload_schema: dict = {}
 
+	# --- Default schedules ---
+	# Timekeeper jobs this task wants to exist out of the box, keyed by job
+	# name: {"my_job": {"channel": ..., "cron": "*/15 * * * *", "payload": {}}}.
+	# Seeded at registration if the job doesn't already exist and wasn't
+	# deliberately removed by the user (the timekeeper tombstones removals).
+	default_jobs: dict = {}
+
 	# --- Routing ---
 	modalities: list[str] = []
 
@@ -172,7 +179,7 @@ class BaseTask:
 		super().__init_subclass__(**kwargs)
 		# Prevent subclasses from sharing mutable class attributes.
 		# Without .copy(), every subclass would mutate the same list object.
-		for attr in ("modalities", "reads", "writes", "requires_services", "dependencies_files", "dependencies_pip", "config_settings", "trigger_channels", "event_payload_schema"):
+		for attr in ("modalities", "reads", "writes", "requires_services", "dependencies_files", "dependencies_pip", "config_settings", "trigger_channels", "event_payload_schema", "default_jobs"):
 			value = getattr(cls, attr)
 			if isinstance(value, (dict, list)):
 				setattr(cls, attr, value.copy())

@@ -49,6 +49,7 @@ def request_input(
     :class:`StateMachineApprovalRequest` after a restart (see
     ``restore_pending_requests`` in ``runtime_persistence``).
     """
+    enum = _sane_enum(enum)
     session = get_or_create_session(runtime, session_key)
     with session.lock:
         req = StateMachineApprovalRequest(
@@ -76,6 +77,20 @@ def request_input(
             runtime.emit_event("approval_requested", req)
         persist_marker(runtime, session)
         return req
+
+
+def _sane_enum(enum: list | None) -> list | None:
+    """Drop unanswerable choices from a caller-supplied enum.
+
+    A choice whose string form is empty can't be rendered as a button or
+    typed back, so a bad caller (an LLM tool call, typically) would wedge
+    the session on a question with no valid answer. Filter those out; if
+    nothing survives, treat the request as free-form input.
+    """
+    if not isinstance(enum, list):
+        return None
+    kept = [v for v in enum if str(v).strip()]
+    return kept or None
 
 
 def request_approval(

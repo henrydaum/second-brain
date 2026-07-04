@@ -138,8 +138,31 @@ class Orchestrator:
 			# so concurrent (un)registration must be excluded here.
 			self._build_graph()
 			self.refresh_event_subscriptions()
+		self._seed_default_jobs(task)
 		logger.info(f"Registered task: {task.name}")
 		bus.emit(TASKS_CHANGED, {"name": task.name, "action": "registered"})
+
+	def _seed_default_jobs(self, task: BaseTask):
+		"""Create the task's declared default Timekeeper jobs if absent.
+
+		Runs on every registration (boot, install, hot-reload) and is
+		idempotent: existing jobs are left alone, and jobs the user
+		deliberately removed stay removed (the timekeeper tombstones them).
+		"""
+		jobs = getattr(task, "default_jobs", None) or {}
+		tk = (self.services or {}).get("timekeeper")
+		if not jobs or tk is None or not hasattr(tk, "create_job"):
+			return
+		for name, job_def in jobs.items():
+			try:
+				if tk.get_job(name) is not None:
+					continue
+				if getattr(tk, "is_job_removed", lambda _n: False)(name):
+					continue
+				tk.create_job(name, job_def)
+				logger.info(f"Seeded default scheduled job '{name}' for task '{task.name}'")
+			except Exception as e:
+				logger.warning(f"Could not seed default job '{name}' for task '{task.name}': {e}")
 
 	def unregister_task(self, name: str):
 		"""Remove a task from the orchestrator (used by build_plugin on delete)."""

@@ -313,6 +313,11 @@ conversation title on a persistent surface; fed by the
   installed package tree, or deliberately in [plugins/tools/](plugins/tools/)
   when it is true kernel behavior. Tools receive `SecondBrainContext` from
   [runtime/context.py](runtime/context.py).
+- **Ship a task with a schedule**: declare `default_jobs` on the task
+  (`{job_name: {"channel", "cron", "payload"}}`). The orchestrator seeds the
+  Timekeeper job at registration if absent; the timekeeper tombstones
+  user-deleted jobs (`removed_scheduled_jobs`) so re-registration never
+  resurrects them, and explicit re-creation revives the name.
 - **Drive an agent from a task**: call `context.runtime.iterate_agent_turn(...)`
   on a session key. The runtime persists history and markers atomically
   for you. Background drivers should keep their session key distinct from
