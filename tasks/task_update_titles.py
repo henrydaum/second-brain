@@ -1,11 +1,15 @@
-"""Periodic conversation-title refresher.
+"""One-shot conversation titler.
 
 Fired by the ``update_titles`` cron job (seeded ``*/15 * * * *`` by
 default via ``default_jobs``). For every conversation whose message count
-has advanced by at least ``_THRESHOLD`` since the last sweep, asks the
-configured LLM for a fresh short title and writes it back. The high-water
-mark is updated even when the LLM returns nothing, so a flaky reply does
-not replay every tick. Each write emits ``CONVERSATION_CHANGED`` with
+has advanced by at least ``_THRESHOLD`` since the last sweep *and* whose
+title still looks kernel-generated ("New Conversation", "New conversation
+(Main)", empty, or a "/clear"-stamped "... (cleared)"), asks the
+configured LLM for a short title and writes it back — once. A conversation
+with a real title (from us or from a user rename) is never overwritten,
+matching how the major chat providers handle titles. The high-water mark
+is updated even when the LLM returns nothing or the row is skipped, so
+nothing replays every tick. Each write emits ``CONVERSATION_CHANGED`` with
 ``action='retitled'`` so frontends refresh sidebars/banners live.
 """
 
@@ -14,6 +18,7 @@ dependencies_pip = []
 
 import json
 import logging
+import re
 
 from events.event_bus import bus
 from events.event_channels import CONVERSATION_CHANGED
@@ -28,6 +33,16 @@ UPDATE_TITLES = "update_titles"
 
 _MAX_LEN = 80
 _THRESHOLD = 4
+
+# Titles that still look kernel-generated and therefore may be replaced.
+# Covers "New Conversation", "New conversation (Main)" and friends.
+_DEFAULT_TITLE = re.compile(r"^new conversation\b", re.IGNORECASE)
+
+
+def _needs_title(title) -> bool:
+    """True while the conversation has never been given a real title."""
+    text = str(title or "").strip()
+    return not text or bool(_DEFAULT_TITLE.match(text)) or text.endswith("(cleared)")
 
 _SYSTEM_PROMPT = (
     "You label conversations with short, concrete titles. "
@@ -95,6 +110,14 @@ class UpdateTitles(BaseTask):
         for row in candidates:
             conversation_id = row.get("id")
             message_count = int(row.get("message_count") or 0)
+            if not _needs_title(row.get("title")):
+                # Titled once (by us or by the user) — never overwrite.
+                # Advance the mark so the row leaves the candidate list.
+                try:
+                    db.update_conversation_title_check_count(conversation_id, message_count)
+                except Exception:
+                    pass
+                continue
             try:
                 self._process_conversation(db, llm, conversation_id, message_count)
                 updated += 1
