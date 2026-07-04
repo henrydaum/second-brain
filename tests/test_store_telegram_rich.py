@@ -169,6 +169,81 @@ def test_banner_respects_config_toggle(frontend_cls):
     assert len(scheduled) == 1
 
 
+class _FakeBot:
+    def __init__(self, fail_edit=False):
+        self.fail_edit = fail_edit
+        self.edits, self.sent, self.pins, self.unpins = [], [], [], []
+
+    async def edit_message_text(self, text, chat_id=None, message_id=None):
+        if self.fail_edit:
+            raise RuntimeError("message to edit not found")
+        self.edits.append((chat_id, message_id, text))
+
+    async def send_message(self, chat_id, text, disable_notification=True):
+        self.sent.append((chat_id, text))
+        return SimpleNamespace(message_id=99)
+
+    async def pin_chat_message(self, chat_id, message_id, disable_notification=True):
+        self.pins.append((chat_id, message_id))
+
+    async def unpin_chat_message(self, chat_id, message_id=None):
+        self.unpins.append((chat_id, message_id))
+
+
+def _banner_frontend(frontend_cls, monkeypatch, persisted=None, fail_edit=False):
+    import asyncio
+
+    fe = frontend_cls()
+    bot = _FakeBot(fail_edit=fail_edit)
+    fe.app = SimpleNamespace(bot=bot)
+    fe.config = {"telegram_banner_messages": persisted or {}}
+    saved = {}
+    monkeypatch.setattr("config.config_manager.load_plugin_config", lambda: {})
+    monkeypatch.setattr("config.config_manager.save_plugin_config", lambda values: saved.update(values))
+    return fe, bot, saved, asyncio.run
+
+
+def test_banner_restart_with_same_title_does_not_repin(frontend_cls, monkeypatch):
+    # A fresh instance (restart) sees the persisted banner and does nothing —
+    # this is the bug where every restart pinned a duplicate banner.
+    fe, bot, _saved, run = _banner_frontend(
+        frontend_cls, monkeypatch, persisted={"42": [7, "FIFA Briefings"]})
+
+    run(fe._update_banner(42, "FIFA Briefings"))
+
+    assert bot.sent == [] and bot.pins == [] and bot.edits == []
+
+
+def test_banner_retitle_edits_in_place_and_persists(frontend_cls, monkeypatch):
+    fe, bot, saved, run = _banner_frontend(
+        frontend_cls, monkeypatch, persisted={"42": [7, "Old Title"]})
+
+    run(fe._update_banner(42, "New Title"))
+
+    assert bot.edits == [(42, 7, "\U0001f4ac New Title")]
+    assert bot.pins == []
+    assert saved["telegram_banner_messages"] == {"42": [7, "New Title"]}
+
+
+def test_banner_edit_failure_replaces_and_unpins_stale(frontend_cls, monkeypatch):
+    # The old pinned message is gone (e.g. user deleted it): pin the fresh
+    # banner and unpin the stale id rather than accumulating pins.
+    fe, bot, saved, run = _banner_frontend(
+        frontend_cls, monkeypatch, persisted={"42": [7, "Old Title"]}, fail_edit=True)
+
+    run(fe._update_banner(42, "New Title"))
+
+    assert bot.pins == [(42, 99)]
+    assert bot.unpins == [(42, 7)]
+    assert saved["telegram_banner_messages"] == {"42": [99, "New Title"]}
+
+
+def test_banner_map_tolerates_json_string_and_junk(frontend_cls):
+    fe = frontend_cls()
+    fe.config = {"telegram_banner_messages": '{"42": [7, "Title"], "bad": "junk"}'}
+    assert fe._banner_map() == {42: (7, "Title")}
+
+
 def test_rich_refused_classifier(frontend_cls):
     fe = _frontend(frontend_cls, {})
     assert fe._rich_refused(Exception("404 Not Found"))
