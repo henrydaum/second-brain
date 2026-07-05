@@ -5,6 +5,10 @@ working **on** the Second Brain codebase. Humans should read [README.md](README.
 this file is the agent-facing companion. If anything here conflicts with an
 explicit user instruction, the user wins.
 
+**[DESIGN.md](DESIGN.md) is the contributor's guide**: core values, hard rules
+(gates), and the grading rubric for evaluating any code against Second Brain's
+standards. Apply its rubric before declaring plugin or kernel code done.
+
 ## ⚡ This is a microkernel (the kernel)
 
 Second Brain is a **microkernel**: a minimal core that boots, runs the
