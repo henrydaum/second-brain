@@ -1,0 +1,7 @@
+{
+  "description": "DATA_DIR backup and restore: /backups command with online SQLite snapshot, manifest provenance, and rotation.",
+  "files": [
+    "commands/command_backups.py"
+  ],
+  "name": "Backups"
+}
