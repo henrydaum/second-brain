@@ -93,6 +93,11 @@ def mod(tmp_path_factory):
     "rg foo && rg bar",
     "git status; git log --oneline -5",
     "cat paths.py | grep DATA | sort | uniq",
+    # discard-only redirections write nothing durable
+    "rg foo 2>/dev/null",
+    "dir 2>NUL",
+    "git status >/dev/null 2>&1",
+    'grep -rn "on_quarantine\\|strikes" --include="*.py" runtime/supervisor.py 2>/dev/null | head -30',
 ])
 def test_auto_approved(mod, command):
     category, needs_approval, error = mod._classify(command)
@@ -129,6 +134,9 @@ def test_auto_approved(mod, command):
     "sed -i s/a/b/ paths.py",
     # shell constructs that can smuggle a second command
     "echo hi > out.txt",
+    "echo hi > out.txt 2>&1",
+    "rg foo 2>errors.txt",
+    "cat x >nul.txt",
     "rg foo | tee out.txt",
     "echo `whoami`",
     "echo $(rm x)",
