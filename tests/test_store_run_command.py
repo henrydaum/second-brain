@@ -98,6 +98,10 @@ def mod(tmp_path_factory):
     "dir 2>NUL",
     "git status >/dev/null 2>&1",
     'grep -rn "on_quarantine\\|strikes" --include="*.py" runtime/supervisor.py 2>/dev/null | head -30',
+    # xargs is safe iff the command it wraps is
+    'find . -name "*.py" | xargs grep -l foo',
+    "find . -print0 | xargs -0 -n 50 grep -l pattern",
+    'find . -type f -name "*.py" | xargs grep -l -i "stream\\|token" 2>/dev/null | grep -v test | head -40',
 ])
 def test_auto_approved(mod, command):
     category, needs_approval, error = mod._classify(command)
@@ -137,6 +141,10 @@ def test_auto_approved(mod, command):
     "echo hi > out.txt 2>&1",
     "rg foo 2>errors.txt",
     "cat x >nul.txt",
+    "find . -type f | xargs rm",
+    "echo x | xargs -I{} rm {}",
+    "echo x | xargs -I rm echo-oops",  # placeholder named rm: inner cmd unknown
+    "cat list.txt | xargs chmod 777",
     "rg foo | tee out.txt",
     "echo `whoami`",
     "echo $(rm x)",
