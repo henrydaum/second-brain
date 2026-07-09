@@ -122,6 +122,15 @@ _ALLOWED_ROOTS = {Path(ROOT_DIR).resolve(), Path(DATA_DIR).resolve()}
 
 # ── Command decomposition ────────────────────────────────────────────
 
+# Redirections that discard a stream (to the null device) or duplicate one fd
+# onto another (2>&1) write nothing durable, so they don't disqualify a
+# segment — strip them before scanning. Any other redirection still forces
+# the approval path.
+_NULL_REDIRECT_RE = re.compile(
+    r"(?:^|(?<=\s))[&\d]?>{1,2}\s*(?:/dev/null|nul)(?=\s|$)|\d?>&\d",
+    re.IGNORECASE,
+)
+
 def _split_segments(command: str) -> list[str] | None:
     """Split ``command`` into pipeline segments at unquoted ``&&``, ``||``,
     ``;``, ``|``, and newlines.
@@ -376,7 +385,10 @@ def _classify(command: str, shell_name: str = "default") -> tuple[str, bool, str
     if shell_name == "powershell" and _PS_STRUCTURAL_RE.search(re.sub(r"'[^']*'", "", stripped)):
         return "shell", True, None
 
-    segments = _split_segments(stripped)
+    # Discard-only redirections (2>/dev/null, >NUL, 2>&1) are read-safe;
+    # remove them so they neither trip the redirect guard nor look like an
+    # out-of-bounds path. Execution still runs the original string.
+    segments = _split_segments(_NULL_REDIRECT_RE.sub(" ", stripped))
     if segments is None:
         # Redirection, substitution, backgrounding, or unbalanced quoting —
         # the string goes to a real shell, so it can never be auto-approved.
@@ -411,7 +423,8 @@ class RunCommand(BaseTool):
         "- pipelines and chains (|, &&, ||, ;) where every part is read-only, e.g. `rg foo | head -20`\n\n"
         "Requires approval: pip install/uninstall, any other command, and any redirection "
         "(>, <), command substitution (`, $()), or backgrounding (&) — those run only after "
-        "the user approves the exact command."
+        "the user approves the exact command. Exception: discard-only redirections "
+        "(2>/dev/null, >NUL, 2>&1) are treated as read-safe."
     )
     parameters = {
         "type": "object",
@@ -453,7 +466,8 @@ class RunCommand(BaseTool):
         "sed -n range prints, git status/log/diff/show/blame/branch/ls-files, pip list/show/freeze, --version "
         "checks — and pipelines or chains (|, &&, ||, ;) composed entirely of such commands, e.g. "
         "`rg foo | head -20`. Everything else — pip install/uninstall, any non-whitelisted command, and any "
-        "redirection (>, <), command substitution (`, $()), or backgrounding (&) — pauses for user approval, "
+        "redirection (>, <; discard-only forms like 2>/dev/null and 2>&1 are fine), command substitution "
+        "(`, $()), or backgrounding (&) — pauses for user approval, "
         "so you may freely propose installing a needed package; the user decides whether it runs. "
         "Large output is truncated inline and the full text is written to a temp file whose path is returned "
         "(spill_path) — read_file that path when you need everything."
