@@ -103,6 +103,14 @@ _GIT_BRANCH_LIST_FLAGS = {
     "-v", "-vv", "--verbose",
 }
 
+# xargs options that take a separate value token (GNU + BSD). Needed to find
+# where the wrapped command starts.
+_XARGS_ARG_OPTIONS = {
+    "-a", "--arg-file", "-d", "--delimiter", "-E", "-e", "--eof", "-I", "-i",
+    "--replace", "-J", "-L", "-l", "--max-lines", "-n", "--max-args", "-P",
+    "--max-procs", "-R", "-s", "--max-chars", "-S", "--process-slot-var",
+}
+
 # Pip subcommands that are read-only (no approval needed)
 _PIP_READ_ONLY = {"list", "show", "freeze", "check", "--version"}
 
@@ -347,6 +355,21 @@ def _classify_single(segment: str) -> tuple[str, bool, str | None]:
     if base == "sed":
         return ("search", False, None) if _is_safe_sed(tokens) else ("shell", True, None)
 
+    if base == "xargs":
+        # xargs only marshals stdin into arguments; safety is decided by the
+        # command it wraps, so classify that recursively. Option values are
+        # skipped so a placeholder like `-I rm` can't be mistaken for it.
+        rest = tokens[1:]
+        i = 0
+        while i < len(rest):
+            if not _unquote(rest[i]).startswith("-"):
+                break
+            i += 2 if rest[i] in _XARGS_ARG_OPTIONS else 1
+        inner = rest[i:]
+        if not inner:
+            return "listing", False, None  # bare xargs defaults to echo
+        return _classify_single(" ".join(inner))
+
     if base in _READ_ONLY_COMMANDS or base in _PS_READ_ONLY:
         args = [_unquote(t) for t in tokens[1:]]
         if base == "find" and any(a in _UNSAFE_FIND_OPTIONS for a in args):
@@ -420,7 +443,8 @@ class RunCommand(BaseTool):
         "- sed -n <N,M>p — print a line range\n"
         "- git status / diff / show / log / blame / branch / ls-files / ls-tree / cat-file / describe / grep\n"
         "- pip list / pip show <pkg> / pip freeze; python --version / pip --version\n"
-        "- pipelines and chains (|, &&, ||, ;) where every part is read-only, e.g. `rg foo | head -20`\n\n"
+        "- pipelines and chains (|, &&, ||, ;) where every part is read-only, e.g. `rg foo | head -20`\n"
+        "- xargs wrapping a read-only command, e.g. `find . -name *.py | xargs grep -l foo`\n\n"
         "Requires approval: pip install/uninstall, any other command, and any redirection "
         "(>, <), command substitution (`, $()), or backgrounding (&) — those run only after "
         "the user approves the exact command. Exception: discard-only redirections "
