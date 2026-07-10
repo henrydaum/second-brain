@@ -392,6 +392,26 @@ def test_shaper_abstains_when_unconfigured_or_missing(tmp_path, escalate_module)
     assert rt.hooks.shape_scope(session, base) is base
 
 
+def test_unresolvable_strong_name_warns_once(tmp_path, escalate_module, caplog):
+    rt, session, db, svc, weak, strong = _escalate_runtime(tmp_path, escalate_module)
+    rt.config["escalate_strong_llm"] = "typo_profile"
+
+    with caplog.at_level("WARNING", logger="Escalate"):
+        assert svc._strong_service() is None
+        assert svc._strong_service() is None  # same bad name: no second warning
+    warnings = [r for r in caplog.records if "typo_profile" in r.getMessage()]
+    assert len(warnings) == 1
+
+    # A different bad name re-warns; a good name clears the latch.
+    caplog.clear()
+    rt.config["escalate_strong_llm"] = "other_typo"
+    with caplog.at_level("WARNING", logger="Escalate"):
+        assert svc._strong_service() is None
+    assert any("other_typo" in r.getMessage() for r in caplog.records)
+    rt.config["escalate_strong_llm"] = "strong"
+    assert svc._strong_service() is rt.services.get("strong")
+
+
 def test_tool_sets_pending_and_restart(tmp_path, escalate_module):
     rt, session, db, svc, weak, strong = _escalate_runtime(tmp_path, escalate_module)
     tool = escalate_module.EscalateTool(svc)
@@ -403,6 +423,26 @@ def test_tool_sets_pending_and_restart(tmp_path, escalate_module):
     assert "strong" in result.llm_summary
     assert session.restart_turn is True
     assert escalate_module.escalation_pending(session)
+
+
+def test_tool_sets_handoff_note_cleared_after_strong_turn(tmp_path, escalate_module):
+    rt, session, db, svc, weak, strong = _escalate_runtime(tmp_path, escalate_module)
+    key = escalate_module.PROMPT_KEY
+    tool = escalate_module.EscalateTool(svc)
+
+    tool.run(SimpleNamespace(runtime=rt, session_key="s"), reason="hard proof")
+    note = session.system_prompt_extras.get(key)
+    assert note and "Escalated turn" in note and "hard proof" in note
+
+    # The weak drive's finalizer must NOT clear it (strong turn hasn't run).
+    svc._turn_finalizer(session)
+    assert key in session.system_prompt_extras
+
+    # Once the selector serves the strong turn, the finalizer clears it.
+    session.busy = True
+    assert svc._llm_selector(session, rt) == "strong"
+    svc._turn_finalizer(session)
+    assert key not in session.system_prompt_extras
 
 
 def test_tool_fails_cleanly_when_strong_missing(tmp_path, escalate_module):
