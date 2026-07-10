@@ -26,6 +26,26 @@ from plugins.BaseTool import BaseTool, ToolResult
 logger = logging.getLogger("Escalate")
 
 PLUGIN = "escalate"
+# system_prompt_extras key holding the escalated-turn framing note (set when a
+# turn is escalated, cleared once the strong model has taken it).
+PROMPT_KEY = "escalate_handoff"
+
+
+def handoff_note(reason: str) -> str:
+    """The framing the strong model sees on an escalated turn."""
+    note = (
+        "## Escalated turn\n"
+        "A weaker model judged this turn beyond its ability and called an "
+        "`escalate` tool, which handed the turn to you — a stronger model. "
+        "You are now completing this same turn with the full conversation, "
+        "including that model's partial work. The `escalate` tool is "
+        "intentionally not offered to you (you are the escalation target), so "
+        "do not look for it or mention its absence. Simply answer the user's "
+        "request directly, at your full capability."
+    )
+    if reason:
+        note += f"\nThe escalating model's stated reason: {reason}"
+    return note
 
 
 def state(session) -> dict:
@@ -85,6 +105,10 @@ class EscalateTool(BaseTool):
             )
         reason = (kwargs.get("reason") or "").strip()
         runtime.update_session_plugin_state(session.key, PLUGIN, {"pending": True})
+        # Frame the re-driven turn so the strong model knows it was escalated
+        # to (rather than seeing an escalate call it can't itself make and
+        # concluding the tool is missing). Cleared by the turn finalizer.
+        session.system_prompt_extras[PROMPT_KEY] = handoff_note(reason)
         session.restart_turn = True
         logger.info(f"Session {session.key!r} escalating to {strong!r}: {reason or '(no reason)'}")
         summary = f"Escalating this turn to {strong}."
@@ -226,6 +250,9 @@ class EscalateService(BaseService):
                 self.runtime.update_session_plugin_state(key, PLUGIN, {"pending": False})
             else:
                 state(session)["pending"] = False
+            extras = getattr(session, "system_prompt_extras", None)
+            if isinstance(extras, dict):
+                extras.pop(PROMPT_KEY, None)
 
     # --- helpers ---
 
