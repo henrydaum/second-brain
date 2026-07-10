@@ -161,6 +161,32 @@ def test_needs_approval(mod, command):
     assert needs_approval is True, f"{command!r} must require approval, classified {category}"
 
 
+def test_posix_escaped_space_path_in_bounds_auto_runs(mod, monkeypatch):
+    """On a POSIX default shell, `Application\\ Support`-style escaped spaces are
+    one path token; an in-bounds path must not shatter into out-of-bounds
+    fragments and prompt (the Mac data-dir regression)."""
+    monkeypatch.setattr(mod, "_IS_WINDOWS", False)
+    root = str(Path(mod.ROOT_DIR).resolve()).replace("\\", "/")
+    if " " not in root:
+        pytest.skip("root path has no space to escape")
+    escaped = root.replace(" ", "\\ ")
+    for command in (
+        f"ls {escaped}/plugins/",
+        f'find {escaped} -type f -name "*.py" 2>/dev/null | xargs grep -l foo 2>/dev/null | head -20',
+    ):
+        category, needs_approval, error = mod._classify(command)
+        assert error is None
+        assert needs_approval is False, f"{command!r} should auto-run, classified {category}"
+
+
+def test_posix_escaped_space_path_outside_roots_still_prompts(mod, monkeypatch):
+    monkeypatch.setattr(mod, "_IS_WINDOWS", False)
+    outside = Path(mod.ROOT_DIR).resolve().parent / "outside dir" / "secrets.txt"
+    escaped = str(outside).replace("\\", "/").replace(" ", "\\ ")
+    _, needs_approval, _ = mod._classify(f"cat {escaped}")
+    assert needs_approval is True
+
+
 def test_absolute_path_outside_roots_needs_approval(mod):
     outside = Path(mod.ROOT_DIR).resolve().parent / "outside.txt"
     category, needs_approval, error = mod._classify(f'cat "{outside}"')
