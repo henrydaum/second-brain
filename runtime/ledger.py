@@ -41,7 +41,7 @@ def record_enact(db, *, origin: str, session_key: str | None,
                  conversation_id: int | None, user_id: int | None,
                  actor_id: str | None, action_type: str, content: Any,
                  result: Any = None, error_message: str | None = None,
-                 duration_ms: int | None = None) -> None:
+                 duration_ms: int | None = None, data: Any = None) -> None:
     """Append one ``cs.enact()`` outcome to the ledger.
 
     Pass ``result`` for a completed enact (its ok/error are recorded), or
@@ -66,7 +66,7 @@ def record_enact(db, *, origin: str, session_key: str | None,
             args=_args_of(content),
             error_code=error_code, error_message=error_message,
             call_id=_call_id_of(content, result),
-            duration_ms=duration_ms,
+            duration_ms=duration_ms, data=data,
         )
     except Exception as e:
         logger.warning(f"Ledger enact record failed (ignored): {e}")

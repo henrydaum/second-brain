@@ -98,6 +98,14 @@ class RuntimeSession:
     # in-flight message was not replayed, and a queue that silently survives
     # a restart would contradict that notice.
     pending_user_messages: list[str] = field(default_factory=list)
+    # A tool (or hook) set this to end the current drive loop and have the
+    # runtime immediately re-drive the turn — build_loop re-resolves the LLM,
+    # registry, and prompt, so a plugin can swap any of them mid-turn (e.g.
+    # escalation to a stronger model). The truncated drive keeps agent
+    # priority and emits no end_turn: the re-driven loop finishes the logical
+    # turn. Ephemeral — deliberately NOT persisted in to_marker(); a restart
+    # request must not survive a process restart.
+    restart_turn: bool = False
     has_compaction_checkpoint: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)

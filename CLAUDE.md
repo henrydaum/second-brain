@@ -317,6 +317,18 @@ conversation title on a persistent surface; fed by the
   installed package tree, or deliberately in [plugins/tools/](plugins/tools/)
   when it is true kernel behavior. Tools receive `SecondBrainContext` from
   [runtime/context.py](runtime/context.py).
+- **Bend a per-turn kernel decision**: register a hook from a service's
+  `bind_runtime`/`_load` via `runtime.hooks.add_*`
+  ([runtime/hooks.py](runtime/hooks.py)): permission gates, scope shapers
+  (inject/hide tools per session), turn finalizers, attachment staging, and
+  **LLM selectors** (`add_llm_selector` — name a different llm service for a
+  turn; consulted in `active_llm`). A tool can also set
+  `session.restart_turn = True` (ephemeral) to end the current drive without
+  an `end_turn` and have the runtime immediately re-drive the turn —
+  `build_loop` re-resolves the LLM/registry/prompt, so hooks can swap them
+  mid-turn (this is how the store Escalate package hands a turn from a weak
+  model to a strong one). Every agent enact ledger row records the driving
+  model in `data_json.llm`.
 - **Ship a task with a schedule**: declare `default_jobs` on the task
   (`{job_name: {"channel", "cron", "payload"}}`). The orchestrator seeds the
   Timekeeper job at registration if absent (disabled jobs count as existing)

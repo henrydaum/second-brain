@@ -204,6 +204,7 @@ class ConversationLoop:
         new_messages: list[dict[str, Any]] = []
         attachments: list[str] = []
         action_failed = False
+        restarting = False
 
         from attachments.attachment import AttachmentBundle
         bundle = AttachmentBundle.from_iterable(cs.pending_attachments)
@@ -251,13 +252,19 @@ class ConversationLoop:
                     if staged:
                         bundle = self._merge_bundles(bundle, staged)
 
+                if self._restart_requested():
+                    # A tool asked the runtime to re-drive this turn (e.g.
+                    # escalation). Exit without end_turn so the agent keeps
+                    # priority; the re-driven loop finishes the logical turn.
+                    restarting = True
+                    break
                 if not result.ok:
                     action_failed = True
                     break
                 if action_type == "end_turn":
                     break
 
-            if cs.turn_priority == actor_id:
+            if cs.turn_priority == actor_id and not restarting:
                 # Only nudge the LLM for a wrap-up when the loop genuinely ran
                 # out of budget/iterations — a failed action ending the turn
                 # would make the "you've hit the tool-call limit" premise false.
@@ -300,6 +307,7 @@ class ConversationLoop:
             actor_id=actor_id, action_type=action_type, content=content,
             result=result, error_message=error_message,
             duration_ms=int((time.perf_counter() - enact_started) * 1000),
+            data={"llm": getattr(self.llm, "model_name", None)},
         )
 
     # ──────────────────────────────────────────────────────────────────────
@@ -735,6 +743,11 @@ class ConversationLoop:
     def _cancelled(self) -> bool:
         """Internal helper to handle cancelled."""
         return self.cancelled or bool(self.cancel_event and self.cancel_event.is_set())
+
+    def _restart_requested(self) -> bool:
+        """True when this session asked for the turn to be re-driven."""
+        session = (getattr(self.runtime, "sessions", {}) or {}).get(self.session_key) if self.runtime else None
+        return bool(getattr(session, "restart_turn", False))
 
     def _drain_queued_messages(self, history, new_messages) -> None:
         """Absorb user messages queued while this turn was running.

@@ -205,6 +205,14 @@ class ConversationRuntime:
             self._drive_agent_turn(session, out)
             with session.lock:
                 _persist.persist_marker(self, session)
+            # A tool requested a turn restart (session.restart_turn): re-drive
+            # immediately. build_loop re-resolves the LLM/registry/prompt, so
+            # hooks can swap them for the re-driven turn. The drives bound
+            # keeps a restart-happy plugin finite.
+            if session.restart_turn:
+                session.restart_turn = False
+                out.data["_drive_agent_turn"] = True
+                continue
             # Closing-race check: a message queued after the loop's final
             # drain (but before busy went False) would otherwise sit unread
             # until the next user input. Start a fresh turn with the first
@@ -346,13 +354,17 @@ class ConversationRuntime:
             out.ok = False
             out.error = err.to_dict()
             out.messages.append(str(e))
+            # A restart requested by a turn that then crashed is void — the
+            # finally below must reclaim priority for the user as usual.
+            session.restart_turn = False
             return out
         finally:
             session.busy = False
             # Safety net: EndTurn should already have handed priority back, but
             # if drive() raised partway through, force the user back into
-            # priority so the conversation can continue.
-            if session.cs.turn_priority != "user":
+            # priority so the conversation can continue. A pending turn restart
+            # keeps agent priority on purpose: the re-driven loop ends the turn.
+            if session.cs.turn_priority != "user" and not session.restart_turn:
                 session.cs.set_priority("user")
             session.cancel_event.clear()
             hooks = getattr(self, "hooks", None)

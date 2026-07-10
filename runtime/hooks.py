@@ -46,6 +46,9 @@ PermissionGate = Callable[[Any, Optional[str], str], Optional[PermissionVerdict]
 ScopeShaper = Callable[[Any, Any], Any]
 # A finalizer runs after an agent turn ends.
 TurnFinalizer = Callable[[Any], None]
+# A selector names the LLM service that should drive a session's next turn,
+# or returns None to abstain (kernel profile resolution then applies).
+LLMSelector = Callable[[Any, Any], Optional[str]]
 
 
 class HookRegistry:
@@ -56,6 +59,7 @@ class HookRegistry:
         self._permission_gates: list[PermissionGate] = []
         self._scope_shapers: list[ScopeShaper] = []
         self._turn_finalizers: list[TurnFinalizer] = []
+        self._llm_selectors: list[LLMSelector] = []
         self._turn_attachments: dict[str, list[Any]] = {}
 
     # --- registration (called by plugins at load) ---
@@ -69,8 +73,22 @@ class HookRegistry:
         self._scope_shapers.append(shaper)
 
     def add_turn_finalizer(self, finalizer: TurnFinalizer) -> None:
-        """Register a callback run after each agent turn."""
+        """Register a callback run after each agent turn.
+
+        Contract wrinkle: finalizers run after every *drive*, and a turn
+        restart (``session.restart_turn``) splits one logical turn into two
+        drives — so a finalizer can fire mid-logical-turn, before the
+        re-driven half runs. A finalizer that clears per-turn state must
+        tolerate that (e.g. the store Escalate service only clears its flag
+        once the re-driven half has been served). If a second plugin ever
+        trips on this, teach the kernel to skip finalizers on restarting
+        drives instead of adding plugin-side bookkeeping.
+        """
         self._turn_finalizers.append(finalizer)
+
+    def add_llm_selector(self, selector: LLMSelector) -> None:
+        """Register a selector that can override which LLM drives a turn."""
+        self._llm_selectors.append(selector)
 
     def stage_attachment(self, session, attachment: Any) -> bool:
         """Queue one attachment for the next LLM call in this session."""
@@ -82,7 +100,7 @@ class HookRegistry:
 
     def remove(self, fn: Callable) -> None:
         """Drop a previously registered gate or shaper (for plugin unload)."""
-        for bucket in (self._permission_gates, self._scope_shapers, self._turn_finalizers):
+        for bucket in (self._permission_gates, self._scope_shapers, self._turn_finalizers, self._llm_selectors):
             try:
                 bucket.remove(fn)
             except ValueError:
@@ -100,6 +118,18 @@ class HookRegistry:
                 continue
             if verdict is not None:
                 return verdict
+        return None
+
+    def select_llm(self, session, runtime) -> str | None:
+        """Return the first selector's non-None LLM service name, or None."""
+        for selector in self._llm_selectors:
+            try:
+                name = selector(session, runtime)
+            except Exception:
+                logger.exception("LLM selector raised; treating as abstain")
+                continue
+            if name:
+                return name
         return None
 
     def shape_scope(self, session, registry):
