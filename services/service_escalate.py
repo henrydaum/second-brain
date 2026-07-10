@@ -102,8 +102,10 @@ class EscalateService(BaseService):
 
     config_settings = [
         ("Strong LLM Profile", "escalate_strong_llm",
-         "llm_profiles key of the model escalated turns run on. Every other "
-         "model gets the escalate tool; leave empty to disable escalation.",
+         "Name of an entry in llm_profiles (the profile name / LLM router key, "
+         "not the provider model string) — the model escalated turns run on. "
+         "Every other model gets the escalate tool; leave empty to disable "
+         "escalation.",
          "", {"type": "text"}),
     ]
 
@@ -118,6 +120,9 @@ class EscalateService(BaseService):
         # ``pending`` for served sessions, so the flag survives the truncated
         # weak drive and dies after the strong one. In-memory on purpose.
         self._served: set[str] = set()
+        # Last strong-name we warned was unresolvable, so a config typo is
+        # surfaced once rather than every turn (and re-warns if it changes).
+        self._warned_missing: str | None = None
 
     # --- lifecycle / hook registration (plan-mode pattern) ---
 
@@ -131,6 +136,7 @@ class EscalateService(BaseService):
         """Load the extension and register hooks when runtime is available."""
         self.loaded = True
         self._register()
+        self._strong_service()  # surface a mis-configured name at load time
         return True
 
     def unload(self):
@@ -162,13 +168,37 @@ class EscalateService(BaseService):
         """The configured strong model's profile/service name ('' = disabled)."""
         return (self.config.get("escalate_strong_llm") or "").strip()
 
+    def _strong_service(self):
+        """Resolve the configured strong LLM service, warning once on a typo.
+
+        The name must match a key registered by the LLM service (an
+        ``llm_profiles`` entry / LLM-router key). If it names nothing, the
+        selector would silently abstain and escalation would appear to do
+        nothing — so surface the mismatch once per distinct bad name.
+        """
+        strong = self.strong_name()
+        runtime = self.runtime
+        if not strong or runtime is None:
+            return None
+        svc = runtime.services.get(strong)
+        if svc is None:
+            if self._warned_missing != strong:
+                self._warned_missing = strong
+                logger.warning(
+                    "escalate_strong_llm=%r matches no registered LLM "
+                    "(llm_profiles key). Escalation is disabled until it names "
+                    "a real profile.", strong
+                )
+            return None
+        self._warned_missing = None
+        return svc
+
     # --- hooks ---
 
     def _scope_shaper(self, session, registry):
         """Offer the escalate tool to every session not already on the strong model."""
         strong = self.strong_name()
-        runtime = self.runtime
-        if not strong or runtime is None or runtime.services.get(strong) is None:
+        if self._strong_service() is None:
             return registry
         if self._effective_llm_is_strong(session, strong):
             return registry
