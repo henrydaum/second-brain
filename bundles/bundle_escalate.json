@@ -1,0 +1,7 @@
+{
+  "description": "Cheap-model cascade: any model that isn't the configured strong one gets an escalate tool that hands the current turn to the strong model mid-conversation.",
+  "files": [
+    "services/service_escalate.py"
+  ],
+  "name": "Escalate"
+}
