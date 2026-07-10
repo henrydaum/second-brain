@@ -37,6 +37,12 @@ from paths import ROOT_DIR, DATA_DIR
 
 logger = logging.getLogger("RunCommand")
 
+# On a POSIX default shell, backslash is an escape character (`Application\ Support`
+# is one path token); on Windows shells it is the path separator. The classifier's
+# tokenizer must match the shell that will execute the string, or in-bounds paths
+# with escaped spaces shatter into out-of-bounds fragments and prompt needlessly.
+_IS_WINDOWS = sys.platform == "win32"
+
 # Per-stream truncation cap before spilling full output to a temp file.
 _OUTPUT_CHAR_CAP = 4000
 
@@ -201,10 +207,10 @@ def _split_segments(command: str) -> list[str] | None:
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
-def _parse_command(command: str) -> tuple[str, list[str]]:
+def _parse_command(command: str, posix: bool = False) -> tuple[str, list[str]]:
     """Extract (base_command, tokens) from a shell command string."""
     try:
-        tokens = shlex.split(command, posix=False)
+        tokens = shlex.split(command, posix=posix)
     except ValueError:
         tokens = command.split()
     if not tokens:
@@ -315,9 +321,9 @@ def _resolve_cwd(raw: str | None) -> tuple[Path | None, str | None]:
     return (cwd, None) if any(cwd == root or root in cwd.parents for root in _ALLOWED_ROOTS) else (None, f"cwd is outside the allowed roots: {cwd}")
 
 
-def _classify_single(segment: str) -> tuple[str, bool, str | None]:
+def _classify_single(segment: str, posix: bool = False) -> tuple[str, bool, str | None]:
     """Classify one pipeline segment. Same contract as _classify."""
-    base, tokens = _parse_command(segment)
+    base, tokens = _parse_command(segment, posix=posix)
     if not base:
         return "blocked", False, "Empty command."
 
@@ -368,7 +374,7 @@ def _classify_single(segment: str) -> tuple[str, bool, str | None]:
         inner = rest[i:]
         if not inner:
             return "listing", False, None  # bare xargs defaults to echo
-        return _classify_single(" ".join(inner))
+        return _classify_single(shlex.join(inner) if posix else " ".join(inner), posix)
 
     if base in _READ_ONLY_COMMANDS or base in _PS_READ_ONLY:
         args = [_unquote(t) for t in tokens[1:]]
@@ -417,9 +423,10 @@ def _classify(command: str, shell_name: str = "default") -> tuple[str, bool, str
         # the string goes to a real shell, so it can never be auto-approved.
         return "shell", True, None
 
+    posix = shell_name == "default" and not _IS_WINDOWS
     categories = []
     for segment in segments:
-        category, needs_approval, error = _classify_single(segment)
+        category, needs_approval, error = _classify_single(segment, posix)
         if error:
             return category, False, error
         if needs_approval:
