@@ -23,7 +23,9 @@ can smuggle an unvetted command past the whitelist.
 dependencies_files = []
 dependencies_pip = []
 
+import itertools
 import logging
+import os
 import re
 import shlex
 import subprocess
@@ -321,6 +323,178 @@ def _resolve_cwd(raw: str | None) -> tuple[Path | None, str | None]:
     return (cwd, None) if any(cwd == root or root in cwd.parents for root in _ALLOWED_ROOTS) else (None, f"cwd is outside the allowed roots: {cwd}")
 
 
+# ── Session-sticky working directory ─────────────────────────────────
+
+_CD_RE = re.compile(r"cd(?:\s+(?P<arg>[^&|;<>`$\r\n]+))?")
+
+
+def _session_bag(context) -> dict | None:
+    """This tool's per-session state (persisted with the conversation marker)."""
+    runtime, key = getattr(context, "runtime", None), getattr(context, "session_key", None)
+    session = getattr(runtime, "sessions", {}).get(key) if runtime and key else None
+    state = getattr(session, "plugin_state", None)
+    if state is None:
+        return None
+    return state.setdefault("run_command", {})
+
+
+def _standalone_cd(command: str) -> str | None:
+    """The target of a standalone `cd` command, '' for bare cd, None otherwise.
+
+    Compound forms (`cd x && ...`) are excluded by the character class — they
+    run in a subshell as before, where the cd's effect is discarded.
+    """
+    m = _CD_RE.fullmatch(command.strip())
+    if m is None:
+        return None
+    return (m.group("arg") or "").strip()
+
+
+def _handle_cd(bag: dict | None, arg: str) -> ToolResult:
+    """Move the persistent working directory (no subprocess involved)."""
+    if bag is None:
+        return ToolResult.failed(
+            "No active session — a persistent working directory can't be set here. "
+            "Pass cwd per call instead.")
+    if not arg:
+        target = Path(ROOT_DIR).resolve()
+    else:
+        base = Path(bag.get("cwd") or ROOT_DIR)
+        target = Path(_unquote(arg)).expanduser()
+        target = (target if target.is_absolute() else base / target).resolve()
+        if not any(target == root or root in target.parents for root in _ALLOWED_ROOTS):
+            return ToolResult.failed(f"cd target is outside the allowed roots: {target}")
+        if not target.is_dir():
+            return ToolResult.failed(f"Not a directory: {target}")
+    bag["cwd"] = str(target)
+    return ToolResult(
+        data={"cwd": str(target), "category": "cd"},
+        llm_summary=f"Working directory is now {target}. It persists for future run_command calls.")
+
+
+# ── Background processes ─────────────────────────────────────────────
+# In-memory registry only: Popen handles don't survive an app restart, and
+# main.pyw shuts down via os._exit, so tracked processes orphan when Second
+# Brain exits — the agent prompt instructs stopping servers when done.
+
+_PROCESSES: dict[int, dict] = {}
+_PROC_IDS = itertools.count(1)
+
+
+def _bg_launch(cmd, use_shell, resolved, cwd, shell_name, session_key) -> ToolResult:
+    """Spawn a detached process with its output teed to a log file."""
+    fh = None
+    try:
+        fd, spill_path = tempfile.mkstemp(
+            prefix=f"runcmd-bg-{int(time.time())}-", suffix=".log", dir=str(DATA_DIR))
+        fh = open(fd, "w", encoding="utf-8", errors="replace")
+        fh.write(f"$ {resolved}\n# cwd: {cwd}\n\n")
+        fh.flush()
+        popen = subprocess.Popen(
+            cmd, shell=use_shell, cwd=str(cwd),
+            stdout=fh, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=not _IS_WINDOWS)  # POSIX: own group for killpg
+    except Exception as e:
+        return ToolResult.failed(f"Background launch failed: {e}")
+    finally:
+        try:
+            if fh is not None:
+                fh.close()  # child holds its own copy of the handle
+        except Exception:
+            pass
+    n = next(_PROC_IDS)
+    _PROCESSES[n] = {
+        "popen": popen, "command": resolved, "cwd": str(cwd), "shell": shell_name,
+        "spill_path": spill_path, "started_at": time.time(), "session_key": session_key,
+    }
+    logger.info(f"Background process #{n} (pid {popen.pid}): {resolved}")
+    return ToolResult(
+        data={"process_id": n, "pid": popen.pid, "spill_path": spill_path,
+              "cwd": str(cwd), "backgrounded": True},
+        llm_summary=(f"Started background process #{n} (pid {popen.pid}): {resolved}\n"
+                     f"Output → {spill_path}. Use operation='check' with process_id={n} "
+                     f"to poll it, and operation='stop' when it is no longer needed."))
+
+
+def _bg_tail(spill_path: str) -> str:
+    """Last _OUTPUT_CHAR_CAP chars of a background process's log."""
+    try:
+        with open(spill_path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return "(log file unavailable)"
+    return text[-_OUTPUT_CHAR_CAP:] if text else "(no output yet)"
+
+
+def _bg_check(process_id: int) -> ToolResult:
+    """Report a background process's status and recent output."""
+    entry = _PROCESSES.get(process_id)
+    if entry is None:
+        return ToolResult.failed(f"No background process #{process_id}. Use operation='list'.")
+    code = entry["popen"].poll()
+    status = "running" if code is None else f"exited (code {code})"
+    tail = _bg_tail(entry["spill_path"])
+    return ToolResult(
+        data={"process_id": process_id, "pid": entry["popen"].pid, "running": code is None,
+              "returncode": code, "spill_path": entry["spill_path"]},
+        llm_summary=(f"Background process #{process_id} — {status}: {entry['command']}\n"
+                     f"Recent output:\n{tail}\n(full log: {entry['spill_path']})"))
+
+
+def _bg_stop(process_id: int) -> ToolResult:
+    """Kill a background process (and its children) and drop it from the registry."""
+    entry = _PROCESSES.get(process_id)
+    if entry is None:
+        return ToolResult.failed(f"No background process #{process_id}. Use operation='list'.")
+    popen = entry["popen"]
+    if popen.poll() is None:
+        try:
+            if _IS_WINDOWS:
+                # shell=True makes popen.pid the shell's pid — /T kills the tree.
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(popen.pid)],
+                               capture_output=True, timeout=15)
+            else:
+                import signal
+                os.killpg(os.getpgid(popen.pid), signal.SIGTERM)
+        except Exception:
+            try:
+                popen.kill()
+            except Exception:
+                pass
+    try:
+        code = popen.wait(timeout=5)
+    except Exception:
+        code = None
+    _PROCESSES.pop(process_id, None)
+    return ToolResult(
+        data={"process_id": process_id, "returncode": code, "spill_path": entry["spill_path"]},
+        llm_summary=(f"Stopped background process #{process_id}"
+                     + (f" (exit code {code})" if code is not None else "")
+                     + f". Log: {entry['spill_path']}"))
+
+
+def _bg_list() -> ToolResult:
+    """List tracked background processes."""
+    if not _PROCESSES:
+        return ToolResult(data={"processes": []},
+                          llm_summary="No background processes are being tracked.")
+    from plugins.frontends.helpers.formatters import md_table
+    rows, procs = [], []
+    for n, entry in sorted(_PROCESSES.items()):
+        running = entry["popen"].poll() is None
+        cmd = entry["command"]
+        rows.append([str(n), "yes" if running else "no",
+                     (cmd[:57] + "...") if len(cmd) > 60 else cmd,
+                     time.strftime("%H:%M:%S", time.localtime(entry["started_at"])),
+                     str(entry["session_key"] or "")])
+        procs.append({"process_id": n, "running": running, "command": cmd,
+                      "spill_path": entry["spill_path"]})
+    return ToolResult(
+        data={"processes": procs},
+        llm_summary="\n" + md_table(["id", "running", "command", "started", "session"], rows))
+
+
 def _classify_single(segment: str, posix: bool = False) -> tuple[str, bool, str | None]:
     """Classify one pipeline segment. Same contract as _classify."""
     base, tokens = _parse_command(segment, posix=posix)
@@ -484,8 +658,21 @@ class RunCommand(BaseTool):
                 "enum": ["default", "powershell", "cmd"],
                 "description": "Shell to use. Defaults to the platform default shell.",
             },
+            "run_in_background": {
+                "type": "boolean",
+                "description": "Run detached and return a process id immediately. For servers, watchers, and long jobs — never for quick commands. Output goes to a log file; poll with operation='check'. 'timeout' is ignored.",
+            },
+            "operation": {
+                "type": "string",
+                "enum": ["run", "check", "stop", "list"],
+                "description": "run (default) executes 'command'. check/stop take process_id. list shows tracked background processes.",
+            },
+            "process_id": {
+                "type": "integer",
+                "description": "Background process id for check/stop (from a run_in_background launch).",
+            },
         },
-        "required": ["command", "justification"],
+        "required": [],
     }
     requires_services = []
     max_calls = 10
@@ -501,25 +688,61 @@ class RunCommand(BaseTool):
         "(`, $()), or backgrounding (&) — pauses for user approval, "
         "so you may freely propose installing a needed package; the user decides whether it runs. "
         "Large output is truncated inline and the full text is written to a temp file whose path is returned "
-        "(spill_path) — read_file that path when you need everything."
+        "(spill_path) — read_file that path when you need everything.\n"
+        "The working directory persists per conversation: a standalone `cd <dir>` moves it for all later "
+        "run_command calls (bare `cd` resets to the project root); `cd` inside a compound command only "
+        "affects that one subshell.\n"
+        "For servers, watchers, and long jobs pass run_in_background=true — you get a process id back "
+        "immediately and can keep working. Poll it with operation='check', see everything with "
+        "operation='list', and ALWAYS operation='stop' servers when the task is done. The registry is "
+        "in-memory: if Second Brain restarts, previously started processes keep running but are no longer "
+        "tracked (their log files under the data directory survive)."
     )
 
     def run(self, context, **kwargs) -> ToolResult:
         """Execute `/tool_run_command` for the active session."""
-        command = kwargs.get("command", "").strip()
-        justification = kwargs.get("justification", "").strip()
+        operation = (kwargs.get("operation") or "run").strip().lower()
+        if operation == "list":
+            return _bg_list()
+        if operation in {"check", "stop"}:
+            process_id = kwargs.get("process_id")
+            if not isinstance(process_id, int):
+                return ToolResult.failed(f"{operation} requires an integer process_id.")
+            return _bg_check(process_id) if operation == "check" else _bg_stop(process_id)
+        if operation != "run":
+            return ToolResult.failed("operation must be run, check, stop, or list.")
+
+        command = (kwargs.get("command") or "").strip()
+        justification = (kwargs.get("justification") or "").strip()
         timeout = min(max(int(kwargs.get("timeout", 30)), 5), 600)
-        cwd, cwd_err = _resolve_cwd(kwargs.get("cwd"))
+        background = bool(kwargs.get("run_in_background"))
         shell_name = (kwargs.get("shell") or "default").strip().lower()
 
         if not command:
             return ToolResult.failed("No command provided.")
         if not justification:
             return ToolResult.failed("A justification is required for every command.")
-        if cwd_err:
-            return ToolResult.failed(cwd_err)
         if shell_name not in {"default", "powershell", "cmd"}:
             return ToolResult.failed("shell must be default, powershell, or cmd.")
+
+        # ── Working directory: explicit kwarg > session-sticky > root ──
+        bag = _session_bag(context)
+        raw_cwd = (kwargs.get("cwd") or "").strip()
+        if not raw_cwd and bag is not None and bag.get("cwd"):
+            p, err = _resolve_cwd(bag["cwd"])
+            if err or not p.is_dir():
+                bag.pop("cwd", None)  # renamed/deleted — fall back to root
+            else:
+                raw_cwd = bag["cwd"]
+        cwd, cwd_err = _resolve_cwd(raw_cwd or None)
+        if cwd_err:
+            return ToolResult.failed(cwd_err)
+
+        # A standalone `cd` moves the persistent working directory — no
+        # subprocess (a subshell's cd would be discarded anyway).
+        cd_arg = _standalone_cd(command)
+        if cd_arg is not None:
+            return _handle_cd(bag, cd_arg)
 
         # ── Whitelist check ──────────────────────────────────────
         category, needs_approval, error = _classify(command, shell_name)
@@ -536,7 +759,8 @@ class RunCommand(BaseTool):
                     "Command execution is not available — no approval handler is configured."
                 )
             try:
-                approved = approve_fn(command, f"{justification}\n\ncwd: {cwd}\nshell: {shell_name}\ntimeout: {timeout}s")
+                bg_note = "\nbackground: yes" if background else ""
+                approved = approve_fn(command, f"{justification}\n\ncwd: {cwd}\nshell: {shell_name}\ntimeout: {timeout}s{bg_note}")
             except Exception as e:
                 logger.error(f"Approval callback failed: {e}")
                 return ToolResult.failed(f"Approval dialog error: {e}")
@@ -555,6 +779,11 @@ class RunCommand(BaseTool):
             cmd, use_shell = ["powershell", "-NoProfile", "-Command", resolved], False
         elif shell_name == "cmd":
             cmd, use_shell = ["cmd", "/c", resolved], False
+        if kwargs.get("cwd") and bag is not None:
+            bag["cwd"] = str(cwd)  # explicit cwd re-pins the sticky directory
+        if background:
+            return _bg_launch(cmd, use_shell, resolved, cwd, shell_name,
+                              getattr(context, "session_key", None))
         logger.info(f"Running ({category}) in {cwd}: {resolved}")
         try:
             result = subprocess.run(
@@ -599,6 +828,8 @@ class RunCommand(BaseTool):
             parts.append(f"(full output written to {spill_path})")
 
         output = "\n".join(parts) if parts else "(no output)"
+        if cwd != Path(ROOT_DIR).resolve():
+            output += f"\n(cwd: {cwd})"
 
         return ToolResult(
             data={"stdout": result.stdout, "stderr": result.stderr, "returncode": result.returncode, "spill_path": spill_path, "cwd": str(cwd), "shell": shell_name, "category": category},
