@@ -270,8 +270,9 @@ def _create_and_switch(runtime, session_key) -> str:
     existing = runtime.sessions.get(session_key)
     if existing is not None and existing.conversation_id not in (None, new_id):
         runtime.close_session(session_key)
-    runtime.load_conversation(session_key, new_id, agent_profile="default")
-    return f"Started new conversation #{new_id} under '{_MAIN}'.\nAgent: default"
+    session = runtime.load_conversation(session_key, new_id)
+    profile = session.profile_override or session.active_agent_profile or "default"
+    return f"Started new conversation #{new_id} under '{_MAIN}'.\nAgent: {profile}"
 
 
 def _decode_id(value) -> int | None:
