@@ -5,13 +5,14 @@ Gives the LLM agent a simple, direct way to read file contents by path.
 No shell commands, no timeouts, no syntax to remember.
 """
 
-dependencies_files = []
+dependencies_files = ['tools/helpers/file_reads.py']
 dependencies_pip = []
 
 from pathlib import Path
 
 from plugins.BaseTool import BaseTool, ToolResult
 from paths import ROOT_DIR
+from .helpers.file_reads import record_read
 
 MAX_CHARS = 20_000
 
@@ -135,4 +136,6 @@ class ReadFile(BaseTool):
         if notes:
             content += "\n\n... (" + "; ".join(notes) + ")"
 
+        # Mark the file as seen for edit_file's read-before-edit gate.
+        record_read(context, target)
         return ToolResult(llm_summary=content)
