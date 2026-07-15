@@ -250,3 +250,143 @@ def test_run_approved_command_executes(mod):
 def test_package_metadata_present(mod):
     assert mod.dependencies_files == []
     assert mod.dependencies_pip == []
+
+
+# ── Sticky cwd + background processes ───────────────────────────────
+
+import time
+
+
+@pytest.fixture()
+def env(mod, tmp_path, monkeypatch):
+    """Confined root, session bag, approving context; kills leftovers."""
+    root = tmp_path / "root"
+    (root / "sub").mkdir(parents=True)
+    monkeypatch.setattr(mod, "ROOT_DIR", root)
+    monkeypatch.setattr(mod, "_ALLOWED_ROOTS", {root.resolve()})
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    session = SimpleNamespace(plugin_state={})
+    context = SimpleNamespace(
+        approve_command=lambda cmd, why: True, approval_denial_reason="",
+        runtime=SimpleNamespace(sessions={"k": session}), session_key="k")
+
+    def call(context_override=None, **kwargs):
+        kwargs.setdefault("justification", "test")
+        return mod.RunCommand().run(context_override or context, **kwargs)
+
+    box = SimpleNamespace(call=call, context=context, session=session,
+                          root=root, sub=root / "sub", mod=mod)
+    yield box
+    for n in list(mod._PROCESSES):
+        try:
+            mod._bg_stop(n)
+        except Exception:
+            pass
+
+
+def _bag(box):
+    return box.session.plugin_state.get("run_command", {})
+
+
+def test_cd_moves_sticky_cwd_without_approval(env):
+    env.context.approve_command = None  # proves cd never consults approval
+    out = env.call(command="cd sub")
+    assert out.success is True
+    assert _bag(env)["cwd"] == str(env.sub.resolve())
+    env.context.approve_command = lambda c, w: True
+    out = env.call(command="echo hi")
+    assert out.data["cwd"] == str(env.sub.resolve())
+    assert "(cwd:" in out.llm_summary
+
+
+def test_cd_relative_outside_and_reset(env):
+    env.call(command="cd sub")
+    out = env.call(command="cd ..")
+    assert out.success is True and _bag(env)["cwd"] == str(env.root.resolve())
+    out = env.call(command="cd ..")  # parent of root — outside allowed roots
+    assert out.success is False and "outside" in out.error
+    env.call(command="cd sub")
+    out = env.call(command="cd")
+    assert out.success is True and _bag(env)["cwd"] == str(env.root.resolve())
+
+
+def test_deleted_sticky_falls_back_to_root(env):
+    gone = env.root / "gone"
+    gone.mkdir()
+    env.call(command=f"cd gone")
+    gone.rmdir()
+    out = env.call(command="echo hi")
+    assert out.data["cwd"] == str(env.root.resolve())
+    assert "cwd" not in _bag(env)
+
+
+def test_explicit_cwd_kwarg_repins(env):
+    out = env.call(command="echo hi", cwd="sub")
+    assert out.success is True
+    assert _bag(env)["cwd"] == str(env.sub.resolve())
+
+
+def test_cd_without_session_fails_clearly(env):
+    context = SimpleNamespace(approve_command=lambda c, w: True)
+    out = env.call(context_override=context, command="cd sub")
+    assert out.success is False and "session" in out.error
+    out = env.call(context_override=context, command="echo hi")
+    assert out.success is True  # normal commands unaffected
+
+
+def test_compound_cd_not_intercepted(env):
+    env.context.approve_command = None
+    out = env.call(command="cd sub && echo hi")
+    assert out.success is False
+    assert "approval" in out.error  # took the normal approval path
+
+
+def test_background_lifecycle(env):
+    out = env.call(command='python -c "import time; time.sleep(30)"',
+                   run_in_background=True)
+    assert out.success is True
+    pid_n = out.data["process_id"]
+    assert out.data["backgrounded"] is True
+    check = env.call(operation="check", process_id=pid_n)
+    assert check.data["running"] is True
+    listing = env.call(operation="list")
+    assert any(p["process_id"] == pid_n for p in listing.data["processes"])
+    stop = env.call(operation="stop", process_id=pid_n)
+    assert stop.success is True
+    assert env.call(operation="check", process_id=pid_n).success is False
+    assert env.call(operation="stop", process_id=pid_n).success is False
+
+
+def test_background_output_lands_in_log(env):
+    out = env.call(command='python -c "print(24*7)"', run_in_background=True)
+    pid_n = out.data["process_id"]
+    for _ in range(100):
+        check = env.call(operation="check", process_id=pid_n)
+        if not check.data["running"]:
+            break
+        time.sleep(0.1)
+    assert check.data["running"] is False and check.data["returncode"] == 0
+    assert "168" in check.llm_summary
+
+
+def test_check_requires_process_id(env):
+    out = env.call(operation="check")
+    assert out.success is False and "process_id" in out.error
+
+
+def test_background_denied_spawns_nothing(env):
+    env.context.approve_command = lambda cmd, why: False
+    before = set(env.mod._PROCESSES)
+    out = env.call(command='python -c "import time; time.sleep(30)"',
+                   run_in_background=True)
+    assert out.success is False
+    assert set(env.mod._PROCESSES) == before
+
+
+def test_background_approval_mentions_background(env):
+    whys = []
+    env.context.approve_command = lambda cmd, why: whys.append(why) or True
+    out = env.call(command='python -c "print(1)"', run_in_background=True)
+    assert out.success is True
+    assert "background: yes" in whys[0]
+    env.call(operation="stop", process_id=out.data["process_id"])
