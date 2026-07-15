@@ -9,10 +9,13 @@ dependencies_files = ['tools/helpers/file_walk.py']
 dependencies_pip = []
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 from plugins.BaseTool import BaseTool, ToolResult
 from .helpers.file_walk import (
+    IGNORED_DIRS,
     MAX_FILE_BYTES,
     compile_glob,
     is_binary,
@@ -26,6 +29,24 @@ DEFAULT_LIMIT = 100
 MAX_LIMIT = 500
 MAX_CONTEXT = 10
 MAX_CHARS = 20_000  # summary cap, mirrors read_file
+
+# ripgrep fast path: used when `rg` is on PATH and the target is a directory.
+# Any rg failure (exit 2 — e.g. Rust regex rejecting backrefs/lookaround —
+# missing binary, timeout, unparseable output) falls back silently to the
+# Python path, so grep can never break outright. Accepted divergences: rg
+# does its own binary/UTF-16 detection (vs our null-byte sniff), has no
+# MAX_SCAN_FILES analogue (scan_truncated stays False), and in multiline
+# content mode reports every line of a match rather than just its first.
+# `--sortr modified` forces single-threaded search — still far faster than
+# the Python path.
+RG_TIMEOUT = 30
+_UNSET = object()
+
+# rg content output: match lines `path:line:text`, context lines
+# `path-line-text`, groups separated by lone `--` lines. Normalized below to
+# the Python path's `rel:lineno: text` / `rel:lineno- text` format.
+_RG_MATCH_RE = re.compile(r"^(.+?):(\d+):(.*)$")
+_RG_CONTEXT_RE = re.compile(r"^(.+?)-(\d+)-(.*)$")
 
 
 class Grep(BaseTool):
@@ -56,6 +77,15 @@ class Grep(BaseTool):
     requires_services = []
     max_calls = 10
     background_safe = True
+
+    _rg_path = _UNSET  # lazy shutil.which("rg") cache; tests reset to _UNSET
+
+    @classmethod
+    def _rg(cls):
+        """Path to ripgrep, or None; resolved once per process."""
+        if cls._rg_path is _UNSET:
+            cls._rg_path = shutil.which("rg")
+        return cls._rg_path
 
     def run(self, context, **kwargs) -> ToolResult:
         """Run grep."""
@@ -88,6 +118,25 @@ class Grep(BaseTool):
         raw_glob = (kwargs.get("glob") or "").strip()
         if raw_glob:
             glob_filter = compile_glob(raw_glob)
+
+        # Fast path: hand directory searches to ripgrep when available.
+        rg = self._rg()
+        if rg and root.is_dir():
+            rg_out = self._run_ripgrep(
+                rg, pattern, root, raw_glob, mode,
+                bool(kwargs.get("case_insensitive")), multiline, context_lines)
+            if rg_out is not None:
+                results, truncated = rg_out[:limit], len(rg_out) > limit
+                summary = self._summary(pattern, root, mode, results, truncated,
+                                        False, 0, 0, limit)
+                return ToolResult(
+                    True,
+                    data={"root": str(root), "mode": mode, "results": results,
+                          "truncated": truncated, "scan_truncated": False,
+                          "skipped_binary": 0, "skipped_large": 0,
+                          "backend": "ripgrep"},
+                    llm_summary=summary,
+                )
 
         scan_truncated = False
         if root.is_file():
@@ -148,9 +197,109 @@ class Grep(BaseTool):
                 "root": str(root), "mode": mode, "results": results,
                 "truncated": truncated, "scan_truncated": scan_truncated,
                 "skipped_binary": skipped_binary, "skipped_large": skipped_large,
+                "backend": "python",
             },
             llm_summary=summary,
         )
+
+    @classmethod
+    def _run_ripgrep(cls, rg, pattern, root, raw_glob, mode,
+                     case_insensitive, multiline, context_lines):
+        """Run rg and parse its output into Python-path result shapes.
+
+        Returns the full (unlimited) result list, or None to signal fallback.
+        """
+        cmd = [rg, "--no-config", "--no-ignore", "--hidden", "--no-messages",
+               "--sortr", "modified", "--max-filesize", str(MAX_FILE_BYTES)]
+        for d in sorted(IGNORED_DIRS):
+            # '**/' prefix is required: slash-containing globs anchor to root.
+            cmd += ["-g", f"!**/{d}/**"]
+        if raw_glob:
+            g = raw_glob.replace("\\", "/").lstrip("/")
+            # Our '*.py' means top-level only; a bare rg glob matches
+            # basenames at any depth, so anchor with a leading '/'.
+            cmd += ["-g", g if g.startswith("**") else "/" + g,
+                    "--glob-case-insensitive"]
+        if case_insensitive:
+            cmd.append("-i")
+        if multiline:
+            cmd += ["-U", "--multiline-dotall"]
+        if mode == "files_with_matches":
+            cmd.append("-l")
+        elif mode == "count":
+            cmd.append("--count-matches")
+        else:
+            cmd.append("-n")
+            if context_lines:
+                cmd += ["-C", str(context_lines)]
+        cmd += ["-e", pattern, "--"]  # -e + '--': a '-foo' pattern can't parse as a flag
+        try:
+            proc = subprocess.run(
+                cmd, cwd=str(root), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=RG_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return None
+        if proc.returncode == 1:
+            return []
+        if proc.returncode != 0:
+            return None
+        return cls._parse_rg(proc.stdout, mode, with_context=context_lines > 0)
+
+    @classmethod
+    def _parse_rg(cls, stdout, mode, with_context=False):
+        """Normalize rg stdout into the Python path's result shapes."""
+        lines = stdout.splitlines()
+        if mode == "files_with_matches":
+            return [cls._rg_rel(l) for l in lines if l]
+        if mode == "count":
+            results = []
+            for l in lines:
+                if not l:
+                    continue
+                path, _, n = l.rpartition(":")
+                if not path or not n.isdigit():
+                    return None
+                results.append((cls._rg_rel(path), int(n)))
+            return results
+        # content without context: rg emits no '--' separators — each match
+        # line is its own result, matching the Python path's grouping.
+        if not with_context:
+            results = []
+            for l in lines:
+                if not l:
+                    continue
+                m = _RG_MATCH_RE.match(l)
+                if not m:
+                    return None
+                results.append(f"{cls._rg_rel(m.group(1))}:{m.group(2)}: {m.group(3)}")
+            return results
+        # content with context: split blocks on lone '--' separator lines
+        # (context lines always carry a 'path-line-' prefix, so a bare '--'
+        # is never content). rg merges contiguous hits into one group where
+        # the Python path emits one group per hit — accepted divergence.
+        results, block = [], []
+        for l in lines + ["--"]:
+            if l == "--":
+                if block:
+                    results.append("\n".join(block))
+                    block = []
+                continue
+            m = _RG_MATCH_RE.match(l)
+            if m:
+                block.append(f"{cls._rg_rel(m.group(1))}:{m.group(2)}: {m.group(3)}")
+                continue
+            m = _RG_CONTEXT_RE.match(l)
+            if m:
+                block.append(f"{cls._rg_rel(m.group(1))}:{m.group(2)}- {m.group(3)}")
+                continue
+            return None  # unparseable line — fall back to the Python path
+        return results
+
+    @staticmethod
+    def _rg_rel(path: str) -> str:
+        """Normalize an rg-emitted relative path to posix form."""
+        path = path.replace("\\", "/")
+        return path[2:] if path.startswith("./") else path
 
     @staticmethod
     def _rel(path: Path, base: Path) -> str:
