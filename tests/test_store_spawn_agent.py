@@ -1,0 +1,265 @@
+"""Tests for the store spawn_agent tool, the spawn task's completion notice,
+and the subagents service's end-of-turn barrier.
+
+The tool is materialized as a package (it relatively imports the task's
+channel constant); the task and service load standalone.
+"""
+
+from __future__ import annotations
+
+import importlib
+import importlib.util
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+_REPO = Path(__file__).resolve().parents[1]
+
+
+def _store_source(rel: str) -> str | None:
+    for ref in ("store", "origin/store"):
+        proc = subprocess.run(
+            ["git", "-C", str(_REPO), "show", f"{ref}:{rel}"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", check=False)
+        if proc.returncode == 0:
+            return proc.stdout
+    return None
+
+
+def _load_standalone(name: str, rel: str, tmp_path_factory):
+    src = _store_source(rel)
+    if src is None:
+        pytest.skip(f"{rel} not present on a local store ref")
+    path = tmp_path_factory.mktemp(name) / Path(rel).name
+    path.write_text(src, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture(scope="module")
+def spawn_mod(tmp_path_factory):
+    tool_src = _store_source("tools/tool_spawn_agent.py")
+    task_src = _store_source("tasks/task_spawn_subagent.py")
+    if tool_src is None or task_src is None:
+        pytest.skip("spawn_agent package not present on a local store ref")
+    root = tmp_path_factory.mktemp("spawn_pkg")
+    pkg = root / "spawn_store_pkg"
+    (pkg / "tools").mkdir(parents=True)
+    (pkg / "tasks").mkdir()
+    for init in (pkg, pkg / "tools", pkg / "tasks"):
+        (init / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "tools" / "tool_spawn_agent.py").write_text(tool_src, encoding="utf-8")
+    (pkg / "tasks" / "task_spawn_subagent.py").write_text(task_src, encoding="utf-8")
+    sys.path.insert(0, str(root))
+    try:
+        module = importlib.import_module("spawn_store_pkg.tools.tool_spawn_agent")
+    finally:
+        sys.path.remove(str(root))
+    return module
+
+
+@pytest.fixture(scope="module")
+def task_mod(tmp_path_factory):
+    return _load_standalone("task_spawn_under_test", "tasks/task_spawn_subagent.py", tmp_path_factory)
+
+
+@pytest.fixture(scope="module")
+def svc_mod(tmp_path_factory):
+    return _load_standalone("service_subagents_under_test", "services/service_subagents.py", tmp_path_factory)
+
+
+class FakeDB:
+    """Minimal db: lock + conn.execute(...).fetchone() driven by a script."""
+
+    def __init__(self, statuses):
+        self.lock = threading.RLock()
+        self.statuses = list(statuses)  # popped one per poll; last repeats
+        self.conn = self
+
+    def execute(self, sql, params=()):
+        status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+        self._row = None if status is None else ("run_x", status, None)
+        if "SELECT status FROM" in sql and self._row:
+            self._row = (self._row[1],)
+        return self
+
+    def fetchone(self):
+        return self._row
+
+    def get_conversation_messages(self, cid):
+        return [{"role": "user", "content": "prompt"},
+                {"role": "assistant", "content": "the child's answer"}]
+
+
+def _context(spawn_mod, monkeypatch, *, db=None, session=None, session_key="repl", cid=42):
+    emits, markers = [], []
+    monkeypatch.setattr(spawn_mod.bus, "emit", lambda ch, payload: emits.append((ch, payload)))
+    monkeypatch.setattr(spawn_mod, "save_state_marker", lambda *a, **k: markers.append(a))
+    sessions = {}
+    if session is not None:
+        sessions[session_key] = session
+    runtime = SimpleNamespace(
+        sessions=sessions,
+        create_conversation=lambda title, **kw: cid,
+    )
+    context = SimpleNamespace(
+        db=db if db is not None else FakeDB([None]),
+        runtime=runtime, session_key=session_key, user_id=1, config={},
+    )
+    return context, emits, markers
+
+
+def test_dependency_literals(spawn_mod):
+    assert spawn_mod.dependencies_files == ['tasks/task_spawn_subagent.py', 'services/service_subagents.py']
+    assert spawn_mod.dependencies_pip == []
+    assert spawn_mod.SPAWN_SUBAGENT == "subagent.spawn"
+
+
+def test_depth_guard(spawn_mod, monkeypatch):
+    context, emits, _ = _context(spawn_mod, monkeypatch, session_key="spawn_subagent:7")
+    out = spawn_mod.SpawnAgent().run(context, prompt="do work")
+    assert out.success is False and "recursive" in out.error
+    assert emits == []
+
+
+def test_empty_prompt_and_missing_attachment(spawn_mod, monkeypatch):
+    context, emits, _ = _context(spawn_mod, monkeypatch)
+    assert spawn_mod.SpawnAgent().run(context, prompt="  ").success is False
+    out = spawn_mod.SpawnAgent().run(context, prompt="x", attachments=["Z:/nope/missing.txt"])
+    assert out.success is False and "Attachment" in out.error
+    assert emits == []
+
+
+def test_background_path(spawn_mod, monkeypatch):
+    session = SimpleNamespace(cancel_event=None)
+    context, emits, markers = _context(spawn_mod, monkeypatch, session=session)
+    out = spawn_mod.SpawnAgent().run(context, prompt="research this", title="Researcher", wait=False)
+    assert out.success is True and "#42" in out.llm_summary
+    assert len(emits) == 1
+    channel, payload = emits[0]
+    assert channel == "subagent.spawn"
+    assert list(payload)[0] == "conversation_id"  # find_run relies on key order
+    assert payload == {"conversation_id": 42, "title": "Researcher", "prompt": "research this",
+                       "attachments": [], "notify_session_key": "repl"}
+    assert session.pending_subagents[42] > time.time()
+    assert markers  # state marker written for the child conversation
+
+
+def test_wait_returns_child_result(spawn_mod, monkeypatch):
+    monkeypatch.setattr(spawn_mod, "POLL_SECONDS", 0.01)
+    db = FakeDB(["PENDING", "PENDING", "DONE"])
+    session = SimpleNamespace(cancel_event=None)
+    context, _, _ = _context(spawn_mod, monkeypatch, db=db, session=session)
+    out = spawn_mod.SpawnAgent().run(context, prompt="answer me", wait=True)
+    assert out.success is True
+    assert "the child's answer" in out.llm_summary
+    assert "#42" in out.llm_summary
+
+
+def test_wait_reports_child_failure(spawn_mod, monkeypatch):
+    monkeypatch.setattr(spawn_mod, "POLL_SECONDS", 0.01)
+    db = FakeDB(["FAILED"])
+    context, _, _ = _context(spawn_mod, monkeypatch, db=db, session=SimpleNamespace(cancel_event=None))
+    out = spawn_mod.SpawnAgent().run(context, prompt="boom", wait=True)
+    assert out.success is False and "#42" in out.error
+
+
+def test_cancel_stops_wait_and_child(spawn_mod, monkeypatch):
+    monkeypatch.setattr(spawn_mod, "POLL_SECONDS", 0.01)
+    cancel = threading.Event()
+    cancel.set()
+    child_cancel = threading.Event()
+    session = SimpleNamespace(cancel_event=cancel)
+    context, _, _ = _context(spawn_mod, monkeypatch, db=FakeDB(["PENDING"]), session=session)
+    context.runtime.sessions["spawn_subagent:42"] = SimpleNamespace(cancel_event=child_cancel)
+    out = spawn_mod.SpawnAgent().run(context, prompt="slow", wait=True)
+    assert out.success is False and "Cancelled" in out.error
+    assert child_cancel.is_set()
+
+
+def test_timeout_degrades_to_background_and_config_caps(spawn_mod, monkeypatch):
+    monkeypatch.setattr(spawn_mod, "POLL_SECONDS", 0.01)
+    session = SimpleNamespace(cancel_event=None)
+    context, _, _ = _context(spawn_mod, monkeypatch, db=FakeDB(["PENDING"]), session=session)
+    context.config = {"subagent_timeout_seconds": 1}
+    out = spawn_mod.SpawnAgent().run(context, prompt="slow", wait=True, timeout_seconds=9999)
+    assert out.success is True
+    assert "after 1s" in out.llm_summary  # capped by the config ceiling
+    assert 42 in session.pending_subagents
+
+
+def test_task_notify_queues_notice(task_mod):
+    session = SimpleNamespace(lock=threading.RLock(), pending_user_messages=[])
+    runtime = SimpleNamespace(sessions={"repl": session})
+    payload = {"notify_session_key": "repl", "title": "Researcher"}
+    task_mod._notify(runtime, payload, 42, ok=True, text="all done")
+    assert len(session.pending_user_messages) == 1
+    notice = session.pending_user_messages[0]
+    assert "Researcher" in notice and "#42" in notice and "all done" in notice
+    # failure variant
+    task_mod._notify(runtime, payload, 42, ok=False, text="exploded")
+    assert "FAILED" in session.pending_user_messages[1]
+    # missing session / missing key: no crash, no queue
+    task_mod._notify(runtime, {"notify_session_key": "gone"}, 42, ok=True, text="x")
+    task_mod._notify(runtime, {}, 42, ok=True, text="x")
+    assert len(session.pending_user_messages) == 2
+
+
+def _service(svc_mod, db):
+    svc = svc_mod.SubagentsService(None)
+    svc.runtime = SimpleNamespace(db=db, sessions={})
+    return svc
+
+
+def test_barrier_noop_without_pending(svc_mod):
+    svc = _service(svc_mod, db=None)
+    session = SimpleNamespace()  # no pending_subagents attr at all
+    svc._barrier(session)  # must not raise or block
+
+
+def test_barrier_waits_then_restarts_turn(svc_mod, monkeypatch):
+    monkeypatch.setattr(svc_mod, "POLL_SECONDS", 0.01)
+    db = FakeDB(["PENDING", "DONE"])
+    svc = _service(svc_mod, db)
+    session = SimpleNamespace(
+        pending_subagents={42: time.time() + 30},
+        pending_user_messages=["[Background agent 'x' finished] ..."],
+        cancel_event=None, restart_turn=False)
+    svc._barrier(session)
+    assert session.pending_subagents == {}
+    assert session.restart_turn is True
+
+
+def test_barrier_deadline_gives_up_without_restart(svc_mod, monkeypatch):
+    monkeypatch.setattr(svc_mod, "POLL_SECONDS", 0.01)
+    svc = _service(svc_mod, FakeDB(["PENDING"]))
+    session = SimpleNamespace(
+        pending_subagents={42: time.time() - 1},
+        pending_user_messages=[], cancel_event=None, restart_turn=False)
+    svc._barrier(session)
+    assert session.pending_subagents == {}
+    assert session.restart_turn is False
+
+
+def test_barrier_cancel_propagates(svc_mod, monkeypatch):
+    monkeypatch.setattr(svc_mod, "POLL_SECONDS", 0.01)
+    cancel = threading.Event()
+    cancel.set()
+    child_cancel = threading.Event()
+    svc = _service(svc_mod, FakeDB(["PENDING"]))
+    svc.runtime.sessions["spawn_subagent:42"] = SimpleNamespace(cancel_event=child_cancel)
+    session = SimpleNamespace(
+        pending_subagents={42: time.time() + 30},
+        pending_user_messages=[], cancel_event=cancel, restart_turn=False)
+    svc._barrier(session)
+    assert child_cancel.is_set()
+    assert session.pending_subagents == {}
+    assert session.restart_turn is False
