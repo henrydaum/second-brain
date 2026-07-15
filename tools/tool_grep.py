@@ -120,11 +120,16 @@ class Grep(BaseTool):
                 continue
             rel = self._rel(f, base)
 
+            # Without multiline, patterns match within single lines (so '^',
+            # '$', and literal '\n' behave like grep); with it, the whole text.
             if mode == "files_with_matches":
-                if regex.search(text):
+                if self._file_matches(regex, multiline, text):
                     results.append(rel)
             elif mode == "count":
-                n = sum(1 for _ in regex.finditer(text))
+                if multiline:
+                    n = sum(1 for _ in regex.finditer(text))
+                else:
+                    n = sum(len(regex.findall(line)) for line in text.splitlines())
                 if n:
                     results.append((rel, n))
             else:  # content
@@ -154,6 +159,13 @@ class Grep(BaseTool):
             return path.relative_to(base).as_posix()
         except ValueError:
             return str(path)
+
+    @staticmethod
+    def _file_matches(regex, multiline, text) -> bool:
+        """Whether the file matches, honoring line-scoped vs multiline mode."""
+        if multiline:
+            return regex.search(text) is not None
+        return any(regex.search(line) for line in text.splitlines())
 
     @staticmethod
     def _content_matches(regex, multiline, text, rel, context_lines, results, limit):
