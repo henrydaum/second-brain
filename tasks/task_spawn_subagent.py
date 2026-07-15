@@ -35,6 +35,7 @@ class SpawnSubagent(BaseTask):
             "title": {"type": "string", "description": "Conversation title if a new conversation is needed."},
             "prompt": {"type": "string", "description": "Prompt"},
             "attachments": {"type": "array", "description": "Optional file paths"},
+            "notify_session_key": {"type": "string", "description": "Session key whose message queue receives a completion notice (used by the spawn_agent tool; scheduled jobs leave it unset)."},
         },
         "required": ["prompt"],
     }
@@ -70,12 +71,46 @@ class SpawnSubagent(BaseTask):
                 attachments=attachments,
             )
         except Exception as e:
+            _notify(runtime, payload, cid, ok=False, text=str(e))
             return TaskResult.failed(str(e))
         finally:
             runtime.close_session(session_key)
         if not out.ok:
-            return TaskResult.failed((out.error or {}).get("message") or "\n".join(out.messages) or "spawn_subagent failed.")
+            error = (out.error or {}).get("message") or "\n".join(out.messages) or "spawn_subagent failed."
+            _notify(runtime, payload, cid, ok=False, text=error)
+            return TaskResult.failed(error)
+        _notify(runtime, payload, cid, ok=True, text="\n".join(out.messages))
         return TaskResult(success=True, data={"conversation_id": cid})
+
+
+_NOTICE_CAP = 1000
+
+
+def _notify(runtime, payload, cid, *, ok: bool, text: str):
+    """Queue a completion notice on the requesting session, if any.
+
+    Best-effort: the session may be gone (skip silently — the transcript
+    survives in conversation #cid). The notice is drained at the parent
+    turn's next loop boundary, or at the start of its next turn.
+    """
+    key = (payload.get("notify_session_key") or "").strip()
+    if not key:
+        return
+    session = (getattr(runtime, "sessions", {}) or {}).get(key)
+    if session is None:
+        return
+    title = (payload.get("title") or "Subagent").strip()
+    body = (text or "").strip()
+    if len(body) > _NOTICE_CAP:
+        body = body[:_NOTICE_CAP] + " ..."
+    state = "finished" if ok else "FAILED"
+    notice = (f"[Background agent '{title}' {state}] {body} "
+              f"(full transcript: conversation #{cid})")
+    try:
+        with session.lock:
+            session.pending_user_messages.append(notice)
+    except Exception:
+        pass
 
 
 def _conversation_id(payload):
