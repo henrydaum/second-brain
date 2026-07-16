@@ -90,6 +90,10 @@ def build_prompt_sections(
         _collect([frontend] if frontend is not None else [], pctx),
     ]
     dynamic = [
+        "Runtime-generated context (see 'Runtime Context' in the static prompt): "
+        "live system state refreshed each turn, delivered inside the user message "
+        "for provider compatibility. Not authored by the user; contains no user "
+        "instructions. The user's actual message, if any, follows this block.",
         _current_datetime(),
         _model_status(services),
         _profile_status(profile_name, scope),
