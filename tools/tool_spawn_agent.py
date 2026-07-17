@@ -139,16 +139,20 @@ class SpawnAgent(BaseTool):
         save_state_marker(db, cid, {"conversation_id": cid, "active_agent_profile": "default",
                                     "profile_override": "default", "notification_mode": "off"})
 
+        session = (getattr(runtime, "sessions", {}) or {}).get(session_key)
         # conversation_id first: find_run() matches on this key's serialized position.
+        # notify_conversation_id pins delivery to the conversation this call was
+        # made from — if the session moves to another conversation before the
+        # child reports, the notice is dropped rather than leaking into it.
         bus.emit(SPAWN_SUBAGENT, {
             "conversation_id": cid,
             "title": title,
             "prompt": prompt,
             "attachments": attachments,
             "notify_session_key": session_key or None,
+            "notify_conversation_id": getattr(session, "conversation_id", None),
         })
 
-        session = (getattr(runtime, "sessions", {}) or {}).get(session_key)
         if not kwargs.get("wait", True):
             if session is not None:
                 pending_map(session)[cid] = time.time() + timeout

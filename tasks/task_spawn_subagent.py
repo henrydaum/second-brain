@@ -63,6 +63,7 @@ class SpawnSubagent(BaseTask):
             "prompt": {"type": "string", "description": "Prompt"},
             "attachments": {"type": "array", "description": "Optional file paths"},
             "notify_session_key": {"type": "string", "description": "Session key whose message queue receives a completion notice (used by the spawn_agent tool; scheduled jobs leave it unset)."},
+            "notify_conversation_id": {"type": "integer", "description": "Conversation the spawn was made from; the notice is dropped if the session has since switched to a different conversation."},
         },
         "required": ["prompt"],
     }
@@ -133,6 +134,12 @@ def _notify(runtime, payload, cid, *, ok: bool, text: str):
         return
     session = (getattr(runtime, "sessions", {}) or {}).get(key)
     if session is None:
+        return
+    # Deliver only to the conversation the spawn was made from: a session
+    # that has since switched conversations must not receive the notice
+    # (the result still lives in the child's own conversation #cid).
+    target_cid = payload.get("notify_conversation_id")
+    if target_cid is not None and getattr(session, "conversation_id", None) != target_cid:
         return
     title = (payload.get("title") or "Subagent").strip()
     body = (text or "").strip()
