@@ -31,6 +31,8 @@ from events.event_channels import (
     CONVERSATION_CHANGED,
     FORM_REQUESTED,
     SESSION_CONVERSATION_CHANGED,
+    SESSION_TURN_COMPLETED,
+    SESSION_TURN_STARTED,
     TASKS_CHANGED,
     TOOL_CALL_FINISHED,
     TOOL_CALL_STARTED,
@@ -345,6 +347,8 @@ class BaseFrontend:
             bus.subscribe(TASKS_CHANGED, self.on_tasks_changed),
             bus.subscribe(SESSION_CONVERSATION_CHANGED, self.on_bus_session_conversation_changed),
             bus.subscribe(CONVERSATION_CHANGED, self.on_bus_conversation_catalog_changed),
+            bus.subscribe(SESSION_TURN_STARTED, self.on_bus_session_turn_started),
+            bus.subscribe(SESSION_TURN_COMPLETED, self.on_bus_session_turn_completed),
         ]
         self._bound = True
 
@@ -725,6 +729,29 @@ class BaseFrontend:
     def on_bus_command_call_finished(self, payload: dict) -> None:
         """Handle on bus command call finished."""
         self._render_tool_status_event({**(payload or {}), "status": "finished", "kind": "command"})
+
+    def on_bus_session_turn_started(self, payload: dict) -> None:
+        """An agent turn began driving — show the typing indicator."""
+        self._route_typing((payload or {}).get("session_key"), True)
+
+    def on_bus_session_turn_completed(self, payload: dict) -> None:
+        """The driven turn finished (ok, crash, or cancel) — hide typing.
+
+        Interim drives of a restarted turn suppress this event at the emit
+        site, so a barrier-held or escalated turn keeps typing on until the
+        logical turn truly ends."""
+        self._route_typing((payload or {}).get("session_key"), False)
+
+    def _route_typing(self, session_key: str | None, on: bool) -> None:
+        """Route a turn-lifecycle typing change to ``render_typing``."""
+        if not getattr(self.capabilities, "supports_typing", False):
+            return
+        if not session_key or session_key not in self._live_session_keys():
+            return
+        try:
+            self.render_typing(session_key, on)
+        except Exception:
+            logger.exception(f"render_typing failed for '{self.name}'")
 
     def on_bus_session_conversation_changed(self, payload: dict) -> None:
         """Route a session's conversation switch/retitle to the banner hook."""
