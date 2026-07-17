@@ -156,8 +156,8 @@ def test_background_path(spawn_mod, monkeypatch):
     assert channel == "subagent.spawn"
     assert list(payload)[0] == "conversation_id"  # find_run relies on key order
     assert payload == {"conversation_id": 42, "title": "Researcher", "prompt": "research this",
-                       "attachments": [], "notify_session_key": "repl",
-                       "notify_conversation_id": 7}
+                       "attachments": [], "report_session_key": "repl",
+                       "report_conversation_id": 7}
     assert session.pending_subagents[42] > time.time()
     assert markers  # state marker written for the child conversation
 
@@ -216,42 +216,42 @@ def test_marker_seeds_notifications_off(spawn_mod, monkeypatch):
     assert markers[0][2]["notification_mode"] == "off"
 
 
-def test_task_notify_queues_notice(task_mod):
+def test_task_report_queues_notice(task_mod):
     session = SimpleNamespace(lock=threading.RLock(), pending_user_messages=[])
     runtime = SimpleNamespace(sessions={"repl": session})
-    payload = {"notify_session_key": "repl", "title": "Researcher"}
-    task_mod._notify(runtime, payload, 42, ok=True, text="all done")
+    payload = {"report_session_key": "repl", "title": "Researcher"}
+    task_mod._report(runtime, payload, 42, ok=True, text="all done")
     assert len(session.pending_user_messages) == 1
     notice = session.pending_user_messages[0]
     assert "Researcher" in notice and "#42" in notice and "all done" in notice
     # failure variant
-    task_mod._notify(runtime, payload, 42, ok=False, text="exploded")
+    task_mod._report(runtime, payload, 42, ok=False, text="exploded")
     assert "FAILED" in session.pending_user_messages[1]
     # missing session / missing key: no crash, no queue
-    task_mod._notify(runtime, {"notify_session_key": "gone"}, 42, ok=True, text="x")
-    task_mod._notify(runtime, {}, 42, ok=True, text="x")
+    task_mod._report(runtime, {"report_session_key": "gone"}, 42, ok=True, text="x")
+    task_mod._report(runtime, {}, 42, ok=True, text="x")
     assert len(session.pending_user_messages) == 2
 
 
-def test_notify_suppressed_for_cancelled_child(task_mod):
+def test_report_suppressed_for_cancelled_child(task_mod):
     session = SimpleNamespace(lock=threading.RLock(), pending_user_messages=[],
                               cancelled_subagents={42})
     runtime = SimpleNamespace(sessions={"repl": session})
-    task_mod._notify(runtime, {"notify_session_key": "repl", "title": "X"}, 42, ok=True, text="late")
+    task_mod._report(runtime, {"report_session_key": "repl", "title": "X"}, 42, ok=True, text="late")
     assert session.pending_user_messages == []  # timeout notice is authoritative
     assert 42 not in session.cancelled_subagents  # entry consumed, no leak
 
 
-def test_notify_dropped_after_conversation_switch(task_mod):
+def test_report_dropped_after_conversation_switch(task_mod):
     session = SimpleNamespace(lock=threading.RLock(), pending_user_messages=[],
                               conversation_id=99)  # session moved off conversation 7
     runtime = SimpleNamespace(sessions={"repl": session})
-    payload = {"notify_session_key": "repl", "title": "X", "notify_conversation_id": 7}
-    task_mod._notify(runtime, payload, 42, ok=True, text="done")
+    payload = {"report_session_key": "repl", "title": "X", "report_conversation_id": 7}
+    task_mod._report(runtime, payload, 42, ok=True, text="done")
     assert session.pending_user_messages == []
     # still on the originating conversation: delivery proceeds
     session.conversation_id = 7
-    task_mod._notify(runtime, payload, 42, ok=True, text="done")
+    task_mod._report(runtime, payload, 42, ok=True, text="done")
     assert len(session.pending_user_messages) == 1
 
 
