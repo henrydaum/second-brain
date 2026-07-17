@@ -555,9 +555,26 @@ class ConversationRuntime:
             return False
         if self.db is not None:
             self.db.delete_conversation(conversation_id)
+        self._remove_scratch_dir(conversation_id)
         self._detach_deleted_conversation(conversation_id)
         bus.emit(CONVERSATION_CHANGED, {"action": "deleted", "conversation_id": conversation_id, "user_id": self.session_user_id(session_key)})
         return True
+
+    @staticmethod
+    def _remove_scratch_dir(conversation_id: int) -> None:
+        """Best-effort removal of the conversation's scratch workspace
+        (``DATA_DIR/scratch/c<id>``) so working files die with their
+        conversation instead of waiting for the retention sweep."""
+        import shutil
+
+        from paths import SCRATCH_DIR
+
+        target = SCRATCH_DIR / f"c{conversation_id}"
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+        except OSError:
+            logger.warning(f"Could not remove scratch dir {target}", exc_info=True)
 
     def _detach_deleted_conversation(self, conversation_id: int) -> None:
         """Unbind any live session still holding a now-deleted conversation.

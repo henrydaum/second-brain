@@ -28,6 +28,11 @@ SANDBOX_PLUGINS = DATA_DIR / "sandbox_plugins"
 INSTALLED_PLUGINS = DATA_DIR / "installed_plugins"
 PACKAGES_DIR = DATA_DIR / "packages"
 
+# Agent scratch space: per-conversation working files, notes, and intermediate
+# outputs (``scratch/c<conversation_id>``). Announced to the agent by the
+# installed file tools (point-of-use); pruned by the single retention knob.
+SCRATCH_DIR = DATA_DIR / "scratch"
+
 # Attachment cache: files dropped in from frontends (e.g. Telegram).
 # Registered as a sync_directory by default so the Stage_2 pipeline indexes them.
 ATTACHMENT_CACHE = DATA_DIR / "attachment_cache"

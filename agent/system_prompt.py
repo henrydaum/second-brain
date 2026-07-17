@@ -81,6 +81,7 @@ def build_prompt_sections(
         frontend_name=frontend_name,
     )
     semi = [
+        _environment(),
         _tool_catalog(r),
         _command_catalog(commands, command_filter),
         _collect(_visible_tools_for_prompt(r), pctx),
@@ -168,8 +169,25 @@ def _visible_commands_for_prompt(commands, command_filter):
         return []
 
 
+def _environment() -> str:
+    import platform
+
+    from paths import DATA_DIR
+
+    return "\n".join([
+        "## Environment",
+        f"- Platform: {platform.system()} {platform.release()}",
+        f"- Project root (kernel source, ROOT_DIR): {_PROJECT_ROOT}",
+        f"- Data directory (database, config, plugins, DATA_DIR): {DATA_DIR}",
+    ])
+
+
 def _current_datetime() -> str:
-    return f"Current date and time: {datetime.now().strftime('%A, %B %d, %Y %I:%M %p')}"
+    now = datetime.now().astimezone()
+    return (
+        f"Current date and time: {now.strftime('%A, %B %d, %Y %I:%M %p')} "
+        f"(local time, UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]})"
+    )
 
 
 def _model_status(services: dict) -> str:
@@ -297,7 +315,7 @@ def _agent_memory() -> str:
     lines = [
         "## Memory",
         f"Path: {root}",
-        "Durable notes that persist across sessions. The index below is a map, not the content.",
+        "Durable notes that persist across sessions.",
         "",
         "Index (MEMORY.md):",
         index or "(empty)",
@@ -311,7 +329,7 @@ def _conversation_metadata(meta: dict[str, Any] | None) -> str:
     if not meta:
         return ""
     lines = "\n".join(["## Current conversation", f"Number: {meta.get('id')}", f"Category: {(meta.get('category') or '').strip() or 'Main'}", f"Title: {(meta.get('title') or '').strip() or 'New Conversation'}"])
-    lines += "\nUse conversation IDs to query the 'conversations' and 'conversation_messages' tables. When a conversation gets too long, it will be compacted to save space. History prior to the compaction will still be available in the database, but won't be visible in the conversation context for new messages."
+    lines += "\nWhen a conversation gets too long, it will be compacted to save space. History prior to the compaction will still be available in the database, but won't be visible in the conversation context for new messages."
     return lines
 
 
@@ -324,6 +342,9 @@ def _scope_prompt_note(profile_name: str, scope: AgentScope | None) -> str:
     if profile_name == "default" or not scope or not scope.has_tool_filter:
         return ""
     return (
-        f"""## Agent profile limits
-You are running under the '{profile_name}' agent profile. Tool access is limited to the tools exposed in this prompt. """
+        f"## Agent profile limits\n"
+        f"You are running under the '{profile_name}' agent profile. Tool access "
+        "is limited to the tools exposed in this prompt. If a task needs a tool "
+        "outside this profile, say so and name the tool rather than improvising "
+        "around the restriction."
     )

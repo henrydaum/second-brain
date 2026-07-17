@@ -56,6 +56,38 @@ def _quit(shutdown_fn):
     return "Shutting down."
 
 
+def _prune_scratch(db, days: int) -> None:
+    """Delete per-conversation scratch dirs idle past the retention cutoff.
+
+    The filesystem half of ``prune_expired``: scratch dirs accumulate without
+    bound like ledger rows do, so the one ``data_retention_days`` knob covers
+    them too. A dir's clock is its newest contained file, so anything still
+    being written to is never eligible. Best-effort like all retention work."""
+    import shutil
+    import time
+
+    from paths import SCRATCH_DIR
+
+    if not days or days <= 0 or not SCRATCH_DIR.exists():
+        return
+    cutoff = time.time() - float(days) * 86400.0
+    removed = []
+    for entry in SCRATCH_DIR.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            newest = max((p.stat().st_mtime for p in entry.rglob("*") if p.is_file()),
+                         default=entry.stat().st_mtime)
+            if newest < cutoff:
+                shutil.rmtree(entry)
+                removed.append(entry.name)
+        except OSError as e:
+            logger.warning(f"Scratch prune skipped {entry}: {e}")
+    if removed and db is not None:
+        db.record_action(origin="system", action_type="retention_prune", ok=True,
+                         args={"days": days}, data={"scratch_dirs": removed})
+
+
 class FrontendManager:
     """Holds running frontend instances. Supports register/unregister at runtime.
 
@@ -217,6 +249,7 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
         config_manager.set_ledger_db(scaffold.db)
         scaffold.db.retention_days = int(config.get("data_retention_days") or 0)
         scaffold.db.prune_expired(scaffold.db.retention_days)
+        _prune_scratch(scaffold.db, scaffold.db.retention_days)
 
     runtime = ConversationRuntime(
         db=scaffold.db,
