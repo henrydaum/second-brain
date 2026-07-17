@@ -232,6 +232,26 @@ def test_task_notify_queues_notice(task_mod):
     assert len(session.pending_user_messages) == 2
 
 
+def test_notify_suppressed_for_cancelled_child(task_mod):
+    session = SimpleNamespace(lock=threading.RLock(), pending_user_messages=[],
+                              cancelled_subagents={42})
+    runtime = SimpleNamespace(sessions={"repl": session})
+    task_mod._notify(runtime, {"notify_session_key": "repl", "title": "X"}, 42, ok=True, text="late")
+    assert session.pending_user_messages == []  # timeout notice is authoritative
+    assert 42 not in session.cancelled_subagents  # entry consumed, no leak
+
+
+def test_scheduled_marker_keeps_default_notifications(task_mod, monkeypatch):
+    markers = []
+    monkeypatch.setattr(task_mod, "save_state_marker", lambda *a, **k: markers.append(a))
+    db = SimpleNamespace(create_conversation=lambda title, **kw: 7)
+    cid = task_mod._create_conversation(db, {"title": "Sched"})
+    assert cid == 7
+    # Scheduled subagents keep notification_mode "on" (the kernel default):
+    # the chat push is their only delivery surface.
+    assert "notification_mode" not in markers[0][2]
+
+
 def _service(svc_mod, db):
     svc = svc_mod.SubagentsService(None)
     svc.runtime = SimpleNamespace(db=db, sessions={})
@@ -257,15 +277,22 @@ def test_barrier_waits_then_restarts_turn(svc_mod, monkeypatch):
     assert session.restart_turn is True
 
 
-def test_barrier_deadline_gives_up_without_restart(svc_mod, monkeypatch):
+def test_barrier_deadline_cancels_and_reports(svc_mod, monkeypatch):
     monkeypatch.setattr(svc_mod, "POLL_SECONDS", 0.01)
+    child_cancel = threading.Event()
     svc = _service(svc_mod, FakeDB(["PENDING"]))
+    svc.runtime.sessions["spawn_subagent:42"] = SimpleNamespace(cancel_event=child_cancel)
     session = SimpleNamespace(
-        pending_subagents={42: time.time() - 1},
+        pending_subagents={42: time.time() - 1}, lock=threading.RLock(),
         pending_user_messages=[], cancel_event=None, restart_turn=False)
     svc._barrier(session)
+    assert child_cancel.is_set()  # hard cutoff: the child is cancelled
     assert session.pending_subagents == {}
-    assert session.restart_turn is False
+    assert len(session.pending_user_messages) == 1
+    notice = session.pending_user_messages[0]
+    assert "TIMED OUT" in notice and "#42" in notice
+    assert session.restart_turn is True  # the model must learn of the cancellation
+    assert 42 in session.cancelled_subagents
 
 
 def test_barrier_cancel_propagates(svc_mod, monkeypatch):
