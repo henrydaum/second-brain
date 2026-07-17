@@ -147,7 +147,55 @@ def parse_audio(path: str, config: dict, services: dict = None) -> ParseResult:
     )
 
 
-registry.register([
+def parse_audio_text(path: str, config: dict, services: dict = None) -> ParseResult:
+    """
+    Transcribe an audio file to text by delegating to the whisper service.
+
+    This is the "text" rendering the attachment system asks for
+    (parse_attachment calls parser.parse(path, "text")), so a voice note
+    attached mid-conversation is transcribed synchronously and rides into
+    the turn as parsed_text instead of a bare file pointer. Soft dependency:
+    if the Whisper package isn't installed, this fails cleanly and the
+    attachment falls back to pointer routing.
+    """
+    whisper = (services or {}).get("whisper")
+    if whisper is None:
+        return ParseResult.failed(
+            "Whisper service not installed — no text rendering for audio",
+            modality="text",
+        )
+    if not whisper.loaded:
+        if not whisper.load():
+            return ParseResult.failed(
+                "Whisper service failed to load", modality="text"
+            )
+
+    text = (whisper.transcribe(path) or "").strip()
+
+    metadata = _probe_metadata(path)
+    metadata["model_name"] = getattr(whisper, "model_name", "unknown")
+    limit = (config or {}).get("max_chars")
+    if limit and len(text) > limit:
+        text = text[:limit]
+        metadata["truncated"] = True
+    metadata["char_count"] = len(text)
+    if not text:
+        metadata["warning"] = "No speech detected"
+
+    return ParseResult(
+        modality="text",
+        output=text or None,
+        metadata=metadata,
+    )
+
+
+_AUDIO_EXTENSIONS = [
     ".mp3", ".wav", ".flac", ".m4a",
     ".aac", ".ogg", ".oga", ".wma", ".opus",
-], "audio", parse_audio)
+]
+
+# "audio" must register first: the first modality registered for an
+# extension becomes its default, and get_modality must keep answering
+# "audio" so native-capable LLMs still get the raw file inlined.
+registry.register(_AUDIO_EXTENSIONS, "audio", parse_audio)
+registry.register(_AUDIO_EXTENSIONS, "text", parse_audio_text)
