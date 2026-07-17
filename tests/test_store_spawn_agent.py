@@ -147,7 +147,7 @@ def test_empty_prompt_and_missing_attachment(spawn_mod, monkeypatch):
 
 
 def test_background_path(spawn_mod, monkeypatch):
-    session = SimpleNamespace(cancel_event=None)
+    session = SimpleNamespace(cancel_event=None, conversation_id=7)
     context, emits, markers = _context(spawn_mod, monkeypatch, session=session)
     out = spawn_mod.SpawnAgent().run(context, prompt="research this", title="Researcher", wait=False)
     assert out.success is True and "#42" in out.llm_summary
@@ -156,7 +156,8 @@ def test_background_path(spawn_mod, monkeypatch):
     assert channel == "subagent.spawn"
     assert list(payload)[0] == "conversation_id"  # find_run relies on key order
     assert payload == {"conversation_id": 42, "title": "Researcher", "prompt": "research this",
-                       "attachments": [], "notify_session_key": "repl"}
+                       "attachments": [], "notify_session_key": "repl",
+                       "notify_conversation_id": 7}
     assert session.pending_subagents[42] > time.time()
     assert markers  # state marker written for the child conversation
 
@@ -239,6 +240,19 @@ def test_notify_suppressed_for_cancelled_child(task_mod):
     task_mod._notify(runtime, {"notify_session_key": "repl", "title": "X"}, 42, ok=True, text="late")
     assert session.pending_user_messages == []  # timeout notice is authoritative
     assert 42 not in session.cancelled_subagents  # entry consumed, no leak
+
+
+def test_notify_dropped_after_conversation_switch(task_mod):
+    session = SimpleNamespace(lock=threading.RLock(), pending_user_messages=[],
+                              conversation_id=99)  # session moved off conversation 7
+    runtime = SimpleNamespace(sessions={"repl": session})
+    payload = {"notify_session_key": "repl", "title": "X", "notify_conversation_id": 7}
+    task_mod._notify(runtime, payload, 42, ok=True, text="done")
+    assert session.pending_user_messages == []
+    # still on the originating conversation: delivery proceeds
+    session.conversation_id = 7
+    task_mod._notify(runtime, payload, 42, ok=True, text="done")
+    assert len(session.pending_user_messages) == 1
 
 
 def test_scheduled_marker_keeps_default_notifications(task_mod, monkeypatch):
