@@ -82,7 +82,7 @@ def test_end_of_turn_leftover_starts_a_fresh_turn(tmp_path):
 
     turns = []
 
-    def fake_drive(sess, out):
+    def fake_drive(sess, out, allow_restart=True):
         turns.append(list(m["content"] for m in sess.history if m["role"] == "user"))
         if len(turns) == 1:
             # Simulate the race: a message lands after the loop's final drain.

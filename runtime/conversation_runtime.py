@@ -212,7 +212,7 @@ class ConversationRuntime:
                 if hooks is not None:
                     hooks.start_turn(session)
             restart_drive = False
-            self._drive_agent_turn(session, out)
+            self._drive_agent_turn(session, out, allow_restart=drives < 5)
             with session.lock:
                 _persist.persist_marker(self, session)
             # A tool requested a turn restart (session.restart_turn): re-drive
@@ -344,8 +344,13 @@ class ConversationRuntime:
     # tells the next runtime "this session was mid-turn — recover."
     # ──────────────────────────────────────────────────────────────────
 
-    def _drive_agent_turn(self, session: RuntimeSession, out: RuntimeResult) -> RuntimeResult:
-        """Run the agent loop for a session and surface its outputs back to the frontend."""
+    def _drive_agent_turn(self, session: RuntimeSession, out: RuntimeResult, *, allow_restart: bool = True) -> RuntimeResult:
+        """Run the agent loop for a session and surface its outputs back to the frontend.
+
+        ``allow_restart=False`` voids any ``session.restart_turn`` the drive
+        set (the caller's drive budget is exhausted), so the turn ends
+        normally: priority returns to the user and SESSION_TURN_COMPLETED is
+        emitted instead of being suppressed for a re-drive that never comes."""
         _persist.ensure_conversation(session=session, runtime=self, title_text=_disp.latest_user_text(session))
         session.busy = True
         session.cancel_event.clear()
@@ -357,6 +362,7 @@ class ConversationRuntime:
             "conversation_id": session.conversation_id,
             "actor_id": "agent",
         })
+        crash_error: str | None = None
         try:
             loop = _cfg.build_loop(self, session.key)
             reply, new_messages, attachments = loop.drive(
@@ -366,6 +372,9 @@ class ConversationRuntime:
                 self.db,
                 session.conversation_id,
             )
+            if session.restart_turn and not allow_restart:
+                logger.warning("Turn restart requested with the drive budget exhausted; ending the turn instead.")
+                session.restart_turn = False
         except Exception as e:
             err = ActionError("agent_failed", str(e))
             session.cs.last_error = err
@@ -375,18 +384,7 @@ class ConversationRuntime:
             # A restart requested by a turn that then crashed is void — the
             # finally below must reclaim priority for the user as usual.
             session.restart_turn = False
-            from events.event_channels import SESSION_TURN_COMPLETED
-            (self.emit_event or bus.emit)(SESSION_TURN_COMPLETED, {
-                "session_key": session.key,
-                "conversation_id": session.conversation_id,
-                "user_id": self.session_user_id(session.key),
-                "ok": False,
-                "error": str(e),
-                "final_text": "",
-                "new_messages": [],
-                "attachments": [],
-            })
-            return out
+            crash_error = str(e)
         finally:
             # Read before the clear below — this is the only record of whether
             # the turn was actually interrupted (used for the no-reply label).
@@ -402,6 +400,23 @@ class ConversationRuntime:
             hooks = getattr(self, "hooks", None)
             if hooks is not None:
                 hooks.finish_turn(session)
+
+        from events.event_channels import SESSION_TURN_COMPLETED
+        if crash_error is not None:
+            # Crash path: broadcast the state change (the finally above just
+            # reclaimed priority for the user) before completing the turn.
+            _disp.emit_state_change(session, old_phase, old_priority)
+            (self.emit_event or bus.emit)(SESSION_TURN_COMPLETED, {
+                "session_key": session.key,
+                "conversation_id": session.conversation_id,
+                "user_id": self.session_user_id(session.key),
+                "ok": False,
+                "error": crash_error,
+                "final_text": "",
+                "new_messages": [],
+                "attachments": [],
+            })
+            return out
 
         if reply:
             # The reply's SESSION_MESSAGE was already emitted when the loop
@@ -423,7 +438,6 @@ class ConversationRuntime:
         # reset) get the same broadcast that user actions get in _dispatch.
         _disp.emit_state_change(session, old_phase, old_priority)
         if not session.restart_turn:
-            from events.event_channels import SESSION_TURN_COMPLETED
             (self.emit_event or bus.emit)(SESSION_TURN_COMPLETED, {
                 "session_key": session.key,
                 "conversation_id": session.conversation_id,

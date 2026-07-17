@@ -138,7 +138,7 @@ def test_restart_turn_re_drives_once(tmp_path):
     rt, session, _ = _runtime(tmp_path)
     turns = []
 
-    def fake_drive(sess, out):
+    def fake_drive(sess, out, allow_restart=True):
         turns.append(len(turns) + 1)
         if len(turns) == 1:
             sess.restart_turn = True  # what the escalate tool does
@@ -159,7 +159,7 @@ def test_restart_turn_ping_pong_is_bounded(tmp_path):
     rt, session, _ = _runtime(tmp_path)
     turns = []
 
-    def hostile_drive(sess, out):
+    def hostile_drive(sess, out, allow_restart=True):
         turns.append(1)
         sess.restart_turn = True  # requests a restart every single time
         sess.cs.set_priority("user")

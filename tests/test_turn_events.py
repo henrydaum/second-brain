@@ -114,3 +114,57 @@ def test_crashed_drive_completes_the_turn_with_ok_false(tmp_path):
     # Every started turn still completed — no dangling busy indicator.
     assert len([c for c, _ in seen if c == SESSION_TURN_STARTED]) == \
         len([c for c, _ in seen if c == SESSION_TURN_COMPLETED])
+
+
+def test_crashed_drive_broadcasts_the_priority_reclaim(tmp_path):
+    """The crash path reclaims priority for the user in its finally block;
+    that state change must reach the bus like any other."""
+    rt, session = _runtime(tmp_path)
+
+    import runtime.conversation_runtime as _crt
+
+    def exploding_build_loop(runtime, session_key=None):
+        raise RuntimeError("boom")
+
+    seen, unsubs = _capture(SESSION_TURN_CHANGED)
+    original = _crt._cfg.build_loop
+    _crt._cfg.build_loop = exploding_build_loop
+    try:
+        rt.handle_action("s", "send_text", "hello")
+    finally:
+        _crt._cfg.build_loop = original
+        for u in unsubs:
+            u()
+
+    assert {"session_key": "s", "from_actor": "agent", "to_actor": "user"} in [p for _, p in seen]
+
+
+def test_exhausted_restart_budget_still_completes_the_turn(tmp_path):
+    """A drive that requests a restart on the final budgeted drive must not
+    leave the logical turn dangling: the restart is voided, priority returns
+    to the user, and SESSION_TURN_COMPLETED is emitted (typing goes off)."""
+    rt, session = _runtime(tmp_path)
+
+    import runtime.conversation_runtime as _crt
+
+    class _HostileLoop:
+        def __init__(self, runtime, session_key):
+            self._session = runtime.sessions[session_key]
+
+        def drive(self, cs, actor, history, db, conversation_id):
+            self._session.restart_turn = True  # requests a restart every time
+            return "", [], []
+
+    seen, unsubs = _capture(SESSION_TURN_COMPLETED)
+    original = _crt._cfg.build_loop
+    _crt._cfg.build_loop = lambda runtime, session_key: _HostileLoop(runtime, session_key)
+    try:
+        rt.handle_action("s", "send_text", "hello")
+    finally:
+        _crt._cfg.build_loop = original
+        for u in unsubs:
+            u()
+
+    assert not session.restart_turn
+    assert session.cs.turn_priority == "user"
+    assert len(seen) == 1  # the capped final drive completes the logical turn

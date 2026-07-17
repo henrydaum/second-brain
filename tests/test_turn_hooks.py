@@ -100,7 +100,7 @@ def test_starter_skipped_on_restart_redrive(tmp_path):
     rt, session, _ = _runtime(tmp_path)
     starts, drives = [], []
 
-    def fake_drive(sess, out):
+    def fake_drive(sess, out, allow_restart=True):
         drives.append(len(drives) + 1)
         if len(drives) == 1:
             sess.restart_turn = True  # what the escalate tool does
@@ -121,7 +121,7 @@ def test_starter_runs_again_for_closing_race_follow_up_turn(tmp_path):
     rt, session, _ = _runtime(tmp_path)
     starts, drives = [], []
 
-    def fake_drive(sess, out):
+    def fake_drive(sess, out, allow_restart=True):
         drives.append(len(drives) + 1)
         if len(drives) == 1:
             # Simulate the race: a message lands after the loop's final drain.
