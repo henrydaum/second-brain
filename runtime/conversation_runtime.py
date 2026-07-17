@@ -339,6 +339,13 @@ class ConversationRuntime:
         session.busy = True
         session.cancel_event.clear()
         _persist.persist_marker(self, session)  # busy=True snapshot for crash recovery
+        from events.event_channels import SESSION_TURN_STARTED
+        old_phase, old_priority = session.cs.phase, session.cs.turn_priority
+        (self.emit_event or bus.emit)(SESSION_TURN_STARTED, {
+            "session_key": session.key,
+            "conversation_id": session.conversation_id,
+            "actor_id": "agent",
+        })
         try:
             loop = _cfg.build_loop(self, session.key)
             reply, new_messages, attachments = loop.drive(
@@ -357,6 +364,16 @@ class ConversationRuntime:
             # A restart requested by a turn that then crashed is void — the
             # finally below must reclaim priority for the user as usual.
             session.restart_turn = False
+            from events.event_channels import SESSION_TURN_COMPLETED
+            (self.emit_event or bus.emit)(SESSION_TURN_COMPLETED, {
+                "session_key": session.key,
+                "conversation_id": session.conversation_id,
+                "ok": False,
+                "error": str(e),
+                "final_text": "",
+                "new_messages": [],
+                "attachments": [],
+            })
             return out
         finally:
             # Read before the clear below — this is the only record of whether
@@ -375,14 +392,9 @@ class ConversationRuntime:
                 hooks.finish_turn(session)
 
         if reply:
+            # The reply's SESSION_MESSAGE was already emitted when the loop
+            # recorded the send_text row (see ConversationLoop._record).
             out.messages.append(reply)
-            from events.event_channels import SESSION_MESSAGE
-            bus.emit(SESSION_MESSAGE, {
-                "session_key": session.key,
-                "role": "assistant",
-                "content": reply,
-                "actor_id": "agent",
-            })
         elif new_messages:
             # Agent ended without final text but produced messages — surface
             # the last assistant content if any, otherwise say what happened.
@@ -395,6 +407,20 @@ class ConversationRuntime:
         out.attachments.extend(attachments)
         out.data.setdefault("conversation_id", session.conversation_id)
         out.data.setdefault("new_messages", []).extend(new_messages)
+        # Agent-side state changes (end_turn's priority hand-back, phase
+        # reset) get the same broadcast that user actions get in _dispatch.
+        _disp.emit_state_change(session, old_phase, old_priority)
+        if not session.restart_turn:
+            from events.event_channels import SESSION_TURN_COMPLETED
+            (self.emit_event or bus.emit)(SESSION_TURN_COMPLETED, {
+                "session_key": session.key,
+                "conversation_id": session.conversation_id,
+                "ok": True,
+                "cancelled": was_cancelled,
+                "final_text": reply or "",
+                "new_messages": list(new_messages),
+                "attachments": list(attachments),
+            })
         return out
 
     # ──────────────────────────────────────────────────────────────────

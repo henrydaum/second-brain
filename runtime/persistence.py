@@ -25,7 +25,6 @@ from events.event_channels import (
     SESSION_CONVERSATION_CHANGED,
     SESSION_CREATED,
     SESSION_MESSAGE,
-    SESSION_TURN_COMPLETED,
 )
 from state_machine.approval import StateMachineApprovalRequest
 from state_machine.conversation_phases import BASE_PHASE, PHASE_APPROVING_REQUEST
@@ -305,15 +304,16 @@ def iterate_agent_turn(
                 runtime.db.replace_conversation_messages(session.conversation_id, list(session.history))
             persist_marker(runtime, session)
     final_text = "\n".join(m for m in out.messages if m).strip()
-    event = {
+    # SESSION_TURN_COMPLETED is emitted per drive by _drive_agent_turn (the
+    # single site both foreground and background turns flow through); this
+    # helper only enriches the result for its callers.
+    out.data.update({
         "session_key": session_key,
         "conversation_id": session.conversation_id if session else None,
         "final_text": final_text,
         "new_messages": list(out.data.get("new_messages") or []),
         "attachments": list(out.attachments),
-    }
-    (runtime.emit_event or bus.emit)(SESSION_TURN_COMPLETED, event)
-    out.data.update(event)
+    })
 
     # Background notification: replay the final answer when notifications
     # are on. Foreground turns are skipped because the reply is already

@@ -224,21 +224,73 @@ Payload:
     to_actor:    str"""
 
 SESSION_MESSAGE = "session_message"
-"""A user- or agent-authored message landed on the session transcript.
+"""One transcript row landed on a session — a complete live feed of the
+conversation. Agent-turn rows (assistant text, assistant tool-call rows, tool
+results, drained mid-turn user messages) are emitted by the loop's single
+record point (``ConversationLoop._record``); user-side rows by the dispatch
+layer. Subscribers building per-message consumers (live transcript views,
+memory extractors) get every row in order without polling the DB.
 Payload:
-    session_key: str
-    role:        str   — "user" | "assistant" | "tool"
-    content:     str
-    actor_id:    str"""
+    session_key:  str
+    role:         str   — "user" | "assistant" | "tool"
+    content:      str
+    actor_id:     str   — "user" | "agent"
+    name:         str (optional)        — tool rows: the tool name
+    tool_call_id: str (optional)        — tool rows: id pairing with the call
+    tool_calls:   list[dict] (optional) — assistant rows that request tools"""
 
-SESSION_TURN_COMPLETED = "session_turn_completed"
-"""One full user-prompted agent turn completed.
+SESSION_TURN_STARTED = "session_turn_started"
+"""An agent turn is about to be driven (foreground and background alike).
+Pairs with SESSION_TURN_COMPLETED — including on crash, which completes with
+``ok: False`` — so live surfaces can show busy state without watching flags.
 Payload:
     session_key:     str
     conversation_id: int | None
+    actor_id:        str — "agent" """
+
+SESSION_TURN_COMPLETED = "session_turn_completed"
+"""One driven agent turn finished. Emitted per drive from the runtime's
+single drive site (interim drives of a restarted turn — e.g. escalation —
+do not emit; the re-driven turn's completion covers the logical turn).
+Payload:
+    session_key:     str
+    conversation_id: int | None
+    ok:              bool — False when the drive crashed (error present)
+    cancelled:       bool (ok drives only) — the turn was interrupted
+    error:           str (crash only)
     final_text:      str
     new_messages:    list[dict]
     attachments:     list[str]"""
+
+SESSION_COMPACTED = "session_compacted"
+"""The loop compacted a session's history into a summary. The summary text
+rides along so subscribers (memory builders, live UIs showing a "condensed"
+marker) don't have to re-read the compaction marker table.
+Payload:
+    session_key:        str
+    conversation_id:    int | None
+    messages_compacted: int — history rows replaced by the summary
+    summary:            str"""
+
+AGENT_LLM_CALL_STARTED = "agent_llm_call_started"
+"""The loop is issuing one LLM request (there are several per agent turn when
+tools are involved). Lets frontends show a "thinking" indicator even when
+streaming is off, and lets observers meter model usage per session.
+Payload:
+    session_key: str
+    model:       str | None
+    streaming:   bool"""
+
+AGENT_LLM_CALL_FINISHED = "agent_llm_call_finished"
+"""The LLM request finished (pairs with AGENT_LLM_CALL_STARTED).
+Payload:
+    session_key:    str
+    model:          str | None
+    ok:             bool
+    error:          str | None
+    duration_s:     float
+    prompt_tokens:  int | None
+    has_tool_calls: bool"""
 
 SESSION_AGENT_PROFILE_CHANGED = "session_agent_profile_changed"
 """A plugin or command changed the agent profile pinned to a session.

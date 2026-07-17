@@ -27,6 +27,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agent.system_prompt import SYSTEM_CONTEXT_MARKER
+from events.event_bus import bus
+from events.event_channels import (
+    AGENT_LLM_CALL_FINISHED,
+    AGENT_LLM_CALL_STARTED,
+    SESSION_COMPACTED,
+    SESSION_MESSAGE,
+)
 from state_machine.serialization import save_compaction_marker, save_history_message
 from runtime.ledger import record_enact
 from runtime.token_stripper import StreamingTokenFilter, strip_model_tokens
@@ -235,10 +242,21 @@ class ConversationLoop:
                 if self._cancelled():
                     break
                 if action_type == "call_tool":
-                    budget_error = self._tool_budget_error(content)
-                    if budget_error:
+                    # Refusals decided by the loop itself (unparseable JSON
+                    # arguments, per-tool budget) are synthesized as failed
+                    # results without enacting: the state machine never sees
+                    # garbage args, the frontend still gets its ✕ status,
+                    # and the error row lands in history for the LLM to read.
+                    args = (content or {}).get("args") or {}
+                    if "__invalid_arguments__" in args:
+                        refusal = (f"Invalid JSON in tool arguments: {args['__invalid_arguments__']}", "invalid_arguments")
+                    else:
+                        refusal = (self._tool_budget_error(content), "tool_budget_exceeded")
+                    if refusal[0]:
                         from state_machine.errors import ActionResult
-                        result = ActionResult.fail("call_tool", budget_error, code="tool_budget_exceeded")
+                        result = ActionResult.fail("call_tool", refusal[0], code=refusal[1])
+                        started = self._tool_started(action_type, content)
+                        self._tool_finished(started, result=result)
                         self._absorb(result, action_type, content, history, new_messages, attachments, db, conversation_id)
                         continue
                 started = self._tool_started(action_type, content)
@@ -458,7 +476,7 @@ class ConversationLoop:
     def _format_tool_result(self, name: str, result, args: dict[str, Any]) -> tuple[str, list[str]]:
         """Serialize the action's outcome into `(text, attachment_paths)`."""
         if "__invalid_arguments__" in (args or {}):
-            return json.dumps({"error": f"Invalid arguments: {args['__invalid_arguments__']}"}), []
+            return json.dumps({"error": f"Invalid JSON in tool arguments: {args['__invalid_arguments__']}"}), []
 
         # The `call_tool` action's data carries the underlying ToolResult.
         payload = (getattr(result, "data", None) or {})
@@ -472,6 +490,12 @@ class ConversationLoop:
         # ToolResult-level failure.
         if tool_result is not None and not getattr(tool_result, "success", True):
             return json.dumps({"error": getattr(tool_result, "error", "Tool failed.")}), []
+
+        # Ok action with no underlying ToolResult (e.g. an approval was
+        # requested): surface the action's own message, never a bare "null"
+        # the model can't interpret.
+        if tool_result is None:
+            return getattr(result, "message", None) or "(tool produced no result)", []
 
         paths = list(getattr(tool_result, "attachment_paths", []) or [])
         try:
@@ -550,6 +574,38 @@ class ConversationLoop:
 
         bundle = attachments or None
         streaming = self.on_delta is not None and getattr(self.llm, "supports_streaming", False)
+        llm_call_started = time.time()
+        bus.emit(AGENT_LLM_CALL_STARTED, {
+            "session_key": self.session_key,
+            "model": getattr(self.llm, "model_name", None),
+            "streaming": streaming,
+        })
+        try:
+            response = self._invoke_inner(messages, tools, bundle, history, streaming)
+        except Exception as e:
+            self._emit_llm_finished(llm_call_started, ok=False, error=str(e))
+            raise
+        self._emit_llm_finished(llm_call_started, ok=True, response=response)
+        return response
+
+    def _emit_llm_finished(self, started_at, *, ok, response=None, error=None):
+        """Announce the outcome of one LLM call (paired with AGENT_LLM_CALL_STARTED)."""
+        bus.emit(AGENT_LLM_CALL_FINISHED, {
+            "session_key": self.session_key,
+            "model": getattr(self.llm, "model_name", None),
+            "ok": ok,
+            "error": error,
+            "duration_s": round(time.time() - started_at, 3),
+            "prompt_tokens": getattr(response, "prompt_tokens", None),
+            "has_tool_calls": bool(getattr(response, "has_tool_calls", False)),
+        })
+
+    def _invoke_inner(self, messages, tools, bundle, history, streaming):
+        """Issue one LLM call with streaming + context-overflow handling.
+
+        Wrapped by ``_invoke``, which brackets it with the
+        AGENT_LLM_CALL_STARTED / _FINISHED bus events."""
+        from plugins.services.service_llm import is_context_limit_error
         try:
             if streaming:
                 import uuid
@@ -735,6 +791,12 @@ class ConversationLoop:
                 session = getattr(self.runtime, "sessions", {}).get(self.session_key)
                 if session is not None:
                     session.has_compaction_checkpoint = True
+            bus.emit(SESSION_COMPACTED, {
+                "session_key": self.session_key,
+                "conversation_id": self._active_conversation_id,
+                "messages_compacted": old_count,
+                "summary": summary,
+            })
             tail = [self._shrink_for_tail(m) for m in history[-2:]]
             history[:] = [
                 {"role": "user", "content": (
@@ -809,25 +871,37 @@ class ConversationLoop:
             session.pending_user_messages.clear()
         if not queued:
             return
-        from events.event_bus import bus
-        from events.event_channels import SESSION_MESSAGE
         for text in queued:
+            # _record emits the SESSION_MESSAGE for each drained row.
             self._record({"role": "user", "content": text}, history, new_messages,
                          self._active_db, self._active_conversation_id)
-            bus.emit(SESSION_MESSAGE, {
-                "session_key": self.session_key,
-                "role": "user",
-                "content": text,
-                "actor_id": "user",
-            })
         self._final_text = None
 
     def _record(self, msg, history, new_messages, db, conversation_id):
-        """Internal helper to handle record."""
+        """Append one transcript row and announce it on the bus.
+
+        This is the single choke point for agent-turn history rows, so the
+        SESSION_MESSAGE emission here is what makes the channel a complete
+        live feed of the transcript (assistant text, tool-call rows, tool
+        results, and drained mid-turn user rows alike)."""
         history.append(msg)
         new_messages.append(msg)
         if db is not None and conversation_id is not None:
             save_history_message(db, conversation_id, msg)
+        role = msg.get("role", "")
+        payload = {
+            "session_key": self.session_key,
+            "role": role,
+            "content": msg.get("content") or "",
+            "actor_id": "user" if role == "user" else "agent",
+        }
+        if msg.get("name"):
+            payload["name"] = msg["name"]
+        if msg.get("tool_call_id"):
+            payload["tool_call_id"] = msg["tool_call_id"]
+        if msg.get("tool_calls"):
+            payload["tool_calls"] = msg["tool_calls"]
+        bus.emit(SESSION_MESSAGE, payload)
 
     def _tool_started(self, action_type: str, content: Any):
         """Internal helper to handle tool started."""

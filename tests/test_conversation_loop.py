@@ -171,6 +171,151 @@ def test_unknown_tool_name_feeds_error_back_instead_of_ending_turn():
     assert len(llm.calls) == 3
 
 
+def test_agent_missing_required_args_fails_fast_instead_of_form():
+    """An agent tool call omitting a required argument must get an immediate
+    readable error — never push a form phase frame the model can't see."""
+    from state_machine.forms import schema_to_form_steps
+
+    ran = []
+    steps = schema_to_form_steps({"properties": {"sql": {"type": "string"}}, "required": ["sql"]})
+    tools = {"sql_query": CallableSpec("sql_query", handler=lambda cs, actor, args: ran.append(args), form=steps)}
+    cs = _agent_state(tools=tools)
+
+    schema = {"type": "function", "function": {"name": "sql_query", "parameters": {"properties": {"sql": {"type": "string"}}, "required": ["sql"]}}}
+    llm = _FakeLLM([
+        _response(content="", tool_calls=[{"id": "c1", "name": "sql_query", "arguments": "{}"}]),
+        _response(content="I forgot the sql argument."),
+    ])
+    loop = _loop(llm, _FakeRegistry([schema]))
+
+    reply, new_messages, _ = loop.drive(cs, "agent", [{"role": "user", "content": "go"}])
+
+    assert ran == []  # the handler never ran with missing args
+    assert reply == "I forgot the sql argument."
+    tool_msg = next(m for m in new_messages if m["role"] == "tool")
+    assert "Missing required argument" in tool_msg["content"]
+    assert "sql" in tool_msg["content"]
+    # No phantom form frame left behind.
+    assert cs.phase == BASE_PHASE
+    assert not cs.cache.get("phases")
+
+
+def test_invalid_json_arguments_are_refused_without_enacting():
+    """Unparseable tool-call JSON is refused by the loop itself: the handler
+    never runs, and the LLM reads the parse error as the tool result."""
+    ran = []
+    tools = {"echo": CallableSpec("echo", handler=lambda cs, actor, args: ran.append(args))}
+    cs = _agent_state(tools=tools)
+
+    schema = {"type": "function", "function": {"name": "echo", "parameters": {}}}
+    llm = _FakeLLM([
+        _response(content="", tool_calls=[{"id": "c1", "name": "echo", "arguments": "{not json"}]),
+        _response(content="Let me fix that JSON."),
+    ])
+    loop = _loop(llm, _FakeRegistry([schema]))
+
+    reply, new_messages, _ = loop.drive(cs, "agent", [{"role": "user", "content": "go"}])
+
+    assert ran == []
+    assert reply == "Let me fix that JSON."
+    tool_msg = next(m for m in new_messages if m["role"] == "tool")
+    assert "Invalid JSON" in tool_msg["content"]
+
+
+def test_session_message_emitted_for_every_transcript_row():
+    """_record is the single SESSION_MESSAGE source: a tool-call turn feeds
+    the bus the assistant tool-call row, the tool result, and the final text."""
+    from events.event_bus import bus
+    from events.event_channels import SESSION_MESSAGE
+
+    seen = []
+    unsub = bus.subscribe(SESSION_MESSAGE, seen.append)
+    try:
+        tools = {"echo": CallableSpec("echo", handler=lambda cs, actor, args: ToolResult(llm_summary="echoed"))}
+        cs = _agent_state(tools=tools)
+        schema = {"type": "function", "function": {"name": "echo", "parameters": {}}}
+        llm = _FakeLLM([
+            _response(content="", tool_calls=[{"id": "c1", "name": "echo", "arguments": "{}"}]),
+            _response(content="Done."),
+        ])
+        loop = ConversationLoop(llm, _FakeRegistry([schema]), {"tool_timeout": 10}, "prompt",
+                                session_key="chat")
+
+        loop.drive(cs, "agent", [{"role": "user", "content": "go"}])
+    finally:
+        unsub()
+
+    assert [(e["role"], e["actor_id"]) for e in seen] == [
+        ("assistant", "agent"),  # tool-call row
+        ("tool", "agent"),       # tool result row
+        ("assistant", "agent"),  # final text row
+    ]
+    tool_event = seen[1]
+    assert tool_event["name"] == "echo"
+    assert tool_event["tool_call_id"] == "c1"
+    assert tool_event["content"] == "echoed"
+    assert seen[0]["tool_calls"][0]["function"]["name"] == "echo"
+    assert seen[2]["content"] == "Done."
+    assert all(e["session_key"] == "chat" for e in seen)
+
+
+def test_llm_call_events_bracket_each_request():
+    from events.event_bus import bus
+    from events.event_channels import AGENT_LLM_CALL_FINISHED, AGENT_LLM_CALL_STARTED
+
+    events = []
+    unsubs = [
+        bus.subscribe(AGENT_LLM_CALL_STARTED, lambda p: events.append(("started", p))),
+        bus.subscribe(AGENT_LLM_CALL_FINISHED, lambda p: events.append(("finished", p))),
+    ]
+    try:
+        cs = _agent_state()
+        llm = _FakeLLM([_response(content="Hello!")])
+        loop = ConversationLoop(llm, _FakeRegistry([]), {"tool_timeout": 10}, "prompt",
+                                session_key="chat")
+        loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
+    finally:
+        for u in unsubs:
+            u()
+
+    assert [kind for kind, _ in events] == ["started", "finished"]
+    finished = events[1][1]
+    assert finished["ok"] is True
+    assert finished["has_tool_calls"] is False
+    assert finished["session_key"] == "chat"
+
+
+def test_compaction_emits_session_compacted_event():
+    from events.event_bus import bus
+    from events.event_channels import SESSION_COMPACTED
+
+    class _Compactor:
+        loaded = True
+
+        def compact(self, **kwargs):
+            return "Earlier summary."
+
+    seen = []
+    unsub = bus.subscribe(SESSION_COMPACTED, seen.append)
+    try:
+        runtime = SimpleNamespace(services={"compactor": _Compactor()}, sessions={})
+        loop = ConversationLoop(_FakeLLM([]), _FakeRegistry([]), {}, "prompt",
+                                runtime=runtime, session_key="chat")
+        history = [
+            {"role": "user", "content": "one"},
+            {"role": "assistant", "content": "two"},
+            {"role": "user", "content": "three"},
+        ]
+        loop._compact(history)
+    finally:
+        unsub()
+
+    [event] = seen
+    assert event["session_key"] == "chat"
+    assert event["messages_compacted"] == 3
+    assert event["summary"] == "Earlier summary."
+
+
 def test_empty_response_after_tool_error_is_retried_with_nudge():
     """A response that cleans to empty (e.g. a weak model emitting only a
     think block after a tool error) is not a final answer: the loop nudges

@@ -31,6 +31,7 @@ from state_machine.errors import (
     ERROR_EXECUTION_FAILED,
     ERROR_INVALID_ACTION,
     ERROR_INVALID_INPUT,
+    ERROR_MISSING_INPUT,
     ERROR_UNKNOWN_COMMAND,
     ERROR_UNKNOWN_TOOL,
     ERROR_WRONG_ACTOR_TYPE,
@@ -275,6 +276,16 @@ class _CallableAction(Action):
         # Missing args turn into a PhaseFrame; subsequent text/callback input
         # fills the frame until the original callable can resume.
         missing = [] if raw_arg else _missing(spec, args, self.cs)
+        if missing and self.cs.participants[actor].kind == "agent":
+            # Forms are a human-input surface. An agent that omits required
+            # arguments gets an immediate, informative failure it can read
+            # and correct — never a phase frame it cannot see (which would
+            # otherwise sit on the stack until superseded or reset, while
+            # the model receives no signal that the call didn't run).
+            names = ", ".join(s.name for s in missing)
+            raise self.error(ERROR_MISSING_INPUT,
+                             f"Missing required argument(s) for {spec.name}: {names}.",
+                             name=spec.name, fields=[s.name for s in missing])
         if missing:
             # First invocation: emit STARTED so the UI can show a pending
             # indicator while the user fills the form. The call_id is pinned
