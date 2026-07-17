@@ -45,35 +45,43 @@ def _load_standalone(name: str, rel: str, tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def spawn_mod(tmp_path_factory):
-    tool_src = _store_source("tools/tool_spawn_agent.py")
-    task_src = _store_source("tasks/task_spawn_subagent.py")
-    if tool_src is None or task_src is None:
+def store_pkg(tmp_path_factory):
+    """Materialize the tool+task+service as one package — the tool and the
+    service relatively import the task, mirroring the installed-plugin tree."""
+    sources = {rel: _store_source(rel) for rel in (
+        "tools/tool_spawn_agent.py",
+        "tasks/task_spawn_subagent.py",
+        "services/service_subagents.py")}
+    if any(src is None for src in sources.values()):
         pytest.skip("spawn_agent package not present on a local store ref")
     root = tmp_path_factory.mktemp("spawn_pkg")
     pkg = root / "spawn_store_pkg"
-    (pkg / "tools").mkdir(parents=True)
-    (pkg / "tasks").mkdir()
-    for init in (pkg, pkg / "tools", pkg / "tasks"):
-        (init / "__init__.py").write_text("", encoding="utf-8")
-    (pkg / "tools" / "tool_spawn_agent.py").write_text(tool_src, encoding="utf-8")
-    (pkg / "tasks" / "task_spawn_subagent.py").write_text(task_src, encoding="utf-8")
+    for family in ("tools", "tasks", "services"):
+        (pkg / family).mkdir(parents=True)
+        (pkg / family / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    for rel, src in sources.items():
+        (pkg / rel).write_text(src, encoding="utf-8")
     sys.path.insert(0, str(root))
     try:
-        module = importlib.import_module("spawn_store_pkg.tools.tool_spawn_agent")
+        yield "spawn_store_pkg"
     finally:
         sys.path.remove(str(root))
-    return module
 
 
 @pytest.fixture(scope="module")
-def task_mod(tmp_path_factory):
-    return _load_standalone("task_spawn_under_test", "tasks/task_spawn_subagent.py", tmp_path_factory)
+def spawn_mod(store_pkg):
+    return importlib.import_module(f"{store_pkg}.tools.tool_spawn_agent")
 
 
 @pytest.fixture(scope="module")
-def svc_mod(tmp_path_factory):
-    return _load_standalone("service_subagents_under_test", "services/service_subagents.py", tmp_path_factory)
+def task_mod(store_pkg):
+    return importlib.import_module(f"{store_pkg}.tasks.task_spawn_subagent")
+
+
+@pytest.fixture(scope="module")
+def svc_mod(store_pkg):
+    return importlib.import_module(f"{store_pkg}.services.service_subagents")
 
 
 class FakeDB:
@@ -185,15 +193,26 @@ def test_cancel_stops_wait_and_child(spawn_mod, monkeypatch):
     assert child_cancel.is_set()
 
 
-def test_timeout_degrades_to_background_and_config_caps(spawn_mod, monkeypatch):
+def test_timeout_cancels_child_and_config_caps(spawn_mod, monkeypatch):
     monkeypatch.setattr(spawn_mod, "POLL_SECONDS", 0.01)
     session = SimpleNamespace(cancel_event=None)
+    child_cancel = threading.Event()
     context, _, _ = _context(spawn_mod, monkeypatch, db=FakeDB(["PENDING"]), session=session)
+    context.runtime.sessions["spawn_subagent:42"] = SimpleNamespace(cancel_event=child_cancel)
     context.config = {"subagent_timeout_seconds": 1}
     out = spawn_mod.SpawnAgent().run(context, prompt="slow", wait=True, timeout_seconds=9999)
-    assert out.success is True
-    assert "after 1s" in out.llm_summary  # capped by the config ceiling
-    assert 42 in session.pending_subagents
+    assert out.success is False  # hard cutoff: timeout is a failure
+    assert "after 1s" in out.error and "cancelled" in out.error  # capped by the config ceiling
+    assert child_cancel.is_set()
+    assert 42 not in getattr(session, "pending_subagents", {})
+    assert 42 in session.cancelled_subagents
+
+
+def test_marker_seeds_notifications_off(spawn_mod, monkeypatch):
+    session = SimpleNamespace(cancel_event=None)
+    context, _, markers = _context(spawn_mod, monkeypatch, session=session)
+    spawn_mod.SpawnAgent().run(context, prompt="x", wait=False)
+    assert markers[0][2]["notification_mode"] == "off"
 
 
 def test_task_notify_queues_notice(task_mod):

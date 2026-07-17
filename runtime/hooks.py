@@ -44,6 +44,8 @@ PermissionGate = Callable[[Any, Optional[str], str], Optional[PermissionVerdict]
 # A shaper receives the session and the registry the agent would otherwise see,
 # and returns a (possibly replaced) registry.
 ScopeShaper = Callable[[Any, Any], Any]
+# A starter runs just before an agent turn is driven.
+TurnStarter = Callable[[Any], None]
 # A finalizer runs after an agent turn ends.
 TurnFinalizer = Callable[[Any], None]
 # A selector names the LLM service that should drive a session's next turn,
@@ -58,6 +60,7 @@ class HookRegistry:
         """Initialize an empty registry."""
         self._permission_gates: list[PermissionGate] = []
         self._scope_shapers: list[ScopeShaper] = []
+        self._turn_starters: list[TurnStarter] = []
         self._turn_finalizers: list[TurnFinalizer] = []
         self._llm_selectors: list[LLMSelector] = []
         self._turn_attachments: dict[str, list[Any]] = {}
@@ -71,6 +74,22 @@ class HookRegistry:
     def add_scope_shaper(self, shaper: ScopeShaper) -> None:
         """Register a shaper that can add/hide tools for a session's registry."""
         self._scope_shapers.append(shaper)
+
+    def add_turn_starter(self, starter: TurnStarter) -> None:
+        """Register a callback run once per logical turn, just before the drive.
+
+        The starter receives the session with the latest user text already in
+        ``session.history``; it injects via ``session.system_prompt_extras``
+        or ``stage_attachment``. Restart re-drives (``session.restart_turn``)
+        are the same logical turn and do NOT re-run starters — anything
+        written into the session on the first drive is still there.
+
+        Contract: starters run synchronously on the drive thread, so they set
+        the latency floor for every reply. Keep them fast (one small-model
+        call at most); a raising starter is logged and skipped, never blocking
+        the turn.
+        """
+        self._turn_starters.append(starter)
 
     def add_turn_finalizer(self, finalizer: TurnFinalizer) -> None:
         """Register a callback run after each agent turn.
@@ -100,7 +119,7 @@ class HookRegistry:
 
     def remove(self, fn: Callable) -> None:
         """Drop a previously registered gate or shaper (for plugin unload)."""
-        for bucket in (self._permission_gates, self._scope_shapers, self._turn_finalizers, self._llm_selectors):
+        for bucket in (self._permission_gates, self._scope_shapers, self._turn_starters, self._turn_finalizers, self._llm_selectors):
             try:
                 bucket.remove(fn)
             except ValueError:
@@ -140,6 +159,14 @@ class HookRegistry:
             except Exception:
                 logger.exception("Scope shaper raised; leaving registry unchanged")
         return registry
+
+    def start_turn(self, session) -> None:
+        """Run registered turn starters."""
+        for starter in self._turn_starters:
+            try:
+                starter(session)
+            except Exception:
+                logger.exception("Turn starter raised; continuing")
 
     def finish_turn(self, session) -> None:
         """Run registered turn finalizers."""

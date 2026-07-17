@@ -200,8 +200,18 @@ class ConversationRuntime:
         # lock above and the lock acquired in ``inject_user_message`` and
         # in ``iterate_agent_turn`` after the handle_action returns.
         drives = 0
+        restart_drive = False
         while out.data.pop("_drive_agent_turn", False) and drives < 5:
             drives += 1
+            # Turn starters run once per logical turn: a restart re-drive is
+            # the same turn (same user message, session state carried over),
+            # so it skips them; the closing-race follow-up below is a fresh
+            # turn and runs them again.
+            if not restart_drive:
+                hooks = getattr(self, "hooks", None)
+                if hooks is not None:
+                    hooks.start_turn(session)
+            restart_drive = False
             self._drive_agent_turn(session, out)
             with session.lock:
                 _persist.persist_marker(self, session)
@@ -211,6 +221,7 @@ class ConversationRuntime:
             # keeps a restart-happy plugin finite.
             if session.restart_turn:
                 session.restart_turn = False
+                restart_drive = True
                 out.data["_drive_agent_turn"] = True
                 continue
             # Closing-race check: a message queued after the loop's final
@@ -368,6 +379,7 @@ class ConversationRuntime:
             (self.emit_event or bus.emit)(SESSION_TURN_COMPLETED, {
                 "session_key": session.key,
                 "conversation_id": session.conversation_id,
+                "user_id": self.session_user_id(session.key),
                 "ok": False,
                 "error": str(e),
                 "final_text": "",
@@ -415,6 +427,7 @@ class ConversationRuntime:
             (self.emit_event or bus.emit)(SESSION_TURN_COMPLETED, {
                 "session_key": session.key,
                 "conversation_id": session.conversation_id,
+                "user_id": self.session_user_id(session.key),
                 "ok": True,
                 "cancelled": was_cancelled,
                 "final_text": reply or "",

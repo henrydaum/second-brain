@@ -320,7 +320,12 @@ conversation title on a persistent surface; fed by the
 - **Bend a per-turn kernel decision**: register a hook from a service's
   `bind_runtime`/`_load` via `runtime.hooks.add_*`
   ([runtime/hooks.py](runtime/hooks.py)): permission gates, scope shapers
-  (inject/hide tools per session), turn finalizers, attachment staging, and
+  (inject/hide tools per session), **turn starters** (`add_turn_starter` —
+  run once per logical turn just before the drive, with the latest user text
+  already in `session.history`; the pre-turn seam for memory recall / skill
+  retrieval, injecting via `session.system_prompt_extras` or
+  `stage_attachment`; synchronous, so keep them fast), turn finalizers,
+  attachment staging, and
   **LLM selectors** (`add_llm_selector` — name a different llm service for a
   turn; consulted in `active_llm`). A tool can also set
   `session.restart_turn = True` (ephemeral) to end the current drive without
@@ -335,6 +340,14 @@ conversation title on a persistent surface; fed by the
   and removes it at unregistration, so default jobs live exactly as long as
   their task and a reinstall picks up an updated declaration. Disabling —
   not deleting — is the durable way to silence a default job.
+- **Observe finished turns** (learn-from-outcome loops, memory writers):
+  subscribe to `SESSION_TURN_COMPLETED` — emitted once per logical turn from
+  the drive site, foreground and background alike, with `ok`/`cancelled`/
+  `user_id`/`final_text`/`new_messages` (restart re-drives don't emit; crashes
+  emit with `ok: False`). Bus handlers run on the drive thread, so heavy
+  consumers should be pipeline tasks with `trigger="event"` on the channel —
+  the event trigger queues a `task_runs` row and the orchestrator does the
+  work off-thread.
 - **Drive an agent from a task**: call `context.runtime.iterate_agent_turn(...)`
   on a session key. The runtime persists history and markers atomically
   for you. Background drivers should keep their session key distinct from

@@ -252,9 +252,14 @@ SESSION_TURN_COMPLETED = "session_turn_completed"
 """One driven agent turn finished. Emitted per drive from the runtime's
 single drive site (interim drives of a restarted turn — e.g. escalation —
 do not emit; the re-driven turn's completion covers the logical turn).
+Handlers run synchronously on the drive thread — heavy consumers (memory
+extraction, skill reflection) should be event-triggered pipeline tasks
+(``trigger="event"``), which just enqueue a task_runs row here and do the
+work on the orchestrator's schedule.
 Payload:
     session_key:     str
     conversation_id: int | None
+    user_id:         int — owner of the session (scope memory/skills per user)
     ok:              bool — False when the drive crashed (error present)
     cancelled:       bool (ok drives only) — the turn was interrupted
     error:           str (crash only)
