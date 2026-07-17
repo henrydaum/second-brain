@@ -259,6 +259,13 @@ class ConversationLoop:
                     restarting = True
                     break
                 if not result.ok:
+                    if action_type == "call_tool":
+                        # A failed tool action (unknown/hallucinated tool name,
+                        # out-of-scope tool, invalid input) is feedback, not a
+                        # turn-ender: _absorb already recorded the error as the
+                        # tool result, so ask the LLM again and let it correct
+                        # course. max_iterations bounds a repeat offender.
+                        continue
                     action_failed = True
                     break
                 if action_type == "end_turn":

@@ -359,6 +359,9 @@ class ConversationRuntime:
             session.restart_turn = False
             return out
         finally:
+            # Read before the clear below — this is the only record of whether
+            # the turn was actually interrupted (used for the no-reply label).
+            was_cancelled = session.cancel_event.is_set()
             session.busy = False
             # Safety net: EndTurn should already have handed priority back, but
             # if drive() raised partway through, force the user back into
@@ -382,11 +385,12 @@ class ConversationRuntime:
             })
         elif new_messages:
             # Agent ended without final text but produced messages — surface
-            # the last assistant content if any, otherwise flag as cancelled.
+            # the last assistant content if any, otherwise say what happened.
             last_assistant = next((m for m in reversed(new_messages) if m.get("role") == "assistant"), None)
-            out.messages.append(last_assistant.get("content") if last_assistant and last_assistant.get("content") else "Cancelled.")
+            fallback = "Cancelled." if was_cancelled else "(The agent ended its turn without a reply.)"
+            out.messages.append(last_assistant.get("content") if last_assistant and last_assistant.get("content") else fallback)
         else:
-            out.messages.append("Cancelled.")
+            out.messages.append("Cancelled." if was_cancelled else "(The agent ended its turn without a reply.)")
 
         out.attachments.extend(attachments)
         out.data.setdefault("conversation_id", session.conversation_id)

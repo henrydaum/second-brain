@@ -141,6 +141,36 @@ def test_tool_failure_is_surfaced_to_the_model_as_error():
     assert reply == "I hit an error."
 
 
+def test_unknown_tool_name_feeds_error_back_instead_of_ending_turn():
+    """A hallucinated tool name must not end the turn: the unknown-tool error
+    goes into history as the tool result and the LLM gets another chance to
+    correct course (mirrors the `pip show openpyxl` incident)."""
+    tools = {"echo": CallableSpec("echo", handler=lambda cs, actor, args: ToolResult(llm_summary="ok"))}
+    cs = _agent_state(tools=tools)
+
+    schema = {"type": "function", "function": {"name": "echo", "parameters": {}}}
+    llm = _FakeLLM([
+        _response(content="Checking the dep.",
+                  tool_calls=[{"id": "c1", "name": "pip show openpyxl", "arguments": "{}"}]),
+        _response(content="", tool_calls=[{"id": "c2", "name": "echo", "arguments": "{}"}]),
+        _response(content="Recovered with the real tool."),
+    ])
+    loop = _loop(llm, _FakeRegistry([schema]))
+
+    reply, new_messages, _ = loop.drive(cs, "agent", [{"role": "user", "content": "go"}])
+
+    # The turn survived the bogus call and finished with real text.
+    assert reply == "Recovered with the real tool."
+    assert cs.turn_priority == "user"
+    # The transcript stays provider-valid: the bogus call's assistant row and
+    # a matching tool-result row carrying the error the LLM can read.
+    error_msg = next(m for m in new_messages if m["role"] == "tool" and m["tool_call_id"] == "c1")
+    assert "Unknown tool" in error_msg["content"]
+    assert "pip show openpyxl" in error_msg["content"]
+    # The second LLM call saw the error before answering.
+    assert len(llm.calls) == 3
+
+
 class _StreamingLLM(_FakeLLM):
     """Streams each queued response's content in 4-char fragments, then
     returns the same LLMResponse shape as the blocking call."""
