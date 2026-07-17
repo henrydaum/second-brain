@@ -222,11 +222,13 @@ def load_history(runtime, session_key: str, conversation_id: int):
     new_profile = session.profile_override or session.active_agent_profile
 
     title = conversation_title(runtime, conversation_id)
-    msg = f"Loaded conversation: {title}\nAgent: {new_profile}"
+    # Blank lines between parts: this travels as markdown, where a single
+    # newline is a soft break that rich renderers collapse into a space.
+    msg = f"Loaded conversation: {title}\n\nAgent: {new_profile}"
     if old_profile != new_profile:
-        msg += f"\nSwitched agent: {old_profile} -> {new_profile}"
+        msg += f"\n\nSwitched agent: {old_profile} -> {new_profile}"
     if session.restore_notices:
-        msg += "\n" + "\n".join(session.restore_notices)
+        msg += "\n\n" + "\n\n".join(session.restore_notices)
 
     return RuntimeResult(
         messages=[msg],
@@ -438,7 +440,7 @@ def recover_marker(marker: dict[str, Any]) -> tuple[dict[str, Any], list[str], b
     changed = False
 
     if marker.get("busy"):
-        notices.append("Recovered from an interrupted agent turn. I did not replay it automatically; send the message again if you want me to continue.")
+        notices.append("An earlier agent turn in this conversation was interrupted before it finished. To continue the conversation, send a message.")
         marker.update({"busy": False, "turn_priority": "user", "phase": BASE_PHASE})
         cache["phases"] = []
         changed = True
@@ -451,7 +453,7 @@ def recover_marker(marker: dict[str, Any]) -> tuple[dict[str, Any], list[str], b
                 continue
             kept.append(frame)
         if expired:
-            notices.append("Recovered by expiring an input request from a previous process. Please retry that action if you still need it.")
+            notices.append("\nAn earlier agent turn in this conversation was lost. To continue the conversation, send a message.")
             cache["phases"] = kept
             marker["phase"] = _frame_phase(kept[-1]) if kept else BASE_PHASE
             marker["turn_priority"] = _frame_actor(kept[-1]) if kept else "user"
