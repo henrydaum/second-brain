@@ -94,16 +94,25 @@ class SpawnAgent(BaseTool):
         ("Subagent Timeout", "subagent_timeout_seconds",
          "Max seconds a spawned agent may run. A child still running at this deadline is cancelled and reported as failed.",
          DEFAULT_TIMEOUT, {"type": "integer"}),
+        ("Subagent LLM", "subagent_llm",
+         "LLM profile that drives spawned agents. Empty (default): the child inherits "
+         "normal LLM resolution, same as the spawning conversation.",
+         "", {"type": "string"}),
     ]
     agent_prompt = (
         "## Spawning agents\n"
-        "Use spawn_agent for long independent work or parallel research: wait=false lets "
-        "you keep calling tools while children run; their results are delivered to you "
-        "automatically — never poll for them. Results also persist in each child's own "
-        "conversation. The timeout is a hard cutoff — children that exceed it are "
-        "cancelled and reported as failed, so size each prompt to finish inside the "
-        "budget. Only report results you actually received; a timed-out agent produced "
-        "none."
+        "Delegate only work that is (a) genuinely independent and heavy, or (b) "
+        "context-polluting — noisy exploration whose full output you don't need back. "
+        "Quick lookups are cheaper inline. Scale the fan-out to the question: a simple "
+        "fact-find is one agent, a comparison 2–4 — never a swarm for a question "
+        "that wants one careful pass. The agent cannot ask follow-ups, so the prompt "
+        "must be fully bounded up front: objective, scope, expected output format, and "
+        "success criteria. Use wait=false for parallel work: keep calling tools while "
+        "children run; their results are delivered to you automatically — never poll "
+        "for them. Results also persist in each child's own conversation. The timeout "
+        "is a hard cutoff — children that exceed it are cancelled and reported as "
+        "failed, so size each prompt to finish inside the budget. Only report results "
+        "you actually received; a timed-out agent produced none."
     )
 
     def run(self, context, **kwargs) -> ToolResult:

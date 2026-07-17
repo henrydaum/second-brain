@@ -97,6 +97,7 @@ class SubagentsService(BaseService):
         hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
         if hooks is not None:
             hooks.remove(self._barrier)
+            hooks.remove(self._llm_selector)
         self._registered = False
         self.loaded = False
 
@@ -105,7 +106,19 @@ class SubagentsService(BaseService):
         if hooks is None or self._registered:
             return
         hooks.add_turn_finalizer(self._barrier)
+        hooks.add_llm_selector(self._llm_selector)
         self._registered = True
+
+    def _llm_selector(self, session, runtime) -> str | None:
+        """Drive spawned-agent sessions with the configured subagent LLM.
+
+        The subagent_llm setting (declared by tool_spawn_agent) names an LLM
+        profile; empty means abstain — the child inherits normal resolution.
+        An unknown name also falls through safely in active_llm.
+        """
+        if not (getattr(session, "key", "") or "").startswith("spawn_subagent:"):
+            return None
+        return ((getattr(runtime, "config", None) or {}).get("subagent_llm") or "").strip() or None
 
     def _barrier(self, session) -> None:
         """Hold the ending turn until pending children finish or time out.
