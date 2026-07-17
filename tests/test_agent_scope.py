@@ -136,3 +136,26 @@ def test_registry_with_tools_leaves_uncloneable_registries_unchanged():
     registry = object()
 
     assert registry_with_tools(registry, [_Injected()]) is registry
+
+
+class _Interactive(_Lexical):
+    """Interactive."""
+    name = "interactive_tool"
+    description = "Needs a human present."
+    background_safe = False
+
+
+def test_unattended_refusal_tells_model_how_to_proceed():
+    """An interactive tool refused in an unattended session should tell the
+    model what to do instead of just that it can't."""
+    from types import SimpleNamespace
+
+    registry = _registry()
+    registry.register(_Interactive())
+    registry.runtime = SimpleNamespace(is_attended=lambda key: False)
+
+    result = registry.call("interactive_tool", _session_key="spawn_subagent:7", query="x")
+
+    assert not result.success
+    assert "unattended" in result.error
+    assert "finish the turn" in result.error

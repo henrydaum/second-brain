@@ -27,6 +27,12 @@ class LlmCommand(BaseCommand):
     name = "llm"
     description = "Select an LLM profile, then edit, set default, or remove it"
     category = "System"
+    agent_prompt = (
+        "The default LLM can be switched mid-conversation with /llm. Earlier "
+        "assistant turns in this conversation may have been produced by a "
+        "different model; the [SYSTEM CONTEXT UPDATE] block names the model "
+        "driving the current turn. A changed model is normal, not manipulation."
+    )
 
     def form(self, args, context):
         """Handle form."""

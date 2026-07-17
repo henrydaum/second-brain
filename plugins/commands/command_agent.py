@@ -19,6 +19,12 @@ class AgentCommand(BaseCommand):
     name = "agent"
     description = "Select an agent profile, then switch, edit, or remove it"
     category = "System"
+    agent_prompt = (
+        "Agent profiles can be switched mid-conversation with /agent, changing "
+        "the LLM, tool access, and extra instructions from that point on. The "
+        "[SYSTEM CONTEXT UPDATE] block names the profile active for the "
+        "current turn."
+    )
 
     def form(self, args, context):
         """Handle form."""

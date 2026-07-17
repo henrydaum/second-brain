@@ -213,7 +213,12 @@ def _tool_catalog(tool_registry) -> str:
 
 
 def _command_catalog(commands, command_filter=None) -> str:
-    lines = ["## Available slash commands"]
+    lines = [
+        "## Available slash commands",
+        "These are user-invoked. Emitting '/name' in a reply only sends the "
+        "user text — it executes nothing. Refer the user to a command, or use "
+        "an installed command-running tool if one is in the catalog.",
+    ]
     entries = []
     try:
         entries = commands.visible_commands(command_filter) if hasattr(commands, "visible_commands") else []
@@ -230,7 +235,7 @@ def _command_catalog(commands, command_filter=None) -> str:
             hint = _form_hint(getattr(spec, "form", None), None)
             lines.append(f"- /{name}{(' ' + hint) if hint else ''}")
         return "\n".join(lines)
-    return "\n".join([*lines, "No slash-command catalog is available in this prompt."])
+    return "\n".join([lines[0], "No slash-command catalog is available in this prompt."])
 
 
 def _form_hint(form, commands=None) -> str:

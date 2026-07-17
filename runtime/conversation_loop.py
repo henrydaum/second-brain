@@ -709,7 +709,16 @@ class ConversationLoop:
                     session.has_compaction_checkpoint = True
             tail = [self._shrink_for_tail(m) for m in history[-2:]]
             history[:] = [
-                {"role": "user", "content": f"[Conversation summary from earlier]\n{summary}"},
+                {"role": "user", "content": (
+                    "[Conversation summary from earlier]\n"
+                    "Earlier turns were compacted away; only this summary remains "
+                    "visible. The full transcript is preserved in the "
+                    "conversation_messages table and is queryable if a SQL/history "
+                    "tool is installed. If the user references something absent from "
+                    "this summary, say you can't see that far back (or query for it) "
+                    "— never deny it was said.\n"
+                    f"{summary}"
+                )},
                 {"role": "assistant", "content": "Understood - I have the earlier context."},
                 *tail,
             ]

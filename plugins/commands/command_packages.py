@@ -28,6 +28,12 @@ class PackagesCommand(BaseCommand):
     name = "packages"
     description = "Browse, install, or uninstall store files by category"
     category = "System"
+    agent_prompt = (
+        "Installing or uninstalling a package changes the live catalogs: new "
+        "tools and commands appear on the next turn, not instantly. After an "
+        "install, re-check the tool catalog before concluding a capability is "
+        "missing or broken."
+    )
 
     def form(self, args, context):
         steps = [FormStep("action", "Choose a package action.", True, enum=ACTIONS, enum_labels=ACTION_LABELS)]

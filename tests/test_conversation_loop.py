@@ -388,6 +388,11 @@ def test_compaction_uses_compactor_service_directly():
 
     assert compactor.calls[0]["runtime"] is runtime
     assert compactor.calls[0]["session_key"] == "chat"
-    assert history[0]["content"] == "[Conversation summary from earlier]\nEarlier summary."
+    assert history[0]["content"].startswith("[Conversation summary from earlier]")
+    assert history[0]["content"].endswith("Earlier summary.")
+    # The synthesized turn carries the compaction ground rules: the full
+    # transcript survives in the DB, and unremembered turns must not be denied.
+    assert "conversation_messages" in history[0]["content"]
+    assert "never deny" in history[0]["content"]
     assert history[1]["content"] == "Understood - I have the earlier context."
     assert notices == ["Compacting conversation...", "Compacted 3 messages."]

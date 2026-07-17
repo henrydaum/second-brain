@@ -84,7 +84,10 @@ class ToolRegistry:
                 and self.runtime is not None
                 and not self.runtime.is_attended(session_key)):
             return ToolResult.failed(
-                f"Tool '{tool_name}' requires an active conversation and cannot run in the background."
+                f"Tool '{tool_name}' is interactive and this session is unattended "
+                "(no human is present to respond). Do not retry or wait for a reply — "
+                "finish the turn with your best grounded result, noting anything that "
+                "needs the user's attention."
             )
 
         # Gate on required services before building a runtime context.

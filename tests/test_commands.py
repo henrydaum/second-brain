@@ -208,3 +208,16 @@ def test_debug_handles_no_active_session(tmp_path, monkeypatch):
 
     assert "(no active session)" in out
     assert "No log file found" in out
+
+
+# ── agent_prompt contributions ───────────────────────────────────────
+
+def test_kernel_commands_contribute_agent_prompt_guidance():
+    """The /llm, /agent, and /packages commands carry the SB-specific facts a
+    model cannot infer: mid-conversation model/profile switches and hot-reload
+    catalog changes."""
+    from plugins.commands.command_packages import PackagesCommand
+
+    assert "different model" in LlmCommand().agent_prompt_for(None)
+    assert "profile" in AgentCommand().agent_prompt_for(None)
+    assert "next turn" in PackagesCommand().agent_prompt_for(None)
