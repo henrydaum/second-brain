@@ -139,6 +139,8 @@ class ConversationLoop:
         self.session_key = session_key
         self.cancelled = False
         self.running = False
+        # One-shot guard for the empty-response nudge retry (per turn).
+        self._empty_response_retried = False
         self._tool_call_counts: dict[str, int] = {}
         # Pending tool calls from the latest LLM response. The loop drains this
         # one-per-iteration so each tool call goes through its own `enact()`.
@@ -194,6 +196,7 @@ class ConversationLoop:
         """
         self.running = True
         self.cancelled = False
+        self._empty_response_retried = False
         self._tool_call_counts.clear()
         self._pending_tool_calls.clear()
         self._assistant_text_for_pending = None
@@ -361,7 +364,25 @@ class ConversationLoop:
         from attachments.attachment import AttachmentBundle
         schemas = self.tool_registry.get_all_schemas() if self.tool_registry else None
         self._used_attachments_for_last_action = bool(bundle)
-        response = self._invoke(self._messages(history), schemas or None, bundle, history)
+        messages = self._messages(history)
+        for retry in (False, True):
+            response = self._invoke(messages, schemas or None, None if retry else bundle, history)
+            if getattr(response, "has_tool_calls", False):
+                break
+            text = _clean(getattr(response, "content", ""))
+            if text or retry or self._empty_response_retried:
+                break
+            # Empty text-only response (weak models sometimes emit nothing, or
+            # a bare think block that strips to nothing — often right after a
+            # tool error). Nudge once with an ephemeral message that is NOT
+            # recorded in history, then accept whatever comes back.
+            self._empty_response_retried = True
+            logger.warning("LLM returned an empty response; retrying once with a nudge.")
+            self._finish_stream(aborted=True)  # drop any streamed whitespace
+            messages = [*messages, {"role": "user", "content": (
+                "Your last response was empty. Send the user a substantive "
+                "reply summarizing where things stand (or call a tool)."
+            )}]
 
         if getattr(response, "has_tool_calls", False):
             self._pending_tool_calls = list(response.tool_calls)

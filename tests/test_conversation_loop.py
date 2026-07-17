@@ -171,6 +171,46 @@ def test_unknown_tool_name_feeds_error_back_instead_of_ending_turn():
     assert len(llm.calls) == 3
 
 
+def test_empty_response_after_tool_error_is_retried_with_nudge():
+    """A response that cleans to empty (e.g. a weak model emitting only a
+    think block after a tool error) is not a final answer: the loop nudges
+    once with an ephemeral message and takes the retry's text."""
+    def failing_sql(cs, actor, args):
+        return ToolResult(success=False, error="no such column: text")
+
+    tools = {"sql_query": CallableSpec("sql_query", handler=failing_sql)}
+    cs = _agent_state(tools=tools)
+    schema = {"type": "function", "function": {"name": "sql_query", "parameters": {}}}
+    llm = _FakeLLM([
+        _response(content="", tool_calls=[{"id": "c1", "name": "sql_query", "arguments": "{}"}]),
+        _response(content="<think>hmm</think>"),  # cleans to empty
+        _response(content="The query failed: no such column."),
+    ])
+    loop = _loop(llm, _FakeRegistry([schema]))
+
+    reply, new_messages, _ = loop.drive(cs, "agent", [{"role": "user", "content": "query it"}])
+
+    assert reply == "The query failed: no such column."
+    assert cs.turn_priority == "user"
+    # The nudge was ephemeral: it reached the LLM but never entered history.
+    assert any("response was empty" in (m.get("content") or "") for m in llm.calls[2])
+    assert not any("response was empty" in (m.get("content") or "") for m in new_messages)
+
+
+def test_persistently_empty_response_still_ends_the_turn():
+    """If the nudge retry is also empty, the loop gives up cleanly — one
+    retry only, empty final text, priority handed back to the user."""
+    cs = _agent_state()
+    llm = _FakeLLM([_response(content=""), _response(content="")])
+    loop = _loop(llm, _FakeRegistry([]))
+
+    reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
+
+    assert reply == ""
+    assert len(llm.calls) == 2  # exactly one nudge retry, no loop
+    assert cs.turn_priority == "user"
+
+
 class _StreamingLLM(_FakeLLM):
     """Streams each queued response's content in 4-char fragments, then
     returns the same LLMResponse shape as the blocking call."""
