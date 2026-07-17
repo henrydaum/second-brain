@@ -5,7 +5,9 @@ The child runs in its own conversation via the spawn_subagent task. With
 wait=true (default) this tool blocks until the child finishes and returns
 its result; with wait=false the parent keeps working and a completion
 notice is queued back to this session (the subagents service holds the
-turn open at its end until pending children finish or time out).
+turn open at its end until pending children finish). The timeout is a hard
+cutoff: a child that exceeds it is cancelled and reported as failed —
+never silently backgrounded.
 """
 
 dependencies_files = ['tasks/task_spawn_subagent.py', 'services/service_subagents.py']
@@ -17,7 +19,7 @@ from pathlib import Path
 from events.event_bus import bus
 from plugins.BaseTool import BaseTool, ToolResult
 from state_machine.serialization import save_state_marker
-from ..tasks.task_spawn_subagent import SPAWN_SUBAGENT
+from ..tasks.task_spawn_subagent import SPAWN_SUBAGENT, cancelled_set
 
 DEFAULT_TIMEOUT = 300
 POLL_SECONDS = 1.0
@@ -70,7 +72,8 @@ class SpawnAgent(BaseTool):
         "follow-up questions, and it cannot use tools that require user approval. "
         "wait=true (default) blocks and returns the agent's result; wait=false runs "
         "it in the background while you continue, and its completion notice arrives "
-        "in this conversation before your turn ends (or next turn if it is slow)."
+        "in this conversation before your turn ends. The timeout is a hard cutoff: "
+        "an agent still running at its deadline is cancelled and reported as failed."
     )
     parameters = {
         "type": "object",
@@ -79,7 +82,7 @@ class SpawnAgent(BaseTool):
             "title": {"type": "string", "description": "Short title for the agent's conversation."},
             "attachments": {"type": "array", "items": {"type": "string"}, "description": "Optional file paths to attach."},
             "wait": {"type": "boolean", "description": "true (default): block and return the result. false: run in the background and continue."},
-            "timeout_seconds": {"type": "integer", "description": "Max seconds to wait before degrading to background. Capped by the subagent_timeout_seconds setting (default 300)."},
+            "timeout_seconds": {"type": "integer", "description": "Max seconds the agent may run before it is cancelled. Capped by the subagent_timeout_seconds setting (default 300)."},
         },
         "required": ["prompt"],
     }
@@ -89,7 +92,7 @@ class SpawnAgent(BaseTool):
     plan_mode_safe = False
     config_settings = [
         ("Subagent Timeout", "subagent_timeout_seconds",
-         "Max seconds a spawn_agent wait (or its end-of-turn barrier) may block. The child keeps running past this; only the wait stops.",
+         "Max seconds a spawned agent may run. A child still running at this deadline is cancelled and reported as failed.",
          DEFAULT_TIMEOUT, {"type": "integer"}),
     ]
     agent_prompt = (
@@ -97,7 +100,10 @@ class SpawnAgent(BaseTool):
         "Use spawn_agent for long independent work or parallel research: wait=false lets "
         "you keep calling tools while children run; their results are delivered to you "
         "automatically — never poll for them. Results also persist in each child's own "
-        "conversation."
+        "conversation. The timeout is a hard cutoff — children that exceed it are "
+        "cancelled and reported as failed, so size each prompt to finish inside the "
+        "budget. Only report results you actually received; a timed-out agent produced "
+        "none."
     )
 
     def run(self, context, **kwargs) -> ToolResult:
@@ -126,7 +132,12 @@ class SpawnAgent(BaseTool):
                                           user_id=getattr(context, "user_id", 1))
         if cid is None:
             return ToolResult.failed("Could not create a conversation for the agent.")
-        save_state_marker(db, cid, {"conversation_id": cid, "active_agent_profile": "default", "profile_override": "default"})
+        # notification_mode off: the child's output belongs to the parent agent
+        # (delivered via the session message queue), never pushed to the user's
+        # chat. Scheduled subagents keep the default "on" — the push is their
+        # only delivery surface.
+        save_state_marker(db, cid, {"conversation_id": cid, "active_agent_profile": "default",
+                                    "profile_override": "default", "notification_mode": "off"})
 
         # conversation_id first: find_run() matches on this key's serialized position.
         bus.emit(SPAWN_SUBAGENT, {
@@ -158,12 +169,16 @@ class SpawnAgent(BaseTool):
                 return self._result(db, cid, title, run)
             time.sleep(POLL_SECONDS)
 
+        # Hard cutoff: cancel the child and report failure. The cancelled set
+        # suppresses the task's own completion notice for this cid so the
+        # model never sees a stale "finished" echo after the failure.
+        cancel_child(runtime, cid)
         if session is not None:
-            pending_map(session)[cid] = time.time() + timeout
-        return ToolResult(
-            True, data={"conversation_id": cid, "wait": True, "timed_out": True},
-            llm_summary=(f"Agent '{title}' is still running in conversation #{cid} after {timeout}s — "
-                         "degraded to background. Its results will be delivered when it finishes; do not poll."))
+            cancelled_set(session).add(cid)
+        return ToolResult.failed(
+            f"Agent '{title}' timed out after {timeout}s and was cancelled — it produced no "
+            f"result (partial transcript in conversation #{cid}). Retry with a smaller prompt "
+            f"or a larger timeout_seconds.")
 
     @staticmethod
     def _result(db, cid, title, run) -> ToolResult:

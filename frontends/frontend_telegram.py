@@ -261,6 +261,9 @@ class TelegramFrontend(BaseFrontend):
         self._banners: dict[int, dict[int, str]] | None = None
         # Most recent inbound message per session, for reaction acks.
         self._inbound: dict[str, tuple[int, int]] = {}
+        # Turn-lifecycle typing pulses (render_typing): session_key -> stop
+        # event of the pulse task on the Telegram loop.
+        self._typing_stops: dict[str, asyncio.Event] = {}
 
     def session_key(self, ctx) -> str:
         """Build the per-user, per-chat, per-thread session key for Telegram traffic."""
@@ -386,6 +389,13 @@ class TelegramFrontend(BaseFrontend):
     def stop(self) -> None:
         """Stop Telegram frontend."""
         self.shutdown_event.set()
+        if self.loop is not None:
+            for stop in list(self._typing_stops.values()):
+                try:
+                    self.loop.call_soon_threadsafe(stop.set)
+                except RuntimeError:
+                    pass
+        self._typing_stops.clear()
         self.unbind()
 
     def submit_text(self, session_key: str, text: str):
@@ -575,10 +585,14 @@ class TelegramFrontend(BaseFrontend):
 
     def render_form_field(self, session_key: str, form: dict) -> None:
         """Prompt for one form field with Telegram-native buttons when available."""
+        # The turn is live but waiting on the user — typing would mislead.
+        # It resumes on the next SESSION_TURN_STARTED.
+        self.render_typing(session_key, False)
         self._send_text(session_key, self._prompt(form), markup=self._enum_markup(session_key, form))
 
     def render_approval_request(self, session_key: str, req) -> None:
         """Render a pending approval request with Telegram controls."""
+        self.render_typing(session_key, False)
         body = _md_to_tg_html(f"{getattr(req, 'title', 'Approval requested')}\n\n{getattr(req, 'body', '')}".strip())
         self._send_text(session_key, body, markup=self._approval_markup(session_key, req))
 
@@ -831,6 +845,50 @@ class TelegramFrontend(BaseFrontend):
         """Return whether the incoming update is from the allowed Telegram user."""
         allowed = int(self.config.get("telegram_allowed_user_id", 0) or 0)
         return not allowed or bool(update.effective_user and update.effective_user.id == allowed)
+
+    def render_typing(self, session_key: str, on: bool) -> None:
+        """Persistent typing pulse tracking the agent-turn lifecycle.
+
+        Driven by SESSION_TURN_STARTED/COMPLETED via the base, so the
+        indicator stays on for the whole logical turn — including while the
+        subagents barrier holds it open — and drops the moment the turn truly
+        ends. Idempotent per session; overlapping with the per-request
+        ``_with_typing`` bracket is harmless (both just re-send the action).
+        """
+        if self.loop is None or self.app is None:
+            return
+        if on:
+            if session_key in self._typing_stops:
+                return
+            chat_id = self._chat_id(session_key)
+            if not chat_id:
+                return
+            stop = asyncio.Event()
+            self._typing_stops[session_key] = stop
+            self._send_nowait(self._typing_pulse(session_key, chat_id, stop))
+        else:
+            stop = self._typing_stops.pop(session_key, None)
+            if stop is not None:
+                try:
+                    self.loop.call_soon_threadsafe(stop.set)
+                except RuntimeError:
+                    pass
+
+    async def _typing_pulse(self, session_key: str, chat_id: int, stop) -> None:
+        """Refresh the typing action every 4s (Telegram expires it at ~5s)."""
+        try:
+            from telegram.constants import ChatAction
+            while not stop.is_set():
+                try:
+                    await self.app.bot.send_chat_action(chat_id, ChatAction.TYPING)
+                    await asyncio.wait_for(stop.wait(), 4)
+                except asyncio.TimeoutError:
+                    pass
+                except Exception:
+                    return
+        finally:
+            if self._typing_stops.get(session_key) is stop:
+                self._typing_stops.pop(session_key, None)
 
     async def _with_typing(self, chat, fn, ChatAction):
         """Run blocking work while periodically showing Telegram typing state."""

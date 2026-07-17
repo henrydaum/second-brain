@@ -1,10 +1,12 @@
 """Subagents runtime extension — the end-of-turn barrier for spawn_agent.
 
-When a session has background children pending (spawn_agent wait=false, or a
-wait that timed out), the turn finalizer holds the turn open until each child
-finishes or its deadline passes. Completion notices land in the session's
-message queue (written by task_spawn_subagent), and the turn is re-driven so
-the model sees results before the logical turn ends — never one turn too late.
+When a session has background children pending (spawn_agent wait=false), the
+turn finalizer holds the turn open until each child finishes or is cancelled
+at its deadline — the timeout is a hard cutoff, never a silent drop, so the
+model always learns each child's fate. Completion and timeout notices land in
+the session's message queue (completions written by task_spawn_subagent,
+timeouts by the barrier itself), and the turn is re-driven so the model sees
+them before the logical turn ends — never one turn too late.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ dependencies_pip = []
 import time
 
 from plugins.BaseService import BaseService, EXTENSION
+from ..tasks.task_spawn_subagent import cancelled_set
 
 POLL_SECONDS = 1.0
 TERMINAL_STATUSES = {"DONE", "FAILED"}
@@ -36,6 +39,24 @@ def _run_status(db, cid) -> str | None:
     except Exception:
         return None
     return row[0] if row else None
+
+
+def _queue_timeout_notice(session, db, cid) -> None:
+    """Tell the parent its child was cancelled at the deadline (best-effort)."""
+    title = "Subagent"
+    try:
+        row = db.get_conversation(cid)
+        title = ((row or {}).get("title") or "").strip() or title
+    except Exception:
+        pass
+    notice = (f"[Background agent '{title}' TIMED OUT and was cancelled — it delivered "
+              f"no result; do not report anything on its behalf. "
+              f"Partial transcript: conversation #{cid}]")
+    try:
+        with session.lock:
+            session.pending_user_messages.append(notice)
+    except Exception:
+        pass
 
 
 def _cancel_children(runtime, cids) -> None:
@@ -117,9 +138,14 @@ class SubagentsService(BaseService):
                     pending.pop(cid, None)
                     delivered += 1
                 elif pending.get(cid, 0) <= now:
-                    # Deadline passed — stop holding the turn; the child keeps
-                    # running and its notice arrives at the next turn's drain.
+                    # Hard cutoff: cancel the child and report the timeout.
+                    # The cancelled set suppresses the task's own late notice
+                    # (and stops a not-yet-dispatched run from starting).
+                    _cancel_children(runtime, [cid])
+                    cancelled_set(session).add(cid)
+                    _queue_timeout_notice(session, db, cid)
                     pending.pop(cid, None)
+                    delivered += 1
             if not pending:
                 break
             time.sleep(POLL_SECONDS)

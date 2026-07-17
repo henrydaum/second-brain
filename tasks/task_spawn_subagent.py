@@ -20,6 +20,33 @@ from state_machine.serialization import save_state_marker
 SPAWN_SUBAGENT = "subagent.spawn"
 
 
+def cancelled_set(session) -> set:
+    """The session's ephemeral set of child cids cancelled at their timeout.
+
+    Written by tool_spawn_agent (wait timeout) and service_subagents (barrier
+    timeout); consumed here to keep a cancelled child from starting late and
+    from echoing a stale completion notice after its failure was reported.
+    """
+    current = getattr(session, "cancelled_subagents", None)
+    if current is None:
+        current = set()
+        session.cancelled_subagents = current
+    return current
+
+
+def _consume_cancelled(runtime, payload, cid) -> bool:
+    """True (and forget the entry) when the parent already cancelled this cid."""
+    key = (payload.get("notify_session_key") or "").strip()
+    if not key:
+        return False
+    session = (getattr(runtime, "sessions", {}) or {}).get(key)
+    cancelled = getattr(session, "cancelled_subagents", None) if session else None
+    if cancelled and cid in cancelled:
+        cancelled.discard(cid)
+        return True
+    return False
+
+
 class SpawnSubagent(BaseTask):
     """Spawn subagent."""
     name = "spawn_subagent"
@@ -52,6 +79,10 @@ class SpawnSubagent(BaseTask):
         if cid is None or db.get_conversation(cid) is None:
             cid = _create_conversation(db, payload)
             _remember_conversation(context, payload, cid)
+        if _consume_cancelled(runtime, payload, cid):
+            # The parent hit its timeout before this run was even dispatched —
+            # don't start a child whose failure was already reported.
+            return TaskResult.failed(f"cancelled before start — the parent timed out waiting (conversation #{cid}).")
         if cid == runtime.active_conversation_id:
             msg = "spawn_subagent cannot run in the active conversation. Switch away or choose another conversation."
             bus.emit(CHAT_MESSAGE_PUSHED, {"message": msg, "source": self.name, "kind": "alert"})
@@ -91,10 +122,14 @@ def _notify(runtime, payload, cid, *, ok: bool, text: str):
 
     Best-effort: the session may be gone (skip silently — the transcript
     survives in conversation #cid). The notice is drained at the parent
-    turn's next loop boundary, or at the start of its next turn.
+    turn's next loop boundary, or at the start of its next turn. A child
+    the parent already cancelled at its timeout queues nothing — the
+    timeout failure is the authoritative report.
     """
     key = (payload.get("notify_session_key") or "").strip()
     if not key:
+        return
+    if _consume_cancelled(runtime, payload, cid):
         return
     session = (getattr(runtime, "sessions", {}) or {}).get(key)
     if session is None:
