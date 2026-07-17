@@ -54,7 +54,7 @@ class SpawnSubagent(BaseTask):
     trigger_channels = [SPAWN_SUBAGENT]
     requires_services = ["llm"]
     writes = []
-    max_workers = 1
+    max_workers = 4
     event_payload_schema = {
         "type": "object",
         "properties": {

@@ -157,6 +157,9 @@ SELECT path, file_name, mtime FROM files WHERE path LIKE '{ATTACHMENT_CACHE}%' O
 ## Writing to the database
 sql_query can also modify data, but writing is an exception, not a routine action. Only issue an INSERT/UPDATE/DELETE/DDL statement when the user has specifically asked you to change the database — otherwise stay read-only. When you do write: SELECT/PRAGMA/EXPLAIN run automatically, but any mutating statement pauses for the user to approve the exact SQL, so include a clear `justification` and write one statement per call.
 
+## Conversation history
+Past conversations live in the 'conversations' and 'conversation_messages' tables; the current conversation's number is in the runtime context. Compacted history is no longer in your context but remains queryable there.
+
 ## Database tables (inspect with sql_query)
 {tables}"""
         )

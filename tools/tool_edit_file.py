@@ -7,7 +7,7 @@ import re
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from paths import DATA_DIR, ROOT_DIR
+from paths import DATA_DIR, ROOT_DIR, SCRATCH_DIR
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.helpers.plugin_paths import iter_plugin_dirs
 from .helpers import file_reads
@@ -69,6 +69,17 @@ class EditFile(BaseTool):
     background_safe = False
     plan_mode_safe = False
 
+    agent_prompt = (
+        "## Scratch workspace\n"
+        f"For temporary files — notes, drafts, intermediate outputs, working "
+        f"data that is not a plugin and not a user deliverable — use "
+        f"{SCRATCH_DIR / 'c<conversation id>'} (the current conversation's number "
+        "is in the runtime context). Edits there apply without approval, so it "
+        "is a frictionless workspace; it is pruned by the data-retention "
+        "setting and deleted with its conversation, so nothing durable belongs "
+        "there. Durable notes go to memory; plugin drafts go to the sandbox."
+    )
+
     def run(self, context, **kwargs) -> ToolResult:
         """Run edit file."""
         op = (kwargs.get("operation") or "").strip().lower()
@@ -81,6 +92,10 @@ class EditFile(BaseTool):
 
         def approve(extra: str = "") -> ToolResult | None:
             """Approve edit file."""
+            if _is_scratch(p):
+                # Scratch is the frictionless workspace: path-confined,
+                # retention-pruned, low blast radius — no approval dialog.
+                return None
             if context.approve_command is None:
                 return ToolResult.failed("File editing is not available — no approval handler is configured.")
             try:
@@ -214,6 +229,12 @@ def _occurrence_lines(text: str, old: str, cap: int = 10) -> str:
         out.append(str(text.count("\n", 0, idx) + 1))
         start = idx + 1
     return ", ".join(out)
+
+
+def _is_scratch(p: Path) -> bool:
+    """Whether the path is inside the agent scratch workspace."""
+    scratch = SCRATCH_DIR.resolve()
+    return p == scratch or scratch in p.parents
 
 
 def _is_root_file(p: Path) -> bool:
