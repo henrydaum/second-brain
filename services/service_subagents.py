@@ -127,6 +127,7 @@ class SubagentsService(BaseService):
         while pending:
             if cancel_event is not None and cancel_event.is_set():
                 _cancel_children(runtime, list(pending))
+                cancelled_set(session).update(pending)  # suppress their stale reports
                 session.pending_subagents = {}
                 return
             now = time.time()

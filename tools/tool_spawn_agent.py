@@ -141,7 +141,7 @@ class SpawnAgent(BaseTool):
 
         session = (getattr(runtime, "sessions", {}) or {}).get(session_key)
         # conversation_id first: find_run() matches on this key's serialized position.
-        # notify_conversation_id pins delivery to the conversation this call was
+        # report_conversation_id pins delivery to the conversation this call was
         # made from — if the session moves to another conversation before the
         # child reports, the notice is dropped rather than leaking into it.
         bus.emit(SPAWN_SUBAGENT, {
@@ -149,8 +149,8 @@ class SpawnAgent(BaseTool):
             "title": title,
             "prompt": prompt,
             "attachments": attachments,
-            "notify_session_key": session_key or None,
-            "notify_conversation_id": getattr(session, "conversation_id", None),
+            "report_session_key": session_key or None,
+            "report_conversation_id": getattr(session, "conversation_id", None),
         })
 
         if not kwargs.get("wait", True):
@@ -167,6 +167,8 @@ class SpawnAgent(BaseTool):
         while time.time() < deadline:
             if cancel_event is not None and cancel_event.is_set():
                 cancel_child(runtime, cid)
+                if session is not None:
+                    cancelled_set(session).add(cid)  # suppress the stale report
                 return ToolResult.failed(f"Cancelled — agent stopped (partial transcript in conversation #{cid}).")
             run = find_run(db, cid)
             if run is not None and run["status"] in TERMINAL_STATUSES:

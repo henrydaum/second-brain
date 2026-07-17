@@ -36,7 +36,7 @@ def cancelled_set(session) -> set:
 
 def _consume_cancelled(runtime, payload, cid) -> bool:
     """True (and forget the entry) when the parent already cancelled this cid."""
-    key = (payload.get("notify_session_key") or "").strip()
+    key = (payload.get("report_session_key") or "").strip()
     if not key:
         return False
     session = (getattr(runtime, "sessions", {}) or {}).get(key)
@@ -62,8 +62,8 @@ class SpawnSubagent(BaseTask):
             "title": {"type": "string", "description": "Conversation title if a new conversation is needed."},
             "prompt": {"type": "string", "description": "Prompt"},
             "attachments": {"type": "array", "description": "Optional file paths"},
-            "notify_session_key": {"type": "string", "description": "Session key whose message queue receives a completion notice (used by the spawn_agent tool; scheduled jobs leave it unset)."},
-            "notify_conversation_id": {"type": "integer", "description": "Conversation the spawn was made from; the notice is dropped if the session has since switched to a different conversation."},
+            "report_session_key": {"type": "string", "description": "Session key whose message queue receives the child's report — the agent-facing channel, unrelated to the user-facing conversation notification system. Used by the spawn_agent tool; scheduled jobs leave it unset."},
+            "report_conversation_id": {"type": "integer", "description": "Conversation the spawn was made from; the report is dropped if the session has since switched to a different conversation."},
         },
         "required": ["prompt"],
     }
@@ -103,23 +103,28 @@ class SpawnSubagent(BaseTask):
                 attachments=attachments,
             )
         except Exception as e:
-            _notify(runtime, payload, cid, ok=False, text=str(e))
+            _report(runtime, payload, cid, ok=False, text=str(e))
             return TaskResult.failed(str(e))
         finally:
             runtime.close_session(session_key)
         if not out.ok:
             error = (out.error or {}).get("message") or "\n".join(out.messages) or "spawn_subagent failed."
-            _notify(runtime, payload, cid, ok=False, text=error)
+            _report(runtime, payload, cid, ok=False, text=error)
             return TaskResult.failed(error)
-        _notify(runtime, payload, cid, ok=True, text="\n".join(out.messages))
+        _report(runtime, payload, cid, ok=True, text="\n".join(out.messages))
         return TaskResult(success=True, data={"conversation_id": cid})
 
 
 _NOTICE_CAP = 1000
 
 
-def _notify(runtime, payload, cid, *, ok: bool, text: str):
-    """Queue a completion notice on the requesting session, if any.
+def _report(runtime, payload, cid, *, ok: bool, text: str):
+    """Queue the child's report on the requesting session's message queue.
+
+    This is the agent-facing return channel of spawn_agent — deliberately
+    separate from the user-facing conversation notification system
+    (notification_mode / CHAT_MESSAGE_PUSHED), which spawned children have
+    turned off.
 
     Best-effort: the session may be gone (skip silently — the transcript
     survives in conversation #cid). The notice is drained at the parent
@@ -127,7 +132,7 @@ def _notify(runtime, payload, cid, *, ok: bool, text: str):
     the parent already cancelled at its timeout queues nothing — the
     timeout failure is the authoritative report.
     """
-    key = (payload.get("notify_session_key") or "").strip()
+    key = (payload.get("report_session_key") or "").strip()
     if not key:
         return
     if _consume_cancelled(runtime, payload, cid):
@@ -138,7 +143,7 @@ def _notify(runtime, payload, cid, *, ok: bool, text: str):
     # Deliver only to the conversation the spawn was made from: a session
     # that has since switched conversations must not receive the notice
     # (the result still lives in the child's own conversation #cid).
-    target_cid = payload.get("notify_conversation_id")
+    target_cid = payload.get("report_conversation_id")
     if target_cid is not None and getattr(session, "conversation_id", None) != target_cid:
         return
     title = (payload.get("title") or "Subagent").strip()
