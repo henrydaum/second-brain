@@ -51,10 +51,8 @@ The uniform contract, enforced here so every hook can rely on it:
   fetched twice).
 
 Registration: ``runtime.hooks.add(moment, fn)`` from a service's
-``bind_runtime``/``_load``; ``runtime.hooks.remove(fn)`` at unload — always
-with the *original* function, even for hooks registered through the legacy
-``add_*`` aliases (the registry tracks the adapter for you, so plugin unload
-never leaks a hook). See ``templates/hook_template.py`` for worked examples.
+``bind_runtime``/``_load``; ``runtime.hooks.remove(fn)`` at unload. See
+``templates/hook_template.py`` for worked examples of every kind.
 """
 
 from __future__ import annotations
@@ -188,15 +186,6 @@ class Redrive:
     re-run."""
 
 
-# Legacy type aliases, kept for reference and for plugin code written against
-# the original registry.
-PermissionGate = Callable[[Any, Optional[str], str], Optional["PermissionVerdict"]]
-ScopeShaper = Callable[[Any, Any], Any]
-TurnStarter = Callable[[Any], None]
-TurnFinalizer = Callable[[Any], None]
-LLMSelector = Callable[[Any, Any], Optional[str]]
-
-
 class PermissionVerdict:
     """A gate's answer to "may this command run?".
 
@@ -222,15 +211,6 @@ class HookRegistry:
     def __init__(self):
         """Initialize an empty registry."""
         self._hooks: dict[str, list[Callable]] = {m: [] for m in MOMENTS}
-        # original fn -> adapter actually registered, so remove(original)
-        # works for hooks added through the legacy aliases (plugin unload
-        # must never leak a hook).
-        self._adapters: dict[Callable, Callable] = {}
-        # Legacy LLM selectors are kept addressable on their own so
-        # ``select_llm`` (drive-time resolution in runtime_config.active_llm)
-        # keeps working; the same selector is also registered as a
-        # ``model_call`` escort so per-call resolution matches.
-        self._legacy_llm_selectors: list[Callable] = []
         self._turn_attachments: dict[str, list[Any]] = {}
 
     # ──────────────────────────────────────────────────────────────────
@@ -244,91 +224,12 @@ class HookRegistry:
         self._hooks[moment].append(fn)
 
     def remove(self, fn: Callable) -> None:
-        """Walk ``fn`` away from every doorway (for plugin unload).
-
-        Accepts the *original* function even when it was registered through a
-        legacy alias — the adapter mapping is resolved here.
-        """
-        target = self._adapters.pop(fn, fn)
+        """Walk ``fn`` away from every doorway (for plugin unload)."""
         for bucket in self._hooks.values():
             try:
-                bucket.remove(target)
+                bucket.remove(fn)
             except ValueError:
                 pass
-        try:
-            self._legacy_llm_selectors.remove(fn)
-        except ValueError:
-            pass
-
-    def _add_adapted(self, moment: str, original: Callable, adapter: Callable) -> None:
-        """Register ``adapter`` at ``moment`` on behalf of ``original``."""
-        self._adapters[original] = adapter
-        self.add(moment, adapter)
-
-    # --- legacy aliases: the original bespoke registration surface. Each is
-    # now a thin coat over ``add()`` with a signature adapter, kept so store
-    # plugins and tests written against the old API keep working unchanged.
-
-    def add_permission_gate(self, gate: PermissionGate) -> None:
-        """Legacy alias: a ``vet_permission`` verdict with the old
-        ``(session, tool_name, command)`` signature."""
-        def adapter(ctx: HookContext, query: PermissionQuery):
-            return gate(ctx.session, query.tool_name, query.command)
-        self._add_adapted(VET_PERMISSION, gate, adapter)
-
-    def add_scope_shaper(self, shaper: ScopeShaper) -> None:
-        """Legacy alias: a ``shape_scope`` adjuster with the old
-        ``(session, registry)`` signature."""
-        def adapter(ctx: HookContext, registry):
-            return shaper(ctx.session, registry)
-        self._add_adapted(SHAPE_SCOPE, shaper, adapter)
-
-    def add_turn_starter(self, starter: TurnStarter) -> None:
-        """Legacy alias: a ``turn_start`` adjuster with the old ``(session)``
-        signature.
-
-        The starter receives the session with the latest user text already in
-        ``session.history``; it injects via ``session.system_prompt_extras``
-        or ``stage_attachment``. Restart re-drives (``Redrive`` /
-        ``session.restart_turn``) are the same logical turn and do NOT re-run
-        starters. Starters run synchronously on the drive thread — keep them
-        fast; a raising starter is logged and skipped.
-        """
-        def adapter(ctx: HookContext, _payload):
-            starter(ctx.session)
-        self._add_adapted(TURN_START, starter, adapter)
-
-    def add_turn_finalizer(self, finalizer: TurnFinalizer) -> None:
-        """Legacy alias: a ``turn_finish`` observer with the old ``(session)``
-        signature. Finalizers run once per *logical* turn — a restart
-        re-drive defers them to the drive that actually ends the turn."""
-        def adapter(ctx: HookContext, _outcome):
-            finalizer(ctx.session)
-        self._add_adapted(TURN_FINISH, finalizer, adapter)
-
-    def add_llm_selector(self, selector: LLMSelector) -> None:
-        """Legacy alias: name a different LLM service for a session's turns.
-
-        Registered two ways from the one function: kept on a side list for
-        drive-time resolution (``select_llm``, consulted by
-        ``runtime_config.active_llm``) and stood at the ``model_call`` doorway
-        as an escort that rewrites ``request.llm`` per call — so a selector's
-        choice holds even for calls issued mid-turn.
-        """
-        self._legacy_llm_selectors.append(selector)
-
-        def adapter(ctx: HookContext, request: ModelRequest, proceed):
-            try:
-                name = selector(ctx.session, ctx.runtime)
-            except Exception:
-                logger.exception("LLM selector raised; treating as abstain")
-                name = None
-            if name and ctx.runtime is not None:
-                svc = (getattr(ctx.runtime, "services", {}) or {}).get(name)
-                if svc is not None:
-                    request.llm = svc
-            return proceed(request)
-        self._add_adapted(MODEL_CALL, selector, adapter)
 
     def stage_attachment(self, session, attachment: Any) -> bool:
         """Queue one attachment for the next LLM call in this session."""
@@ -363,23 +264,6 @@ class HookRegistry:
                 return verdict
         return None
 
-    def select_llm(self, session, runtime) -> str | None:
-        """Drive-time LLM resolution: first legacy selector's non-None name.
-
-        Per-call resolution happens at the ``model_call`` doorway (the same
-        selectors are registered there as escorts); this method exists so
-        ``build_loop`` can still pick the drive's default brain up front.
-        """
-        for selector in self._legacy_llm_selectors:
-            try:
-                name = selector(session, runtime)
-            except Exception:
-                logger.exception("LLM selector raised; treating as abstain")
-                continue
-            if name:
-                return name
-        return None
-
     def shape_scope(self, session, registry, runtime=None):
         """Fold every shaper over the registry, in registration order."""
         ctx = self._ctx(session, runtime, SHAPE_SCOPE)
@@ -394,7 +278,15 @@ class HookRegistry:
         return registry
 
     def start_turn(self, session, runtime=None) -> None:
-        """Run the ``turn_start`` adjusters (once per logical turn)."""
+        """Run the ``turn_start`` adjusters (once per logical turn).
+
+        A starter receives the session with the latest user text already in
+        ``session.history``; it injects via ``session.system_prompt_extras``,
+        ``stage_attachment``, or ``session.pending_agent_actions``. Restart
+        re-drives (``Redrive`` / ``session.restart_turn``) are the same
+        logical turn and do NOT re-run starters. Starters run synchronously
+        on the drive thread, so they set the latency floor for every reply —
+        keep them fast (one small-model call at most)."""
         ctx = self._ctx(session, runtime, TURN_START)
         for starter in self._hooks[TURN_START]:
             try:

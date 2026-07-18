@@ -121,17 +121,13 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
 
 
 def active_llm(runtime, session: RuntimeSession | None = None):
-    """Return the LLM service instance that should drive this session."""
-    # Opt-in LLM selectors (runtime.hooks) may override profile resolution
-    # per turn. An unknown name falls through to the kernel default.
-    hooks = getattr(runtime, "hooks", None)
-    if hooks is not None and session is not None:
-        name = hooks.select_llm(session, runtime)
-        if name:
-            svc = runtime.services.get(name)
-            if svc is not None:
-                return svc
-            logger.warning(f"LLM selector chose unknown service {name!r}; using profile resolution")
+    """Return the LLM service instance that should drive this session.
+
+    This is drive-time profile resolution only — the default brain. Plugins
+    that want a different brain stand at the ``model_call`` doorway and
+    rewrite ``request.llm`` per call (see runtime/hooks.py), so their choice
+    is invisible here and to any non-drive caller (e.g. /debug).
+    """
     profile = profile_for(runtime, session)
     try:
         from runtime.agent_scope import resolve_agent_llm

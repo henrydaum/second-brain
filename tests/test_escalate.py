@@ -1,12 +1,12 @@
-"""Tests for the escalation stack: the kernel's LLM-selector hook, the
-turn-restart primitive, per-enact model recording, and the store Escalate
-package (``services/service_escalate.py``, loaded off the local store ref).
+"""Tests for the escalation stack: the turn-restart primitive, per-enact
+model recording, and the store Escalate package
+(``services/service_escalate.py``, loaded off the local store ref).
 
-The kernel pieces are generic — a plugin names a different LLM for a turn
-(``hooks.add_llm_selector``), a tool asks for the turn to be re-driven
-(``session.restart_turn``), and every agent enact records which model made it
-(ledger ``data_json.llm``). The store package composes all three into the
-weak-model cascade.
+The kernel pieces are generic — a ``model_call`` escort retargets
+``request.llm`` per call (contract pinned in tests/test_hooks_moments.py), a
+tool asks for the turn to be re-driven (``session.restart_turn``), and every
+agent enact records which model actually made it (ledger ``data_json.llm``).
+The store package composes all three into the weak-model cascade.
 """
 
 import importlib.util
@@ -25,7 +25,7 @@ import state_machine  # noqa: F401
 from pipeline.database import Database
 from runtime import runtime_config as _cfg
 from runtime.conversation_runtime import ConversationRuntime
-from runtime.hooks import HookRegistry
+from runtime.hooks import HookContext, ModelRequest
 from runtime.ledger import record_enact
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -78,54 +78,9 @@ def _runtime(tmp_path, services=None, config=None):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Kernel A: the LLM-selector hook
-# ─────────────────────────────────────────────────────────────────────────
-
-def test_llm_selector_overrides_active_llm(tmp_path):
-    strong = _FakeLLM("strong")
-    weak = _FakeLLM("weak")
-    rt, session, _ = _runtime(tmp_path, services={"llm": weak, "strong": strong})
-
-    assert _cfg.active_llm(rt, session) is weak
-
-    rt.hooks.add_llm_selector(lambda s, r: "strong")
-    assert _cfg.active_llm(rt, session) is strong
-
-
-def test_llm_selector_abstain_unknown_and_raising_fall_through(tmp_path):
-    weak = _FakeLLM("weak")
-    rt, session, _ = _runtime(tmp_path, services={"llm": weak})
-
-    rt.hooks.add_llm_selector(lambda s, r: None)          # abstain
-    assert _cfg.active_llm(rt, session) is weak
-
-    rt.hooks.add_llm_selector(lambda s, r: "nonexistent")  # unknown name
-    assert _cfg.active_llm(rt, session) is weak
-
-    def boom(s, r):
-        raise RuntimeError("selector crashed")
-
-    hooks = HookRegistry()
-    hooks.add_llm_selector(boom)
-    hooks.add_llm_selector(lambda s, r: "llm")
-    # A raising selector is an abstain; the next one still answers.
-    assert hooks.select_llm(session, rt) == "llm"
-
-
-def test_llm_selector_remove_restores_default(tmp_path):
-    strong = _FakeLLM("strong")
-    weak = _FakeLLM("weak")
-    rt, session, _ = _runtime(tmp_path, services={"llm": weak, "strong": strong})
-
-    selector = lambda s, r: "strong"  # noqa: E731
-    rt.hooks.add_llm_selector(selector)
-    assert _cfg.active_llm(rt, session) is strong
-    rt.hooks.remove(selector)
-    assert _cfg.active_llm(rt, session) is weak
-
-
-# ─────────────────────────────────────────────────────────────────────────
-# Kernel B: the turn-restart primitive
+# Kernel A: the turn-restart primitive
+# (Per-call brain swapping — the model_call escort — is pinned in
+# tests/test_hooks_moments.py; active_llm is profile resolution only.)
 # ─────────────────────────────────────────────────────────────────────────
 
 def test_restart_turn_is_not_persisted(tmp_path):
@@ -174,9 +129,9 @@ def test_restart_turn_ping_pong_is_bounded(tmp_path):
 
 def test_restart_skips_end_turn_and_keeps_agent_priority(tmp_path):
     """A real drive: the tool sets restart_turn; the loop must exit without
-    enacting end_turn (agent keeps priority for the re-drive), and the re-driven
-    loop — running on the hook-selected LLM — finishes the turn."""
-    seen_models = []
+    enacting end_turn (agent keeps priority for the re-drive), and the
+    re-driven loop — its calls retargeted by a model_call escort — finishes
+    the turn."""
 
     def escalate_handler(cs, actor, args):
         session.restart_turn = True
@@ -190,8 +145,13 @@ def test_restart_skips_end_turn_and_keeps_agent_priority(tmp_path):
     strong = _FakeLLM("strong", [_response(content="Strong answer.")])
 
     rt, session, db = _runtime(tmp_path, services={"llm": weak, "strong": strong})
-    rt.hooks.add_llm_selector(
-        lambda s, r: "strong" if (s.plugin_state.get("esc") or {}).get("pending") else None)
+
+    def escort(ctx, request, proceed):
+        if (ctx.session.plugin_state.get("esc") or {}).get("pending"):
+            request.llm = strong
+        return proceed(request)
+
+    rt.hooks.add("model_call", escort)
 
     # Wire a registry exposing the escalate tool spec through the state machine.
     from state_machine.conversation import CallableSpec
@@ -210,7 +170,6 @@ def test_restart_skips_end_turn_and_keeps_agent_priority(tmp_path):
 
     def build_loop_with_tool(runtime, session_key=None):
         loop = real_build_loop(runtime, session_key)
-        seen_models.append(loop.llm.model_name)
         # Hand the participant a live handler for the escalate spec.
         sess = runtime.sessions[session_key]
         agent = next(p for p in sess.cs.participants.values() if p.kind == "agent")
@@ -226,7 +185,9 @@ def test_restart_skips_end_turn_and_keeps_agent_priority(tmp_path):
     finally:
         _crt._cfg.build_loop = original
 
-    assert seen_models == ["weak", "strong"]
+    # One call per brain: the weak drive's escalate round, then the re-driven
+    # turn's call retargeted onto the strong model by the escort.
+    assert [len(weak.calls), len(strong.calls)] == [1, 1]
     assert "Strong answer." in out.messages
     assert session.cs.turn_priority == "user"
     # The weak partial turn stayed in history: assistant tool-call, tool result,
@@ -239,6 +200,10 @@ def test_restart_skips_end_turn_and_keeps_agent_priority(tmp_path):
         "SELECT COUNT(*) FROM action_ledger WHERE action_type='end_turn' AND origin='agent_enact'"
     ).fetchone()
     assert rows[0] == 1
+    # The ledger shows the flip: weak enacts, then strong enacts.
+    models = [json.loads(r[0])["llm"] for r in db.conn.execute(
+        "SELECT data_json FROM action_ledger WHERE origin='agent_enact' ORDER BY id").fetchall()]
+    assert "weak" in models and "strong" in models
 
 
 def test_crashed_drive_voids_restart_and_returns_priority(tmp_path):
@@ -434,14 +399,17 @@ def test_tool_sets_handoff_note_cleared_after_strong_turn(tmp_path, escalate_mod
     note = session.system_prompt_extras.get(key)
     assert note and "Escalated turn" in note and "hard proof" in note
 
-    # The weak drive's finalizer must NOT clear it (strong turn hasn't run).
-    svc._turn_finalizer(session)
+    finish_ctx = HookContext(session=session, runtime=rt, moment="turn_finish")
+    # The weak drive's turn_finish must NOT clear it (strong turn hasn't run).
+    svc._turn_finish(finish_ctx, None)
     assert key in session.system_prompt_extras
 
-    # Once the selector serves the strong turn, the finalizer clears it.
-    session.busy = True
-    assert svc._llm_selector(session, rt) == "strong"
-    svc._turn_finalizer(session)
+    # Once the escort serves a strong call, turn_finish clears it.
+    call_ctx = HookContext(session=session, runtime=rt, moment="model_call")
+    request = ModelRequest(llm=weak, messages=[], tools=None)
+    svc._model_call(call_ctx, request, lambda req: SimpleNamespace(content="ok"))
+    assert request.llm is strong
+    svc._turn_finish(finish_ctx, None)
     assert key not in session.system_prompt_extras
 
 
@@ -499,5 +467,8 @@ def test_unload_removes_all_hooks(tmp_path, escalate_module):
     svc.unload()
 
     assert rt.hooks.shape_scope(session, base) is base
+    # With the escort gone, a pending escalation no longer retargets calls.
     session.plugin_state.setdefault("escalate", {})["pending"] = True
-    assert rt.hooks.select_llm(session, rt) is None
+    request = ModelRequest(llm=weak, messages=[], tools=None)
+    handler = rt.hooks.wrap_model_call(session, rt, lambda req: req.llm)
+    assert handler(request) is weak

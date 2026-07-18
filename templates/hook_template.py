@@ -65,9 +65,8 @@ THE UNIFORM CONTRACT (identical at every doorway)
      proceed is used (never re-fetched); raising before dialing lets the call
      proceed as if the escort were not there.
   4. Register with runtime.hooks.add(moment, fn); unregister with
-     runtime.hooks.remove(fn) — always the ORIGINAL function, even for hooks
-     registered through the legacy add_* aliases (the registry maps the
-     adapter for you; plugin unload must never leak a hook).
+     runtime.hooks.remove(fn) at unload — plugin unload must never leak a
+     hook.
   5. Hooks run synchronously on the drive thread. Keep them fast — every
      millisecond is added to the reply latency of every turn they touch.
 

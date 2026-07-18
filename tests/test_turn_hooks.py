@@ -58,10 +58,11 @@ def test_starter_runs_before_drive_and_sees_latest_user_text(tmp_path):
     rt, session, llm = _runtime(tmp_path)
     seen = []
 
-    def starter(sess):
+    def starter(ctx, _payload):
+        sess = ctx.session
         seen.append((len(llm.calls), [m["content"] for m in sess.history if m["role"] == "user"]))
 
-    rt.hooks.add_turn_starter(starter)
+    rt.hooks.add("turn_start", starter)
     out = rt.handle_action("s", "send_text", "remember the milk")
 
     assert out.ok
@@ -73,10 +74,10 @@ def test_starter_runs_before_drive_and_sees_latest_user_text(tmp_path):
 def test_starter_prompt_extra_reaches_the_model(tmp_path):
     rt, session, llm = _runtime(tmp_path)
 
-    def starter(sess):
-        sess.system_prompt_extras["memory"] = "MEMOMARK-7731"
+    def starter(ctx, _payload):
+        ctx.session.system_prompt_extras["memory"] = "MEMOMARK-7731"
 
-    rt.hooks.add_turn_starter(starter)
+    rt.hooks.add("turn_start", starter)
     rt.handle_action("s", "send_text", "hello")
 
     assert llm.calls, "the drive never reached the model"
@@ -86,10 +87,10 @@ def test_starter_prompt_extra_reaches_the_model(tmp_path):
 def test_raising_starter_never_blocks_the_turn(tmp_path):
     rt, session, llm = _runtime(tmp_path, [_response(content="fine.")])
 
-    def boom(sess):
+    def boom(ctx, _payload):
         raise RuntimeError("memory service down")
 
-    rt.hooks.add_turn_starter(boom)
+    rt.hooks.add("turn_start", boom)
     out = rt.handle_action("s", "send_text", "hello")
 
     assert out.ok
@@ -110,7 +111,7 @@ def test_starter_skipped_on_restart_redrive(tmp_path):
         return out
 
     rt._drive_agent_turn = fake_drive
-    rt.hooks.add_turn_starter(lambda sess: starts.append(1))
+    rt.hooks.add("turn_start", lambda ctx, _p: starts.append(1))
     rt.handle_action("s", "send_text", "hello")
 
     assert drives == [1, 2]  # the logical turn was two drives...
@@ -132,7 +133,7 @@ def test_starter_runs_again_for_closing_race_follow_up_turn(tmp_path):
         return out
 
     rt._drive_agent_turn = fake_drive
-    rt.hooks.add_turn_starter(lambda sess: starts.append(1))
+    rt.hooks.add("turn_start", lambda ctx, _p: starts.append(1))
     rt.handle_action("s", "send_text", "first message")
 
     assert drives == [1, 2]
@@ -142,9 +143,9 @@ def test_starter_runs_again_for_closing_race_follow_up_turn(tmp_path):
 def test_remove_unregisters_a_starter(tmp_path):
     rt, session, _ = _runtime(tmp_path)
     starts = []
-    starter = lambda sess: starts.append(1)  # noqa: E731
+    starter = lambda ctx, _p: starts.append(1)  # noqa: E731
 
-    rt.hooks.add_turn_starter(starter)
+    rt.hooks.add("turn_start", starter)
     rt.handle_action("s", "send_text", "one")
     rt.hooks.remove(starter)
     rt.handle_action("s", "send_text", "two")

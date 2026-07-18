@@ -335,9 +335,7 @@ conversation title on a persistent surface; fed by the
   default doorman at `reason == "budget_exhausted"`), and `turn_finish`
   (observer — fires once per logical turn with a `TurnOutcome`). Hooks can
   also queue tool calls onto `session.pending_agent_actions` (drained at
-  loop boundaries through the normal enact/ledger path). The legacy
-  `add_turn_starter`/`add_scope_shaper`/`add_permission_gate`/
-  `add_turn_finalizer`/`add_llm_selector` aliases still work, and
+  loop boundaries through the normal enact/ledger path).
   `session.restart_turn = True` remains the mid-turn spelling of `Redrive()`
   for tools. Every agent enact ledger row records the driving model in
   `data_json.llm` (post-escort) and doorway-forced acts carry

@@ -272,10 +272,16 @@ def _service(svc_mod, db):
     return svc
 
 
+def _finish_ctx(svc, session):
+    """The turn_finish envelope the kernel hands the barrier."""
+    from runtime.hooks import HookContext
+    return HookContext(session=session, runtime=svc.runtime, moment="turn_finish")
+
+
 def test_barrier_noop_without_pending(svc_mod):
     svc = _service(svc_mod, db=None)
     session = SimpleNamespace()  # no pending_subagents attr at all
-    svc._barrier(session)  # must not raise or block
+    svc._barrier(_finish_ctx(svc, session), None)  # must not raise or block
 
 
 def test_barrier_waits_then_restarts_turn(svc_mod, monkeypatch):
@@ -286,7 +292,7 @@ def test_barrier_waits_then_restarts_turn(svc_mod, monkeypatch):
         pending_subagents={42: time.time() + 30},
         pending_user_messages=["[Background agent 'x' finished] ..."],
         cancel_event=None, restart_turn=False)
-    svc._barrier(session)
+    svc._barrier(_finish_ctx(svc, session), None)
     assert session.pending_subagents == {}
     assert session.restart_turn is True
 
@@ -299,7 +305,7 @@ def test_barrier_deadline_cancels_and_reports(svc_mod, monkeypatch):
     session = SimpleNamespace(
         pending_subagents={42: time.time() - 1}, lock=threading.RLock(),
         pending_user_messages=[], cancel_event=None, restart_turn=False)
-    svc._barrier(session)
+    svc._barrier(_finish_ctx(svc, session), None)
     assert child_cancel.is_set()  # hard cutoff: the child is cancelled
     assert session.pending_subagents == {}
     assert len(session.pending_user_messages) == 1
@@ -319,7 +325,7 @@ def test_barrier_cancel_propagates(svc_mod, monkeypatch):
     session = SimpleNamespace(
         pending_subagents={42: time.time() + 30},
         pending_user_messages=[], cancel_event=cancel, restart_turn=False)
-    svc._barrier(session)
+    svc._barrier(_finish_ctx(svc, session), None)
     assert child_cancel.is_set()
     assert session.pending_subagents == {}
     assert session.restart_turn is False
