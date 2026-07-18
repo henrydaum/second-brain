@@ -42,8 +42,9 @@ def full_permissions_this_turn(session) -> bool:
     return bool(getattr(session, "busy", False) and state(session).get("full_permissions_this_turn"))
 
 
-def plan_permission_gate(session, _tool_name, _command):
+def plan_permission_gate(ctx, _query):
     """Reject permission dialogs in Plan mode; honor one active-turn override."""
+    session = getattr(ctx, "session", None)
     if session is None:
         return None
     if enabled(session):
@@ -53,15 +54,15 @@ def plan_permission_gate(session, _tool_name, _command):
     return None
 
 
-def plan_turn_finalizer(session) -> None:
+def plan_turn_finalizer(ctx, _outcome) -> None:
     """Clear one-turn permission grants when the active agent turn ends."""
-    state(session).pop("full_permissions_this_turn", None)
+    state(ctx.session).pop("full_permissions_this_turn", None)
 
 
 def make_plan_scope_shaper(tool_factory):
     """Build a shaper that injects the plan approval tool while Plan mode is active."""
-    def plan_scope_shaper(session, registry):
-        if not enabled(session):
+    def plan_scope_shaper(ctx, registry):
+        if not enabled(ctx.session):
             return registry
         from runtime.agent_scope import registry_with_tools
         return registry_with_tools(registry, [tool_factory()])
@@ -144,8 +145,8 @@ class PlanModeService(BaseService):
         hooks = getattr(runtime, "hooks", None) if runtime else None
         if hooks is None or self._registered:
             return
-        hooks.add_permission_gate(plan_permission_gate)
-        hooks.add_turn_finalizer(plan_turn_finalizer)
+        hooks.add("vet_permission", plan_permission_gate)
+        hooks.add("turn_finish", plan_turn_finalizer)
         try:
             from ..tools.tool_propose_plan import ProposePlan
         except ImportError:
@@ -155,7 +156,7 @@ class PlanModeService(BaseService):
                 ProposePlan = None
         if ProposePlan is not None:
             self._scope_shaper = make_plan_scope_shaper(ProposePlan)
-            hooks.add_scope_shaper(self._scope_shaper)
+            hooks.add("shape_scope", self._scope_shaper)
         self._registered = True
         for key, session in getattr(runtime, "sessions", {}).items():
             if enabled(session):

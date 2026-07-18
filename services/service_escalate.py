@@ -3,10 +3,11 @@
 Any session whose effective LLM is *not* the configured strong model gets an
 ``escalate`` tool. Calling it ends the current drive, and the runtime
 immediately re-drives the turn on the strong model (the kernel's
-``session.restart_turn`` primitive + the ``llm_selector`` hook). The weak
-model's partial turn — including the escalate call and its reason — stays in
-history, so the strong model sees what was attempted. Escalation lasts one
-turn: the next user message resolves the session's normal model again.
+``session.restart_turn`` primitive + a ``model_call`` escort that retargets
+every call of the re-driven turn). The weak model's partial turn — including
+the escalate call and its reason — stays in history, so the strong model sees
+what was attempted. Escalation lasts one turn: the next user message resolves
+the session's normal model again.
 
 Only the strong model's profile name is configured; every other model is
 implicitly "weak". The strong model itself never sees the tool, so it can
@@ -118,7 +119,9 @@ class EscalateTool(BaseTool):
 
 
 class EscalateService(BaseService):
-    """Registers the escalate scope shaper, LLM selector, and turn finalizer."""
+    """Registers the escalate hooks: a shape_scope adjuster (offer the tool
+    to weak sessions), a model_call escort (drive escalated turns on the
+    strong model), and a turn_finish observer (clear served escalations)."""
 
     model_name = "Escalate"
     shared = True
@@ -140,7 +143,8 @@ class EscalateService(BaseService):
         self.runtime = None
         self._registered = False
         # Session keys whose pending escalation was actually served (the
-        # selector answered during a busy drive). The finalizer only clears
+        # escort retargeted a real model call — escorts only ever run inside
+        # a drive, so no busy-check is needed). turn_finish only clears
         # ``pending`` for served sessions, so the flag survives the truncated
         # weak drive and dies after the strong one. In-memory on purpose.
         self._served: set[str] = set()
@@ -172,17 +176,17 @@ class EscalateService(BaseService):
         hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
         if hooks is None or self._registered:
             return
-        hooks.add_scope_shaper(self._scope_shaper)
-        hooks.add_llm_selector(self._llm_selector)
-        hooks.add_turn_finalizer(self._turn_finalizer)
+        hooks.add("shape_scope", self._shape_scope)
+        hooks.add("model_call", self._model_call)
+        hooks.add("turn_finish", self._turn_finish)
         self._registered = True
 
     def _unregister(self):
         hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
         if hooks is not None:
-            hooks.remove(self._scope_shaper)
-            hooks.remove(self._llm_selector)
-            hooks.remove(self._turn_finalizer)
+            hooks.remove(self._shape_scope)
+            hooks.remove(self._model_call)
+            hooks.remove(self._turn_finish)
         self._registered = False
         self._served.clear()
 
@@ -219,30 +223,37 @@ class EscalateService(BaseService):
 
     # --- hooks ---
 
-    def _scope_shaper(self, session, registry):
+    def _shape_scope(self, ctx, registry):
         """Offer the escalate tool to every session not already on the strong model."""
+        session = ctx.session
         strong = self.strong_name()
         if self._strong_service() is None:
+            return registry
+        if escalation_pending(session):
+            # The strong model is retaking this turn (drive-time profile
+            # resolution still says "weak", so the effective-LLM check below
+            # would wrongly offer it the tool). The escalation target never
+            # sees the escalate tool.
             return registry
         if self._effective_llm_is_strong(session, strong):
             return registry
         from runtime.agent_scope import registry_with_tools
         return registry_with_tools(registry, [EscalateTool(self)])
 
-    def _llm_selector(self, session, runtime):
-        """Answer the strong model while this session's escalation is pending."""
-        strong = self.strong_name()
-        if not strong or not escalation_pending(session):
-            return None
-        # Only count the escalation as served when a real drive asks (busy is
-        # set for the whole of _drive_agent_turn); stray active_llm callers
-        # (e.g. /debug) must not burn the pending flag.
-        if getattr(session, "busy", False):
-            self._served.add(getattr(session, "key", None))
-        return strong
+    def _model_call(self, ctx, request, proceed):
+        """Escort: retarget calls onto the strong model while escalation is
+        pending. Escorts only run inside a real drive, so every retargeted
+        call counts the escalation as served."""
+        if escalation_pending(ctx.session):
+            svc = self._strong_service()
+            if svc is not None:
+                request.llm = svc
+                self._served.add(getattr(ctx.session, "key", None))
+        return proceed(request)
 
-    def _turn_finalizer(self, session):
+    def _turn_finish(self, ctx, _outcome):
         """Clear a pending escalation once its strong turn has run."""
+        session = ctx.session
         key = getattr(session, "key", None)
         if key in self._served:
             self._served.discard(key)

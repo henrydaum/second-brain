@@ -97,7 +97,7 @@ class SubagentsService(BaseService):
         hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
         if hooks is not None:
             hooks.remove(self._barrier)
-            hooks.remove(self._llm_selector)
+            hooks.remove(self._model_call)
         self._registered = False
         self.loaded = False
 
@@ -105,27 +105,34 @@ class SubagentsService(BaseService):
         hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
         if hooks is None or self._registered:
             return
-        hooks.add_turn_finalizer(self._barrier)
-        hooks.add_llm_selector(self._llm_selector)
+        hooks.add("turn_finish", self._barrier)
+        hooks.add("model_call", self._model_call)
         self._registered = True
 
-    def _llm_selector(self, session, runtime) -> str | None:
-        """Drive spawned-agent sessions with the configured subagent LLM.
+    def _model_call(self, ctx, request, proceed):
+        """Escort: drive spawned-agent sessions with the configured subagent LLM.
 
         The subagent_llm setting (declared by tool_spawn_agent) names an LLM
-        profile; empty means abstain — the child inherits normal resolution.
-        An unknown name also falls through safely in active_llm.
+        profile; empty (or a name that resolves to no service) means abstain —
+        the child inherits normal resolution.
         """
-        if not (getattr(session, "key", "") or "").startswith("spawn_subagent:"):
-            return None
-        return ((getattr(runtime, "config", None) or {}).get("subagent_llm") or "").strip() or None
+        if (getattr(ctx.session, "key", "") or "").startswith("spawn_subagent:"):
+            runtime = ctx.runtime
+            name = ((getattr(runtime, "config", None) or {}).get("subagent_llm") or "").strip()
+            svc = (getattr(runtime, "services", {}) or {}).get(name) if name else None
+            if svc is not None:
+                request.llm = svc
+        return proceed(request)
 
-    def _barrier(self, session) -> None:
+    def _barrier(self, ctx, _outcome=None) -> None:
         """Hold the ending turn until pending children finish or time out.
 
-        Finalizers fire after every drive, including restarted ones — the
-        pending map empties on the first pass, so re-entry is a no-op.
+        The barrier can extend the turn: when children delivered reports, it
+        sets ``restart_turn`` so the re-driven half absorbs them — and that
+        re-driven half's own turn_finish re-enters here with the pending map
+        already empty, a no-op.
         """
+        session = ctx.session
         pending = getattr(session, "pending_subagents", None)
         if not pending:
             return
