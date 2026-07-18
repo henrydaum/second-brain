@@ -222,6 +222,12 @@ class ConversationRuntime:
             if session.restart_turn:
                 session.restart_turn = False
                 restart_drive = True
+                # A restart set after end_turn (e.g. a turn_finish barrier
+                # holding for subagent reports) finds priority already handed
+                # back to the user; the re-driven half needs agent priority or
+                # the loop exits immediately without acting.
+                if session.cs.turn_priority != "agent":
+                    session.cs.set_priority("agent")
                 out.data["_drive_agent_turn"] = True
                 continue
             # Closing-race check: a message queued after the loop's final
@@ -433,6 +439,10 @@ class ConversationRuntime:
             # The reply's SESSION_MESSAGE was already emitted when the loop
             # recorded the send_text row (see ConversationLoop._record).
             out.messages.append(reply)
+        elif session.restart_turn:
+            # Half of a logical turn with a re-drive pending: the drive that
+            # actually ends the turn supplies the reply (or its own fallback).
+            pass
         elif new_messages:
             # Agent ended without final text but produced messages — surface
             # the last assistant content if any, otherwise say what happened.

@@ -139,6 +139,43 @@ def test_crashed_drive_broadcasts_the_priority_reclaim(tmp_path):
     assert {"session_key": "s", "from_actor": "agent", "to_actor": "user"} in [p for _, p in seen]
 
 
+def test_turn_finish_restart_redrives_with_agent_priority(tmp_path):
+    """A turn_finish observer that queues messages and sets restart_turn (the
+    subagent barrier pattern) gets a real re-drive: end_turn already handed
+    priority to the user, so the redrive must restore agent priority instead
+    of exiting instantly with the no-reply fallback."""
+    rt, session = _runtime(
+        tmp_path,
+        [_response(content="Hang tight."), _response(content="Here is the briefing.")],
+    )
+
+    fired = []
+
+    def barrier(ctx, _outcome=None):
+        if fired:
+            return
+        fired.append(1)
+        ctx.session.pending_user_messages.append("[Background agent 'x' finished] report")
+        ctx.session.restart_turn = True
+
+    rt.hooks.add("turn_finish", barrier)
+    seen, unsubs = _capture(SESSION_TURN_COMPLETED)
+    try:
+        out = rt.handle_action("s", "send_text", "hello")
+    finally:
+        for u in unsubs:
+            u()
+
+    assert out.ok
+    # The re-driven half actually ran: it absorbed the report and replied.
+    assert "Here is the briefing." in out.messages
+    assert not any("without a reply" in m for m in out.messages)
+    # One logical turn: turn_finish waited for the drive that ended it.
+    assert len(seen) == 1
+    assert seen[0][1]["final_text"] == "Here is the briefing."
+    assert session.cs.turn_priority == "user"
+
+
 def test_exhausted_restart_budget_still_completes_the_turn(tmp_path):
     """A drive that requests a restart on the final budgeted drive must not
     leave the logical turn dangling: the restart is voided, priority returns

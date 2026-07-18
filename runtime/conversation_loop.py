@@ -153,6 +153,9 @@ class ConversationLoop:
         self.running = False
         # One-shot guard for the empty-response nudge retry (per turn).
         self._empty_response_retried = False
+        # Set by the compaction layer around overflow retries: the retried
+        # call runs non-streaming (the aborted stream was already closed).
+        self._retry_without_streaming = False
         self._tool_call_counts: dict[str, int] = {}
         # Pending tool calls from the latest LLM response. The loop drains this
         # one-per-iteration so each tool call goes through its own `enact()`.
@@ -429,7 +432,8 @@ class ConversationLoop:
 
         # 3) Otherwise call the LLM for the next response. The call travels
         #    through the model-call escort chain (registered escorts outermost,
-        #    the kernel's empty-response nudge innermost — see _invoke). The
+        #    then the kernel's context guard, then the empty-response nudge —
+        #    see _invoke). The
         #    doorman once-flags shape exactly one call: a narrowed/forced
         #    toolbox and ephemeral notes shown to the model but kept out of
         #    history.
@@ -460,7 +464,6 @@ class ConversationLoop:
             self._finish_stream(cleaned, "narration")
             if cleaned and self.runtime is not None and self.session_key:
                 self.runtime.push_message(self.session_key, cleaned)
-            self._compact_if_needed(response, history)
             # Recurse to immediately return the first call as an action.
             return self._next_action(cs, history, AttachmentBundle())
 
@@ -468,7 +471,6 @@ class ConversationLoop:
         text = _clean(getattr(response, "content", ""))
         self._finish_stream(text, "final")
         self._final_text = text
-        self._compact_if_needed(response, history)
         return "send_text", text
 
     # ──────────────────────────────────────────────────────────────────────
@@ -623,7 +625,10 @@ class ConversationLoop:
         at the ``model_call`` doorway can rewrite it (swap the brain, edit
         messages, force a tool), place the call themselves, and inspect the
         response before the loop sees it. The onion, outermost first:
-        registered escorts → the kernel's empty-response nudge → the backend.
+        registered escorts → the kernel's context guard (compaction) → the
+        kernel's empty-response nudge → the backend. The two kernel layers are
+        always installed by the loop itself — context safety never depends on
+        what happens to be registered.
         """
         from runtime.hooks import ModelRequest
 
@@ -632,10 +637,9 @@ class ConversationLoop:
             tool_choice=tool_choice, attachments=attachments or None,
         )
 
-        def base(req):
-            return self._call_backend(req, history)
-
-        handler = self._empty_response_layer(base)
+        handler = self._empty_response_layer(self._call_backend)
+        if history is not None:
+            handler = self._compaction_layer(handler, history)
         session = self._session()
         hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
         if hooks is not None and session is not None:
@@ -674,13 +678,15 @@ class ConversationLoop:
             return proceed(retry)
         return layer
 
-    def _call_backend(self, request, history):
+    def _call_backend(self, request):
         """The innermost step of the escort onion: the actual backend call,
         bracketed by the AGENT_LLM_CALL_STARTED / _FINISHED bus events (which
         report the brain that actually took the call, post-escorts)."""
         llm = request.llm or self.llm
         self._last_llm_used = llm
-        streaming = self.on_delta is not None and getattr(llm, "supports_streaming", False)
+        streaming = (self.on_delta is not None
+                     and getattr(llm, "supports_streaming", False)
+                     and not self._retry_without_streaming)
         llm_call_started = time.time()
         bus.emit(AGENT_LLM_CALL_STARTED, {
             "session_key": self.session_key,
@@ -688,7 +694,7 @@ class ConversationLoop:
             "streaming": streaming,
         })
         try:
-            response = self._invoke_inner(request, history, streaming)
+            response = self._invoke_inner(request, streaming)
         except Exception as e:
             self._emit_llm_finished(llm, llm_call_started, ok=False, error=str(e))
             raise
@@ -707,14 +713,15 @@ class ConversationLoop:
             "has_tool_calls": bool(getattr(response, "has_tool_calls", False)),
         })
 
-    def _invoke_inner(self, request, history, streaming):
-        """Issue one LLM call with streaming + context-overflow handling.
+    def _invoke_inner(self, request, streaming):
+        """Issue one LLM call with streaming.
 
         Wrapped by ``_call_backend``, which brackets it with the
         AGENT_LLM_CALL_STARTED / _FINISHED bus events. Extra provider kwargs
         (``request.params``, ``tool_choice``) are forwarded only when set, so
-        backends and test fakes that don't accept them are never surprised."""
-        from plugins.services.service_llm import is_context_limit_error
+        backends and test fakes that don't accept them are never surprised.
+        Failures — including error-shaped responses — are raised; the
+        compaction layer above catches context-limit ones and retries."""
         llm = request.llm or self.llm
         messages, tools, bundle = request.messages, request.tools, request.attachments
         kwargs = dict(request.params or {})
@@ -731,22 +738,15 @@ class ConversationLoop:
                     messages, tools, attachments=bundle, on_delta=self._emit_delta, **kwargs)
             else:
                 response = llm.chat_with_tools(messages, tools, attachments=bundle, **kwargs)
-        except Exception as e:
+        except Exception:
             # Any deltas already shown are now stale — tell frontends to
-            # discard the partial line before the retry/raise.
+            # discard the partial line before the retry/raise above.
             self._finish_stream(aborted=True)
-            if history is None or not is_context_limit_error(e):
-                raise
-            logger.warning("Context limit hit, compacting and retrying: %s", e)
-            response = self._retry_after_overflow(tools, history)
+            raise
         if getattr(response, "is_error", False):
             self._finish_stream(aborted=True)
             err = getattr(response, "error", None) or getattr(response, "content", None) or "LLM provider error."
-            if history is not None and is_context_limit_error(err):
-                logger.warning("Context limit hit (response error), compacting and retrying: %s", err)
-                response = self._retry_after_overflow(tools, history)
-            else:
-                raise RuntimeError(err)
+            raise RuntimeError(err)
         return response
 
     # ──────────────────────────────────────────────────────────────────────
@@ -810,33 +810,60 @@ class ConversationLoop:
         except Exception:
             logger.exception("on_delta sink raised on done; continuing")
 
-    def _retry_after_overflow(self, tools, history):
-        """Compact + retry. If retry still overflows, drop history down to
-        a single emergency stub and retry once more. Only after THAT
-        fails do we surface the unrecoverable error."""
+    def _compaction_layer(self, proceed, history):
+        """The kernel's context-safety escort, always installed by the loop.
+
+        Outward (reactive): a context-limit failure from any inner layer is
+        caught here — compact ``history``, rebuild the prompt from it, and
+        retry through the same inner onion, so the retry gets the post-escort
+        brain, bus events, and streaming like any other call. If the
+        post-compact retry still overflows, emergency-truncate and try once
+        more before surfacing the unrecoverable error. Inward (proactive):
+        after a successful call, compact when it used most of the brain's
+        context window, so the next call starts small.
+        """
         from plugins.services.service_llm import is_context_limit_error
+        from runtime.hooks import ModelRequest
 
-        self._compact(history)
-        try:
-            return self.llm.chat_with_tools(self._messages(history), tools, attachments=None)
-        except Exception as retry_error:
-            if not is_context_limit_error(retry_error):
-                raise
-            logger.warning("Post-compact retry still over context, doing emergency truncation: %s", retry_error)
+        def rebuilt(request):
+            # The prompt is rebuilt from the (now smaller) history; ephemeral
+            # additions and attachments from the failed call are dropped.
+            return ModelRequest(
+                llm=request.llm, messages=self._messages(history),
+                tools=request.tools, tool_choice=request.tool_choice,
+                params=request.params, attachments=None,
+            )
 
-        self._emergency_truncate(history)
-        try:
-            response = self.llm.chat_with_tools(self._messages(history), tools, attachments=None)
-        except Exception as final_error:
-            if is_context_limit_error(final_error):
-                raise RuntimeError("Context limit reached even after compacting. Use /new to start fresh.") from final_error
-            raise
-        if getattr(response, "is_error", False):
-            err = getattr(response, "error", None) or "LLM provider error."
-            if is_context_limit_error(err):
-                raise RuntimeError("Context limit reached even after compacting. Use /new to start fresh.")
-            raise RuntimeError(err)
-        return response
+        def layer(request):
+            try:
+                response = proceed(request)
+            except Exception as e:
+                if not is_context_limit_error(e):
+                    raise
+                logger.warning("Context limit hit, compacting and retrying: %s", e)
+                self._compact(history)
+                # Retries run non-streaming: the aborted stream was already
+                # closed, and a second partial line would only confuse.
+                self._retry_without_streaming = True
+                try:
+                    try:
+                        return proceed(rebuilt(request))
+                    except Exception as retry_error:
+                        if not is_context_limit_error(retry_error):
+                            raise
+                        logger.warning("Post-compact retry still over context, doing emergency truncation: %s", retry_error)
+                    self._emergency_truncate(history)
+                    try:
+                        return proceed(rebuilt(request))
+                    except Exception as final_error:
+                        if is_context_limit_error(final_error):
+                            raise RuntimeError("Context limit reached even after compacting. Use /new to start fresh.") from final_error
+                        raise
+                finally:
+                    self._retry_without_streaming = False
+            self._compact_if_needed(request, response, history)
+            return response
+        return layer
 
     def _emergency_truncate(self, history) -> None:
         """Last-resort shrink that does NOT call the LLM. Keeps only the
@@ -869,12 +896,15 @@ class ConversationLoop:
         if self.on_notice:
             self.on_notice(f"Context overflow: dropped earlier messages to keep going (was {original_count}).")
 
-    def _compact_if_needed(self, response, history) -> None:
+    def _compact_if_needed(self, request, response, history) -> None:
         # Proactive compaction: trigger before hitting the context limit when
         # the model's context_size is set. context_size == 0 disables proactive
-        # compaction; reactive compaction in `_invoke` is the safety net.
+        # compaction; the reactive path of the compaction layer is the safety
+        # net. Measured against the brain that actually took the call
+        # (post-escort), not the loop's default.
         """Internal helper to compact if needed."""
-        ctx, tok = getattr(self.llm, "context_size", 0), getattr(response, "prompt_tokens", 0)
+        llm = request.llm or self.llm
+        ctx, tok = getattr(llm, "context_size", 0), getattr(response, "prompt_tokens", 0)
         if not ctx or not tok or tok / ctx < 0.80 or len(history) <= 2:
             return
         self._compact(history)

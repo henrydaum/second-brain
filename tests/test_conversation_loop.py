@@ -611,3 +611,159 @@ def test_compaction_uses_compactor_service_directly():
     assert "never deny" in history[0]["content"]
     assert history[1]["content"] == "Understood - I have the earlier context."
     assert notices == ["Compacting conversation...", "Compacted 3 messages."]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The compaction layer (the kernel's context-safety escort)
+# ──────────────────────────────────────────────────────────────────────
+
+_OVERFLOW_ERROR = "This model's maximum context length is 8192 tokens."
+
+
+class _OverflowLLM(_FakeLLM):
+    """Raises a context-limit error for the first ``overflows`` calls."""
+
+    def __init__(self, responses, overflows=1):
+        super().__init__(responses)
+        self.overflows = overflows
+
+    def chat_with_tools(self, messages, tools, attachments=None):
+        if self.overflows > 0:
+            self.overflows -= 1
+            self.calls.append(messages)
+            raise RuntimeError(_OVERFLOW_ERROR)
+        return super().chat_with_tools(messages, tools, attachments=attachments)
+
+
+class _CountingCompactor:
+    loaded = True
+
+    def __init__(self):
+        self.calls = 0
+
+    def compact(self, **kwargs):
+        self.calls += 1
+        return "Earlier summary."
+
+
+def _overflow_rig(llm, compactor=None):
+    from runtime.hooks import HookRegistry as _HR
+    session = SimpleNamespace(restart_turn=False)
+    runtime = SimpleNamespace(
+        sessions={"chat": session},
+        hooks=_HR(),
+        services={"compactor": compactor} if compactor else {},
+    )
+    loop = ConversationLoop(llm, _FakeRegistry([]), {}, "prompt",
+                            runtime=runtime, session_key="chat")
+    return loop, runtime
+
+
+def test_context_overflow_compacts_and_retries():
+    """A context-limit failure is caught by the kernel's compaction layer:
+    history is summarized in place and the call retried with the rebuilt,
+    smaller prompt."""
+    compactor = _CountingCompactor()
+    llm = _OverflowLLM([_response(content="Recovered.")], overflows=1)
+    loop, _ = _overflow_rig(llm, compactor)
+    cs = _agent_state()
+    history = [
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    reply, _, _ = loop.drive(cs, "agent", history)
+
+    assert reply == "Recovered."
+    assert compactor.calls == 1
+    # The retry's prompt was rebuilt from the compacted history.
+    retry_messages = llm.calls[-1]
+    assert any("[Conversation summary from earlier]" in (m.get("content") or "")
+               for m in retry_messages)
+    assert cs.turn_priority == "user"
+
+
+def test_double_overflow_falls_back_to_emergency_truncation():
+    """When the post-compact retry still overflows, the layer truncates
+    history to an emergency stub and tries once more."""
+    llm = _OverflowLLM([_response(content="Barely made it.")], overflows=2)
+    loop, _ = _overflow_rig(llm, _CountingCompactor())
+    cs = _agent_state()
+    history = [
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    reply, _, _ = loop.drive(cs, "agent", history)
+
+    assert reply == "Barely made it."
+    assert history[0]["content"].startswith("[Earlier conversation dropped")
+
+
+def test_unrecoverable_overflow_surfaces_the_start_fresh_error():
+    llm = _OverflowLLM([], overflows=3)
+    loop, _ = _overflow_rig(llm, _CountingCompactor())
+    cs = _agent_state()
+    history = [{"role": "user", "content": "hi"}]
+
+    import pytest
+    with pytest.raises(RuntimeError, match="Use /new"):
+        loop.drive(cs, "agent", history)
+
+
+def test_overflow_retry_stays_on_the_escort_swapped_brain():
+    """The compaction layer sits inside registered escorts, so its retries
+    keep the post-escort brain instead of falling back to the loop default."""
+    default_llm = _FakeLLM([])  # must never be called
+    swapped = _OverflowLLM([_response(content="From the swapped brain.")], overflows=1)
+    loop, runtime = _overflow_rig(default_llm, _CountingCompactor())
+
+    def escort(ctx, request, proceed):
+        request.llm = swapped
+        return proceed(request)
+
+    runtime.hooks.add("model_call", escort)
+    cs = _agent_state()
+    history = [
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    reply, _, _ = loop.drive(cs, "agent", history)
+
+    assert reply == "From the swapped brain."
+    assert default_llm.calls == []  # both the call and its retry used request.llm
+
+
+def test_proactive_compaction_measures_the_brain_that_took_the_call():
+    """Proactive compaction reads context_size off the post-escort brain."""
+    compactor = _CountingCompactor()
+
+    class _SmallBrain(_FakeLLM):
+        context_size = 100  # 90/100 prompt tokens -> compaction triggers
+
+    small = _SmallBrain([SimpleNamespace(
+        content="Done.", tool_calls=[], has_tool_calls=False,
+        is_error=False, prompt_tokens=90,
+    )])
+    loop, runtime = _overflow_rig(_FakeLLM([]), compactor)  # default has context_size=0
+
+    def escort(ctx, request, proceed):
+        request.llm = small
+        return proceed(request)
+
+    runtime.hooks.add("model_call", escort)
+    cs = _agent_state()
+    history = [
+        {"role": "user", "content": "one"},
+        {"role": "assistant", "content": "two"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    reply, _, _ = loop.drive(cs, "agent", history)
+
+    assert reply == "Done."
+    assert compactor.calls == 1

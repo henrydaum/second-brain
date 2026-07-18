@@ -137,10 +137,22 @@ class TurnOutcome:
 
 @dataclass
 class PermissionQuery:
-    """The question a ``vet_permission`` verdict answers: may this command run?"""
+    """The question a ``vet_permission`` verdict answers.
+
+    Two stages knock at this doorway:
+
+    - ``"approval"`` — a tool is asking to run a sensitive command
+      (``command`` holds it); abstaining falls through to the kernel's
+      own approval flow (skip_permissions, then asking the human).
+    - ``"unattended_call"`` — an interactive (``background_safe=False``)
+      tool was invoked from a session with no human present; ``command``
+      is empty. Abstaining falls through to the kernel default: refuse.
+      A gate that answers allow lets the call proceed anyway.
+    """
 
     tool_name: Optional[str]
     command: str
+    stage: str = "approval"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -250,10 +262,10 @@ class HookRegistry:
         return HookContext(session=session, runtime=runtime, moment=moment)
 
     def vet_permission(self, session, tool_name: str | None, command: str,
-                       runtime=None) -> PermissionVerdict | None:
+                       runtime=None, stage: str = "approval") -> PermissionVerdict | None:
         """Return the first decisive verdict, or None if every gate abstains."""
         ctx = self._ctx(session, runtime, VET_PERMISSION)
-        query = PermissionQuery(tool_name=tool_name, command=command)
+        query = PermissionQuery(tool_name=tool_name, command=command, stage=stage)
         for gate in self._hooks[VET_PERMISSION]:
             try:
                 verdict = gate(ctx, query)

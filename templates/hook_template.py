@@ -86,8 +86,13 @@ PAYLOADS AND VERDICTS (all defined in runtime/hooks.py)
   TurnOutcome(ok, cancelled, final_text)
       — "turn_finish" payload. Fires once per LOGICAL turn (a Redrive's two
         drives are one turn).
-  PermissionQuery(tool_name, command) / PermissionVerdict(allow, reason)
-      — "vet_permission" payload and answer.
+  PermissionQuery(tool_name, command, stage) / PermissionVerdict(allow, reason)
+      — "vet_permission" payload and answer. stage says which question is
+        being asked: "approval" (a tool wants to run a sensitive command;
+        abstaining falls through to skip_permissions and then the human) or
+        "unattended_call" (an interactive background_safe=False tool was
+        invoked with no human present; abstaining falls through to the
+        kernel default: refuse — answer allow to let it through).
 
   end_turn verdicts:
   Allow()                    — wave the agent through (and stop consulting

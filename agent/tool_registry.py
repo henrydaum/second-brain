@@ -77,18 +77,29 @@ class ToolRegistry:
             return ToolResult.failed(f"Unknown tool: {tool_name}")
 
         # Background-safety gate: tools marked background_safe=False are
-        # interactive (they need a human watching). Refuse if the call is
-        # coming from a session that isn't the currently active one.
+        # interactive (they need a human watching). When such a call comes
+        # from an unattended session, the question goes through the
+        # vet_permission doorway (stage "unattended_call") so policy gates
+        # can allow it or replace the refusal reason; the kernel's default
+        # when every gate abstains is to refuse.
         if (not getattr(tool, "background_safe", True)
                 and session_key is not None
                 and self.runtime is not None
                 and not self.runtime.is_attended(session_key)):
-            return ToolResult.failed(
-                f"Tool '{tool_name}' is interactive and this session is unattended "
-                "(no human is present to respond). Do not retry or wait for a reply — "
-                "finish the turn with your best grounded result, noting anything that "
-                "needs the user's attention."
-            )
+            verdict = None
+            hooks = getattr(self.runtime, "hooks", None)
+            session = (getattr(self.runtime, "sessions", {}) or {}).get(session_key)
+            if hooks is not None and session is not None:
+                verdict = hooks.vet_permission(session, tool_name, "",
+                                               runtime=self.runtime, stage="unattended_call")
+            if verdict is None or not verdict.allow:
+                reason = (verdict.reason or "").strip() if verdict is not None else ""
+                return ToolResult.failed(reason or (
+                    f"Tool '{tool_name}' is interactive and this session is unattended "
+                    "(no human is present to respond). Do not retry or wait for a reply — "
+                    "finish the turn with your best grounded result, noting anything that "
+                    "needs the user's attention."
+                ))
 
         # Gate on required services before building a runtime context.
         if tool.requires_services:

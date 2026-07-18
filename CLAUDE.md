@@ -93,7 +93,13 @@ These edits exist so the kernel degrades cleanly when a stdlib plugin is absent 
 the difference between a microkernel and a pile of assumptions:
 - **`plugins/services/service_compactor.py`** — context compaction is a
   synchronous service call from the conversation loop, so the kernel does not
-  route a blocking request through the event task queue.
+  route a blocking request through the event task queue. Its trigger lives in
+  the loop's own **compaction layer** (`_compaction_layer`), a kernel escort
+  always stacked inside registered `model_call` escorts (onion: registered
+  escorts → context guard → empty-response nudge → backend) — context safety
+  is hook-shaped but never registry-dependent. Reactive overflow retries
+  rebuild the prompt from compacted history and re-enter the inner onion, so
+  they keep the post-escort brain, bus events, and provider params.
 - **`runtime/runtime_config.py` `build_loop`** — the "no LLM" path now raises a
   friendly message pointing at `/setup` instead of an opaque error.
 - **`config/config_data.py`** — `autoload_services` trimmed to
@@ -323,7 +329,9 @@ conversation title on a persistent surface; fed by the
   `turn_start` (adjuster — pre-drive injection: prompt extras, staged
   attachments, queued actions; skipped on restart re-drives; keep fast),
   `shape_scope` (adjuster — inject/hide tools per session), `vet_permission`
-  (verdict — allow/deny sensitive calls), `model_call` (**escort** —
+  (verdict — allow/deny sensitive calls; asked at two stages, `"approval"`
+  for sensitive commands and `"unattended_call"` for interactive tools in
+  unattended sessions, where the kernel's default on abstain is to refuse), `model_call` (**escort** —
   `fn(ctx, request, proceed)` owns the round trip to the model: rewrite the
   `ModelRequest` (swap `request.llm`, edit messages, set `tool_choice` on
   backends with `supports_tool_choice`), place the call, inspect the
