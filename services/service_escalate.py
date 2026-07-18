@@ -86,7 +86,7 @@ class EscalateTool(BaseTool):
     }
     requires_services = []
     max_calls = 1
-    background_safe = True
+    background_safe = False
 
     def __init__(self, service: "EscalateService"):
         """Initialize with the owning service (for config access)."""
