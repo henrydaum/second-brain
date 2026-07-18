@@ -363,6 +363,7 @@ class ConversationRuntime:
             "actor_id": "agent",
         })
         crash_error: str | None = None
+        reply, new_messages, attachments = None, [], []
         try:
             loop = _cfg.build_loop(self, session.key)
             reply, new_messages, attachments = loop.drive(
@@ -398,8 +399,18 @@ class ConversationRuntime:
                 session.cs.set_priority("user")
             session.cancel_event.clear()
             hooks = getattr(self, "hooks", None)
-            if hooks is not None:
-                hooks.finish_turn(session)
+            if hooks is not None and not session.restart_turn:
+                # turn_finish observers fire once per LOGICAL turn: a pending
+                # re-drive means this drive was only the first half, so they
+                # wait for the drive that actually ends the turn. (Crash and
+                # exhausted-budget paths void restart_turn above, so those
+                # turns always reach their observers.)
+                from runtime.hooks import TurnOutcome
+                hooks.finish_turn(session, TurnOutcome(
+                    ok=crash_error is None,
+                    cancelled=was_cancelled,
+                    final_text=reply or "",
+                ), runtime=self)
 
         from events.event_channels import SESSION_TURN_COMPLETED
         if crash_error is not None:

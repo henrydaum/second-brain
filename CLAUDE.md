@@ -314,22 +314,34 @@ conversation title on a persistent surface; fed by the
   when it is true kernel behavior. Tools receive `SecondBrainContext` from
   [runtime/context.py](runtime/context.py).
 - **Bend a per-turn kernel decision**: register a hook from a service's
-  `bind_runtime`/`_load` via `runtime.hooks.add_*`
-  ([runtime/hooks.py](runtime/hooks.py)): permission gates, scope shapers
-  (inject/hide tools per session), **turn starters** (`add_turn_starter` —
-  run once per logical turn just before the drive, with the latest user text
-  already in `session.history`; the pre-turn seam for memory recall / skill
-  retrieval, injecting via `session.system_prompt_extras` or
-  `stage_attachment`; synchronous, so keep them fast), turn finalizers,
-  attachment staging, and
-  **LLM selectors** (`add_llm_selector` — name a different llm service for a
-  turn; consulted in `active_llm`). A tool can also set
-  `session.restart_turn = True` (ephemeral) to end the current drive without
-  an `end_turn` and have the runtime immediately re-drive the turn —
-  `build_loop` re-resolves the LLM/registry/prompt, so hooks can swap them
-  mid-turn (this is how the store Escalate package hands a turn from a weak
-  model to a strong one). Every agent enact ledger row records the driving
-  model in `data_json.llm`.
+  `bind_runtime`/`_load` via `runtime.hooks.add(moment, fn)`
+  ([runtime/hooks.py](runtime/hooks.py), worked examples in
+  [templates/hook_template.py](templates/hook_template.py)). The agent turn
+  is a fixed ritual with a doorway at every moment, and nothing influences a
+  turn except through a doorway. Six moments, one contract (`fn(ctx,
+  payload)`; return `None` to abstain; raising hooks are logged and skipped):
+  `turn_start` (adjuster — pre-drive injection: prompt extras, staged
+  attachments, queued actions; skipped on restart re-drives; keep fast),
+  `shape_scope` (adjuster — inject/hide tools per session), `vet_permission`
+  (verdict — allow/deny sensitive calls), `model_call` (**escort** —
+  `fn(ctx, request, proceed)` owns the round trip to the model: rewrite the
+  `ModelRequest` (swap `request.llm`, edit messages, set `tool_choice` on
+  backends with `supports_tool_choice`), place the call, inspect the
+  response, retry — subsumes the old LLM-selector mechanism and the old
+  restart-to-swap-brains dance), `end_turn` (verdict — the doorman at the
+  exit: `Allow` / `SendBack(note)` / `RequireTool(name)` / `Redrive()`,
+  hard-capped at `DOORMAN_FIRE_LIMIT` interventions per turn so a doorman
+  can never trap the agent; the kernel's over-budget wrap-up is itself the
+  default doorman at `reason == "budget_exhausted"`), and `turn_finish`
+  (observer — fires once per logical turn with a `TurnOutcome`). Hooks can
+  also queue tool calls onto `session.pending_agent_actions` (drained at
+  loop boundaries through the normal enact/ledger path). The legacy
+  `add_turn_starter`/`add_scope_shaper`/`add_permission_gate`/
+  `add_turn_finalizer`/`add_llm_selector` aliases still work, and
+  `session.restart_turn = True` remains the mid-turn spelling of `Redrive()`
+  for tools. Every agent enact ledger row records the driving model in
+  `data_json.llm` (post-escort) and doorway-forced acts carry
+  `data_json.hook`.
 - **Ship a task with a schedule**: declare `default_jobs` on the task
   (`{job_name: {"channel", "cron", "payload"}}`). The orchestrator seeds the
   Timekeeper job at registration if absent (disabled jobs count as existing)

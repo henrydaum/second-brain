@@ -27,7 +27,7 @@ import threading
 from dataclasses import dataclass
 
 from pipeline.database import DEFAULT_USER_ID
-from state_machine.conversation_phases import FORM_PHASES
+from state_machine.conversation_phases import BASE_PHASE, FORM_PHASES
 
 
 @dataclass(frozen=True)
@@ -166,6 +166,19 @@ def _check_sessions(runtime, db, out: list[Violation]) -> None:
         if idle and phases:
             out.append(Violation("state.leaked_phase_frame",
                                  f"session {key!r} idle but {len(phases)} phase frame(s) remain"))
+
+        # Doorman/turn hygiene: a settled session (not mid-drive, no re-drive
+        # pending, base phase, nothing awaiting approval) must have handed
+        # priority back to the user. An end_turn doorman that trapped the
+        # agent past its fire budget — or any drive that exited without
+        # end_turn and without a restart — would leave priority stuck here.
+        if (tp == "agent"
+                and not getattr(session, "busy", False)
+                and not getattr(session, "restart_turn", False)
+                and getattr(cs, "phase", None) == BASE_PHASE
+                and not _has_pending_approval(runtime, key)):
+            out.append(Violation("state.turn_not_returned",
+                                 f"session {key!r} settled in base phase but priority is still with the agent"))
 
 
 def _effective_user(runtime, key: str):

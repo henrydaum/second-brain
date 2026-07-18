@@ -113,7 +113,12 @@ class ConversationLoop:
     """
 
     OVER_BUDGET_MESSAGE = "I've made too many tool calls. Could you try a more specific question?"
+    OVER_BUDGET_NUDGE = "You've hit the tool-call limit. Summarize what you have and stop calling tools."
     MAX_TOOL_RESULT_CHARS = 12000
+    # How many times the doormen at the end_turn doorway may send the agent
+    # back inside per drive. A stubborn doorman can never trap the agent
+    # (the Claude Code stop_hook_active lesson): past this, the turn ends.
+    DOORMAN_FIRE_LIMIT = 3
 
     def __init__(
         self,
@@ -169,6 +174,18 @@ class ConversationLoop:
         # Streaming twin of the _clean() applied to whole responses: keeps
         # <think> blocks and EOS tokens out of the displayed deltas.
         self._stream_filter: StreamingTokenFilter | None = None
+        # The brain that actually took the most recent call (escorts may swap
+        # request.llm per call); the ledger records this, not the default.
+        self._last_llm_used = None
+        # End-turn doorman state (reset per drive). The once-flags shape the
+        # NEXT model call only: ephemeral notes are shown to the model without
+        # entering history; the overrides narrow/force the toolbox for a
+        # doorman-demanded call.
+        self._doorman_fires = 0
+        self._pending_ephemeral_notes: list[str] = []
+        self._tools_override_once: list | None = None
+        self._tool_choice_once = None
+        self._suppress_tools_once = False
 
     @property
     def max_tool_calls(self) -> int:
@@ -210,6 +227,11 @@ class ConversationLoop:
         self._final_text = None
         self._active_db = db
         self._active_conversation_id = conversation_id
+        self._doorman_fires = 0
+        self._pending_ephemeral_notes.clear()
+        self._tools_override_once = None
+        self._tool_choice_once = None
+        self._suppress_tools_once = False
 
         new_messages: list[dict[str, Any]] = []
         attachments: list[str] = []
@@ -241,6 +263,17 @@ class ConversationLoop:
 
                 if self._cancelled():
                     break
+                if action_type == "end_turn":
+                    # The doorman at the exit: the agent says "I'm done" —
+                    # registered end_turn hooks may let it leave, send it back
+                    # inside with a note, or demand one last tool call.
+                    gate = self._doorman_gate(cs, content, history, new_messages, db, conversation_id)
+                    if gate == "redrive":
+                        restarting = True
+                        break
+                    if gate == "again":
+                        continue
+                    # gate == "end": fall through and enact end_turn.
                 if action_type == "call_tool":
                     # Refusals decided by the loop itself (unparseable JSON
                     # arguments, per-tool budget) are synthesized as failed
@@ -292,13 +325,14 @@ class ConversationLoop:
                 if action_type == "end_turn":
                     break
 
-            if cs.turn_priority == actor_id and not restarting:
+            if cs.turn_priority == actor_id and not restarting and not self._restart_requested():
                 # Only nudge the LLM for a wrap-up when the loop genuinely ran
                 # out of budget/iterations — a failed action ending the turn
                 # would make the "you've hit the tool-call limit" premise false.
                 if not self._cancelled() and not action_failed:
-                    self._over_budget_summary(cs, actor_id, history, new_messages, attachments, db, conversation_id)
-                self._enact_logged(cs, "end_turn", None, actor_id)
+                    self._finish_over_budget(cs, actor_id, history, new_messages, attachments, db, conversation_id)
+                if not self._restart_requested():
+                    self._enact_logged(cs, "end_turn", None, actor_id)
 
             return self._final_text, new_messages, attachments
         finally:
@@ -326,7 +360,14 @@ class ConversationLoop:
 
     def _record_ledger(self, action_type, content, actor_id, result, error_message, enact_started):
         """Internal helper to append one agent-side enact to the ledger."""
-        session = (getattr(self.runtime, "sessions", {}) or {}).get(self.session_key) if self.runtime else None
+        session = self._session()
+        data = {"llm": getattr(self._last_llm_used or self.llm, "model_name", None)}
+        # Doorway-forced acts (queued agent actions, doorman-required tools)
+        # carry their origin so the audit trail distinguishes model-chosen
+        # moves from script-forced ones.
+        forced_by = (content or {}).get("_forced_by") if isinstance(content, dict) else None
+        if forced_by:
+            data["hook"] = forced_by
         record_enact(
             self._active_db, origin="agent_enact",
             session_key=self.session_key,
@@ -335,7 +376,7 @@ class ConversationLoop:
             actor_id=actor_id, action_type=action_type, content=content,
             result=result, error_message=error_message,
             duration_ms=int((time.perf_counter() - enact_started) * 1000),
-            data={"llm": getattr(self.llm, "model_name", None)},
+            data=data,
         )
 
     # ──────────────────────────────────────────────────────────────────────
@@ -373,34 +414,41 @@ class ConversationLoop:
             self._assistant_text_for_pending = None  # only first call carries it
             return "call_tool", content
 
+        # 1b) Doorway-queued agent actions (session.pending_agent_actions):
+        #     tool calls injected by hooks/tools, waiting at the loop
+        #     boundary. Never drained mid tool-call batch (step 1 runs
+        #     first), so an assistant/tool-result pair is never split.
+        queued = self._pop_agent_action()
+        if queued is not None:
+            return queued
+
         # 2) Final text was already emitted but turn isn't ended → end it.
         if self._final_text is not None and cs.turn_priority == "agent":
             text = self._final_text
             return "end_turn", {"final_text": text}
 
-        # 3) Otherwise call the LLM for the next response.
+        # 3) Otherwise call the LLM for the next response. The call travels
+        #    through the model-call escort chain (registered escorts outermost,
+        #    the kernel's empty-response nudge innermost — see _invoke). The
+        #    doorman once-flags shape exactly one call: a narrowed/forced
+        #    toolbox and ephemeral notes shown to the model but kept out of
+        #    history.
         from attachments.attachment import AttachmentBundle
         schemas = self.tool_registry.get_all_schemas() if self.tool_registry else None
+        if self._tools_override_once is not None:
+            schemas = self._tools_override_once
+        if self._suppress_tools_once:
+            schemas = None
+        tool_choice = self._tool_choice_once
+        self._tools_override_once = None
+        self._tool_choice_once = None
+        self._suppress_tools_once = False
         self._used_attachments_for_last_action = bool(bundle)
         messages = self._messages(history)
-        for retry in (False, True):
-            response = self._invoke(messages, schemas or None, None if retry else bundle, history)
-            if getattr(response, "has_tool_calls", False):
-                break
-            text = _clean(getattr(response, "content", ""))
-            if text or retry or self._empty_response_retried:
-                break
-            # Empty text-only response (weak models sometimes emit nothing, or
-            # a bare think block that strips to nothing — often right after a
-            # tool error). Nudge once with an ephemeral message that is NOT
-            # recorded in history, then accept whatever comes back.
-            self._empty_response_retried = True
-            logger.warning("LLM returned an empty response; retrying once with a nudge.")
-            self._finish_stream(aborted=True)  # drop any streamed whitespace
-            messages = [*messages, {"role": "user", "content": (
-                "Your last response was empty. Send the user a substantive "
-                "reply summarizing where things stand (or call a tool)."
-            )}]
+        if self._pending_ephemeral_notes:
+            messages = [*messages, *({"role": "user", "content": n} for n in self._pending_ephemeral_notes)]
+            self._pending_ephemeral_notes.clear()
+        response = self._invoke(messages, schemas or None, bundle, history, tool_choice=tool_choice)
 
         if getattr(response, "has_tool_calls", False):
             self._pending_tool_calls = list(response.tool_calls)
@@ -510,7 +558,7 @@ class ConversationLoop:
     def _drain_hook_attachments(self):
         """Collect attachments staged by tools/services for the next LLM call."""
         from attachments.attachment import AttachmentBundle
-        session = (getattr(self.runtime, "sessions", {}) or {}).get(self.session_key) if self.runtime else None
+        session = self._session()
         hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
         return AttachmentBundle.from_iterable(hooks.drain_attachments(session)) if hooks and session else AttachmentBundle()
 
@@ -568,31 +616,90 @@ class ConversationLoop:
         self._tool_call_counts[name] = used + 1
         return None
 
-    def _invoke(self, messages, tools, attachments=None, history=None):
-        """Internal helper to handle invoke."""
-        from plugins.services.service_llm import is_context_limit_error
+    def _invoke(self, messages, tools, attachments=None, history=None, tool_choice=None):
+        """Issue one model call through the escort chain.
 
-        bundle = attachments or None
-        streaming = self.on_delta is not None and getattr(self.llm, "supports_streaming", False)
+        The request is materialized as a ``ModelRequest`` so escorts standing
+        at the ``model_call`` doorway can rewrite it (swap the brain, edit
+        messages, force a tool), place the call themselves, and inspect the
+        response before the loop sees it. The onion, outermost first:
+        registered escorts → the kernel's empty-response nudge → the backend.
+        """
+        from runtime.hooks import ModelRequest
+
+        request = ModelRequest(
+            llm=self.llm, messages=messages, tools=tools,
+            tool_choice=tool_choice, attachments=attachments or None,
+        )
+
+        def base(req):
+            return self._call_backend(req, history)
+
+        handler = self._empty_response_layer(base)
+        session = self._session()
+        hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
+        if hooks is not None and session is not None:
+            handler = hooks.wrap_model_call(session, self.runtime, handler)
+        return handler(request)
+
+    def _empty_response_layer(self, proceed):
+        """The kernel's own innermost escort: retry an empty response once.
+
+        Empty text-only responses happen with weak models (or a bare think
+        block that strips to nothing — often right after a tool error). Nudge
+        once with an ephemeral message that is NOT recorded in history, then
+        accept whatever comes back. One retry per turn.
+        """
+        def layer(request):
+            response = proceed(request)
+            if getattr(response, "has_tool_calls", False):
+                return response
+            if _clean(getattr(response, "content", "") or ""):
+                return response
+            if self._empty_response_retried:
+                return response
+            self._empty_response_retried = True
+            logger.warning("LLM returned an empty response; retrying once with a nudge.")
+            self._finish_stream(aborted=True)  # drop any streamed whitespace
+            from runtime.hooks import ModelRequest
+            retry = ModelRequest(
+                llm=request.llm,
+                messages=[*request.messages, {"role": "user", "content": (
+                    "Your last response was empty. Send the user a substantive "
+                    "reply summarizing where things stand (or call a tool)."
+                )}],
+                tools=request.tools, tool_choice=request.tool_choice,
+                params=request.params, attachments=None,
+            )
+            return proceed(retry)
+        return layer
+
+    def _call_backend(self, request, history):
+        """The innermost step of the escort onion: the actual backend call,
+        bracketed by the AGENT_LLM_CALL_STARTED / _FINISHED bus events (which
+        report the brain that actually took the call, post-escorts)."""
+        llm = request.llm or self.llm
+        self._last_llm_used = llm
+        streaming = self.on_delta is not None and getattr(llm, "supports_streaming", False)
         llm_call_started = time.time()
         bus.emit(AGENT_LLM_CALL_STARTED, {
             "session_key": self.session_key,
-            "model": getattr(self.llm, "model_name", None),
+            "model": getattr(llm, "model_name", None),
             "streaming": streaming,
         })
         try:
-            response = self._invoke_inner(messages, tools, bundle, history, streaming)
+            response = self._invoke_inner(request, history, streaming)
         except Exception as e:
-            self._emit_llm_finished(llm_call_started, ok=False, error=str(e))
+            self._emit_llm_finished(llm, llm_call_started, ok=False, error=str(e))
             raise
-        self._emit_llm_finished(llm_call_started, ok=True, response=response)
+        self._emit_llm_finished(llm, llm_call_started, ok=True, response=response)
         return response
 
-    def _emit_llm_finished(self, started_at, *, ok, response=None, error=None):
+    def _emit_llm_finished(self, llm, started_at, *, ok, response=None, error=None):
         """Announce the outcome of one LLM call (paired with AGENT_LLM_CALL_STARTED)."""
         bus.emit(AGENT_LLM_CALL_FINISHED, {
             "session_key": self.session_key,
-            "model": getattr(self.llm, "model_name", None),
+            "model": getattr(llm, "model_name", None),
             "ok": ok,
             "error": error,
             "duration_s": round(time.time() - started_at, 3),
@@ -600,12 +707,19 @@ class ConversationLoop:
             "has_tool_calls": bool(getattr(response, "has_tool_calls", False)),
         })
 
-    def _invoke_inner(self, messages, tools, bundle, history, streaming):
+    def _invoke_inner(self, request, history, streaming):
         """Issue one LLM call with streaming + context-overflow handling.
 
-        Wrapped by ``_invoke``, which brackets it with the
-        AGENT_LLM_CALL_STARTED / _FINISHED bus events."""
+        Wrapped by ``_call_backend``, which brackets it with the
+        AGENT_LLM_CALL_STARTED / _FINISHED bus events. Extra provider kwargs
+        (``request.params``, ``tool_choice``) are forwarded only when set, so
+        backends and test fakes that don't accept them are never surprised."""
         from plugins.services.service_llm import is_context_limit_error
+        llm = request.llm or self.llm
+        messages, tools, bundle = request.messages, request.tools, request.attachments
+        kwargs = dict(request.params or {})
+        if request.tool_choice is not None and getattr(llm, "supports_tool_choice", False):
+            kwargs["tool_choice"] = request.tool_choice
         try:
             if streaming:
                 import uuid
@@ -613,10 +727,10 @@ class ConversationLoop:
                 self._stream_seq = 0
                 self._stream_emitted = False
                 self._stream_filter = StreamingTokenFilter()
-                response = self.llm.chat_with_tools_streaming(
-                    messages, tools, attachments=bundle, on_delta=self._emit_delta)
+                response = llm.chat_with_tools_streaming(
+                    messages, tools, attachments=bundle, on_delta=self._emit_delta, **kwargs)
             else:
-                response = self.llm.chat_with_tools(messages, tools, attachments=bundle)
+                response = llm.chat_with_tools(messages, tools, attachments=bundle, **kwargs)
         except Exception as e:
             # Any deltas already shown are now stale — tell frontends to
             # discard the partial line before the retry/raise.
@@ -827,10 +941,147 @@ class ConversationLoop:
             return msg
         return {**msg, "content": _truncate_middle(content, self.MAX_TOOL_RESULT_CHARS)}
 
-    def _over_budget_summary(self, cs, actor_id, history, new_messages, attachments, db, conversation_id) -> None:
-        """Internal helper to handle over budget summary."""
+    # ──────────────────────────────────────────────────────────────────────
+    # The end_turn doorway (doorman gate + budget exhaustion)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _doorman_gate(self, cs, content, history, new_messages, db, conversation_id) -> str:
+        """Consult the doormen when the agent tries to end its turn.
+
+        Returns ``"end"`` (let it leave), ``"again"`` (sent back inside — the
+        loop re-asks the model), or ``"redrive"`` (exit this drive; the
+        runtime re-drives the logical turn). Past the fire budget the doormen
+        are no longer consulted and the agent always gets to leave.
+        """
+        from runtime.hooks import Allow, Redrive, RequireTool, SendBack, TurnEnding
+
+        if self._doorman_fires >= self.DOORMAN_FIRE_LIMIT:
+            return "end"
+        session = self._session()
+        hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
+        if hooks is None or session is None:
+            return "end"
+        ending = TurnEnding(
+            final_text=(content or {}).get("final_text"),
+            reason="model_finished",
+            doorman_fires=self._doorman_fires,
+        )
+        verdict = hooks.vet_end_turn(session, self.runtime, ending)
+        if verdict is None or isinstance(verdict, Allow):
+            return "end"
+        if isinstance(verdict, Redrive):
+            session.restart_turn = True
+            return "redrive"
+        self._doorman_fires += 1
+        if isinstance(verdict, SendBack):
+            note = (verdict.note or "").strip()
+            if note and not verdict.ephemeral:
+                # Recorded feedback keeps the transcript coherent: the note
+                # lands as a user row between the agent's two replies.
+                self._record({"role": "user", "content": note}, history, new_messages, db, conversation_id)
+            elif note:
+                self._pending_ephemeral_notes.append(note)
+            if not verdict.allow_tools:
+                self._suppress_tools_once = True
+            self._final_text = None
+            return "again"
+        if isinstance(verdict, RequireTool):
+            schema = self._tool_schema(verdict.name)
+            if schema is None:
+                logger.warning(f"Doorman required unknown tool {verdict.name!r}; allowing end of turn.")
+                return "end"
+            note = (verdict.note or "").strip() or (
+                f"Before finishing, you must call the '{verdict.name}' tool now."
+            )
+            self._pending_ephemeral_notes.append(note)
+            if getattr(self.llm, "supports_tool_choice", False):
+                # The real force: one call offering only that tool, with
+                # tool_choice pinned. (Checked against the drive's default
+                # brain; an escort that swaps llm per call keeps the pin only
+                # if its brain also honors tool_choice.)
+                self._tools_override_once = [schema]
+                self._tool_choice_once = {"type": "function", "function": {"name": verdict.name}}
+            # Without backend support this degrades to the prompt-level
+            # instruction alone — softer, but works on every backend.
+            self._final_text = None
+            return "again"
+        logger.warning(f"Unknown doorman verdict {verdict!r}; allowing end of turn.")
+        return "end"
+
+    def _tool_schema(self, name: str):
+        """Find one tool's provider schema in the current registry, if present."""
+        for schema in (self.tool_registry.get_all_schemas() if self.tool_registry else None) or []:
+            fn = schema.get("function", schema)
+            if fn.get("name") == name:
+                return schema
+        return None
+
+    def _pop_agent_action(self):
+        """Return the next doorway-queued agent action as a call_tool, if any.
+
+        Entries on ``session.pending_agent_actions`` are dicts:
+        ``{"name": tool_name, "args": {...}, "forced_by": <hook label>}``.
+        Each drains through the same enact/absorb/ledger path as a
+        model-chosen call, with a synthetic tool_call_id and a ledger stamp
+        marking who queued it.
+        """
+        session = self._session()
+        if session is None or not getattr(session, "pending_agent_actions", None):
+            return None
+        with session.lock:
+            if not session.pending_agent_actions:
+                return None
+            entry = session.pending_agent_actions.pop(0)
+        name = (entry or {}).get("name")
+        if not name:
+            logger.warning(f"Ignoring malformed queued agent action: {entry!r}")
+            return self._pop_agent_action()
+        import uuid
+        return "call_tool", {
+            "name": name,
+            "args": dict((entry or {}).get("args") or {}),
+            "_tool_call_id": f"tc_hook_{uuid.uuid4().hex[:8]}",
+            "_assistant_text": None,
+            "_forced_by": (entry or {}).get("forced_by") or "pending_agent_actions",
+        }
+
+    def _finish_over_budget(self, cs, actor_id, history, new_messages, attachments, db, conversation_id) -> None:
+        """The doorman consult at budget exhaustion.
+
+        The kernel's own default doorman lives here: when every registered
+        doorman abstains, the classic wrap-up runs — one text-only model call
+        nudging the agent to summarize what it has (this used to be the
+        hardcoded ``_over_budget_summary``). A registered doorman can wave
+        the exhausted turn through silently (``Allow``), replace the wrap-up
+        note (``SendBack``), or hand the turn back for a re-drive
+        (``Redrive``). ``RequireTool`` degrades to its note here: with the
+        iteration budget spent there is nothing left to run a tool with.
+        """
+        from runtime.hooks import Allow, Redrive, RequireTool, SendBack, TurnEnding
+
+        verdict = None
+        session = self._session()
+        hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
+        if hooks is not None and session is not None and self._doorman_fires < self.DOORMAN_FIRE_LIMIT:
+            verdict = hooks.vet_end_turn(session, self.runtime, TurnEnding(
+                final_text=None, reason="budget_exhausted", doorman_fires=self._doorman_fires,
+            ))
+        if isinstance(verdict, Allow):
+            return  # a doorman explicitly waved the silent exit through
+        if isinstance(verdict, Redrive):
+            if session is not None:
+                session.restart_turn = True
+            return
+        note = self.OVER_BUDGET_NUDGE
+        if isinstance(verdict, SendBack) and (verdict.note or "").strip():
+            self._doorman_fires += 1
+            note = verdict.note.strip()
+        elif isinstance(verdict, RequireTool):
+            self._doorman_fires += 1
+            logger.warning(f"Doorman required tool {verdict.name!r} at budget exhaustion; degrading to a note.")
+            note = (verdict.note or "").strip() or note
         try:
-            nudge = {"role": "user", "content": "You've hit the tool-call limit. Summarize what you have and stop calling tools."}
+            nudge = {"role": "user", "content": note}
             response = self._invoke(self._messages([*history, nudge]), None, None, history)
             text = _clean(getattr(response, "content", "")) or self.OVER_BUDGET_MESSAGE
         except Exception:
@@ -843,10 +1094,15 @@ class ConversationLoop:
         """Internal helper to handle cancelled."""
         return self.cancelled or bool(self.cancel_event and self.cancel_event.is_set())
 
+    def _session(self):
+        """The RuntimeSession this loop is driving, if the runtime knows it."""
+        if self.runtime is None or not self.session_key:
+            return None
+        return (getattr(self.runtime, "sessions", {}) or {}).get(self.session_key)
+
     def _restart_requested(self) -> bool:
         """True when this session asked for the turn to be re-driven."""
-        session = (getattr(self.runtime, "sessions", {}) or {}).get(self.session_key) if self.runtime else None
-        return bool(getattr(session, "restart_turn", False))
+        return bool(getattr(self._session(), "restart_turn", False))
 
     def _drain_queued_messages(self, history, new_messages) -> None:
         """Absorb user messages queued while this turn was running.
@@ -863,7 +1119,7 @@ class ConversationLoop:
         """
         if self._pending_tool_calls:
             return
-        session = (getattr(self.runtime, "sessions", {}) or {}).get(self.session_key) if self.runtime else None
+        session = self._session()
         if session is None or not getattr(session, "pending_user_messages", None):
             return
         with session.lock:

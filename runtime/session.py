@@ -98,13 +98,28 @@ class RuntimeSession:
     # in-flight message was not replayed, and a queue that silently survives
     # a restart would contradict that notice.
     pending_user_messages: list[str] = field(default_factory=list)
+    # Agent actions queued by hooks/tools for the ConversationLoop to drain
+    # at its next loop boundary (never mid tool-call batch): dicts of
+    # ``{"name": tool_name, "args": {...}, "forced_by": <hook label>}``. The
+    # agent-side mirror of ``pending_user_messages`` — how a turn_start hook
+    # injects a tool call at the start of a turn, or a tool queues follow-up
+    # work within the same turn. Guarded by ``lock``. Deliberately NOT
+    # persisted in to_marker(): a queued action must not replay after a
+    # restart the queuing hook never saw.
+    pending_agent_actions: list = field(default_factory=list)
     # A tool (or hook) set this to end the current drive loop and have the
     # runtime immediately re-drive the turn — build_loop re-resolves the LLM,
     # registry, and prompt, so a plugin can swap any of them mid-turn (e.g.
     # escalation to a stronger model). The truncated drive keeps agent
     # priority and emits no end_turn: the re-driven loop finishes the logical
-    # turn. Ephemeral — deliberately NOT persisted in to_marker(); a restart
-    # request must not survive a process restart.
+    # turn. This flag is the session-level spelling of the end_turn doorway's
+    # ``Redrive`` verdict (runtime/hooks.py) — new code should return the
+    # verdict from an end_turn hook; setting the flag directly remains
+    # supported for tools that decide mid-turn. Ephemeral — deliberately NOT
+    # persisted in to_marker(); a restart request must not survive a process
+    # restart. Note a per-call ``model_call`` escort can swap the brain
+    # without any restart at all — prefer that when a re-drive was only ever
+    # a vehicle for swapping the LLM.
     restart_turn: bool = False
     has_compaction_checkpoint: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)

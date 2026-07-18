@@ -274,8 +274,12 @@ class BaseService(ABC):
 
 
 # =====================================================================
-# EXAMPLE: A tiny runtime extension service
+# EXAMPLE: A tiny runtime extension service (a hook carrier)
 # =====================================================================
+# Hooks are how an extension service bends per-turn kernel decisions: the
+# runtime puts a doorway at every moment of the agent turn and a service
+# registers functions at them. See templates/hook_template.py for the six
+# moments, the (ctx, payload) contract, and worked examples of each kind.
 
 # from plugins.BaseService import EXTENSION, BaseService
 #
@@ -287,9 +291,16 @@ class BaseService(ABC):
 #     def bind_runtime(self, *, runtime=None, **_):
 #         self.runtime = runtime
 #         if runtime and getattr(runtime, "hooks", None):
-#             runtime.hooks.add_permission_gate(self.permission_gate)
+#             runtime.hooks.add("vet_permission", self.permission_gate)
 #
-#     def permission_gate(self, session, tool_name, command):
+#     def unload(self):
+#         # Walk the hook away from its doorway; pass the ORIGINAL function.
+#         if getattr(self, "runtime", None) and getattr(self.runtime, "hooks", None):
+#             self.runtime.hooks.remove(self.permission_gate)
+#         self.loaded = False
+#
+#     def permission_gate(self, ctx, query):
+#         # query.tool_name / query.command; ctx.session / ctx.runtime.
 #         return None  # No opinion; let other gates/default approval decide.
 #
 #

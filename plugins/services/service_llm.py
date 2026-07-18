@@ -196,6 +196,12 @@ class BaseLLM(BaseService):
     # blocking call" — the default below is only a structural fallback.
     supports_streaming: bool = False
 
+    # Backends that honor a ``tool_choice`` kwarg on chat_with_tools (forcing
+    # the model to call a tool / a specific tool) set this True. When False,
+    # the conversation loop never forwards tool_choice and doorway policies
+    # that force tools degrade to prompt-level instructions instead.
+    supports_tool_choice: bool = False
+
     def chat_with_tools_streaming(self, messages: list[dict], tools: list[dict] = None,
                                   on_delta=None, **kwargs) -> LLMResponse:
         """Streaming variant of ``chat_with_tools``.
