@@ -329,7 +329,7 @@ def test_declares_store_contract(escalate_module):
     assert "dependencies_pip = []" in src
     assert escalate_module.EscalateService.lifecycle == "extension"
     assert escalate_module.EscalateTool.max_calls == 1
-    assert escalate_module.EscalateTool.background_safe is True
+    assert escalate_module.EscalateTool.background_safe is False
 
 
 def test_shaper_offers_tool_only_to_weak_sessions(tmp_path, escalate_module):
