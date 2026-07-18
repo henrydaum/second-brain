@@ -119,7 +119,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
             # from every gate means "no opinion — fall through".
             hooks = getattr(runtime, "hooks", None)
             if hooks is not None:
-                verdict = hooks.vet_permission(session, current_tool_name, command)
+                verdict = hooks.vet_permission(session, current_tool_name, command, runtime=runtime)
                 if verdict is not None:
                     if not verdict.allow and ctx is not None:
                         ctx.approval_denial_reason = verdict.reason

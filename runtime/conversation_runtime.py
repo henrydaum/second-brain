@@ -210,7 +210,7 @@ class ConversationRuntime:
             if not restart_drive:
                 hooks = getattr(self, "hooks", None)
                 if hooks is not None:
-                    hooks.start_turn(session)
+                    hooks.start_turn(session, runtime=self)
             restart_drive = False
             self._drive_agent_turn(session, out, allow_restart=drives < 5)
             with session.lock:

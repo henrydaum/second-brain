@@ -352,6 +352,55 @@ def test_queued_agent_action_runs_before_the_model_is_consulted(monkeypatch):
 # Registry contract (registration, abstain, removal, adjusters)
 # ──────────────────────────────────────────────────────────────────────
 
+def test_every_doorway_threads_a_real_runtime_into_ctx(tmp_path):
+    """The uniform contract promises ctx.runtime at EVERY doorway (the
+    template's vet_permission example dereferences ctx.runtime.db). A driven
+    turn must reach all six moments with ctx.runtime set — never None."""
+    from pipeline.database import Database
+    from runtime.conversation_runtime import ConversationRuntime
+    from runtime.hooks import (
+        END_TURN, MODEL_CALL, SHAPE_SCOPE, TURN_FINISH, TURN_START,
+        VET_PERMISSION, SendBack,
+    )
+
+    class _ServiceLLM(_FakeLLM):
+        loaded = True
+        is_llm_backend = True
+
+    db = Database(str(tmp_path / "ctx.db"))
+    cid = db.create_conversation("x")
+    llm = _ServiceLLM([_response(content="one"), _response(content="two")])
+    rt = ConversationRuntime(db=db, services={"llm": llm}, config={},
+                             tool_registry=_FakeRegistry([]))
+    rt.load_conversation("s", cid)
+
+    seen = {}
+
+    def record(moment):
+        def hook(ctx, *_):
+            seen[moment] = ctx.runtime
+            # end_turn: send back exactly once so the turn still ends.
+            if moment == END_TURN:
+                return SendBack("more") if _[0].doorman_fires == 0 else None
+            return None
+        return hook
+
+    rt.hooks.add(TURN_START, record(TURN_START))
+    rt.hooks.add(SHAPE_SCOPE, lambda ctx, reg: seen.__setitem__(SHAPE_SCOPE, ctx.runtime) or reg)
+    rt.hooks.add(VET_PERMISSION, record(VET_PERMISSION))
+    rt.hooks.add(MODEL_CALL, lambda ctx, req, proceed: (seen.__setitem__(MODEL_CALL, ctx.runtime), proceed(req))[1])
+    rt.hooks.add(END_TURN, record(END_TURN))
+    rt.hooks.add(TURN_FINISH, record(TURN_FINISH))
+
+    rt.handle_action("s", "send_text", "hello")
+
+    # vet_permission only fires when a tool asks to run; the other five are
+    # reached by any driven turn. Assert none of the reached ones saw None.
+    for moment in (TURN_START, SHAPE_SCOPE, MODEL_CALL, END_TURN, TURN_FINISH):
+        assert moment in seen, f"{moment} doorway was never reached"
+        assert seen[moment] is rt, f"{moment} handed ctx.runtime={seen[moment]!r}, expected the runtime"
+
+
 def test_add_rejects_unknown_moment():
     hooks = HookRegistry()
     try:

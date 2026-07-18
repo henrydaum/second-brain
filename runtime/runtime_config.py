@@ -116,7 +116,7 @@ def active_tool_registry(runtime, session: RuntimeSession | None = None):
     # Opt-in scope shapers can add/hide tools per session. No-op when no shaper is registered.
     hooks = getattr(runtime, "hooks", None)
     if hooks is not None and session is not None:
-        registry = hooks.shape_scope(session, registry)
+        registry = hooks.shape_scope(session, registry, runtime=runtime)
     return registry
 
 
