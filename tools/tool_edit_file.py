@@ -76,22 +76,15 @@ class EditFile(BaseTool):
          True, {"type": "bool"}),
     ]
 
-    def agent_prompt_for(self, ctx) -> str:
-        """Scratch-workspace guidance; approval sentence tracks the setting."""
-        frictionless = (getattr(ctx, "config", None) or {}).get("scratch_no_approval", True)
-        approval = (
-            "Edits there apply without approval, so it is a frictionless workspace; it"
-            if frictionless else "It"
-        )
-        return (
-            "## Scratch workspace\n"
-            f"For temporary files — notes, drafts, intermediate outputs, working "
-            f"data that is not a plugin and not a user deliverable — use "
-            f"{SCRATCH_DIR / 'c<conversation id>'} (the current conversation's number "
-            f"is in the runtime context). {approval} is pruned by the data-retention "
-            "setting and deleted with its conversation, so nothing durable belongs "
-            "there. Durable notes go to memory; plugin drafts go to the sandbox."
-        )
+    agent_prompt = (
+        "## Scratch workspace\n"
+        f"For temporary files — notes, drafts, intermediate outputs, working "
+        f"data that is not a plugin and not a user deliverable — use "
+        f"{SCRATCH_DIR / 'c<conversation id>'} (the current conversation's number "
+        "is in the runtime context). It is pruned by the data-retention "
+        "setting and deleted with its conversation, so nothing durable belongs "
+        "there. Durable notes go to memory; plugin drafts go to the sandbox."
+    )
 
     def run(self, context, **kwargs) -> ToolResult:
         """Run edit file."""
