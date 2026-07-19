@@ -61,20 +61,20 @@ class ConfigCommand(BaseCommand):
         steps = []
         category = args.get("category")
         if not args.get("setting_name"):
-            # Optional enum: interactively it gates the setting list by
-            # category; one-shot, a non-category first token falls through to
-            # setting_name (see parse_command_line's optional-enum skip), so
-            # `/config stream_responses` still works.
-            counts = _category_counts()
+            # Required enum: the category gate is always the first thing browsed.
+            # There is no one-shot `/config <setting>` fall-through — the setting
+            # is always reached through its category (`/config kernel max_workers
+            # edit`) or the explicit `all` (`/config all max_workers edit`). Being
+            # required also means the frontend never offers a redundant "skip"
+            # (skip would just mean "all", which is already an explicit button).
             steps.append(FormStep(
-                "category", "Which settings do you want to browse?", False,
+                "category", "Which settings do you want to browse?", True,
                 enum=CATEGORIES,
-                enum_labels=[f"{_CATEGORY_LABELS[c]} — {counts[c]}" for c in CATEGORIES],
-                prompt_when_missing=True))
+                enum_labels=[_CATEGORY_LABELS[c] for c in CATEGORIES]))
             # Second drill-down level, only for plugin settings: pick the owning
-            # plugin before its settings. Optional enum for the same reason as
-            # category — one-shot `/config plugin <setting>` (no plugin name)
-            # falls through to setting_name.
+            # plugin before its settings. Optional (skippable) here is meaningful,
+            # not redundant — skipping shows every plugin setting flat, which no
+            # single button offers.
             if category == "plugin":
                 groups = _plugin_groups()
                 steps.append(FormStep(

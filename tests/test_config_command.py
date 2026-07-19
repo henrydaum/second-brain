@@ -66,11 +66,11 @@ def test_plugin_groups_group_by_owner(monkeypatch):
 def test_form_gates_settings_by_category(monkeypatch):
     steps = _form({}, monkeypatch)
     assert steps[0].name == "category"
-    assert steps[0].required is False
-    # Optional but prompt_when_missing, so it's the interactive default gate
-    # (the four buttons) while still skippable in one-shot parsing.
-    assert steps[0].prompt_when_missing is True
+    # Required: the category gate is the always-shown default (four buttons) and,
+    # being required, never offers a redundant "skip" (skip == "all").
+    assert steps[0].required is True
     assert steps[0].enum == ["kernel", "plugin", "user", "all"]
+    assert steps[0].enum_labels == ["Kernel Settings", "Plugin Settings", "User Settings", "All Settings"]
     assert steps[1].name == "setting_name"
     assert set(steps[1].enum) == set(cc._settings())  # unfiltered until chosen
 
@@ -101,14 +101,29 @@ def test_quicklink_args_skip_the_category_gate(monkeypatch):
     assert [s.name for s in steps][:2] == ["setting_name", "action"]
 
 
-def test_one_shot_setting_name_still_parses(monkeypatch):
+def test_one_shot_requires_category(monkeypatch):
+    # The legacy `/config <setting>` fall-through is gone: a setting is always
+    # reached through its category. `/config kernel stream_responses` works...
     _patch_plugins(monkeypatch)
     cmd = cc.ConfigCommand()
 
-    args = parse_command_line("stream_responses", lambda a, c: cmd.form(a, _ctx()))
+    args = parse_command_line("kernel stream_responses", lambda a, c: cmd.form(a, _ctx()))
 
+    assert args["category"] == "kernel"
     assert args["setting_name"] == "stream_responses"
-    assert args.get("category") is None
+
+
+def test_one_shot_all_category_reaches_any_setting(monkeypatch):
+    # ...and `all` is the explicit escape hatch for any setting, flat.
+    _patch_plugins(monkeypatch)
+    cmd = cc.ConfigCommand()
+
+    args = parse_command_line("all max_workers edit 6", lambda a, c: cmd.form(a, _ctx()))
+
+    assert args["category"] == "all"
+    assert args["setting_name"] == "max_workers"
+    assert args["action"] == "edit"
+    assert args["value"] == 6
 
 
 def test_one_shot_category_setting_skips_plugin_level(monkeypatch):
