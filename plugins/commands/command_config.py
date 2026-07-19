@@ -69,7 +69,8 @@ class ConfigCommand(BaseCommand):
             steps.append(FormStep(
                 "category", "Which settings do you want to browse?", False,
                 enum=CATEGORIES,
-                enum_labels=[f"{_CATEGORY_LABELS[c]} — {counts[c]}" for c in CATEGORIES]))
+                enum_labels=[f"{_CATEGORY_LABELS[c]} — {counts[c]}" for c in CATEGORIES],
+                prompt_when_missing=True))
             # Second drill-down level, only for plugin settings: pick the owning
             # plugin before its settings. Optional enum for the same reason as
             # category — one-shot `/config plugin <setting>` (no plugin name)
@@ -79,7 +80,8 @@ class ConfigCommand(BaseCommand):
                 steps.append(FormStep(
                     "plugin_name", "Which plugin's settings do you want to browse?", False,
                     enum=sorted(groups),
-                    enum_labels=[f"{p} — {len(groups[p])}" for p in sorted(groups)], columns=2))
+                    enum_labels=[f"{p} — {len(groups[p])}" for p in sorted(groups)], columns=2,
+                    prompt_when_missing=True))
         steps.append(FormStep("setting_name", "Select a setting to inspect or edit.", True,
                               enum=sorted(_settings_for(category, args.get("plugin_name"))), columns=2))
         if args.get("setting_name"):

@@ -67,6 +67,9 @@ def test_form_gates_settings_by_category(monkeypatch):
     steps = _form({}, monkeypatch)
     assert steps[0].name == "category"
     assert steps[0].required is False
+    # Optional but prompt_when_missing, so it's the interactive default gate
+    # (the four buttons) while still skippable in one-shot parsing.
+    assert steps[0].prompt_when_missing is True
     assert steps[0].enum == ["kernel", "plugin", "user", "all"]
     assert steps[1].name == "setting_name"
     assert set(steps[1].enum) == set(cc._settings())  # unfiltered until chosen
