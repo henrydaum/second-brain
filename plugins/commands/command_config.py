@@ -20,12 +20,21 @@ ACTIONS = ["edit"]
 
 # Browse gate: settings are shown one category at a time — there are too many
 # to pick from a single flat list. Values are stable tokens (usable one-shot:
-# `/config plugin`); labels explain where each category is stored.
-CATEGORIES = ["kernel", "plugin", "user"]
+# `/config plugin`); labels are the button text. "all" is the explicit escape
+# hatch that reproduces the old flat everything-at-once view one tap deeper.
+_REAL_CATEGORIES = ("kernel", "plugin", "user")
+CATEGORIES = ["kernel", "plugin", "user", "all"]
 _CATEGORY_LABELS = {
-    "kernel": "Kernel settings (config.json)",
-    "plugin": "Plugin settings (plugin_config.json)",
-    "user": "User settings (per-user)",
+    "kernel": "Kernel Settings",
+    "plugin": "Plugin Settings",
+    "user": "User Settings",
+    "all": "All Settings",
+}
+# Where each real category is stored — shown as the section header on list views.
+_CATEGORY_STORAGE = {
+    "kernel": "config.json",
+    "plugin": "plugin_config.json",
+    "user": "per-user",
 }
 
 # Global settings the filesystem watcher reads. Changing any of these triggers a
@@ -50,6 +59,7 @@ class ConfigCommand(BaseCommand):
     def form(self, args, context):
         """Handle form."""
         steps = []
+        category = args.get("category")
         if not args.get("setting_name"):
             # Optional enum: interactively it gates the setting list by
             # category; one-shot, a non-category first token falls through to
@@ -60,8 +70,18 @@ class ConfigCommand(BaseCommand):
                 "category", "Which settings do you want to browse?", False,
                 enum=CATEGORIES,
                 enum_labels=[f"{_CATEGORY_LABELS[c]} — {counts[c]}" for c in CATEGORIES]))
+            # Second drill-down level, only for plugin settings: pick the owning
+            # plugin before its settings. Optional enum for the same reason as
+            # category — one-shot `/config plugin <setting>` (no plugin name)
+            # falls through to setting_name.
+            if category == "plugin":
+                groups = _plugin_groups()
+                steps.append(FormStep(
+                    "plugin_name", "Which plugin's settings do you want to browse?", False,
+                    enum=sorted(groups),
+                    enum_labels=[f"{p} — {len(groups[p])}" for p in sorted(groups)], columns=2))
         steps.append(FormStep("setting_name", "Select a setting to inspect or edit.", True,
-                              enum=sorted(_settings_for(args.get("category"))), columns=2))
+                              enum=sorted(_settings_for(category, args.get("plugin_name"))), columns=2))
         if args.get("setting_name"):
             steps.append(FormStep("action", f"What do you want to do with this setting?\n\n{_describe(context, args['setting_name'])}", True, enum=ACTIONS, enum_labels=["Edit setting"]))
         if args.get("action") == "edit":
@@ -72,7 +92,7 @@ class ConfigCommand(BaseCommand):
         """Execute `/config` for the active session."""
         key = args.get("setting_name")
         if not key:
-            return _list(context, args.get("category"))
+            return _list(context, args.get("category"), args.get("plugin_name"))
         if key not in _settings():
             return f"Unknown setting: {key}"
         if args.get("action") != "edit":
@@ -147,19 +167,37 @@ def _category_of(key) -> str:
     return "plugin" if key in _plugin_keys() else "kernel"
 
 
-def _settings_for(category=None):
-    """The settings dict, filtered to one browse category when given."""
+def _settings_for(category=None, plugin_name=None):
+    """The settings dict, filtered to one browse category (and, for the plugin
+    category, one owning plugin) when given. "all"/None mean everything."""
     all_settings = _settings()
-    if category not in CATEGORIES:
+    if category == "plugin" and plugin_name:
+        keys = _plugin_groups().get(plugin_name, [])
+        return {k: all_settings[k] for k in keys if k in all_settings}
+    if category not in _REAL_CATEGORIES:
         return all_settings
     return {k: v for k, v in all_settings.items() if _category_of(k) == category}
 
 
+def _plugin_groups() -> dict:
+    """Plugin-category settings grouped by owning plugin name:
+    ``{plugin_name: [setting_key, ...]}``. A setting declared by several plugins
+    appears under each of them; ones with no known owner fall under "(unknown)"."""
+    groups: dict = {}
+    for key in _settings():
+        if _category_of(key) != "plugin":
+            continue
+        for owner in get_setting_plugin_names(key) or ["(unknown)"]:
+            groups.setdefault(owner, []).append(key)
+    return groups
+
+
 def _category_counts() -> dict:
     """Setting count per browse category, for the gate labels."""
-    counts = dict.fromkeys(CATEGORIES, 0)
+    counts = dict.fromkeys(_REAL_CATEGORIES, 0)
     for key in _settings():
         counts[_category_of(key)] += 1
+    counts["all"] = len(_settings())
     return counts
 
 
@@ -250,19 +288,42 @@ def _describe(context, key):
         (key, _format_value(_current_value(context, key))),
         ("Used by", ", ".join(users) if users else "kernel"),
     ])
-    return card + (f"\n\n{quote_block(desc)}" if desc.strip() else "")
+    out = card + (f"\n\n{quote_block(desc)}" if desc.strip() else "")
+    if len(users) > 1:
+        # Shared setting: one value, several plugins. Warn that an edit here is
+        # not local to whichever plugin the user navigated in through.
+        out += f"\n\n⚠ Shared setting — changing this also affects: {', '.join(users)}."
+    return out
 
 
-def _list(context, category=None):
-    """Internal helper to list config, grouped by browse category."""
+def _settings_table(context, keys) -> str:
+    """A Setting/Value table for the given keys."""
+    rows = [(k, _format_value(_current_value(context, k))) for k in keys]
+    return md_table(["Setting", "Value"], rows)
+
+
+def _list(context, category=None, plugin_name=None):
+    """Internal helper to list config, grouped by browse category. For the plugin
+    category with no plugin chosen, settings are grouped by owning plugin."""
+    if category == "plugin" and not plugin_name:
+        groups = _plugin_groups()
+        if not groups:
+            return "No plugin settings found."
+        return "\n\n".join(f"{plugin}:\n\n" + _settings_table(context, sorted(groups[plugin]))
+                           for plugin in sorted(groups))
+    if category == "plugin" and plugin_name:
+        keys = sorted(_settings_for("plugin", plugin_name))
+        if not keys:
+            return f"No settings for plugin: {plugin_name}"
+        return f"{plugin_name}:\n\n" + _settings_table(context, keys)
     sections = []
-    wanted = [category] if category in CATEGORIES else CATEGORIES
+    wanted = [category] if category in _REAL_CATEGORIES else _REAL_CATEGORIES
     for cat in wanted:
         keys = sorted(_settings_for(cat))
         if not keys:
             continue
-        rows = [(k, _format_value(_current_value(context, k))) for k in keys]
-        sections.append(f"{_CATEGORY_LABELS[cat]}:\n\n" + md_table(["Setting", "Value"], rows))
+        header = f"{_CATEGORY_LABELS[cat]} ({_CATEGORY_STORAGE[cat]})"
+        sections.append(f"{header}:\n\n" + _settings_table(context, keys))
     return "\n\n".join(sections) or "No settings found."
 
 
