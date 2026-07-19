@@ -233,6 +233,28 @@ def test_task_report_queues_notice(task_mod):
     assert len(session.pending_user_messages) == 2
 
 
+def test_report_sized_like_a_real_deliverable_arrives_whole(task_mod):
+    """The notice cap is a backstop against pathological dumps, not the
+    delivery format: a realistic research report (~6k chars) must arrive
+    uncut."""
+    session = SimpleNamespace(lock=threading.RLock(), pending_user_messages=[])
+    runtime = SimpleNamespace(sessions={"repl": session})
+    report = "R" * 6228
+    task_mod._report(runtime, {"report_session_key": "repl", "title": "X"}, 42, ok=True, text=report)
+    [notice] = session.pending_user_messages
+    assert report in notice
+    assert "truncated" not in notice
+
+
+def test_report_truncation_names_the_missing_content(task_mod):
+    session = SimpleNamespace(lock=threading.RLock(), pending_user_messages=[])
+    runtime = SimpleNamespace(sessions={"repl": session})
+    task_mod._report(runtime, {"report_session_key": "repl", "title": "X"}, 42, ok=True, text="R" * 20000)
+    [notice] = session.pending_user_messages
+    assert "report truncated: 20,000 chars total" in notice
+    assert "#42" in notice  # the transcript pointer survives the cut
+
+
 def test_report_suppressed_for_cancelled_child(task_mod):
     session = SimpleNamespace(lock=threading.RLock(), pending_user_messages=[],
                               cancelled_subagents={42})
