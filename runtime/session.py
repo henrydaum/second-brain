@@ -107,6 +107,11 @@ class RuntimeSession:
     # persisted in to_marker(): a queued action must not replay after a
     # restart the queuing hook never saw.
     pending_agent_actions: list = field(default_factory=list)
+    # Attachments staged by hooks/tools for the session's next model call
+    # (see ``HookRegistry.stage_attachment`` / ``drain_attachments``). Same
+    # lifecycle rules as ``pending_agent_actions``: ephemeral, cleared at
+    # turn end, deliberately NOT persisted in to_marker().
+    staged_attachments: list = field(default_factory=list)
     # A tool (or hook) set this to end the current drive loop and have the
     # runtime immediately re-drive the turn — build_loop re-resolves the LLM,
     # registry, and prompt, so a plugin can swap any of them mid-turn (e.g.

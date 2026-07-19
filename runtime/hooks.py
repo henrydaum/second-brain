@@ -53,6 +53,11 @@ The uniform contract, enforced here so every hook can rely on it:
 Registration: ``runtime.hooks.add(moment, fn)`` from a service's
 ``bind_runtime``/``_load``; ``runtime.hooks.remove(fn)`` at unload. See
 ``templates/hook_template.py`` for worked examples of every kind.
+
+Ordering: hooks run in registration order — for verdicts the first non-None
+answer wins, for escorts the first registered is the outermost wrapper — and
+registration order is simply plugin load order. There is deliberately no
+priority knob yet; add one only when two real plugins actually conflict.
 """
 
 from __future__ import annotations
@@ -223,7 +228,6 @@ class HookRegistry:
     def __init__(self):
         """Initialize an empty registry."""
         self._hooks: dict[str, list[Callable]] = {m: [] for m in MOMENTS}
-        self._turn_attachments: dict[str, list[Any]] = {}
 
     # ──────────────────────────────────────────────────────────────────
     # Registration (called by plugins at load).
@@ -244,11 +248,19 @@ class HookRegistry:
                 pass
 
     def stage_attachment(self, session, attachment: Any) -> bool:
-        """Queue one attachment for the next LLM call in this session."""
-        key = getattr(session, "key", None)
-        if not key:
+        """Queue one attachment for the next LLM call in this session.
+
+        The queue lives on the session (``session.staged_attachments``, like
+        ``pending_agent_actions``) — the registry itself holds no per-session
+        state. Created on demand so bare stub sessions work too.
+        """
+        if session is None or not getattr(session, "key", None):
             return False
-        self._turn_attachments.setdefault(key, []).append(attachment)
+        staged = getattr(session, "staged_attachments", None)
+        if staged is None:
+            staged = []
+            session.staged_attachments = staged
+        staged.append(attachment)
         return True
 
     # ──────────────────────────────────────────────────────────────────
@@ -314,7 +326,9 @@ class HookRegistry:
                 finalizer(ctx, outcome)
             except Exception:
                 logger.exception("Turn finalizer raised; continuing")
-        self._turn_attachments.pop(getattr(session, "key", None), None)
+        # Staged-but-undrained attachments do not survive the turn.
+        if getattr(session, "staged_attachments", None):
+            session.staged_attachments.clear()
 
     def wrap_model_call(self, session, runtime, base: Callable[[ModelRequest], Any]) -> Callable[[ModelRequest], Any]:
         """Build the escort onion around one model call.
@@ -370,4 +384,9 @@ class HookRegistry:
 
     def drain_attachments(self, session) -> list[Any]:
         """Return and clear attachments staged for the next model call."""
-        return self._turn_attachments.pop(getattr(session, "key", None), [])
+        staged = getattr(session, "staged_attachments", None)
+        if not staged:
+            return []
+        drained = list(staged)
+        staged.clear()
+        return drained

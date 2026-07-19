@@ -272,19 +272,35 @@ def _service(svc_mod, db):
     return svc
 
 
-def _finish_ctx(svc, session):
-    """The turn_finish envelope the kernel hands the barrier."""
+def _ending_ctx(svc, session):
+    """The end_turn envelope the kernel hands the doorman."""
     from runtime.hooks import HookContext
-    return HookContext(session=session, runtime=svc.runtime, moment="turn_finish")
+    return HookContext(session=session, runtime=svc.runtime, moment="end_turn")
 
 
-def test_barrier_noop_without_pending(svc_mod):
+def _ending():
+    from runtime.hooks import TurnEnding
+    return TurnEnding(final_text="done", reason="model_finished")
+
+
+def test_barrier_registers_as_an_end_turn_doorman(svc_mod):
+    from runtime.hooks import HookRegistry
+    svc = _service(svc_mod, db=None)
+    svc.runtime.hooks = HookRegistry()
+    svc.loaded = True
+    svc._register()
+    assert svc._barrier in svc.runtime.hooks._hooks["end_turn"]
+    assert svc._barrier not in svc.runtime.hooks._hooks["turn_finish"]
+
+
+def test_barrier_abstains_without_pending(svc_mod):
     svc = _service(svc_mod, db=None)
     session = SimpleNamespace()  # no pending_subagents attr at all
-    svc._barrier(_finish_ctx(svc, session), None)  # must not raise or block
+    assert svc._barrier(_ending_ctx(svc, session), _ending()) is None  # must not block
 
 
-def test_barrier_waits_then_restarts_turn(svc_mod, monkeypatch):
+def test_barrier_waits_then_redrives(svc_mod, monkeypatch):
+    from runtime.hooks import Redrive
     monkeypatch.setattr(svc_mod, "POLL_SECONDS", 0.01)
     db = FakeDB(["PENDING", "DONE"])
     svc = _service(svc_mod, db)
@@ -292,12 +308,16 @@ def test_barrier_waits_then_restarts_turn(svc_mod, monkeypatch):
         pending_subagents={42: time.time() + 30},
         pending_user_messages=["[Background agent 'x' finished] ..."],
         cancel_event=None, restart_turn=False)
-    svc._barrier(_finish_ctx(svc, session), None)
+    verdict = svc._barrier(_ending_ctx(svc, session), _ending())
+    assert isinstance(verdict, Redrive)
     assert session.pending_subagents == {}
-    assert session.restart_turn is True
+    # The doorman answers with a verdict; the kernel's Redrive branch owns
+    # the restart_turn flag.
+    assert session.restart_turn is False
 
 
 def test_barrier_deadline_cancels_and_reports(svc_mod, monkeypatch):
+    from runtime.hooks import Redrive
     monkeypatch.setattr(svc_mod, "POLL_SECONDS", 0.01)
     child_cancel = threading.Event()
     svc = _service(svc_mod, FakeDB(["PENDING"]))
@@ -305,13 +325,13 @@ def test_barrier_deadline_cancels_and_reports(svc_mod, monkeypatch):
     session = SimpleNamespace(
         pending_subagents={42: time.time() - 1}, lock=threading.RLock(),
         pending_user_messages=[], cancel_event=None, restart_turn=False)
-    svc._barrier(_finish_ctx(svc, session), None)
+    verdict = svc._barrier(_ending_ctx(svc, session), _ending())
     assert child_cancel.is_set()  # hard cutoff: the child is cancelled
     assert session.pending_subagents == {}
     assert len(session.pending_user_messages) == 1
     notice = session.pending_user_messages[0]
     assert "TIMED OUT" in notice and "#42" in notice
-    assert session.restart_turn is True  # the model must learn of the cancellation
+    assert isinstance(verdict, Redrive)  # the model must learn of the cancellation
     assert 42 in session.cancelled_subagents
 
 
@@ -325,7 +345,58 @@ def test_barrier_cancel_propagates(svc_mod, monkeypatch):
     session = SimpleNamespace(
         pending_subagents={42: time.time() + 30},
         pending_user_messages=[], cancel_event=cancel, restart_turn=False)
-    svc._barrier(_finish_ctx(svc, session), None)
+    assert svc._barrier(_ending_ctx(svc, session), _ending()) is None  # turn may end
     assert child_cancel.is_set()
     assert session.pending_subagents == {}
     assert session.restart_turn is False
+
+
+def test_barrier_holds_a_real_turn_and_the_redrive_delivers(svc_mod, monkeypatch, tmp_path):
+    """End-to-end through the real doorman gate: the barrier holds the turn
+    while a child finishes, the redrive absorbs the report, and the user
+    never sees a no-reply fallback or a mid-wait priority flip."""
+    from pipeline.database import Database
+    from runtime.conversation_runtime import ConversationRuntime
+
+    class _LLM:
+        context_size = 0
+        is_llm_backend = True
+        model_name = "fake"
+        loaded = True
+
+        def __init__(self, responses):
+            self._responses = list(responses)
+
+        def chat_with_tools(self, messages, tools, attachments=None):
+            return SimpleNamespace(content=self._responses.pop(0), tool_calls=[],
+                                   has_tool_calls=False, is_error=False, prompt_tokens=0)
+
+    monkeypatch.setattr(svc_mod, "POLL_SECONDS", 0.01)
+    db = Database(str(tmp_path / "barrier.db"))
+    rt = ConversationRuntime(db=db, services={"llm": _LLM(["Hang tight.", "Here is the briefing."])}, config={})
+    session = rt.load_conversation("s", db.create_conversation("x"))
+    session.pending_subagents = {42: time.time() + 30}
+
+    svc = svc_mod.SubagentsService(None)
+    svc.runtime = SimpleNamespace(db=FakeDB(["DONE"]), sessions=rt.sessions)
+    rt.hooks.add("end_turn", svc._barrier)
+
+    priorities_at_poll = []
+
+    def finishing_run_status(_db, _cid):
+        # The child completes mid-wait: its report lands on the queue just
+        # before the run flips terminal, exactly like task_spawn_subagent.
+        priorities_at_poll.append(session.cs.turn_priority)
+        session.pending_user_messages.append("[Background agent 'x' finished] report")
+        return "DONE"
+
+    monkeypatch.setattr(svc_mod, "_run_status", finishing_run_status)
+
+    out = rt.handle_action("s", "send_text", "fan out")
+
+    assert out.ok
+    assert "Here is the briefing." in out.messages
+    assert not any("without a reply" in m for m in out.messages)
+    assert priorities_at_poll == ["agent"]  # the agent held priority through the wait
+    assert session.pending_subagents == {}
+    assert session.cs.turn_priority == "user"

@@ -345,7 +345,8 @@ conversation title on a persistent surface; fed by the
   also queue tool calls onto `session.pending_agent_actions` (drained at
   loop boundaries through the normal enact/ledger path).
   `session.restart_turn = True` remains the mid-turn spelling of `Redrive()`
-  for tools. Every agent enact ledger row records the driving model in
+  for tools. Hooks run in registration order (= plugin load order); a
+  priority knob is deliberately deferred until two plugins actually conflict. Every agent enact ledger row records the driving model in
   `data_json.llm` (post-escort) and doorway-forced acts carry
   `data_json.hook`.
 - **Ship a task with a schedule**: declare `default_jobs` on the task
