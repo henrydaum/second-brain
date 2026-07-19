@@ -1,7 +1,7 @@
 """Slash command plugin for `/tools`."""
 
 from plugins.BaseCommand import BaseCommand
-from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks
+from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks, setting_rows
 from plugins.frontends.helpers.formatters import detail_card, format_tool_result, format_tools, quote_block
 from state_machine.conversation import FormStep
 from state_machine.forms import schema_to_form_steps
@@ -64,10 +64,11 @@ def _describe(tool, context=None):
     required = set(params.get("required", []))
     fields = [f"{name}{'*' if name in required else ''}" for name in (params.get("properties") or {})]
     skipped = tool.name in ((getattr(context, "config", None) or {}).get("skip_permissions") or [])
-    card = detail_card(tool.name, [
+    pairs = [
         ("Args", ", ".join(fields) or "(none)"),
         ("Skip permissions", "enabled" if skipped else "disabled"),
-    ])
+    ]
+    card = detail_card(tool.name, pairs + setting_rows(tool, context))
     desc = (schema.get("description") or "").strip()
     return f"{card}\n\n{quote_block(desc)}" if desc else card
 

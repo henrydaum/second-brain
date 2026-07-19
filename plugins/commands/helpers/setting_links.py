@@ -34,6 +34,14 @@ def quicklinks(plugin) -> tuple[list[str], list[str]]:
             [f"Edit {e[0]}" for e in entries])
 
 
+def setting_rows(plugin, context) -> list[tuple]:
+    """(Setting title, current-value string) rows for *plugin*'s settings, for
+    describe cards — so the user sees what's currently set before choosing a new
+    value. Values come through the same scope-aware reader /config uses."""
+    from plugins.commands.command_config import _current_value, _format_value
+    return [(e[0], _format_value(_current_value(context, e[1]))) for e in _entries(plugin)]
+
+
 def quicklink_value_steps(action, context) -> list:
     """The /config value step when *action* is a quicklink, else []."""
     if not isinstance(action, str) or not action.startswith(_PREFIX):

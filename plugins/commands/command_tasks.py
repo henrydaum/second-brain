@@ -4,7 +4,7 @@ import json
 from uuid import uuid4
 
 from plugins.BaseCommand import BaseCommand
-from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks
+from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks, setting_rows
 from plugins.frontends.helpers.formatters import detail_card, format_tasks
 from state_machine.conversation import FormStep
 from state_machine.forms import schema_to_form_steps
@@ -101,12 +101,13 @@ def _describe(context, task_name):
     counts = (db.get_system_stats().get("tasks", {}) if db else {}) | (db.get_run_stats() if db and hasattr(db, "get_run_stats") else {})
     c = {"PENDING": 0, "PROCESSING": 0, "DONE": 0, "FAILED": 0} | counts.get(task_name, {})
     hint = _schedule_hint(context, orch.tasks[task_name])
-    card = detail_card(task_name, [
+    pairs = [
         ("Pending", c["PENDING"]),
         ("Running", c["PROCESSING"]),
         ("Done", c["DONE"]),
         ("Failed", c["FAILED"]),
-    ])
+    ]
+    card = detail_card(task_name, pairs + setting_rows(orch.tasks[task_name], context))
     return card + (f"\n\n{hint}" if hint else "")
 
 

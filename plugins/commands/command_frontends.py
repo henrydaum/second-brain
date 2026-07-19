@@ -4,7 +4,7 @@ import json
 
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
-from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks
+from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks, setting_rows
 from plugins.frontends.helpers.formatters import detail_card, md_table
 from state_machine.conversation import FormStep
 
@@ -37,8 +37,9 @@ class FrontendsCommand(BaseCommand):
         name = args.get("frontend_name")
         if name:
             adapter = (getattr(getattr(context, "runtime", None), "frontend_manager", None) or object())
-            links, link_labels = quicklinks(getattr(adapter, "adapters", {}).get(name))
-            steps.append(FormStep("action", f"What do you want to do with this frontend?\n\n{_describe(context.config, name)}", True, enum=ACTIONS + links, enum_labels=ACTION_LABELS + link_labels))
+            plugin = getattr(adapter, "adapters", {}).get(name)
+            links, link_labels = quicklinks(plugin)
+            steps.append(FormStep("action", f"What do you want to do with this frontend?\n\n{_describe(context.config, name, plugin, context)}", True, enum=ACTIONS + links, enum_labels=ACTION_LABELS + link_labels))
         steps += quicklink_value_steps(args.get("action"), context)
         if args.get("action") == "configure":
             steps.append(FormStep("field", "Choose which part of the frontend profile to edit.", True, enum=FIELDS, enum_labels=FIELD_LABELS))
@@ -154,14 +155,15 @@ def _show(context):
     return "Frontends:\n\n" + md_table(["Frontend", "Status", "Access"], rows)
 
 
-def _describe(config, name):
+def _describe(config, name, plugin=None, context=None):
     """Internal helper to handle describe."""
     enabled = set((config or {}).get("enabled_frontends", []))
     profile = ((config or {}).get("frontend_profiles", {}) or {}).get(name)
-    return detail_card(name, [
+    pairs = [
         ("Status", "Enabled" if name in enabled else "Disabled"),
         ("Profile", _profile_summary(profile)),
-    ])
+    ]
+    return detail_card(name, pairs + setting_rows(plugin, context))
 
 
 def _profile_summary(profile):

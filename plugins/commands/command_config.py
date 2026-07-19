@@ -80,7 +80,7 @@ class ConfigCommand(BaseCommand):
                 steps.append(FormStep(
                     "plugin_name", "Which plugin's settings do you want to browse?", False,
                     enum=sorted(groups),
-                    enum_labels=[f"{p} — {len(groups[p])}" for p in sorted(groups)], columns=2,
+                    enum_labels=[f"{p}" for p in sorted(groups)], columns=2,
                     prompt_when_missing=True))
         steps.append(FormStep("setting_name", "Select a setting to inspect or edit.", True,
                               enum=sorted(_settings_for(category, args.get("plugin_name"))), columns=2))

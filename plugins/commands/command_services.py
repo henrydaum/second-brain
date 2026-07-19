@@ -2,7 +2,7 @@
 
 from plugins.BaseCommand import BaseCommand
 from plugins.BaseService import is_extension_service, is_user_managed_service, service_lifecycle
-from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks
+from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks, setting_rows
 from plugins.frontends.helpers.formatters import detail_card, format_services
 from state_machine.conversation import FormStep
 
@@ -23,7 +23,7 @@ class ServicesCommand(BaseCommand):
             return steps
         actions, labels = _actions_for(context, name, svc)
         if actions:
-            steps.append(FormStep("action", f"What do you want to do with this service?\n\n{_describe(services, name)}", True, enum=actions, enum_labels=labels))
+            steps.append(FormStep("action", f"What do you want to do with this service?\n\n{_describe(services, name, context)}", True, enum=actions, enum_labels=labels))
         steps += quicklink_value_steps(args.get("action"), context)
         return steps
 
@@ -37,7 +37,7 @@ class ServicesCommand(BaseCommand):
         if svc is None:
             return "Unknown service."
         if not action:
-            return _describe(services, name)
+            return _describe(services, name, context)
         handled = quicklink_run(action, args, context)
         if handled is not None:
             return handled
@@ -95,16 +95,17 @@ def _show(services):
     ])
 
 
-def _describe(services, name):
+def _describe(services, name, context=None):
     """Internal helper to handle describe."""
     svc = services.get(name)
     if svc is None:
         return "Action"
     status = "Extension" if is_extension_service(svc) else ("Loaded" if getattr(svc, 'loaded', False) else "Unloaded")
-    return detail_card(name, [
+    pairs = [
         ("Status", status),
         ("Model", getattr(svc, "model_name", "") or "-"),
-    ])
+    ]
+    return detail_card(name, pairs + setting_rows(svc, context))
 
 
 def _clear_tasks(context):
