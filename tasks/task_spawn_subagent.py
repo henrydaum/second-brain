@@ -76,6 +76,8 @@ class SpawnSubagent(BaseTask):
         prompt = (payload.get("prompt") or "").strip()
         if not prompt:
             return TaskResult.failed("prompt is required.")
+        if (payload.get("report_session_key") or "").strip():
+            prompt += _REPORT_FRAMING
         cid = _conversation_id(payload)
         if cid is None or db.get_conversation(cid) is None:
             cid = _create_conversation(db, payload)
@@ -115,7 +117,15 @@ class SpawnSubagent(BaseTask):
         return TaskResult(success=True, data={"conversation_id": cid})
 
 
-_NOTICE_CAP = 1000
+_NOTICE_CAP = 16000
+
+# Appended to the child's prompt when a report channel exists: the final
+# message IS the deliverable (the notice cap is a backstop, not the format).
+_REPORT_FRAMING = (
+    "\n\n[Note: you are a background agent; nobody will reply to you. Your "
+    "final message is the only thing delivered back to the requester — make "
+    "it a complete, self-contained report of your findings.]"
+)
 
 
 def _report(runtime, payload, cid, *, ok: bool, text: str):
@@ -149,7 +159,11 @@ def _report(runtime, payload, cid, *, ok: bool, text: str):
     title = (payload.get("title") or "Subagent").strip()
     body = (text or "").strip()
     if len(body) > _NOTICE_CAP:
-        body = body[:_NOTICE_CAP] + " ..."
+        # Tell the parent it is missing content (and how much), so it never
+        # mistakes the preview for the whole report.
+        body = (body[:_NOTICE_CAP]
+                + f" … [report truncated: {len(body):,} chars total, "
+                  f"first {_NOTICE_CAP:,} shown]")
     state = "finished" if ok else "FAILED"
     notice = (f"[Background agent '{title}' {state}] {body} "
               f"(full transcript: conversation #{cid})")
