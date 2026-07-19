@@ -1,12 +1,14 @@
 """Subagents runtime extension — the end-of-turn barrier for spawn_agent.
 
-When a session has background children pending (spawn_agent wait=false), the
-turn finalizer holds the turn open until each child finishes or is cancelled
-at its deadline — the timeout is a hard cutoff, never a silent drop, so the
-model always learns each child's fate. Completion and timeout notices land in
-the session's message queue (completions written by task_spawn_subagent,
-timeouts by the barrier itself), and the turn is re-driven so the model sees
-them before the logical turn ends — never one turn too late.
+When a session has background children pending (spawn_agent wait=false), an
+``end_turn`` doorman holds the turn open until each child finishes or is
+cancelled at its deadline — the timeout is a hard cutoff, never a silent
+drop, so the model always learns each child's fate. Completion and timeout
+notices land in the session's message queue (completions written by
+task_spawn_subagent, timeouts by the barrier itself), and the doorman answers
+``Redrive()`` so the model sees them before the logical turn ends — never
+one turn too late. Because the doorman stands at the exit *before* the
+end_turn enact, the agent keeps priority for the whole wait.
 """
 
 from __future__ import annotations
@@ -105,7 +107,7 @@ class SubagentsService(BaseService):
         hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
         if hooks is None or self._registered:
             return
-        hooks.add("turn_finish", self._barrier)
+        hooks.add("end_turn", self._barrier)
         hooks.add("model_call", self._model_call)
         self._registered = True
 
@@ -124,23 +126,28 @@ class SubagentsService(BaseService):
                 request.llm = svc
         return proceed(request)
 
-    def _barrier(self, ctx, _outcome=None) -> None:
-        """Hold the ending turn until pending children finish or time out.
+    def _barrier(self, ctx, _ending=None):
+        """The end_turn doorman: hold the ending turn until pending children
+        finish or time out, then ``Redrive()`` so the re-driven half absorbs
+        their reports.
 
-        The barrier can extend the turn: when children delivered reports, it
-        sets ``restart_turn`` so the re-driven half absorbs them — and that
-        re-driven half's own turn_finish re-enters here with the pending map
-        already empty, a no-op.
+        Standing at the exit (before the end_turn enact) means the agent keeps
+        priority for the whole wait — there is no user-priority window between
+        the halves of the logical turn. The re-driven half's own end_turn
+        re-enters here with the pending map already empty and abstains, and
+        ``turn_finish`` observers fire only once the complete turn is over.
+        Consulted at ``budget_exhausted`` too, so exhausted turns with pending
+        children get the same barrier.
         """
         session = ctx.session
         pending = getattr(session, "pending_subagents", None)
         if not pending:
-            return
+            return None
         runtime = self.runtime
         db = getattr(runtime, "db", None) if runtime else None
         if db is None:
             session.pending_subagents = {}
-            return
+            return None
 
         cancel_event = getattr(session, "cancel_event", None)
         delivered = 0
@@ -149,7 +156,7 @@ class SubagentsService(BaseService):
                 _cancel_children(runtime, list(pending))
                 cancelled_set(session).update(pending)  # suppress their stale reports
                 session.pending_subagents = {}
-                return
+                return None  # let the turn end; kernel cancel handling proceeds
             now = time.time()
             for cid in list(pending):
                 status = _run_status(db, cid)
@@ -172,7 +179,9 @@ class SubagentsService(BaseService):
             time.sleep(POLL_SECONDS)
 
         if delivered and getattr(session, "pending_user_messages", None):
-            session.restart_turn = True
+            from runtime.hooks import Redrive
+            return Redrive()
+        return None
 
 
 def build_services(config) -> dict:
