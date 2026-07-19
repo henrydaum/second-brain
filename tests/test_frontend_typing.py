@@ -1,9 +1,10 @@
-"""Tests for BaseFrontend's turn-lifecycle typing routing.
+"""Tests for BaseFrontend's turn-priority typing routing.
 
-SESSION_TURN_STARTED / SESSION_TURN_COMPLETED drive ``render_typing`` so a
-typing indicator tracks the whole logical turn (including barrier-held turns),
-scoped to sessions the frontend owns and to transports that declare
-``supports_typing``.
+SESSION_TURN_CHANGED drives ``render_typing`` off the priority axis (whose
+turn it is) rather than per-drive lifecycle, so a typing indicator tracks the
+whole logical turn — including barrier-held turns whose interim re-drives keep
+priority with the agent — scoped to sessions the frontend owns and to
+transports that declare ``supports_typing``.
 """
 
 # Import the state_machine package before runtime modules to settle the
@@ -28,50 +29,49 @@ class _TypingFrontend(BaseFrontend):
         return ["mine"]
 
 
-def _started(key):
-    return {"session_key": key, "conversation_id": 1, "actor_id": "agent"}
+def _changed(key, to_actor, from_actor="user"):
+    return {"session_key": key, "from_actor": from_actor, "to_actor": to_actor}
 
 
-def _completed(key, ok=True):
-    return {"session_key": key, "conversation_id": 1, "ok": ok}
-
-
-def test_turn_events_toggle_typing_for_owned_session():
+def test_priority_handoffs_toggle_typing_for_owned_session():
     f = _TypingFrontend()
-    f.on_bus_session_turn_started(_started("mine"))
-    f.on_bus_session_turn_completed(_completed("mine"))
+    f.on_bus_session_turn_changed(_changed("mine", "agent"))
+    f.on_bus_session_turn_changed(_changed("mine", "user", from_actor="agent"))
     assert f.calls == [("mine", True), ("mine", False)]
 
 
 def test_foreign_session_ignored():
     f = _TypingFrontend()
-    f.on_bus_session_turn_started(_started("spawn_subagent:9"))
-    f.on_bus_session_turn_completed(_completed("spawn_subagent:9"))
+    f.on_bus_session_turn_changed(_changed("spawn_subagent:9", "agent"))
+    f.on_bus_session_turn_changed(_changed("spawn_subagent:9", "user", from_actor="agent"))
     assert f.calls == []
 
 
 def test_supports_typing_false_ignored():
     f = _TypingFrontend()
     f.capabilities = FrontendCapabilities(supports_typing=False)
-    f.on_bus_session_turn_started(_started("mine"))
+    f.on_bus_session_turn_changed(_changed("mine", "agent"))
     assert f.calls == []
 
 
-def test_restarted_turn_nets_off_without_interim_off():
-    # The emit site suppresses COMPLETED for interim restart drives, so a
-    # barrier-held turn arrives as STARTED, STARTED, COMPLETED.
+def test_barrier_held_turn_stays_on_until_user_regains_priority():
+    # A barrier-held turn (spawn_agent wait=false) keeps priority with the
+    # agent across its interim re-drives, so no SESSION_TURN_CHANGED fires
+    # between the initial handoff and the final hand-back. Typing goes on
+    # once and stays on until the logical turn truly ends.
     f = _TypingFrontend()
-    f.on_bus_session_turn_started(_started("mine"))
-    f.on_bus_session_turn_started(_started("mine"))
-    f.on_bus_session_turn_completed(_completed("mine"))
-    assert f.calls == [("mine", True), ("mine", True), ("mine", False)]
+    f.on_bus_session_turn_changed(_changed("mine", "agent"))
+    f.on_bus_session_turn_changed(_changed("mine", "user", from_actor="agent"))
+    assert f.calls == [("mine", True), ("mine", False)]
     assert f.calls[-1][1] is False
 
 
-def test_crash_completion_turns_typing_off():
+def test_crash_handback_turns_typing_off():
+    # A crash forces priority back to the user, emitting a to_actor="user"
+    # change — typing clears on that path too.
     f = _TypingFrontend()
-    f.on_bus_session_turn_started(_started("mine"))
-    f.on_bus_session_turn_completed(_completed("mine", ok=False))
+    f.on_bus_session_turn_changed(_changed("mine", "agent"))
+    f.on_bus_session_turn_changed(_changed("mine", "user", from_actor="agent"))
     assert f.calls[-1] == ("mine", False)
 
 
@@ -82,4 +82,4 @@ def test_render_typing_exception_is_swallowed():
         raise RuntimeError("boom")
 
     f.render_typing = _boom
-    f.on_bus_session_turn_started(_started("mine"))  # must not raise
+    f.on_bus_session_turn_changed(_changed("mine", "agent"))  # must not raise

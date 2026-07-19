@@ -31,8 +31,7 @@ from events.event_channels import (
     CONVERSATION_CHANGED,
     FORM_REQUESTED,
     SESSION_CONVERSATION_CHANGED,
-    SESSION_TURN_COMPLETED,
-    SESSION_TURN_STARTED,
+    SESSION_TURN_CHANGED,
     TASKS_CHANGED,
     TOOL_CALL_FINISHED,
     TOOL_CALL_STARTED,
@@ -347,8 +346,7 @@ class BaseFrontend:
             bus.subscribe(TASKS_CHANGED, self.on_tasks_changed),
             bus.subscribe(SESSION_CONVERSATION_CHANGED, self.on_bus_session_conversation_changed),
             bus.subscribe(CONVERSATION_CHANGED, self.on_bus_conversation_catalog_changed),
-            bus.subscribe(SESSION_TURN_STARTED, self.on_bus_session_turn_started),
-            bus.subscribe(SESSION_TURN_COMPLETED, self.on_bus_session_turn_completed),
+            bus.subscribe(SESSION_TURN_CHANGED, self.on_bus_session_turn_changed),
         ]
         self._bound = True
 
@@ -730,17 +728,21 @@ class BaseFrontend:
         """Handle on bus command call finished."""
         self._render_tool_status_event({**(payload or {}), "status": "finished", "kind": "command"})
 
-    def on_bus_session_turn_started(self, payload: dict) -> None:
-        """An agent turn began driving — show the typing indicator."""
-        self._route_typing((payload or {}).get("session_key"), True)
+    def on_bus_session_turn_changed(self, payload: dict) -> None:
+        """Turn priority moved — track the typing indicator to whose turn it is.
 
-    def on_bus_session_turn_completed(self, payload: dict) -> None:
-        """The driven turn finished (ok, crash, or cancel) — hide typing.
-
-        Interim drives of a restarted turn suppress this event at the emit
-        site, so a barrier-held or escalated turn keeps typing on until the
-        logical turn truly ends."""
-        self._route_typing((payload or {}).get("session_key"), False)
+        Priority (not per-drive lifecycle) is the right axis: it only moves on
+        a real handoff. A barrier-held turn (e.g. spawn_agent wait=false waiting
+        on subagents) or an escalation re-drive keeps priority with the agent
+        across its interim drives, so no event fires and typing stays on until
+        the logical turn truly hands back to the user. Crashes force priority
+        back to the user, so that path clears typing too."""
+        payload = payload or {}
+        to_actor = payload.get("to_actor")
+        if to_actor == "agent":
+            self._route_typing(payload.get("session_key"), True)
+        elif to_actor == "user":
+            self._route_typing(payload.get("session_key"), False)
 
     def _route_typing(self, session_key: str | None, on: bool) -> None:
         """Route a turn-lifecycle typing change to ``render_typing``."""
