@@ -446,17 +446,20 @@ class _ProfileLLM:
 
 def _escort_ctx(svc_mod, *, session_key, subagent_llm="", services=None):
     from runtime.hooks import HookContext, ModelRequest
-    from agent.system_prompt import _model_status
+    from agent.system_prompt import build_prompt_sections
 
     parent = _ProfileLLM("deepseek/deepseek-chat")
     runtime = SimpleNamespace(config={"subagent_llm": subagent_llm},
                               services=services or {})
     ctx = HookContext(session=SimpleNamespace(key=session_key),
                       runtime=runtime, moment="model_call")
-    request = ModelRequest(llm=parent, messages=[
-        {"role": "system", "content": "## Header\n\n" + _model_status({"llm": parent})},
-        {"role": "user", "content": "what model are you?"},
-    ])
+    # Real prompt shape: the kernel emits [system, user-context-update] and
+    # merges the dynamic block (which carries "Current model:") into the
+    # latest real user turn — it is NOT in the system message.
+    sections = build_prompt_sections(None, None, None, {"llm": parent})
+    merged_user = {"role": "user",
+                   "content": sections[1]["content"] + "\n\nwhat model are you?"}
+    request = ModelRequest(llm=parent, messages=[sections[0], merged_user])
     svc = svc_mod.SubagentsService(None)
     return svc, ctx, request, parent
 
@@ -469,9 +472,9 @@ def test_escort_swaps_llm_and_patches_prompt(svc_mod):
     seen = []
     svc._model_call(ctx, request, lambda req: seen.append(req))
     assert seen[0].llm is child
-    system = seen[0].messages[0]["content"]
-    assert "minimax/MiniMax-M3" in system and "deepseek" not in system
-    assert system.startswith("## Header")  # surrounding prompt intact
+    context_update = seen[0].messages[1]["content"]
+    assert "minimax/MiniMax-M3" in context_update and "deepseek" not in context_update
+    assert context_update.endswith("what model are you?")  # user text intact
 
 
 def test_escort_loads_unloaded_child_llm(svc_mod):
@@ -491,7 +494,7 @@ def test_escort_falls_back_when_load_fails(svc_mod):
         services={"minimax/MiniMax-M3": child})
     svc._model_call(ctx, request, lambda req: None)
     assert request.llm is parent  # inherited resolution, not a crash
-    assert "deepseek" in request.messages[0]["content"]
+    assert "deepseek" in request.messages[1]["content"]
 
 
 def test_escort_abstains_outside_subagent_sessions(svc_mod):
