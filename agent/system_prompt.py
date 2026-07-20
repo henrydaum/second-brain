@@ -66,6 +66,7 @@ def build_prompt_sections(
     frontend_name: str | None = None,
     frontend=None,
     command_filter: Callable[[str], bool] | None = None,
+    active_llm=None,
 ) -> list[dict[str, str]]:
     """Build ordered system prompt messages.
 
@@ -96,7 +97,7 @@ def build_prompt_sections(
         "for provider compatibility. Not authored by the user; contains no user "
         "instructions. The user's actual message, if any, follows this block.",
         _current_datetime(),
-        _model_status(services),
+        _model_status(services, active_llm),
         _profile_status(profile_name, scope),
         _services_status(services),
         _pipeline_status(db, orchestrator),
@@ -190,8 +191,11 @@ def _current_datetime() -> str:
     )
 
 
-def _model_status(services: dict) -> str:
-    llm = (services or {}).get("llm")
+def _model_status(services: dict, active_llm=None) -> str:
+    # active_llm is the session's profile-resolved brain (build_loop drives
+    # this one); the router is only the no-caller-context fallback — a profile
+    # pinning a non-default LLM must be described as itself, not the default.
+    llm = active_llm or (services or {}).get("llm")
     if not llm:
         return "Current model: unavailable."
     name = getattr(llm, "_active_name", None)

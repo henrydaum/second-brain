@@ -240,7 +240,8 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
         profile = config.get("active_agent_profile") or "default"
         scope = _scope(profile, config)
         registry_for_prompt = scoped_registry(tool_registry, scope, db=scaffold.db) if scope else tool_registry
-        return build_prompt_sections(scaffold.db, scaffold.orchestrator, registry_for_prompt, services, scope=scope, profile_name=profile, commands=registry, config=config)
+        from runtime.agent_scope import resolve_agent_llm
+        return build_prompt_sections(scaffold.db, scaffold.orchestrator, registry_for_prompt, services, scope=scope, profile_name=profile, commands=registry, config=config, active_llm=resolve_agent_llm(profile, config, services))
 
     # Action-ledger wiring: config saves get audit rows, and the single
     # data-retention knob is applied once at startup (then opportunistically

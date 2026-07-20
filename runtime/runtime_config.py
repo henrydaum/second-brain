@@ -305,6 +305,7 @@ def session_system_prompt(runtime, session: RuntimeSession | None):
             frontend_name=session.frontend_name,
             frontend=frontend,
             command_filter=command_filter,
+            active_llm=active_llm(runtime, session),
         )
         return _append_dynamic(sections, _account_suffix())
     return _session_prompt
