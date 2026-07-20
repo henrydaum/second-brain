@@ -16,13 +16,47 @@ from __future__ import annotations
 dependencies_files = ['tasks/task_spawn_subagent.py']
 dependencies_pip = []
 
+import logging
+import re
 import time
 
 from plugins.BaseService import BaseService, EXTENSION
 from ..tasks.task_spawn_subagent import cancelled_set
 
+logger = logging.getLogger("SubagentsService")
+
 POLL_SECONDS = 1.0
 TERMINAL_STATUSES = {"DONE", "FAILED"}
+
+# The "Current model: ... file pointers." block emitted by the kernel's
+# _model_status (agent/system_prompt.py) — replaced when the escort swaps
+# the child's brain, so the child is never told it is the default model.
+_MODEL_STATUS_RE = re.compile(
+    r"Current model: .*?rely only on parsed text or file pointers\.", re.S)
+
+
+def _patch_model_status(messages, svc):
+    """Rewrite the system prompt's model-status block to name ``svc``.
+
+    The prompt is built before escorts run and its model line reads the
+    global default router, so a swapped child would otherwise be told it is
+    the parent's model (and repeat that when asked). Best-effort: on any
+    surprise the messages pass through unchanged.
+    """
+    try:
+        from agent.system_prompt import _model_status
+        for i, msg in enumerate(messages):
+            content = msg.get("content")
+            if (msg.get("role") == "system" and isinstance(content, str)
+                    and "Current model:" in content):
+                patched = _MODEL_STATUS_RE.sub(
+                    lambda _: _model_status({"llm": svc}), content, count=1)
+                out = list(messages)
+                out[i] = {**msg, "content": patched}
+                return out
+    except Exception:
+        logger.exception("Failed to patch model status for subagent prompt")
+    return messages
 
 
 def _run_status(db, cid) -> str | None:
@@ -116,14 +150,24 @@ class SubagentsService(BaseService):
 
         The subagent_llm setting (declared by tool_spawn_agent) names an LLM
         profile; empty (or a name that resolves to no service) means abstain —
-        the child inherits normal resolution.
+        the child inherits normal resolution. The named service is loaded on
+        demand, and the system prompt's model-status block is rewritten to
+        match, so the child knows which model actually drives it.
         """
         if (getattr(ctx.session, "key", "") or "").startswith("spawn_subagent:"):
             runtime = ctx.runtime
             name = ((getattr(runtime, "config", None) or {}).get("subagent_llm") or "").strip()
             svc = (getattr(runtime, "services", {}) or {}).get(name) if name else None
+            if svc is not None and not getattr(svc, "loaded", True):
+                try:
+                    svc.load()
+                except Exception:
+                    logger.exception("Failed to load subagent LLM %r", name)
+                if not getattr(svc, "loaded", False):
+                    svc = None  # fall back to inherited resolution
             if svc is not None:
                 request.llm = svc
+                request.messages = _patch_model_status(request.messages, svc)
         return proceed(request)
 
     def _barrier(self, ctx, _ending=None):
