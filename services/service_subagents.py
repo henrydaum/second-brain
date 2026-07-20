@@ -40,15 +40,17 @@ def _patch_model_status(messages, svc):
 
     The prompt is built before escorts run and its model line reads the
     global default router, so a swapped child would otherwise be told it is
-    the parent's model (and repeat that when asked). Best-effort: on any
-    surprise the messages pass through unchanged.
+    the parent's model (and repeat that when asked). The block lives in the
+    dynamic SYSTEM CONTEXT UPDATE section, which the kernel emits as a
+    user-role message and merges into the latest real user turn — so every
+    message is scanned, not just system ones. Best-effort: on any surprise
+    the messages pass through unchanged.
     """
     try:
         from agent.system_prompt import _model_status
         for i, msg in enumerate(messages):
             content = msg.get("content")
-            if (msg.get("role") == "system" and isinstance(content, str)
-                    and "Current model:" in content):
+            if isinstance(content, str) and "Current model:" in content:
                 patched = _MODEL_STATUS_RE.sub(
                     lambda _: _model_status({"llm": svc}), content, count=1)
                 out = list(messages)
