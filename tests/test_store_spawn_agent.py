@@ -422,3 +422,89 @@ def test_barrier_holds_a_real_turn_and_the_redrive_delivers(svc_mod, monkeypatch
     assert priorities_at_poll == ["agent"]  # the agent held priority through the wait
     assert session.pending_subagents == {}
     assert session.cs.turn_priority == "user"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The subagent_llm model_call escort
+# ──────────────────────────────────────────────────────────────────────
+
+class _ProfileLLM:
+    """Stub LLM profile service with load tracking."""
+
+    def __init__(self, model_name, *, loaded=True, load_ok=True):
+        self.model_name, self.loaded, self._load_ok = model_name, loaded, load_ok
+        self.load_calls = 0
+        self.capabilities = {}
+        self.native_attachment_modalities = set()
+
+    def load(self):
+        self.load_calls += 1
+        if not self._load_ok:
+            raise RuntimeError("boom")
+        self.loaded = True
+
+
+def _escort_ctx(svc_mod, *, session_key, subagent_llm="", services=None):
+    from runtime.hooks import HookContext, ModelRequest
+    from agent.system_prompt import _model_status
+
+    parent = _ProfileLLM("deepseek/deepseek-chat")
+    runtime = SimpleNamespace(config={"subagent_llm": subagent_llm},
+                              services=services or {})
+    ctx = HookContext(session=SimpleNamespace(key=session_key),
+                      runtime=runtime, moment="model_call")
+    request = ModelRequest(llm=parent, messages=[
+        {"role": "system", "content": "## Header\n\n" + _model_status({"llm": parent})},
+        {"role": "user", "content": "what model are you?"},
+    ])
+    svc = svc_mod.SubagentsService(None)
+    return svc, ctx, request, parent
+
+
+def test_escort_swaps_llm_and_patches_prompt(svc_mod):
+    child = _ProfileLLM("minimax/MiniMax-M3")
+    svc, ctx, request, parent = _escort_ctx(
+        svc_mod, session_key="spawn_subagent:42", subagent_llm="minimax/MiniMax-M3",
+        services={"minimax/MiniMax-M3": child})
+    seen = []
+    svc._model_call(ctx, request, lambda req: seen.append(req))
+    assert seen[0].llm is child
+    system = seen[0].messages[0]["content"]
+    assert "minimax/MiniMax-M3" in system and "deepseek" not in system
+    assert system.startswith("## Header")  # surrounding prompt intact
+
+
+def test_escort_loads_unloaded_child_llm(svc_mod):
+    child = _ProfileLLM("minimax/MiniMax-M3", loaded=False)
+    svc, ctx, request, _ = _escort_ctx(
+        svc_mod, session_key="spawn_subagent:42", subagent_llm="minimax/MiniMax-M3",
+        services={"minimax/MiniMax-M3": child})
+    svc._model_call(ctx, request, lambda req: None)
+    assert child.load_calls == 1 and child.loaded
+    assert request.llm is child
+
+
+def test_escort_falls_back_when_load_fails(svc_mod):
+    child = _ProfileLLM("minimax/MiniMax-M3", loaded=False, load_ok=False)
+    svc, ctx, request, parent = _escort_ctx(
+        svc_mod, session_key="spawn_subagent:42", subagent_llm="minimax/MiniMax-M3",
+        services={"minimax/MiniMax-M3": child})
+    svc._model_call(ctx, request, lambda req: None)
+    assert request.llm is parent  # inherited resolution, not a crash
+    assert "deepseek" in request.messages[0]["content"]
+
+
+def test_escort_abstains_outside_subagent_sessions(svc_mod):
+    child = _ProfileLLM("minimax/MiniMax-M3")
+    svc, ctx, request, parent = _escort_ctx(
+        svc_mod, session_key="repl", subagent_llm="minimax/MiniMax-M3",
+        services={"minimax/MiniMax-M3": child})
+    svc._model_call(ctx, request, lambda req: None)
+    assert request.llm is parent
+
+
+def test_escort_abstains_on_unknown_profile_name(svc_mod):
+    svc, ctx, request, parent = _escort_ctx(
+        svc_mod, session_key="spawn_subagent:42", subagent_llm="nope", services={})
+    svc._model_call(ctx, request, lambda req: None)
+    assert request.llm is parent
