@@ -5,7 +5,9 @@ design:
 
 - **Requests** (``sdk.fs``, ``sdk.db``, ``sdk.net``, …) yield to the kernel.
   They block, they are classified, they may be refused, and they land in the
-  ledger.
+  ledger. Each namespace is one Request family, so ``sdk.fs.read`` is the
+  ``fs.read`` Request and the catalogue reads as a table of contents for the
+  SDK.
 - **Helpers** (``sdk.text``, ``sdk.md``) are plain functions running inside
   the sandbox. They cost nothing, need no approval, and never reach the
   kernel.
@@ -295,7 +297,7 @@ class _Services(_Namespace):
 
 
 class _Tools(_Namespace):
-    """Calling other tools and commands."""
+    """Calling other tools."""
 
     def list(self):
         """Tools the current scope exposes."""
@@ -305,11 +307,15 @@ class _Tools(_Namespace):
         """Call another tool."""
         return self._ask(TOOL_CALL, name=name, kwargs=kwargs)
 
-    def commands(self):
+
+class _Commands(_Namespace):
+    """Running slash commands."""
+
+    def list(self):
         """Registered slash commands."""
         return self._ask(COMMAND_LIST)
 
-    def run_command(self, name: str, **args):
+    def run(self, name: str, **args):
         """Run a slash command in one shot."""
         return self._ask(COMMAND_CALL, name=name, args=args)
 
@@ -373,8 +379,8 @@ class _Events(_Namespace):
                          timeout=timeout)
 
 
-class _Pipeline(_Namespace):
-    """Tasks and the watched-file table."""
+class _Tasks(_Namespace):
+    """Pipeline work."""
 
     def enqueue(self, name: str, paths):
         """Queue work."""
@@ -390,11 +396,15 @@ class _Pipeline(_Namespace):
         return self._ask(TASK_OUTPUT, name=name,
                          path=str(path) if path else None)
 
-    def register_file(self, path, **meta):
+
+class _Files(_Namespace):
+    """The watched-file table the pipeline runs on."""
+
+    def register(self, path, **meta):
         """Add a path to the watched-file table."""
         return self._ask(FILE_REGISTER, path=str(path), meta=meta)
 
-    def files(self, modality: str = ""):
+    def list(self, modality: str = ""):
         """Query the watched-file table."""
         return self._ask(FILE_LIST, modality=modality or None)
 
@@ -527,10 +537,12 @@ class SDK:
         self.plugins = _Plugins(self)
         self.services = _Services(self)
         self.tools = _Tools(self)
+        self.commands = _Commands(self)
         self.agent = _Agent(self)
         self.cron = _Cron(self)
         self.events = _Events(self)
-        self.pipeline = _Pipeline(self)
+        self.tasks = _Tasks(self)
+        self.files = _Files(self)
         self.parse = _Parse(self)
         self.ledger = _Ledger(self)
         self.net = _Net(self)

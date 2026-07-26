@@ -361,3 +361,53 @@ def test_a_secret_is_usable_without_being_readable(tmp_path):
         assert "sk-real" not in str(seen)
     finally:
         interpreter.shutdown()
+
+
+def test_every_namespace_is_exactly_one_request_family():
+    """The rule that makes the SDK learnable from the catalogue and back.
+
+    A namespace that merged two families (``sdk.tools.run_command`` running a
+    *command*) means the author has to memorise the exceptions rather than
+    read one off the other.
+    """
+    from sandbox.guest.sdk import SDK, _Namespace
+
+    sent = {}
+
+    class Recorder:
+        """Notes which family each namespace emits."""
+
+        def __init__(self, name):
+            self.name = name
+
+        def send(self, request):
+            """Record the family."""
+            sent.setdefault(self.name, set()).add(request.family)
+            return Result(data=None)
+
+        def log(self, level, message):
+            """Ignore."""
+
+    import inspect
+
+    probe = SDK(Recorder("probe"))
+    for name in [n for n in vars(probe) if not n.startswith("_")]:
+        namespace = getattr(probe, name)
+        if not isinstance(namespace, _Namespace):
+            continue
+        namespace._sdk = SDK(Recorder(name))
+        for attr in dir(namespace):
+            if attr.startswith("_"):
+                continue
+            method = getattr(namespace, attr)
+            if not inspect.ismethod(method):
+                continue
+            args = {p.name: "x" for p in
+                    inspect.signature(method).parameters.values()
+                    if p.default is inspect.Parameter.empty
+                    and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)}
+            method(**args)
+
+    mixed = {name: families for name, families in sent.items()
+             if len(families) > 1}
+    assert not mixed, f"namespaces spanning several families: {mixed}"
