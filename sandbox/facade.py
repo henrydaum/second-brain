@@ -33,6 +33,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from .approval import build_approver
 from .boxes import DEFAULT_START_TIMEOUT, BoxError, PersistentBox, open_box
 from .guest.box import PERSISTENT, SUBPROCESS, Membership, resolve
 from .guest.loader import load_entry, unload_box
@@ -115,14 +116,21 @@ class Sandbox:
     """The kernel's handle on sandboxed execution."""
 
     def __init__(self, interpreter: Interpreter | None = None, *,
-                 context=None, approve=None, record=None,
-                 max_background: int = 4):
+                 context=None, approve=None, record=None, runtime=None,
+                 session_key=None, max_background: int = 4):
         """
         context:
             The kernel's context object, passed to every handler — Second
             Brain's ``SecondBrainContext``. Lives on the host side and never
             crosses into the guest.
+        runtime:
+            The conversation runtime. Supplying it wires approval to the
+            kernel's own doorway — ``vet_permission`` hooks, the user's
+            trusted list, then a dialog. Without one, and without an explicit
+            ``approve``, everything unsafe is refused.
         """
+        if approve is None and runtime is not None:
+            approve = build_approver(runtime, session_key)
         self.interpreter = interpreter or Interpreter(
             approve=approve, record=record, context=context)
         self._pool = ThreadPoolExecutor(max_workers=max_background,

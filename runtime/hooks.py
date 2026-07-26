@@ -146,18 +146,40 @@ class PermissionQuery:
 
     Two stages knock at this doorway:
 
-    - ``"approval"`` — a tool is asking to run a sensitive command
-      (``command`` holds it); abstaining falls through to the kernel's
-      own approval flow (skip_permissions, then asking the human).
-    - ``"unattended_call"`` — an interactive (``background_safe=False``)
-      tool was invoked from a session with no human present; ``command``
-      is empty. Abstaining falls through to the kernel default: refuse.
-      A gate that answers allow lets the call proceed anyway.
+    - ``"approval"`` — something sensitive wants to happen; abstaining falls
+      through to the kernel's own approval flow (skip_permissions, then
+      asking the human).
+    - ``"unattended_call"`` — it was asked for from a session with no human
+      present. Abstaining falls through to the kernel default: refuse. A gate
+      that answers allow lets it proceed anyway.
+
+    **Two kinds of asker, told apart by ``origin``.** The first three fields
+    describe a *tool* asking to run a sensitive command, which is what this
+    doorway was built for. Sandboxed code asks a different question — a typed
+    Request, already classified, arriving with the chain of provenance that
+    caused it — and flattening that into a command string throws away
+    everything a gate would want to reason about.
+
+    So the richer fields are carried alongside rather than replacing anything:
+    ``command`` still holds a readable rendering, so gates written against the
+    original shape keep working untouched, while a sandbox-aware gate can read
+    ``request``, ``chain`` and ``decision`` directly.
     """
 
     tool_name: Optional[str]
     command: str
     stage: str = "approval"
+
+    # "tool" — a tool call asking to run something sensitive.
+    # "request" — sandboxed code whose Request the policy function refused.
+    origin: str = "tool"
+
+    # Populated only when origin == "request". A sandbox ``Request`` (its
+    # ``type`` and ``args``), the ``Chain`` of provenance rooted in whatever
+    # caused the work, and the ``Decision`` that sent it here with its reason.
+    request: Any = None
+    chain: Any = None
+    decision: Any = None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -274,10 +296,19 @@ class HookRegistry:
         return HookContext(session=session, runtime=runtime, moment=moment)
 
     def vet_permission(self, session, tool_name: str | None, command: str,
-                       runtime=None, stage: str = "approval") -> PermissionVerdict | None:
-        """Return the first decisive verdict, or None if every gate abstains."""
+                       runtime=None, stage: str = "approval",
+                       origin: str = "tool", request=None, chain=None,
+                       decision=None) -> PermissionVerdict | None:
+        """Return the first decisive verdict, or None if every gate abstains.
+
+        ``origin`` and the three fields after it carry a sandboxed Request's
+        full context for gates that want it; gates written against
+        ``tool_name`` and ``command`` alone are unaffected.
+        """
         ctx = self._ctx(session, runtime, VET_PERMISSION)
-        query = PermissionQuery(tool_name=tool_name, command=command, stage=stage)
+        query = PermissionQuery(tool_name=tool_name, command=command,
+                                stage=stage, origin=origin, request=request,
+                                chain=chain, decision=decision)
         for gate in self._hooks[VET_PERMISSION]:
             try:
                 verdict = gate(ctx, query)
