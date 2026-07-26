@@ -1,0 +1,95 @@
+"""Runners — where sandboxed code actually executes.
+
+Two modes, one calling convention, exactly as the security contract requires:
+*the code functions the same either way, just with different levels of
+security.*
+
+- **in-process** (this module): the code runs on a worker thread with the SDK
+  bound to a queue. Fast, no setup cost, and the validation script is the only
+  thing standing between the code and the machine — so this mode is for code
+  that is trusted, linted, and merely careless.
+- **subprocess** (next): the same code, the same SDK, the same Requests, with
+  the boundary enforced by the operating system rather than by a linter.
+
+The in-process runner cannot kill a runaway thread — Python provides no such
+primitive. It does not need to: every effect passes through the interpreter, so
+cancelling an execution starves it of effects at its next Request. Code stuck
+in a pure compute loop still burns a core, which is precisely the honest limit
+of in-process execution and the reason subprocess mode exists.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+
+from .guest.channel import Terminated
+from .guest.requests import Result
+from .guest.sdk import SDK
+from .interpreter import Execution, Interpreter, clamp_timeout
+from .policy import Chain
+
+logger = logging.getLogger("Sandbox")
+
+
+class TimedOut(Exception):
+    """Raised inside the worker when the kernel's clamped deadline passes."""
+
+
+def run_in_process(interpreter: Interpreter, fn, *, name: str,
+                   chain: Chain | None = None, timeout: float | None = None,
+                   kwargs: dict | None = None,
+                   execution: Execution | None = None) -> Result:
+    """Run ``fn(sdk, **kwargs)`` under the sandbox and return its Result.
+
+    ``timeout`` is the plugin's *declared* value. It is clamped here: a plugin
+    may ask for a longer leash, it does not get to grant itself one.
+    """
+    # An execution may be supplied so a caller holding it can cancel a run
+    # that is still going.
+    if execution is None:
+        execution = Execution(name=name, chain=(chain or Chain()).push(name))
+    sdk = SDK(interpreter.channel(execution))
+    deadline = clamp_timeout(timeout)
+    box: dict = {}
+
+    def _worker():
+        """Run the plugin body and capture whatever it produces."""
+        try:
+            box["result"] = fn(sdk, **(kwargs or {}))
+        except Terminated as stop:
+            box["result"] = Result(data=stop.value)
+        except Exception as exc:
+            logger.exception("sandboxed code raised: %s", name)
+            box["result"] = Result.failure(f"unhandled error: {exc}")
+        finally:
+            execution.finished.set()
+
+    worker = threading.Thread(target=_worker, daemon=True,
+                              name=f"sandbox-{name}")
+    started = time.perf_counter()
+    worker.start()
+    completed = execution.finished.wait(timeout=deadline)
+
+    for level, message in execution.logs:
+        logger.log(getattr(logging, level.upper(), logging.INFO),
+                   "[%s] %s", name, message)
+
+    if not completed:
+        # Starve it rather than pretend we killed it: the thread survives, but
+        # its next Request is refused, so it can no longer affect anything.
+        interpreter.cancel(execution)
+        return Result.failure(
+            f"timed out after {deadline:.1f}s (declared {timeout})",
+            retryable=True)
+
+    elapsed = time.perf_counter() - started
+    logger.debug("%s finished in %.1fms", name, elapsed * 1000)
+
+    if execution.response is not None:
+        return execution.response
+    result = box.get("result")
+    if isinstance(result, Result):
+        return result
+    return Result(data=result)

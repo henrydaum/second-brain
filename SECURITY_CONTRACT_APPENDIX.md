@@ -1,0 +1,385 @@
+# Appendix A — The Request Catalogue
+
+*Companion to The Second Brain Security Contract. Every capability the kernel
+exposes to sandboxed code, derived from the live call sites in the kernel tree
+and on the `store` branch.*
+
+---
+
+## How to read this
+
+Each Request is listed with the **policy inputs** that decide its security
+level. The kernel policy function computes that level from three things, as
+stated in the contract:
+
+- **what** — the nature of the Request (its type and arguments)
+- **who** — the chain of provenance (which plugin, called by which, rooted in
+  a user turn / cron job / subagent)
+- **where** — the destination (a path, a host, a table, a user)
+
+The **Default** column is the level when nothing unusual is present. It is a
+starting point for the policy function, not a fixed property of the Request —
+`fs.write` to the scratch directory is safe; the same Request aimed at
+`main.pyw` is not.
+
+Three mechanisms referenced throughout are defined at the bottom: **secret
+handles**, **per-user views**, and the **provenance root**.
+
+---
+
+## Not Requests: the SDK
+
+Anything that does not touch disk, network, clock, or process is a plain
+function in the SDK. It runs inside the sandbox, costs nothing, needs no
+approval, and never reaches the ledger.
+
+| SDK area | Contents |
+|---|---|
+| Text | truncation, tokenizing, diffing, normalization, slugs |
+| Formatting | markdown tables, detail cards, quote blocks, code fences |
+| Math | cosine similarity, vector ops, statistics |
+| Time | cron parsing and description (`croniter`, `cron_descriptor`), date math |
+| Encoding | JSON, base64, hashing, mimetype lookup |
+| Logging | `sdk.log(...)` — writes to the kernel's sink, not the filesystem |
+
+**The test:** does it touch disk, network, clock, or process? If no, it is SDK.
+If yes, it is a Request.
+
+Logging is the deliberate edge case — it does reach disk, but the SDK routes it
+to the kernel's log sink so the plugin author never writes a Request for it.
+Reuse that pattern wherever a Request would be too noisy to write by hand.
+
+---
+
+## 1. Filesystem
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `fs.read(path)` | File contents as text or bytes | path | safe |
+| `fs.write(path, data, mode)` | Create, overwrite, or append | path | safe in scratch/memory/sandbox, else unsafe |
+| `fs.list(path, pattern)` | Directory listing, glob, stat | path | safe |
+| `fs.search(pattern, root)` | Content search across a tree | root path | safe |
+| `fs.delete(path)` | Remove a file or tree | path | unsafe |
+| `fs.move(src, dst)` | Copy, rename, replace | both paths | unsafe outside scratch |
+| `fs.temp()` | Allocate a scratch file or directory | — | safe, always |
+
+`fs.temp` exists so that "I need somewhere to put this" never requires a policy
+decision. Scratch space is granted, not requested by path.
+
+`fs.search` is derivable from `fs.list` + `fs.read`, and is a separate Request
+anyway: doing it by hand costs one round trip per file.
+
+## 2. Database
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `db.query(sql, params)` | Read rows | resolved tables/columns, user | safe |
+| `db.write(sql, params)` | Insert, update, delete | resolved tables, user | unsafe on kernel tables, safe on plugin-owned |
+| `db.define(ddl)` | Create or alter a plugin-owned table | table name | safe for new tables, unsafe to alter kernel tables |
+
+Reads stay deliberately unrestricted. Free reads are safe **because the exits
+are gated** — a plugin that reads everything still cannot send anything
+anywhere without passing `net.http`, which is always checked. Do not trade away
+the agent's reach over its own database to solve a problem that egress control
+already solves.
+
+Two narrow exceptions, both structural rather than policy:
+
+- `users.password_hash` is denied at the column level. It is the only secret
+  column in the schema.
+- User-scoped tables are reached through **per-user views**, not base tables.
+
+Raw `db.conn` and `db.lock` access is withdrawn — every current use migrates to
+these three Requests. Transaction scoping becomes an argument
+(`db.write(..., atomic=[...])`), not a borrowed lock.
+
+## 3. Conversations
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `conv.create(title)` | Start a conversation | user | safe |
+| `conv.read(id)` | Messages and metadata | id, owning user | safe (own), unsafe (other user) |
+| `conv.list(filters)` | Enumerate conversations | user | safe |
+| `conv.append(id, message)` | Add a message | id, owning user | safe (own) |
+| `conv.set_title(id, title)` | Retitle | id, owning user | safe (own) |
+| `conv.set_category(id, cat)` | Categorize | id, owning user | safe (own) |
+| `conv.set_notify(id, mode)` | Notification mode | id, owning user | safe (own) |
+| `conv.clear(id)` | Drop messages, keep conversation | id, owning user | unsafe |
+| `conv.delete(id)` | Delete conversation and messages | id, owning user | unsafe |
+| `conv.enact(id, action)` | Drive an agent turn | id, owning user, root | unsafe from an unattended root |
+
+Ownership is checked on every id-bearing Request, mirroring
+`runtime.assert_conversation_access`. Cross-user access is refused and recorded,
+never silently filtered.
+
+## 4. Sessions
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `session.get(key)` / `session.list()` | Inspect live sessions | — | safe |
+| `session.open(key)` / `session.close(key)` | Session lifecycle | key | safe |
+| `session.push(key, message)` | Proactive message to the user | key, attendance | safe |
+| `session.state_get/set/clear(key, ns)` | Per-session plugin scratch state | namespace | safe |
+| `session.set_attended(key, bool)` | Declare human presence | key | unsafe |
+| `session.cancel(key)` | Cancel the running turn | key | safe |
+| `session.add_attachment(key, path)` | Stage an attachment for the turn | path | safe |
+| `session.set_profile(key, profile)` | Switch agent profile | profile | unsafe |
+| `session.add_prompt_extra(key, text)` | Inject system prompt text | — | unsafe |
+| `session.remove_prompt_extra(key, id)` | Withdraw injected text | — | safe |
+| `session.add_tool(key, name)` | Widen the agent's scope | tool name | unsafe |
+| `session.remove_tool(key, name)` | Narrow the agent's scope | tool name | safe |
+
+The asymmetry is intentional and runs through the whole catalogue: **widening
+capability is unsafe, narrowing it is safe.** Adding a tool, injecting prompt
+text, or claiming attendance changes what the agent may do next; the reverse
+never does.
+
+## 5. User interaction
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `ui.ask(title, prompt, type)` | Question with typed answer (text/bool/choice) | attendance | safe if attended, refused if not |
+| `ui.approve(action, justification)` | Explicit approval for a sensitive action | attendance | safe |
+| `ui.render(paths, caption)` | Show files to the user in chat | paths | safe |
+
+`ui.ask` is definitionally safe when a human is present — it *is* the approval
+channel. In an unattended session it is refused rather than queued, matching the
+kernel's existing default at the `unattended_call` gate.
+
+## 6. Configuration
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `config.read(key, scope)` | Global or user-scoped setting | key sensitivity | safe, **secrets returned as handles** |
+| `config.write(key, value, scope)` | Change a setting | key, scope | unsafe |
+
+Scope (`global` / `user`) is an argument, not a separate Request.
+
+This — not the database — is where the contract's "private information" clause
+belongs. API keys and OAuth tokens live in config and the environment. See
+**secret handles** below.
+
+## 7. Users
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `user.read(id)` | User row, minus denied columns | id vs. current user | safe (self), unsafe (other) |
+| `user.list()` | Enumerate users | — | unsafe |
+| `user.write(id, fields)` | Update type or config blob | id, fields | unsafe |
+| `user.set_credentials(id, ...)` | Set username / password hash | — | unsafe, always |
+| `user.delete(id)` | Remove a user | id | unsafe, always |
+
+`password_hash` is never returned by any Request, at any level.
+
+## 8. Plugin lifecycle
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `plugin.list(family)` | Enumerate installed plugins | — | safe |
+| `plugin.describe(name)` | Metadata, path, dependencies | — | safe |
+| `plugin.register(path)` | Load a plugin live | path, family | unsafe |
+| `plugin.unregister(name)` | Unload | name | unsafe |
+| `plugin.reload(name)` | Reload in place | name | unsafe |
+| `plugin.install(stem)` | Install from the store | stem, store commit | unsafe |
+| `plugin.uninstall(stem)` | Remove, with dependency scan | stem | unsafe |
+| `plugin.quarantine(name, reason)` | Disable a misbehaving plugin | name | safe |
+
+This family is the literal subject of the LibOS quote: the agent extends itself
+here, and every widening Request in it is unsafe by default. Quarantine is safe
+because it only removes capability.
+
+## 9. Services
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `service.list()` | Loaded services and status | — | safe |
+| `service.call(name, method, args)` | Invoke a method in the service's container | target service, method | safe — the callee's own Requests are gated with the caller in the chain |
+| `service.load(name)` | Load a service | name | unsafe |
+| `service.unload(name)` | Unload | name | unsafe |
+
+`service.call` is safe *because of provenance*, not despite it. A service's own
+Requests are classified with the caller in the chain, so nothing is laundered by
+routing through a service — the earlier "calling a service is safe because
+services are sandboxed" reasoning is replaced by this.
+
+Native objects never cross the boundary. A service holding a model in memory
+keeps it inside its persistent container; callers get simple data back.
+
+## 10. Tools and commands
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `tool.list()` / `tool.schema(name)` | Discover callable tools | — | safe |
+| `tool.call(name, args)` | Tool-to-tool composition | target tool | safe — callee's Requests gated with the chain |
+| `command.list()` | Discover slash commands | — | safe |
+| `command.call(name, args)` | One-shot slash command | target command, `require_approval` | inherits the command's own declaration |
+
+## 11. Agent
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `agent.complete(prompt, schema)` | A model call | — | safe |
+| `agent.spawn(prompt, wait)` | Run a subagent now | root, depth | safe |
+| `agent.schedule(prompt, cron)` | Run a subagent later | cron, root | unsafe |
+| `agent.escalate(reason)` | Re-drive on the strong model | — | safe |
+
+`agent.complete` is its own Request and never a generic `service.call`. Keys,
+sockets, and provider details stay kernel-side; the sandbox sees a prompt and a
+schema.
+
+`agent.spawn` is safe because the child's own Requests are gated with the parent
+in the chain — you cannot buy authority by having someone else ask.
+`agent.schedule` is unsafe because it creates *unattended* future work, where no
+one is present to answer a dialog.
+
+## 12. Scheduling
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `cron.list()` / `cron.get(name)` | Inspect jobs | — | safe |
+| `cron.describe(name)` | Next fire time, human-readable schedule | — | safe |
+| `cron.create(name, def)` | New job | channel, payload | unsafe |
+| `cron.update(name, patch)` | Change schedule or payload | name | unsafe |
+| `cron.enable(name, bool)` | Enable or disable | name | safe to disable, unsafe to enable |
+| `cron.remove(name)` | Delete a job | name | unsafe |
+
+Everything that creates recurring unattended work is unsafe, for the same reason
+`agent.schedule` is.
+
+## 13. Events and hooks
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `event.emit(channel, payload)` | Publish | channel | safe |
+| `event.subscribe(channel)` | Receive on a channel | channel | safe |
+| `event.request(channel, payload, timeout)` | Blocking request/response | channel | safe |
+| `hook.register(moment, fn)` | Stand at a turn doorway | moment | unsafe |
+| `hook.unregister(fn)` | Step away | — | safe |
+
+`hook.register` is unsafe because a hook is a standing intervention in every
+future turn — the largest persistent capability grant in the system.
+
+**Note the latency cost.** Hooks fire inside the agent turn's hot path, and
+`model_call` wraps every model call. A hook registered from a subprocessed
+service pays IPC on each fire. This is the strongest argument for validated
+in-process execution being the default for services, with subprocess as opt-in.
+
+## 14. Pipeline and tasks
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `task.enqueue(name, paths)` | Queue work | task name | safe |
+| `task.status(name, path)` | Check state | — | safe |
+| `task.output(name, filters)` | Read a task's output table | table | safe |
+| `task.reset(name, scope)` | Re-run, clear state | scope | unsafe |
+| `file.register(path, meta)` | Add to the watched-file table | path | safe |
+| `file.unregister(path)` | Remove from the table | path | safe |
+| `file.list(filters)` | Query the file registry | — | safe |
+
+## 15. Parsing
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `parse.file(path, modality)` | Parse to text via the registry | path | safe |
+| `parse.modality(ext)` | Resolve a file's modality | — | safe |
+
+## 16. Ledger
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `ledger.record(...)` | Write an audit row | — | safe |
+| `ledger.read(filters)` | Targeted query | user, conversation | safe (own), unsafe (other users) |
+
+Every Request that reaches the kernel is itself a ledger row, with its chain of
+provenance as a column. `ledger.record` exists for plugin-level events that are
+not Requests.
+
+## 17. Network
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `net.http(method, url, headers, body)` | Any outbound HTTP | host, method, secret handles present | **always checked, never auto-safe** |
+
+One Request, one gate. The verb is irrelevant: a `GET` with data in the query
+string is exfiltration. This is the single control that makes free filesystem
+and database reads safe, so it does not get exceptions.
+
+Secret handles are substituted here, on the way out.
+
+## 18. Process
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `proc.run(argv, timeout)` | Run to completion | argv classification | safe if every segment is read-only, else unsafe |
+| `proc.start(argv)` | Start a persistent process, return a handle | argv | unsafe |
+| `proc.stop(handle)` | Terminate | handle | safe |
+
+The read-only classifier already exists and is battle-tested — `tool_run_command`
+decomposes compound commands at unquoted `&&`, `||`, `;`, `|`, and newlines and
+auto-runs only when every segment is read-only, sending redirection, command
+substitution, backgrounding, and unbalanced quotes down the approval path. Lift
+it wholesale rather than rewriting it.
+
+## 19. Self and ambient
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `self.respond(result)` | Return a result and terminate | — | safe |
+| `self.terminate()` | End without a result | — | safe |
+| `self.yield()` | Persistent containers: sleep until next input | — | safe |
+| `env.read(name)` | Environment variable | name sensitivity | safe, **secrets returned as handles** |
+
+`time.now()` is SDK, not a Request — determinism is not a goal.
+
+`self.respond` is invalid for persistent containers, which use `self.yield`.
+
+---
+
+## The return contract
+
+Every Request returns simple data — never a live object. A dataclass is
+converted to a dictionary before crossing, and the SDK rebuilds it on the far
+side from the same class definition, so plugin code keeps attribute access
+without a kernel object ever crossing the boundary.
+
+Three outcomes, one shape:
+
+| Outcome | Returns |
+|---|---|
+| Success | The requested data, or a success report for action Requests |
+| Failure | A failure report — reason, and whether retrying could help |
+| **Denial** | A failure report with reason `denied` |
+
+**A denied Request is an ordinary failure, not an exception and not a kill.**
+The plugin is resumed and may handle it, retry differently, or terminate. This
+is deliberate: one error path is learnable, two are not, and code that treats
+denial as fatal is the most likely thing a careless author will write.
+
+---
+
+## Three supporting mechanisms
+
+**Secret handles.** A Request that would return an API key, token, or
+credential returns an opaque handle instead — `<secret:brave_api_key>`. The
+handle can be passed into other Requests; the kernel substitutes the real value
+at the point of use, inside `net.http`. Sandboxed code can therefore *use* a
+credential it can never *read*, which is exactly the property a careless plugin
+needs. This is what the contract's "private information" clause means in
+practice.
+
+**Per-user views.** Tables carrying a `user_id` are exposed to sandboxed code as
+views filtered to the session's current user, not as base tables. Scoping is
+structural: the plugin cannot forget to filter, and cannot misreport its
+identity, because the kernel bound the view. Free-form SQL is preserved.
+
+**The provenance root.** A chain does not begin at a plugin. It begins at the
+thing that caused the work — a user turn, a cron job, a subagent, a frontend
+event — and the root is what makes a permission dialog answerable. `cron:nightly_index
+→ task_index → net.http` tells the user everything; `task_index → net.http`
+tells them nothing.
+
+The kernel maintains the chain as its own stack: push when it begins driving a
+plugin, pop when that plugin terminates. Plugins never report their own
+identity, so they cannot misstate it. A persistent container, being in no one's
+call stack, carries the chain captured at its creation. The stack is capped for
+depth, which also detects cycles.

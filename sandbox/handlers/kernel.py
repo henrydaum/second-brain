@@ -1,0 +1,878 @@
+"""Kernel-facing handlers — the Requests that need ``SecondBrainContext``.
+
+Everything here reaches into the context object the kernel supplies: the
+database, the conversation runtime, config, services, the tool and command
+registries. The guest never touches any of it.
+
+Two conventions run through the file:
+
+- **Ownership is checked, not assumed.** Conversation Requests go through
+  ``runtime.assert_conversation_access`` wherever it exists, mirroring the
+  kernel's own rule that listing filters are convenience and access checks
+  are the real boundary.
+- **A missing capability is an ordinary failure.** The kernel is a microkernel;
+  the timekeeper, the parser, or a tool registry may simply not be installed.
+  Sandboxed code gets a Result saying so, not an exception.
+"""
+
+from __future__ import annotations
+
+from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
+                              CONFIG_READ, CONFIG_WRITE, CONV_APPEND,
+                              CONV_CREATE, CONV_DELETE, CONV_LIST, CONV_READ,
+                              CONV_SET_CATEGORY, CONV_SET_TITLE, CRON_CREATE,
+                              CRON_ENABLE, CRON_GET, CRON_LIST, CRON_REMOVE,
+                              CRON_UPDATE, DB_DEFINE, DB_QUERY, DB_WRITE,
+                              EVENT_EMIT, EVENT_REQUEST, FILE_LIST,
+                              FILE_REGISTER, LEDGER_READ, LEDGER_RECORD,
+                              PARSE_FILE, PARSE_MODALITY, PLUGIN_DESCRIBE,
+                              PLUGIN_LIST, SERVICE_CALL, SERVICE_LIST,
+                              SESSION_ADD_PROMPT, SESSION_ADD_TOOL,
+                              SESSION_CANCEL, SESSION_GET, SESSION_LIST,
+                              SESSION_PUSH, SESSION_REMOVE_PROMPT,
+                              SESSION_REMOVE_TOOL, SESSION_STATE_GET,
+                              SESSION_STATE_SET, TASK_ENQUEUE, TASK_OUTPUT,
+                              TASK_STATUS, TOOL_CALL, TOOL_LIST, UI_APPROVE,
+                              UI_ASK, UI_RENDER, USER_LIST, USER_READ,
+                              USER_WRITE, Result)
+from ..secrets import redact
+from ..users import scope_sql
+
+# Never returned by any Request, at any level.
+HIDDEN_USER_COLUMNS = {"password_hash"}
+
+
+def _need(value, what: str):
+    """Return a Result explaining an absent capability, or None.
+
+    Callers must compare against None. A failure Result is *falsy* by design
+    — that is the whole point of the return contract — so ``if (bad := _need(
+    ...)):`` silently does nothing, which is the opposite of a guard.
+    """
+    if value is None:
+        return Result.failure(f"{what} is not available in this kernel")
+    return None
+
+
+def _db(ctx):
+    """The database, or None."""
+    return getattr(ctx, "db", None)
+
+
+def _runtime(ctx):
+    """The conversation runtime, or None."""
+    return getattr(ctx, "runtime", None)
+
+
+def _service(ctx, name: str):
+    """A loaded service by name, or None."""
+    return (getattr(ctx, "services", None) or {}).get(name)
+
+
+def _rows(value):
+    """Normalize sqlite rows into plain dicts, which is all that may cross."""
+    if value is None:
+        return []
+    return [dict(row) for row in value]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Database.
+# ──────────────────────────────────────────────────────────────────────
+
+def _db_query(ctx, args: dict) -> Result:
+    """Read rows.
+
+    Reads stay deliberately broad — a plugin that reads everything still
+    cannot send anything anywhere, because egress is gated. What is narrowed
+    is *whose* rows: user-scoped tables are rewritten to the current user.
+    """
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    sql = args.get("sql")
+    if not sql:
+        return Result.failure("db.query requires sql")
+    try:
+        scoped, params = scope_sql(sql, args.get("params") or [],
+                                   getattr(ctx, "user_id", None))
+        return Result(data=_rows(db.query(scoped, params)))
+    except Exception as exc:
+        return Result.failure(f"query failed: {exc}")
+
+
+def _db_write(ctx, args: dict) -> Result:
+    """Insert, update or delete."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    sql = args.get("sql")
+    if not sql:
+        return Result.failure("db.write requires sql")
+    try:
+        db.execute_write(sql, args.get("params") or [])
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"write failed: {exc}")
+
+
+def _db_define(ctx, args: dict) -> Result:
+    """Create a plugin-owned table."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    ddl = args.get("ddl")
+    if not ddl:
+        return Result.failure("db.define requires ddl")
+    try:
+        db.execute_write(ddl, [])
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"define failed: {exc}")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Conversations.
+# ──────────────────────────────────────────────────────────────────────
+
+def _check_access(ctx, conversation_id) -> Result | None:
+    """Refuse a conversation belonging to somebody else."""
+    runtime = _runtime(ctx)
+    check = getattr(runtime, "assert_conversation_access", None)
+    if check is None or conversation_id is None:
+        return None
+    try:
+        check(conversation_id, getattr(ctx, "user_id", None))
+    except Exception as exc:
+        return Result.refusal(f"conversation {conversation_id}: {exc}")
+    return None
+
+
+def _conv_create(ctx, args: dict) -> Result:
+    """Start a conversation."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    try:
+        cid = db.create_conversation(args.get("title") or "New conversation")
+        return Result(data=cid)
+    except Exception as exc:
+        return Result.failure(f"create failed: {exc}")
+
+
+def _conv_read(ctx, args: dict) -> Result:
+    """Messages and metadata for one conversation."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    cid = args.get("id")
+    if (refused := _check_access(ctx, cid)) is not None:
+        return refused
+    try:
+        return Result(data={
+            "conversation": dict(db.get_conversation(cid) or {}),
+            "messages": _rows(db.get_conversation_messages(cid)),
+        })
+    except Exception as exc:
+        return Result.failure(f"read failed: {exc}")
+
+
+def _conv_list(ctx, args: dict) -> Result:
+    """Conversations belonging to the current user."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    try:
+        user_id = getattr(ctx, "user_id", None)
+        if user_id is not None and hasattr(db, "list_user_conversations"):
+            return Result(data=_rows(db.list_user_conversations(user_id)))
+        return Result(data=_rows(db.list_conversations()))
+    except Exception as exc:
+        return Result.failure(f"list failed: {exc}")
+
+
+def _conv_append(ctx, args: dict) -> Result:
+    """Add a message."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    cid = args.get("id")
+    if (refused := _check_access(ctx, cid)) is not None:
+        return refused
+    try:
+        db.save_message(cid, args.get("role") or "user", args.get("content") or "")
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"append failed: {exc}")
+
+
+def _conv_set_title(ctx, args: dict) -> Result:
+    """Retitle a conversation."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    cid = args.get("id")
+    if (refused := _check_access(ctx, cid)) is not None:
+        return refused
+    try:
+        db.update_conversation_title(cid, args.get("title") or "")
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"retitle failed: {exc}")
+
+
+def _conv_set_category(ctx, args: dict) -> Result:
+    """Categorize a conversation."""
+    runtime = _runtime(ctx)
+    setter = getattr(runtime, "set_conversation_category", None)
+    if (bad := _need(setter, "conversation categories")) is not None:
+        return bad
+    try:
+        setter(args.get("id"), args.get("category") or "")
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"categorize failed: {exc}")
+
+
+def _conv_delete(ctx, args: dict) -> Result:
+    """Delete a conversation and its messages."""
+    runtime = _runtime(ctx)
+    deleter = getattr(runtime, "delete_conversation", None) or getattr(
+        _db(ctx), "delete_conversation", None)
+    if (bad := _need(deleter, "conversation deletion")) is not None:
+        return bad
+    cid = args.get("id")
+    if (refused := _check_access(ctx, cid)) is not None:
+        return refused
+    try:
+        deleter(cid)
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"delete failed: {exc}")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Sessions.
+# ──────────────────────────────────────────────────────────────────────
+
+def _session_get(ctx, args: dict) -> Result:
+    """Describe one live session."""
+    runtime = _runtime(ctx)
+    if (bad := _need(runtime, "the runtime")) is not None:
+        return bad
+    key = args.get("key") or getattr(ctx, "session_key", None)
+    session = (getattr(runtime, "sessions", None) or {}).get(key)
+    if session is None:
+        return Result(data=None)
+    return Result(data={
+        "key": key,
+        "conversation_id": getattr(session, "conversation_id", None),
+        "attended": bool(runtime.is_attended(key))
+        if hasattr(runtime, "is_attended") else None,
+    })
+
+
+def _session_list(ctx, args: dict) -> Result:
+    """Every live session key."""
+    runtime = _runtime(ctx)
+    if (bad := _need(runtime, "the runtime")) is not None:
+        return bad
+    lister = getattr(runtime, "list_sessions", None)
+    if lister is not None:
+        return Result(data=[str(s) for s in lister()])
+    return Result(data=list(getattr(runtime, "sessions", None) or {}))
+
+
+def _session_push(ctx, args: dict) -> Result:
+    """Send a message to the user out of band."""
+    runtime = _runtime(ctx)
+    push = getattr(runtime, "push_message", None)
+    if (bad := _need(push, "proactive messages")) is not None:
+        return bad
+    key = args.get("key") or getattr(ctx, "session_key", None)
+    try:
+        push(key, args.get("message") or "")
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"push failed: {exc}")
+
+
+def _session_state_get(ctx, args: dict) -> Result:
+    """Read this plugin's per-session scratch state."""
+    runtime = _runtime(ctx)
+    getter = getattr(runtime, "get_session_plugin_state", None)
+    if (bad := _need(getter, "session state")) is not None:
+        return bad
+    key = args.get("key") or getattr(ctx, "session_key", None)
+    try:
+        return Result(data=getter(key, args.get("namespace") or "sandbox"))
+    except Exception as exc:
+        return Result.failure(f"state read failed: {exc}")
+
+
+def _session_state_set(ctx, args: dict) -> Result:
+    """Write this plugin's per-session scratch state."""
+    runtime = _runtime(ctx)
+    setter = getattr(runtime, "update_session_plugin_state", None)
+    if (bad := _need(setter, "session state")) is not None:
+        return bad
+    key = args.get("key") or getattr(ctx, "session_key", None)
+    try:
+        setter(key, args.get("namespace") or "sandbox", args.get("value"))
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"state write failed: {exc}")
+
+
+def _session_cancel(ctx, args: dict) -> Result:
+    """Cancel the turn running on a session."""
+    runtime = _runtime(ctx)
+    canceller = getattr(runtime, "cancel_session", None)
+    if (bad := _need(canceller, "session cancellation")) is not None:
+        return bad
+    canceller(args.get("key") or getattr(ctx, "session_key", None))
+    return Result(data=True)
+
+
+def _session_add_tool(ctx, args: dict) -> Result:
+    """Widen the agent's scope for this session."""
+    runtime = _runtime(ctx)
+    adder = getattr(runtime, "add_session_tool", None)
+    if (bad := _need(adder, "session scope")) is not None:
+        return bad
+    adder(args.get("key") or getattr(ctx, "session_key", None),
+          args.get("tool"))
+    return Result(data=True)
+
+
+def _session_remove_tool(ctx, args: dict) -> Result:
+    """Narrow the agent's scope for this session."""
+    runtime = _runtime(ctx)
+    remover = getattr(runtime, "remove_session_tool", None)
+    if (bad := _need(remover, "session scope")) is not None:
+        return bad
+    remover(args.get("key") or getattr(ctx, "session_key", None),
+            args.get("tool"))
+    return Result(data=True)
+
+
+def _session_add_prompt(ctx, args: dict) -> Result:
+    """Inject system prompt text for this session."""
+    runtime = _runtime(ctx)
+    adder = getattr(runtime, "add_system_prompt_extra", None)
+    if (bad := _need(adder, "prompt extras")) is not None:
+        return bad
+    handle = adder(args.get("key") or getattr(ctx, "session_key", None),
+                   args.get("text") or "")
+    return Result(data=handle)
+
+
+def _session_remove_prompt(ctx, args: dict) -> Result:
+    """Withdraw injected prompt text."""
+    runtime = _runtime(ctx)
+    remover = getattr(runtime, "remove_system_prompt_extra", None)
+    if (bad := _need(remover, "prompt extras")) is not None:
+        return bad
+    remover(args.get("key") or getattr(ctx, "session_key", None),
+            args.get("handle"))
+    return Result(data=True)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Talking to the user.
+# ──────────────────────────────────────────────────────────────────────
+
+def _ui_ask(ctx, args: dict) -> Result:
+    """Ask a question and wait for the answer."""
+    asker = getattr(ctx, "request_user_input", None)
+    runtime = _runtime(ctx)
+    key = getattr(ctx, "session_key", None)
+    if asker is None and runtime is not None and key:
+        def asker(title, prompt, **kw):
+            """Fall back to the runtime's own prompt."""
+            return runtime.request_input(key, title, prompt, **kw)
+    if (bad := _need(asker, "asking the user")) is not None:
+        return bad
+
+    try:
+        request = asker(args.get("title") or "Question",
+                        args.get("prompt") or "",
+                        type=args.get("type") or "text",
+                        choices=args.get("choices") or None)
+        if not request.wait(timeout=float(args.get("timeout") or 300.0)):
+            return Result.failure("the user did not answer", retryable=True)
+        if request.metadata.get("cancelled"):
+            return Result.refusal("the user cancelled")
+        return Result(data=getattr(request, "value", None)
+                      if hasattr(request, "value") else request.approved)
+    except Exception as exc:
+        return Result.failure(f"could not ask: {exc}")
+
+
+def _ui_approve(ctx, args: dict) -> Result:
+    """Ask the user to approve a described action."""
+    approve = getattr(ctx, "approve_command", None)
+    if (bad := _need(approve, "approval")) is not None:
+        return bad
+    try:
+        allowed = approve(args.get("action") or "",
+                          args.get("justification") or "")
+        return Result(data=bool(allowed))
+    except Exception as exc:
+        return Result.failure(f"could not ask: {exc}")
+
+
+def _ui_render(ctx, args: dict) -> Result:
+    """Show files to the user in chat."""
+    runtime = _runtime(ctx)
+    push = getattr(runtime, "push_message", None)
+    if (bad := _need(push, "rendering to the user")) is not None:
+        return bad
+    paths = args.get("paths") or []
+    caption = args.get("caption") or ""
+    try:
+        push(getattr(ctx, "session_key", None),
+             caption or f"{len(paths)} file(s)")
+        return Result(data={"rendered": len(paths)})
+    except Exception as exc:
+        return Result.failure(f"render failed: {exc}")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Config, users.
+# ──────────────────────────────────────────────────────────────────────
+
+def _config_read(ctx, args: dict) -> Result:
+    """Read a setting, redacting credentials into handles."""
+    config = getattr(ctx, "config", None) or {}
+    key = args.get("key")
+    if key is None:
+        return Result(data={k: redact(k, v) for k, v in config.items()})
+    if key not in config:
+        return Result(data=None)
+    return Result(data=redact(key, config[key]))
+
+
+def _config_write(ctx, args: dict) -> Result:
+    """Change a setting."""
+    key = args.get("key")
+    if not key:
+        return Result.failure("config.write requires a key")
+    config = getattr(ctx, "config", None)
+    if (bad := _need(config, "config")) is not None:
+        return bad
+    try:
+        from config import config_manager
+        config[key] = args.get("value")
+        config_manager.save(config)
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"config write failed: {exc}")
+
+
+def _visible_user(row) -> dict:
+    """A user row with its secret columns removed."""
+    return {k: v for k, v in dict(row or {}).items()
+            if k not in HIDDEN_USER_COLUMNS}
+
+
+def _user_read(ctx, args: dict) -> Result:
+    """One user, minus anything never returned."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    uid = args.get("id", getattr(ctx, "user_id", None))
+    try:
+        return Result(data=_visible_user(db.get_user(uid)))
+    except Exception as exc:
+        return Result.failure(f"user read failed: {exc}")
+
+
+def _user_list(ctx, args: dict) -> Result:
+    """Every user, minus anything never returned."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    try:
+        return Result(data=[_visible_user(r) for r in db.list_users() or []])
+    except Exception as exc:
+        return Result.failure(f"user list failed: {exc}")
+
+
+def _user_write(ctx, args: dict) -> Result:
+    """Update a user's config blob or type."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    uid = args.get("id", getattr(ctx, "user_id", None))
+    try:
+        if "config" in args:
+            db.set_user_config(uid, args["config"])
+        if "user_type" in args:
+            db.set_user_type(uid, args["user_type"])
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"user write failed: {exc}")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Plugins, services, tools, commands.
+# ──────────────────────────────────────────────────────────────────────
+
+def _plugin_list(ctx, args: dict) -> Result:
+    """Everything currently registered, by family."""
+    registry = getattr(ctx, "tool_registry", None)
+    orchestrator = getattr(ctx, "orchestrator", None)
+    commands = getattr(ctx, "command_registry", None)
+    return Result(data={
+        "tools": sorted(getattr(registry, "tools", None) or {}),
+        "tasks": sorted(getattr(orchestrator, "tasks", None) or {}),
+        "services": sorted(getattr(ctx, "services", None) or {}),
+        "commands": sorted(getattr(commands, "commands", None) or {}),
+    })
+
+
+def _plugin_describe(ctx, args: dict) -> Result:
+    """Metadata for one registered plugin."""
+    name = args.get("name")
+    registry = getattr(ctx, "tool_registry", None)
+    getter = getattr(registry, "get_schema", None)
+    if getter is not None:
+        schema = getter(name)
+        if schema is not None:
+            return Result(data=schema)
+    return Result.failure(f"no plugin named {name!r}")
+
+
+def _service_list(ctx, args: dict) -> Result:
+    """Loaded services and whether each is ready."""
+    services = getattr(ctx, "services", None) or {}
+    return Result(data={
+        name: bool(getattr(service, "loaded", False))
+        for name, service in services.items()
+    })
+
+
+def _service_call(ctx, args: dict) -> Result:
+    """Invoke a method on a loaded service.
+
+    Safe *because of* provenance, not despite it: the callee's own Requests
+    are classified with the caller in the chain, so routing through a service
+    launders nothing. Only methods the service lists in ``exports`` are
+    reachable — anything else is internal.
+    """
+    name, method = args.get("name"), args.get("method")
+    service = _service(ctx, name)
+    if service is None:
+        return Result.failure(f"service {name!r} is not loaded")
+
+    exports = getattr(service, "exports", None)
+    if exports is not None and method not in exports:
+        return Result.refusal(
+            f"{name}.{method} is not exported; {sorted(exports)} are")
+
+    fn = getattr(service, method or "", None)
+    if not callable(fn):
+        return Result.failure(f"{name} has no method {method!r}")
+    try:
+        return Result(data=fn(**(args.get("kwargs") or {})))
+    except Exception as exc:
+        return Result.failure(f"{name}.{method} failed: {exc}")
+
+
+def _tool_list(ctx, args: dict) -> Result:
+    """Tools the current scope exposes."""
+    registry = getattr(ctx, "tool_registry", None)
+    if (bad := _need(registry, "the tool registry")) is not None:
+        return bad
+    return Result(data=sorted(registry.list_tools()))
+
+
+def _tool_call(ctx, args: dict) -> Result:
+    """Call another tool. The Request that makes a chain two links deep."""
+    call = getattr(ctx, "call_tool", None)
+    if (bad := _need(call, "tool-to-tool calls")) is not None:
+        return bad
+    name = args.get("name")
+    try:
+        outcome = call(name, **(args.get("kwargs") or {}))
+        return Result(ok=bool(getattr(outcome, "success", True)),
+                      data=getattr(outcome, "data", outcome),
+                      error=str(getattr(outcome, "error", "")))
+    except Exception as exc:
+        return Result.failure(f"tool {name!r} failed: {exc}")
+
+
+def _command_list(ctx, args: dict) -> Result:
+    """Registered slash commands."""
+    registry = getattr(ctx, "command_registry", None)
+    if (bad := _need(registry, "the command registry")) is not None:
+        return bad
+    return Result(data=sorted(getattr(registry, "commands", None) or {}))
+
+
+def _command_call(ctx, args: dict) -> Result:
+    """Run a slash command in one shot."""
+    registry = getattr(ctx, "command_registry", None)
+    runner = getattr(registry, "run", None) or getattr(registry, "execute", None)
+    if (bad := _need(runner, "running commands")) is not None:
+        return bad
+    try:
+        return Result(data=runner(args.get("name"), args.get("args") or {}))
+    except Exception as exc:
+        return Result.failure(f"command failed: {exc}")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Agent, scheduling, events, pipeline, parsing, ledger.
+# ──────────────────────────────────────────────────────────────────────
+
+def _agent_complete(ctx, args: dict) -> Result:
+    """A model call.
+
+    Its own Request, never a generic ``service.call``: keys, sockets and
+    provider details stay kernel-side and the sandbox sees a prompt.
+    """
+    llm = _service(ctx, "llm")
+    if (bad := _need(llm, "an LLM")) is not None:
+        return bad
+    messages = args.get("messages")
+    if not messages:
+        prompt = args.get("prompt") or ""
+        messages = [{"role": "user", "content": prompt}]
+    try:
+        response = llm.chat_with_tools(messages)
+        return Result(ok=not getattr(response, "is_error", False),
+                      data={"content": getattr(response, "content", ""),
+                            "tool_calls": getattr(response, "tool_calls", [])},
+                      error=str(getattr(response, "error", "") or ""))
+    except Exception as exc:
+        return Result.failure(f"model call failed: {exc}")
+
+
+def _timekeeper(ctx):
+    """The scheduling service, or None."""
+    return _service(ctx, "timekeeper")
+
+
+def _cron_list(ctx, args: dict) -> Result:
+    """Every scheduled job."""
+    keeper = _timekeeper(ctx)
+    if (bad := _need(keeper, "the timekeeper")) is not None:
+        return bad
+    return Result(data=keeper.list_jobs())
+
+
+def _cron_get(ctx, args: dict) -> Result:
+    """One scheduled job."""
+    keeper = _timekeeper(ctx)
+    if (bad := _need(keeper, "the timekeeper")) is not None:
+        return bad
+    return Result(data=keeper.get_job(args.get("name")))
+
+
+def _cron_create(ctx, args: dict) -> Result:
+    """Add a job."""
+    keeper = _timekeeper(ctx)
+    if (bad := _need(keeper, "the timekeeper")) is not None:
+        return bad
+    try:
+        return Result(data=keeper.create_job(args.get("name"),
+                                             args.get("job") or {}))
+    except Exception as exc:
+        return Result.failure(f"could not create job: {exc}")
+
+
+def _cron_update(ctx, args: dict) -> Result:
+    """Change a job."""
+    keeper = _timekeeper(ctx)
+    if (bad := _need(keeper, "the timekeeper")) is not None:
+        return bad
+    try:
+        return Result(data=keeper.update_job(args.get("name"),
+                                             args.get("patch") or {}))
+    except Exception as exc:
+        return Result.failure(f"could not update job: {exc}")
+
+
+def _cron_remove(ctx, args: dict) -> Result:
+    """Delete a job."""
+    keeper = _timekeeper(ctx)
+    if (bad := _need(keeper, "the timekeeper")) is not None:
+        return bad
+    return Result(data=bool(keeper.remove_job(args.get("name"))))
+
+
+def _cron_enable(ctx, args: dict) -> Result:
+    """Enable or disable a job."""
+    keeper = _timekeeper(ctx)
+    if (bad := _need(keeper, "the timekeeper")) is not None:
+        return bad
+    return Result(data=keeper.enable_job(args.get("name"),
+                                         bool(args.get("enabled", True))))
+
+
+def _event_emit(ctx, args: dict) -> Result:
+    """Publish on a bus channel."""
+    try:
+        from events.event_bus import bus
+        bus.emit(args.get("channel"), args.get("payload"))
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"emit failed: {exc}")
+
+
+def _event_request(ctx, args: dict) -> Result:
+    """Publish and wait for one answer."""
+    try:
+        from events.event_bus import bus
+        return Result(data=bus.request(args.get("channel"),
+                                       args.get("payload") or {},
+                                       timeout=float(args.get("timeout") or 120.0)))
+    except Exception as exc:
+        return Result.failure(f"request failed: {exc}", retryable=True)
+
+
+def _task_enqueue(ctx, args: dict) -> Result:
+    """Queue pipeline work."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    try:
+        for path in args.get("paths") or []:
+            db.enqueue_task(args.get("name"), path)
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"enqueue failed: {exc}")
+
+
+def _task_status(ctx, args: dict) -> Result:
+    """Where one task stands for one path."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    try:
+        return Result(data=db.get_task_status(args.get("name"),
+                                              args.get("path")))
+    except Exception as exc:
+        return Result.failure(f"status failed: {exc}")
+
+
+def _task_output(ctx, args: dict) -> Result:
+    """Read a task's output table."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    try:
+        return Result(data=_rows(db.get_task_output(args.get("name"),
+                                                    args.get("path"))))
+    except Exception as exc:
+        return Result.failure(f"output failed: {exc}")
+
+
+def _file_register(ctx, args: dict) -> Result:
+    """Add a path to the watched-file table."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    try:
+        db.upsert_file(args.get("path"), **(args.get("meta") or {}))
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"register failed: {exc}")
+
+
+def _file_list(ctx, args: dict) -> Result:
+    """Query the watched-file table."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    try:
+        modality = args.get("modality")
+        rows = (db.get_files_by_modality(modality) if modality
+                else db.get_all_files())
+        return Result(data=_rows(rows))
+    except Exception as exc:
+        return Result.failure(f"file list failed: {exc}")
+
+
+def _parse_file(ctx, args: dict) -> Result:
+    """Parse a file to text through the parser registry."""
+    parser = _service(ctx, "parser")
+    if (bad := _need(parser, "the parser service")) is not None:
+        return bad
+    try:
+        parsed = parser.parse(args.get("path"), args.get("modality") or "text")
+        return Result(data=getattr(parsed, "text", parsed))
+    except Exception as exc:
+        return Result.failure(f"parse failed: {exc}")
+
+
+def _parse_modality(ctx, args: dict) -> Result:
+    """Resolve a file extension's modality."""
+    parser = _service(ctx, "parser")
+    if (bad := _need(parser, "the parser service")) is not None:
+        return bad
+    return Result(data=parser.get_modality(args.get("extension") or ""))
+
+
+def _ledger_record(ctx, args: dict) -> Result:
+    """Write an audit row for something that is not itself a Request."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    try:
+        db.record_action(origin="sandbox",
+                         action_type=args.get("action") or "note",
+                         ok=bool(args.get("ok", True)),
+                         session_key=getattr(ctx, "session_key", None),
+                         data_json=args.get("data"))
+        return Result(data=True)
+    except Exception:
+        # Ledger writes are best-effort at every layer: the ledger observes
+        # the system and must never break it.
+        return Result(data=False)
+
+
+def _ledger_read(ctx, args: dict) -> Result:
+    """Query the ledger, targeted rather than linearly."""
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    try:
+        return Result(data=_rows(db.get_ledger_rows(
+            limit=int(args.get("limit") or 50))))
+    except Exception as exc:
+        return Result.failure(f"ledger read failed: {exc}")
+
+
+HANDLERS = {
+    DB_QUERY: _db_query, DB_WRITE: _db_write, DB_DEFINE: _db_define,
+    CONV_CREATE: _conv_create, CONV_READ: _conv_read, CONV_LIST: _conv_list,
+    CONV_APPEND: _conv_append, CONV_SET_TITLE: _conv_set_title,
+    CONV_SET_CATEGORY: _conv_set_category, CONV_DELETE: _conv_delete,
+    SESSION_GET: _session_get, SESSION_LIST: _session_list,
+    SESSION_PUSH: _session_push, SESSION_STATE_GET: _session_state_get,
+    SESSION_STATE_SET: _session_state_set, SESSION_CANCEL: _session_cancel,
+    SESSION_ADD_TOOL: _session_add_tool,
+    SESSION_REMOVE_TOOL: _session_remove_tool,
+    SESSION_ADD_PROMPT: _session_add_prompt,
+    SESSION_REMOVE_PROMPT: _session_remove_prompt,
+    UI_ASK: _ui_ask, UI_APPROVE: _ui_approve, UI_RENDER: _ui_render,
+    CONFIG_READ: _config_read, CONFIG_WRITE: _config_write,
+    USER_READ: _user_read, USER_LIST: _user_list, USER_WRITE: _user_write,
+    PLUGIN_LIST: _plugin_list, PLUGIN_DESCRIBE: _plugin_describe,
+    SERVICE_LIST: _service_list, SERVICE_CALL: _service_call,
+    TOOL_LIST: _tool_list, TOOL_CALL: _tool_call,
+    COMMAND_LIST: _command_list, COMMAND_CALL: _command_call,
+    AGENT_COMPLETE: _agent_complete,
+    CRON_LIST: _cron_list, CRON_GET: _cron_get, CRON_CREATE: _cron_create,
+    CRON_UPDATE: _cron_update, CRON_REMOVE: _cron_remove,
+    CRON_ENABLE: _cron_enable,
+    EVENT_EMIT: _event_emit, EVENT_REQUEST: _event_request,
+    TASK_ENQUEUE: _task_enqueue, TASK_STATUS: _task_status,
+    TASK_OUTPUT: _task_output,
+    FILE_REGISTER: _file_register, FILE_LIST: _file_list,
+    PARSE_FILE: _parse_file, PARSE_MODALITY: _parse_modality,
+    LEDGER_RECORD: _ledger_record, LEDGER_READ: _ledger_read,
+}
