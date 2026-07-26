@@ -25,7 +25,7 @@ import threading
 import time
 
 from .guest.channel import Terminated
-from .guest.requests import Result
+from .guest.requests import RequestFailed, Result
 from .guest.sdk import SDK
 from .interpreter import Execution, Interpreter, clamp_timeout
 from .policy import Chain
@@ -60,6 +60,10 @@ def run_in_process(interpreter: Interpreter, fn, *, name: str,
             box["result"] = fn(sdk, **(kwargs or {}))
         except Terminated as stop:
             box["result"] = Result(data=stop.value)
+        except RequestFailed as failed:
+            # An uncaught Request failure is that failure, not a mystery. A
+            # refusal the plugin chose not to handle still reads as a refusal.
+            box["result"] = failed.result
         except Exception as exc:
             logger.exception("sandboxed code raised: %s", name)
             box["result"] = Result.failure(f"unhandled error: {exc}")

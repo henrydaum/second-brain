@@ -46,8 +46,9 @@ Four mechanical changes, then the effects:
 |---|---|---|
 | Base class | `from plugins.BaseTool import BaseTool` | `from guest.bases import BaseTool` |
 | Signature | `run(self, context, **kwargs)` | `run(self, sdk, **kwargs)` |
-| Returning | `ToolResult(data=x, llm_summary=s)` | `sdk.ok(x, llm_summary=s)` |
-| Failing | `ToolResult.failed(msg)` | `sdk.fail(msg)` |
+| Returning | `ToolResult(data=x)` | `return x` |
+| Returning with extras | `ToolResult(data=x, llm_summary=s)` | `sdk.ok(x, llm_summary=s)` |
+| Failing | `ToolResult.failed(msg)` | `sdk.fail(msg)`, or just let it raise |
 
 The signature differs by family, and the **argument order changes** for two of
 them:
@@ -59,29 +60,48 @@ them:
 | command | `run(self, args, context)` | `run(self, sdk, args)` |
 | service | `_load(self)` | `start(self, sdk)` + `stop(self, sdk)` |
 
+A command's `form(args, context)` becomes `form(sdk, args)` and is bridged
+alongside `run`, so a migrated command keeps collecting its arguments.
+
 Then convert each effect the plan listed. The common ones:
 
 ```python
-open(p).read()              ->  sdk.fs.read(p).data
-Path(p).write_text(s)       ->  sdk.fs.write(p, s)
-context.db.query(sql, a)    ->  sdk.db.query(sql, a).data
-context.services["x"].m()   ->  sdk.services.call("x", "m").data
-context.call_tool("t", ...) ->  sdk.tools.call("t", ...)
-context.approve_command(...)->  sdk.ui.approve(action, why)
-requests.get(url)           ->  sdk.net.http(url)
+open(p).read()               ->  sdk.fs.read(p)
+Path(p).write_text(s)        ->  sdk.fs.write(p, s)
+context.db.query(sql, a)     ->  sdk.db.query(sql, a)
+context.db.conn.execute(...) ->  sdk.db.write(sql, params)
+context.services["x"].m()    ->  sdk.services.call("x", "m")
+context.call_tool("t", ...)  ->  sdk.tools.call("t", ...)
+context.approve_command(...) ->  sdk.ui.approve(action, why)
+requests.get(url)            ->  sdk.net.http(url)
+logger.info(msg)             ->  sdk.log(msg)
 ```
 
-Everything returns a `Result`. Check it:
+**Requests return their value and raise when they fail**, so most plugin code
+is a straight line:
 
 ```python
-r = sdk.fs.read(path)
-if not r:
-    return sdk.fail(r.error)
-text = r.data
+def run(self, sdk, path):
+    return len(sdk.fs.read(path).split())
 ```
 
-**A denial is an ordinary failure**, not an exception — the user said no, and
-your plugin should carry on or report it like any other error.
+There is no result to unwrap and no branch that exists only to forward an
+error. A failure you do not catch becomes the plugin's failure, carrying the
+original reason — which is what the caller wanted anyway.
+
+Catch one only when you have something to do about it. Refusals have their own
+class, so "the user said no" can be handled without also swallowing "the disk
+is full":
+
+```python
+try:
+    page = sdk.net.http(url)
+except sdk.Denied:
+    return "I need permission to fetch that."
+```
+
+`sdk.Denied` is a subclass of `sdk.Failed`, so catching `sdk.Failed` catches
+both.
 
 ### 3. Add declarations if it needs them
 
@@ -194,9 +214,8 @@ Nothing to compare; use the validator alone.
 **"previous version failed"** — the old plugin could not run with the context
 you supplied. Give a fuller context, or compare a simpler payload.
 
-**A difference in `data` only under some inputs** — usually a `Result` vs
-`ToolResult` shape mismatch. Check you are returning `sdk.ok(x)` and not
-`sdk.ok({"data": x})`.
+**A difference in `data` only under some inputs** — check you are returning
+the value itself. `return x`, not `return sdk.ok({"data": x})`.
 
 **Everything is denied** — no approver is wired. `Sandbox(runtime=runtime)`
 connects the dialog; without it, everything unsafe is refused by design.

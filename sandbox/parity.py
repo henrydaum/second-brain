@@ -25,7 +25,9 @@ difference is worth stopping for.
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -179,8 +181,14 @@ def compare(path, entry: str = "", *, payload=None, context=None,
 
     owned = sandbox is None
     box = sandbox or Sandbox(context=context)
-    space = Path(workspace) if workspace else path.parent
     native_box = f"parity_{name}"
+
+    # Never beside the plugin. A file called ``tool_x_previous.py`` sitting in
+    # a plugin directory carries the ``tool_`` prefix, so discovery finds it,
+    # registers it, and collides on the very name we just migrated.
+    space = Path(workspace) if workspace else Path(
+        tempfile.mkdtemp(prefix="sb-parity-"))
+    disposable = workspace is None
 
     try:
         module = _load_native(previous, f"{name}_previous", space,
@@ -190,6 +198,8 @@ def compare(path, entry: str = "", *, payload=None, context=None,
         return Parity(name, error=f"previous version failed: {exc}")
     finally:
         unload_box(native_box)
+        if disposable:
+            shutil.rmtree(space, ignore_errors=True)
 
     try:
         if entry:

@@ -196,6 +196,48 @@ class Request:
 DENIED = "denied"
 
 
+class RequestFailed(Exception):
+    """A Request did not succeed.
+
+    Python's answer to "an operation that can fail" is an exception, so that
+    is what the SDK gives plugin authors. Handling a failure is a ``try``;
+    ignoring one lets the runner turn it into a failed result with the reason
+    intact. Neither costs a line of ceremony.
+
+    The :class:`Result` is still there on ``.result`` for anything that wants
+    the whole shape.
+    """
+
+    def __init__(self, result: "Result", request_type: str = ""):
+        self.result = result
+        self.request_type = request_type
+        super().__init__(f"{request_type or 'request'}: {result.error}"
+                         if request_type else result.error)
+
+    @property
+    def error(self) -> str:
+        """Why it failed."""
+        return self.result.error
+
+    @property
+    def retryable(self) -> bool:
+        """Whether trying again could plausibly work."""
+        return self.result.retryable
+
+
+class Denied(RequestFailed):
+    """The kernel refused a Request — policy, not breakage.
+
+    Separate from :class:`RequestFailed` so a plugin can react to "the user
+    said no" without also swallowing "the disk is full"::
+
+        try:
+            page = sdk.net.http(url)
+        except sdk.Denied:
+            return "I need permission to fetch that."
+    """
+
+
 @dataclass(frozen=True)
 class Result:
     """What a Request returns.

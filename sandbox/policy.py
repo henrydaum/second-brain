@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .guest import requests as R
 from .guest.requests import (AGENT_SCHEDULE, CONFIG_READ, CONV_DELETE,
                              ENV_READ, FS_DELETE, FS_MOVE, FS_TEMP, FS_WRITE,
                              NET_HTTP, PROC_RUN, SESSION_ADD_PROMPT,
@@ -150,42 +151,51 @@ MAX_DEPTH = 8
 # perform without asking, whatever the arguments.
 ALWAYS_UNSAFE = {
     # Widening what the agent may do next.
-    "session.add_tool", "session.add_prompt_extra", "session.set_profile",
+    R.SESSION_ADD_TOOL, R.SESSION_ADD_PROMPT,
     # The literal subject of the LibOS quote: the agent extending itself.
-    "plugin.register", "plugin.unregister", "plugin.reload",
-    "plugin.install", "plugin.uninstall",
-    "service.load", "service.unload",
+    R.PLUGIN_REGISTER, R.PLUGIN_UNREGISTER, R.PLUGIN_RELOAD,
+    R.PLUGIN_INSTALL, R.PLUGIN_UNINSTALL,
+    R.SERVICE_LOAD, R.SERVICE_UNLOAD,
     # Recurring unattended work.
-    "cron.create", "cron.update", "cron.remove",
-    "agent.schedule",
+    R.CRON_CREATE, R.CRON_UPDATE, R.CRON_REMOVE,
+    R.AGENT_SCHEDULE,
     # Identity and settings.
-    "config.write", "user.write", "user.list",
+    R.CONFIG_WRITE, R.USER_WRITE, R.USER_LIST,
     # Destructive.
-    "conv.delete", "fs.delete",
+    R.CONV_DELETE, R.FS_DELETE,
 }
 
 # Requests that narrow capability, or only ever affect this execution.
 ALWAYS_SAFE = {
-    "self.respond", "fs.temp", "fs.read", "fs.list", "fs.search",
-    "db.query", "conv.read", "conv.list", "conv.create", "conv.append",
-    "conv.set_title", "conv.set_category",
-    "session.get", "session.list", "session.push", "session.cancel",
-    "session.state_get", "session.state_set", "session.remove_tool",
-    "session.remove_prompt_extra",
-    "ui.approve", "ui.render",
-    "user.read",
-    "plugin.list", "plugin.describe", "service.list", "service.call",
-    "tool.list", "tool.call", "command.list", "command.call",
-    "cron.enable",
-    "agent.complete", "agent.spawn",
-    "cron.list", "cron.get",
-    "event.emit", "event.request",
-    "task.enqueue", "task.status", "task.output",
-    "file.register", "file.list",
-    "parse.file", "parse.modality",
-    "ledger.record", "ledger.read",
-    "db.write", "db.define",
+    R.SELF_RESPOND, R.FS_TEMP, R.FS_READ, R.FS_LIST, R.FS_SEARCH,
+    R.DB_QUERY, R.DB_WRITE, R.DB_DEFINE,
+    R.CONV_READ, R.CONV_LIST, R.CONV_CREATE, R.CONV_APPEND,
+    R.CONV_SET_TITLE, R.CONV_SET_CATEGORY,
+    R.SESSION_GET, R.SESSION_LIST, R.SESSION_PUSH, R.SESSION_CANCEL,
+    R.SESSION_STATE_GET, R.SESSION_STATE_SET, R.SESSION_REMOVE_TOOL,
+    R.SESSION_REMOVE_PROMPT,
+    R.UI_APPROVE, R.UI_RENDER,
+    R.USER_READ,
+    R.PLUGIN_LIST, R.PLUGIN_DESCRIBE, R.SERVICE_LIST, R.SERVICE_CALL,
+    R.TOOL_LIST, R.TOOL_CALL, R.COMMAND_LIST, R.COMMAND_CALL,
+    R.AGENT_COMPLETE, R.AGENT_SPAWN,
+    R.CRON_LIST, R.CRON_GET, R.CRON_ENABLE,
+    R.EVENT_EMIT, R.EVENT_REQUEST,
+    R.TASK_ENQUEUE, R.TASK_STATUS, R.TASK_OUTPUT,
+    R.FILE_REGISTER, R.FILE_LIST,
+    R.PARSE_FILE, R.PARSE_MODALITY,
+    R.LEDGER_RECORD, R.LEDGER_READ,
 }
+
+# Every Request must appear in exactly one of the two sets or be handled by a
+# branch above. Checked at import so a new Request cannot be added without a
+# decision being made about it — silently defaulting to "unsafe" would look
+# like policy when it is really an oversight.
+_BRANCHED = {NET_HTTP, PROC_RUN, FS_WRITE, FS_MOVE, FS_DELETE, FS_TEMP,
+             CONFIG_READ, ENV_READ, UI_ASK, SESSION_ADD_TOOL,
+             SESSION_ADD_PROMPT, AGENT_SCHEDULE, CONV_DELETE}
+_UNDECIDED = R.ALL_TYPES - ALWAYS_SAFE - ALWAYS_UNSAFE - _BRANCHED
+assert not _UNDECIDED, f"unclassified Requests: {sorted(_UNDECIDED)}"
 
 
 def classify(request: Request, chain: Chain) -> Decision:

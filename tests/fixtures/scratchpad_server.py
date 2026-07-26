@@ -20,16 +20,16 @@ def remember(sdk, key, value):
     global _calls
     _calls += 1
     _notes[key] = value
-    return sdk.ok(len(_notes))
+    return len(_notes)
 
 
 def recall(sdk, key):
     """Fetch a note, or None."""
     global _calls
     _calls += 1
-    return sdk.ok(_notes.get(key))
+    return _notes.get(key)
 
 
 def stats(sdk):
     """Report how much state has accumulated."""
-    return sdk.ok({"notes": len(_notes), "calls": _calls})
+    return {"notes": len(_notes), "calls": _calls}

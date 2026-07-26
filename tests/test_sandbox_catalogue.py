@@ -357,7 +357,7 @@ def test_a_secret_is_usable_without_being_readable(tmp_path):
         sdk = SDK(interpreter.channel(execution))
 
         seen = sdk.config.read("brave_api_key")
-        assert seen.data == "<secret:brave_api_key>"
-        assert "sk-real" not in str(seen.data)
+        assert seen == "<secret:brave_api_key>"
+        assert "sk-real" not in str(seen)
     finally:
         interpreter.shutdown()

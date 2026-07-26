@@ -26,6 +26,7 @@ package migrates exactly like a kernel one.
 
 from __future__ import annotations
 
+import ast
 import logging
 import types
 from pathlib import Path
@@ -36,9 +37,10 @@ from .validator import FAMILIES, validate_file
 
 logger = logging.getLogger("Sandbox")
 
-# Imports that mean "this file is written against the SDK".
-SANDBOX_MARKERS = ("guest.bases", "guest.box", "sandbox.guest.bases",
-                   "from guest import", "import guest\n")
+# Modules whose import means "this file is written against the SDK".
+SANDBOX_MODULES = {"guest", "guest.bases", "guest.box", "guest.sdk",
+                   "sandbox.guest", "sandbox.guest.bases",
+                   "sandbox.guest.box"}
 
 # The native base class each family's adapter must subclass, so the kernel
 # keeps seeing what it expects.
@@ -50,16 +52,12 @@ NATIVE_BASES = {
     "frontend": ("plugins.BaseFrontend", "BaseFrontend"),
 }
 
-# Declarations that mean something to the *kernel* and must be copied onto the
-# adapter, or the registry will advertise a plugin with no schema and no name.
-CARRIED = ("name", "description", "parameters", "requires_services",
-           "dependencies_files", "dependencies_pip", "dependencies_tools",
-           "max_calls", "background_safe", "auto_register", "category",
-           "hide_from_help", "require_approval", "config_settings",
-           "agent_prompt", "trigger", "trigger_channels", "modalities",
-           "reads", "writes", "output_schema", "batch_size", "max_workers",
-           "default_jobs", "require_all_inputs", "shared", "lifecycle",
-           "model_name", "user_binding", "default_user_id")
+# Declarations are copied onto the adapter wholesale, minus the few that mean
+# something to the *sandbox* rather than to the kernel. A denylist rather than
+# an allowlist because the base classes will grow, and an allowlist that
+# drifts silently drops a plugin's schema.
+NOT_CARRIED = {"family", "box", "isolation", "lifetime", "timeout",
+               "memory_mb", "requests", "exports"}
 
 _SANDBOX: Sandbox | None = None
 
@@ -85,14 +83,29 @@ def get_sandbox() -> Sandbox:
 def is_sandboxed(path) -> bool:
     """Whether a plugin file is written against the SDK.
 
-    Reads the source rather than importing it, so asking the question costs
-    nothing and cannot run anything.
+    Parses rather than imports, so asking costs nothing and cannot run
+    anything — and parses rather than greps, because a docstring mentioning
+    ``guest.bases`` would otherwise route a perfectly ordinary plugin into the
+    bridge and break it at load.
     """
     try:
         source = Path(path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        tree = ast.parse(source)
+    except (OSError, SyntaxError):
         return False
-    return any(marker in source for marker in SANDBOX_MARKERS)
+    return imports_sdk(tree)
+
+
+def imports_sdk(tree) -> bool:
+    """Whether a parsed module imports the SDK contract."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(a.name in SANDBOX_MODULES for a in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            if (node.module or "") in SANDBOX_MODULES:
+                return True
+    return False
 
 
 def family_of(path) -> str:
@@ -163,7 +176,7 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     source_path = str(path)
     box_name = declarations.get("box") or path.stem
 
-    def _forward(self, context, payload):
+    def _forward(self, context, payload, method: str = "run"):
         """Run the migrated plugin and translate the answer back.
 
         The context is passed *per call* rather than held, because two calls
@@ -175,7 +188,9 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         chain = Chain(root=_root_for(context))
         result = get_sandbox().run(
             source_path, entry, kwargs=payload, chain=chain, context=context,
-            name=self.name or path.stem)
+            name=self.name or path.stem, method=method)
+        if method != "run":
+            return result.data if result.ok else None
         return _result_to_native(family, result, native_module)
 
     # The families disagree about argument order, and the adapter is the one
@@ -193,6 +208,17 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         """Native command contract."""
         return _forward(self, context, {"args": dict(args or {})})
 
+    def form_command(self, args, context):
+        """Native command form contract.
+
+        A command whose form vanished would silently stop collecting its
+        arguments, which is worse than not bridging commands at all — so the
+        second entry point is forwarded too, and only when the migrated file
+        actually defines one.
+        """
+        return _forward(self, context, {"args": dict(args or {})},
+                        method="form") or []
+
     run = {"tool": run_tool, "task": run_task,
            "command": run_command}.get(family)
     if run is None:
@@ -201,15 +227,17 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
 
     attributes = {
         "__doc__": f"Sandboxed {family} loaded from {path.name}.",
+        **({"form": form_command} if family == "command"
+           and _defines(report.source, entry, "form") else {}),
         "_source_path": source_path,
         "_sandboxed": True,
         "_box": box_name,
         "_entry": entry,
         "run": run,
     }
-    for key in CARRIED:
-        if key in declarations:
-            attributes[key] = declarations[key]
+    for key, value in declarations.items():
+        if key not in NOT_CARRIED:
+            attributes[key] = value
     attributes.setdefault("name", path.stem.split("_", 1)[-1])
 
     adapter = type(f"Sandboxed{entry}", (base,), attributes)
@@ -245,3 +273,16 @@ def _entry_from(source: str) -> str:
                 if isinstance(base, ast.Name) and base.id in wanted:
                     return node.name
     return ""
+
+
+def _defines(source: str, class_name: str, method: str) -> bool:
+    """Whether a class in the source defines a given method."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            return any(isinstance(item, ast.FunctionDef)
+                       and item.name == method for item in node.body)
+    return False

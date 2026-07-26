@@ -69,7 +69,7 @@ def test_a_declared_isolation_picks_the_runner(sb, tmp_path, note):
     script.write_text(
         'isolation = "subprocess"\n\n'
         "def go(sdk, path):\n"
-        "    return sdk.ok(sdk.fs.read(path).data)\n", encoding="utf-8")
+        "    return sdk.fs.read(path)\n", encoding="utf-8")
     report, spec = sb.inspect(script)
     assert spec.isolation == SUBPROCESS
     assert sb.run(script, "go", kwargs={"path": note}).data == "one two three"

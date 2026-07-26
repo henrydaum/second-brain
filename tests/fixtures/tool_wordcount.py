@@ -24,7 +24,4 @@ class WordCount(BaseTool):
 
     def run(self, sdk, path):
         """Read the file and count."""
-        r = sdk.fs.read(path)
-        if not r:
-            return sdk.fail(r.error)
-        return sdk.ok(count_words(r.data))
+        return count_words(sdk.fs.read(path))

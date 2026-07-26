@@ -259,8 +259,11 @@ def script(tmp_path):
     path = tmp_path / "reach.py"
     path.write_text(
         "def go(sdk):\n"
-        "    r = sdk.net.http('https://example.invalid/x')\n"
-        "    return sdk.ok({'ok': r.ok, 'denied': r.denied})\n",
+        "    try:\n"
+        "        sdk.net.http('https://example.invalid/x')\n"
+        "        return {'denied': False}\n"
+        "    except sdk.Denied:\n"
+        "        return {'denied': True}\n",
         encoding="utf-8")
     return path
 
@@ -278,7 +281,7 @@ def test_a_refused_request_reaches_the_plugin_as_a_denial(script):
         unload_box("reach")
 
     assert result.ok
-    assert result.data == {"ok": False, "denied": True}
+    assert result.data == {"denied": True}
     assert len(runtime.asked) == 1
     assert "example.invalid" in runtime.asked[0]["prompt"]
     assert "user -> reach" in runtime.asked[0]["prompt"]
@@ -293,7 +296,7 @@ def test_safe_requests_never_reach_the_dialog(tmp_path):
     path = tmp_path / "reader.py"
     path.write_text(
         "def go(sdk, p):\n"
-        "    return sdk.ok(sdk.fs.read(p).data)\n", encoding="utf-8")
+        "    return sdk.fs.read(p)\n", encoding="utf-8")
 
     runtime = FakeRuntime(answer=True)
     box = Sandbox(runtime=runtime)

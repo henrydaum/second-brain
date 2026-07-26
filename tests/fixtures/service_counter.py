@@ -26,16 +26,15 @@ class Counter(BaseService):
     def add(self, sdk, n):
         """Add to the total and return the new value."""
         self.running += n
-        return sdk.ok(self.running)
+        return self.running
 
     def total(self, sdk):
         """Report the total without changing it."""
-        return sdk.ok(self.running)
+        return self.running
 
     def read_file(self, sdk, path):
         """A method that makes a Request mid-call."""
-        r = sdk.fs.read(path)
-        return sdk.ok(r.data if r else None)
+        return sdk.fs.read(path)
 
     def explode(self, sdk):
         """Fail, to prove one bad call does not kill the service."""

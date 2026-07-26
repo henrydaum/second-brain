@@ -243,7 +243,7 @@ class ReadSetting(BaseTool):
 
     def run(self, sdk, key=""):
         """Through the gate."""
-        return sdk.ok(sdk.config.read(key).data)
+        return sdk.config.read(key)
 '''
     module = adapt(_write(tmp_path, "tool_word_count.py", source))
     instance = next(v() for v in vars(module).values() if isinstance(v, type))
@@ -335,3 +335,42 @@ def test_migrated_and_native_tools_register_together(tmp_path, box):
     # And both are callable through the one registry, indistinguishably.
     assert registry.call("shout", text="hey").data == "HEY"
     assert registry.call("word_count", text="a b c").data == {"words": 3}
+
+
+def test_a_command_form_is_bridged_too(tmp_path, box):
+    """A command whose form vanished would silently stop collecting args."""
+    source = '''
+"""A migrated command with a form."""
+
+from guest.bases import BaseCommand
+
+
+class Deploy(BaseCommand):
+    """Deploy something."""
+
+    name = "deploy"
+
+    def form(self, sdk, args):
+        """Ask for the target if it was not given."""
+        return [] if args.get("target") else [{"field": "target"}]
+
+    def run(self, sdk, args):
+        """Do it."""
+        return f"deploying {args['target']}"
+'''
+    module = adapt(_write(tmp_path, "command_deploy.py", source))
+    instance = next(v() for v in vars(module).values() if isinstance(v, type))
+
+    assert instance.form({}, SimpleNamespace(config={})) == [
+        {"field": "target"}]
+    assert instance.form({"target": "prod"}, SimpleNamespace(config={})) == []
+    assert instance.run({"target": "prod"},
+                        SimpleNamespace(config={})) == "deploying prod"
+    unload_box("command_deploy")
+
+
+def test_a_command_without_a_form_keeps_the_base_default(tmp_path, box):
+    """Only forward what the migrated file actually defines."""
+    module = adapt(_write(tmp_path, "command_status.py", MIGRATED_COMMAND))
+    instance = next(v() for v in vars(module).values() if isinstance(v, type))
+    assert instance.form({}, SimpleNamespace(config={})) == []

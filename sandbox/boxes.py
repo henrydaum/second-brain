@@ -124,6 +124,7 @@ class InProcessBox(PersistentBox):
     def _invoke(self, fn, kwargs: dict, deadline: float) -> Result:
         """Run one callable on a worker thread under a deadline."""
         from .guest.channel import Terminated
+        from .guest.requests import RequestFailed
 
         box: dict = {}
         done = threading.Event()
@@ -136,6 +137,8 @@ class InProcessBox(PersistentBox):
                     data=raw)
             except Terminated as stop:
                 box["result"] = Result(data=stop.value)
+            except RequestFailed as failed:
+                box["result"] = failed.result
             except Exception as exc:
                 box["result"] = Result.failure(f"{type(exc).__name__}: {exc}")
             finally:

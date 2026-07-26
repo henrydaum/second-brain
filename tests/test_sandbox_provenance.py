@@ -145,8 +145,11 @@ def test_the_dialog_sees_the_whole_chain_not_just_the_leaf(tmp_path):
         script = tmp_path / "reach_out.py"
         script.write_text(
             "def go(sdk):\n"
-            "    r = sdk.net.http('https://example.invalid/collect')\n"
-            "    return sdk.ok(r.denied)\n", encoding="utf-8")
+            "    try:\n"
+            "        sdk.net.http('https://example.invalid/collect')\n"
+            "        return False\n"
+            "    except sdk.Denied:\n"
+            "        return True\n", encoding="utf-8")
         result = box.run(script, "go",
                          chain=Chain(root="cron:nightly_index").push("task_x"))
     finally:

@@ -79,7 +79,7 @@ def load_member(module_path, box_name: str = "", root=None):
 
 
 def load_entry(module_path, func_name: str = "", box_name: str = "",
-               root=None, bound: bool = True):
+               root=None, bound: bool = True, method: str = "run"):
     """Import a box member and resolve what the runner should hold.
 
     ``bound`` decides *what* comes back, because the two lifetimes need
@@ -107,7 +107,7 @@ def load_entry(module_path, func_name: str = "", box_name: str = "",
     if not bound:
         return target() if isinstance(target, type) else target
 
-    fn = entry_for(target)
+    fn = entry_for(target, method)
     if not callable(fn):
         raise AttributeError(f"{module_path}.{func_name} is not callable")
     return fn

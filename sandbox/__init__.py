@@ -43,12 +43,14 @@ _sys.modules.setdefault("guest", _guest)
 # name happened to be imported first. Pinning every submodule under both
 # names keeps one object per module however it is reached.
 import importlib as _importlib  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
 
-for _submodule in ("requests", "protocol", "channel", "sdk", "bases", "box",
-                   "loader"):
+for _found in sorted(_Path(_guest.__file__).parent.glob("*.py")):
+    if _found.stem in ("__init__", "child"):
+        continue          # child is only ever the subprocess entry point
     _sys.modules.setdefault(
-        f"guest.{_submodule}",
-        _importlib.import_module(f".guest.{_submodule}", __name__))
+        f"guest.{_found.stem}",
+        _importlib.import_module(f".guest.{_found.stem}", __name__))
 
 from .guest.channel import Terminated  # noqa: E402
 from .guest.requests import Request, Result

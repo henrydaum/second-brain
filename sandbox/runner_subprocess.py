@@ -49,7 +49,7 @@ def run_in_subprocess(interpreter: Interpreter, module_path: str,
                       box: str = "", box_root: str | None = None,
                       root_dir: str | None = None,
                       execution: Execution | None = None,
-                      on_proc=None) -> Result:
+                      on_proc=None, method: str = "run") -> Result:
     """Run ``func_name`` from ``module_path`` in a child process.
 
     ``timeout`` and ``memory_mb`` are the plugin's *declared* values and are
@@ -89,6 +89,7 @@ def run_in_subprocess(interpreter: Interpreter, module_path: str,
             "kind": protocol.START,
             "module": str(module_path),
             "func": func_name,
+            "method": method,
             "kwargs": kwargs or {},
             "box": box,
             "root": box_root,
@@ -182,10 +183,15 @@ def _pump(interpreter: Interpreter, execution: Execution, proc,
 
     message = service_until(interpreter, execution, proc,
                             {protocol.DONE, protocol.FAULT})
+
+    # The watchdog firing is the answer, whatever the child managed to say on
+    # its way out. Since a refused Request now unwinds the plugin promptly, a
+    # starved runaway can return a tidy "denied" a moment before the kill
+    # lands — and reporting that would hide the fact that it ran too long.
+    if killed.is_set():
+        return Result.failure(f"timed out after {deadline:.1f}s",
+                              retryable=True)
     if message is None:
-        if killed.is_set():
-            return Result.failure(f"timed out after {deadline:.1f}s",
-                                  retryable=True)
         return Result.failure(
             f"child exited without a result (code {proc.poll()})")
     if message["kind"] == protocol.FAULT:

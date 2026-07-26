@@ -185,16 +185,17 @@ class Sandbox:
     def run(self, source, entry: str = "", *, kwargs: dict | None = None,
             chain: Chain | None = None, name: str | None = None,
             isolated: bool | None = None, timeout: float | None = None,
-            context=None) -> Result:
+            context=None, method: str = "run") -> Result:
         """Run once and wait for the answer. The ``wait=True`` shape."""
         run = self.start(source, entry, kwargs=kwargs, chain=chain, name=name,
-                         isolated=isolated, timeout=timeout, context=context)
+                         isolated=isolated, timeout=timeout, context=context,
+                         method=method)
         return run.wait()
 
     def start(self, source, entry: str = "", *, kwargs: dict | None = None,
               chain: Chain | None = None, name: str | None = None,
               isolated: bool | None = None, timeout: float | None = None,
-              on_done=None, context=None) -> Run:
+              on_done=None, context=None, method: str = "run") -> Run:
         """Run without waiting. The ``wait=False`` shape.
 
         The work begins immediately on a background thread and the caller
@@ -223,8 +224,10 @@ class Sandbox:
                         kwargs=kwargs, timeout=opts["timeout"],
                         memory_mb=opts["memory_mb"], box=spec.name,
                         box_root=str(Path(source).parent),
-                        execution=execution, on_proc=run._attach_proc)
-                target = load_entry(source, entry, box_name=spec.name)
+                        execution=execution, on_proc=run._attach_proc,
+                        method=method)
+                target = load_entry(source, entry, box_name=spec.name,
+                                    method=method)
                 return run_in_process(
                     self.interpreter, target, name=run_name, kwargs=kwargs,
                     timeout=opts["timeout"], execution=execution)

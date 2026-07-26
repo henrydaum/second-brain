@@ -289,7 +289,7 @@ class ReadSetting(BaseTool):
 
     def run(self, sdk, key=""):
         """Through the gate."""
-        return sdk.ok(sdk.config.read(key).data)
+        return sdk.config.read(key)
 '''
     path = _commit(repo, "tool_read_setting.py", native)
     path.write_text(migrated, encoding="utf-8")

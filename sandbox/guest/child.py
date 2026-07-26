@@ -22,7 +22,7 @@ import traceback
 from . import protocol
 from .channel import PipeChannel, Terminated
 from .loader import load_entry
-from .requests import Result
+from .requests import RequestFailed, Result
 from .sdk import SDK
 
 
@@ -88,6 +88,9 @@ def _run_ephemeral(wire_out, sdk, target, kwargs) -> int:
         result = raw if isinstance(raw, Result) else Result(data=raw)
     except Terminated as stop:
         result = Result(data=stop.value)
+    except RequestFailed as failed:
+        # An uncaught Request failure is that failure, not a mystery.
+        result = failed.result
     except Exception as exc:
         return _fault(wire_out, exc)
     return 0 if _send_result(wire_out, protocol.DONE, result) else 1
@@ -149,6 +152,8 @@ def _serve_persistent(wire_in, wire_out, sdk, instance) -> int:
             # Requests are being refused: the kernel is tearing us down and a
             # further answer would go nowhere.
             break
+        except RequestFailed as failed:
+            result = failed.result
         except Exception as exc:
             # One bad call must not take the service down with it.
             result = Result.failure(f"{type(exc).__name__}: {exc}")
@@ -180,7 +185,8 @@ def main() -> int:
         target = load_entry(start["module"], start["func"],
                             box_name=start.get("box") or "",
                             root=start.get("root") or None,
-                            bound=not start.get("persistent"))
+                            bound=not start.get("persistent"),
+                            method=start.get("method") or "run")
     except Exception as exc:
         return _fault(wire_out, exc)
 

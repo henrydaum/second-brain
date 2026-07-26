@@ -31,11 +31,8 @@ def test_plugin_reads_a_file(interp, tmp_path):
     target.write_text("hello sandbox", encoding="utf-8")
 
     def plugin(sdk, path):
-        """Read a file, no yield in sight."""
-        r = sdk.fs.read(path)
-        if not r:
-            return sdk.fail(r.error)
-        return sdk.ok(sdk.text.truncate(r.data, 5))
+        """Read a file - straight line, no result to unwrap."""
+        return sdk.text.truncate(sdk.fs.read(path), 5)
 
     result = run_in_process(interp, plugin, name="reader",
                             kwargs={"path": str(target)})
@@ -49,7 +46,7 @@ def test_helpers_can_make_requests_without_being_generators(interp, tmp_path):
 
     def load(sdk, path):
         """An ordinary function - not a generator, no yield from."""
-        return sdk.fs.read(path).data
+        return sdk.fs.read(path)
 
     def plugin(sdk):
         """Call the helper."""
@@ -80,9 +77,11 @@ def test_denial_is_an_ordinary_failure_not_a_kill(interp, tmp_path):
 
     def plugin(sdk):
         """Get denied, then carry on and succeed."""
-        denied = sdk.net.http("https://example.com")
-        assert denied.denied
-        return sdk.fs.read(str(tmp_path / "ok.txt"))
+        try:
+            sdk.net.http("https://example.com")
+            return sdk.fail("expected a denial")
+        except sdk.Denied:
+            return sdk.fs.read(str(tmp_path / "ok.txt"))
 
     result = run_in_process(interp, plugin, name="resilient")
     assert result.ok
@@ -170,7 +169,7 @@ def test_cancellation_unwinds_rather_than_failing(interp, tmp_path):
 
     execution = Execution(name="doomed", chain=Chain().push("doomed"))
     sdk = SDK(InterpreterChannel(interp, execution))
-    assert sdk.fs.list(str(tmp_path)).ok
+    assert sdk.fs.list(str(tmp_path)) == []
 
     interp.cancel(execution)
     with pytest.raises(Terminated):
@@ -181,8 +180,11 @@ def test_a_denial_is_still_an_ordinary_failure(interp):
     """The other half of the distinction: the user saying no is survivable."""
     def plugin(sdk):
         """Get denied and keep going."""
-        denied = sdk.net.http("https://example.com")
-        return sdk.ok({"denied": denied.denied, "still_running": True})
+        try:
+            sdk.net.http("https://example.com")
+            return {"denied": False, "still_running": True}
+        except sdk.Denied:
+            return {"denied": True, "still_running": True}
 
     result = run_in_process(interp, plugin, name="denied")
     assert result.ok

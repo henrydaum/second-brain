@@ -240,17 +240,21 @@ FAMILIES = {TOOL: BaseTool, TASK: BaseTask, SERVICE: BaseService,
             COMMAND: BaseCommand, FRONTEND: BaseFrontend}
 
 
-def entry_for(obj):
+def entry_for(obj, method: str = "run"):
     """Resolve a module attribute to the callable a runner should invoke.
 
     A plugin's entry point is a method on a class; an arbitrary script's is
     just a function. Both runners resolve through here so a file needs a base
     class only when the kernel has to register it — never merely to run.
+
+    ``method`` names which one, because a plugin has more than one entry: a
+    command answers with ``run`` but collects its arguments with ``form``.
     """
     if isinstance(obj, type) and issubclass(obj, BasePlugin):
         instance = obj()
-        entry = getattr(instance, "run", None) or getattr(instance, "start")
-        return entry
+        return (getattr(instance, method, None)
+                or getattr(instance, "run", None)
+                or getattr(instance, "start"))
     return obj
 
 __all__ = ["BasePlugin", "BaseTool", "BaseTask", "BaseService", "BaseCommand",

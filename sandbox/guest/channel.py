@@ -15,8 +15,13 @@ from . import protocol
 from .requests import Request, Result
 
 
-class Terminated(Exception):
+class Terminated(BaseException):
     """Raised by ``sdk.respond`` to unwind the sandboxed code.
+
+    Deriving from ``BaseException`` rather than ``Exception`` on purpose, for
+    the same reason ``KeyboardInterrupt`` does: a plugin wrapping its work in
+    ``except Exception`` must not accidentally swallow the kernel tearing it
+    down and carry on running.
 
     Sandboxed code has to ask to end its own life, and asking has to actually
     end it — otherwise ``respond`` would record an answer and then keep
