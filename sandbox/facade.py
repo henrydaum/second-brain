@@ -184,17 +184,17 @@ class Sandbox:
 
     def run(self, source, entry: str = "", *, kwargs: dict | None = None,
             chain: Chain | None = None, name: str | None = None,
-            isolated: bool | None = None,
-            timeout: float | None = None) -> Result:
+            isolated: bool | None = None, timeout: float | None = None,
+            context=None) -> Result:
         """Run once and wait for the answer. The ``wait=True`` shape."""
         run = self.start(source, entry, kwargs=kwargs, chain=chain, name=name,
-                         isolated=isolated, timeout=timeout)
+                         isolated=isolated, timeout=timeout, context=context)
         return run.wait()
 
     def start(self, source, entry: str = "", *, kwargs: dict | None = None,
               chain: Chain | None = None, name: str | None = None,
               isolated: bool | None = None, timeout: float | None = None,
-              on_done=None) -> Run:
+              on_done=None, context=None) -> Run:
         """Run without waiting. The ``wait=False`` shape.
 
         The work begins immediately on a background thread and the caller
@@ -210,7 +210,8 @@ class Sandbox:
 
         run_name = opts["name"]
         execution = Execution(name=run_name,
-                              chain=(chain or Chain()).push(run_name))
+                              chain=(chain or Chain()).push(run_name),
+                              context=context)
         run = Run(run_name, execution.chain, execution, self.interpreter)
 
         def _work() -> Result:

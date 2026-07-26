@@ -278,3 +278,47 @@ def test_every_family_prefix_is_enforced():
         source = GOOD_TOOL.replace("BaseTool", base)
         assert _validate(source, filename=f"{family}_x.py").ok, family
         assert not _validate(source, filename=f"wrong_{family}.py").ok, family
+
+
+# ──────────────────────────────────────────────────────────────────────
+# What counts as pure.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_pure_stdlib_passes_clean():
+    """Computation-only modules are not effects and must not be flagged."""
+    for module in ("time", "email", "csv", "ast", "struct", "mimetypes",
+                   "secrets", "traceback", "contextlib"):
+        report = _validate(GOOD_TOOL.replace("import json", f"import {module}"))
+        assert report.ok and not report.disclaimed, f"{module}: {report.render()}"
+
+
+def test_vouched_third_party_packages_pass_clean():
+    """Pure computation from pip is still pure computation."""
+    for module in ("croniter", "cron_descriptor"):
+        report = _validate(GOOD_TOOL.replace("import json", f"import {module}"))
+        assert report.ok and not report.disclaimed, f"{module}: {report.render()}"
+
+
+def test_logging_points_at_the_sdk_rather_than_being_allowed():
+    """A subprocessed plugin's log lines must reach the kernel's sink, and
+    a child process cannot see the host's logging configuration."""
+    report = _validate(GOOD_TOOL.replace("import json", "import logging"))
+    assert not report.ok
+    assert "sdk.log" in _messages(report)
+
+
+def test_io_and_xml_stay_out_despite_having_pure_parts():
+    """StringIO is pure and io.open is beside it; ElementTree.parse takes a
+    filename. Both are close enough to an effect to keep out."""
+    assert not _validate(GOOD_TOOL.replace("import json", "import io")).ok
+    xml = _validate(GOOD_TOOL.replace("import json",
+                                      "import xml.etree.ElementTree"))
+    assert xml.disclaimed
+
+
+def test_kernel_modules_are_not_called_foreign_libraries():
+    """They are the boundary, not an unvalidatable dependency."""
+    for module in ("paths", "runtime.context", "plugins.helpers.plugin_paths"):
+        report = _validate(GOOD_TOOL.replace("import json", f"import {module}"))
+        assert not report.ok, module
+        assert "kernel side" in _messages(report), module

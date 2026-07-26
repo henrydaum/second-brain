@@ -217,6 +217,22 @@ class Result:
     error: str = ""
     retryable: bool = False
 
+    # ── how a result reaches the agent and the frontend ────────────
+    # ``data`` is for the caller; these carry the rest of what a plugin
+    # produces, and dropping them would quietly lose behaviour the kernel
+    # already depends on.
+    #
+    # Tools:
+    llm_summary: str = ""            # what the *model* is told, when the raw
+                                     # data is the wrong thing to show it
+    attachment_paths: list = field(default_factory=list)  # files for the user
+    #
+    # Tasks:
+    also_contains: list = field(default_factory=list)     # nested content
+                                                          # found while parsing
+    discovered_paths: list = field(default_factory=list)  # new files to
+                                                          # register
+
     def __bool__(self) -> bool:
         return self.ok
 
@@ -239,11 +255,19 @@ class Result:
     def to_dict(self) -> dict:
         """Serialize for the subprocess runner."""
         return {"ok": self.ok, "data": self.data,
-                "error": self.error, "retryable": self.retryable}
+                "error": self.error, "retryable": self.retryable,
+                "llm_summary": self.llm_summary,
+                "attachment_paths": list(self.attachment_paths),
+                "also_contains": list(self.also_contains),
+                "discovered_paths": list(self.discovered_paths)}
 
     @staticmethod
     def from_dict(raw: dict) -> "Result":
         """Rebuild from the wire."""
         return Result(ok=raw["ok"], data=raw.get("data"),
                       error=raw.get("error", ""),
-                      retryable=raw.get("retryable", False))
+                      retryable=raw.get("retryable", False),
+                      llm_summary=raw.get("llm_summary", ""),
+                      attachment_paths=list(raw.get("attachment_paths") or []),
+                      also_contains=list(raw.get("also_contains") or []),
+                      discovered_paths=list(raw.get("discovered_paths") or []))

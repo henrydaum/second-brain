@@ -50,13 +50,71 @@ CONTRACT_MODULES = (
 )
 
 # Pure stdlib: computation only, no way to reach the environment.
+#
+# Judgement calls worth knowing about:
+#   - ``time`` is here because the clock is an SDK helper, not a Request; we
+#     are not chasing replay determinism.
+#   - ``email`` and ``csv`` parse things already in memory. The store's mail
+#     and tabular plugins lean on them heavily and neither opens a file.
+#   - ``ast`` and ``tokenize`` read source text, not files.
+#   - ``io`` is *not* here despite ``StringIO`` being pure, because ``io.open``
+#     is right beside it. Use ``sdk.fs``.
+#   - ``xml`` is not here for the same reason: ``ElementTree.parse`` takes a
+#     filename.
 PURE_MODULES = {
-    "__future__", "abc", "base64", "binascii", "bisect", "calendar",
-    "collections", "colorsys", "copy", "dataclasses", "datetime", "decimal",
-    "difflib", "enum", "fractions", "functools", "hashlib", "heapq", "hmac",
-    "html", "itertools", "json", "math", "numbers", "operator", "random",
-    "re", "statistics", "string", "textwrap", "types", "typing", "unicodedata",
-    "urllib.parse", "uuid", "zoneinfo",
+    "__future__", "abc", "argparse", "array", "ast", "base64", "binascii",
+    "bisect", "calendar", "cmath", "codecs", "collections", "colorsys",
+    "contextlib", "copy", "csv", "dataclasses", "datetime", "decimal",
+    "difflib", "email", "enum", "fnmatch", "fractions", "functools",
+    "graphlib", "hashlib", "heapq", "hmac", "html", "itertools", "json",
+    "keyword", "math", "mimetypes", "numbers", "operator", "posixpath",
+    "pprint", "queue", "random", "re", "reprlib", "secrets", "statistics",
+    "string", "struct", "textwrap", "time", "token", "tokenize", "traceback",
+    "types", "typing", "unicodedata", "urllib.parse", "uuid", "warnings",
+    "zoneinfo",
+}
+
+# Pure third-party packages the SDK vouches for. Not stdlib, but computation
+# only — no disk, no network, no process — so importing one in-process is no
+# more dangerous than arithmetic.
+#
+# Anything here has to be installed wherever guest code runs, which for a
+# container means shipping it in the image. That is the cost of the list, and
+# it is why the list is short and stays short: a plugin wanting something
+# heavier should declare ``isolation = "subprocess"`` and take the disclaimer.
+SDK_PACKAGES = {
+    "croniter": "parsing and stepping cron expressions",
+    "cron_descriptor": "describing cron expressions in English",
+}
+
+# First-party kernel modules. Importing one is not a foreign-library problem
+# — it is the boundary itself. Whatever the plugin wanted from it is a
+# Request, and saying "this cannot be validated, subprocess it" would be both
+# wrong and unhelpful.
+KERNEL_MODULES = {
+    "agent", "attachments", "config", "events", "paths", "pipeline",
+    "plugins", "runtime", "state_machine", "stress",
+}
+
+# What a native plugin reached for on its context, and the SDK route that
+# replaces it. This is the migration checklist for plugins that perform their
+# effects through ``context`` rather than through stdlib calls.
+CONTEXT_MAP = {
+    "db": "sdk.db",
+    "config": "sdk.config",
+    "services": "sdk.services.call",
+    "call_tool": "sdk.tools.call",
+    "approve_command": "sdk.ui.approve",
+    "request_user_input": "sdk.ui.ask",
+    "tool_registry": "sdk.tools",
+    "orchestrator": "sdk.pipeline",
+    "command_registry": "sdk.tools.run_command",
+    "runtime": "sdk.session / sdk.conv",
+    "session_key": "sdk.session.get",
+    "user_id": "sdk.users.read",
+    "current_user": "sdk.users.read",
+    "user_config": "sdk.config.read",
+    "root_dir": "sdk.fs",
 }
 
 # Reaching for the environment directly. Each maps to the Request that does
@@ -91,6 +149,21 @@ BANNED_BUILTINS = {
     "__import__": "sdk.plugin.register",
     "input": "sdk.ui.ask",
     "breakpoint": "nothing",
+}
+
+# Database-shaped attribute names. Native plugins reach past the Database
+# API into the raw sqlite connection in dozens of places, and every one of
+# them has to become a Request. Bare ``execute`` and ``lock`` are deliberately
+# absent: they appear on plenty of things that are not databases, and a linter
+# that cries wolf gets worked around.
+DB_ATTRS = {
+    "conn": "sdk.db.query / sdk.db.write",
+    "cursor": "sdk.db.query",
+    "fetchone": "sdk.db.query",
+    "fetchall": "sdk.db.query",
+    "executemany": "sdk.db.write",
+    "execute_write": "sdk.db.write",
+    "ensure_output_table": "sdk.db.define",
 }
 
 # Effect-shaped method names. Heuristic by nature: a linter, not a proof.
@@ -202,13 +275,20 @@ class _Walker(ast.NodeVisitor):
         key = _module_root(name)
         if key in PURE_MODULES or name in PURE_MODULES:
             return
+        if key in SDK_PACKAGES:
+            return
         if key in EFFECT_MODULES:
             self.add(ERROR, node, f"imports {name!r}, which reaches the "
                                   f"environment directly", EFFECT_MODULES[key])
             return
+        if key in KERNEL_MODULES:
+            self.add(ERROR, node,
+                     f"imports {name!r}, which lives on the kernel side of "
+                     f"the boundary", "a Request for whatever it needed")
+            return
         self.add(WARNING, node,
                  f"imports {name!r}, a foreign library. Its actions cannot be "
-                 f"turned into Requests, so they are not mediated — run this "
+                 f"turned into Requests, so they are not mediated - run this "
                  f"plugin in a subprocess")
 
     def visit_Import(self, node):
@@ -228,6 +308,11 @@ class _Walker(ast.NodeVisitor):
     def visit_Call(self, node):
         """Direct calls to banned builtins."""
         fn = node.func
+        if isinstance(fn, ast.Name) and fn.id == "getattr":
+            # ``getattr(context, "db", None)`` is how a native plugin asks for
+            # an optional capability, and it is invisible to plain attribute
+            # matching.
+            self._check_getattr(node)
         if isinstance(fn, ast.Name) and fn.id in BANNED_BUILTINS:
             self.add(ERROR, node, f"calls {fn.id}()",
                      BANNED_BUILTINS[fn.id])
@@ -245,6 +330,38 @@ class _Walker(ast.NodeVisitor):
         while isinstance(node, ast.Attribute):
             node = node.value
         return isinstance(node, ast.Name) and node.id == "sdk"
+
+    def _check_getattr(self, node):
+        """Flag getattr(context, "field") the way a direct access is flagged."""
+        if len(node.args) < 2:
+            return
+        target, name = node.args[0], node.args[1]
+        if not (isinstance(target, ast.Name) and target.id == "context"):
+            return
+        field_name = _literal(name)
+        if isinstance(field_name, str) and field_name in CONTEXT_MAP:
+            self.add(ERROR, node,
+                     f"reads context.{field_name} via getattr; sandboxed code "
+                     f"is handed an sdk, not a context",
+                     CONTEXT_MAP[field_name])
+
+    def visit_Attribute(self, node):
+        """Catch effects performed through the old ``context`` object.
+
+        A sandboxed plugin is never handed a context, so every ``context.x``
+        is something that has to become a Request — and naming which one is
+        the difference between a migration and a puzzle.
+        """
+        if (isinstance(node.value, ast.Name) and node.value.id == "context"
+                and node.attr in CONTEXT_MAP):
+            self.add(ERROR, node,
+                     f"uses context.{node.attr}; sandboxed code is handed an "
+                     f"sdk, not a context", CONTEXT_MAP[node.attr])
+        elif node.attr in DB_ATTRS and not self._is_sdk_call(node):
+            self.add(ERROR, node,
+                     f"reaches the database directly via .{node.attr}",
+                     DB_ATTRS[node.attr])
+        self.generic_visit(node)
 
     def visit_ClassDef(self, node):
         """Remember plugin classes for the contract check."""
@@ -401,12 +518,17 @@ def _collect_declarations(tree, walker: _Walker, filename: str) -> dict:
         declared.update(FAMILY_DEFAULTS.get(family, {}))
         scopes.append(_assignments(classes[0][2].body))
 
+    # Every literal class attribute, not just the documented ones: the
+    # dual-mode loader has to copy ``parameters``, ``description`` and the
+    # rest onto its adapter, or the registry advertises a plugin with no
+    # schema.
     for scope in scopes:
-        for key in DECLARATION_KEYS:
-            if key in scope:
-                value = _literal(scope[key].value)
-                if value is not None:
-                    declared[key] = value
+        for key, node in scope.items():
+            if key.startswith("_"):
+                continue
+            value = _literal(node.value)
+            if value is not None:
+                declared[key] = value
 
     declared.setdefault("name", Path(filename).stem)
     return declared

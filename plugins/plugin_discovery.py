@@ -646,8 +646,34 @@ def _load_baked_in(module_name: str, reload: bool):
 
 
 def _load_plugin_module(module_name: str, file_path: Path, built_in: bool, reload: bool):
-    """Load a plugin module from a built-in or DATA_DIR plugin tree."""
+    """Load a plugin module from a built-in or DATA_DIR plugin tree.
+
+    A plugin migrated to the sandbox is written against the SDK, so importing
+    it here would give a class whose ``run`` wants an ``sdk`` while the
+    registry is about to hand it a context. The bridge spots those by reading
+    the file and returns a synthetic module holding a native-looking adapter
+    instead, which everything downstream registers and calls unchanged.
+
+    Migrated and unmigrated plugins therefore coexist, and this is the only
+    place that knows the difference.
+    """
+    adapted = _adapt_sandboxed(file_path)
+    if adapted is not None:
+        return adapted
     return _load_baked_in(module_name, reload) if built_in else _load_external(module_name, file_path, reload)
+
+
+def _adapt_sandboxed(file_path: Path):
+    """Return a bridged module for a migrated plugin, or None."""
+    try:
+        from sandbox.bridge import adapt
+    except Exception:
+        return None
+    try:
+        return adapt(file_path)
+    except Exception as exc:
+        logger.error(f"Failed to bridge sandboxed plugin {file_path.name}: {exc}")
+        return None
 
 
 def _load_external(module_name: str, file_path: Path, reload: bool):

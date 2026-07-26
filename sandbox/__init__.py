@@ -37,6 +37,19 @@ from . import guest as _guest
 # names and risk shadowing).
 _sys.modules.setdefault("guest", _guest)
 
+# Aliasing the package is not enough. Python imports ``guest.bases`` and
+# ``sandbox.guest.bases`` as *separate* module objects, giving two distinct
+# ``BasePlugin`` classes — so whether ``issubclass`` works depends on which
+# name happened to be imported first. Pinning every submodule under both
+# names keeps one object per module however it is reached.
+import importlib as _importlib  # noqa: E402
+
+for _submodule in ("requests", "protocol", "channel", "sdk", "bases", "box",
+                   "loader"):
+    _sys.modules.setdefault(
+        f"guest.{_submodule}",
+        _importlib.import_module(f".guest.{_submodule}", __name__))
+
 from .guest.channel import Terminated  # noqa: E402
 from .guest.requests import Request, Result
 from .guest.sdk import SDK

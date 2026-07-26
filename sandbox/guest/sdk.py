@@ -520,9 +520,19 @@ class SDK:
 
     # ── returning ──────────────────────────────────────────────────
 
-    def ok(self, data=None) -> Result:
-        """Succeed with a value."""
-        return Result(data=data)
+    def ok(self, data=None, *, llm_summary: str = "", attachments=None,
+           also_contains=None, discovered_paths=None) -> Result:
+        """Succeed with a value.
+
+        ``llm_summary`` is what the model is told when the raw data is the
+        wrong thing to show it; ``attachments`` are files to put in front of
+        the user. The last two are for tasks: nested content found while
+        parsing, and new files the pipeline should register.
+        """
+        return Result(data=data, llm_summary=llm_summary,
+                      attachment_paths=list(attachments or []),
+                      also_contains=list(also_contains or []),
+                      discovered_paths=list(discovered_paths or []))
 
     def fail(self, error: str, retryable: bool = False) -> Result:
         """Fail with a reason."""

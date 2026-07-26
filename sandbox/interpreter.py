@@ -62,6 +62,12 @@ class Execution:
     finished: threading.Event = field(default_factory=threading.Event)
     response: Result | None = None
 
+    # The kernel context this execution's handlers answer from. Carried per
+    # execution rather than held on the interpreter because contexts differ
+    # by session and user, and two tool calls can be in flight at once — a
+    # single shared context would answer one of them from the other's world.
+    context: object = None
+
 
 class Interpreter:
     """Classifies and services Requests from running sandboxed code."""
@@ -165,7 +171,9 @@ class Interpreter:
             result = Result.failure(f"no handler for {request.type}")
         else:
             try:
-                result = handler(self.context, request.args)
+                context = (execution.context if execution.context is not None
+                           else self.context)
+                result = handler(context, request.args)
             except Exception as exc:
                 logger.exception("handler failed: %s", request.type)
                 result = Result.failure(f"handler error: {exc}")
