@@ -578,11 +578,11 @@ def _register(output, modality="text", success=True, error="",
               also_contains=()):
     """Register a real parser for .probe and return the handler's answer."""
     import parsing
-    from parsing.result import ParseResult
+    from parsing import ParseResult
 
     calls = []
 
-    def parser(path, config, services):
+    def parser(sdk, path, config=None):
         """Stand in for a real parse_*.py helper."""
         calls.append(path)
         return ParseResult(modality=modality, success=success, error=error,

@@ -12,37 +12,34 @@ that wants a modality whose result cannot cross a process boundary imports the
 parser into its own box and calls it there.
 """
 
-import logging
-from pathlib import Path
-
-import parsing
-from parsing import ParseResult, clean_text, max_chars
-
-logger = logging.getLogger("ParseText")
+from guest.parsing import ParseResult, clean_text, max_chars, register
 
 
 # Extensions whose indentation is meaningful and must be preserved.
-_CODE_SUFFIXES = {
+_CODE_SUFFIXES = (
     ".py", ".js", ".jsx", ".ts", ".tsx", ".html", ".htm", ".css", ".scss",
     ".c", ".cpp", ".h", ".hpp", ".java", ".cs", ".php", ".rb",
     ".go", ".rs", ".swift", ".kt", ".sql", ".sh", ".bat", ".ps1",
     ".r", ".m", ".scala", ".lua", ".json", ".yaml", ".yml", ".xml",
     ".ini", ".toml", ".cfg", ".env", ".log",
-}
+)
 
 
-def parse_plaintext(path: str, config: dict, services: dict = None) -> ParseResult:
-    """Read any UTF-8 text file. Falls back to latin-1."""
+def parse_plaintext(sdk, path: str, config: dict = None) -> ParseResult:
+    """Read any UTF-8 text file. Falls back to latin-1.
+
+    The read goes through ``sdk.fs.read`` rather than ``open``, which is what
+    makes this file importable into a box: inside one the read is a mediated
+    Request, and here it is the kernel reading its own disk. The parser does
+    not know or care which — that is the point of the shared signature.
+    """
     try:
-        limit = max_chars(config)
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read(limit)
-        except UnicodeDecodeError:
-            with open(path, "r", encoding="latin-1") as f:
-                content = f.read(limit)
+        content = sdk.fs.read(path)[:max_chars(config)]
 
-        is_code = Path(path).suffix.lower() in _CODE_SUFFIXES
+        # String matching rather than pathlib: a parser must load in a
+        # subprocess box, where importing anything that reaches the
+        # environment is refused — and a suffix is just the end of a string.
+        is_code = path.lower().endswith(_CODE_SUFFIXES)
         content = clean_text(content, preserve_indent=is_code)
 
         return ParseResult(
@@ -51,11 +48,11 @@ def parse_plaintext(path: str, config: dict, services: dict = None) -> ParseResu
             metadata={"char_count": len(content)},
         )
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="text")
 
 
-parsing.register([
+register([
     ".txt", ".md", ".markdown", ".rst", ".tex", ".log", ".rtf",
     ".csv", ".tsv",
     ".json", ".yaml", ".yml", ".xml",

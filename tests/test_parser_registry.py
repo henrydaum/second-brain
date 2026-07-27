@@ -22,7 +22,7 @@ def clean_registry():
 
 def _stub(output="text", modality="text"):
     """A parser function shaped like a real parse_*.py helper."""
-    def parser(path, config, services):
+    def parser(sdk, path, config=None):
         """Answer with a fixed result."""
         return parsing.ParseResult(modality=modality, output=output)
     return parser
@@ -96,7 +96,7 @@ def test_a_parser_can_be_looked_up_and_called_directly():
     parser = parsing.parser_for(".png", "image")
     assert parser is not None
 
-    result = parser("x.png", {}, {})
+    result = parser(None, "x.png", {})
     assert result.output == "an image object"
     assert not result.crossable      # exactly why it was called in-box
 
@@ -140,7 +140,7 @@ def test_parse_reports_an_unroutable_file():
 
 def test_a_raising_parser_becomes_a_failed_result():
     """One bad parser must not take down whatever asked it to parse."""
-    def broken(path, config, services):
+    def broken(sdk, path, config=None):
         """Fail the way a real parser fails on a malformed file."""
         raise ValueError("corrupt header")
 
@@ -150,23 +150,209 @@ def test_a_raising_parser_becomes_a_failed_result():
     assert "corrupt header" in result.error
 
 
-def test_bound_services_reach_delegating_parsers():
-    """parse_gdoc needs google_drive; that is what binding replaced.
+def test_a_delegating_parser_reaches_a_peer_through_the_sdk():
+    """parse_gdoc needs google_drive, and asks for it the same way in both worlds.
 
-    The service dict was the one thing ParserService did that the registry
-    could not, and it turned out to be a reference rather than a lifecycle.
+    Inside a box that call is a Request; here it is a direct lookup against the
+    live registry. The parser is written once and cannot tell the difference,
+    which is what the shared signature buys.
     """
-    seen = {}
+    class Drive:
+        """A peer service."""
+        def fetch(self, doc_id):
+            """Answer."""
+            return f"contents of {doc_id}"
 
-    def delegating(path, config, services):
-        """Record what peers were available."""
-        seen["services"] = services
-        return parsing.ParseResult(modality="text", output="ok")
+    def delegating(sdk, path, config=None):
+        """Reach the peer rather than holding it."""
+        text = sdk.services.call("google_drive", "fetch", doc_id=path)
+        return parsing.ParseResult(modality="text", output=text)
 
     parsing.register([".gdoc"], "text", delegating)
-    parsing.bind_services({"google_drive": "a service"})
+    parsing.bind_services({"google_drive": Drive()})
     try:
-        parsing.parse("doc.gdoc")
-        assert seen["services"] == {"google_drive": "a service"}
+        assert parsing.parse("doc.gdoc").output == "contents of doc.gdoc"
     finally:
         parsing.bind_services({})
+
+
+def test_a_parser_missing_its_peer_fails_rather_than_crashes():
+    """An uninstalled delegate is an ordinary answer in a microkernel."""
+    def delegating(sdk, path, config=None):
+        """Ask for something that is not loaded."""
+        return parsing.ParseResult(modality="text",
+                                   output=sdk.services.call("absent", "fetch"))
+
+    parsing.register([".gdoc"], "text", delegating)
+    result = parsing.parse("doc.gdoc")
+    assert not result.success
+    assert "absent" in result.error
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The pilot migration: one parser, two callers.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_the_kernel_parser_reads_through_the_sdk(tmp_path):
+    """``parse_text`` is the first migrated parser, and this is the claim.
+
+    It never calls ``open``. The kernel hands it a stand-in whose ``fs.read``
+    is a direct read; a box hands it the real SDK and the same line becomes a
+    mediated Request. Nothing in the parser changes.
+    """
+    from plugins.helpers.parse_text import parse_plaintext
+
+    note = tmp_path / "note.md"
+    note.write_text("hello   world\n\n\n\nagain\n", encoding="utf-8")
+
+    class Recording:
+        """An sdk that records instead of reading."""
+
+        def __init__(self, text):
+            self.asked = []
+            self.fs = self
+            self._text = text
+
+        def read(self, path, encoding="utf-8"):
+            """Stand in for sdk.fs.read."""
+            self.asked.append(path)
+            return self._text
+
+        def log(self, message, level="info"):
+            """Stand in for sdk.log."""
+
+    sdk = Recording("hello   world\n\n\n\nagain\n")
+    result = parse_plaintext(sdk, str(note), {})
+
+    assert result.success
+    assert sdk.asked == [str(note)], "the parser must read through the sdk"
+    assert "hello world" in result.output       # collapsed by clean_text
+    assert result.crossable
+
+
+def test_the_kernel_stand_in_actually_reads(tmp_path):
+    """And through the real kernel path, it reads the real file."""
+    note = tmp_path / "note.md"
+    note.write_text("# Title\n\nBody text.\n", encoding="utf-8")
+
+    parsing.discover()
+    result = parsing.parse(str(note))
+    assert result.success
+    assert "Body text." in result.output
+
+
+def test_a_parser_honours_the_char_limit(tmp_path):
+    """max_chars comes from config, and truncation happens after the read."""
+    from plugins.helpers.parse_text import parse_plaintext
+
+    class Sdk:
+        """Minimal stand-in."""
+        fs = property(lambda self: self)
+
+        def read(self, path, encoding="utf-8"):
+            """A long file."""
+            return "x" * 10_000
+
+        def log(self, message, level="info"):
+            """Ignore."""
+
+    result = parse_plaintext(Sdk(), "big.txt", {"max_chars": 100})
+    assert len(result.output) == 100
+
+
+def test_a_parser_loads_inside_a_subprocess_box(tmp_path):
+    """The property the guest move exists for.
+
+    A parser importing kernel modules loads in-process and fails in a child,
+    because the child runs with ``sandbox/`` as its working directory and
+    cannot see the kernel at all. That difference only shows up for the heavy
+    parsers that most need the process boundary — so it is pinned here with
+    the kernel's own parser, in a real subprocess.
+    """
+    import shutil
+
+    from sandbox.bridge import adapt, configure
+    from sandbox.facade import Sandbox
+
+    tree = tmp_path / "tree"
+    (tree / "tools").mkdir(parents=True)
+    (tree / "helpers").mkdir()
+    shutil.copy("plugins/helpers/parse_text.py", tree / "helpers" / "parse_text.py")
+
+    note = tmp_path / "note.md"
+    note.write_text("# Title\n\nSome   body   text.\n", encoding="utf-8")
+
+    (tree / "tools" / "tool_read.py").write_text('''
+"""Read a file through the kernel's parser."""
+
+from guest.bases import BaseTool
+
+from .parse_text import parse_plaintext
+
+
+class Read(BaseTool):
+    """Read."""
+
+    name = "read_via_parser"
+    description = "Read a file as text."
+    parameters = {"type": "object", "properties": {"path": {"type": "string"}}}
+    dependencies_files = ["helpers/parse_text.py"]
+    isolation = "subprocess"
+
+    def run(self, sdk, path=""):
+        """Parse inside this box; only the text leaves it."""
+        result = parse_plaintext(sdk, path)
+        return result.output
+''', encoding="utf-8")
+
+    sandbox = Sandbox()
+    configure(sandbox)
+    try:
+        module = adapt(tree / "tools" / "tool_read.py")
+        assert module is not None, "the tool did not bridge"
+        tool = next(v() for v in vars(module).values() if isinstance(v, type))
+
+        outcome = tool.run(None, path=str(note))
+        assert outcome.success, outcome.error
+        assert "Some body text." in outcome.data     # whitespace collapsed
+    finally:
+        configure(None)
+        sandbox.shutdown()
+
+
+def test_the_parser_contract_is_guest_code():
+    """``ParseResult`` must be reachable without importing the kernel.
+
+    This is the constraint that makes a parser loadable in a box, and it is
+    easy to undo by accident — one convenient kernel import in a parser and
+    only the subprocess path breaks.
+    """
+    from sandbox.validator import validate_file
+
+    report = validate_file("plugins/helpers/parse_text.py")
+    assert report.ok, report.render()
+    assert not report.disclaimed, report.render()
+
+
+def test_the_kernel_stand_in_matches_the_sdk_surface():
+    """The stand-in must offer every name a parser could reach for.
+
+    A parser is written once and run two ways; if ``KERNEL_SDK`` is missing a
+    method the real SDK has, the parser works in a box and breaks in the
+    kernel — a divergence with no symptom until something calls it. Pinning
+    the namespaces parsers actually use keeps the two honest.
+    """
+    from sandbox.guest.sdk import SDK
+    from parsing.kernel_sdk import KERNEL_SDK
+
+    real = SDK(None)
+    for namespace in ("fs", "services"):
+        expected = {n for n in dir(getattr(real, namespace))
+                    if not n.startswith("_")}
+        actual = {n for n in dir(getattr(KERNEL_SDK, namespace))
+                  if not n.startswith("_")}
+        missing = expected - actual
+        assert not missing, f"KERNEL_SDK.{namespace} is missing {sorted(missing)}"
+
+    for name in ("log", "ok", "fail"):
+        assert callable(getattr(KERNEL_SDK, name, None)), name

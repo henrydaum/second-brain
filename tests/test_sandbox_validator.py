@@ -82,7 +82,7 @@ def test_effect_modules_are_refused():
     """Direct environment access is an error, whichever door it uses."""
     for module, expected in (("os", "sdk.fs"), ("subprocess", "sdk.proc.run"),
                              ("socket", "sdk.net.http"),
-                             ("sqlite3", "sdk.db.query")):
+                             ("shutil", "sdk.fs.move")):
         report = _validate(GOOD_TOOL.replace("import json", f"import {module}"))
         assert not report.ok, module
         assert expected in _messages(report), module
@@ -307,13 +307,50 @@ def test_logging_points_at_the_sdk_rather_than_being_allowed():
     assert "sdk.log" in _messages(report)
 
 
-def test_io_and_xml_stay_out_despite_having_pure_parts():
-    """StringIO is pure and io.open is beside it; ElementTree.parse takes a
-    filename. Both are close enough to an effect to keep out."""
-    assert not _validate(GOOD_TOOL.replace("import json", "import io")).ok
+def test_io_is_pure_but_its_one_impure_name_is_not():
+    """``BytesIO`` is how you hand bytes to a decoder without giving it a path.
+
+    Banning the module punished that and taught nothing, so the module is pure
+    and ``io.open`` is caught as an attribute instead — the same shape as
+    reaching past a Database object into its connection.
+    """
+    assert _validate(GOOD_TOOL.replace("import json", "import io")).ok
+
+    reaching = _validate(GOOD_TOOL.replace(
+        "import json", "import io").replace(
+        "r = sdk.fs.read(path)", "r = io.open(path).read()"))
+    assert not reaching.ok
+    assert "sdk.fs.read" in _messages(reaching)
+
+
+def test_xml_stays_out_because_its_parser_takes_a_filename():
+    """``ElementTree.parse`` opens a path, so the module is not pure."""
     xml = _validate(GOOD_TOOL.replace("import json",
                                       "import xml.etree.ElementTree"))
     assert xml.disclaimed
+
+
+def test_unmediated_stdlib_is_disclaimed_rather_than_refused():
+    """sqlite3, zipfile and tarfile open a file the plugin names.
+
+    That cannot be mediated, but it is legitimate — a tabular parser reading a
+    user's ``.db`` read-only, or a container parser opening an archive. They
+    take the foreign-library disclaimer instead of being refused outright,
+    because refusing them would lose the whole parser.
+    """
+    for module in ("sqlite3", "zipfile", "tarfile"):
+        report = _validate(GOOD_TOOL.replace("import json", f"import {module}"))
+        assert report.ok, module
+        assert report.disclaimed, module
+        assert "subprocess" in _messages(report), module
+
+
+def test_reaching_around_the_kernel_database_is_still_an_error():
+    """Allowing the sqlite3 import must not allow the misuse it guarded."""
+    report = _validate(GOOD_TOOL.replace(
+        "r = sdk.fs.read(path)", "r = context.db.conn.execute(path)"))
+    assert not report.ok
+    assert "sdk.db" in _messages(report)
 
 
 def test_kernel_modules_are_not_called_foreign_libraries():

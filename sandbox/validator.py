@@ -46,8 +46,9 @@ BASE_TO_FAMILY = {base: family for family, base in FAMILIES.items()}
 CONTRACT_MODULES = (
     {f"plugins.{base}" for base in FAMILIES.values()}
     | {"guest", "guest.bases", "guest.box", "guest.sdk", "guest.hooks",
+       "guest.parsing",
        "sandbox.guest", "sandbox.guest.bases", "sandbox.guest.box",
-       "sandbox.guest.hooks"}
+       "sandbox.guest.hooks", "sandbox.guest.parsing"}
 )
 
 # Pure stdlib: computation only, no way to reach the environment.
@@ -58,8 +59,10 @@ CONTRACT_MODULES = (
 #   - ``email`` and ``csv`` parse things already in memory. The store's mail
 #     and tabular plugins lean on them heavily and neither opens a file.
 #   - ``ast`` and ``tokenize`` read source text, not files.
-#   - ``io`` is *not* here despite ``StringIO`` being pure, because ``io.open``
-#     is right beside it. Use ``sdk.fs``.
+#   - ``io`` IS here, because ``BytesIO``/``StringIO`` are pure and are how
+#     you hand bytes to a foreign decoder without giving it a path. Its one
+#     dangerous name, ``io.open``, is caught as an attribute instead — banning
+#     the module punished the pure use and taught nothing.
 #   - ``xml`` is not here for the same reason: ``ElementTree.parse`` takes a
 #     filename.
 PURE_MODULES = {
@@ -67,7 +70,7 @@ PURE_MODULES = {
     "bisect", "calendar", "cmath", "codecs", "collections", "colorsys",
     "contextlib", "copy", "csv", "dataclasses", "datetime", "decimal",
     "difflib", "email", "enum", "fnmatch", "fractions", "functools",
-    "graphlib", "hashlib", "heapq", "hmac", "html", "itertools", "json",
+    "graphlib", "hashlib", "heapq", "hmac", "html", "io", "itertools", "json",
     "keyword", "math", "mimetypes", "numbers", "operator", "posixpath",
     "pprint", "queue", "random", "re", "reprlib", "secrets", "statistics",
     "string", "struct", "textwrap", "time", "token", "tokenize", "traceback",
@@ -86,6 +89,19 @@ PURE_MODULES = {
 SDK_PACKAGES = {
     "croniter": "parsing and stepping cron expressions",
     "cron_descriptor": "describing cron expressions in English",
+}
+
+# Stdlib modules that perform their own I/O on a path the plugin names. They
+# are not kernel-reaching and not foreign, but they cannot be mediated either
+# — a tabular parser opening a user's ``.db`` read-only is a legitimate parse,
+# and so is reading an archive. They get the foreign-library disclaimer.
+#
+# The dangerous case — reaching around the kernel's own database — is caught
+# by DB_ATTRS as an ERROR regardless, so nothing is lost by allowing these.
+UNMEDIATED_STDLIB = {
+    "sqlite3": "opens a database file directly",
+    "zipfile": "reads and extracts an archive directly",
+    "tarfile": "reads and extracts an archive directly",
 }
 
 # First-party kernel modules. Importing one is not a foreign-library problem
@@ -122,7 +138,6 @@ CONTEXT_MAP = {
 # the same job through the gate.
 EFFECT_MODULES = {
     "os": "sdk.fs / sdk.env",
-    "io": "sdk.fs",
     "sys": "the SDK",
     "shutil": "sdk.fs.move / sdk.fs.delete",
     "pathlib": "sdk.fs (Path is fine for building paths, not for touching them)",
@@ -134,12 +149,18 @@ EFFECT_MODULES = {
     "http": "sdk.net.http",
     "requests": "sdk.net.http",
     "httpx": "sdk.net.http",
-    "sqlite3": "sdk.db.query / sdk.db.write",
     "threading": "the kernel schedules; a plugin should not",
     "multiprocessing": "the kernel schedules; a plugin should not",
     "ctypes": "nothing — this defeats the boundary entirely",
     "importlib": "sdk.plugin.register",
     "logging": "sdk.log",
+}
+
+# Pure modules with one impure name. Importing them is fine; reaching for
+# these is not. Cheaper and more teachable than banning the whole module.
+PURE_MODULE_ATTRS = {
+    ("io", "open"): "sdk.fs.read / sdk.fs.write",
+    ("io", "FileIO"): "sdk.fs.read / sdk.fs.write",
 }
 
 BANNED_BUILTINS = {
@@ -173,8 +194,12 @@ EFFECT_METHODS = {
     "write_text": "sdk.fs.write", "write_bytes": "sdk.fs.write",
     "unlink": "sdk.fs.delete", "rmdir": "sdk.fs.delete",
     "mkdir": "sdk.fs.write", "rename": "sdk.fs.move",
-    "iterdir": "sdk.fs.list", "walk": "sdk.fs.list",
+    "iterdir": "sdk.fs.list",
 }
+# ``walk`` is deliberately absent. Every module that offers a dangerous one —
+# ``os``, ``pathlib`` — is already refused at import, so the name could only
+# ever fire on something harmless: ``email.Message.walk``, ``ast.walk``. A
+# linter that cries wolf gets worked around, which costs more than it saves.
 
 # Ceilings mirrored from the interpreter. Exceeding one is not an error —
 # the plugin declares intent, the kernel clamps.
@@ -278,6 +303,11 @@ class _Walker(ast.NodeVisitor):
             return
         if key in SDK_PACKAGES:
             return
+        if key in UNMEDIATED_STDLIB:
+            self.add(WARNING, node,
+                     f"imports {name!r}, which {UNMEDIATED_STDLIB[key]} and so "
+                     f"cannot be mediated - run this plugin in a subprocess")
+            return
         if key in EFFECT_MODULES:
             self.add(ERROR, node, f"imports {name!r}, which reaches the "
                                   f"environment directly", EFFECT_MODULES[key])
@@ -358,6 +388,12 @@ class _Walker(ast.NodeVisitor):
             self.add(ERROR, node,
                      f"uses context.{node.attr}; sandboxed code is handed an "
                      f"sdk, not a context", CONTEXT_MAP[node.attr])
+        elif (isinstance(node.value, ast.Name)
+              and (node.value.id, node.attr) in PURE_MODULE_ATTRS):
+            self.add(ERROR, node,
+                     f"uses {node.value.id}.{node.attr}, which reaches the "
+                     f"environment directly",
+                     PURE_MODULE_ATTRS[(node.value.id, node.attr)])
         elif node.attr in DB_ATTRS and not self._is_sdk_call(node):
             self.add(ERROR, node,
                      f"reaches the database directly via .{node.attr}",

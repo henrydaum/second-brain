@@ -32,12 +32,22 @@ from .bases import entry_for
 PACKAGE_PREFIX = "box_"
 
 
-def install_box(root, box_name: str):
+def install_box(root, box_name: str, extra_roots=()):
     """Register the synthetic package a box's members are imported into.
 
     Idempotent: loading a second member of the same box reuses the package, so
     siblings share one namespace and one module cache — which is what "same
     box" means at the language level.
+
+    ``extra_roots`` are the directories holding files the plugin *declared* in
+    ``dependencies_files``. They join ``__path__``, so a declared helper is a
+    sibling by import even though it lives in another folder — a tool can
+    reach ``helpers/parse_image.py`` as ``.parse_image``. Declaring is what
+    makes a file importable; the plugin still writes the import, exactly as
+    ``dependencies_pip`` installs a library and the plugin still imports it.
+
+    A box therefore stays *flat*: one namespace, no package structure to
+    reason about, and no relative path that climbs out of it.
     """
     package = f"{PACKAGE_PREFIX}{box_name}"
     existing = sys.modules.get(package)
@@ -45,18 +55,20 @@ def install_box(root, box_name: str):
         return package
     spec = importlib.machinery.ModuleSpec(package, None, is_package=True)
     module = importlib.util.module_from_spec(spec)
-    module.__path__ = [str(root)]
+    # The plugin's own directory first, so a sibling always wins a name clash
+    # with a declared dependency.
+    module.__path__ = [str(root), *(str(p) for p in extra_roots)]
     sys.modules[package] = module
     return package
 
 
-def load_member(module_path, box_name: str = "", root=None):
+def load_member(module_path, box_name: str = "", root=None, extra_roots=()):
     """Import one file as a member of its box and return the module."""
     path = Path(module_path)
     if not path.is_file():
         raise FileNotFoundError(f"no such file: {module_path}")
     root = Path(root) if root else path.parent
-    package = install_box(root, box_name or path.stem)
+    package = install_box(root, box_name or path.stem, extra_roots)
 
     qualified = f"{package}.{path.stem}"
     cached = sys.modules.get(qualified)
@@ -79,7 +91,8 @@ def load_member(module_path, box_name: str = "", root=None):
 
 
 def load_entry(module_path, func_name: str = "", box_name: str = "",
-               root=None, bound: bool = True, method: str = "run"):
+               root=None, bound: bool = True, method: str = "run",
+               extra_roots=()):
     """Import a box member and resolve what the runner should hold.
 
     ``bound`` decides *what* comes back, because the two lifetimes need
@@ -94,7 +107,8 @@ def load_entry(module_path, func_name: str = "", box_name: str = "",
     That second case is the whole of what makes a persistent script work: an
     agent's scratchpad server is a module whose globals outlive each call.
     """
-    module = load_member(module_path, box_name=box_name, root=root)
+    module = load_member(module_path, box_name=box_name, root=root,
+                         extra_roots=extra_roots)
     if not func_name:
         # No entry named: the module itself is the object. Only meaningful
         # for a persistent box, where calls resolve to module-level functions.

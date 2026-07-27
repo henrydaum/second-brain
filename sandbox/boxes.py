@@ -179,11 +179,12 @@ class SubprocessBox(PersistentBox):
 
     def __init__(self, module_path: str, entry: str, name: str,
                  chain=None, call_timeout=None, box_root=None,
-                 memory_mb: int | None = None):
+                 memory_mb: int | None = None, extra_roots=()):
         super().__init__(name, chain, call_timeout)
         self.module_path = str(module_path)
         self.entry = entry
         self.box_root = box_root
+        self.extra_roots = list(extra_roots or [])
         self.memory_mb = memory_mb
         self.proc = None
         self._interpreter = None
@@ -206,6 +207,7 @@ class SubprocessBox(PersistentBox):
                 "persistent": True,
                 "box": self.name,
                 "root": self.box_root,
+                "extra_roots": self.extra_roots,
                 "memory_mb": self.memory_mb,
                 "cpu_seconds": None,
             })
@@ -316,7 +318,8 @@ def open_box(interpreter: Interpreter, module_path, entry: str = "", *,
              name: str, isolated: bool = False, chain: Chain | None = None,
              call_timeout: float | None = None,
              start_timeout: float = DEFAULT_START_TIMEOUT,
-             box_root=None, memory_mb: int | None = None) -> PersistentBox:
+             box_root=None, memory_mb: int | None = None,
+             extra_roots=()) -> PersistentBox:
     """Load a resident box and return a handle to call into.
 
     ``entry`` names a plugin class, or is empty for a bare script — in which
@@ -330,10 +333,10 @@ def open_box(interpreter: Interpreter, module_path, entry: str = "", *,
     if isolated:
         box = SubprocessBox(module_path, entry, name, chain=chain,
                             call_timeout=call_timeout, box_root=box_root,
-                            memory_mb=memory_mb)
+                            memory_mb=memory_mb, extra_roots=extra_roots)
     else:
         target = load_entry(module_path, entry, box_name=name, root=box_root,
-                            bound=False)
+                            bound=False, extra_roots=extra_roots)
         box = InProcessBox(target, name, chain=chain,
                            call_timeout=call_timeout)
 

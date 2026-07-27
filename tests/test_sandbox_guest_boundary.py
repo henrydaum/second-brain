@@ -25,7 +25,7 @@ GUEST_DIR = Path(__file__).resolve().parent.parent / "sandbox" / "guest"
 # Everything the guest is permitted to import. Stdlib only, plus its own
 # siblings by relative import.
 ALLOWED_ABSOLUTE = {
-    "__future__", "importlib", "importlib.util", "json", "sys",
+    "__future__", "importlib", "importlib.util", "json", "re", "sys",
     "traceback", "pathlib", "time", "typing", "dataclasses", "resource",
 }
 

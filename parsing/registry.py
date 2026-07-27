@@ -30,7 +30,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from .result import ParseResult
+from .kernel_sdk import KERNEL_SDK
+from sandbox.guest.parsing import ParseResult, drain_registrations
 
 logger = logging.getLogger("Parsing")
 
@@ -39,7 +40,7 @@ logger = logging.getLogger("Parsing")
 # THE REGISTRY
 #
 # Key:   (extension, modality)  e.g. (".pdf", "text"), (".pdf", "image")
-# Value: parser function  ->  func(path, config, services) -> ParseResult
+# Value: parser function  ->  func(sdk, path, config) -> ParseResult
 #
 # _MODALITY_MAP holds the default modality per extension, set by register():
 # the first modality registered for an extension becomes its default.
@@ -48,11 +49,6 @@ logger = logging.getLogger("Parsing")
 _REGISTRY: dict[tuple[str, str], callable] = {}
 _MODALITY_MAP: dict[str, str] = {}
 
-# Peer services, for parsers that delegate (parse_gdoc -> google_drive,
-# parse_audio -> whisper). Bound once at bootstrap. This is the one thing the
-# ParserService did that the registry could not, and it is a single reference
-# rather than a lifecycle.
-_SERVICES: dict = {}
 
 # Native modalities the LLM may ingest directly even when no parser is
 # installed for the extension. The kernel's standing knowledge of "what kind
@@ -106,14 +102,14 @@ def register(extensions: str | list[str], modality: str, func: callable):
 
 
 def bind_services(services: dict) -> None:
-    """Hand the registry the live service registry, for delegating parsers.
+    """Point the kernel-side sdk's service lookup at the live registry.
 
-    Kept as a plain reference rather than a lifecycle: parsing is not a thing
-    that loads, and a parser that needs a peer either finds it here or fails
-    the way it would have anyway.
+    For parsers that delegate (parse_gdoc -> google_drive, parse_audio ->
+    whisper). A reference, not a lifecycle: parsing is not a thing that loads.
+    Inside a box the same call goes through ``sdk.services.call`` as a Request
+    instead, which is the whole point of the shared signature.
     """
-    global _SERVICES
-    _SERVICES = services if services is not None else {}
+    KERNEL_SDK.services.bind(services)
 
 
 # ===================================================================
@@ -156,7 +152,7 @@ def parser_for(extension: str, modality: str):
 # ===================================================================
 
 def parse(path: str, modality: str = None, config: dict = None,
-          services: dict = None) -> ParseResult:
+          sdk=None) -> ParseResult:
     """Parse a file in *this* process and return a ParseResult.
 
     Fine for text and for extracted paths, which is what core asks for. For
@@ -164,6 +160,9 @@ def parse(path: str, modality: str = None, config: dict = None,
     consumes the result — calling through here puts a live PIL image or an
     open container in the caller's process, which is exactly what stops it
     being sandboxable.
+
+    ``sdk`` defaults to the kernel stand-in; a box passes its real one, and
+    the parser cannot tell the difference.
     """
     config = config or {}
     path_obj = Path(path)
@@ -183,8 +182,7 @@ def parse(path: str, modality: str = None, config: dict = None,
 
     logger.debug("Parsing %r as %s (ext=%s)", path_obj.name, modality, extension)
     try:
-        return parser_func(path, config,
-                           _SERVICES if services is None else services)
+        return parser_func(KERNEL_SDK if sdk is None else sdk, path, config)
     except Exception as exc:
         logger.error("Parser failed for %s as %s: %s", path_obj.name, modality,
                      exc)
@@ -221,11 +219,19 @@ def discover() -> int:
             if py_file.stem in seen:
                 continue          # an earlier, higher-precedence root won
             module_name = f"{root.module}.helpers.{py_file.stem}"
+            drain_registrations()          # discard anything left by a failure
             module = _load_plugin_module(module_name, py_file, root.built_in,
                                          reload=True)
-            if module is not None:
-                seen.add(py_file.stem)
-                count += 1
+            if module is None:
+                continue
+            # The parser declared itself into the guest-side collector on
+            # import; this is where those declarations become the kernel's
+            # registry. Draining per module keeps one broken parser from
+            # stealing another's registrations.
+            for extensions, modality, func in drain_registrations():
+                register(extensions, modality, func)
+            seen.add(py_file.stem)
+            count += 1
 
     logger.info("Parser discovery: %d parser module(s), %d extension(s).",
                 count, len(get_supported_extensions()))

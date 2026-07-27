@@ -327,6 +327,46 @@ class Embedder(BaseService):
     exports = ["embed", "similarity"]   # everything else stays internal
 ```
 
+**Declaring a file makes it importable.** `dependencies_files` names files
+from other folders; they join your box's namespace, so you reach them as
+siblings:
+
+```python
+class Caption(BaseTool):
+    dependencies_files = ["helpers/parse_image.py"]
+
+# then, in the same file
+from .parse_image import parse_image
+```
+
+You still write the import. Declaring is what makes the name *available* —
+exactly as `dependencies_pip = ["numpy"]` installs numpy and you still write
+`import numpy`. Nothing appears in your namespace by magic.
+
+This is how you reach a **parser**:
+
+```python
+from guest.parsing import ParseResult, clean_text, max_chars, register
+
+
+def parse_thing(sdk, path, config=None):
+    """One signature, whoever calls it."""
+    return ParseResult(modality="text", output=clean_text(sdk.fs.read(path)))
+
+
+register([".thing"], "text", parse_thing)
+```
+
+Import the contract from **`guest.parsing`**, never from the kernel's
+`parsing` — a child process cannot see the kernel, so a kernel import loads
+in-process and fails in a subprocess, which is exactly where a heavy parser
+wants to run. Avoid `pathlib` too; match suffixes with `str.endswith`.
+
+Modalities whose result is a live object — image, audio, video, tabular — can
+only be used *inside* the box that imports the parser, because a PIL image or
+an open container cannot cross a boundary. Text and extracted paths can, so
+`sdk.parse.file` handles those and refuses the rest, pointing you here.
+
 **Helper files** need no class. Give them the same `box` as the plugin that
 imports them and use relative imports:
 
@@ -361,7 +401,6 @@ checked cannot execute anything.
 | `import os`, `import pathlib` | `sdk.fs`, `sdk.env` |
 | `import subprocess` | `sdk.proc.run` |
 | `import requests`, `urllib.request` | `sdk.net.http` |
-| `import sqlite3` | `sdk.db` |
 | `import logging` | `sdk.log` |
 | `context.db`, `context.services` | `sdk.db`, `sdk.services` |
 | `db.conn.execute(...)` | `sdk.db.write(sql, params)` |
@@ -372,6 +411,12 @@ Importing a third-party library that isn't vouched for is **not** an error —
 it loads with a disclaimer, and you should declare
 `isolation = "subprocess"`, because that library's actions cannot be mediated.
 Everything can be written this way; nothing is off-limits for needing one.
+
+A few stdlib modules get the same treatment for the same reason: `sqlite3`,
+`zipfile` and `tarfile` open a file *you* name and do their own I/O. Reading a
+user's `.db` read-only or extracting an archive is legitimate, so they are
+disclaimed rather than refused — subprocess them. Reaching around the kernel's
+own database is still an error, caught at `db.conn` rather than at the import.
 
 ---
 

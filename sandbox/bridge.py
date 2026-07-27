@@ -67,9 +67,20 @@ def configure(sandbox: Sandbox | None):
 
     Called once at bootstrap. Without it the bridge builds one on demand,
     which works but shares no boxes with the rest of the kernel.
+
+    Also hands over the plugin tree roots, so a plugin's declared
+    ``dependencies_files`` resolve across trees — an installed tool can
+    declare a helper that only ships with the kernel. The bridge does this
+    because it is the one part of the sandbox that knows about plugin layout.
     """
     global _SANDBOX
     _SANDBOX = sandbox
+    if sandbox is not None:
+        try:
+            from plugins.helpers.plugin_paths import PLUGIN_ROOTS
+            sandbox.plugin_roots = [root.path for root in PLUGIN_ROOTS]
+        except Exception:
+            logger.debug("could not resolve plugin roots for dependencies")
 
 
 def get_sandbox() -> Sandbox:

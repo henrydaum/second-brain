@@ -70,6 +70,33 @@ parser into *its own box* alongside the thing that consumes it — the waveform
 never crosses anything, the transcript does. `sdk.parse.file` refuses
 non-crossable modalities with a message pointing at that route.
 
+**A parser is `parse_x(sdk, path, config) -> ParseResult`** — one signature,
+two callers. Inside a box it gets the real SDK and every effect is a Request;
+when the *kernel* calls it (`parsing.parse`) it gets `parsing.kernel_sdk.
+KERNEL_SDK`, a deliberate in-process stand-in whose `fs.read` reads directly,
+because the kernel is already inside the boundary and mediating it against
+itself would be theatre. The parser cannot tell which it has, and that is what
+makes the same file importable into a box without a second contract. It also
+retired the `services` dict that used to be threaded through every call:
+delegating parsers now use `sdk.services.call("google_drive", ...)`, and
+`parsing.bind_services()` just points the stand-in at the live registry.
+`plugins/helpers/parse_text.py` is the migrated reference — it validates
+clean and loads in a subprocess box, both pinned by tests.
+
+**The contract lives in the guest** (`sandbox/guest/parsing.py`): `ParseResult`,
+`CROSSABLE`, `clean_text`/`max_chars`, and `register`. A parser is guest code,
+and the child process runs with `sandbox/` as its cwd and *cannot see the
+kernel at all* — so a parser importing a kernel module loads in-process and
+fails in a subprocess, which is the case the heavy parsers most need. Kernel
+code reaches the same objects through `parsing`, which re-exports them; that
+is the one place kernel code imports `sandbox.guest.*`, and it is the guest
+*contract*, never host machinery. `register` is a **collector**, not a
+registry: a parser calls it at import time, `discover()` drains what
+accumulated per module, and a box running the same line simply collects
+nothing — which is what keeps one file loadable in both worlds. Parsers must
+also avoid `pathlib` (the validator refuses it); match suffixes with
+`str.endswith`.
+
 **Parsers live in `helpers/` at a plugin tree's root**, not under a family —
 `plugins/helpers/parse_text.py`, `DATA_DIR/installed_plugins/helpers/
 parse_pdf.py`. A parser belongs to no family because it is not a plugin: no
@@ -93,11 +120,22 @@ effect live. `parsing.bind_services()` supplies peers for delegating parsers
 `attachments/parse.py` builds an `Attachment` via `parsing.get_modality` +
 `parsing.parse(path, "text")` (no separate attachment-parser registry).
 
-**The store branch needs the matching move**: `services/helpers/parse_*.py` →
-`helpers/parse_*.py`, and their imports from
-`plugins.services.helpers.{ParseResult,parser_registry,parsing_utils}` →
-`parsing`. Nothing shims the old paths — the files have to move anyway, so
-changing the import line is free.
+**The store branch needs the matching migration**, five mechanical changes per
+parser:
+
+1. `services/helpers/parse_*.py` → `helpers/parse_*.py`
+2. imports from `plugins.services.helpers.{ParseResult,parser_registry,
+   parsing_utils}` → `from guest.parsing import ParseResult, clean_text,
+   max_chars, register` (the **guest**, not `parsing` — a kernel import breaks
+   the subprocess path)
+3. signature `(path, config, services)` → `(sdk, path, config)`
+4. `open(path)` → `sdk.fs.read(path)`; `services["x"].m()` →
+   `sdk.services.call("x", "m")`; `logger.*` → `sdk.log`
+5. drop `pathlib`; declare `dependencies_pip` for the heavy library and
+   `isolation = "subprocess"`
+
+Run `sandbox.validator.validate_file` on each: `conforms.` means it will load
+in a box. Nothing shims the old paths — the files have to move anyway.
 
 ## The kernel boundary (the one rule)
 

@@ -133,6 +133,10 @@ class Sandbox:
             approve = build_approver(runtime, session_key)
         self.interpreter = interpreter or Interpreter(
             approve=approve, record=record, context=context)
+        # Trees to resolve ``dependencies_files`` against. Set by the bridge,
+        # which is the part of the sandbox allowed to know about plugin
+        # layout; empty means "look only in the plugin's own tree".
+        self.plugin_roots: list = []
         self._pool = ThreadPoolExecutor(max_workers=max_background,
                                         thread_name_prefix="sandbox-bg")
         self._boxes: dict[str, PersistentBox] = {}
@@ -176,7 +180,48 @@ class Sandbox:
             "timeout": timeout if timeout is not None else (
                 spec.timeout or None),
             "memory_mb": spec.memory_mb or None,
+            "extra_roots": self.dependency_roots(
+                source, report.declarations.get("dependencies_files")),
         }
+
+    def dependency_roots(self, source, declared) -> list:
+        """Where a plugin's declared ``dependencies_files`` actually live.
+
+        The declaration is tree-relative (``helpers/parse_image.py``) because
+        that is how the store ships it, but at runtime the file sits in
+        whichever tree it was installed into. Resolution walks the plugin's
+        own tree first and then the others, so an installed tool can declare
+        a parser that only ships with the kernel.
+
+        Returns directories rather than files: they join the box's import
+        path, which is what turns a declaration into an importable name.
+        """
+        if not declared:
+            return []
+
+        source = Path(source)
+        # <tree>/<family>/plugin.py, or <tree>/helpers/helper.py — either way
+        # the tree is two levels up.
+        own_tree = source.parent.parent
+        trees = [own_tree, *(t for t in self.plugin_roots if t != own_tree)]
+
+        found, missing = [], []
+        for relative in declared:
+            for tree in trees:
+                candidate = tree / relative
+                if candidate.is_file():
+                    if candidate.parent not in found:
+                        found.append(candidate.parent)
+                    break
+            else:
+                missing.append(relative)
+        if missing:
+            # Not fatal here: the import itself will fail with a better
+            # message, and a plugin may declare a file it only needs when
+            # installed a particular way.
+            logger.debug("%s declares unresolved dependencies: %s",
+                         source.name, missing)
+        return found
 
     # ──────────────────────────────────────────────────────────────
     # Ephemeral.
@@ -224,10 +269,12 @@ class Sandbox:
                         kwargs=kwargs, timeout=opts["timeout"],
                         memory_mb=opts["memory_mb"], box=spec.name,
                         box_root=str(Path(source).parent),
+                        extra_roots=[str(p) for p in opts["extra_roots"]],
                         execution=execution, on_proc=run._attach_proc,
                         method=method)
                 target = load_entry(source, entry, box_name=spec.name,
-                                    method=method)
+                                    method=method,
+                                    extra_roots=opts["extra_roots"])
                 return run_in_process(
                     self.interpreter, target, name=run_name, kwargs=kwargs,
                     timeout=opts["timeout"], execution=execution)
@@ -276,6 +323,7 @@ class Sandbox:
                        call_timeout=opts["timeout"],
                        start_timeout=start_timeout,
                        box_root=str(Path(source).parent),
+                       extra_roots=[str(p) for p in opts["extra_roots"]],
                        memory_mb=opts["memory_mb"])
         with self._lock:
             self._boxes[box_name] = box

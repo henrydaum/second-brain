@@ -185,6 +185,7 @@ def main() -> int:
         target = load_entry(start["module"], start["func"],
                             box_name=start.get("box") or "",
                             root=start.get("root") or None,
+                            extra_roots=start.get("extra_roots") or (),
                             bound=not start.get("persistent"),
                             method=start.get("method") or "run")
     except Exception as exc:

@@ -130,7 +130,6 @@ REJECTED = [
     "import pathlib",
     "import subprocess",
     "import requests",
-    "import sqlite3",
     "import logging",
     "import paths",
     "eval('1')",
@@ -154,6 +153,20 @@ def test_the_left_column_really_is_rejected(snippet):
               else f"def go(sdk, p):\n    return {snippet}\n")
     report = validate(source, filename="scratch.py")
     assert not report.ok, f"{snippet} was allowed"
+
+
+# Stdlib that opens a file the plugin names. SDK.md says these are disclaimed
+# rather than refused, so "not an error" and "not silently fine" both matter.
+DISCLAIMED = ["import sqlite3", "import zipfile", "import tarfile"]
+
+
+@pytest.mark.parametrize("snippet", DISCLAIMED)
+def test_unmediated_stdlib_loads_with_a_disclaimer(snippet):
+    """The document promises a disclaimer, not a refusal and not silence."""
+    source = f"{snippet}\n\n\ndef go(sdk):\n    return 1\n"
+    report = validate(source, filename="scratch.py")
+    assert report.ok, f"{snippet} was refused"
+    assert report.disclaimed, f"{snippet} passed without a disclaimer"
 
 
 @pytest.mark.parametrize("snippet", ACCEPTED)

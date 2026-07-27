@@ -15,10 +15,15 @@ there — which is the only way a foreign library can be sandboxed at all.
 from .registry import (bind_services, clear, discover, get_modalities_for,
                        get_modality, get_supported_extensions, parse,
                        parser_for, register)
-from .result import CROSSABLE, ParseResult
-from .utils import clean_text, max_chars
+# The contract itself lives in the guest, because a parser is guest code and
+# the child process cannot see the kernel. Kernel callers reach it from here
+# so they need not care where it physically lives.
+from sandbox.guest.parsing import (CROSSABLE, DEFAULT_MAX_CHARS, ParseResult,
+                                   basename, suffix,
+                                   clean_text, max_chars)
 
-__all__ = ["ParseResult", "CROSSABLE", "bind_services", "clean_text", "clear",
+__all__ = ["ParseResult", "CROSSABLE", "DEFAULT_MAX_CHARS",
+           "basename", "bind_services", "clean_text", "clear", "suffix",
            "discover", "get_modalities_for", "get_modality",
            "get_supported_extensions", "max_chars", "parse", "parser_for",
            "register"]
