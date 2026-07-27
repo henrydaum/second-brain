@@ -18,7 +18,7 @@ from state_machine import ConversationRuntime
 from pipeline.database import Database, DEFAULT_USER_ID
 from plugins.BaseFrontend import BaseFrontend
 from plugins.commands.command_agent import AgentCommand
-from plugins.commands.command_tools import _toggle_skip
+from sandbox.handlers.kernel import _config_write
 
 
 @pytest.fixture
@@ -279,7 +279,11 @@ def test_skip_permissions_persist_per_user(tmp_path):
         runtime=rt, session_key="alice", db=db, user_id=uid,
     )
 
-    assert _toggle_skip(context, "run_command", True) == "Skip permissions enabled for run_command."
+    result = _config_write(
+        context,
+        {"key": "skip_permissions", "value": ["run_command"]},
+    )
+    assert result.ok
     assert db.get_user_config(uid)["skip_permissions"] == ["run_command"]
     assert "skip_permissions" not in rt.config
 

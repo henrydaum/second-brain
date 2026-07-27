@@ -384,13 +384,26 @@ class _Services(_Namespace):
 class _Tools(_Namespace):
     """Calling other tools."""
 
-    def list(self):
-        """Tools the current scope exposes."""
-        return self._ask(TOOL_LIST)
+    def list(self, details: bool = False):
+        """Tools the current scope exposes, optionally with schemas/settings."""
+        return self._ask(TOOL_LIST, details=details)
 
-    def call(self, name: str, **kwargs):
-        """Call another tool."""
-        return self._ask(TOOL_CALL, name=name, kwargs=kwargs)
+    def call(
+        self,
+        name: str,
+        *,
+        _result: bool = False,
+        _user_initiated: bool = False,
+        **kwargs,
+    ):
+        """Call another tool.
+
+        ``_result`` preserves the complete result envelope for presentation.
+        ``_user_initiated`` is honored only for command-originated calls.
+        """
+        return self._ask(
+            TOOL_CALL, name=name, kwargs=kwargs, result=_result,
+            user_initiated=_user_initiated)
 
 
 class _Commands(_Namespace):
@@ -751,26 +764,224 @@ class _Text:
         nb = sum(y * y for y in b) ** 0.5
         return dot / (na * nb) if na and nb else 0.0
 
+    @staticmethod
+    def value(value) -> str:
+        """Render a configuration value without Python repr artifacts."""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, list):
+            return "(none)" if not value else ", ".join(
+                str(item) for item in value)
+        return str(value)
+
 
 class _Markdown:
     """Presentation helpers, mirroring the kernel's markdown-on-the-wire
     convention so sandboxed output renders identically."""
 
     @staticmethod
-    def table(headers, rows) -> str:
+    def table(headers, rows, *, leading_blank: bool = True) -> str:
         """Render a GitHub-flavored markdown table."""
-        head = "| " + " | ".join(str(h) for h in headers) + " |"
-        rule = "| " + " | ".join("---" for _ in headers) + " |"
-        body = ["| " + " | ".join(str(c) for c in row) + " |" for row in rows]
-        # Leading blank line: GFM folds a table into the preceding paragraph
-        # without one.
-        return "\n" + "\n".join([head, rule, *body])
+        def cell(value):
+            return str("" if value is None else value).replace(
+                "\n", " ").replace("|", "\\|")
+
+        head = "| " + " | ".join(cell(h) for h in headers) + " |"
+        rule = "|" + "|".join(" --- " for _ in headers) + "|"
+        body = [
+            "| " + " | ".join(cell(c) for c in row) + " |"
+            for row in rows
+        ]
+        table = "\n".join([head, rule, *body])
+        return "\n" + table if leading_blank else table
 
     @staticmethod
     def card(title: str, pairs) -> str:
         """Render a detail card as a two-column table."""
-        return f"**{title}**\n" + _Markdown.table(
-            ["Field", "Value"], [[k, v] for k, v in pairs])
+        return _Markdown.table(
+            [title, ""], pairs, leading_blank=False)
+
+    @staticmethod
+    def quote(text: str) -> str:
+        """Render text as a markdown blockquote."""
+        return "\n".join(
+            f"> {line}" if line.strip() else ">"
+            for line in (text or "").splitlines()
+        )
+
+    @staticmethod
+    def tools(tools) -> str:
+        """Render structured tool metadata in the standard command table."""
+        if not tools:
+            return "No tools registered."
+        rows = []
+        for tool in tools:
+            params = tool.get("parameters") or {}
+            required = set(params.get("required") or [])
+            fields = ", ".join(
+                f"{name}{'*' if name in required else ''}"
+                for name in (params.get("properties") or {})
+            )
+            desc = _Text.truncate(
+                (tool.get("description") or "").split("\n")[0], 100)
+            services = tool.get("requires_services") or []
+            if services:
+                desc += f" (needs: {', '.join(services)})"
+            rows.append((tool["name"], fields, desc))
+        return "Tools:\n\n" + _Markdown.table(
+            ["Tool", "Args", "Description"], rows, leading_blank=False)
+
+    @staticmethod
+    def tool_result(result) -> str:
+        """Render a complete structured tool-result envelope."""
+        import json
+
+        if not result.get("success", True):
+            return (
+                "Failed: "
+                + (result.get("error") or result.get("llm_summary")
+                   or "(no details)")
+            )
+        data = result.get("data")
+        summary = result.get("llm_summary") or ""
+        if isinstance(data, dict) and "columns" in data and "rows" in data:
+            rows = data["rows"]
+            if not rows:
+                return "(no results)"
+            table = _Markdown.table(
+                data["columns"],
+                [
+                    [_Text.truncate(str(value), 60) for value in row]
+                    for row in rows
+                ],
+                leading_blank=False,
+            )
+            if data.get("truncated"):
+                table += "\n... (results capped at 100 rows)"
+            return table
+        if data is None:
+            return summary or "(no output)"
+        if summary:
+            text = f"Done: {summary.strip()}"
+            final = data.get("final_text") if isinstance(data, dict) else None
+            return f"{text}\n\n{str(final).strip()}" if final else text
+        try:
+            return json.dumps(data, indent=2, default=str)
+        except Exception:
+            return str(data)
+
+
+class _Forms:
+    """Pure helpers for describing command forms."""
+
+    @staticmethod
+    def from_schema(schema, *, prompt_optional: bool = False):
+        """Convert a JSON object schema into serializable form steps."""
+        from .forms import FormStep
+
+        props = (schema or {}).get("properties", {})
+        required = set((schema or {}).get("required", []))
+        return [
+            FormStep(
+                name,
+                _Forms._prompt(name, info),
+                name in required,
+                info.get("type", "string"),
+                info.get("enum"),
+                default=info.get("default"),
+                prompt_when_missing=(
+                    prompt_optional and name not in required),
+            )
+            for name, info in props.items()
+        ]
+
+    @staticmethod
+    def _prompt(name, info):
+        label = str(name or "value").replace("_", " ")
+        desc = str((info or {}).get("description") or "").strip()
+        choose = (info or {}).get("enum") or (
+            info or {}).get("type") == "boolean"
+        if choose:
+            prompt = f"Choose {label}."
+        else:
+            article = (
+                label if label.startswith(("a ", "an ", "the "))
+                else f"{'an' if label[:1].lower() in 'aeiou' else 'a'} {label}"
+            )
+            prompt = f"Enter {article}."
+        return f"{prompt}\n{desc}" if desc else prompt
+
+    @staticmethod
+    def setting_actions(settings, prefix: str = "edit_setting:"):
+        """Return action values and labels for editable setting metadata."""
+        settings = settings or []
+        return (
+            [f"{prefix}{setting['key']}" for setting in settings],
+            [f"Edit {setting['title']}" for setting in settings],
+        )
+
+    @staticmethod
+    def setting_for_action(
+        settings,
+        action,
+        prefix: str = "edit_setting:",
+    ):
+        """Resolve an encoded setting action to its declared metadata."""
+        if not isinstance(action, str) or not action.startswith(prefix):
+            return None
+        key = action[len(prefix):]
+        return next(
+            (setting for setting in (settings or [])
+             if setting["key"] == key),
+            None,
+        )
+
+    @staticmethod
+    def setting_value_step(setting):
+        """Build the standard typed value step for a setting."""
+        from .forms import FormStep
+
+        type_ = _Forms._setting_type(setting)
+        if type_ == "path_list":
+            prompt = (
+                "Enter one folder path per line. / and \\ are both accepted; "
+                "each folder must already exist. Example:\n\n"
+                "C:\\Users\\you\\Notes\nD:\\Archive"
+            )
+        elif type_ == "path":
+            prompt = (
+                "Enter a path. / and \\ are both accepted; the parent folder "
+                "must exist."
+            )
+        elif type_ == "array":
+            prompt = (
+                "Enter a list of items, one on each line, like so:\n\n"
+                "item 1\nitem 2"
+            )
+        else:
+            prompt = "Enter the new value."
+        return FormStep("value", prompt, True, type_)
+
+    @staticmethod
+    def _setting_type(setting):
+        info = setting.get("info") or {}
+        type_ = info.get("type")
+        if type_ in {"path", "path_list"}:
+            return type_
+        if type_ == "json_list":
+            return "array"
+        if type_ == "json_dict":
+            return "object"
+        if type_ in {"bool", "boolean"}:
+            return "boolean"
+        if type_ == "slider":
+            return "number" if info.get("is_float") else "integer"
+        default = setting.get("default")
+        if isinstance(default, list):
+            return "array"
+        if isinstance(default, dict):
+            return "object"
+        return "string"
 
     @staticmethod
     def plain(text: str) -> str:
@@ -825,6 +1036,10 @@ class _Markdown:
 
         return "\n".join(line for line in out
                          if not re.fullmatch(r"\s*```\w*\s*", line))
+
+
+# ``plain`` predates the forms namespace; keep it on the markdown surface.
+_Markdown.plain = staticmethod(_Forms.plain)
 
 
 class SDK:
@@ -884,6 +1099,7 @@ class SDK:
         self.secrets = _Secrets(self)
         self.text = _Text()
         self.md = _Markdown()
+        self.forms = _Forms()
 
     # ── the channel ────────────────────────────────────────────────
 

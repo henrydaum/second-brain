@@ -586,11 +586,6 @@ def _config_write(ctx, args: dict) -> Result:
             runtime = _runtime(ctx)
             if (
                 runtime is not None
-                and getattr(runtime, "config", None) is not None
-            ):
-                runtime.config[key] = value
-            if (
-                runtime is not None
                 and hasattr(runtime, "refresh_session_specs")
             ):
                 runtime.refresh_session_specs()
@@ -945,7 +940,44 @@ def _tool_list(ctx, args: dict) -> Result:
     registry = getattr(ctx, "tool_registry", None)
     if (bad := _need(registry, "the tool registry")) is not None:
         return bad
+    if args.get("details"):
+        tools = getattr(registry, "tools", None) or {}
+        return Result(data=[
+            _tool_details(ctx, tool)
+            for _, tool in sorted(tools.items())
+        ])
     return Result(data=sorted(registry.list_tools()))
+
+
+def _tool_details(ctx, tool) -> dict:
+    """Serializable schema, requirements, and editable settings for a tool."""
+    schema = (tool.to_schema() or {}).get("function", {})
+    return {
+        "name": schema.get("name") or getattr(tool, "name", ""),
+        "description": schema.get("description") or "",
+        "parameters": schema.get("parameters") or {},
+        "requires_services": list(
+            getattr(tool, "requires_services", None) or []),
+        "config_settings": [
+            {
+                "title": entry[0],
+                "key": entry[1],
+                "description": entry[2],
+                "default": entry[3],
+                "info": entry[4] if isinstance(entry[4], dict) else {},
+                "current": redact(
+                    entry[1], _config_value(ctx, entry[1], entry),
+                    guess=True),
+            }
+            for entry in (getattr(tool, "config_settings", None) or [])
+            if isinstance(entry, (list, tuple))
+            and len(entry) == 5
+            and not (
+                isinstance(entry[4], dict)
+                and entry[4].get("hidden") is True
+            )
+        ],
+    }
 
 
 def _tool_call(ctx, args: dict) -> Result:
@@ -955,7 +987,24 @@ def _tool_call(ctx, args: dict) -> Result:
         return bad
     name = args.get("name")
     try:
-        outcome = call(name, **(args.get("kwargs") or {}))
+        kwargs = dict(args.get("kwargs") or {})
+        command_origin = (
+            getattr(ctx, "command_registry", None) is not None
+            and not getattr(ctx, "current_tool_name", None)
+        )
+        if args.get("user_initiated") and command_origin:
+            kwargs["_user_initiated"] = True
+        outcome = call(name, **kwargs)
+        if args.get("result"):
+            return Result(data={
+                "success": bool(getattr(outcome, "success", True)),
+                "data": getattr(outcome, "data", outcome),
+                "error": str(getattr(outcome, "error", "") or ""),
+                "llm_summary": str(
+                    getattr(outcome, "llm_summary", "") or ""),
+                "attachment_paths": list(
+                    getattr(outcome, "attachment_paths", None) or []),
+            })
         return Result(ok=bool(getattr(outcome, "success", True)),
                       data=getattr(outcome, "data", outcome),
                       error=str(getattr(outcome, "error", "")))
