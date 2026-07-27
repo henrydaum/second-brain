@@ -4,12 +4,14 @@
 dependencies_files = []
 dependencies_pip = ['av', 'numpy']
 
-import logging
-from pathlib import Path
-from plugins.services.helpers.ParseResult import ParseResult
-from plugins.services.helpers import parser_registry as registry
+# PyAV wraps ffmpeg and holds an open container,
+# so their actions cannot be turned into Requests. A process boundary is
+# what actually contains them — and a malformed file that kills a box is a
+# failed parse rather than a dead kernel.
+isolation = "subprocess"
 
-logger = logging.getLogger("ParseVideo")
+from guest.parsing import ParseResult, register
+
 
 # Returns a standardized av.Container object
 
@@ -38,7 +40,7 @@ Requires: av (PyAV)
 """
 
 
-def parse_video(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_video(sdk, path: str, config: dict = None) -> ParseResult:
     """
     Open a video file and return an av.Container handle.
 
@@ -48,7 +50,7 @@ def parse_video(path: str, config: dict, services: dict = None) -> ParseResult:
     try:
         import av
     except ImportError:
-        logger.debug("PyAV not installed")
+        sdk.log("PyAV not installed", level="debug")
         return ParseResult.failed("PyAV not installed", modality="video")
 
     try:
@@ -99,25 +101,25 @@ def parse_video(path: str, config: dict, services: dict = None) -> ParseResult:
             also_contains=also_contains,
         )
     except av.AVError as e:
-        logger.debug(f"Failed to open video: {e}")
+        sdk.log(f"Failed to open video: {e}", level="debug")
         return ParseResult.failed(f"Failed to open video: {e}", modality="video")
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="video")
 
 
-registry.register([
+register([
     ".mp4", ".mkv", ".avi", ".mov",
     ".webm", ".flv", ".wmv", ".gif",
 ], "video", parse_video)
 
-def parse_video_audio(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_video_audio(sdk, path: str, config: dict = None) -> ParseResult:
     """Extract the audio track from a video as (np.ndarray, sample_rate)."""
     try:
         import av
         import numpy as np
     except ImportError as e:
-        logger.debug(f"Missing dependency: {e}")
+        sdk.log(f"Missing dependency: {e}", level="debug")
         return ParseResult.failed(f"Missing dependency: {e}", modality="audio")
 
     try:
@@ -164,11 +166,11 @@ def parse_video_audio(path: str, config: dict, services: dict = None) -> ParseRe
             },
         )
     except Exception as e:
-        logger.debug(f"Failed to extract audio from {path}: {e}")
+        sdk.log(f"Failed to extract audio from {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="audio")
 
 
-registry.register([
+register([
     ".mp4", ".mkv", ".avi", ".mov",
     ".webm", ".flv", ".wmv",
 ], "audio", parse_video_audio)

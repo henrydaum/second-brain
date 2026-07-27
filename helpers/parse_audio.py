@@ -4,14 +4,15 @@
 dependencies_files = []
 dependencies_pip = ['librosa', 'numpy', 'soundfile']
 
-import logging
-import json
-import subprocess
-from pathlib import Path
-from plugins.services.helpers.ParseResult import ParseResult
-from plugins.services.helpers import parser_registry as registry
+# soundfile/librosa decode audio in C and read the file themselves,
+# so their actions cannot be turned into Requests. A process boundary is
+# what actually contains them — and a malformed file that kills a box is a
+# failed parse rather than a dead kernel.
+isolation = "subprocess"
 
-logger = logging.getLogger("ParseAudio")
+import json
+from guest.parsing import ParseResult, basename, register
+
 
 # Returns a standardized np.ndarray + sample rate integer
 
@@ -28,28 +29,29 @@ Tasks that need the waveform will fail gracefully with a clear error.
 """
 
 
-def _probe_metadata(path: str) -> dict:
+def _probe_metadata(sdk, path: str) -> dict:
     """
     Extract audio metadata via ffprobe. Returns empty dict if unavailable.
     This is lightweight — no decoding, just reads the file header.
+
+    Running a process is a Request, so the user is asked once for a parser
+    that shells out — which is the right thing to be asked about.
     """
     try:
-        result = subprocess.run(
+        result = sdk.proc.run(
             [
                 "ffprobe", "-v", "quiet",
                 "-print_format", "json",
                 "-show_format", "-show_streams",
                 str(path),
             ],
-            capture_output=True,
-            text=True,
             timeout=10,
         )
 
-        if result.returncode != 0:
+        if result["code"] != 0:
             return {}
 
-        probe = json.loads(result.stdout)
+        probe = json.loads(result["stdout"])
         fmt = probe.get("format", {})
         metadata = {
             "duration_seconds": float(fmt.get("duration", 0)),
@@ -67,15 +69,15 @@ def _probe_metadata(path: str) -> dict:
 
         return metadata
 
-    except FileNotFoundError:
-        logger.debug("ffprobe not available")
+    except sdk.Denied:
+        sdk.log("not allowed to run ffprobe", level="debug")
         return {}
     except Exception as e:
-        logger.debug(f"ffprobe failed: {e}")
+        sdk.log(f"ffprobe failed: {e}", level="debug")
         return {}
 
 
-def parse_audio(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_audio(sdk, path: str, config: dict = None) -> ParseResult:
     """
     Load an audio file as (np.ndarray, sample_rate).
 
@@ -83,7 +85,7 @@ def parse_audio(path: str, config: dict, services: dict = None) -> ParseResult:
     Falls back to librosa for MP3 and other formats that need decoding.
     Falls back to metadata-only if neither is available.
     """
-    metadata = _probe_metadata(path)
+    metadata = _probe_metadata(sdk, path)
 
     # Target sample rate: Whisper uses 16000, music apps use 44100.
     # Default to the file's native rate (None = no resampling).
@@ -110,7 +112,7 @@ def parse_audio(path: str, config: dict, services: dict = None) -> ParseResult:
             metadata=metadata,
         )
     except Exception as sf_err:
-        logger.debug(f"soundfile failed for {Path(path).name}: {sf_err}")
+        sdk.log(f"soundfile failed for {basename(path)}: {sf_err}", level="debug")
 
     # Fallback: librosa (handles MP3, M4A, etc. via ffmpeg)
     try:
@@ -129,9 +131,9 @@ def parse_audio(path: str, config: dict, services: dict = None) -> ParseResult:
             metadata=metadata,
         )
     except ImportError:
-        logger.debug("Neither soundfile nor librosa available")
+        sdk.log("Neither soundfile nor librosa available", level="debug")
     except Exception as lr_err:
-        logger.debug(f"librosa failed for {Path(path).name}: {lr_err}")
+        sdk.log(f"librosa failed for {basename(path)}: {lr_err}", level="debug")
 
     # Last resort: metadata only, no waveform
     if metadata:
@@ -147,7 +149,7 @@ def parse_audio(path: str, config: dict, services: dict = None) -> ParseResult:
     )
 
 
-def parse_audio_text(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_audio_text(sdk, path: str, config: dict = None) -> ParseResult:
     """
     Transcribe an audio file to text by delegating to the whisper service.
 
@@ -172,7 +174,7 @@ def parse_audio_text(path: str, config: dict, services: dict = None) -> ParseRes
 
     text = (whisper.transcribe(path) or "").strip()
 
-    metadata = _probe_metadata(path)
+    metadata = _probe_metadata(sdk, path)
     metadata["model_name"] = getattr(whisper, "model_name", "unknown")
     limit = (config or {}).get("max_chars")
     if limit and len(text) > limit:
@@ -197,5 +199,5 @@ _AUDIO_EXTENSIONS = [
 # "audio" must register first: the first modality registered for an
 # extension becomes its default, and get_modality must keep answering
 # "audio" so native-capable LLMs still get the raw file inlined.
-registry.register(_AUDIO_EXTENSIONS, "audio", parse_audio)
-registry.register(_AUDIO_EXTENSIONS, "text", parse_audio_text)
+register(_AUDIO_EXTENSIONS, "audio", parse_audio)
+register(_AUDIO_EXTENSIONS, "text", parse_audio_text)

@@ -1,13 +1,13 @@
 {
   "description": "Every file parser: images, PDF, Office, tabular, audio, video, Google Docs, containers, Whisper transcription, and OCR.",
   "files": [
-    "services/helpers/parse_image.py",
-    "services/helpers/parse_audio.py",
-    "services/helpers/parse_gdoc.py",
-    "services/helpers/parse_office.py",
-    "services/helpers/parse_pdf.py",
-    "services/helpers/parse_tabular.py",
-    "services/helpers/parse_video.py",
+    "helpers/parse_image.py",
+    "helpers/parse_audio.py",
+    "helpers/parse_gdoc.py",
+    "helpers/parse_office.py",
+    "helpers/parse_pdf.py",
+    "helpers/parse_tabular.py",
+    "helpers/parse_video.py",
     "services/service_ocr.py",
     "services/service_whisper.py",
     "tasks/task_extract_container.py"

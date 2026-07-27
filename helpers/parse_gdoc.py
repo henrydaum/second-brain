@@ -12,39 +12,33 @@ dependencies_files = ['services/service_drive.py']
 dependencies_pip = []
 
 import json
-import logging
-from pathlib import Path
 
-from plugins.services.helpers.ParseResult import ParseResult
-from plugins.services.helpers import parser_registry as registry
-from plugins.services.helpers.parsing_utils import clean_text, max_chars
-
-logger = logging.getLogger("ParseGDoc")
+from guest.parsing import ParseResult, clean_text, max_chars, register
 
 
-def parse_gdoc(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_gdoc(sdk, path: str, config: dict = None) -> ParseResult:
     """Parse a .gdoc shortcut and fetch its content from Google Drive.
 
-    Requires the ``google_drive`` service to be loaded.
+    Requires the ``google_drive`` service to be loaded. Reaching it through
+    ``sdk.services`` rather than holding the instance is what lets this file
+    run in a box: the call becomes a Request, and the service stays wherever
+    it lives.
     """
-    drive_svc = services.get("google_drive") if services else None
-
-    if drive_svc is None or not getattr(drive_svc, "loaded", False):
+    if not sdk.services.list().get("google_drive"):
         return ParseResult.failed(
             "Drive service not loaded — retry after loading",
             modality="text",
         )
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            gdoc_data = json.load(f)
+        gdoc_data = json.loads(sdk.fs.read(path))
 
         doc_id = gdoc_data.get("doc_id")
         if not doc_id:
             return ParseResult.failed("No doc_id found in .gdoc file", modality="text")
 
-        # Service handles the API call and thread safety internally.
-        content = drive_svc.download_text(doc_id)
+        # The service handles the API call and thread safety internally.
+        content = sdk.services.call("google_drive", "download_text", doc_id=doc_id)
         if content is None:
             return ParseResult.failed("Failed to download document", modality="text")
 
@@ -61,8 +55,8 @@ def parse_gdoc(path: str, config: dict, services: dict = None) -> ParseResult:
             },
         )
     except Exception as e:
-        logger.error(f"Failed to parse gdoc {Path(path).name}: {e}")
+        sdk.log(f"Failed to parse gdoc {path}: {e}", level="error")
         return ParseResult.failed(str(e), modality="text")
 
 
-registry.register(".gdoc", "text", parse_gdoc)
+register(".gdoc", "text", parse_gdoc)

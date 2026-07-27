@@ -4,12 +4,14 @@
 dependencies_files = ['services/service_drive.py']
 dependencies_pip = ['pandas']
 
-import logging
-from pathlib import Path
-from plugins.services.helpers.ParseResult import ParseResult
-from plugins.services.helpers import parser_registry as registry
+# pandas and sqlite3 open the file themselves,
+# so their actions cannot be turned into Requests. A process boundary is
+# what actually contains them — and a malformed file that kills a box is a
+# failed parse rather than a dead kernel.
+isolation = "subprocess"
 
-logger = logging.getLogger("ParseTabular")
+from guest.parsing import ParseResult, basename, register, suffix
+
 
 # Returns standardized DataFrame object
 
@@ -37,16 +39,16 @@ def _max_rows(config: dict) -> int:
 # CSV / TSV
 # ===================================================================
 
-def parse_csv(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_csv(sdk, path: str, config: dict = None) -> ParseResult:
     """Parse CSV/TSV into a DataFrame."""
     try:
         import pandas as pd
     except ImportError:
-        logger.debug("pandas not installed")
+        sdk.log("pandas not installed", level="debug")
         return ParseResult.failed("pandas not installed", modality="tabular")
 
     try:
-        ext = Path(path).suffix.lower()
+        ext = suffix(path)
         sep = "\t" if ext == ".tsv" else ","
         limit = _max_rows(config)
 
@@ -55,7 +57,7 @@ def parse_csv(path: str, config: dict, services: dict = None) -> ParseResult:
             try:
                 df = pd.read_csv(path, nrows=limit, sep=None, engine="python")
             except Exception:
-                logger.debug(f"Failed to auto-detect CSV delimiter for {path}")
+                sdk.log(f"Failed to auto-detect CSV delimiter for {path}", level="debug")
                 df = pd.read_csv(path, nrows=limit, sep=sep)
         else:
             df = pd.read_csv(path, nrows=limit, sep=sep)
@@ -71,23 +73,23 @@ def parse_csv(path: str, config: dict, services: dict = None) -> ParseResult:
             },
         )
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="tabular")
 
 
-registry.register([".csv", ".tsv"], "tabular", parse_csv)
+register([".csv", ".tsv"], "tabular", parse_csv)
 
 
 # ===================================================================
 # XLSX / XLS
 # ===================================================================
 
-def parse_xlsx(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_xlsx(sdk, path: str, config: dict = None) -> ParseResult:
     """Parse Excel files. Returns all sheets as a dict of DataFrames."""
     try:
         import pandas as pd
     except ImportError:
-        logger.debug("pandas not installed")
+        sdk.log("pandas not installed", level="debug")
         return ParseResult.failed("pandas not installed", modality="tabular")
 
     try:
@@ -117,28 +119,28 @@ def parse_xlsx(path: str, config: dict, services: dict = None) -> ParseResult:
             },
         )
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="tabular")
 
 
-registry.register([".xlsx", ".xls"], "tabular", parse_xlsx)
+register([".xlsx", ".xls"], "tabular", parse_xlsx)
 
 
 # ===================================================================
 # PARQUET / FEATHER
 # ===================================================================
 
-def parse_parquet(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_parquet(sdk, path: str, config: dict = None) -> ParseResult:
     """Parse Apache Parquet files into a DataFrame."""
     try:
         import pandas as pd
     except ImportError:
-        logger.debug("pandas not installed")
+        sdk.log("pandas not installed", level="debug")
         return ParseResult.failed("pandas not installed", modality="tabular")
 
     try:
         limit = _max_rows(config)
-        ext = Path(path).suffix.lower()
+        ext = suffix(path)
 
         if ext == ".feather":
             df = pd.read_feather(path)
@@ -161,24 +163,24 @@ def parse_parquet(path: str, config: dict, services: dict = None) -> ParseResult
             },
         )
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="tabular")
 
 
-registry.register([".parquet", ".feather"], "tabular", parse_parquet)
+register([".parquet", ".feather"], "tabular", parse_parquet)
 
 
 # ===================================================================
 # SQLITE
 # ===================================================================
 
-def parse_sqlite(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_sqlite(sdk, path: str, config: dict = None) -> ParseResult:
     """Parse sqlite."""
     try:
         import pandas as pd
         import sqlite3
     except ImportError as e:
-        logger.debug(f"Missing dependency: {e}")
+        sdk.log(f"Missing dependency: {e}", level="debug")
         return ParseResult.failed(f"Missing dependency: {e}", modality="tabular")
 
     try:
@@ -226,11 +228,11 @@ def parse_sqlite(path: str, config: dict, services: dict = None) -> ParseResult:
             },
         )
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="tabular")
 
 
-registry.register([".sqlite", ".db"], "tabular", parse_sqlite)
+register([".sqlite", ".db"], "tabular", parse_sqlite)
 
 
 # ===================================================================
@@ -238,7 +240,7 @@ registry.register([".sqlite", ".db"], "tabular", parse_sqlite)
 # ===================================================================
 
 
-def parse_gsheet(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_gsheet(sdk, path: str, config: dict = None) -> ParseResult:
     """
     Parse a .gsheet file (JSON shortcut) by downloading content from
     Google Drive as CSV and converting to a DataFrame.
@@ -249,20 +251,17 @@ def parse_gsheet(path: str, config: dict, services: dict = None) -> ParseResult:
     try:
         import pandas as pd
     except ImportError:
-        logger.debug("pandas not installed")
+        sdk.log("pandas not installed", level="debug")
         return ParseResult.failed("pandas not installed", modality="tabular")
 
-    drive_svc = services.get("google_drive") if services else None
-
-    if drive_svc is None or not getattr(drive_svc, "loaded", False):
+    if not sdk.services.list().get("google_drive"):
         return ParseResult.failed(
             "Drive service not loaded — retry after loading",
             modality="tabular",
         )
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            gsheet_data = json.load(f)
+        gsheet_data = json.loads(sdk.fs.read(path))
 
         doc_id = gsheet_data.get("doc_id")
         if not doc_id:
@@ -271,7 +270,7 @@ def parse_gsheet(path: str, config: dict, services: dict = None) -> ParseResult:
             )
 
         # Download as CSV via the Drive export API
-        csv_text = drive_svc.download_csv(doc_id)
+        csv_text = sdk.services.call("google_drive", "download_csv", doc_id=doc_id)
 
         if csv_text is None:
             return ParseResult.failed(
@@ -300,8 +299,8 @@ def parse_gsheet(path: str, config: dict, services: dict = None) -> ParseResult:
             },
         )
     except Exception as e:
-        logger.error(f"Failed to parse gsheet {Path(path).name}: {e}")
+        sdk.log(f"Failed to parse gsheet {basename(path)}: {e}", level="error")
         return ParseResult.failed(str(e), modality="tabular")
 
 
-registry.register(".gsheet", "tabular", parse_gsheet)
+register(".gsheet", "tabular", parse_gsheet)

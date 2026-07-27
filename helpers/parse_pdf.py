@@ -10,23 +10,24 @@ than failing the parser-discovery scan when PyMuPDF is absent.
 dependencies_files = []
 dependencies_pip = ['Pillow', 'pandas', 'PyMuPDF']
 
-import logging
+# PyMuPDF is a C library parsing untrusted documents,
+# so their actions cannot be turned into Requests. A process boundary is
+# what actually contains them — and a malformed file that kills a box is a
+# failed parse rather than a dead kernel.
+isolation = "subprocess"
+
 import time
-from pathlib import Path
 
-from plugins.services.helpers.ParseResult import ParseResult
-from plugins.services.helpers import parser_registry as registry
-from plugins.services.helpers.parsing_utils import clean_text, max_chars
-
-logger = logging.getLogger("ParsePDF")
+from guest.parsing import ParseResult, basename, clean_text, max_chars, register
 
 
-def parse_pdf_text(path: str, config: dict, services: dict = None) -> ParseResult:
+
+def parse_pdf_text(sdk, path: str, config: dict = None) -> ParseResult:
     """Extract text from a PDF. Detects embedded images and tables."""
     try:
         import fitz  # PyMuPDF
     except ImportError:
-        logger.debug("PyMuPDF not installed")
+        sdk.log("PyMuPDF not installed", level="debug")
         return ParseResult.failed("PyMuPDF not installed", modality="text")
 
     try:
@@ -78,10 +79,10 @@ def parse_pdf_text(path: str, config: dict, services: dict = None) -> ParseResul
                 "is_scanned": is_scanned,
             }
 
-        logger.debug(
-            f"PDF parsed: {Path(path).name} — {metadata['page_count']} pages, "
+        sdk.log(
+            f"PDF parsed: {basename(path)} — {metadata['page_count']} pages, "
             f"{len(text)} chars in {time.time() - t0:.2f}s"
-        )
+        , level="debug")
         return ParseResult(
             modality="text",
             output=text,
@@ -89,21 +90,21 @@ def parse_pdf_text(path: str, config: dict, services: dict = None) -> ParseResul
             also_contains=also_contains,
         )
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="text")
 
 
-registry.register(".pdf", "text", parse_pdf_text)
+register(".pdf", "text", parse_pdf_text)
 
 
-def parse_pdf_image(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_pdf_image(sdk, path: str, config: dict = None) -> ParseResult:
     """Extract embedded images from a PDF as PIL.Image objects."""
     try:
         import fitz
         from PIL import Image
         import io
     except ImportError as e:
-        logger.debug(f"Missing dependency: {e}")
+        sdk.log(f"Missing dependency: {e}", level="debug")
         return ParseResult.failed(f"Missing dependency: {e}", modality="image")
 
     try:
@@ -136,20 +137,20 @@ def parse_pdf_image(path: str, config: dict, services: dict = None) -> ParseResu
             metadata={"image_count": len(images), "source_format": "pdf"},
         )
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="image")
 
 
-registry.register(".pdf", "image", parse_pdf_image)
+register(".pdf", "image", parse_pdf_image)
 
 
-def parse_pdf_tables(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_pdf_tables(sdk, path: str, config: dict = None) -> ParseResult:
     """Extract tables from a PDF as DataFrames."""
     try:
         import fitz
         import pandas as pd  # noqa: F401  (table.to_pandas needs pandas installed)
     except ImportError as e:
-        logger.debug(f"Missing dependency: {e}")
+        sdk.log(f"Missing dependency: {e}", level="debug")
         return ParseResult.failed(f"Missing dependency: {e}", modality="tabular")
 
     try:
@@ -195,8 +196,8 @@ def parse_pdf_tables(path: str, config: dict, services: dict = None) -> ParseRes
             },
         )
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="tabular")
 
 
-registry.register(".pdf", "tabular", parse_pdf_tables)
+register(".pdf", "tabular", parse_pdf_tables)

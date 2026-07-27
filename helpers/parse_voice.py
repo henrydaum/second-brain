@@ -19,13 +19,9 @@ Whisper service, so importing this helper stays cheap.
 dependencies_files = ['services/service_whisper.py']
 dependencies_pip = []
 
-import logging
-from pathlib import Path
 
-from plugins.services.helpers.ParseResult import ParseResult
-from plugins.services.helpers import parser_registry as registry
+from guest.parsing import ParseResult, basename, register
 
-logger = logging.getLogger("ParseVoice")
 
 # Mirror parse_audio's extension set so every audio attachment can be transcribed.
 AUDIO_EXTENSIONS = [
@@ -34,7 +30,7 @@ AUDIO_EXTENSIONS = [
 ]
 
 
-def parse_voice(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_voice(sdk, path: str, config: dict = None) -> ParseResult:
     """Return the spoken contents of an audio file as text via the Whisper service."""
     whisper = (services or {}).get("whisper")
     if whisper is None or not getattr(whisper, "loaded", False):
@@ -45,7 +41,7 @@ def parse_voice(path: str, config: dict, services: dict = None) -> ParseResult:
     try:
         text = (whisper.transcribe(path) or "").strip()
     except Exception as e:
-        logger.warning(f"Transcription failed for {Path(path).name}: {e}")
+        sdk.log(f"Transcription failed for {basename(path)}: {e}", level="warning")
         return ParseResult.failed(str(e), modality="text")
 
     if not text:
@@ -60,4 +56,4 @@ def parse_voice(path: str, config: dict, services: dict = None) -> ParseResult:
     )
 
 
-registry.register(AUDIO_EXTENSIONS, "text", parse_voice)
+register(AUDIO_EXTENSIONS, "text", parse_voice)

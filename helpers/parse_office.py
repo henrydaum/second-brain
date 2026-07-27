@@ -10,15 +10,16 @@ rather than failing the parser-discovery scan.
 dependencies_files = []
 dependencies_pip = ['Pillow', 'pandas', 'python-docx', 'python-pptx']
 
-import logging
+# python-docx and python-pptx open the document themselves,
+# so their actions cannot be turned into Requests. A process boundary is
+# what actually contains them — and a malformed file that kills a box is a
+# failed parse rather than a dead kernel.
+isolation = "subprocess"
+
 import time
-from pathlib import Path
 
-from plugins.services.helpers.ParseResult import ParseResult
-from plugins.services.helpers import parser_registry as registry
-from plugins.services.helpers.parsing_utils import clean_text, max_chars
+from guest.parsing import ParseResult, basename, clean_text, max_chars, register
 
-logger = logging.getLogger("ParseOffice")
 
 # Safety cap for pathological DOCX tables (matches the tabular package).
 DEFAULT_MAX_TABLE_ROWS = 100_000
@@ -28,12 +29,12 @@ DEFAULT_MAX_TABLE_ROWS = 100_000
 # DOCX
 # ===================================================================
 
-def parse_docx_text(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_docx_text(sdk, path: str, config: dict = None) -> ParseResult:
     """Extract text from a Word document. Detects embedded images."""
     try:
         from docx import Document
     except ImportError:
-        logger.debug("python-docx not installed")
+        sdk.log("python-docx not installed", level="debug")
         return ParseResult.failed("python-docx not installed", modality="text")
 
     try:
@@ -72,10 +73,10 @@ def parse_docx_text(path: str, config: dict, services: dict = None) -> ParseResu
         if has_tables:
             also_contains.append("tabular")
 
-        logger.debug(
-            f"DOCX parsed: {Path(path).name} — {len(doc.paragraphs)} paragraphs, "
+        sdk.log(
+            f"DOCX parsed: {basename(path)} — {len(doc.paragraphs)} paragraphs, "
             f"{len(content)} chars in {time.time() - t0:.2f}s"
-        )
+        , level="debug")
         return ParseResult(
             modality="text",
             output=content,
@@ -83,21 +84,21 @@ def parse_docx_text(path: str, config: dict, services: dict = None) -> ParseResu
             also_contains=also_contains,
         )
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="text")
 
 
-registry.register([".docx", ".doc"], "text", parse_docx_text)
+register([".docx", ".doc"], "text", parse_docx_text)
 
 
-def parse_docx_image(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_docx_image(sdk, path: str, config: dict = None) -> ParseResult:
     """Extract embedded images from a DOCX as PIL.Image objects."""
     try:
         from docx import Document
         from PIL import Image
         import io
     except ImportError as e:
-        logger.debug(f"Missing dependency: {e}")
+        sdk.log(f"Missing dependency: {e}", level="debug")
         return ParseResult.failed(f"Missing dependency: {e}", modality="image")
 
     try:
@@ -127,11 +128,11 @@ def parse_docx_image(path: str, config: dict, services: dict = None) -> ParseRes
             metadata={"image_count": len(images), "source_format": "docx"},
         )
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="image")
 
 
-registry.register([".docx", ".doc"], "image", parse_docx_image)
+register([".docx", ".doc"], "image", parse_docx_image)
 
 
 def _docx_cell_text(cell) -> str:
@@ -193,7 +194,7 @@ def _docx_table_to_dataframe(table, limit: int):
     return df
 
 
-def parse_docx_tables(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_docx_tables(sdk, path: str, config: dict = None) -> ParseResult:
     """Extract every table from a .docx as a dict of DataFrames.
 
     Complements ``parse_docx_text``, which flags ``also_contains=["tabular"]``
@@ -204,13 +205,13 @@ def parse_docx_tables(path: str, config: dict, services: dict = None) -> ParseRe
         import pandas as pd  # noqa: F401  (used by _docx_table_to_dataframe)
         from docx import Document
     except ImportError as e:
-        logger.debug(f"Missing dependency: {e}")
+        sdk.log(f"Missing dependency: {e}", level="debug")
         return ParseResult.failed(f"Missing dependency: {e}", modality="tabular")
 
     try:
         doc = Document(path)
     except Exception as e:
-        logger.debug(f"Failed to open {path}: {e}")
+        sdk.log(f"Failed to open {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="tabular")
 
     limit = (config or {}).get("max_rows", DEFAULT_MAX_TABLE_ROWS)
@@ -219,7 +220,7 @@ def parse_docx_tables(path: str, config: dict, services: dict = None) -> ParseRe
         try:
             df = _docx_table_to_dataframe(table, limit)
         except Exception as e:
-            logger.debug(f"Skipping table {idx} in {Path(path).name}: {e}")
+            sdk.log(f"Skipping table {idx} in {basename(path)}: {e}", level="debug")
             continue
         if df is None or df.empty:
             continue
@@ -241,10 +242,10 @@ def parse_docx_tables(path: str, config: dict, services: dict = None) -> ParseRe
             "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
         }
 
-    logger.debug(
-        f"DOCX tables parsed: {Path(path).name} — "
+    sdk.log(
+        f"DOCX tables parsed: {basename(path)} — "
         f"{len(all_tables)} table(s), {total_rows} rows"
-    )
+    , level="debug")
     return ParseResult(
         modality="tabular",
         output=all_tables,
@@ -258,19 +259,19 @@ def parse_docx_tables(path: str, config: dict, services: dict = None) -> ParseRe
     )
 
 
-registry.register([".docx", ".doc"], "tabular", parse_docx_tables)
+register([".docx", ".doc"], "tabular", parse_docx_tables)
 
 
 # ===================================================================
 # PPTX
 # ===================================================================
 
-def parse_pptx_text(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_pptx_text(sdk, path: str, config: dict = None) -> ParseResult:
     """Extract text from a PowerPoint. Detects embedded images."""
     try:
         from pptx import Presentation
     except ImportError:
-        logger.debug("python-pptx not installed")
+        sdk.log("python-pptx not installed", level="debug")
         return ParseResult.failed("python-pptx not installed", modality="text")
 
     try:
@@ -298,10 +299,10 @@ def parse_pptx_text(path: str, config: dict, services: dict = None) -> ParseResu
         if image_count > 0:
             also_contains.append("image")
 
-        logger.debug(
-            f"PPTX parsed: {Path(path).name} — {len(prs.slides)} slides, "
+        sdk.log(
+            f"PPTX parsed: {basename(path)} — {len(prs.slides)} slides, "
             f"{len(content)} chars in {time.time() - t0:.2f}s"
-        )
+        , level="debug")
         return ParseResult(
             modality="text",
             output=content,
@@ -314,14 +315,14 @@ def parse_pptx_text(path: str, config: dict, services: dict = None) -> ParseResu
             also_contains=also_contains,
         )
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="text")
 
 
-registry.register(".pptx", "text", parse_pptx_text)
+register(".pptx", "text", parse_pptx_text)
 
 
-def parse_pptx_image(path: str, config: dict, services: dict = None) -> ParseResult:
+def parse_pptx_image(sdk, path: str, config: dict = None) -> ParseResult:
     """Extract embedded images from a PPTX as PIL.Image objects."""
     try:
         from pptx import Presentation
@@ -329,7 +330,7 @@ def parse_pptx_image(path: str, config: dict, services: dict = None) -> ParseRes
         from PIL import Image
         import io
     except ImportError as e:
-        logger.debug(f"Missing dependency: {e}")
+        sdk.log(f"Missing dependency: {e}", level="debug")
         return ParseResult.failed(f"Missing dependency: {e}", modality="image")
 
     try:
@@ -362,8 +363,8 @@ def parse_pptx_image(path: str, config: dict, services: dict = None) -> ParseRes
             metadata={"image_count": len(images), "source_format": "pptx"},
         )
     except Exception as e:
-        logger.debug(f"Failed to parse {path}: {e}")
+        sdk.log(f"Failed to parse {path}: {e}", level="debug")
         return ParseResult.failed(str(e), modality="image")
 
 
-registry.register(".pptx", "image", parse_pptx_image)
+register(".pptx", "image", parse_pptx_image)
