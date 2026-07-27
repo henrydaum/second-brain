@@ -7,7 +7,7 @@ import re
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from paths import DATA_DIR, ROOT_DIR, SCRATCH_DIR
+from paths import DATA_DIR, ROOT_DIR, SANDBOX_PLUGINS, SCRATCH_DIR
 from plugins.BaseTool import BaseTool, ToolResult
 from plugins.helpers.plugin_paths import iter_plugin_dirs
 from .helpers import file_reads
@@ -101,6 +101,14 @@ class EditFile(BaseTool):
             if _is_scratch(p) and (getattr(context, "config", None) or {}).get("scratch_no_approval", True):
                 # Scratch is the frictionless workspace: path-confined,
                 # retention-pruned, low blast radius — no approval dialog.
+                return None
+            if _is_authoring(p):
+                # The agent's own plugin tree. Everything there runs behind a
+                # process boundary, so containment has already bought what the
+                # dialog would. Not config-gated, unlike scratch: this one is
+                # the kernel's policy, and a setting that could disagree with
+                # sandbox/policy.py would make the grant depend on which tool
+                # did the writing.
                 return None
             if context.approve_command is None:
                 return ToolResult.failed("File editing is not available — no approval handler is configured.")
@@ -241,6 +249,30 @@ def _is_scratch(p: Path) -> bool:
     """Whether the path is inside the agent scratch workspace."""
     scratch = SCRATCH_DIR.resolve()
     return p == scratch or scratch in p.parents
+
+
+def _is_authoring(p: Path) -> bool:
+    """Whether the path is inside the agent's own plugin tree.
+
+    Free to edit for the same reason scratch is, but the reason is stronger
+    and worth stating: every file under ``sandbox_plugins`` runs in a
+    subprocess, decided by the kernel from the path rather than from anything
+    the file says. Code written here is contained *before* it runs, so a
+    dialog per edit approves something that cannot act unmediated anyway —
+    while costing the thing that makes an authoring agent useful, since
+    writing a plugin is a dozen edits and a dozen interruptions.
+
+    This mirrors the kernel's own answer: ``sandbox/policy.py`` classifies
+    ``fs.write``/``fs.delete``/``fs.move`` under this tree as safe. That
+    covers sandboxed plugins; this covers the native path, and the two must
+    agree or the grant depends on which tool happens to be doing the writing.
+
+    What it does not grant, exactly as there: writing a file changes what the
+    system can *ask*, never what it may *affect*. The new plugin's Requests
+    are classified like anybody else's.
+    """
+    sandbox = SANDBOX_PLUGINS.resolve()
+    return p == sandbox or sandbox in p.parents
 
 
 def _is_root_file(p: Path) -> bool:
