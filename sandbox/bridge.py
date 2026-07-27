@@ -698,6 +698,28 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
                           ctx=project_payload("session_key", ctx))
         return str(result.data) if result.ok and result.data else "default"
 
+    def _live_session_keys(self):
+        """Only the sessions this frontend actually owns.
+
+        The native default is *every* session the runtime knows about, which
+        works because each native frontend overrides it — the REPL answers
+        ``["default"]``. A sandboxed frontend cannot override a native method,
+        and inheriting that default would mean rendering another frontend's
+        conversation to this one's transport.
+
+        The tag is already there: ``_tag_session`` stamps ``frontend_name`` on
+        every session a frontend submits for, so ownership can be read rather
+        than declared. Untagged sessions are included, because a session that
+        nobody has claimed is one this frontend may still be about to receive
+        — dropping it would lose the first message of a conversation.
+        """
+        runtime = getattr(self, "runtime", None)
+        if runtime is None:
+            return []
+        return [key for key, session in (getattr(runtime, "sessions", None)
+                                         or {}).items()
+                if getattr(session, "frontend_name", None) in (None, self.name)]
+
     def _renderer(kind: str):
         """One native render method, funnelled into the single box call."""
         def render(self, session_key, payload=None):
@@ -717,6 +739,7 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
         "__init__": __init__,
         "_done": _done,
         "_render": _render,
+        "_live_session_keys": _live_session_keys,
         "start": start,
         "stop": stop,
         "session_key": session_key,

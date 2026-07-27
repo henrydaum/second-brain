@@ -27,7 +27,8 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               CRON_UPDATE, DB_DEFINE, DB_QUERY, DB_WRITE,
                               EVENT_EMIT, EVENT_REQUEST, FILE_LIST,
                               FILE_REGISTER, FRONTEND_ATTEND, FRONTEND_BIND,
-                              FRONTEND_CANCEL, FRONTEND_RESOLVE,
+                              FRONTEND_CANCEL, FRONTEND_PENDING,
+                              FRONTEND_RESOLVE,
                               FRONTEND_SUBMIT, LEDGER_READ, LEDGER_RECORD,
                               PARSE_FILE, PARSE_MODALITY, PLUGIN_DESCRIBE,
                               PLUGIN_LIST, SERVICE_CALL, SERVICE_LIST,
@@ -268,9 +269,16 @@ def _session_get(ctx, args: dict) -> Result:
     session = (getattr(runtime, "sessions", None) or {}).get(key)
     if session is None:
         return Result(data=None)
+    # The phase is what the state machine is doing right now. A frontend needs
+    # it to know whether the machine is already collecting an answer — if it
+    # is, the frontend must not also interpret the next line, or one keystroke
+    # gets consumed twice.
+    machine = getattr(session, "cs", None)
     return Result(data={
         "key": key,
         "conversation_id": getattr(session, "conversation_id", None),
+        "phase": getattr(machine, "phase", None),
+        "busy": bool(getattr(session, "busy", False)),
         "attended": bool(runtime.is_attended(key))
         if hasattr(runtime, "is_attended") else None,
     })
@@ -883,6 +891,31 @@ def _frontend_resolve(ctx, args: dict) -> Result:
         return Result.failure(f"resolve failed: {exc}")
 
 
+def _frontend_pending(ctx, args: dict) -> Result:
+    """The id of the approval a session is waiting on, or None.
+
+    Asked rather than remembered. A frontend knows an approval exists — it was
+    handed one to render — but not when it stops existing: another frontend can
+    answer it, or it can time out. A frontend acting on a stale record would
+    swallow the next thing a person typed as a yes/no.
+    """
+    adapter, refusal = _at_desk(args)
+    if refusal is not None:
+        return refusal
+
+    session_key = str(args.get("session_key") or "")
+    try:
+        if not adapter.has_pending_approval(session_key):
+            return Result(data=None)
+        order = getattr(adapter, "_pending_approval_order", None) or {}
+        waiting = list(order.get(session_key) or [])
+        # The id is enough to answer and only enough to answer — the same
+        # projection the ``approval`` render makes.
+        return Result(data=waiting[0] if waiting else True)
+    except Exception as exc:
+        return Result.failure(f"pending lookup failed: {exc}")
+
+
 def _console_read(ctx, args: dict) -> Result:
     """Take the next line a person typed, if one has arrived.
 
@@ -1087,7 +1120,7 @@ HANDLERS = {
     EVENT_EMIT: _event_emit, EVENT_REQUEST: _event_request,
     FRONTEND_SUBMIT: _frontend_submit, FRONTEND_CANCEL: _frontend_cancel,
     FRONTEND_BIND: _frontend_bind, FRONTEND_ATTEND: _frontend_attend,
-    FRONTEND_RESOLVE: _frontend_resolve,
+    FRONTEND_RESOLVE: _frontend_resolve, FRONTEND_PENDING: _frontend_pending,
     CONSOLE_READ: _console_read, CONSOLE_WRITE: _console_write,
     TASK_ENQUEUE: _task_enqueue, TASK_STATUS: _task_status,
     TASK_OUTPUT: _task_output,

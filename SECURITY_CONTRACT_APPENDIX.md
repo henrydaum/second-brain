@@ -286,6 +286,7 @@ the same shape but a worse failure mode: handlers run on the thread that
 | `frontend.cancel(session_key)` | Stop what a session is doing | token | safe |
 | `frontend.bind(session_key, external_id, ...)` | Say whose data a session is | token, external_id | safe |
 | `frontend.attend(session_key, present)` | Say whether a person is watching | token | safe |
+| `frontend.pending(session_key)` | Whether an approval is still waiting | token | safe |
 | `frontend.resolve(session_key, value, request_id)` | Answer a pending approval | token, request_id | safe |
 
 These are the same shape as `model.proceed`: **scoped by reachability, not by a

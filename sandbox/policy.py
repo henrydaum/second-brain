@@ -196,7 +196,7 @@ ALWAYS_SAFE = {
     # what the kernel lets a native frontend do. The token is what stops one
     # frontend doing it on another's behalf.
     R.FRONTEND_SUBMIT, R.FRONTEND_CANCEL, R.FRONTEND_BIND, R.FRONTEND_ATTEND,
-    R.FRONTEND_RESOLVE,
+    R.FRONTEND_RESOLVE, R.FRONTEND_PENDING,
     # The console is scoped harder still: not merely "a frontend", but the one
     # frontend that claimed it. Reading takes only what a person already typed
     # at this machine's own keyboard, and writing puts text on the screen in

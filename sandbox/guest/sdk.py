@@ -58,7 +58,8 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        CRON_REMOVE, CRON_UPDATE, DB_DEFINE, DB_QUERY, DB_WRITE,
                        ENV_READ, EVENT_EMIT, EVENT_REQUEST, FILE_LIST,
                        FILE_REGISTER, FRONTEND_ATTEND, FRONTEND_BIND,
-                       FRONTEND_CANCEL, FRONTEND_RESOLVE, FRONTEND_SUBMIT,
+                       FRONTEND_CANCEL, FRONTEND_PENDING, FRONTEND_RESOLVE,
+                       FRONTEND_SUBMIT,
                        FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                        FS_SEARCH, FS_TEMP, FS_WRITE, LEDGER_READ,
                        LEDGER_RECORD, NET_HTTP, PARSE_FILE, PARSE_MODALITY,
@@ -430,6 +431,17 @@ class _Frontend(_Namespace):
         """
         return self._ask(FRONTEND_ATTEND, token=self._token(),
                          session_key=session_key, present=bool(present))
+
+    def pending_approval(self, session_key: str):
+        """The id of the approval this session is waiting on, or None.
+
+        Ask rather than remember. You are told an approval exists — you were
+        handed one to render — but not when it stops existing: another frontend
+        can answer it, or it can time out. Acting on a stale record means
+        swallowing the next thing a person types as a yes or no.
+        """
+        return self._ask(FRONTEND_PENDING, token=self._token(),
+                         session_key=session_key)
 
     def resolve(self, session_key: str, value, request_id: str = ""):
         """Answer the approval a ``render`` of kind ``approval`` showed.

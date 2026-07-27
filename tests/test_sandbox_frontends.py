@@ -495,3 +495,94 @@ def test_session_key_falls_back_rather_than_losing_a_message(frontend):
     """With no box there is no answer, and dropping the message is worse."""
     assert frontend._sandbox_box is None
     assert frontend.session_key({"room": 7}) == "default"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# What a frontend is allowed to render to.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_a_frontend_renders_only_to_its_own_sessions(frontend):
+    """The native default is *every* session the runtime knows about.
+
+    That works natively because each frontend overrides it — the REPL answers
+    ``["default"]``. A sandboxed frontend cannot override a native method, so
+    inheriting that default would render a Telegram conversation to a
+    terminal. Ownership is read from the tag ``_tag_session`` already writes.
+    """
+    frontend.runtime = SimpleNamespace(sessions={
+        "web:1": SimpleNamespace(frontend_name="web"),
+        "tg:9": SimpleNamespace(frontend_name="telegram"),
+        "fresh": SimpleNamespace(frontend_name=None),
+    })
+
+    keys = frontend._live_session_keys()
+
+    assert "web:1" in keys
+    assert "tg:9" not in keys, "rendered another frontend's session"
+    # Nobody has claimed this one yet, and it may be about to arrive here —
+    # dropping it would lose a conversation's first message.
+    assert "fresh" in keys
+
+
+def test_live_sessions_is_empty_before_binding(frontend):
+    """No runtime, no sessions. Never an exception on the render path."""
+    assert frontend._live_session_keys() == []
+
+
+def test_pending_approval_is_asked_not_remembered(box, tmp_path):
+    """A frontend must be able to find out an approval went away.
+
+    It learns one exists by being handed it to render, but not when it is
+    answered elsewhere or times out — and acting on a stale record swallows
+    the next thing a person types as a yes or no.
+    """
+    class Approvals:
+        """An adapter with one pending approval, then none."""
+
+        def __init__(self):
+            self._pending = True
+            self._pending_approval_order = {"s1": ["approve_abc"]}
+
+        def has_pending_approval(self, session_key):
+            """Whether anything is waiting."""
+            return self._pending
+
+    adapter = Approvals()
+    token = park(adapter)
+    source = TALKER.replace("ISOLATION", "").replace(
+        '    def token(self, sdk):',
+        '    def pending(self, sdk):\n'
+        '        """Ask what is waiting."""\n'
+        '        return sdk.frontend.pending_approval("s1")\n\n'
+        '    def token(self, sdk):')
+    path = tmp_path / "frontend_talker.py"
+    path.write_text(source, encoding="utf-8")
+    opened = box.open(path, "Talker", name="frontend_talker")
+    try:
+        assert opened.call("__bind__", token=token).ok
+        assert opened.call("pending").data == "approve_abc"
+
+        adapter._pending = False              # answered somewhere else
+        assert opened.call("pending").data is None
+    finally:
+        unpark(token)
+        box.close("frontend_talker")
+        unload_box("frontend_talker")
+
+
+def test_a_session_reports_its_phase(box, tmp_path):
+    """A frontend needs the phase to know whether the state machine is already
+    collecting an answer — if it is, interpreting the line too would consume
+    one keystroke twice."""
+    from sandbox.handlers.kernel import _session_get
+
+    ctx = SimpleNamespace(runtime=SimpleNamespace(
+        sessions={"s1": SimpleNamespace(
+            conversation_id=7, busy=True,
+            cs=SimpleNamespace(phase="approving_request"))}))
+
+    described = _session_get(ctx, {"key": "s1"}).data
+
+    assert described["phase"] == "approving_request"
+    assert described["busy"] is True
+    assert described["conversation_id"] == 7

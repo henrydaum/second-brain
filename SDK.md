@@ -330,6 +330,7 @@ sdk.frontend.submit_action(session_key, action_type, payload=None)
 sdk.frontend.cancel(session_key)
 sdk.frontend.bind(session_key, external_id=None, user_type="user", config=None)
 sdk.frontend.attended(session_key, present=True)
+sdk.frontend.pending_approval(session_key)      # an id, or None
 sdk.frontend.resolve(session_key, value, request_id="")
 ```
 
@@ -341,6 +342,15 @@ same namespace reaches nothing at all.
 An `approval` render carries an `id`; answer it with `sdk.frontend.resolve`.
 Holding the id is enough to answer and *only* enough to answer — the action
 being authorized never crosses.
+
+**Ask what is pending; do not remember it.** A transport where a person answers
+by typing "yes" has to know whether a yes/no is what the next line means. You
+are told an approval exists — you were handed one to render — but not when it
+stops existing: another frontend can answer it, or it can time out. Call
+`sdk.frontend.pending_approval(key)` at the moment you need to decide, and
+check `sdk.session.get(key)["phase"]` too: when the state machine is already
+collecting the answer itself, interpreting the line as well consumes one
+keystroke twice.
 
 ### The console
 

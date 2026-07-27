@@ -117,6 +117,11 @@ FRONTEND_CANCEL = "frontend.cancel"
 FRONTEND_BIND = "frontend.bind"
 FRONTEND_ATTEND = "frontend.attend"
 FRONTEND_RESOLVE = "frontend.resolve"
+# Whether an approval is still waiting. A frontend could remember what it was
+# asked to render instead, but that record goes stale the moment the approval
+# is answered somewhere else or times out — and a frontend acting on a stale
+# one would swallow the next thing a person typed as a yes/no.
+FRONTEND_PENDING = "frontend.pending"
 
 # The machine's console. Scoped like the rest of the family — the kernel reads
 # stdin on its own thread and the guest drains what arrived, so nothing blocks
@@ -162,7 +167,7 @@ ALL_TYPES = {
     CRON_LIST, CRON_GET, CRON_CREATE, CRON_UPDATE, CRON_REMOVE, CRON_ENABLE,
     EVENT_EMIT, EVENT_REQUEST,
     FRONTEND_SUBMIT, FRONTEND_CANCEL, FRONTEND_BIND, FRONTEND_ATTEND,
-    FRONTEND_RESOLVE, CONSOLE_READ, CONSOLE_WRITE,
+    FRONTEND_RESOLVE, FRONTEND_PENDING, CONSOLE_READ, CONSOLE_WRITE,
     TASK_ENQUEUE, TASK_STATUS, TASK_OUTPUT, FILE_REGISTER, FILE_LIST,
     PARSE_FILE, PARSE_MODALITY, LEDGER_RECORD, LEDGER_READ,
     NET_HTTP, PROC_RUN, ENV_READ, SECRET_REVEAL, SELF_RESPOND,
@@ -175,7 +180,7 @@ READ_ONLY = {
     SESSION_LIST, SESSION_STATE_GET, CONFIG_READ, USER_READ, USER_LIST,
     PLUGIN_LIST, PLUGIN_DESCRIBE, SERVICE_LIST, TOOL_LIST, COMMAND_LIST,
     CRON_LIST, CRON_GET, TASK_STATUS, TASK_OUTPUT, FILE_LIST, PARSE_FILE,
-    PARSE_MODALITY, LEDGER_READ, ENV_READ, CONSOLE_READ,
+    PARSE_MODALITY, LEDGER_READ, ENV_READ, CONSOLE_READ, FRONTEND_PENDING,
 }
 
 

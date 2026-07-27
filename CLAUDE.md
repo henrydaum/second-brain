@@ -452,7 +452,7 @@ containment to fix.
 
 **Docs:** `SDK.md` (hand this to an agent writing sandbox code — its examples
 are executed by `tests/test_sdk_docs.py`), `MIGRATING_PLUGINS.md` (the
-per-plugin procedure), `SECURITY_CONTRACT_APPENDIX.md` (the ~83-Request
+per-plugin procedure), `SECURITY_CONTRACT_APPENDIX.md` (the ~84-Request
 catalogue with policy inputs).
 
 **Migration tooling:** `sandbox.migrate.plan(path)` reports what converting a
