@@ -1,22 +1,38 @@
-"""Small text-file CRUD tool for repo-native editing."""
+"""Small text-file CRUD tool for repo-native editing.
+
+Sandboxed. The interesting part of this migration is what *left*: this tool
+used to run its own approval dialog, with its own path exemptions deciding
+when to skip it. That is policy, and policy does not belong in a plugin —
+every effect here is now a Request, so ``sandbox/policy.py`` is the single
+place that decides, and it already knows that scratch and the agent's own
+plugin tree are free while everything else asks. The tool's job is the edit;
+the kernel's job is whether.
+
+That deletion is the whole point of the exercise: there is no longer a
+question of the native path and the sandboxed path disagreeing, because there
+is no native path.
+"""
 
 dependencies_files = ['tools/helpers/file_reads.py']
 dependencies_pip = []
+requests = ["fs.read", "fs.write", "fs.delete", "fs.list", "paths.get",
+            "session.state_get", "session.state_set"]
 
 import re
 from difflib import SequenceMatcher
-from pathlib import Path
 
-from paths import DATA_DIR, ROOT_DIR, SANDBOX_PLUGINS, SCRATCH_DIR
-from plugins.BaseTool import BaseTool, ToolResult
-from plugins.helpers.plugin_paths import iter_plugin_dirs
-from .helpers import file_reads
+from guest.bases import BaseTool
 
-ROOTS = tuple(p.resolve() for p in (ROOT_DIR, DATA_DIR))
-ROOT_WARNING = "WARNING: this edits a source-controlled ROOT file."
+# Flat, not ``from .helpers import file_reads``: a box is one namespace, and
+# the kernel puts each declared dependency's *directory* on the box's import
+# path. The helper is a sibling here even though it ships in a subdirectory.
+from . import file_reads
+
 PLUGIN_EDIT_REMINDER = " You edited or created a plugin file. Use test_plugin(plugin_path=...) to make sure it is correct."
 READ_FIRST = "Read the file with read_file before editing it."
 STALE_READ = "File changed on disk since it was last read — re-read it with read_file."
+DENIED_STOP = (" STOP — do not retry this edit. Ask the user what they would "
+               "like you to do instead.")
 
 # Self-correcting no-match errors: quote the closest real text so the model
 # can fix its old_text in one step instead of re-reading the whole file.
@@ -30,14 +46,42 @@ LINE_PREFIX_HINT = (
 )
 
 
-def _path(raw: str) -> tuple[Path | None, str | None]:
-    """Internal helper to handle path."""
+def _roots(sdk) -> list:
+    """Where this tool will edit at all.
+
+    Not authorization — the kernel decides that, and would ask about a path
+    outside these anyway. This is *scope*: edit_file is for project and
+    application files, and narrowing what a tool will attempt is always safe.
+    """
+    return [sdk.paths.get("project"), sdk.paths.get("data")]
+
+
+def _resolve(sdk, raw: str):
+    """Absolutize a path and confine it to this tool's roots."""
     raw = (raw or "").strip()
     if not raw:
         return None, "path is required."
-    p = Path(raw)
-    p = (p if p.is_absolute() else ROOT_DIR / p).resolve()
-    return (p, None) if any(p == r or r in p.parents for r in ROOTS) else (None, f"Path is outside allowed roots: {p}")
+    target = sdk.path.absolute(raw, base=sdk.paths.get("project"))
+    if not any(sdk.path.within(target, root) for root in _roots(sdk)):
+        return None, f"Path is outside allowed roots: {target}"
+    return target, None
+
+
+def _stat(sdk, path):
+    """The file's entry, or None if it is absent or not a file.
+
+    ``fs.list`` on a file answers for that file alone, which is how a
+    sandboxed plugin asks "does this exist, and when did it change?" without
+    an existence Request of its own.
+    """
+    try:
+        entries = sdk.fs.list(path, details=True)
+    except sdk.Failed:
+        return None
+    for entry in entries or []:
+        if not entry.get("is_dir"):
+            return entry
+    return None
 
 
 class EditFile(BaseTool):
@@ -60,7 +104,7 @@ class EditFile(BaseTool):
             "old_text": {"type": "string", "description": "Exact text to replace."},
             "new_text": {"type": "string", "description": "Replacement text."},
             "replace_all": {"type": "boolean", "description": "Replace every occurrence instead of requiring exactly one match."},
-            "justification": {"type": "string", "description": "Short plain-English reason for the edit, shown in the approval dialog."},
+            "justification": {"type": "string", "description": "Short plain-English reason for the edit. Recorded in the action ledger."},
         },
         "required": ["operation", "path", "justification"],
     }
@@ -69,134 +113,123 @@ class EditFile(BaseTool):
     background_safe = False
     plan_mode_safe = False
 
-    config_settings = [
-        ("Frictionless Scratchpad", "scratch_no_approval",
-         "Skip the approval dialog for edits under the scratch workspace "
-         "(DATA_DIR/scratch). Disable to require approval there like any other path.",
-         True, {"type": "bool"}),
-    ]
+    def run(self, sdk, **kwargs):
+        """Run edit file.
 
-    agent_prompt = (
-        "## Scratch workspace\n"
-        f"For temporary files — notes, drafts, intermediate outputs, working "
-        f"data that is not a plugin and not a user deliverable — use "
-        f"{SCRATCH_DIR / 'c<conversation id>'} (the current conversation's number "
-        "is in the runtime context). It is pruned by the data-retention "
-        "setting and deleted with its conversation, so nothing durable belongs "
-        "there. Durable notes go to memory; plugin drafts go to the sandbox."
-    )
-
-    def run(self, context, **kwargs) -> ToolResult:
-        """Run edit file."""
+        No approval branch anywhere below. ``fs.write`` and ``fs.delete`` are
+        classified by the kernel on the way out: free under scratch and the
+        agent's own plugin tree, a dialog everywhere else. A refusal comes
+        back as ``sdk.Denied``, which is the one case worth translating —
+        the model needs to be told to stop rather than retry.
+        """
         op = (kwargs.get("operation") or "").strip().lower()
         justification = (kwargs.get("justification") or "").strip()
-        p, err = _path(kwargs.get("path", ""))
+        path, err = _resolve(sdk, kwargs.get("path", ""))
         if err:
-            return ToolResult.failed(err)
+            return sdk.fail(err)
         if not justification:
-            return ToolResult.failed("A justification is required for every edit.")
-
-        def approve(extra: str = "") -> ToolResult | None:
-            """Approve edit file."""
-            if _is_scratch(p) and (getattr(context, "config", None) or {}).get("scratch_no_approval", True):
-                # Scratch is the frictionless workspace: path-confined,
-                # retention-pruned, low blast radius — no approval dialog.
-                return None
-            if _is_authoring(p):
-                # The agent's own plugin tree. Everything there runs behind a
-                # process boundary, so containment has already bought what the
-                # dialog would. Not config-gated, unlike scratch: this one is
-                # the kernel's policy, and a setting that could disagree with
-                # sandbox/policy.py would make the grant depend on which tool
-                # did the writing.
-                return None
-            if context.approve_command is None:
-                return ToolResult.failed("File editing is not available — no approval handler is configured.")
-            try:
-                warning = f"\n\n{ROOT_WARNING}" if _is_root_file(p) else ""
-                ok = context.approve_command(f"edit_file {op} {p}", f"{justification}{warning}\n\npath: {p}{extra}".strip())
-            except Exception as e:
-                return ToolResult.failed(f"Approval dialog error: {e}")
-            if ok:
-                return None
-            return ToolResult.failed(
-                getattr(context, "approval_denial_reason", "")
-                or "Edit denied by user. STOP — do not retry this edit. Ask the user what they would like you to do instead."
-            )
+            return sdk.fail("A justification is required for every edit.")
 
         try:
             if op == "delete":
-                if not p.exists():
-                    return ToolResult.failed(f"File not found: {p}")
-                if not p.is_file():
-                    return ToolResult.failed(f"Not a file: {p}")
-                state = file_reads.check(context, p)
-                if state == file_reads.UNREAD:
-                    return ToolResult.failed(READ_FIRST)
-                if state == file_reads.STALE:
-                    return ToolResult.failed(STALE_READ)
-                denied = approve()
-                if denied:
-                    return denied
-                p.unlink()
-                file_reads.forget(context, p)
-                return ToolResult(data={"path": str(p), "operation": op}, llm_summary=f"Deleted {p}.")
+                return self._delete(sdk, path)
             if op in {"create", "overwrite", "append"}:
-                text = kwargs.get("content")
-                if text is None:
-                    return ToolResult.failed("content is required for create, overwrite, and append.")
-                if op == "create" and p.exists():
-                    return ToolResult.failed(f"File already exists: {p}")
-                if op != "create" and p.exists():
-                    state = file_reads.check(context, p)
-                    if state == file_reads.UNREAD:
-                        return ToolResult.failed(READ_FIRST)
-                    if state == file_reads.STALE:
-                        return ToolResult.failed(STALE_READ)
-                denied = approve(f"\nchars: {len(text)}")
-                if denied:
-                    return denied
-                p.parent.mkdir(parents=True, exist_ok=True)
-                prior = p.read_text(encoding="utf-8") if op == "append" and p.exists() else ""
-                p.write_text((prior + text) if op == "append" else text, encoding="utf-8")
-                file_reads.record_read(context, p)
-                verb = {"create": "Created", "overwrite": "Overwrote", "append": "Appended to"}[op]
-                return ToolResult(data={"path": str(p), "operation": op}, llm_summary=f"{verb} {p}.{_plugin_edit_reminder(p)}")
+                return self._put(sdk, op, path, kwargs)
             if op == "replace":
-                old, new = kwargs.get("old_text"), kwargs.get("new_text")
-                if old in (None, ""):
-                    return ToolResult.failed("old_text is required for replace.")
-                if new is None:
-                    return ToolResult.failed("new_text is required for replace.")
-                if not p.is_file():
-                    return ToolResult.failed(f"File not found: {p}")
-                state = file_reads.check(context, p)
-                if state == file_reads.UNREAD:
-                    return ToolResult.failed(READ_FIRST)
-                text = p.read_text(encoding="utf-8")
-                count = text.count(old)
-                if count == 0:
-                    return ToolResult.failed(_not_found_error(text, old))
-                if state == file_reads.STALE and count != 1:
-                    # A single exact match is safe evidence even on a changed
-                    # file; anything else needs a fresh read.
-                    return ToolResult.failed(STALE_READ)
-                if count > 1 and not kwargs.get("replace_all"):
-                    return ToolResult.failed(
-                        f"old_text appears {count} times (lines {_occurrence_lines(text, old)}); "
-                        "pass replace_all=true or make it unique.")
-                replacements = count if kwargs.get("replace_all") else 1
-                denied = approve(f"\nreplacements: {replacements}")
-                if denied:
-                    return denied
-                p.write_text(text.replace(old, new, -1 if kwargs.get("replace_all") else 1), encoding="utf-8")
-                file_reads.record_read(context, p)
-                return ToolResult(data={"path": str(p), "operation": op, "replacements": replacements}, llm_summary=f"Replaced text in {p}.{_plugin_edit_reminder(p)}")
-            return ToolResult.failed("operation must be create, overwrite, replace, append, or delete.")
-        except UnicodeDecodeError:
-            return ToolResult.failed(f"Cannot edit binary or non-UTF-8 file: {p}")
-        except Exception as e:
-            return ToolResult.failed(f"Edit failed: {e}")
+                return self._replace(sdk, path, kwargs)
+            return sdk.fail("operation must be create, overwrite, replace, "
+                            "append, or delete.")
+        except sdk.Denied as refused:
+            return sdk.fail(f"{refused}{DENIED_STOP}")
+
+    # ── the three shapes ───────────────────────────────────────────
+
+    def _delete(self, sdk, path):
+        """Remove a file that has been read this conversation."""
+        if _stat(sdk, path) is None:
+            return sdk.fail(f"File not found: {path}")
+        if (stale := self._staleness(sdk, path)) is not None:
+            return stale
+        sdk.fs.delete(path)
+        file_reads.forget(sdk, path)
+        return sdk.ok({"path": path, "operation": "delete"},
+                      llm_summary=f"Deleted {path}.")
+
+    def _put(self, sdk, op: str, path, kwargs):
+        """create / overwrite / append."""
+        text = kwargs.get("content")
+        if text is None:
+            return sdk.fail(
+                "content is required for create, overwrite, and append.")
+        exists = _stat(sdk, path) is not None
+        if op == "create" and exists:
+            return sdk.fail(f"File already exists: {path}")
+        if op != "create" and exists:
+            if (stale := self._staleness(sdk, path)) is not None:
+                return stale
+
+        # Append is a write mode rather than read-concat-write: the handler
+        # opens the file in append mode, so this neither loads the prior
+        # contents nor races anything between the two halves.
+        sdk.fs.write(path, text,
+                     mode="append" if op == "append" else "overwrite")
+        file_reads.record_read(sdk, path)
+        verb = {"create": "Created", "overwrite": "Overwrote",
+                "append": "Appended to"}[op]
+        return sdk.ok(
+            {"path": path, "operation": op},
+            llm_summary=f"{verb} {path}.{_plugin_edit_reminder(sdk, path)}")
+
+    def _replace(self, sdk, path, kwargs):
+        """Exact-match replacement, with a self-correcting miss."""
+        old, new = kwargs.get("old_text"), kwargs.get("new_text")
+        if old in (None, ""):
+            return sdk.fail("old_text is required for replace.")
+        if new is None:
+            return sdk.fail("new_text is required for replace.")
+        if _stat(sdk, path) is None:
+            return sdk.fail(f"File not found: {path}")
+
+        state = file_reads.check(sdk, path)
+        if state == file_reads.UNREAD:
+            return sdk.fail(READ_FIRST)
+        try:
+            text = sdk.fs.read(path)
+        except sdk.Failed as failed:
+            return sdk.fail(f"Could not read {path}: {failed.error}")
+
+        count = text.count(old)
+        if count == 0:
+            return sdk.fail(_not_found_error(text, old))
+        if state == file_reads.STALE and count != 1:
+            # A single exact match is safe evidence even on a changed file;
+            # anything else needs a fresh read.
+            return sdk.fail(STALE_READ)
+        if count > 1 and not kwargs.get("replace_all"):
+            return sdk.fail(
+                f"old_text appears {count} times "
+                f"(lines {_occurrence_lines(text, old)}); "
+                "pass replace_all=true or make it unique.")
+
+        replacements = count if kwargs.get("replace_all") else 1
+        sdk.fs.write(path, text.replace(
+            old, new, -1 if kwargs.get("replace_all") else 1))
+        file_reads.record_read(sdk, path)
+        return sdk.ok(
+            {"path": path, "operation": "replace",
+             "replacements": replacements},
+            llm_summary=f"Replaced text in {path}."
+                        f"{_plugin_edit_reminder(sdk, path)}")
+
+    @staticmethod
+    def _staleness(sdk, path):
+        """Refuse an edit to a file the model has not actually looked at."""
+        state = file_reads.check(sdk, path)
+        if state == file_reads.UNREAD:
+            return sdk.fail(READ_FIRST)
+        if state == file_reads.STALE:
+            return sdk.fail(STALE_READ)
+        return None
 
 
 def _not_found_error(text: str, old: str) -> str:
@@ -245,46 +278,17 @@ def _occurrence_lines(text: str, old: str, cap: int = 10) -> str:
     return ", ".join(out)
 
 
-def _is_scratch(p: Path) -> bool:
-    """Whether the path is inside the agent scratch workspace."""
-    scratch = SCRATCH_DIR.resolve()
-    return p == scratch or scratch in p.parents
+def _plugin_edit_reminder(sdk, path) -> str:
+    """Nudge the author to validate a plugin file they just wrote.
 
-
-def _is_authoring(p: Path) -> bool:
-    """Whether the path is inside the agent's own plugin tree.
-
-    Free to edit for the same reason scratch is, but the reason is stronger
-    and worth stating: every file under ``sandbox_plugins`` runs in a
-    subprocess, decided by the kernel from the path rather than from anything
-    the file says. Code written here is contained *before* it runs, so a
-    dialog per edit approves something that cannot act unmediated anyway —
-    while costing the thing that makes an authoring agent useful, since
-    writing a plugin is a dozen edits and a dozen interruptions.
-
-    This mirrors the kernel's own answer: ``sandbox/policy.py`` classifies
-    ``fs.write``/``fs.delete``/``fs.move`` under this tree as safe. That
-    covers sandboxed plugins; this covers the native path, and the two must
-    agree or the grant depends on which tool happens to be doing the writing.
-
-    What it does not grant, exactly as there: writing a file changes what the
-    system can *ask*, never what it may *affect*. The new plugin's Requests
-    are classified like anybody else's.
+    Checks the tree roots rather than enumerating every family directory: the
+    old version imported ``iter_plugin_dirs`` from the kernel, which is the
+    one import a sandboxed file may never make.
     """
-    sandbox = SANDBOX_PLUGINS.resolve()
-    return p == sandbox or sandbox in p.parents
-
-
-def _is_root_file(p: Path) -> bool:
-    """Return whether root file."""
-    root = ROOT_DIR.resolve()
-    data = DATA_DIR.resolve()
-    return (p == root or root in p.parents) and not (p == data or data in p.parents)
-
-
-def _plugin_edit_reminder(p: Path) -> str:
-    """Internal helper to handle plugin edit reminder."""
-    if p.suffix != ".py":
+    if sdk.path.suffix(path) != ".py":
         return ""
-    parent = p.parent.resolve()
-    return PLUGIN_EDIT_REMINDER if any(parent == d.resolve() for _kind, d in iter_plugin_dirs()) else ""
+    for name in ("sandbox_plugins", "installed_plugins"):
+        if sdk.path.within(path, sdk.paths.get(name)):
+            return PLUGIN_EDIT_REMINDER
+    project_plugins = sdk.path.join(sdk.paths.get("project"), "plugins")
+    return PLUGIN_EDIT_REMINDER if sdk.path.within(path, project_plugins) else ""

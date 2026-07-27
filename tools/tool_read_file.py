@@ -3,16 +3,23 @@ Read File tool.
 
 Gives the LLM agent a simple, direct way to read file contents by path.
 No shell commands, no timeouts, no syntax to remember.
+
+Sandboxed: the read is an ``fs.read`` Request, so the kernel decides what may
+be read (and refuses the config file and the database outright, whatever the
+path says). Nothing here asks permission — reads are classified safe, and
+always were.
 """
 
 dependencies_files = ['tools/helpers/file_reads.py']
 dependencies_pip = []
+requests = ["fs.read", "fs.list", "paths.get",
+            "session.state_get", "session.state_set"]
 
-from pathlib import Path
+from guest.bases import BaseTool
 
-from plugins.BaseTool import BaseTool, ToolResult
-from paths import ROOT_DIR
-from .helpers.file_reads import record_read
+# Flat: the box is one namespace and the declared dependency's directory is on
+# its import path, so the helper is a sibling despite shipping in a subfolder.
+from .file_reads import record_read
 
 MAX_CHARS = 20_000
 
@@ -50,32 +57,11 @@ class ReadFile(BaseTool):
     requires_services = []
     max_calls = 10
 
-    def agent_prompt_for(self, ctx) -> str:
-        """Tell the agent what is indexed and which file types are parseable."""
-        try:
-            stats = ctx.db.get_system_stats().get("files", {}) if ctx.db else {}
-        except Exception:
-            stats = {}
-        total = sum(stats.values()) if stats else 0
-        lines = [
-            "## File inventory",
-            (", ".join(f"{c} {m}" for m, c in sorted(stats.items())) + f" ({total} total)")
-            if stats else "No files indexed yet.",
-        ]
-        try:
-            from plugins.services.helpers.parser_registry import get_supported_extensions
-            exts = sorted(get_supported_extensions())
-        except Exception:
-            exts = []
-        if exts:
-            lines.append("Supported extensions: " + " ".join(exts))
-        return "\n".join(lines)
-
-    def run(self, context, **kwargs) -> ToolResult:
+    def run(self, sdk, **kwargs):
         """Run read file."""
-        raw_path = kwargs.get("path", "").strip()
+        raw_path = (kwargs.get("path") or "").strip()
         if not raw_path:
-            return ToolResult.failed("No path provided.")
+            return sdk.fail("No path provided.")
 
         try:
             offset = int(kwargs.get("offset") or 1)
@@ -91,24 +77,17 @@ class ReadFile(BaseTool):
         if limit is not None:
             limit = max(1, limit)
 
-        target = Path(raw_path)
-        if not target.is_absolute():
-            target = ROOT_DIR / target
-
-        if not target.exists():
-            return ToolResult.failed(f"File not found: {target}")
-        if not target.is_file():
-            return ToolResult.failed(f"Not a file: {target}")
+        target = sdk.path.absolute(raw_path, base=sdk.paths.get("project"))
 
         try:
-            content = target.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            return ToolResult.failed(f"Cannot read as text (binary file?): {target}")
-        except Exception as e:
-            return ToolResult.failed(f"Read error: {e}")
+            content = sdk.fs.read(target)
+        except sdk.Denied as refused:
+            return sdk.fail(str(refused))
+        except sdk.Failed as failed:
+            return sdk.fail(f"Could not read {target}: {failed.error}")
 
         lines = content.splitlines()
-        if target.suffix == ".log":
+        if sdk.path.suffix(target) == ".log":
             # Logs are read newest-first so the latest messages are always visible.
             lines = list(reversed(lines))
 
@@ -137,5 +116,5 @@ class ReadFile(BaseTool):
             content += "\n\n... (" + "; ".join(notes) + ")"
 
         # Mark the file as seen for edit_file's read-before-edit gate.
-        record_read(context, target)
-        return ToolResult(llm_summary=content)
+        record_read(sdk, target)
+        return sdk.ok(None, llm_summary=content)
