@@ -56,7 +56,9 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        CRON_CREATE, CRON_ENABLE, CRON_GET, CRON_LIST,
                        CRON_REMOVE, CRON_UPDATE, DB_DEFINE, DB_QUERY, DB_WRITE,
                        ENV_READ, EVENT_EMIT, EVENT_REQUEST, FILE_LIST,
-                       FILE_REGISTER, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
+                       FILE_REGISTER, FRONTEND_ATTEND, FRONTEND_BIND,
+                       FRONTEND_CANCEL, FRONTEND_RESOLVE, FRONTEND_SUBMIT,
+                       FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                        FS_SEARCH, FS_TEMP, FS_WRITE, LEDGER_READ,
                        LEDGER_RECORD, NET_HTTP, PARSE_FILE, PARSE_MODALITY,
                        MODEL_PROCEED, PLUGIN_DESCRIBE, PLUGIN_LIST, PROC_RUN,
@@ -366,6 +368,79 @@ class _Model(_Namespace):
                                 if k in allowed})
 
 
+class _Frontend(_Namespace):
+    """Carrying what a person did into the state machine.
+
+    Only meaningful inside a loaded frontend. Every call resolves to *this*
+    frontend's own adapter, so a frontend cannot submit on another's behalf,
+    and code that is not a frontend reaches no adapter and is refused.
+
+    This is the inbound half of a frontend. The outbound half — showing things
+    to a person — is not a Request at all: the kernel calls ``render`` on you.
+    """
+
+    def _token(self) -> str:
+        """The handle on this frontend's adapter, set when its box opened."""
+        return getattr(self._sdk, "_frontend_token", "")
+
+    def submit_text(self, session_key: str, text: str):
+        """Hand over a line someone typed. The usual one."""
+        return self._ask(FRONTEND_SUBMIT, token=self._token(),
+                         session_key=session_key, input_kind="text", text=text)
+
+    def submit_attachment(self, session_key: str, path: str,
+                          extension: str = ""):
+        """Hand over a file someone sent."""
+        return self._ask(FRONTEND_SUBMIT, token=self._token(),
+                         session_key=session_key, input_kind="attachment",
+                         path=str(path), extension=extension)
+
+    def submit_action(self, session_key: str, action_type: str, payload=None):
+        """Hand over a typed action — a button press, a menu choice."""
+        return self._ask(FRONTEND_SUBMIT, token=self._token(),
+                         session_key=session_key, input_kind="action",
+                         action_type=action_type, payload=payload)
+
+    def cancel(self, session_key: str):
+        """Stop whatever that session is doing."""
+        return self._ask(FRONTEND_CANCEL, token=self._token(),
+                         session_key=session_key)
+
+    def bind(self, session_key: str, external_id=None, user_type: str = "user",
+             config=None):
+        """Say whose data this session is. Returns the user id.
+
+        With no ``external_id`` the session takes this frontend's declared
+        default user. With one, it is upgraded to that identity's own user —
+        what a ``per_user`` frontend does on login. Authenticating is your
+        job; the kernel stores what you give it and asks nothing.
+        """
+        return self._ask(FRONTEND_BIND, token=self._token(),
+                         session_key=session_key,
+                         external_id=(None if external_id is None
+                                      else str(external_id)),
+                         user_type=user_type, config=config)
+
+    def attended(self, session_key: str, present: bool = True):
+        """Say whether a person is actually watching this session.
+
+        The kernel only reads attendance; a frontend owns the policy. Say it
+        on connect and disconnect and background-safety gating follows.
+        """
+        return self._ask(FRONTEND_ATTEND, token=self._token(),
+                         session_key=session_key, present=bool(present))
+
+    def resolve(self, session_key: str, value, request_id: str = ""):
+        """Answer the approval a ``render`` of kind ``approval`` showed.
+
+        With no ``request_id`` the session's next pending request is answered,
+        which is what a transport with one message at a time wants.
+        """
+        return self._ask(FRONTEND_RESOLVE, token=self._token(),
+                         session_key=session_key, value=value,
+                         request_id=request_id)
+
+
 class _Cron(_Namespace):
     """Scheduled jobs."""
 
@@ -591,6 +666,13 @@ class SDK:
         # ``model.proceed`` can name the call it is meant to place without the
         # author having to carry a token around.
         self._hook_token = ""
+        self.frontend = _Frontend(self)
+        # Set once by BaseFrontend.__bind__ when this box opens, and it stays
+        # for the box's life — unlike the hook token, a frontend is not visiting
+        # a doorway, it *is* resident. The kernel parks the matching adapter and
+        # drops it at stop, so a token that outlived its frontend reaches
+        # nothing.
+        self._frontend_token = ""
         self.cron = _Cron(self)
         self.events = _Events(self)
         self.tasks = _Tasks(self)

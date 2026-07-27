@@ -279,6 +279,74 @@ Channel names are not a closed vocabulary. The kernel's are in
 listen to another plugin's, so nothing validates the string — a typo is
 silence, not an error.
 
+### Being a frontend
+
+A frontend is inbound-driven, and that inverts the usual shape twice.
+
+**There is no main loop.** `start` opens the transport and *returns*; the
+kernel then calls `poll` over and over on a thread it owns. Blocking in `start`
+would hold the box — a box takes one call at a time — and no `render` would
+ever get in, so the frontend would go deaf the moment it started listening.
+
+```python
+class Chat(BaseFrontend):
+    name = "chat"
+    poll_interval = 0.05          # paid only when a poll finds nothing
+
+    def start(self, sdk):
+        self._cursor = 0
+        return True
+
+    def poll(self, sdk):
+        updates = sdk.net.http(f"https://api.example.com/updates?after={self._cursor}")
+        for update in updates["body"]["items"]:
+            self._cursor = update["id"]
+            sdk.frontend.submit_text(f"chat:{update['room']}", update["text"])
+        return bool(updates["body"]["items"])     # truthy = call me straight back
+
+    def render(self, sdk, session_key, kind, payload):
+        if kind == "messages":
+            for text in payload:
+                sdk.net.http("https://api.example.com/send", method="POST",
+                             json={"room": session_key, "text": text})
+```
+
+`poll` must return promptly — between polls is the only moment the kernel can
+call `render`, so a slow poll is a frozen display. A long-poll with a short
+server-side timeout is the right shape; an unbounded wait is not.
+
+**Showing things is not a Request** — `render` is called *on you*, with a
+`kind` saying what: `messages`, `attachments`, `form_field`, `approval`,
+`buttons`, `error`, `typing`, `tool_status`, `stream_delta`. Handle what your
+transport can show and ignore the rest; a frontend that only renders
+`messages` is a working frontend.
+
+Carrying what a person *does* back the other way is:
+
+```python
+sdk.frontend.submit_text(session_key, text)
+sdk.frontend.submit_attachment(session_key, path, extension="")
+sdk.frontend.submit_action(session_key, action_type, payload=None)
+sdk.frontend.cancel(session_key)
+sdk.frontend.bind(session_key, external_id=None, user_type="user", config=None)
+sdk.frontend.attended(session_key, present=True)
+sdk.frontend.resolve(session_key, value, request_id="")
+```
+
+These work **only inside a loaded frontend**. Each resolves to your own
+frontend's adapter through a handle the kernel parks when your box opens, so
+you cannot submit on another frontend's behalf and a tool that imported the
+same namespace reaches nothing at all.
+
+An `approval` render carries an `id`; answer it with `sdk.frontend.resolve`.
+Holding the id is enough to answer and *only* enough to answer — the action
+being authorized never crosses.
+
+`bind` is the "whose data is this?" axis, not permissions. With no
+`external_id` the session takes your declared `default_user_id`; with one it is
+upgraded to that identity's own user, which is what a `per_user` frontend does
+on login. Authenticating is your job — the kernel stores what you give it.
+
 Two things are worth knowing about the payload. Handlers run **on the thread
 that emitted**, so a slow `on_event` slows down whoever published; do the work
 in a task if it is not quick. And a payload only carries what can cross the

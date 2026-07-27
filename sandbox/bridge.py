@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import threading
 import types
 from pathlib import Path
 
@@ -193,6 +194,12 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     if family == "service":
         return _adapt_service(path, entry, base, declarations, box_name)
 
+    # A frontend is a residency too, but one the kernel drives rather than
+    # calls: it owns a loop and nine render doorways. Its own builder for the
+    # same reason a service has one.
+    if family == "frontend":
+        return _adapt_frontend(path, entry, base, declarations, box_name)
+
     def _forward(self, context, payload, method: str = "run"):
         """Run the migrated plugin and translate the answer back.
 
@@ -245,7 +252,10 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     run = {"tool": run_tool, "task": run_task,
            "command": run_command}.get(family)
     if run is None:
-        logger.info("%s: %s plugins are not bridged yet", path.name, family)
+        # Unreachable while there are five families: services and frontends
+        # returned above and the other three are here. It stands as the guard
+        # for a sixth, which would otherwise load as a plugin that does nothing.
+        logger.error("%s: %s plugins have no adapter", path.name, family)
         return None
 
     attributes = {
@@ -263,12 +273,28 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
             attributes[key] = value
     attributes.setdefault("name", path.stem.split("_", 1)[-1])
 
-    adapter = type(f"Sandboxed{entry}", (base,), attributes)
+    adapter, module = _build(entry, base, attributes, path, source_path)
+    return module
 
-    module = types.ModuleType(f"sandboxed_{path.stem}")
+
+def _build(entry: str, base, attributes: dict, path, source_path: str):
+    """Make the adapter class and the synthetic module that carries it.
+
+    One place because of ``__module__``. Discovery only accepts classes that
+    belong to the module it just loaded, and a class built with ``type()``
+    claims the module ``type()`` was *called* from — ``sandbox.bridge``. Every
+    adapter therefore looked foreign to discovery and no migrated plugin could
+    be found at all. Setting it here, once, is what makes a bridged plugin
+    discoverable like any other.
+    """
+    module_name = f"sandboxed_{Path(path).stem}"
+    adapter = type(f"Sandboxed{entry}", (base,),
+                   {**attributes, "__module__": module_name})
+
+    module = types.ModuleType(module_name)
     module.__file__ = source_path
     setattr(module, adapter.__name__, adapter)
-    return module
+    return adapter, module
 
 
 def _make_response(answer: dict):
@@ -484,11 +510,7 @@ def _adapt_service(path, entry: str, base, declarations: dict, box_name: str):
     for method in exports:
         attributes[method] = _export(method)
 
-    adapter = type(f"Sandboxed{entry}", (base,), attributes)
-
-    module = types.ModuleType(f"sandboxed_{path.stem}")
-    module.__file__ = source_path
-    setattr(module, adapter.__name__, adapter)
+    adapter, module = _build(entry, base, attributes, path, source_path)
 
     def build_services(config: dict) -> dict:
         """Services are discovered by calling this, not by scanning classes."""
@@ -496,6 +518,233 @@ def _adapt_service(path, entry: str, base, declarations: dict, box_name: str):
 
     module.build_services = build_services
     return module
+
+
+def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
+    """Build a native-looking frontend backed by a resident box.
+
+    Like a service this is a residency, but a frontend is the family the kernel
+    calls *into*, and that changes two things.
+
+    **The loop inverts.** A native frontend blocks in ``start()`` forever. A box
+    serializes one call at a time, so a guest that never returned from ``start``
+    would hold its box and no ``render`` could get in — the frontend would go
+    deaf the moment it started listening. So the guest's ``start`` sets up and
+    returns, and this adapter runs the loop on the daemon thread the frontend
+    manager already gives it, calling ``poll`` over and over. Between polls is
+    when a render lands.
+
+    **Nine render methods become one call.** ``BaseFrontend`` hands subclasses
+    nine typed methods; the box gets one ``render(kind, payload)``. Nine wire
+    methods for one concept is surface with no payoff, and it lets a guest
+    handle the kinds its transport can show and ignore the rest.
+    """
+    from .frontends import park, project_payload, unpark
+
+    source_path = str(path)
+    name = declarations.get("name") or path.stem.split("_", 1)[-1]
+    interval = declarations.get("poll_interval")
+    try:
+        interval = max(0.0, min(float(interval), 5.0))
+    except (TypeError, ValueError):
+        interval = 0.05
+
+    # A poll that keeps failing is a broken box, not a busy one. Spinning on it
+    # would burn a core and fill the log; stopping makes the failure visible.
+    max_failures = 5
+
+    def __init__(self, shutdown_event=None):
+        """Take the host's shutdown Event, if the manager offers one.
+
+        Named as a constructor parameter because that is how ``FrontendManager``
+        supplies host resources — it matches parameters against what it has.
+        """
+        base.__init__(self)
+        self._sandbox_box = None
+        self._token = ""
+        self._stopping = threading.Event()
+        self._shutdown_event = shutdown_event
+
+    def _done(self) -> bool:
+        """Whether the loop should stop."""
+        return self._stopping.is_set() or (
+            self._shutdown_event is not None
+            and self._shutdown_event.is_set())
+
+    def start(self):
+        """Open the box, hand it its authority, then drive it until stopped.
+
+        Runs on the frontend manager's daemon thread, so blocking here is
+        correct — this is the loop the guest is no longer allowed to write.
+        """
+        try:
+            self._sandbox_box = get_sandbox().open(
+                source_path, entry, name=box_name)
+        except Exception as exc:
+            logger.error("frontend %s did not start: %s", name, exc)
+            return
+
+        # The desk opens before the guest's start(), so a frontend can submit
+        # from its very first line — restoring a session, say.
+        self._token = park(self)
+        box = self._sandbox_box
+        result = box.call("__bind__", token=self._token)
+        if not result.ok:
+            logger.error("frontend %s could not be bound: %s", name,
+                         result.error)
+            self.stop()
+            return
+
+        if not box.call("start").ok:
+            logger.error("frontend %s refused to start", name)
+            self.stop()
+            return
+
+        failures = 0
+        while not self._done() and box.alive:
+            outcome = box.call("poll")
+            if outcome.ok:
+                failures = 0
+                # Truthy means "I did work" — go straight back rather than
+                # sleeping, so a busy transport is not rate-limited by us.
+                if not outcome.data:
+                    self._stopping.wait(interval)
+                continue
+
+            failures += 1
+            logger.warning("frontend %s poll failed (%d/%d): %s", name,
+                           failures, max_failures, outcome.error)
+            if failures >= max_failures:
+                logger.error("frontend %s stopped after repeated poll "
+                             "failures", name)
+                break
+            self._stopping.wait(interval)
+
+        self.stop()
+
+    def stop(self):
+        """Stop the loop, close the box, and take the frontend's authority.
+
+        Idempotent: the loop calls it on the way out and the manager calls it
+        on unregister, and either may be first.
+        """
+        self._stopping.set()
+        box, self._sandbox_box = self._sandbox_box, None
+        if box is not None and box.alive:
+            try:
+                box.call("stop")
+            except Exception:
+                logger.exception("frontend %s stop() failed", name)
+        # Revoked before the box is closed, so nothing can submit during
+        # teardown on a frontend that is already going away.
+        unpark(self._token)
+        self._token = ""
+        if box is not None:
+            try:
+                get_sandbox().close(box_name)
+            except Exception:
+                logger.exception("failed to close box %s", box_name)
+
+    def _render(self, session_key: str, kind: str, payload=None):
+        """One render, forwarded into the box.
+
+        A frontend that cannot show something is not an error the kernel needs
+        to hear about — the turn carries on either way — so failures are logged
+        and swallowed, the same policy hooks have.
+        """
+        box = self._sandbox_box
+        if box is None or not box.alive:
+            return
+        result = box.call("render", session_key=session_key, kind=kind,
+                          payload=project_payload(kind, payload))
+        if not result.ok:
+            logger.warning("frontend %s could not render %s: %s", name, kind,
+                           result.error)
+
+    def session_key(self, ctx):
+        """Ask the box to name a session.
+
+        A transport context is the frontend's own object and cannot cross, so
+        what goes in is whatever of it is plain data. Most frontends key off a
+        string or a couple of ids, and one that cannot answer falls back to a
+        single session rather than losing the message.
+        """
+        box = self._sandbox_box
+        if box is None or not box.alive:
+            return "default"
+        result = box.call("session_key",
+                          ctx=project_payload("session_key", ctx))
+        return str(result.data) if result.ok and result.data else "default"
+
+    def _renderer(kind: str):
+        """One native render method, funnelled into the single box call."""
+        def render(self, session_key, payload=None):
+            """Show something."""
+            self._render(session_key, kind, payload)
+        render.__name__ = f"render_{kind}"
+        render.__doc__ = f"Forward a {kind} render into the box."
+        return render
+
+    attributes = {
+        "__doc__": f"Sandboxed frontend loaded from {path.name}.",
+        "_source_path": source_path,
+        "_sandboxed": True,
+        "_box": box_name,
+        "_entry": entry,
+        "name": name,
+        "__init__": __init__,
+        "_done": _done,
+        "_render": _render,
+        "start": start,
+        "stop": stop,
+        "session_key": session_key,
+    }
+    for key, value in declarations.items():
+        if key not in NOT_CARRIED:
+            attributes[key] = value
+
+    # The native names differ from the wire kinds in three places, because the
+    # kernel named them for what they are and the wire names them for what a
+    # frontend does with them.
+    native_names = {"messages": "render_messages",
+                    "attachments": "render_attachments",
+                    "form_field": "render_form_field",
+                    "approval": "render_approval_request",
+                    "buttons": "render_buttons",
+                    "error": "render_error",
+                    "typing": "render_typing",
+                    "tool_status": "render_tool_status",
+                    "stream_delta": "render_stream_delta"}
+    for kind, method in native_names.items():
+        attributes[method] = _renderer(kind)
+
+    # ``capabilities`` is declared as a plain dict because a box cannot hold a
+    # dataclass; the native side reads attributes off one. Same rebuild as
+    # ``_form_step`` does for a command's form.
+    attributes["capabilities"] = _capabilities(declarations.get("capabilities"))
+
+    adapter, module = _build(entry, base, attributes, path, source_path)
+    return module
+
+
+def _capabilities(declared):
+    """Rebuild a FrontendCapabilities from the literal dict a guest declares.
+
+    Unknown keys are dropped rather than raising: a frontend claiming a
+    capability this kernel has never heard of should lose that claim, not fail
+    to load.
+    """
+    from plugins.BaseFrontend import FrontendCapabilities
+
+    if not isinstance(declared, dict):
+        return FrontendCapabilities()
+    allowed = set(FrontendCapabilities.__dataclass_fields__)
+    unknown = set(declared) - allowed
+    if unknown:
+        logger.warning("frontend declares unknown capabilities: %s",
+                       ", ".join(sorted(unknown)))
+    return FrontendCapabilities(**{k: v for k, v in declared.items()
+                                   if k in allowed})
 
 
 def _form_step(step):

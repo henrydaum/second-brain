@@ -754,10 +754,20 @@ def _find_subclass_instances(module, base_class, module_name: str) -> list:
 
 
 def _find_subclasses(module, base_class, module_name: str) -> list:
-    """Find all concrete subclasses of base_class declared in a module."""
+    """Find all concrete subclasses of base_class declared in a module.
+
+    The check is against ``module.__name__`` rather than the ``module_name``
+    the caller asked for. They are the same for an ordinary import, but a
+    *bridged* plugin arrives in a synthetic module the bridge built, and
+    comparing to the requested name made every migrated plugin invisible to
+    discovery — the adapter existed, and nothing could find it.
+
+    ``module_name`` is kept in the signature because callers use it for their
+    own messages, and because it is what a caller means by "this module".
+    """
     found = []
     for _, cls in inspect.getmembers(module, inspect.isclass):
-        if issubclass(cls, base_class) and cls is not base_class and cls.__module__ == module_name:
+        if issubclass(cls, base_class) and cls is not base_class and cls.__module__ == module.__name__:
             found.append(cls)
     return found
 

@@ -185,6 +185,18 @@ ALWAYS_SAFE = {
     R.MODEL_PROCEED,
     R.CRON_LIST, R.CRON_GET, R.CRON_ENABLE,
     R.EVENT_EMIT, R.EVENT_REQUEST,
+    # Safe for the same reason MODEL_PROCEED is: the limit is reachability,
+    # not a verdict. Each resolves to the calling frontend's *own* adapter
+    # through a token parked when its box opened, so code that is not a loaded
+    # frontend reaches nothing and is refused. Carrying a person's input into
+    # the state machine is the entire job of a frontend — a dialog on every
+    # keystroke would be nonsense, and FRONTEND_BIND is here rather than with
+    # USER_WRITE for the same reason: asking a user to approve their own login
+    # would make a per_user frontend unusable, and binding sessions is already
+    # what the kernel lets a native frontend do. The token is what stops one
+    # frontend doing it on another's behalf.
+    R.FRONTEND_SUBMIT, R.FRONTEND_CANCEL, R.FRONTEND_BIND, R.FRONTEND_ATTEND,
+    R.FRONTEND_RESOLVE,
     R.TASK_ENQUEUE, R.TASK_STATUS, R.TASK_OUTPUT,
     R.FILE_REGISTER, R.FILE_LIST,
     R.PARSE_FILE, R.PARSE_MODALITY,

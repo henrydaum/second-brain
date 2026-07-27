@@ -282,10 +282,19 @@ class BaseCommand(BasePlugin):
 class BaseFrontend(BasePlugin):
     """A surface a person talks to.
 
-    Deliberately the thinnest of the five. Frontends are inbound-driven — the
-    kernel calls *them* — which the Request model does not describe yet, and
-    they are the last family to migrate. Treat this as the shape, not the
-    finished contract.
+    Frontends are the one family the kernel calls *into* rather than up from,
+    and that inverts the usual shape twice.
+
+    **There is no main loop.** A native frontend blocks in ``start()`` forever.
+    That cannot work here: a box serializes one call at a time, so code that
+    never returns from ``start`` holds the box and no ``render`` ever gets in —
+    the frontend would go deaf the moment it started listening. So ``start``
+    sets up and *returns*, and the kernel calls ``poll`` over and over on a
+    thread it owns. You are not driving; you are being asked.
+
+    **Showing things is not a Request.** ``render`` is called on you when the
+    kernel has something for a person to see. Carrying what that person does
+    back the other way *is* — see ``sdk.frontend``.
     """
 
     family = FRONTEND
@@ -295,17 +304,65 @@ class BaseFrontend(BasePlugin):
     default_user_id: int = 1
     capabilities: dict = {}
 
+    # How long the kernel waits after a poll that found nothing. Only paid
+    # when idle: a poll that reports work is called straight back.
+    poll_interval: float = 0.05
+
     def start(self, sdk):
-        """Begin accepting input. Returns when the frontend stops."""
+        """Open the transport. **Must return** — do not loop here.
+
+        Return True on success. Anything else and the frontend does not run.
+        """
+        raise NotImplementedError
+
+    def poll(self, sdk):
+        """Take whatever input is waiting and submit it. Called repeatedly.
+
+        **Must return promptly.** Between polls is the only time the kernel
+        can call ``render``, so a slow poll is a frozen display. Return truthy
+        if you did something — you will be called straight back — and falsy if
+        there was nothing, which earns a ``poll_interval`` pause.
+
+        A long-poll with a short server-side timeout is the right shape. An
+        unbounded wait is not.
+        """
         raise NotImplementedError
 
     def stop(self, sdk):
-        """Stop accepting input."""
+        """Close the transport. Must tolerate never having started."""
         return None
 
-    def render(self, sdk, session_key: str, payload: dict):
-        """Show something to the user."""
+    def render(self, sdk, session_key: str, kind: str, payload):
+        """Show one thing to a person. ``kind`` says what.
+
+        ``messages`` (list[str] of markdown) · ``attachments`` (list of paths)
+        · ``form_field`` · ``approval`` · ``buttons`` · ``error`` · ``typing``
+        (bool) · ``tool_status`` · ``stream_delta``.
+
+        Handle the kinds your transport can show and ignore the rest — a
+        frontend that only renders ``messages`` is a working frontend.
+        Answer an ``approval`` with ``sdk.frontend.resolve``.
+        """
         raise NotImplementedError
+
+    def session_key(self, sdk, ctx):
+        """Name the session some transport context belongs to.
+
+        One string per conversational surface: a chat, a socket, a thread.
+        The kernel treats two contexts with the same key as the same person
+        in the same place.
+        """
+        raise NotImplementedError
+
+    def __bind__(self, sdk, token: str = ""):
+        """Receive the handle on this frontend's own adapter. Kernel-called.
+
+        Held on the ``sdk`` rather than on the plugin so ``sdk.frontend``
+        works without the author ever seeing a token — and so a frontend
+        cannot hand its authority to anything by passing itself around.
+        """
+        sdk._frontend_token = token
+        return True
 
 
 FAMILIES = {TOOL: BaseTool, TASK: BaseTask, SERVICE: BaseService,

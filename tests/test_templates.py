@@ -25,15 +25,15 @@ TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 # Migrated to the SDK: these must validate and must not mention the old
 # contract anywhere.
 SANDBOXED = ["tool_template.py", "task_template.py", "command_template.py",
-             "service_template.py", "script_template.py", "hook_template.py"]
+             "service_template.py", "script_template.py", "hook_template.py",
+             "frontend_template.py"]
 
 # Deliberately still native, each for a stated reason carried in a banner at
 # the top of the file. Listed explicitly so that adding a template forces a
 # decision about which group it belongs to, rather than silently defaulting
-# into the unchecked one.
-NATIVE = {
-    "frontend_template.py": "inbound protocol does not exist yet",
-}
+# into the unchecked one. Empty since frontends were bridged — kept because
+# the next family to be added may well arrive before its contract does.
+NATIVE = {}
 
 # The validator rules a template is allowed to break, and only these. Both are
 # rules about DISCOVERY — one class per file, and the family prefix in the

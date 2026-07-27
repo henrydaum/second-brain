@@ -251,18 +251,70 @@ Everything that creates recurring unattended work is unsafe, for the same reason
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
 | `event.emit(channel, payload)` | Publish | channel | safe |
-| `event.subscribe(channel)` | Receive on a channel | channel | safe |
 | `event.request(channel, payload, timeout)` | Blocking request/response | channel | safe |
-| `hook.register(moment, fn)` | Stand at a turn doorway | moment | unsafe |
-| `hook.unregister(fn)` | Step away | — | safe |
+| `model.proceed(request)` | Place the call an escort is holding | token | safe |
 
-`hook.register` is unsafe because a hook is a standing intervention in every
-future turn — the largest persistent capability grant in the system.
+**Receiving is not a Request, and neither is standing at a doorway.** Both were
+once going to be (`event.subscribe`, `hook.register`) and both became
+*declarations* instead — `subscribed_channels = [...]` and
+`hooks = {moment: method}`, read from the file without importing it. The
+reasoning is the same for each: a subscription and a hook are standing
+capability, and a Request that grants standing capability leaves something the
+plugin holds and can forget to release. A declaration cannot leak, because the
+plugin never registered anything — the kernel did, and the kernel undoes it at
+unload. It is also visible at install time, which a runtime call never is.
+
+`model.proceed` is safe for an unusual reason: it is the only Request whose
+handler is a **per-call closure**. The kernel parks an escort's `proceed` under
+a one-shot token for exactly the duration of one `model_call` visit. Code
+holding no token reaches no call, so the limit is reachability rather than a
+verdict, and "proceed" only ever means *place the call the kernel already
+decided to make*.
 
 **Note the latency cost.** Hooks fire inside the agent turn's hot path, and
-`model_call` wraps every model call. A hook registered from a subprocessed
-service pays IPC on each fire. This is the strongest argument for validated
-in-process execution being the default for services, with subprocess as opt-in.
+`model_call` wraps every model call. A hook on a subprocessed service pays IPC
+on each fire. This is the strongest argument for validated in-process execution
+being the default for services, with subprocess as opt-in. Bus deliveries have
+the same shape but a worse failure mode: handlers run on the thread that
+*emitted*, so a slow subscriber slows the publisher down.
+
+## 13a. Frontends
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `frontend.submit(session_key, input_kind, ...)` | Carry a person's input into the state machine | token, kind | safe |
+| `frontend.cancel(session_key)` | Stop what a session is doing | token | safe |
+| `frontend.bind(session_key, external_id, ...)` | Say whose data a session is | token, external_id | safe |
+| `frontend.attend(session_key, present)` | Say whether a person is watching | token | safe |
+| `frontend.resolve(session_key, value, request_id)` | Answer a pending approval | token, request_id | safe |
+
+These are the same shape as `model.proceed`: **scoped by reachability, not by a
+verdict.** When a frontend's box opens, its native adapter is parked under a
+token that is handed into the box; every one of these carries it back and
+resolves to *that adapter and no other*. A tool, a service, or a script that
+imported the same namespace holds no token, reaches no adapter, and is refused.
+The desk is cleared when the frontend stops, so a leaked token then reaches
+nothing.
+
+They are `safe` because carrying a person's input into the state machine is the
+entire job of a frontend — a dialog per keystroke would be nonsense. The one
+that deserves argument is `frontend.bind`, which touches identity and might
+look like it belongs with `user.write`. It does not: asking a user to approve
+their own login would make a `per_user` frontend unusable, and a native
+frontend already binds sessions freely. Which of the two native paths runs is
+decided by whether an `external_id` was named rather than by the plugin picking
+a method, so a frontend cannot upgrade a session to an arbitrary user.
+
+Authentication is deliberately outside this boundary. The kernel stores
+`password_hash` opaquely and ships no crypto; a frontend that binds a session
+is asserting it did the work, and the kernel takes its word. `user_type` is
+frontend-defined metadata, never a kernel admin bypass.
+
+Rendering has no Request at all — the kernel calls `render` on the frontend.
+An `approval` crosses as a question (`id`, `title`, `body`, `type`, `enum`,
+`default`) and never as the decision: the pending action and the live
+`threading.Event` the state machine waits on stay kernel-side, so holding the
+id is enough to answer and only enough to answer.
 
 ## 14. Pipeline and tasks
 

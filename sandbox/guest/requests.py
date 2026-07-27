@@ -106,6 +106,18 @@ CRON_ENABLE = "cron.enable"
 EVENT_EMIT = "event.emit"
 EVENT_REQUEST = "event.request"
 
+# ── frontends ─────────────────────────────────────────────────────────
+# A frontend is the one family that acts *for a person*: it carries what
+# someone typed into the state machine. These are the inbound half of that,
+# and they are reachable only from inside a loaded frontend's box — the
+# handler resolves that frontend's own adapter through a token, so nothing
+# else can submit on a user's behalf or bind a session it does not own.
+FRONTEND_SUBMIT = "frontend.submit"
+FRONTEND_CANCEL = "frontend.cancel"
+FRONTEND_BIND = "frontend.bind"
+FRONTEND_ATTEND = "frontend.attend"
+FRONTEND_RESOLVE = "frontend.resolve"
+
 # ── pipeline ──────────────────────────────────────────────────────────
 TASK_ENQUEUE = "task.enqueue"
 TASK_STATUS = "task.status"
@@ -143,6 +155,8 @@ ALL_TYPES = {
     AGENT_COMPLETE, AGENT_SPAWN, AGENT_SCHEDULE, MODEL_PROCEED,
     CRON_LIST, CRON_GET, CRON_CREATE, CRON_UPDATE, CRON_REMOVE, CRON_ENABLE,
     EVENT_EMIT, EVENT_REQUEST,
+    FRONTEND_SUBMIT, FRONTEND_CANCEL, FRONTEND_BIND, FRONTEND_ATTEND,
+    FRONTEND_RESOLVE,
     TASK_ENQUEUE, TASK_STATUS, TASK_OUTPUT, FILE_REGISTER, FILE_LIST,
     PARSE_FILE, PARSE_MODALITY, LEDGER_RECORD, LEDGER_READ,
     NET_HTTP, PROC_RUN, ENV_READ, SECRET_REVEAL, SELF_RESPOND,

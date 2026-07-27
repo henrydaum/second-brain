@@ -334,6 +334,42 @@ not through `service.call`. The synthetic module supplies `build_services`,
 since that is how discovery finds services. The box owns the start deadline,
 so the adapter sets `load_timeout = 0` rather than race two timers.
 
+**Frontends are resident boxes the kernel *drives*.** All five families are now
+bridged. A frontend is a residency like a service, but with the loop inverted:
+a native frontend blocks in `start()` forever, and a box takes one call at a
+time, so a guest that never returned from `start` would hold its box and no
+render could get in — the frontend would go deaf the moment it started
+listening. So the guest's `start` sets up and returns, and `_adapt_frontend`
+runs the loop on the daemon thread `FrontendManager` already gives it, calling
+`poll` repeatedly (truthy = "did work, call me straight back"; falsy = pause
+`poll_interval`). Between polls is when a render lands. Five consecutive poll
+failures stop the frontend rather than spinning on a dead box.
+
+`BaseFrontend` itself is **not** migrated and should not be: its 880 lines are
+host-side routing — fourteen bus subscriptions funnelling into nine `render_*`
+methods, and `submit_*` funnelling into `runtime.handle_action`. The base owns
+*when*, the guest owns *how*, so the base becomes the adapter. The nine
+`render_*` collapse to one `render(kind, payload)` box call (`sandbox/
+frontends.py` holds the `KINDS` both sides must agree on); `capabilities`
+crosses as a literal dict and is rebuilt into `FrontendCapabilities`.
+
+The inbound half — `sdk.frontend.submit_text/submit_attachment/submit_action/
+cancel/bind/attended/resolve` — is five Requests scoped the same way
+`model.proceed` is: **by reachability, not by a verdict.** The adapter is
+parked at a *desk* under a token when its box opens, every Request carries it
+back, and it resolves to that adapter and no other. A tool importing the same
+namespace holds no token and is refused; the desk is cleared at stop, so a
+leaked token reaches nothing. `frontend.bind` sits here rather than with
+`user.write` deliberately — approving your own login would make a `per_user`
+frontend unusable, and which native path runs is decided by whether an
+`external_id` was named rather than by the plugin picking a method.
+
+**A REPL cannot be written on this contract**, and that is not an oversight to
+fix casually: `input()` is refused and a subprocess box's stdin is the wire
+protocol, so sandboxed code has no route to a terminal. `frontend_repl` stays
+native until a terminal Request exists. Network-driven frontends (Telegram,
+MCP, a websocket) have no such problem.
+
 **Hooks are declared, not registered.** A service names doorways in
 `hooks = {moment: method}`, read by AST like `exports`. The bridge stands a
 shim at each and removes it on unload — a hook cannot leak, because the plugin
@@ -404,7 +440,7 @@ containment to fix.
 
 **Docs:** `SDK.md` (hand this to an agent writing sandbox code — its examples
 are executed by `tests/test_sdk_docs.py`), `MIGRATING_PLUGINS.md` (the
-per-plugin procedure), `SECURITY_CONTRACT_APPENDIX.md` (the ~77-Request
+per-plugin procedure), `SECURITY_CONTRACT_APPENDIX.md` (the ~81-Request
 catalogue with policy inputs).
 
 **Migration tooling:** `sandbox.migrate.plan(path)` reports what converting a

@@ -25,7 +25,9 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               CRON_ENABLE, CRON_GET, CRON_LIST, CRON_REMOVE,
                               CRON_UPDATE, DB_DEFINE, DB_QUERY, DB_WRITE,
                               EVENT_EMIT, EVENT_REQUEST, FILE_LIST,
-                              FILE_REGISTER, LEDGER_READ, LEDGER_RECORD,
+                              FILE_REGISTER, FRONTEND_ATTEND, FRONTEND_BIND,
+                              FRONTEND_CANCEL, FRONTEND_RESOLVE,
+                              FRONTEND_SUBMIT, LEDGER_READ, LEDGER_RECORD,
                               PARSE_FILE, PARSE_MODALITY, PLUGIN_DESCRIBE,
                               PLUGIN_LIST, SERVICE_CALL, SERVICE_LIST,
                               SESSION_ADD_PROMPT, SESSION_ADD_TOOL,
@@ -755,6 +757,131 @@ def _event_request(ctx, args: dict) -> Result:
         return Result.failure(f"request failed: {exc}", retryable=True)
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Frontends: carrying what a person did into the state machine.
+#
+# Every one of these resolves through a token to the calling frontend's own
+# adapter, so the authority is the frontend's identity rather than anything
+# the Request says about itself. A caller that is not a loaded frontend holds
+# no token, reaches no adapter, and is refused — which is the correct answer
+# rather than an omission, exactly as it is for ``model.proceed``.
+# ──────────────────────────────────────────────────────────────────────
+
+def _at_desk(args: dict):
+    """The adapter behind a frontend Request, or a refusal explaining why not."""
+    from ..frontends import desk
+
+    adapter = desk(args.get("token") or "")
+    if adapter is None:
+        return None, Result.refusal(
+            "sdk.frontend is only available inside a loaded frontend")
+    return adapter, None
+
+
+def _frontend_submit(ctx, args: dict) -> Result:
+    """Hand a person's input to the state machine.
+
+    The three kinds go to three different native entry points because they
+    coerce differently — text may be a slash command, an attachment has to be
+    parsed and staged — and collapsing them here would lose that.
+    """
+    adapter, refusal = _at_desk(args)
+    if refusal is not None:
+        return refusal
+
+    session_key = str(args.get("session_key") or "")
+    kind = args.get("input_kind") or "text"
+    try:
+        if kind == "text":
+            result = adapter.submit_text(session_key, args.get("text") or "")
+        elif kind == "attachment":
+            result = adapter.submit_attachment(
+                session_key, args.get("path") or "",
+                args.get("extension") or None)
+        elif kind == "action":
+            result = adapter.submit(session_key,
+                                    args.get("action_type") or "",
+                                    args.get("payload"))
+        else:
+            return Result.failure(f"unknown submit kind {kind!r}")
+    except Exception as exc:
+        return Result.failure(f"submit failed: {exc}")
+
+    # A RuntimeResult is a live object. What a frontend needs back is whether
+    # it landed, and the rest reaches it as a render call like everything else.
+    return Result(data=bool(getattr(result, "ok", result is not None)))
+
+
+def _frontend_cancel(ctx, args: dict) -> Result:
+    """Stop whatever a session is doing."""
+    adapter, refusal = _at_desk(args)
+    if refusal is not None:
+        return refusal
+    try:
+        adapter.cancel(str(args.get("session_key") or ""))
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"cancel failed: {exc}")
+
+
+def _frontend_bind(ctx, args: dict) -> Result:
+    """Say whose data a session is. Returns the user id.
+
+    Which of the two native paths runs is decided by whether an external
+    identity was named, not by the plugin choosing — so a frontend cannot
+    upgrade a session to an arbitrary user by picking the wrong call.
+    """
+    adapter, refusal = _at_desk(args)
+    if refusal is not None:
+        return refusal
+
+    session_key = str(args.get("session_key") or "")
+    external_id = args.get("external_id")
+    try:
+        if external_id is None:
+            return Result(data=adapter.bind_session(session_key))
+        return Result(data=adapter.identify(
+            session_key, external_id, args.get("config") or None,
+            user_type=str(args.get("user_type") or "user")))
+    except Exception as exc:
+        return Result.failure(f"bind failed: {exc}")
+
+
+def _frontend_attend(ctx, args: dict) -> Result:
+    """Say whether a person is watching a session."""
+    adapter, refusal = _at_desk(args)
+    if refusal is not None:
+        return refusal
+
+    session_key = str(args.get("session_key") or "")
+    try:
+        if args.get("present"):
+            adapter.mark_attended(session_key)
+        else:
+            adapter.mark_unattended(session_key)
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"attendance failed: {exc}")
+
+
+def _frontend_resolve(ctx, args: dict) -> Result:
+    """Answer a pending approval by id, or the session's next one."""
+    adapter, refusal = _at_desk(args)
+    if refusal is not None:
+        return refusal
+
+    session_key = str(args.get("session_key") or "")
+    request_id = str(args.get("request_id") or "")
+    try:
+        if request_id:
+            return Result(data=bool(adapter.resolve_approval(
+                session_key, request_id, args.get("value"))))
+        return Result(data=bool(adapter.resolve_next_approval(
+            session_key, args.get("value"))))
+    except Exception as exc:
+        return Result.failure(f"resolve failed: {exc}")
+
+
 def _task_enqueue(ctx, args: dict) -> Result:
     """Queue pipeline work."""
     db = _db(ctx)
@@ -919,6 +1046,9 @@ HANDLERS = {
     CRON_UPDATE: _cron_update, CRON_REMOVE: _cron_remove,
     CRON_ENABLE: _cron_enable,
     EVENT_EMIT: _event_emit, EVENT_REQUEST: _event_request,
+    FRONTEND_SUBMIT: _frontend_submit, FRONTEND_CANCEL: _frontend_cancel,
+    FRONTEND_BIND: _frontend_bind, FRONTEND_ATTEND: _frontend_attend,
+    FRONTEND_RESOLVE: _frontend_resolve,
     TASK_ENQUEUE: _task_enqueue, TASK_STATUS: _task_status,
     TASK_OUTPUT: _task_output,
     FILE_REGISTER: _file_register, FILE_LIST: _file_list,

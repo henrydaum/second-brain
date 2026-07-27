@@ -287,22 +287,22 @@ def test_an_invalid_migrated_plugin_does_not_load(tmp_path, box):
     assert adapt(_write(tmp_path, "tool_broken.py", source)) is None
 
 
-def test_an_unbridged_family_declines_cleanly(tmp_path, box):
-    """Frontends are not bridged yet; say so, do not guess."""
+def test_a_file_that_is_not_a_plugin_declines_cleanly(tmp_path, box):
+    """A file naming no plugin class is a helper or a script, not a plugin.
+
+    All five families are bridged now, so what is left to decline is a file
+    the bridge cannot find an entry point in — and it must say so rather than
+    build an adapter around nothing.
+    """
     source = '''
-"""A migrated frontend."""
+"""Helpers, not a plugin."""
 
 from guest.bases import BaseFrontend
 
 
-class Web(BaseFrontend):
-    """A surface."""
-
-    name = "web"
-
-    def start(self, sdk):
-        """Start."""
-        return True
+def helper(sdk):
+    """Do something."""
+    return 1
 '''
     assert adapt(_write(tmp_path, "frontend_web.py", source)) is None
 
@@ -517,3 +517,31 @@ def test_a_command_without_a_form_keeps_the_base_default(tmp_path, box):
     module = adapt(_write(tmp_path, "command_status.py", MIGRATED_COMMAND))
     instance = next(v() for v in vars(module).values() if isinstance(v, type))
     assert instance.form({}, SimpleNamespace(config={})) == []
+
+
+@pytest.mark.parametrize("filename, source, base_module, base_name", [
+    ("tool_word_count.py", MIGRATED_TOOL, "plugins.BaseTool", "BaseTool"),
+    ("service_counter.py", MIGRATED_SERVICE.replace("ISOLATION", ""),
+     "plugins.BaseService", "BaseService"),
+])
+def test_a_bridged_plugin_is_visible_to_discovery(tmp_path, box, filename,
+                                                  source, base_module,
+                                                  base_name):
+    """The adapter has to be *findable*, not merely built.
+
+    Discovery only accepts classes belonging to the module it just loaded, and
+    a ``type()``-made class claims the module ``type()`` ran in — so every
+    adapter used to look foreign and no migrated plugin could be discovered at
+    all. The bridge worked; nothing could reach it. Every test here called
+    ``adapt`` directly, which is exactly the step that hid it.
+    """
+    from plugins.plugin_discovery import _find_subclasses
+
+    base = getattr(__import__(base_module, fromlist=[base_name]), base_name)
+    module = adapt(_write(tmp_path, filename, source))
+
+    # The name discovery would have asked for, which is *not* the synthetic
+    # module's name — that difference is the whole bug.
+    found = _find_subclasses(module, base, f"plugins.x.{Path(filename).stem}")
+    assert found, "a bridged plugin was invisible to discovery"
+    assert issubclass(found[0], base)
