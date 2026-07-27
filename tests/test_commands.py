@@ -175,11 +175,7 @@ def test_frontends_form_uses_runtime_cache_without_discovery(monkeypatch):
 # ── agent_prompt contributions ───────────────────────────────────────
 
 def test_kernel_commands_contribute_agent_prompt_guidance():
-    """The /llm, /agent, and /packages commands carry the SB-specific facts a
-    model cannot infer: mid-conversation model/profile switches and hot-reload
-    catalog changes."""
-    from plugins.commands.command_packages import PackagesCommand
+    """Native profile commands carry their model-switching guidance."""
 
     assert "different model" in LlmCommand().agent_prompt_for(None)
     assert "profile" in AgentCommand().agent_prompt_for(None)
-    assert "next turn" in PackagesCommand().agent_prompt_for(None)

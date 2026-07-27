@@ -195,6 +195,7 @@ belongs. API keys and OAuth tokens live in config and the environment. See
 | `plugin.reload(name)` | Reload in place | name | unsafe |
 | `plugin.install(stem)` | Install from the store | stem, store commit | unsafe |
 | `plugin.uninstall(stem)` | Remove, with dependency scan | stem | unsafe |
+| `plugin.update()` | Update installed store packages | store commit | unsafe |
 | `plugin.quarantine(name, reason)` | Disable a misbehaving plugin | name | safe |
 
 This family is the literal subject of the LibOS quote: the agent extends itself

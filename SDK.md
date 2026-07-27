@@ -211,7 +211,11 @@ sdk.commands.list(details=False, visible=False)
 sdk.commands.run(name, **args)
 sdk.services.list()
 sdk.services.call(name, method, **kwargs)   # only exported methods
-sdk.plugins.list() / describe(name)
+sdk.plugins.list(source="registered", category="")
+sdk.plugins.describe(name)
+sdk.plugins.install(package_id)
+sdk.plugins.uninstall(package_id)
+sdk.plugins.update()
 
 sdk.agent.complete(prompt)           # a model call
 sdk.agent.spawn(prompt, wait=True)   # a subagent now

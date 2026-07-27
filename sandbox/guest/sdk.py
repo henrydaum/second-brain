@@ -67,7 +67,8 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        LEDGER_READ,
                        LEDGER_RECORD, NET_HTTP, PARSE_FILE, PARSE_MODALITY,
                        MODEL_DELTA, MODEL_PROCEED, PATH_GET,
-                       PLUGIN_DESCRIBE, PLUGIN_LIST, PROC_RUN,
+                       PLUGIN_DESCRIBE, PLUGIN_INSTALL, PLUGIN_LIST,
+                       PLUGIN_UNINSTALL, PLUGIN_UPDATE, PROC_RUN,
                        SECRET_REVEAL, SELF_RESPOND,
                        SERVICE_CALL, SERVICE_LIST, SESSION_ADD_PROMPT,
                        SESSION_ADD_TOOL, SESSION_CANCEL, SESSION_GET,
@@ -317,13 +318,26 @@ class _Users(_Namespace):
 class _Plugins(_Namespace):
     """Introspection over what is registered."""
 
-    def list(self):
-        """Everything registered, by family."""
-        return self._ask(PLUGIN_LIST)
+    def list(self, source: str = "registered", category: str = ""):
+        """List registered plugins or package-store entries."""
+        return self._ask(
+            PLUGIN_LIST, source=source, category=category or None)
 
     def describe(self, name: str):
         """Metadata for one plugin."""
         return self._ask(PLUGIN_DESCRIBE, name=name)
+
+    def install(self, package_id: str):
+        """Install a package or bundle from the kernel store."""
+        return self._ask(PLUGIN_INSTALL, package_id=package_id)
+
+    def uninstall(self, package_id: str):
+        """Uninstall an installed package, helper, or bundle."""
+        return self._ask(PLUGIN_UNINSTALL, package_id=package_id)
+
+    def update(self):
+        """Update installed packages from the kernel store."""
+        return self._ask(PLUGIN_UPDATE)
 
 
 class _Services(_Namespace):

@@ -31,7 +31,8 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               FRONTEND_RESOLVE,
                               FRONTEND_SUBMIT, LEDGER_READ, LEDGER_RECORD,
                               PARSE_FILE, PARSE_MODALITY, PATH_GET, PLUGIN_DESCRIBE,
-                              PLUGIN_LIST, SERVICE_CALL, SERVICE_LIST,
+                              PLUGIN_INSTALL, PLUGIN_LIST, PLUGIN_UNINSTALL,
+                              PLUGIN_UPDATE, SERVICE_CALL, SERVICE_LIST,
                               SESSION_ADD_PROMPT, SESSION_ADD_TOOL,
                               SESSION_CANCEL, SESSION_GET, SESSION_LIST,
                               SESSION_PUSH, SESSION_REMOVE_PROMPT,
@@ -617,6 +618,42 @@ def _user_write(ctx, args: dict) -> Result:
 
 def _plugin_list(ctx, args: dict) -> Result:
     """Everything currently registered, by family."""
+    source = args.get("source") or "registered"
+    if source != "registered":
+        try:
+            from paths import ROOT_DIR
+            from plugins.commands.helpers import package_manager
+
+            root = getattr(ctx, "root_dir", None) or ROOT_DIR
+            if source == "available":
+                installed = {
+                    item["path"]
+                    for item in package_manager.installed_packages()
+                }
+                items = [
+                    item for item in package_manager.search_packages(root)
+                    if item["path"] not in installed
+                ]
+            elif source == "installed":
+                items = package_manager.installed_packages()
+            elif source == "removable":
+                items = (
+                    package_manager.removable_packages()
+                    + package_manager.search_bundles(root)
+                )
+            else:
+                return Result.failure(
+                    f"unknown plugin list source {source!r}")
+            category = args.get("category")
+            if category:
+                items = [
+                    item for item in items
+                    if item.get("family") == category
+                ]
+            return Result(data=items)
+        except Exception as exc:
+            return Result.failure(str(exc))
+
     registry = getattr(ctx, "tool_registry", None)
     orchestrator = getattr(ctx, "orchestrator", None)
     commands = getattr(ctx, "command_registry", None)
@@ -626,6 +663,60 @@ def _plugin_list(ctx, args: dict) -> Result:
         "services": sorted(getattr(ctx, "services", None) or {}),
         "commands": sorted(getattr(commands, "commands", None) or {}),
     })
+
+
+def _package_progress(ctx):
+    """Send long-running package progress to the issuing frontend."""
+    runtime = _runtime(ctx)
+    key = getattr(ctx, "session_key", None)
+    push = getattr(runtime, "push_message", None)
+    if push is None or not key:
+        return None
+    return lambda message: push(key, message, source="packages")
+
+
+def _plugin_install(ctx, args: dict) -> Result:
+    """Install one store package through the kernel package manager."""
+    try:
+        from paths import ROOT_DIR
+        from plugins.commands.helpers import package_manager
+
+        root = getattr(ctx, "root_dir", None) or ROOT_DIR
+        outcome = package_manager.install_package(
+            root, args.get("package_id") or "", ctx,
+            progress=_package_progress(ctx))
+        return Result(data=outcome.text())
+    except Exception as exc:
+        return Result.failure(str(exc))
+
+
+def _plugin_uninstall(ctx, args: dict) -> Result:
+    """Uninstall one package through the kernel package manager."""
+    try:
+        from paths import ROOT_DIR
+        from plugins.commands.helpers import package_manager
+
+        root = getattr(ctx, "root_dir", None) or ROOT_DIR
+        outcome = package_manager.uninstall_package(
+            args.get("package_id") or "", ctx,
+            progress=_package_progress(ctx), root_dir=root)
+        return Result(data=outcome.text())
+    except Exception as exc:
+        return Result.failure(str(exc))
+
+
+def _plugin_update(ctx, args: dict) -> Result:
+    """Update all installed packages through the kernel package manager."""
+    try:
+        from paths import ROOT_DIR
+        from plugins.commands.helpers import package_manager
+
+        root = getattr(ctx, "root_dir", None) or ROOT_DIR
+        outcome = package_manager.update_packages(
+            root, ctx, progress=_package_progress(ctx))
+        return Result(data=outcome.text())
+    except Exception as exc:
+        return Result.failure(str(exc))
 
 
 def _plugin_describe(ctx, args: dict) -> Result:
@@ -1264,6 +1355,8 @@ HANDLERS = {
     PATH_GET: _path_get,
     USER_READ: _user_read, USER_LIST: _user_list, USER_WRITE: _user_write,
     PLUGIN_LIST: _plugin_list, PLUGIN_DESCRIBE: _plugin_describe,
+    PLUGIN_INSTALL: _plugin_install, PLUGIN_UNINSTALL: _plugin_uninstall,
+    PLUGIN_UPDATE: _plugin_update,
     SERVICE_LIST: _service_list, SERVICE_CALL: _service_call,
     TOOL_LIST: _tool_list, TOOL_CALL: _tool_call,
     COMMAND_LIST: _command_list, COMMAND_CALL: _command_call,
