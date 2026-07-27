@@ -308,10 +308,16 @@ class _UI(_Namespace):
 class _Config(_Namespace):
     """Settings. Credentials come back as handles, never plaintext."""
 
-    def read(self, key: str = "", *, present: bool = False):
-        """Read a setting, or check whether it has a non-empty value."""
+    def read(
+        self,
+        key: str = "",
+        *,
+        present: bool = False,
+        keys: bool = False,
+    ):
+        """Read a setting, test presence, or return mapping keys."""
         return self._ask(
-            CONFIG_READ, key=key or None, present=present)
+            CONFIG_READ, key=key or None, present=present, keys=keys)
 
     def write(
         self,
@@ -363,11 +369,12 @@ class _Plugins(_Namespace):
         source: str = "registered",
         category: str = "",
         role: str = "",
+        details: bool = False,
     ):
         """List plugins, optionally narrowed by a kernel-defined role."""
         return self._ask(
             PLUGIN_LIST, source=source, category=category or None,
-            role=role or None)
+            role=role or None, details=details)
 
     def describe(self, name: str):
         """Metadata for one plugin."""

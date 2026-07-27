@@ -686,6 +686,14 @@ def _config_read(ctx, args: dict) -> Result:
     if args.get("present"):
         return Result(data=bool(config.get(key))) if key else Result(
             data=bool(config))
+    if args.get("keys"):
+        value = config.get(key) if key else config
+        if value is None:
+            return Result(data=[])
+        if not isinstance(value, dict):
+            return Result.failure(
+                f"config setting {key!r} is not a mapping")
+        return Result(data=sorted(str(item) for item in value))
     if key is None:
         return Result(data={k: redact(k, v) for k, v in config.items()})
     if key not in config:
@@ -882,6 +890,58 @@ def _plugin_list(ctx, args: dict) -> Result:
             return Result(data=items)
         except Exception as exc:
             return Result.failure(str(exc))
+
+    category = args.get("category")
+    if args.get("details") and category == "frontends":
+        runtime = _runtime(ctx)
+        manager = getattr(runtime, "frontend_manager", None)
+        available = set(
+            getattr(manager, "available_frontends", None) or [])
+        adapters = dict(getattr(manager, "adapters", None) or {})
+        config = getattr(ctx, "config", None) or {}
+        enabled = set(config.get("enabled_frontends") or [])
+        profiles = set((config.get("frontend_profiles") or {}).keys())
+        names = sorted(available | set(adapters) | enabled | profiles)
+        return Result(data=[
+            {
+                "name": name,
+                "available": name in available,
+                "loaded": name in adapters,
+                "config_settings": [
+                    {
+                        "title": entry[0],
+                        "key": entry[1],
+                        "description": entry[2],
+                        "default": entry[3],
+                        "info": (
+                            entry[4]
+                            if isinstance(entry[4], dict)
+                            else {}
+                        ),
+                        "current": redact(
+                            entry[1],
+                            _config_value(ctx, entry[1], entry),
+                            guess=True,
+                        ),
+                    }
+                    for entry in (
+                        getattr(
+                            adapters.get(name),
+                            "config_settings",
+                            None,
+                        )
+                        or []
+                    )
+                    if isinstance(entry, (list, tuple))
+                    and len(entry) == 5
+                    and not (
+                        isinstance(entry[4], dict)
+                        and entry[4].get("hidden") is True
+                    )
+                ],
+            }
+            for name in names
+        ])
 
     role = args.get("role")
     if role:
