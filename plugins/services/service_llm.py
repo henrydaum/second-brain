@@ -260,7 +260,10 @@ def _build_llm_from_profile(model_name: str, profile: dict) -> BaseLLM:
     """
     cls_name = profile.get("llm_service_class") or "LiteLLMService"
 
-    api_key = profile.get("llm_api_key", "")
+    api_key = (
+        profile.get("secret_llm_api_key")
+        or profile.get("llm_api_key", "")
+    )
     resolved_key = os.environ.get(api_key, api_key) if api_key else None
     base_url = profile.get("llm_endpoint", "") or None
 

@@ -74,7 +74,11 @@ def _build_minimax_llm(real_config: dict, dest_dir: Path, profile_name: str):
         )
     import os
     cls = _fetch_litellm_backend(dest_dir)
-    api_key = profile.get("llm_api_key", "") or ""
+    api_key = (
+        profile.get("secret_llm_api_key")
+        or profile.get("llm_api_key", "")
+        or ""
+    )
     resolved_key = os.environ.get(api_key, api_key) if api_key else None
     base_url = profile.get("llm_endpoint") or None
     llm = cls(profile_name, api_key=resolved_key, base_url=base_url)

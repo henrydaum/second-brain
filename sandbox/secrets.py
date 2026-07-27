@@ -24,6 +24,8 @@ than being silently blanked, so a mistake looks like a mistake.
 
 from __future__ import annotations
 
+import base64
+import json
 import re
 
 PREFIX = "<secret:"
@@ -89,6 +91,35 @@ def redact(name: str, value, *, guess: bool = False):
     return handle_for(name) if is_secret(name, guess=guess) else value
 
 
+def redact_nested(name: str, value):
+    """Redact credential-shaped leaves in a structured config value.
+
+    The handle encodes its original config path, so it remains usable after
+    guest code moves or rewrites the surrounding structure.
+    """
+    def walk(current, path):
+        if isinstance(current, dict):
+            return {
+                key: walk(item, [*path, str(key)])
+                for key, item in current.items()
+            }
+        if isinstance(current, list):
+            return [
+                walk(item, [*path, str(index)])
+                for index, item in enumerate(current)
+            ]
+        leaf = path[-1] if path else name
+        if len(path) == 1 and is_secret(leaf):
+            return handle_for(leaf)
+        if is_secret(leaf) or leaf == "llm_api_key":
+            raw = json.dumps(path, separators=(",", ":")).encode()
+            token = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+            return handle_for(f"path_{token}")
+        return current
+
+    return walk(value, [name])
+
+
 def resolve(value, lookup):
     """Swap handles for real values, recursively, on the way out.
 
@@ -119,6 +150,22 @@ def lookup_from(ctx):
     def _lookup(name: str):
         """Find a secret by name, config first."""
         config = getattr(ctx, "config", None) or {}
+        if name.startswith("path_"):
+            try:
+                token = name[5:]
+                token += "=" * (-len(token) % 4)
+                path = json.loads(
+                    base64.urlsafe_b64decode(token.encode()).decode())
+                value = config
+                for part in path:
+                    value = (
+                        value[int(part)]
+                        if isinstance(value, list)
+                        else value[part]
+                    )
+                return value
+            except (KeyError, IndexError, TypeError, ValueError):
+                return None
         if name in config and isinstance(config[name], str):
             return config[name]
         return os.environ.get(name)

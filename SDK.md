@@ -181,6 +181,11 @@ sdk.users.list()
 sdk.users.write(user_id=None, **fields)
 ```
 
+Secret-prefixed fields are proxied recursively, including fields inside
+structured settings such as profiles. A returned handle can be written back
+through `sdk.config.write`; the kernel restores its original value without
+revealing it to the plugin.
+
 **Reading rows of user-owned tables uses the `my_` name**, which the kernel
 expands to the current user. Reading the base table is refused:
 

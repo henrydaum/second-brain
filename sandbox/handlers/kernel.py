@@ -46,7 +46,7 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               UI_APPROVE,
                               UI_ASK, UI_RENDER, USER_LIST, USER_READ,
                               USER_WRITE, Result)
-from ..secrets import redact
+from ..secrets import lookup_from, redact, redact_nested, resolve
 from ..users import scope_sql
 
 # Never returned by any Request, at any level.
@@ -761,10 +761,11 @@ def _config_read(ctx, args: dict) -> Result:
                 f"config setting {key!r} is not a mapping")
         return Result(data=sorted(str(item) for item in value))
     if key is None:
-        return Result(data={k: redact(k, v) for k, v in config.items()})
+        return Result(data={
+            k: redact_nested(k, v) for k, v in config.items()})
     if key not in config:
         return Result(data=None)
-    return Result(data=redact(key, config[key]))
+    return Result(data=redact_nested(key, config[key]))
 
 
 def _config_write(ctx, args: dict) -> Result:
@@ -783,7 +784,16 @@ def _config_write(ctx, args: dict) -> Result:
             get_plugin_settings,
         )
 
-        value = args.get("value")
+        value = resolve(args.get("value"), lookup_from(ctx))
+        if key == "llm_profiles" and isinstance(value, dict):
+            for profile in value.values():
+                if (
+                    isinstance(profile, dict)
+                    and "llm_api_key" in profile
+                    and "secret_llm_api_key" not in profile
+                ):
+                    profile["secret_llm_api_key"] = profile.pop(
+                        "llm_api_key")
         if args.get("merge"):
             current = config.get(key)
             if current is not None and not isinstance(current, dict):

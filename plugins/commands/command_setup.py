@@ -276,7 +276,7 @@ class SetupCommand(BaseCommand):
 
         profile = {
             "llm_endpoint": ATLAS_BASE_URL,
-            "llm_api_key": api_key_field,
+            "secret_llm_api_key": api_key_field,
             "llm_context_size": DEFAULT_CONTEXT_SIZE,
             "llm_service_class": DEFAULT_BACKEND,
         }
@@ -303,7 +303,7 @@ class SetupCommand(BaseCommand):
             return "Model name is required."
         profile = {
             "llm_endpoint": (args.get("other_endpoint") or "").strip(),
-            "llm_api_key": (args.get("other_api_key") or "").strip(),
+            "secret_llm_api_key": (args.get("other_api_key") or "").strip(),
             "llm_context_size": int(args.get("other_context_size") or 0),
             "llm_service_class": (args.get("other_service_class") or DEFAULT_BACKEND).strip() or DEFAULT_BACKEND,
         }

@@ -131,7 +131,7 @@ def test_setup_profile_merge_stays_kernel_side_and_preserves_secrets(
     config = {
         "llm_profiles": {
             "existing": {
-                "llm_api_key": "must-not-cross-the-sandbox",
+                "secret_llm_api_key": "must-not-cross-the-sandbox",
             },
         },
     }
@@ -149,7 +149,7 @@ def test_setup_profile_merge_stays_kernel_side_and_preserves_secrets(
     )
 
     assert result.ok, result.error
-    assert config["llm_profiles"]["existing"]["llm_api_key"] == (
+    assert config["llm_profiles"]["existing"]["secret_llm_api_key"] == (
         "must-not-cross-the-sandbox")
     assert "openai/test" in config["llm_profiles"]
     assert config["default_llm_profile"] == "openai/test"

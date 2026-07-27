@@ -48,7 +48,7 @@ def test_build_from_profile_uses_installed_backend_and_profile_fields(monkeypatc
 
     llm = _build_llm_from_profile("model-a", {
         "llm_service_class": "FakeBackend",
-        "llm_api_key": "FAKE_API_KEY",
+        "secret_llm_api_key": "FAKE_API_KEY",
         "llm_endpoint": "https://example.test",
         "llm_context_size": 32000,
         "llm_capabilities": {"image": True, "audio": False, "other": True},

@@ -282,7 +282,7 @@ Illustrative shape after the `starter` bundle and `/setup` (LiteLLM backend, Tel
   "llm_profiles": {
     "default": {
       "llm_endpoint": "https://api.atlascloud.ai/v1",
-      "llm_api_key": "ATLAS_API_KEY",
+      "secret_llm_api_key": "ATLAS_API_KEY",
       "llm_context_size": 0,
       "llm_service_class": "LiteLLMService"
     }
@@ -304,7 +304,7 @@ Notes:
 - Run `/setup` for guided onboarding; it installs a bundle and writes the LLM/Telegram config.
 - Configure LLM profiles with `/llm`, agent profiles with `/agent`, and app/plugin settings with `/config`.
 - `llm_context_size: 0` lets automatic compaction manage context.
-- `LiteLLMService` (from the `starter` bundle) reaches most providers; point `llm_endpoint`/`llm_api_key` at whichever you use.
+- `LiteLLMService` (from the `starter` bundle) reaches most providers; point `llm_endpoint`/`secret_llm_api_key` at whichever you use.
 - `LiteLLMService`: be careful with the model_name parameter. It may need to be prefixed (like 'openai/gpt-5.4'), but it depends on the cloud provider you are using. Look this up if not sure.
 - Each `llm_profiles` entry is registered as its own service, and the `llm` router follows `default_llm_profile`.
 - Installed 'extension'-type services auto-load when present; you don't need to list them in `autoload_services`.

@@ -272,7 +272,11 @@ class Brain:
     @property
     def api_key(self) -> str:
         """The key, resolved through the environment if it names a variable."""
-        raw = self.profile.get("llm_api_key", "") or ""
+        raw = (
+            self.profile.get("secret_llm_api_key")
+            or self.profile.get("llm_api_key", "")
+            or ""
+        )
         return os.environ.get(raw, raw) if raw else ""
 
     @property
