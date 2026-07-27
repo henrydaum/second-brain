@@ -364,11 +364,23 @@ leaked token reaches nothing. `frontend.bind` sits here rather than with
 frontend unusable, and which native path runs is decided by whether an
 `external_id` was named rather than by the plugin picking a method.
 
-**A REPL cannot be written on this contract**, and that is not an oversight to
-fix casually: `input()` is refused and a subprocess box's stdin is the wire
-protocol, so sandboxed code has no route to a terminal. `frontend_repl` stays
-native until a terminal Request exists. Network-driven frontends (Telegram,
-MCP, a websocket) have no such problem.
+**The console is the kernel's, lent to one frontend.** `input()` is refused and
+stays refused, for three compounding reasons: it blocks (holding the box, so
+the frontend cannot render until the next keypress), a subprocess box's stdin
+*is* the wire protocol (reading it eats the frames the box talks over), and a
+rule that works in-process and corrupts the transport under isolation is the
+worst kind. `sandbox/console.py` inverts it the same way the poll loop
+inverted — a kernel thread reads stdin into a bounded buffer and
+`sdk.console.read_line()` drains it without blocking, so a console frontend can
+be **subprocess-isolated**, which `input()` could never allow. The reader takes
+any iterator of lines, so tests drive a console without a terminal.
+
+Exclusive by declaration: `uses_console = True`, first claimant wins, second is
+refused — two readers would split a person's keystrokes non-deterministically,
+presenting as dropped characters. Release names the token so a frontend that
+already lost the claim cannot revoke its successor's. `sdk.md.plain()` is the
+guest's copy of the kernel's `render_plain` (pure; byte-identical, pinned by a
+test) for monospace rendering.
 
 **Hooks are declared, not registered.** A service names doorways in
 `hooks = {moment: method}`, read by AST like `exports`. The bridge stands a
@@ -440,7 +452,7 @@ containment to fix.
 
 **Docs:** `SDK.md` (hand this to an agent writing sandbox code — its examples
 are executed by `tests/test_sdk_docs.py`), `MIGRATING_PLUGINS.md` (the
-per-plugin procedure), `SECURITY_CONTRACT_APPENDIX.md` (the ~81-Request
+per-plugin procedure), `SECURITY_CONTRACT_APPENDIX.md` (the ~83-Request
 catalogue with policy inputs).
 
 **Migration tooling:** `sandbox.migrate.plan(path)` reports what converting a

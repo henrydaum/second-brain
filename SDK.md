@@ -342,6 +342,56 @@ An `approval` render carries an `id`; answer it with `sdk.frontend.resolve`.
 Holding the id is enough to answer and *only* enough to answer — the action
 being authorized never crosses.
 
+### The console
+
+A frontend whose transport is *this machine's terminal* declares
+`uses_console = True` and reads through the kernel:
+
+```python
+class Terminal(BaseFrontend):
+    name = "terminal"
+    uses_console = True
+
+    def start(self, sdk):
+        return True
+
+    def poll(self, sdk):
+        line = sdk.console.read_line()     # a line, or None. Never blocks.
+        if line is None:
+            return False
+        sdk.frontend.submit_text("default", line)
+        return True
+
+    def render(self, sdk, session_key, kind, payload):
+        if kind == "messages":
+            for text in payload:
+                sdk.console.write(sdk.md.plain(text))
+```
+
+**`input()` is refused and always will be**, for three compounding reasons.
+It blocks, and a box takes one call at a time — so a frontend blocked on input
+holds its own box and cannot render, meaning agent output would appear only
+*after* the next thing you typed. A subprocess box's stdin **is** the wire
+protocol, so reading it would eat the frames the box talks over. And a rule
+that worked in-process and corrupted the protocol under isolation is the worst
+kind, because nothing fails until someone sets `isolation`.
+
+Inverting it fixes all three: the kernel reads on its own thread, you drain
+what arrived. A console frontend can therefore be subprocess-isolated, which
+`input()` could never allow.
+
+`read_line()` returns `None` when nothing has arrived — return falsy from
+`poll` and renders land in the pause. It *raises* once the console is closed
+and drained; letting that propagate out of `poll` is how a frontend stops
+itself at end of input on a piped stdin.
+
+**The console is exclusive.** Two frontends reading one stdin would split a
+person's keystrokes between them, which reads as the machine dropping
+characters — so the kernel lends it to one claimant and refuses the second.
+
+`sdk.md.plain(text)` renders markdown for a monospace surface: tables become
+padded columns and code fences drop away. Pure, no Request.
+
 `bind` is the "whose data is this?" axis, not permissions. With no
 `external_id` the session takes your declared `default_user_id`; with one it is
 upgraded to that identity's own user, which is what a `per_user` frontend does

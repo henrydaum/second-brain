@@ -49,7 +49,7 @@ This might seem like a lot. However, Second Brain can only do what you tell it t
 
 Second Brain ships as a microkernel plus a package store.
 
-**The kernel** is what lives in this repository's main tree. It is almost pure Python and boots *fast*. It holds the runtime, runs the conversation state machine and agent turn, persists conversations, manages config, and discovers and loads plugins. It ships only the plugins it cannot run without: the LLM router, the compactor (for LLM context size management), the Parser service (with lightweight UTF-8 text parsing), Timekeeper (the event clock), the plugin watcher (live install and reload), the REPL frontend, and a small set of REPL admin commands. There are **no built-in tools or tasks** — a fresh kernel can hold a conversation, but it cannot search your files or edit code until you install packages. *Even the LLM backends are plugins! LLMs involve heavy and unstable dependencies, so to ensure kernel stability it was best to make them plugins.*
+**The kernel** is what lives in this repository's main tree. It is almost pure Python and boots *fast*. It holds the runtime, runs the conversation state machine and agent turn, persists conversations, manages config, and discovers and loads plugins. It ships only the plugins it cannot run without: the LLM router, the compactor (for LLM context size management), Timekeeper (the event clock), the plugin watcher (live install and reload), the REPL frontend, and a small set of REPL admin commands. Parsing is kernel routing rather than a plugin (`parsing/`), and ships one dependency-light text parser. There are **no built-in tools or tasks** — a fresh kernel can hold a conversation, but it cannot search your files or edit code until you install packages. *Even the LLM backends are plugins! LLMs involve heavy and unstable dependencies, so to ensure kernel stability it was best to make them plugins.*
 
 **The store** is a parallel branch (`store`) that mirrors what a fully loaded install looks like: every optional tool, task, service, command, frontend, and helper is there, plus named *bundles* that group them. You browse and install from it with `/packages`, and the kernel copies the files into your data directory and live-loads them with the Plugin Watcher.
 
@@ -454,8 +454,8 @@ may declare, and then the template for what is specific to that family:
 - `templates/service_template.py`
 - `templates/command_template.py`
 - `templates/script_template.py` — sandboxed code that is not a plugin
-- `templates/frontend_template.py` — still the native contract
-- `templates/hook_template.py` — still the native contract
+- `templates/frontend_template.py`
+- `templates/hook_template.py`
 
 `MIGRATING_PLUGINS.md` covers converting an existing native plugin.
 

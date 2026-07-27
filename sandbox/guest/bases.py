@@ -308,6 +308,12 @@ class BaseFrontend(BasePlugin):
     # when idle: a poll that reports work is called straight back.
     poll_interval: float = 0.05
 
+    # Whether this frontend's transport is the machine's own console. The
+    # kernel lends it to exactly one frontend — two readers would split a
+    # person's keystrokes between them — so a second claimant is refused and
+    # ``sdk.console`` reaches nothing for it. See :mod:`sandbox.console`.
+    uses_console: bool = False
+
     def start(self, sdk):
         """Open the transport. **Must return** — do not loop here.
 

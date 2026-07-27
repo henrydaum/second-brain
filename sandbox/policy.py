@@ -197,6 +197,12 @@ ALWAYS_SAFE = {
     # frontend doing it on another's behalf.
     R.FRONTEND_SUBMIT, R.FRONTEND_CANCEL, R.FRONTEND_BIND, R.FRONTEND_ATTEND,
     R.FRONTEND_RESOLVE,
+    # The console is scoped harder still: not merely "a frontend", but the one
+    # frontend that claimed it. Reading takes only what a person already typed
+    # at this machine's own keyboard, and writing puts text on the screen in
+    # front of them — neither reaches past the console, and gating them would
+    # mean asking permission to show the prompt that asks permission.
+    R.CONSOLE_READ, R.CONSOLE_WRITE,
     R.TASK_ENQUEUE, R.TASK_STATUS, R.TASK_OUTPUT,
     R.FILE_REGISTER, R.FILE_LIST,
     R.PARSE_FILE, R.PARSE_MODALITY,

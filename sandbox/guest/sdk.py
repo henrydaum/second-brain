@@ -54,6 +54,7 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        CONV_APPEND, CONV_CREATE, CONV_DELETE, CONV_LIST,
                        CONV_READ, CONV_SET_CATEGORY, CONV_SET_TITLE,
                        CRON_CREATE, CRON_ENABLE, CRON_GET, CRON_LIST,
+                       CONSOLE_READ, CONSOLE_WRITE,
                        CRON_REMOVE, CRON_UPDATE, DB_DEFINE, DB_QUERY, DB_WRITE,
                        ENV_READ, EVENT_EMIT, EVENT_REQUEST, FILE_LIST,
                        FILE_REGISTER, FRONTEND_ATTEND, FRONTEND_BIND,
@@ -441,6 +442,34 @@ class _Frontend(_Namespace):
                          request_id=request_id)
 
 
+class _Console(_Namespace):
+    """The machine's console, if this frontend claimed it.
+
+    Declare ``uses_console = True`` and the kernel lends it to you — to exactly
+    one frontend, because two readers would split a person's keystrokes between
+    them. Everything else reaches nothing here.
+
+    The kernel does the reading, on its own thread. That is what makes this
+    usable from a poll loop at all: there is nothing to block on, and a
+    subprocess box never opens stdin, so a console frontend can be isolated.
+    """
+
+    def read_line(self):
+        """The next line someone typed, or None if none has arrived yet.
+
+        Never blocks. Raises once the console is closed and drained — on a
+        piped stdin that is end of input, and letting it propagate out of
+        ``poll`` is how a frontend stops itself when there is no more to read.
+        """
+        return self._ask(CONSOLE_READ, token=getattr(
+            self._sdk, "_frontend_token", ""))
+
+    def write(self, text: str, end: str = "\n"):
+        """Put a line on the console."""
+        return self._ask(CONSOLE_WRITE, token=getattr(
+            self._sdk, "_frontend_token", ""), text=str(text), end=end)
+
+
 class _Cron(_Namespace):
     """Scheduled jobs."""
 
@@ -633,6 +662,60 @@ class _Markdown:
         return f"**{title}**\n" + _Markdown.table(
             ["Field", "Value"], [[k, v] for k, v in pairs])
 
+    @staticmethod
+    def plain(text: str) -> str:
+        """Markdown rendered for a monospace surface: a terminal.
+
+        Tables become padded columns and code-fence markers are dropped, since
+        the content inside already reads as plain text. Every other line passes
+        through untouched, so one message body works on rich and plain surfaces
+        alike — which is the whole point of markdown being the wire format.
+
+        Mirrors the kernel's own ``render_plain``. It lives here because a
+        sandboxed frontend cannot import kernel helpers, and because it is
+        pure: no Request, no cost.
+        """
+        import re
+
+        lines = (text or "").split("\n")
+        row = re.compile(r"^\s*\|.*\|\s*$")
+        separator = re.compile(r"^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$")
+
+        def cells(line):
+            """Split one table row, honouring escaped pipes."""
+            parts = re.split(r"(?<!\\)\|", line.strip().strip("|"))
+            return [p.strip().replace("\\|", "|") for p in parts]
+
+        out, i = [], 0
+        while i < len(lines):
+            if (row.match(lines[i]) and i + 1 < len(lines)
+                    and separator.match(lines[i + 1])):
+                block = [lines[i]]
+                j = i + 2
+                while j < len(lines) and row.match(lines[j]):
+                    block.append(lines[j])
+                    j += 1
+                rows = [cells(line) for line in block]
+                width = max(len(r) for r in rows)
+                rows = [r + [""] * (width - len(r)) for r in rows]
+                sizes = [max(len(r[c]) for r in rows) for c in range(width)]
+
+                def fmt(cs):
+                    """One padded line."""
+                    return "  ".join(v.ljust(w)
+                                     for v, w in zip(cs, sizes)).rstrip()
+
+                out.append(fmt(rows[0]))
+                out.append("  ".join("-" * w for w in sizes))
+                out.extend(fmt(r) for r in rows[1:])
+                i = j
+            else:
+                out.append(lines[i])
+                i += 1
+
+        return "\n".join(line for line in out
+                         if not re.fullmatch(r"\s*```\w*\s*", line))
+
 
 class SDK:
     """The handle sandboxed code is given.
@@ -667,6 +750,7 @@ class SDK:
         # author having to carry a token around.
         self._hook_token = ""
         self.frontend = _Frontend(self)
+        self.console = _Console(self)
         # Set once by BaseFrontend.__bind__ when this box opens, and it stays
         # for the box's life — unlike the hook token, a frontend is not visiting
         # a doorway, it *is* resident. The kernel parks the matching adapter and

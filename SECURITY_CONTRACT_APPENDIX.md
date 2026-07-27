@@ -310,6 +310,32 @@ Authentication is deliberately outside this boundary. The kernel stores
 is asserting it did the work, and the kernel takes its word. `user_type` is
 frontend-defined metadata, never a kernel admin bypass.
 
+### The console
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `console.read()` | Take the next line typed at this machine | token, claim | safe |
+| `console.write(text, end)` | Put text on the console | token, claim | safe |
+
+Scoped harder than the rest of the family: not merely "a frontend", but **the
+one frontend holding the claim**. A frontend declares `uses_console = True`,
+the kernel lends the console to the first claimant and refuses the second —
+two readers would split a person's keystrokes between them non-deterministically,
+which presents as the machine dropping characters. Release names the token, so
+a frontend that already lost the claim cannot revoke its successor's.
+
+Safe because neither reaches past the console: reading takes only what a person
+already typed at this machine's own keyboard, and writing puts text on the
+screen in front of them. Gating them would mean asking permission to draw the
+prompt that asks permission.
+
+`input()` stays refused. It blocks (holding the box, so the frontend cannot
+render), a subprocess box's stdin is the wire protocol (reading it corrupts the
+transport), and a rule that works in-process and breaks under isolation is
+worse than no rule. Inverting it — kernel reads, guest drains — removes all
+three, and lets a console frontend be subprocess-isolated, which `input()`
+never could.
+
 Rendering has no Request at all — the kernel calls `render` on the frontend.
 An `approval` crosses as a question (`id`, `title`, `body`, `type`, `enum`,
 `default`) and never as the decision: the pending action and the live

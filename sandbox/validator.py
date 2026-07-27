@@ -169,7 +169,11 @@ BANNED_BUILTINS = {
     "exec": "nothing — build the value directly",
     "compile": "nothing",
     "__import__": "sdk.plugin.register",
-    "input": "sdk.ui.ask",
+    # Two answers, because there are two questions. A plugin that wants to ask
+    # a person something wants sdk.ui.ask. A *frontend* whose transport is the
+    # terminal wants the console — and never input(), which would block its own
+    # box and stop it rendering until the next keypress.
+    "input": "sdk.ui.ask, or sdk.console.read_line in a console frontend",
     "breakpoint": "nothing",
 }
 
@@ -621,7 +625,7 @@ DECLARATION_KEYS = ("name", "box", "isolation", "lifetime", "timeout",
                     "memory_mb", "requests", "exports", "dependencies_files",
                     "dependencies_pip", "requires_services", "max_calls",
                     "background_safe", "agent_prompt", "hooks",
-                    "subscribed_channels")
+                    "subscribed_channels", "uses_console", "poll_interval")
 
 # Reading declarations without importing means *inherited* defaults are
 # invisible: ``class Counter(BaseService)`` never writes ``lifetime`` in the

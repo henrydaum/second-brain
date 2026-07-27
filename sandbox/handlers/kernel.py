@@ -23,6 +23,7 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               CONV_CREATE, CONV_DELETE, CONV_LIST, CONV_READ,
                               CONV_SET_CATEGORY, CONV_SET_TITLE, CRON_CREATE,
                               CRON_ENABLE, CRON_GET, CRON_LIST, CRON_REMOVE,
+                              CONSOLE_READ, CONSOLE_WRITE,
                               CRON_UPDATE, DB_DEFINE, DB_QUERY, DB_WRITE,
                               EVENT_EMIT, EVENT_REQUEST, FILE_LIST,
                               FILE_REGISTER, FRONTEND_ATTEND, FRONTEND_BIND,
@@ -882,6 +883,44 @@ def _frontend_resolve(ctx, args: dict) -> Result:
         return Result.failure(f"resolve failed: {exc}")
 
 
+def _console_read(ctx, args: dict) -> Result:
+    """Take the next line a person typed, if one has arrived.
+
+    Non-blocking on purpose. The kernel's reader thread is what waits; if this
+    blocked, it would hold the calling box for the duration and the frontend
+    could not render until the user pressed return.
+    """
+    from ..console import CONSOLE
+
+    token = args.get("token") or ""
+    if not token or CONSOLE.owner != token:
+        return Result.refusal(
+            "the console belongs to another frontend, or to none")
+    try:
+        return Result(data=CONSOLE.read_line())
+    except EOFError as exc:
+        # Not a refusal: nothing was denied, the input simply ended. A frontend
+        # that lets this propagate out of poll() stops itself, which is what
+        # end-of-input on a pipe should do.
+        return Result.failure(str(exc))
+
+
+def _console_write(ctx, args: dict) -> Result:
+    """Put a line on the console."""
+    from ..console import CONSOLE
+
+    token = args.get("token") or ""
+    if not token or CONSOLE.owner != token:
+        return Result.refusal(
+            "the console belongs to another frontend, or to none")
+    try:
+        CONSOLE.write(str(args.get("text") or ""),
+                      end=str(args.get("end", "\n")))
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"console write failed: {exc}")
+
+
 def _task_enqueue(ctx, args: dict) -> Result:
     """Queue pipeline work."""
     db = _db(ctx)
@@ -1049,6 +1088,7 @@ HANDLERS = {
     FRONTEND_SUBMIT: _frontend_submit, FRONTEND_CANCEL: _frontend_cancel,
     FRONTEND_BIND: _frontend_bind, FRONTEND_ATTEND: _frontend_attend,
     FRONTEND_RESOLVE: _frontend_resolve,
+    CONSOLE_READ: _console_read, CONSOLE_WRITE: _console_write,
     TASK_ENQUEUE: _task_enqueue, TASK_STATUS: _task_status,
     TASK_OUTPUT: _task_output,
     FILE_REGISTER: _file_register, FILE_LIST: _file_list,

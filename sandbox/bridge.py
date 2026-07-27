@@ -551,7 +551,11 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
 
     # A poll that keeps failing is a broken box, not a busy one. Spinning on it
     # would burn a core and fill the log; stopping makes the failure visible.
+    # It is also how a console frontend ends at end-of-input: reading a closed
+    # console fails, so a piped stdin runs out and the frontend stops itself.
     max_failures = 5
+
+    wants_console = bool(declarations.get("uses_console"))
 
     def __init__(self, shutdown_event=None):
         """Take the host's shutdown Event, if the manager offers one.
@@ -588,6 +592,18 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
         # from its very first line — restoring a session, say.
         self._token = park(self)
         box = self._sandbox_box
+
+        # The console is exclusive. Losing the claim is not fatal — a frontend
+        # that cannot read the keyboard may still have something to show — but
+        # it must be loud, because the symptom is a frontend that ignores
+        # everything typed at it.
+        if wants_console:
+            from .console import CONSOLE
+
+            if not CONSOLE.claim(self._token):
+                logger.error("frontend %s wants the console but %s already "
+                             "has it; it will not receive input", name,
+                             "another frontend")
         result = box.call("__bind__", token=self._token)
         if not result.ok:
             logger.error("frontend %s could not be bound: %s", name,
@@ -636,7 +652,13 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
             except Exception:
                 logger.exception("frontend %s stop() failed", name)
         # Revoked before the box is closed, so nothing can submit during
-        # teardown on a frontend that is already going away.
+        # teardown on a frontend that is already going away. Releasing the
+        # console names the token, so a frontend that already lost the claim
+        # cannot take it from whoever holds it now.
+        if wants_console:
+            from .console import CONSOLE
+
+            CONSOLE.release(self._token)
         unpark(self._token)
         self._token = ""
         if box is not None:
