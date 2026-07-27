@@ -219,6 +219,7 @@ from runtime.supervisor import supervisor
 from runtime.heartbeat import heartbeat
 from plugins.BaseService import should_autoload_service
 from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
+from plugins.plugin_watcher import PluginWatcher
 
 
 @dataclass
@@ -364,6 +365,7 @@ def main():
 	event_trigger = EventTrigger(orchestrator, database, config)
 	event_trigger.start()
 	scaffold.event_trigger = event_trigger
+	plugin_watcher = None
 	logger.info("-----------------------------")
 	logger.info(f"SecondBrain started in {time.time() - t_start:.2f}s. Type /commands for commands, /quit to exit.")
 
@@ -380,6 +382,8 @@ def main():
 		logger.info("-----------------------------")
 		logger.info("Shutting down...")
 		supervisor.stop_memory_watchdog()
+		if plugin_watcher is not None:
+			plugin_watcher.stop()
 		event_trigger.stop()
 		watcher.stop()
 		orchestrator.stop()
@@ -445,6 +449,8 @@ def main():
 		def graceful_then_exec():
 			try:
 				logger.info("Restart: graceful shutdown starting...")
+				if plugin_watcher is not None:
+					plugin_watcher.stop()
 				event_trigger.stop()
 				watcher.stop()
 				orchestrator.stop()
@@ -479,6 +485,17 @@ def main():
 		frontends, scaffold, shutdown, _shutdown, tool_registry, services, config, _ROOT
 	)
 	_bind_runtime_services(services, tool_registry, orchestrator, scaffold.frontend_runtime)
+	plugin_watcher = PluginWatcher(
+		config,
+		services=services,
+		tool_registry=tool_registry,
+		orchestrator=orchestrator,
+		command_registry=getattr(scaffold.frontend_runtime, "command_registry", None),
+		frontend_manager=getattr(scaffold.frontend_runtime, "frontend_manager", None),
+		runtime=scaffold.frontend_runtime,
+	)
+	scaffold.frontend_runtime.plugin_watcher = plugin_watcher
+	plugin_watcher.start()
 
 	# --- 11. Main thread idles until shutdown, proving liveness as it goes ---
 	probe = heartbeat.register("main-loop")  # never unregistered: this loop only exits at process death

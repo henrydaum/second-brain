@@ -1,4 +1,4 @@
-"""Tests for the plugin hot-reload substrate (``service_plugin_watcher``).
+"""Tests for the kernel plugin hot-reload substrate.
 
 The watcher is the install/uninstall mechanism the future plugin store builds
 on: it scans the plugin dirs, debounces filesystem events, and loads/unloads
@@ -11,7 +11,7 @@ from pathlib import Path
 from events.event_bus import bus
 from events.event_channels import CHAT_MESSAGE_PUSHED
 from plugins import plugin_discovery
-from plugins.services.service_plugin_watcher import PluginWatcherService
+from plugins.plugin_watcher import PluginWatcher
 
 
 class _ToolRegistry:
@@ -30,6 +30,15 @@ class _ToolRegistry:
         self.tools[tool.name] = tool
 
 
+def test_plugin_watcher_is_kernel_infrastructure():
+    """The watcher must not drift back into the service registry."""
+    from plugins.BaseService import BaseService
+    import plugins.plugin_watcher as watcher_module
+
+    assert not issubclass(PluginWatcher, BaseService)
+    assert not hasattr(watcher_module, "build_services")
+
+
 def _watched_dir(tmp_path, monkeypatch, plugin_type="tool"):
     """Create a watched plugin dir under tmp_path and patch it in."""
     directory = tmp_path / "watched"
@@ -41,7 +50,7 @@ def _watched_dir(tmp_path, monkeypatch, plugin_type="tool"):
 def _patch_plugin_dir(monkeypatch, directory, plugin_type="tool"):
     """Internal helper to handle patch plugin dir."""
     import plugins.helpers.plugin_paths as paths
-    import plugins.services.service_plugin_watcher as watcher_mod
+    import plugins.plugin_watcher as watcher_mod
 
     config = dict(paths.PLUGIN_CONFIG)
     directory = Path(directory).resolve()
@@ -89,7 +98,7 @@ def test_plugin_watcher_initial_scan_records_mtimes(tmp_path, monkeypatch):
     """Verify plugin watcher initial scan records mtimes."""
     path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
     path.write_text("x", encoding="utf-8")
-    service = PluginWatcherService({})
+    service = PluginWatcher({})
 
     service._scan_existing()
 
@@ -101,9 +110,9 @@ def test_plugin_watcher_add_or_edit_loads_plugin(tmp_path, monkeypatch):
     calls = []
     path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
     path.write_text("x", encoding="utf-8")
-    monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: calls.append((a, k)) or ("demo", None))
-    monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
-    service = PluginWatcherService({})
+    monkeypatch.setattr("plugins.plugin_watcher.load_single_plugin", lambda *a, **k: calls.append((a, k)) or ("demo", None))
+    monkeypatch.setattr("plugins.plugin_watcher.PluginWatcher._reconcile_plugin_config", lambda self: None)
+    service = PluginWatcher({})
     service.bind_runtime(tool_registry=_ToolRegistry())
 
     service.handle_create_or_modify(str(path))
@@ -119,9 +128,9 @@ def test_plugin_watcher_emits_registered_and_edit_messages(tmp_path, monkeypatch
     path.write_text("x", encoding="utf-8")
     unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
     try:
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: ("demo", None))
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
-        service = PluginWatcherService({})
+        monkeypatch.setattr("plugins.plugin_watcher.load_single_plugin", lambda *a, **k: ("demo", None))
+        monkeypatch.setattr("plugins.plugin_watcher.PluginWatcher._reconcile_plugin_config", lambda self: None)
+        service = PluginWatcher({})
 
         service.handle_create_or_modify(str(path))
         service._known_mtimes[str(path.resolve())] = path.stat().st_mtime - 1
@@ -139,8 +148,8 @@ def test_plugin_watcher_emits_registration_failed_message(tmp_path, monkeypatch)
     path.write_text("x", encoding="utf-8")
     unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
     try:
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: (None, "boom"))
-        service = PluginWatcherService({})
+        monkeypatch.setattr("plugins.plugin_watcher.load_single_plugin", lambda *a, **k: (None, "boom"))
+        service = PluginWatcher({})
 
         service.handle_create_or_modify(str(path))
 
@@ -154,8 +163,8 @@ def test_plugin_watcher_unchanged_mtime_is_ignored(tmp_path, monkeypatch):
     calls = []
     path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
     path.write_text("x", encoding="utf-8")
-    monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: calls.append(a) or ("demo", None))
-    service = PluginWatcherService({})
+    monkeypatch.setattr("plugins.plugin_watcher.load_single_plugin", lambda *a, **k: calls.append(a) or ("demo", None))
+    service = PluginWatcher({})
     service._known_mtimes[str(path.resolve())] = path.stat().st_mtime
 
     service.handle_create_or_modify(str(path))
@@ -171,14 +180,14 @@ def test_plugin_watcher_delete_unloads_by_source(tmp_path, monkeypatch):
     path.write_text("x", encoding="utf-8")
     unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
     try:
-        service = PluginWatcherService({})
+        service = PluginWatcher({})
         registry = _ToolRegistry()
         registry.tools["demo"] = type("DemoTool", (), {"_source_path": str(path.resolve())})()
         service.bind_runtime(tool_registry=registry)
         service._known_mtimes[str(path.resolve())] = path.stat().st_mtime
         path.unlink()
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.unload_plugin", lambda *a, **k: calls.append((a, k)))
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
+        monkeypatch.setattr("plugins.plugin_watcher.unload_plugin", lambda *a, **k: calls.append((a, k)))
+        monkeypatch.setattr("plugins.plugin_watcher.PluginWatcher._reconcile_plugin_config", lambda self: None)
 
         service.handle_delete(str(path))
 
@@ -194,8 +203,8 @@ def test_plugin_watcher_wrong_name_does_not_load(tmp_path, monkeypatch):
     calls = []
     path = _watched_dir(tmp_path, monkeypatch) / "demo.py"
     path.write_text("x", encoding="utf-8")
-    monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", lambda *a, **k: calls.append(a) or ("demo", None))
-    service = PluginWatcherService({})
+    monkeypatch.setattr("plugins.plugin_watcher.load_single_plugin", lambda *a, **k: calls.append(a) or ("demo", None))
+    service = PluginWatcher({})
 
     service.handle_create_or_modify(str(path))
 
@@ -207,7 +216,7 @@ def test_plugin_watcher_refreshes_sandboxed_llm_backends(
     monkeypatch,
 ):
     """LLM helper changes rescan the kernel registry."""
-    import plugins.services.service_plugin_watcher as watcher_mod
+    import plugins.plugin_watcher as watcher_mod
 
     directory = tmp_path / "helpers"
     directory.mkdir()
@@ -227,7 +236,7 @@ def test_plugin_watcher_refreshes_sandboxed_llm_backends(
             ("refresh", config, kwargs)
         ),
     )
-    service = PluginWatcherService({"llm_profiles": {}})
+    service = PluginWatcher({"llm_profiles": {}})
 
     service.handle_create_or_modify(str(path))
     path.unlink()
@@ -254,9 +263,9 @@ def test_plugin_watcher_refreshes_runtime_commands_on_command_load(tmp_path, mon
         kwargs["command_registry"].register(command)
         return "agent", None
 
-    monkeypatch.setattr("plugins.services.service_plugin_watcher.load_single_plugin", fake_load)
-    monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
-    service = PluginWatcherService({})
+    monkeypatch.setattr("plugins.plugin_watcher.load_single_plugin", fake_load)
+    monkeypatch.setattr("plugins.plugin_watcher.PluginWatcher._reconcile_plugin_config", lambda self: None)
+    service = PluginWatcher({})
     service.bind_runtime(command_registry=registry, runtime=runtime)
 
     service.handle_create_or_modify(str(path))
@@ -275,11 +284,11 @@ def test_plugin_watcher_refreshes_runtime_commands_on_command_delete(tmp_path, m
     registry.register(command)
     runtime = type("Runtime", (), {"commands": {"agent": command}, "refreshes": 0})()
     runtime.refresh_session_specs = lambda: setattr(runtime, "refreshes", runtime.refreshes + 1)
-    service = PluginWatcherService({})
+    service = PluginWatcher({})
     service.bind_runtime(command_registry=registry, runtime=runtime)
     service._known_mtimes[str(path.resolve())] = path.stat().st_mtime
-    monkeypatch.setattr("plugins.services.service_plugin_watcher.unload_plugin", lambda *a, **k: registry.unregister("agent"))
-    monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
+    monkeypatch.setattr("plugins.plugin_watcher.unload_plugin", lambda *a, **k: registry.unregister("agent"))
+    monkeypatch.setattr("plugins.plugin_watcher.PluginWatcher._reconcile_plugin_config", lambda self: None)
 
     path.unlink()
     service.handle_delete(str(path))
@@ -289,12 +298,12 @@ def test_plugin_watcher_refreshes_runtime_commands_on_command_delete(tmp_path, m
     assert runtime.refreshes == 1
 
 
-def test_plugin_watcher_unload_cancels_pending_timers():
-    """Verify plugin watcher unload cancels pending timers."""
-    service = PluginWatcherService({})
+def test_plugin_watcher_stop_cancels_pending_timers():
+    """Stopping kernel observation cancels pending reload batches."""
+    service = PluginWatcher({})
     handler = service._handler = _FakeHandler()
 
-    service.unload()
+    service.stop()
 
     assert handler.cancelled
 

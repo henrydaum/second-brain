@@ -136,16 +136,16 @@ Everything user-extensible has its own plugin family:
 | Commands | `plugins/commands/` | `sandbox_plugins/commands/` | User slash commands via `BaseCommand` |
 | Frontends | `plugins/frontends/` | `sandbox_plugins/frontends/` | User transports via `BaseFrontend` |
 
-Built-in plugins are source-controlled. Sandbox plugins live in the Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; and adds, edits, and deletes are synced live when `plugin_watcher` is loaded (which is always).
+Built-in plugins are source-controlled. Sandbox plugins live in the Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; the kernel plugin watcher then syncs adds, edits, and deletes live.
 
 The agent can create new plugins on-the-fly. When you ask Second Brain to make a new plugin (and test_plugin is installed), it'll follow these instructions:
 
 1. Read the relevant template in `templates/`.
 2. Read a similar built-in plugin.
 3. Create or edit the plugin file with `edit_file`.
-4. Let `plugin_watcher` auto-load the file when it is enabled, and call `test_plugin(plugin_path=...)` for purpose-built diagnostics.
+4. Let the kernel plugin watcher auto-load the file, and call `test_plugin(plugin_path=...)` for purpose-built diagnostics.
 5. If testing fails, fix the same file and call `test_plugin` again. Repeat until it is fixed and the plugin loads.
-6. To remove it durably and from the live runtime, delete the sandbox file; `plugin_watcher` unloads it when enabled.
+6. To remove it durably and from the live runtime, delete the sandbox file; the kernel plugin watcher unloads it.
 
 These instructions are found within the test_plugin tool, inside the def agent_prompt_for method. Yes: plugins can declare their own system prompt text. If the plugin isn't loaded, then this stuff won't take up precious context. This agent-facing text can also be written as static text: agent_prompt = "blah blah blah"; agent_prompt_for is for prompts that update based on the current information. The system prompt is recalculated with every step of the conversation, making it always completely up-to-date. To maintain prompt caching (and reduce costs $) the most volatile system prompt text is inserted at the bottom of the conversation, with stable and semi-stable at the start.
 
@@ -234,7 +234,7 @@ Telegram is useful because the local runtime can reach you anywhere: approvals, 
 
 `BaseFrontend` provides the shared runtime binding, command parsing path, form and approval submission, bus subscriptions, progress rendering hooks, session helpers, and `FrontendCapabilities` model. Each frontend implements only the transport-specific parts: receiving input, deriving a session key, rendering messages, sending attachments, showing buttons, and stopping cleanly.
 
-Custom frontends are first-class plugins. A Discord bot, HTTP bridge, desktop shell, or narrow operational UI can be built as a sandbox frontend, tested with `test_plugin`, and live-loaded by `plugin_watcher` when enabled.
+Custom frontends are first-class plugins. A Discord bot, HTTP bridge, desktop shell, or narrow operational UI can be built as a sandbox frontend, tested with `test_plugin`, and live-loaded by the kernel plugin watcher.
 
 ## Setup
 
@@ -471,7 +471,7 @@ Authoring rules:
 - Plugins can declare `config_settings`, which appear in config views and are stored in `plugin_config.json`.
 - Sandbox plugins must follow naming conventions: `tool_*.py`, `task_*.py`, `service_*.py`, `command_*.py`, and `frontend_*.py`.
 
-For source-controlled additions, move stable sandbox plugins into the matching built-in plugin directory. For live experimentation, keep them in the data directory, call `test_plugin`, and let `plugin_watcher` load them when it is enabled.
+For source-controlled additions, move stable sandbox plugins into the matching built-in plugin directory. For live experimentation, keep them in the data directory, call `test_plugin`, and let the kernel plugin watcher load them.
 
 ## Philosophy
 

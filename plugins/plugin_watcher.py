@@ -1,4 +1,4 @@
-"""Plugin watcher service for discovery, diagnostics, and hot reloads."""
+"""Kernel-owned plugin discovery, diagnostics, and hot reload coordination."""
 
 import logging
 import threading
@@ -13,7 +13,6 @@ from events.event_channels import (
     PLUGIN_QUARANTINE_REQUESTED,
     PLUGIN_QUARANTINED,
 )
-from plugins.BaseService import BaseService, EXTENSION
 from plugins.helpers.plugin_paths import helper_dirs, iter_plugin_dirs, plugin_info
 from plugins.plugin_discovery import get_plugin_settings, load_single_plugin, unload_plugin, wire_peer_services
 from runtime.supervisor import supervisor
@@ -21,26 +20,39 @@ from runtime.supervisor import supervisor
 logger = logging.getLogger("PluginWatcher")
 
 
-class PluginWatcherService(BaseService):
-    """Plugin watcher service."""
-    model_name = "Plugin Watcher"
-    shared = True
-    lifecycle = EXTENSION
+class PluginWatcher:
+    """Watch plugin trees and coordinate changes across live registries."""
 
-    def __init__(self, config: dict):
-        """Initialize the plugin watcher service."""
-        super().__init__()
+    def __init__(
+        self,
+        config: dict,
+        *,
+        services=None,
+        tool_registry=None,
+        orchestrator=None,
+        command_registry=None,
+        frontend_manager=None,
+        runtime=None,
+    ):
+        """Bind the kernel objects whose registries hot reload mutates."""
         self.config = config
+        self.services = services if services is not None else {}
         self.observer = None
         self._handler = None
         self._known_mtimes: dict[str, float] = {}
-        self._runtime = {}
+        self._runtime = {
+            "tool_registry": tool_registry,
+            "orchestrator": orchestrator,
+            "command_registry": command_registry,
+            "frontend_manager": frontend_manager,
+            "runtime": runtime,
+        }
         self._lock = threading.RLock()
         self._unsub_quarantine = None
+        self.started = False
 
     def bind_runtime(self, *, tool_registry=None, orchestrator=None, command_registry=None, frontend_manager=None, runtime=None, **_):
-        """Bind runtime. Accepts (and ignores) ``runtime`` so the shared
-        ``_bind_runtime_services`` call signature stays uniform across services."""
+        """Refresh live kernel bindings before the watcher starts."""
         self._runtime.update({
             "tool_registry": tool_registry,
             "orchestrator": orchestrator,
@@ -49,8 +61,10 @@ class PluginWatcherService(BaseService):
             "runtime": runtime,
         })
 
-    def _load(self) -> bool:
-        """Internal helper to load plugin watcher service."""
+    def start(self) -> bool:
+        """Start watching after initial plugin discovery is complete."""
+        if self.started:
+            return True
         self.observer = Observer()
         handler = _PluginEventHandler(self)
         self._handler = handler
@@ -68,12 +82,12 @@ class PluginWatcherService(BaseService):
         # The supervisor (runtime/supervisor.py) decides which plugins are
         # unhealthy; the watcher owns the mechanism (unload).
         self._unsub_quarantine = bus.subscribe(PLUGIN_QUARANTINE_REQUESTED, self._on_quarantine)
-        self.loaded = True
+        self.started = True
         logger.info(f"Plugin watcher started on {watched} folder(s).")
         return True
 
-    def unload(self):
-        """Handle unload."""
+    def stop(self):
+        """Stop observation and discard pending reload batches."""
         if self._unsub_quarantine:
             self._unsub_quarantine()
             self._unsub_quarantine = None
@@ -85,7 +99,7 @@ class PluginWatcherService(BaseService):
             observer.join(timeout=5.0)
         self.observer = None
         self._handler = None
-        self.loaded = False
+        self.started = False
 
     def _scan_existing(self):
         """Internal helper to handle scan existing."""
@@ -326,7 +340,7 @@ class _PluginEventHandler(FileSystemEventHandler):
     what keeps registry mutation off the dispatch/registration critical paths,
     and ordering is what spares dependent tasks the 'missing service' churn.
     """
-    def __init__(self, watcher: PluginWatcherService):
+    def __init__(self, watcher: PluginWatcher):
         """Initialize the plugin event handler."""
         self.watcher = watcher
         self.pending: set[str] = set()
@@ -391,8 +405,3 @@ class _PluginEventHandler(FileSystemEventHandler):
         """Handle on deleted."""
         if not event.is_directory:
             self.watcher.handle_delete(event.src_path)
-
-
-def build_services(config: dict) -> dict:
-    """Build services."""
-    return {"plugin_watcher": PluginWatcherService(config)}

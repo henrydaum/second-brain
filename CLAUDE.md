@@ -27,7 +27,8 @@ future store) — *not* by deleting them. What remains:
 
 - **Services:** `service_compactor` (context-safety),
   `service_timekeeper` (lightweight event clock), and
-  `service_plugin_watcher` (hot-reload = the install/uninstall substrate).
+  the kernel-owned `plugins.plugin_watcher` (hot-reload = the
+  install/uninstall substrate).
   Parsing was here and deliberately is not any more — it is kernel routing,
   see **Parsers** below. If another tracked service remains, treat it as
   kernel-boundary debt unless the user explicitly keeps it.
@@ -211,6 +212,11 @@ in a box. Nothing shims the old paths — the files have to move anyway.
 Core code (`pipeline/`, `runtime/`, `state_machine/`, `agent/`, `events/`,
 `config/`, `attachments/`, `main.pyw`) hard-imports **zero** plugin modules.
 Every capability, without exception, arrives by discovery.
+
+The kernel may import the plugin *substrate*: base contracts, discovery and
+path metadata, registry adapters, and `plugins.plugin_watcher`. The watcher is
+part of discovery itself—it observes plugin trees and applies live registry
+changes—rather than a discoverable capability.
 
 It was two, then one, now none, and each step down worked the same way: the
 *routing* moved into the kernel and the *implementations* became installable

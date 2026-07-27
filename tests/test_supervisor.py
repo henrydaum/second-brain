@@ -103,14 +103,14 @@ def test_clean_run_resets_the_window():
 
 def test_watcher_unloads_on_quarantine_event(monkeypatch):
     """End-to-end: a quarantine request makes the watcher unload + notify."""
-    import plugins.services.service_plugin_watcher as watcher_mod
+    import plugins.plugin_watcher as watcher_mod
     from events.event_channels import CHAT_MESSAGE_PUSHED, PLUGIN_QUARANTINED
 
     calls = {}
     monkeypatch.setattr(watcher_mod, "unload_plugin",
                         lambda *a, **k: calls.update(args=a, kwargs=k))
 
-    svc = watcher_mod.PluginWatcherService({})
+    svc = watcher_mod.PluginWatcher({})
     notices, done = [], []
     unsub_notice = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda p: notices.append(p))
     unsub_done = bus.subscribe(PLUGIN_QUARANTINED, lambda p: done.append(p))

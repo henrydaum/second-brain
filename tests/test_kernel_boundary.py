@@ -37,6 +37,7 @@ SUBSTRATE = frozenset({
     "plugins.BaseTask",
     "plugins.BaseTool",
     "plugins.plugin_discovery",
+    "plugins.plugin_watcher",
     "plugins.helpers.plugin_paths",
     "plugins.helpers.memory_paths",
     "plugins.frontends.helpers.command_registry",
