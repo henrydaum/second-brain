@@ -51,7 +51,11 @@ def _tree(sdk, path):
     try:
         entries = sdk.fs.list(path, details=True)
     except sdk.Failed as exc:
-        if exc.error == f"not a directory: {path}":
+        # Matched on a fragment rather than the whole formatted message: the
+        # previous version compared against an exact f-string containing the
+        # path, so rewording the handler silently turned "(missing)" into a
+        # raised error.
+        if "no such directory or file" in exc.error:
             return ["(missing)"]
         raise
     entries.sort(key=lambda entry: (

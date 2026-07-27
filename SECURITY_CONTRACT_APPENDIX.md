@@ -104,7 +104,7 @@ thing and stays a different thing: a person may decide what the code may not.
 | `fs.write(path, data, mode)` | Create, overwrite, or append text | path | safe in scratch and the agent's plugin tree, else unsafe |
 | `fs.read_bytes(path)` | File contents as raw bytes | path | safe, except protected files |
 | `fs.write_bytes(path, data, mode)` | Create, overwrite, or append bytes | path | safe in scratch and the agent's plugin tree, else unsafe |
-| `fs.list(path, pattern)` | Directory listing, glob, stat | path | safe |
+| `fs.list(path, pattern, details)` | Directory listing, glob, stat | path | safe |
 | `fs.search(pattern, root)` | Content search across a tree | root path | safe; protected files skipped |
 | `fs.delete(path)` | Remove a file or tree | path | unsafe |
 | `fs.move(src, dst)` | Copy, rename, replace | both paths | unsafe outside scratch |
@@ -133,6 +133,14 @@ before, because containment does not apply there.
 
 `fs.search` is derivable from `fs.list` + `fs.read`, and is a separate Request
 anyway: doing it by hand costs one round trip per file.
+
+`fs.list` is also the **stat**: `details=True` adds `is_dir`, `size` and
+`mtime` (`st_mtime_ns`, an int so it survives JSON exactly — compare with
+`!=`, since a file restored to an older version has also changed). Pointed at
+a *file* it answers for that one entry, which is how a plugin asks "does this
+exist, and has it changed since I looked?" without a second Request type.
+Routing that through "list the parent and filter" made callers build a glob
+out of a filename, which breaks on any name containing `[` or `*`.
 
 **Protected files** (`sandbox/protected.py`) are the one place a read Request
 refuses on the path alone: `config.json`, `plugin_config.json`, and the SQLite

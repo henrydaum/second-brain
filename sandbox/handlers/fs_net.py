@@ -132,21 +132,46 @@ def _fs_list(ctx, args: dict) -> Result:
     pattern = args.get("pattern") or "*"
     path = Path(raw)
     try:
-        if not path.is_dir():
-            return Result.failure(f"not a directory: {raw}")
-        entries = sorted(path.glob(pattern))
+        # A file answers for itself. Asking "what do you know about this one
+        # path" is the common case behind a stat, and routing it through
+        # "list the parent, then filter" made callers build a glob out of a
+        # filename — which breaks the moment the name contains [ or *.
+        if path.is_file():
+            entries = [path]
+        elif path.is_dir():
+            entries = sorted(path.glob(pattern))
+        else:
+            return Result.failure(f"no such directory or file: {raw}")
         if args.get("details"):
-            return Result(data=[
-                {
-                    "path": str(entry),
-                    "name": entry.name,
-                    "is_dir": entry.is_dir(),
-                }
-                for entry in entries
-            ])
+            return Result(data=[_entry_details(entry) for entry in entries])
         return Result(data=[str(entry) for entry in entries])
     except OSError as exc:
         return Result.failure(f"list failed: {exc}", retryable=True)
+
+
+def _entry_details(entry: Path) -> dict:
+    """One directory entry's metadata.
+
+    ``mtime`` is ``st_mtime_ns`` — an int, so it survives JSON exactly, where
+    a float seconds value would round and make "changed since I looked"
+    unreliable at sub-millisecond resolution. Compare it with ``!=`` rather
+    than ``<``: a file restored to an older version has also changed.
+
+    A stat that fails leaves the fields ``None`` rather than dropping the
+    entry, so a listing never silently omits a file the caller can see.
+    """
+    try:
+        info = entry.stat()
+        mtime, size = info.st_mtime_ns, info.st_size
+    except OSError:
+        mtime, size = None, None
+    return {
+        "path": str(entry),
+        "name": entry.name,
+        "is_dir": entry.is_dir(),
+        "mtime": mtime,
+        "size": size,
+    }
 
 
 def _fs_search(ctx, args: dict) -> Result:

@@ -33,7 +33,10 @@ def test_fs_list_details_preserves_default_and_reports_entry_types(tmp_path):
         str(tmp_path / "folder"),
     ])
     assert detailed.ok
-    assert detailed.data == [
+    # Identity and type are pinned exactly; size and mtime are pinned by
+    # shape, since asserting the clock would make this a flaky test.
+    assert [{k: v for k, v in entry.items() if k not in ("mtime", "size")}
+            for entry in detailed.data] == [
         {
             "path": str(tmp_path / "file.txt"),
             "name": "file.txt",
@@ -45,6 +48,28 @@ def test_fs_list_details_preserves_default_and_reports_entry_types(tmp_path):
             "is_dir": True,
         },
     ]
+    listed = {entry["name"]: entry for entry in detailed.data}
+    assert listed["file.txt"]["size"] == 4
+    assert isinstance(listed["file.txt"]["mtime"], int)
+
+
+def test_fs_list_answers_for_a_single_file(tmp_path):
+    """Asking about one path should not mean globbing its parent.
+
+    This is how a sandboxed plugin asks "does this exist, and has it
+    changed?" — building a glob out of a filename breaks the moment the name
+    contains ``[`` or ``*``.
+    """
+    target = tmp_path / "a[1].txt"
+    target.write_text("xy", encoding="utf-8")
+
+    result = _fs_list(None, {"path": str(target), "details": True})
+
+    assert result.ok
+    assert len(result.data) == 1
+    assert result.data[0]["name"] == "a[1].txt"
+    assert result.data[0]["size"] == 2
+    assert result.data[0]["is_dir"] is False
 
 
 def test_locations_command_preserves_tree_format_and_order(tmp_path):

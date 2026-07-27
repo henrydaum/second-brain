@@ -48,6 +48,15 @@ for ``sdk.ok(...)`` only to attach ``llm_summary`` or attachments, and
 from __future__ import annotations
 
 import base64
+# ``ntpath``/``posixpath`` rather than ``os.path``, which is one of these two
+# under a name that also drags in ``os``. The guest ships stdlib-only and
+# environment-free (pinned by tests/test_sandbox_guest_boundary.py), and these
+# two modules are pure string arithmetic — no cwd, no stat, no environment.
+# ``os.path`` would have imported the very module the boundary exists to keep
+# out, to get functions these already provide.
+import ntpath
+import posixpath
+import sys
 
 from .channel import Terminated
 from .requests import Denied, RequestFailed
@@ -137,7 +146,15 @@ class _FS(_Namespace):
                          mode=mode)
 
     def list(self, path, pattern: str = "*", details: bool = False):
-        """List a directory, optionally with entry type metadata."""
+        """List a directory, optionally with entry metadata.
+
+        ``details`` adds ``is_dir``, ``size`` and ``mtime`` (``st_mtime_ns``,
+        an int — compare with ``!=``, since a file restored to an older
+        version has also changed).
+
+        Pointing this at a **file** returns that one entry, which is how you
+        ask "has this changed?" without building a glob out of a filename.
+        """
         return self._ask(
             FS_LIST, path=str(path), pattern=pattern, details=details)
 
@@ -841,6 +858,102 @@ class _Secrets(_Namespace):
 # Helpers: no Request, no cost, no ledger row.
 # ──────────────────────────────────────────────────────────────────────
 
+class _Path:
+    """Pure path helpers — string arithmetic, never the filesystem.
+
+    Guest code cannot import ``pathlib`` or ``os.path``: both reach the
+    environment, and the validator refuses them. But manipulating a path is
+    *computation* — joining, splitting, taking a parent — and by this SDK's own
+    test (does it touch disk, network, clock, or process?) that makes it a
+    helper, not a Request. Without these, a plugin doing anything path-shaped
+    had to concatenate strings by hand and get separators wrong.
+
+    Two things it deliberately does not do, both because they would reach the
+    environment and stop being helpers:
+
+    - **No symlink resolution.** ``normalize`` is textual, so two names for
+      one file through a link normalize differently. For the caller that
+      matters — read-before-edit tracking — that fails toward "not read yet",
+      the strict direction.
+    - **No current directory.** A relative path with no ``base`` stays
+      relative rather than being resolved against a cwd, which inside a box
+      is ``sandbox/`` and means nothing to the plugin anyway. Pass the base
+      you mean, usually ``sdk.paths.get("project")``.
+    """
+
+    @staticmethod
+    def _os():
+        """The path flavour this platform actually uses."""
+        return ntpath if sys.platform == "win32" else posixpath
+
+    @staticmethod
+    def join(*parts) -> str:
+        """Join path segments with the platform separator."""
+        usable = [str(p) for p in parts if p not in (None, "")]
+        return _Path._os().join(*usable) if usable else ""
+
+    @staticmethod
+    def parent(path) -> str:
+        """The containing directory."""
+        return _Path._os().dirname(str(path))
+
+    @staticmethod
+    def name(path) -> str:
+        """The final component, extension included."""
+        return _Path._os().basename(str(path))
+
+    @staticmethod
+    def stem(path) -> str:
+        """The final component without its extension."""
+        flavour = _Path._os()
+        return flavour.splitext(flavour.basename(str(path)))[0]
+
+    @staticmethod
+    def suffix(path) -> str:
+        """The extension, dot included, or ``""``."""
+        return _Path._os().splitext(str(path))[1]
+
+    @staticmethod
+    def is_absolute(path) -> bool:
+        """Whether this path stands on its own."""
+        return _Path._os().isabs(str(path))
+
+    @staticmethod
+    def absolute(path, base="") -> str:
+        """Resolve against ``base`` and collapse ``..`` textually.
+
+        A relative path with no base is returned normalized but still
+        relative — see the class docstring on why the cwd is not consulted.
+        """
+        flavour = _Path._os()
+        raw = str(path)
+        if base and not flavour.isabs(raw):
+            raw = flavour.join(str(base), raw)
+        return flavour.normpath(raw)
+
+    @staticmethod
+    def normalize(path) -> str:
+        """A canonical key for comparing two paths.
+
+        Case-folded where the platform is case-insensitive, so a Windows
+        plugin does not treat ``C:\\A.py`` and ``c:\\a.py`` as different
+        files.
+        """
+        return _Path._os().normcase(_Path.absolute(path))
+
+    @staticmethod
+    def within(path, root) -> bool:
+        """Whether ``path`` is ``root`` or sits underneath it.
+
+        Compared on normalized strings with a separator guard, so ``/data``
+        does not appear to contain ``/database``.
+        """
+        flavour = _Path._os()
+        target, base = _Path.normalize(path), _Path.normalize(root)
+        return (target == base
+                or target.startswith(base.rstrip(flavour.sep) + flavour.sep))
+
+
 class _Text:
     """Pure text helpers."""
 
@@ -1269,6 +1382,7 @@ class SDK:
         self.proc = _Proc(self)
         self.env = _Env(self)
         self.secrets = _Secrets(self)
+        self.path = _Path()
         self.text = _Text()
         self.md = _Markdown()
         self.forms = _Forms()

@@ -28,6 +28,11 @@ ALLOWED_ABSOLUTE = {
     "__future__", "base64", "importlib", "importlib.util", "json", "re",
     "sys", "traceback", "pathlib", "time", "typing", "dataclasses",
     "resource",
+    # Pure path *arithmetic* for sdk.path — string manipulation with no cwd,
+    # no stat, no environment. Named directly rather than reached through
+    # ``os.path``, which is one of these two under an alias that also imports
+    # ``os`` — the module this boundary exists to keep out.
+    "ntpath", "posixpath",
 }
 
 HOST_MODULES = {"policy", "handlers", "interpreter", "runner",

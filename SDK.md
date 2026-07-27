@@ -138,6 +138,11 @@ sdk.fs.write(path, data, mode="overwrite") # mode="append" to add
 sdk.fs.read_bytes(path)                    # -> bytes; use for anything non-text
 sdk.fs.write_bytes(path, data, mode="overwrite")
 sdk.fs.list(path, pattern="*")             # -> [str]
+sdk.fs.list(path, details=True)            # -> [{path, name, is_dir, size, mtime}]
+                                           # point it at a *file* for just that
+                                           # one entry — this is how you ask
+                                           # "does it exist / has it changed?"
+                                           # mtime is st_mtime_ns; compare with !=
 sdk.fs.search(pattern, root=".", glob="**/*")   # -> [{path, line, text}]
 sdk.fs.delete(path)
 sdk.fs.move(src, dst, copy=False)
@@ -589,7 +594,28 @@ sdk.text.truncate(text, limit)
 sdk.text.cosine(vector_a, vector_b)
 sdk.md.table(headers, rows)
 sdk.md.card(title, pairs)
+
+sdk.path.join(root, "helpers", "thing.py")
+sdk.path.parent(p); sdk.path.name(p); sdk.path.stem(p); sdk.path.suffix(p)
+sdk.path.absolute(p, base=sdk.paths.get("project"))
+sdk.path.within(p, root)          # containment, separator-aware
+sdk.path.normalize(p)             # canonical key for comparing two paths
 ```
+
+`sdk.path` exists because you cannot import `pathlib` or `os.path` — both
+reach the environment — while *manipulating* a path is only string
+arithmetic. Two things it will not do, both deliberate:
+
+- **It never consults the current directory.** Inside a box that is
+  `sandbox/`, which means nothing to your plugin, so a relative path with no
+  `base` stays relative rather than becoming confidently wrong. Pass the base
+  you mean — usually `sdk.paths.get("project")`.
+- **It never resolves symlinks**, because that is a disk read. Two names for
+  one file therefore compare unequal.
+
+Note `sdk.paths` (a Request — asks the kernel where things are) and
+`sdk.path` (a helper — arithmetic on a string you already have) are different
+namespaces. The plural one crosses the boundary; the singular one does not.
 
 Plus the pure standard library — `json`, `re`, `math`, `datetime`, `time`,
 `collections`, `itertools`, `hashlib`, `base64`, `csv`, `email`, `textwrap`,
