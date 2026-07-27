@@ -342,8 +342,15 @@ def _session_cancel(ctx, args: dict) -> Result:
     canceller = getattr(runtime, "cancel_session", None)
     if (bad := _need(canceller, "session cancellation")) is not None:
         return bad
-    canceller(args.get("key") or getattr(ctx, "session_key", None))
-    return Result(data=True)
+    outcome = canceller(args.get("key") or getattr(ctx, "session_key", None))
+    if outcome is None:
+        return Result(data=None)
+    return Result(data={
+        "ok": bool(getattr(outcome, "ok", True)),
+        "messages": list(getattr(outcome, "messages", None) or []),
+        "error": getattr(outcome, "error", None),
+        "data": dict(getattr(outcome, "data", None) or {}),
+    })
 
 
 def _session_add_tool(ctx, args: dict) -> Result:

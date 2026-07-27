@@ -1,6 +1,6 @@
 """Slash command plugin for `/cancel`."""
 
-from plugins.BaseCommand import BaseCommand
+from guest.bases import BaseCommand
 
 
 class CancelCommand(BaseCommand):
@@ -8,18 +8,18 @@ class CancelCommand(BaseCommand):
     name = "cancel"
     description = "Cancel the current interaction"
     category = "Conversation"
+    requests = ["session.get", "session.cancel"]
 
-    def run(self, _args, context):
+    def run(self, sdk, args):
         """Execute `/cancel` for the active session."""
-        runtime = getattr(context, "runtime", None)
-        session_key = getattr(context, "session_key", None)
-        if runtime is None or not session_key:
+        if sdk.session.get() is None:
             return "No active session to cancel."
-        result = runtime.handle_action(session_key, "cancel")
-        if getattr(result, "messages", None):
-            return "\n".join(result.messages)
-        if getattr(result, "error", None):
-            return result.error.get("message") if isinstance(result.error, dict) else str(result.error)
-        if not getattr(result, "ok", True):
+        result = sdk.session.cancel()
+        if result.get("messages"):
+            return "\n".join(result["messages"])
+        if result.get("error"):
+            error = result["error"]
+            return error.get("message") if isinstance(error, dict) else str(error)
+        if not result.get("ok", True):
             return "Nothing to cancel."
         return "Cancelled."
