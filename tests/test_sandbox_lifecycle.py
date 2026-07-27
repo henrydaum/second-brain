@@ -62,6 +62,21 @@ def isolated(request):
     return request.param
 
 
+def test_host_managed_resident_defers_lifecycle(interp, boxes, isolated):
+    """Frontends bind host authority before start and explicitly stop once."""
+    box = boxes(
+        interp, SERVICE, "Counter", name="counter",
+        isolated=isolated, manage_lifecycle=False,
+    )
+
+    before = box.call("total")
+    assert not before.ok
+    assert box.call("start").ok
+    assert box.call("total").data == 0
+    assert box.call("stop").ok
+    assert box.stop().ok
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Ephemeral: the lifetime is the call.
 # ──────────────────────────────────────────────────────────────────────

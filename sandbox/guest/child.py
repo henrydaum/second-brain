@@ -96,7 +96,8 @@ def _run_ephemeral(wire_out, sdk, target, kwargs) -> int:
     return 0 if _send_result(wire_out, protocol.DONE, result) else 1
 
 
-def _serve_persistent(wire_in, wire_out, sdk, instance) -> int:
+def _serve_persistent(wire_in, wire_out, sdk, instance,
+                      manage_lifecycle: bool = True) -> int:
     """Load, announce, then answer calls until told to stop.
 
     Between calls this blocks on a read and executes nothing: a resident box
@@ -105,7 +106,7 @@ def _serve_persistent(wire_in, wire_out, sdk, instance) -> int:
     closes, or being killed.
     """
     start_fn = getattr(instance, "start", None)
-    if callable(start_fn):
+    if manage_lifecycle and callable(start_fn):
         try:
             start_fn(sdk)
         except Terminated:
@@ -129,7 +130,7 @@ def _serve_persistent(wire_in, wire_out, sdk, instance) -> int:
 
         if kind == protocol.STOP:
             stop_fn = getattr(instance, "stop", None)
-            if callable(stop_fn):
+            if manage_lifecycle and callable(stop_fn):
                 try:
                     stop_fn(sdk)
                 except Exception:
@@ -192,7 +193,10 @@ def main() -> int:
         return _fault(wire_out, exc)
 
     if start.get("persistent"):
-        return _serve_persistent(wire_in, wire_out, sdk, target)
+        return _serve_persistent(
+            wire_in, wire_out, sdk, target,
+            manage_lifecycle=bool(start.get("manage_lifecycle", True)),
+        )
     return _run_ephemeral(wire_out, sdk, target, start.get("kwargs") or {})
 
 

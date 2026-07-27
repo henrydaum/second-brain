@@ -103,9 +103,11 @@ class InProcessBox(PersistentBox):
     starvation path behave exactly as they do for a subprocess.
     """
 
-    def __init__(self, target, name: str, chain=None, call_timeout=None):
+    def __init__(self, target, name: str, chain=None, call_timeout=None,
+                 manage_lifecycle: bool = True):
         super().__init__(name, chain, call_timeout)
         self.target = target
+        self.manage_lifecycle = manage_lifecycle
         self.sdk = SDK(None)   # channel attached at start()
 
     def start(self, interpreter: Interpreter,
@@ -114,7 +116,7 @@ class InProcessBox(PersistentBox):
         self.sdk = SDK(interpreter.channel(self.execution))
         self._interpreter = interpreter
         start_fn = getattr(self.target, "start", None)
-        if callable(start_fn):
+        if self.manage_lifecycle and callable(start_fn):
             outcome = self._invoke(start_fn, {}, clamp_timeout(timeout))
             if not outcome.ok:
                 return outcome
@@ -167,7 +169,7 @@ class InProcessBox(PersistentBox):
             return Result(data=False)
         self._alive = False
         stop_fn = getattr(self.target, "stop", None)
-        if callable(stop_fn):
+        if self.manage_lifecycle and callable(stop_fn):
             self._invoke(stop_fn, {}, clamp_timeout(timeout))
         self._interpreter.cancel(self.execution)
         unload_box(self.name)
@@ -179,13 +181,15 @@ class SubprocessBox(PersistentBox):
 
     def __init__(self, module_path: str, entry: str, name: str,
                  chain=None, call_timeout=None, box_root=None,
-                 memory_mb: int | None = None, extra_roots=()):
+                 memory_mb: int | None = None, extra_roots=(),
+                 manage_lifecycle: bool = True):
         super().__init__(name, chain, call_timeout)
         self.module_path = str(module_path)
         self.entry = entry
         self.box_root = box_root
         self.extra_roots = list(extra_roots or [])
         self.memory_mb = memory_mb
+        self.manage_lifecycle = manage_lifecycle
         self.proc = None
         self._interpreter = None
 
@@ -210,6 +214,7 @@ class SubprocessBox(PersistentBox):
                 "extra_roots": self.extra_roots,
                 "memory_mb": self.memory_mb,
                 "cpu_seconds": None,
+                "manage_lifecycle": self.manage_lifecycle,
             })
             if not ok:
                 return Result.failure("child exited before it could start")
@@ -319,7 +324,7 @@ def open_box(interpreter: Interpreter, module_path, entry: str = "", *,
              call_timeout: float | None = None,
              start_timeout: float = DEFAULT_START_TIMEOUT,
              box_root=None, memory_mb: int | None = None,
-             extra_roots=()) -> PersistentBox:
+             extra_roots=(), manage_lifecycle: bool = True) -> PersistentBox:
     """Load a resident box and return a handle to call into.
 
     ``entry`` names a plugin class, or is empty for a bare script — in which
@@ -333,12 +338,14 @@ def open_box(interpreter: Interpreter, module_path, entry: str = "", *,
     if isolated:
         box = SubprocessBox(module_path, entry, name, chain=chain,
                             call_timeout=call_timeout, box_root=box_root,
-                            memory_mb=memory_mb, extra_roots=extra_roots)
+                            memory_mb=memory_mb, extra_roots=extra_roots,
+                            manage_lifecycle=manage_lifecycle)
     else:
         target = load_entry(module_path, entry, box_name=name, root=box_root,
                             bound=False, extra_roots=extra_roots)
         box = InProcessBox(target, name, chain=chain,
-                           call_timeout=call_timeout)
+                           call_timeout=call_timeout,
+                           manage_lifecycle=manage_lifecycle)
 
     outcome = box.start(interpreter, timeout=start_timeout)
     if not outcome.ok:

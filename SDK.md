@@ -322,6 +322,13 @@ class Chat(BaseFrontend):
 call `render`, so a slow poll is a frozen display. A long-poll with a short
 server-side timeout is the right shape; an unbounded wait is not.
 
+If handing input to the runtime can synchronously produce output, declare
+`background_submit = True`. The host then schedules `sdk.frontend.submit_*`
+off the `poll` call so output can render into the serialized frontend box.
+For a frontend that must reopen its last conversation before accepting input,
+declare `restore_on_start = True`; the host restores after `start` returns so
+restored forms and approvals cannot re-enter a busy box.
+
 **Showing things is not a Request** — `render` is called *on you*, with a
 `kind` saying what: `messages`, `attachments`, `form_field`, `approval`,
 `buttons`, `error`, `typing`, `tool_status`, `stream_delta`. Handle what your
@@ -559,6 +566,10 @@ class Indexer(BaseTool):
     timeout = 120              # seconds; the kernel clamps it
     memory_mb = 512            # subprocess only, POSIX only
     requests = ["fs.read", "db.query"]   # advisory; shown at install time
+
+    # Frontends only:
+    background_submit = True   # submit off poll() when replies may render
+    restore_on_start = True    # host restores after start() releases the box
 
     dependencies_pip = ["numpy"]
     dependencies_files = ["helpers/shared.py"]

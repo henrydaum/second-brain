@@ -20,7 +20,8 @@ _THINKING_PATTERN = re.compile(
 
 # Matches <invoke> blocks, <tool_call> blocks, Minimax tags, and common EOS tokens.
 _STRUCTURAL_PATTERN = re.compile(
-    r"<invoke.*?>.*?</invoke>|<tool_call.*?>.*?</tool_call>|<(?:/)?minimax:tool_call>|<\|im_end\|>|<\|eot_id\|>",
+    r"<invoke.*?>.*?</invoke>|<tool_call.*?>.*?</tool_call>|<(?:/)?minimax:tool_call>|"
+    r"<\|im_end\|>|<\|eot_id\|>",
     re.DOTALL,
 )
 
@@ -50,12 +51,17 @@ class StreamingTokenFilter:
 
     _OPENERS = ("<think>", "<thinking>")
     _CLOSERS = ("</think>", "</thinking>")
+    _TOOL_OPENERS = ("<tool_call>",)
+    _TOOL_CLOSERS = ("</tool_call>",)
     _DROPPED = ("<|im_end|>", "<|eot_id|>")
-    _ALL_TAGS = _OPENERS + _CLOSERS + _DROPPED
+    _ALL_TAGS = (
+        _OPENERS + _CLOSERS + _TOOL_OPENERS + _TOOL_CLOSERS + _DROPPED
+    )
 
     def __init__(self):
         self._tail = ""
         self._in_think = False
+        self._in_tool = False
         self._emitted = False
 
     @classmethod
@@ -83,16 +89,22 @@ class StreamingTokenFilter:
         self._tail = ""
         out: list[str] = []
         while text:
-            if self._in_think:
-                idx, closer = self._find_first(text, self._CLOSERS)
+            if self._in_think or self._in_tool:
+                closers = self._CLOSERS if self._in_think else self._TOOL_CLOSERS
+                idx, closer = self._find_first(text, closers)
                 if idx is None:
                     self._tail = self._partial_tag_tail(text)
                     text = ""
                 else:
                     text = text[idx + len(closer):]
                     self._in_think = False
+                    self._in_tool = False
             else:
-                idx, tag = self._find_first(text, self._OPENERS + self._CLOSERS + self._DROPPED)
+                tags = (
+                    self._OPENERS + self._CLOSERS
+                    + self._TOOL_OPENERS + self._TOOL_CLOSERS + self._DROPPED
+                )
+                idx, tag = self._find_first(text, tags)
                 if idx is None:
                     keep = self._partial_tag_tail(text)
                     out.append(text[:len(text) - len(keep)] if keep else text)
@@ -102,6 +114,7 @@ class StreamingTokenFilter:
                     out.append(text[:idx])
                     text = text[idx + len(tag):]
                     self._in_think = tag in self._OPENERS
+                    self._in_tool = tag in self._TOOL_OPENERS
         emitted = "".join(out)
         if not self._emitted:
             emitted = emitted.lstrip()
@@ -112,7 +125,7 @@ class StreamingTokenFilter:
     def flush(self) -> str:
         """Release any withheld tail at end of stream (it wasn't a tag)."""
         tail, self._tail = self._tail, ""
-        if self._in_think or not tail:
+        if self._in_think or self._in_tool or not tail:
             return ""
         tail = tail if self._emitted else tail.lstrip()
         if tail:

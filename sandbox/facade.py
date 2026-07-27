@@ -308,7 +308,8 @@ class Sandbox:
     def open(self, source, entry: str = "", *, name: str | None = None,
              chain: Chain | None = None, isolated: bool | None = None,
              call_timeout: float | None = None,
-             start_timeout: float = DEFAULT_START_TIMEOUT) -> PersistentBox:
+             start_timeout: float = DEFAULT_START_TIMEOUT,
+             manage_lifecycle: bool = True) -> PersistentBox:
         """Load a resident box and keep a handle on it."""
         report, spec, opts = self._prepare(source, isolated=isolated,
                                            timeout=call_timeout, name=name)
@@ -324,7 +325,8 @@ class Sandbox:
                        start_timeout=start_timeout,
                        box_root=str(Path(source).parent),
                        extra_roots=[str(p) for p in opts["extra_roots"]],
-                       memory_mb=opts["memory_mb"])
+                       memory_mb=opts["memory_mb"],
+                       manage_lifecycle=manage_lifecycle)
         with self._lock:
             self._boxes[box_name] = box
         return box

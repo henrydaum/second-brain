@@ -626,6 +626,7 @@ DECLARATION_KEYS = ("name", "box", "isolation", "lifetime", "timeout",
                     "dependencies_pip", "requires_services", "max_calls",
                     "background_safe", "agent_prompt", "hooks",
                     "subscribed_channels", "uses_console", "poll_interval",
+                    "background_submit", "restore_on_start",
                     # LLM backends. Read rather than asked because the whole
                     # point is to know what a backend can do without importing
                     # it — deciding whether to stream a call must not cost a

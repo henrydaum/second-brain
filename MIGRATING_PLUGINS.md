@@ -206,11 +206,14 @@ Three files need a moment's thought, not an exemption:
   is a deliberate kernel edit plus a boundary-test update — not a plugin
   migration. Do it late. (`parser_registry` used to be the second such case;
   it stopped being a plugin at all and moved into the kernel as `parsing/`.)
-- **`frontend_repl`** cannot be migrated on the current contract, and this is
-  a property of terminals rather than of the plugin. `input()` is refused —
-  it would block the box — and a subprocess box's stdin is the wire protocol,
-  so sandboxed code has no route to a console. Every *other* frontend is
-  migratable today; the REPL waits for a console Request.
+- **Console frontends** declare `uses_console = True`, drain input with
+  `sdk.console.read_line()` from `poll`, and write with `sdk.console.write()`.
+  The kernel owns stdin, so reads never block the box and subprocess stdin
+  remains reserved for the wire protocol. If submitting input can render back
+  synchronously, declare `background_submit = True`. If the frontend must
+  reopen the last conversation before first input, declare
+  `restore_on_start = True`; the host restores between box calls so restored
+  forms and approvals cannot re-enter a busy box.
 
 ---
 

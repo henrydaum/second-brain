@@ -314,6 +314,13 @@ class BaseFrontend(BasePlugin):
     # ``sdk.console`` reaches nothing for it. See :mod:`sandbox.console`.
     uses_console: bool = False
 
+    # Submissions can synchronously render back into this serialized box.
+    # Terminal-style frontends therefore ask the host to submit off poll().
+    background_submit: bool = False
+
+    # Restore after start() releases the box, since restoration may render.
+    restore_on_start: bool = False
+
     def start(self, sdk):
         """Open the transport. **Must return** — do not loop here.
 

@@ -19,6 +19,13 @@ _LOG_DATEFMT = "%I:%M%p"
 
 logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT, datefmt=_LOG_DATEFMT)
 
+# The terminal is a user-facing frontend, not the diagnostic log. Keep routine
+# INFO chatter (including sandbox/backend timing) in app.log while still
+# surfacing warnings and errors that need the operator's attention.
+for _handler in logging.getLogger().handlers:
+	if isinstance(_handler, logging.StreamHandler):
+		_handler.setLevel(logging.WARNING)
+
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 (DATA_DIR / "memory.md").touch(exist_ok=True)
 LOG_FILE = DATA_DIR / "app.log"
@@ -475,9 +482,12 @@ def main():
 
 	# --- 11. Main thread idles until shutdown, proving liveness as it goes ---
 	probe = heartbeat.register("main-loop")  # never unregistered: this loop only exits at process death
-	while not _shutdown.is_set():
-		probe.beat()
-		_shutdown.wait(timeout=1.0)
+	try:
+		while not _shutdown.is_set():
+			probe.beat()
+			_shutdown.wait(timeout=1.0)
+	except KeyboardInterrupt:
+		shutdown()
 
 def _bind_runtime_services(services, tool_registry, orchestrator, runtime):
 	for svc in services.values():

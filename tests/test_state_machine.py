@@ -8,7 +8,8 @@ only kernel frontend, so frontend assertions here use it directly.
 
 from types import SimpleNamespace
 
-from plugins.frontends.frontend_repl import ReplFrontend
+from plugins.BaseFrontend import BaseFrontend
+from plugins.frontends.helpers.formatters import render_plain
 from state_machine.conversation import CallableSpec, ConversationState, FormStep, Participant
 from state_machine.form_display import form_step_display
 from state_machine.forms import schema_to_form_steps
@@ -18,6 +19,39 @@ from state_machine.serialization import (
     save_compaction_marker,
     save_state_marker,
 )
+
+
+class ReplFrontend(BaseFrontend):
+    """Native test surface for host-side input coercion and form projection."""
+
+    name = "repl"
+
+    def render_messages(self, _key, messages):
+        for message in messages:
+            print(render_plain(message))
+
+    def render_form_field(self, _key, form):
+        field = form.get("field") or {}
+        display = form.get("display") or {}
+        prompt = (
+            display.get("prompt") or field.get("prompt")
+            or field.get("name") or "Input required"
+        )
+        print(f"{render_plain(str(prompt))}{self._hints(display or field)}")
+
+    def render_error(self, _key, error):
+        print(f"[error] {(error or {}).get('message') or error}")
+
+    render_attachments = render_buttons = render_approval_request = (
+        lambda self, *args, **kwargs: None
+    )
+
+    @staticmethod
+    def _hints(field):
+        parts = []
+        if field.get("allow_back"):
+            parts.append("/back to go back")
+        return f" ({'; '.join(parts)})" if parts else ""
 
 
 # ── Schema -> form derivation ────────────────────────────────────────

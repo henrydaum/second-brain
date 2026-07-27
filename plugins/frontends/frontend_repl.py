@@ -1,184 +1,173 @@
-"""REPL frontend plugin backed by the conversation runtime."""
+"""Sandboxed REPL frontend backed by the conversation runtime."""
 
-from __future__ import annotations
-
-import logging
-import sys
-import threading
-
-from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
-from plugins.frontends.helpers.formatters import render_plain
-from pipeline.database import DEFAULT_USER_ID
-from state_machine.conversation_phases import PHASE_APPROVING_REQUEST
-
-logger = logging.getLogger("REPL")
+from guest.bases import BaseFrontend
 
 
 class ReplFrontend(BaseFrontend):
-    """Blocking terminal frontend backed by the conversation runtime."""
+    """Terminal frontend using the kernel-owned nonblocking console."""
+
     name = "repl"
-    description = "Blocking terminal frontend backed by the conversation state machine."
-    capabilities = FrontendCapabilities(
-        supports_attachments_in=True,
-        supports_proactive_push=True,
-        supports_streaming=True,
-    )
-    # Single local operator — every session acts as the base user. The terminal
-    # has no login; authorization for the REPL is its frontend_profile, not a user.
+    description = "Terminal frontend backed by the conversation state machine."
+    isolation = "subprocess"
+    uses_console = True
+    background_submit = True
+    restore_on_start = True
+    capabilities = {
+        "supports_attachments_in": True,
+        "supports_proactive_push": True,
+        "supports_streaming": True,
+    }
     user_binding = "single"
-    default_user_id = DEFAULT_USER_ID
+    default_user_id = 1
+    requests = [
+        "console.read", "console.write", "frontend.submit",
+        "frontend.pending", "frontend.resolve", "session.get",
+    ]
 
-    def __init__(self, shutdown_fn=None, shutdown_event: threading.Event | None = None):
-        """Initialize the REPL frontend."""
-        super().__init__()
-        self.shutdown_fn = shutdown_fn
-        # Observed, never set: the app-wide shutdown ends the loop, but
-        # stopping this frontend (e.g. a hot-reload after /update rewrites
-        # this file) must not shut down the whole app.
-        self.shutdown_event = shutdown_event or threading.Event()
-        self._stop_event = threading.Event()
-        # Whether the current stream has written any characters to stdout —
-        # decides how the done event terminates the line.
+    def start(self, sdk):
+        """Initialize display state and announce readiness."""
         self._stream_wrote = False
+        self._prompted = False
+        sdk.console.write("Second Brain REPL ready. Type /quit to exit.")
+        return True
 
-    def session_key(self, _ctx=None) -> str:
+    def poll(self, sdk):
+        """Drain one console line without blocking."""
+        raw = sdk.console.read_line()
+        if raw is None:
+            if not self._prompted:
+                sdk.console.write("\n", end="")
+                self._prompted = True
+            return False
+        self._prompted = False
+        raw = raw.strip()
+        if not raw:
+            return True
+
+        key = "default"
+        session = sdk.session.get(key) or {}
+        pending = sdk.frontend.pending_approval(key)
+        if pending and session.get("phase") != "approving_request":
+            approved = self._parse_approval(raw)
+            if approved is None:
+                self._error(sdk, "Approval needs yes or no.")
+                return True
+            request_id = pending if isinstance(pending, str) else ""
+            ok = sdk.frontend.resolve(key, approved, request_id)
+            message = (
+                "Approval granted." if ok and approved
+                else "Approval denied." if ok
+                else "No pending approvals."
+            )
+            self._messages(sdk, [message])
+            return True
+
+        if raw.startswith("/attach"):
+            _, _, path = raw.partition(" ")
+            path = path.strip()
+            if not path:
+                self._error(sdk, "Usage: /attach <path>")
+            else:
+                sdk.frontend.submit_attachment(key, path)
+            return True
+
+        sdk.frontend.submit_text(key, raw)
+        return True
+
+    def render(self, sdk, session_key, kind, payload):
+        """Render one projected frontend payload to the terminal."""
+        if kind == "messages":
+            self._messages(sdk, payload or [])
+        elif kind == "attachments":
+            for path in payload or []:
+                sdk.console.write(f"\n[attachment] {path}")
+        elif kind == "form_field":
+            form = payload or {}
+            field = form.get("field") or {}
+            display = form.get("display") or {}
+            prompt = (
+                display.get("prompt") or field.get("prompt")
+                or field.get("name") or "Input required"
+            )
+            sdk.console.write(
+                f"\n{sdk.md.plain(str(prompt))}{self._hints(display or field)}"
+            )
+        elif kind == "approval":
+            request = payload or {}
+            hints = self._hints({
+                "type": request.get("type", "boolean"),
+                "enum": request.get("enum"),
+                "default": request.get("default"),
+            })
+            body = (
+                f"\n{sdk.md.plain(str(request.get('body')))}"
+                if request.get("body") else ""
+            )
+            sdk.console.write(
+                f"\n{request.get('title') or 'Approval requested'}"
+                f"{body}{hints}"
+            )
+        elif kind == "buttons":
+            for index, button in enumerate(payload or [], 1):
+                label = (
+                    button.get("label") or button.get("text")
+                    or button.get("value") or "Option"
+                )
+                sdk.console.write(f"{index}. {label}")
+        elif kind == "error":
+            self._error(sdk, (payload or {}).get("message") or payload)
+        elif kind == "stream_delta":
+            self._stream(sdk, payload or {})
+        elif kind == "tool_status":
+            self._tool_status(sdk, payload or {})
+
+    def session_key(self, sdk, ctx):
         """Return the singleton REPL session key."""
         return "default"
 
-    def start(self) -> None:
-        """Start REPL frontend."""
-        key = self.session_key(None)
-        print("Second Brain REPL ready. Type /quit to exit.")
-        try:
-            notice = self.runtime.restore_last_active(key)
-            if notice:
-                self.render_messages(key, [notice])
-            # A restored form/approval re-prompts itself via the FORM_REQUESTED /
-            # APPROVAL_REQUESTED bus events emitted during restore_last_active.
-        except Exception:
-            logger.exception("REPL restore_last_active failed")
-        while not self.shutdown_event.is_set() and not self._stop_event.is_set():
-            try:
-                raw = input("\n").strip()
-            except KeyboardInterrupt:
-                if self.shutdown_fn:
-                    self.shutdown_fn()
-                return
-            except EOFError:
-                logger.info("REPL stdin closed; stopping REPL without shutting down the app.")
-                return
-            if not raw:
-                continue
-            if self.has_pending_approval(key):
-                self._handle_raw(key, raw)
-                continue
-            threading.Thread(target=self._handle_raw, args=(key, raw), daemon=True, name="repl-submit").start()
+    @staticmethod
+    def _messages(sdk, messages):
+        for message in messages:
+            if message:
+                sdk.console.write(f"{sdk.md.plain(message)}\n")
 
-    def _handle_raw(self, key: str, raw: str) -> None:
-        """Route one raw REPL line into text or attachment submission."""
-        try:
-            if raw.startswith("/attach"):
-                _, _, path = raw.partition(" ")
-                self.submit_attachment(key, path.strip()) if path.strip() else self.render_error(key, {"message": "Usage: /attach <path>"})
-            else:
-                self.submit_text(key, raw)
-        except Exception as e:
-            logger.exception("REPL submit failed")
-            self.render_error(key, {"message": str(e)})
+    @staticmethod
+    def _error(sdk, message):
+        sdk.console.write(f"\n[error] {message}")
 
-    def submit_text(self, session_key: str, text: str):
-        """Submit text."""
-        if self._current_phase(session_key) != PHASE_APPROVING_REQUEST and self.has_pending_approval(session_key):
-            approved = self._parse_approval(text)
-            if approved is None:
-                self.render_error(session_key, {"message": "Approval needs yes or no."})
-                return None
-            ok = self.resolve_next_approval(session_key, approved, self.name)
-            self.render_messages(session_key, ["Approval granted." if ok and approved else "Approval denied." if ok else "No pending approvals."])
-            return None
-        return super().submit_text(session_key, text)
-
-    def stop(self) -> None:
-        """Stop this frontend only — the app-wide shutdown event stays untouched."""
-        self._stop_event.set()
-        self.unbind()
-
-    def render_messages(self, _session_key: str, messages: list[str]) -> None:
-        """Render messages."""
-        for msg in messages:
-            if msg:
-                print(f"{render_plain(msg)}\n")
-
-    def render_attachments(self, _session_key: str, paths: list[str]) -> None:
-        """Render attachments."""
-        for path in paths:
-            print(f"\n[attachment] {path}")
-
-    def render_form_field(self, _session_key: str, form: dict) -> None:
-        """Render form field."""
-        field = form.get("field") or {}
-        display = form.get("display") or {}
-        prompt = display.get("prompt") or field.get("prompt") or field.get("name") or "Input required"
-        hints = self._hints(display or field)
-        print(f"\n{render_plain(str(prompt))}{hints}")
-
-    def render_approval_request(self, _session_key: str, req) -> None:
-        """Render approval request."""
-        hints = self._hints({"type": getattr(req, "type", "boolean"), "enum": getattr(req, "enum", None), "default": getattr(req, "default", None)})
-        body = f"\n{render_plain(str(req.body))}" if getattr(req, "body", "") else ""
-        print(f"\n{getattr(req, 'title', 'Approval requested')}{body}{hints}")
-
-    def render_buttons(self, _session_key: str, buttons: list[dict]) -> None:
-        """Render buttons."""
-        for i, button in enumerate(buttons, 1):
-            label = button.get("label") or button.get("text") or button.get("value") or "Option"
-            print(f"{i}. {label}")
-
-    def render_error(self, _session_key: str, error: dict) -> None:
-        """Render error."""
-        print(f"\n[error] {(error or {}).get('message') or error}")
-
-    def render_stream_delta(self, _session_key: str, payload: dict) -> None:
-        """Write streamed agent text to stdout as it arrives."""
+    def _stream(self, sdk, payload):
         if payload.get("done"):
             if self._stream_wrote:
-                # Clean done: full blank line to match render_messages spacing
-                # (the duplicate whole message is skipped by base dedup).
-                # Aborted: just end the partial line — whatever follows
-                # (retry answer, "Cancelled.") renders as a whole message.
-                sys.stdout.write("\n\n" if not payload.get("aborted") else "\n")
-                sys.stdout.flush()
+                sdk.console.write(
+                    "", end="\n\n" if not payload.get("aborted") else "\n"
+                )
             self._stream_wrote = False
             return
         delta = payload.get("delta") or ""
         if delta:
             self._stream_wrote = True
-            sys.stdout.write(delta)
-            sys.stdout.flush()
-
-    def render_tool_status(self, _session_key: str, payload: dict) -> None:
-        """Render tool status."""
-        name = payload.get("tool_name") or payload.get("command_name") or "call"
-        if payload.get("status") == "started":
-            sys.stdout.write(f"\n⋯ {name}...")
-            sys.stdout.flush()
-            return
-        if payload.get("status") != "finished":
-            return
-        sys.stdout.write(f"\r{'✓' if payload.get('ok') else '✕'} {name}   \n")
-        sys.stdout.flush()
-
-    def _live_session_keys(self) -> list[str]:
-        """Return the REPL sessions that can receive proactive output."""
-        return [self.session_key(None)]
+            sdk.console.write(delta, end="")
 
     @staticmethod
-    def _hints(field: dict) -> str:
-        """Render short REPL hints for a form field or approval."""
+    def _tool_status(sdk, payload):
+        name = payload.get("tool_name") or payload.get("command_name") or "call"
+        if payload.get("status") == "started":
+            sdk.console.write(f"\n⋯ {name}...", end="")
+        elif payload.get("status") == "finished":
+            mark = "✓" if payload.get("ok") else "✕"
+            sdk.console.write(f"\r{mark} {name}   ")
+
+    @staticmethod
+    def _hints(field):
         parts = []
         choices = field.get("choices") or []
         if choices:
-            parts.append("options: " + ", ".join(str(c.get("label") or c.get("value")) for c in choices))
+            parts.append(
+                "options: " + ", ".join(
+                    str(choice.get("label") or choice.get("value"))
+                    for choice in choices
+                )
+            )
         elif field.get("enum"):
             display = field.get("enum_labels") or field["enum"]
             parts.append("options: " + ", ".join(map(str, display)))
@@ -193,8 +182,7 @@ class ReplFrontend(BaseFrontend):
         return f" ({'; '.join(parts)})" if parts else ""
 
     @staticmethod
-    def _parse_approval(text: str) -> bool | None:
-        """Parse a yes-or-no REPL reply into an approval decision."""
+    def _parse_approval(text):
         value = (text or "").strip().lower()
         if value in {"/cancel", "n", "no", "deny", "denied", "false", "0"}:
             return False

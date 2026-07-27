@@ -36,6 +36,16 @@ def test_eos_tokens_are_dropped():
     assert _run(["All ", "done.<|eot", "_id|>"]) == "All done."
 
 
+def test_streamed_tool_call_block_is_suppressed():
+    raw = (
+        'Before<tool_call>\n'
+        '<invoke name="grep"><pattern>llm</pattern>'
+        '</invoke>\n</tool_call>After'
+    )
+    fragments = [raw[i:i + 4] for i in range(0, len(raw), 4)]
+    assert _run(fragments) == "BeforeAfter"
+
+
 def test_stray_closer_tag_is_removed():
     # Qwen-style omitted opener: the preceding text streams (accepted
     # limitation) but the closer tag itself never displays.

@@ -819,19 +819,36 @@ def _frontend_submit(ctx, args: dict) -> Result:
 
     session_key = str(args.get("session_key") or "")
     kind = args.get("input_kind") or "text"
-    try:
+    def submit():
         if kind == "text":
-            result = adapter.submit_text(session_key, args.get("text") or "")
+            return adapter.submit_text(session_key, args.get("text") or "")
         elif kind == "attachment":
-            result = adapter.submit_attachment(
+            return adapter.submit_attachment(
                 session_key, args.get("path") or "",
                 args.get("extension") or None)
         elif kind == "action":
-            result = adapter.submit(session_key,
-                                    args.get("action_type") or "",
-                                    args.get("payload"))
-        else:
-            return Result.failure(f"unknown submit kind {kind!r}")
+            return adapter.submit(session_key,
+                                  args.get("action_type") or "",
+                                  args.get("payload"))
+        raise ValueError(f"unknown submit kind {kind!r}")
+
+    if getattr(adapter, "background_submit", False):
+        import threading
+
+        def run():
+            try:
+                submit()
+            except Exception:
+                logger.exception("background frontend submit failed")
+
+        threading.Thread(
+            target=run, daemon=True,
+            name=f"{getattr(adapter, 'name', 'frontend')}-submit",
+        ).start()
+        return Result(data=True)
+
+    try:
+        result = submit()
     except Exception as exc:
         return Result.failure(f"submit failed: {exc}")
 

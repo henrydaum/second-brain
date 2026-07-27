@@ -556,6 +556,7 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
     max_failures = 5
 
     wants_console = bool(declarations.get("uses_console"))
+    restore_on_start = bool(declarations.get("restore_on_start"))
 
     def __init__(self, shutdown_event=None):
         """Take the host's shutdown Event, if the manager offers one.
@@ -583,9 +584,25 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
         """
         try:
             self._sandbox_box = get_sandbox().open(
-                source_path, entry, name=box_name)
+                source_path, entry, name=box_name, manage_lifecycle=False)
         except Exception as exc:
             logger.error("frontend %s did not start: %s", name, exc)
+            return
+
+        # Persistent frontend Requests need the same host context native
+        # commands receive. The execution object stays host-side; only Request
+        # results cross into the box.
+        try:
+            context_for = getattr(self.commands, "context", None)
+            context = (
+                context_for(None) if callable(context_for)
+                else types.SimpleNamespace(runtime=self.runtime,
+                                           session_key=None)
+            )
+            self._sandbox_box.execution.context = context
+        except Exception:
+            logger.exception("frontend %s could not bind sandbox context", name)
+            self.stop()
             return
 
         # The desk opens before the guest's start(), so a frontend can submit
@@ -615,6 +632,17 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
             logger.error("frontend %s refused to start", name)
             self.stop()
             return
+
+        # Restoration may synchronously emit form/approval renders. It must
+        # happen between guest calls, after start() has released the box.
+        if restore_on_start:
+            try:
+                key = self.session_key(None)
+                notice = self.runtime.restore_last_active(key)
+                if notice:
+                    self.render_messages(key, [notice])
+            except Exception:
+                logger.exception("frontend %s restore_last_active failed", name)
 
         failures = 0
         while not self._done() and box.alive:
