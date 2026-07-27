@@ -49,7 +49,7 @@ def _run(context, args, *, method="run", approve=None):
 
 def test_plugin_list_can_discover_llm_backend_role(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "plugins.services.service_llm.llm_backend_names",
+        "llm.backend_names",
         lambda: ["LiteLLMService", "OtherBackend"],
     )
 
@@ -68,7 +68,7 @@ def test_plugin_list_can_discover_llm_backend_role(monkeypatch, tmp_path):
 
 def test_setup_form_preserves_dependent_atlas_steps(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "plugins.services.service_llm.llm_backend_names",
+        "llm.backend_names",
         lambda: ["LiteLLMService"],
     )
     monkeypatch.setattr(package_manager, "installed_packages", lambda: [])
@@ -92,7 +92,7 @@ def test_setup_form_preserves_dependent_atlas_steps(monkeypatch, tmp_path):
 
 def test_setup_fresh_form_starts_with_package_choice(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "plugins.services.service_llm.llm_backend_names", lambda: [])
+        "llm.backend_names", lambda: [])
     context = _context(tmp_path)
 
     initial = _run(context, {}, method="form")
@@ -173,7 +173,7 @@ def test_config_write_merge_rejects_non_mapping(tmp_path):
 
 def test_setup_skip_output_is_exact(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "plugins.services.service_llm.llm_backend_names", lambda: [])
+        "llm.backend_names", lambda: [])
 
     result = _run(_context(tmp_path), {"install_choice": "skip"})
 
@@ -233,7 +233,7 @@ def test_setup_denied_config_write_stays_denied(tmp_path):
 
 def test_live_repl_collects_setup_package_choice(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        "plugins.services.service_llm.llm_backend_names", lambda: [])
+        "llm.backend_names", lambda: [])
     db = Database(str(tmp_path / "setup-live.db"))
     config = {}
     services = {}

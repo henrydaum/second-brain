@@ -178,15 +178,12 @@ The loop now splits the bundle against the model's capabilities and the
 backend's `native_modalities`, appends the text fallback itself, and the box
 receives plain dicts whose bytes the backend reads with `sdk.fs.read_bytes`.
 
-**Dual mode is permanent-ish, not transitional.** Provider libraries are
-volatile and local-model backends will arrive on whichever contract their
-author knew, so a native `BaseLLM` service with `is_llm_backend = True` still
-resolves, wrapped as a `NativeBrain`. `llm.registry.as_brain` extends that to
-*anything* exposing `chat_with_tools` — a test double, the stress harness's
-fake — which is why the kernel speaks exactly one language internally without a
-flag day. `plugins/services/service_llm.py` survives only as a compat shim
-re-exporting from `llm/`, because the unmigrated `service_litellm.py` imports
-it; delete it once every backend has moved.
+**Backend discovery is sandbox-only.** Every installed provider is a
+`helpers/llm_*.py` backend and runs through a `Brain` pool. The deprecated
+`plugins/services/service_llm.py` compatibility shim is gone.
+`llm.registry.as_brain` still adapts directly injected objects exposing
+`chat_with_tools` — test doubles and the stress harness use that seam — but
+plugin discovery never imports a native provider into the kernel.
 
 `/llm` gained explicit `load` / `unload` actions. Loading used to be a side
 effect of editing a profile; now a brain holds real processes, so opening one

@@ -324,7 +324,7 @@ def _make_response(answer: dict):
     type, and the bridge is the one part of the sandbox sanctioned to import
     across that line — the same reason it holds the native base classes.
     """
-    from plugins.services.service_llm import LLMResponse
+    from llm import LLMResponse
 
     return LLMResponse(content=str(answer.get("content") or ""),
                        tool_calls=list(answer.get("tool_calls") or []),

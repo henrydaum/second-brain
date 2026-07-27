@@ -202,41 +202,43 @@ def test_plugin_watcher_wrong_name_does_not_load(tmp_path, monkeypatch):
     assert not calls
 
 
-def test_plugin_watcher_accepts_llm_backend_provider(tmp_path, monkeypatch):
-    """Verify service-family LLM backend files refresh profiles instead of failing."""
-    from plugins.services.service_llm import LLMRouter
-    messages = []
-    path = _watched_dir(tmp_path, monkeypatch, "service") / "service_fake_llm.py"
-    unsub = bus.subscribe(CHAT_MESSAGE_PUSHED, lambda payload: messages.append(payload["message"]))
-    try:
-        path.write_text(
-            "from plugins.services.service_llm import BaseLLM, LLMResponse\n\n"
-            "class FakeBackend(BaseLLM):\n"
-            "    is_llm_backend = True\n"
-            "    def __init__(self, model_name, api_key=None, base_url=None): super().__init__(); self.model_name = model_name\n"
-            "    def _load(self): self.loaded = True; return True\n"
-            "    def unload(self): self.loaded = False\n"
-            "    def invoke(self, messages, attachments=None, **kwargs): return LLMResponse(content='ok')\n"
-            "    def stream(self, messages, attachments=None, **kwargs): return iter(())\n"
-            "    def chat_with_tools(self, messages, tools=None, **kwargs): return LLMResponse(content='ok')\n",
-            encoding="utf-8",
-        )
-        config = {"llm_profiles": {"model-x": {"llm_service_class": "FakeBackend"}}, "default_llm_profile": "model-x"}
-        services = {}
-        services["llm"] = LLMRouter(config, services)
-        monkeypatch.setattr("plugins.services.service_plugin_watcher.PluginWatcherService._reconcile_plugin_config", lambda self: None)
-        service = PluginWatcherService(config)
-        service.services = services
+def test_plugin_watcher_refreshes_sandboxed_llm_backends(
+    tmp_path,
+    monkeypatch,
+):
+    """LLM helper changes rescan the kernel registry."""
+    import plugins.services.service_plugin_watcher as watcher_mod
 
-        service.handle_create_or_modify(str(path))
+    directory = tmp_path / "helpers"
+    directory.mkdir()
+    root = object()
+    monkeypatch.setattr(
+        watcher_mod,
+        "helper_dirs",
+        lambda: ((root, directory),),
+    )
+    path = directory / "llm_fake.py"
+    path.write_text("display_name = 'Fake'\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr("llm.discover", lambda: calls.append("discover"))
+    monkeypatch.setattr(
+        "llm.refresh",
+        lambda config, **kwargs: calls.append(
+            ("refresh", config, kwargs)
+        ),
+    )
+    service = PluginWatcherService({"llm_profiles": {}})
 
-        assert services["model-x"].loaded
-        assert messages == ["✓ Registered plugin: LLM backends"]
-        path.unlink()
-        service.handle_delete(str(path))
-        assert "model-x" not in services
-    finally:
-        unsub()
+    service.handle_create_or_modify(str(path))
+    path.unlink()
+    service.handle_delete(str(path))
+
+    assert calls == [
+        "discover",
+        ("refresh", service.config, {"force": True}),
+        "discover",
+        ("refresh", service.config, {"force": True}),
+    ]
 
 
 def test_plugin_watcher_refreshes_runtime_commands_on_command_load(tmp_path, monkeypatch):

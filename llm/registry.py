@@ -148,31 +148,12 @@ def discover() -> int:
         return len(_BACKENDS)
 
 
-def _native_backends() -> dict[str, type]:
-    """Unmigrated ``BaseLLM`` services still declaring ``is_llm_backend``.
-
-    The dual mode, and not a courtesy: provider libraries are volatile and
-    local-model backends will arrive on whichever contract their author knew.
-    A native backend keeps working exactly as it did, at the cost of running
-    in the kernel's own process — which is the thing migrating fixes.
-    """
-    try:
-        from plugins.services.service_llm import _llm_backend_classes
-    except Exception:
-        return {}
-    try:
-        return _llm_backend_classes()
-    except Exception:
-        logger.exception("native LLM backend scan failed")
-        return {}
-
-
 def backend_names() -> list[str]:
-    """Every backend a profile may name, sandboxed and native alike."""
+    """Every sandboxed backend a profile may name."""
     with _LOCK:
         if not _BACKENDS:
             discover()
-        return sorted({*_BACKENDS, *_native_backends()})
+        return sorted(_BACKENDS)
 
 
 def backend_display_names() -> dict[str, str]:
@@ -180,8 +161,6 @@ def backend_display_names() -> dict[str, str]:
     with _LOCK:
         labels = {name: spec["display_name"]
                   for name, spec in _BACKENDS.items()}
-    for name in _native_backends():
-        labels.setdefault(name, name)
     return labels
 
 
@@ -660,40 +639,17 @@ def _native_bundle(attachments):
 # ──────────────────────────────────────────────────────────────────────
 
 def _build(name: str, profile: dict, config: dict) -> Brain:
-    """Make the right kind of brain for one profile.
-
-    Sandboxed backends win: if a profile names a class that exists in both
-    worlds, the isolated one is the one that runs.
-    """
-    with _LOCK:
-        if not _BACKENDS:
-            discover()
-        wanted = profile.get("llm_service_class") or DEFAULT_BACKEND
-        sandboxed = (_BACKENDS.get(wanted)
-                     or _BACKENDS.get(_ALIASES.get(wanted, "")))
-    if sandboxed is not None:
-        return Brain(name, profile, config)
-
-    native_classes = _native_backends()
-    cls = (native_classes.get(profile.get("llm_service_class") or "")
-           or native_classes.get(DEFAULT_BACKEND))
-    if cls is None:
-        # No backend either way. Still a Brain — it answers questions about
-        # the profile (context size, capabilities) and fails honestly when
-        # asked to talk, which is better than not existing and turning every
-        # caller into a None check.
-        return Brain(name, profile, config)
-
-    from plugins.services.service_llm import _build_llm_from_profile
-    return NativeBrain(name, profile, config,
-                       service=_build_llm_from_profile(name, profile))
+    """Build a profile brain; missing backends fail honestly when called."""
+    return Brain(name, profile, config)
 
 
-def refresh(config: dict) -> dict[str, Brain]:
+def refresh(config: dict, *, force: bool = False) -> dict[str, Brain]:
     """Rebuild every brain from config. Call after profiles change.
 
     Brains that survive the change keep their pools: rebuilding a brain whose
     settings did not move would close a working box for nothing.
+    ``force`` is for backend source changes and preserves which profiles were
+    loaded while replacing their boxes.
     """
     profiles = (config or {}).get("llm_profiles", {}) or {}
     with _LOCK:
@@ -701,12 +657,19 @@ def refresh(config: dict) -> dict[str, Brain]:
             _BRAINS.pop(name).unload()
         for name, profile in profiles.items():
             current = _BRAINS.get(name)
-            if current is not None and current.profile == profile:
+            if (
+                not force
+                and current is not None
+                and current.profile == profile
+            ):
                 current.config = config
                 continue
+            was_loaded = bool(current and current.loaded)
             if current is not None:
                 current.unload()
             _BRAINS[name] = _build(name, profile, config)
+            if was_loaded:
+                _BRAINS[name].load()
         if not (config or {}).get("default_llm_profile") and profiles:
             config["default_llm_profile"] = next(iter(profiles))
         return dict(_BRAINS)

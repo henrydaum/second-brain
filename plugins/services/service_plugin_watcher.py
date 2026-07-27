@@ -14,7 +14,7 @@ from events.event_channels import (
     PLUGIN_QUARANTINED,
 )
 from plugins.BaseService import BaseService, EXTENSION
-from plugins.helpers.plugin_paths import iter_plugin_dirs, plugin_info
+from plugins.helpers.plugin_paths import helper_dirs, iter_plugin_dirs, plugin_info
 from plugins.plugin_discovery import get_plugin_settings, load_single_plugin, unload_plugin, wire_peer_services
 from runtime.supervisor import supervisor
 
@@ -59,6 +59,10 @@ class PluginWatcherService(BaseService):
             directory.mkdir(parents=True, exist_ok=True)
             self.observer.schedule(handler, str(directory), recursive=False)
             watched += 1
+        for _root, directory in helper_dirs():
+            directory.mkdir(parents=True, exist_ok=True)
+            self.observer.schedule(handler, str(directory), recursive=False)
+            watched += 1
         self._scan_existing()
         self.observer.start()
         # The supervisor (runtime/supervisor.py) decides which plugins are
@@ -95,6 +99,14 @@ class PluginWatcherService(BaseService):
                         self._known_mtimes[str(path.resolve())] = path.stat().st_mtime
                     except OSError:
                         pass
+            for _root, directory in helper_dirs():
+                if not directory.exists():
+                    continue
+                for path in directory.glob("llm_*.py"):
+                    try:
+                        self._known_mtimes[str(path.resolve())] = path.stat().st_mtime
+                    except OSError:
+                        pass
 
     def handle_create_or_modify(self, raw_path: str):
         """Handle create or modify."""
@@ -124,6 +136,13 @@ class PluginWatcherService(BaseService):
 
     def _load_plugin(self, path: Path, edited: bool = False):
         """Internal helper to load plugin."""
+        if self._is_llm_backend(path):
+            self._refresh_llm_backends()
+            self._notify(
+                f"✓ Registered LLM backend{' edit' if edited else ''}: "
+                f"{path.stem}"
+            )
+            return
         # A (re)load is a fresh start: forget any prior strikes/quarantine so a
         # fixed-and-resaved plugin gets a clean strike budget.
         supervisor.health.clear(str(path))
@@ -160,6 +179,10 @@ class PluginWatcherService(BaseService):
 
     def _unload_plugin(self, path: Path):
         """Internal helper to handle unload plugin."""
+        if self._is_llm_backend(path):
+            self._refresh_llm_backends()
+            self._notify(f"Deregistered LLM backend: {path.stem}")
+            return
         info, err = plugin_info(path)
         if err:
             logger.warning(f"Plugin watcher could not infer deleted plugin {path}: {err}")
@@ -270,14 +293,22 @@ class PluginWatcherService(BaseService):
             import llm
 
             llm.discover()
-            llm.refresh(self.config)
+            llm.refresh(self.config, force=True)
         except Exception:
             logger.exception("LLM backend rescan failed")
+
+    @staticmethod
+    def _is_llm_backend(path: Path) -> bool:
+        """Whether a changed helper is a sandboxed LLM backend."""
+        if path.suffix != ".py" or not path.stem.startswith("llm_"):
+            return False
         try:
-            from plugins.services.service_llm import refresh_llm_profile_services
-        except Exception:
-            return
-        refresh_llm_profile_services(self.services, self.config)
+            return any(
+                path.parent.resolve() == directory.resolve()
+                for _root, directory in helper_dirs()
+            )
+        except OSError:
+            return False
 
 
 # Load priority: services must register before the tasks that require them, so
@@ -329,7 +360,10 @@ class _PluginEventHandler(FileSystemEventHandler):
             self._timer = None
 
         def _priority(raw_path: str) -> int:
-            info, err = plugin_info(Path(raw_path))
+            path = Path(raw_path)
+            if self.watcher._is_llm_backend(path):
+                return _LOAD_PRIORITY["service"]
+            info, err = plugin_info(path)
             return _LOAD_PRIORITY.get(info.plugin_type, len(_LOAD_PRIORITY)) if info and not err else len(_LOAD_PRIORITY)
 
         # Stable sort: services before tasks before everything else, ties keep

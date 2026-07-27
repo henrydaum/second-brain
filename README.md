@@ -263,7 +263,7 @@ On first run, Second Brain creates its data directory (the DATA_DIR) automatical
 - macOS: `~/Library/Application Support/Second Brain/`
 - Linux: `${XDG_DATA_HOME:-~/.local/share}/Second Brain/`
 
-From there, `/setup` writes the LLM profile and Telegram settings for you, and installing packages extends `enabled_frontends`/`autoload_services` as needed. A fresh kernel starts with `enabled_frontends: ["repl"]` and `autoload_services: ["llm", "timekeeper"]`.
+From there, `/setup` writes the LLM profile and Telegram settings for you, and installing packages extends `enabled_frontends`/`autoload_services` as needed. A fresh kernel starts with `enabled_frontends: ["repl"]` and `autoload_services: ["timekeeper"]`; the kernel-owned LLM registry loads the default profile separately.
 
 The most important setting once indexing is installed is `sync_directories`: the folders Second Brain should watch and index. The attachment cache is included by default so files sent through frontends can enter the same pipeline. You can add multiple folders here, and they all get synced automatically. As soon as you set a sync directory, the REPL and app.log will be flooded with task status messages. Don't worry — that's the sync working as intended. It'll stop once the sync is complete. (You can use Telegram if you prefer a cleaner chat experience.)
 
@@ -276,7 +276,7 @@ Illustrative shape after the `starter` bundle and `/setup` (LiteLLM backend, Tel
     "C:/Users/you/AppData/Local/Second Brain/attachment_cache"
   ],
   "enabled_frontends": ["repl", "telegram"],
-  "autoload_services": ["llm", "timekeeper"],
+  "autoload_services": ["timekeeper"],
   "telegram_bot_token": "",
   "telegram_allowed_user_id": 0,
   "llm_profiles": {

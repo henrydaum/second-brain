@@ -57,7 +57,7 @@ SETTINGS_DATA = [
     # --- Services ---
     ("Auto-load Services", "autoload_services",
      "Managed service names to load automatically on startup. Extension services auto-load when installed.",
-     ["llm", "timekeeper"],
+     ["timekeeper"],
      {"type": "json_list"}),
 
     # --- Frontends ---

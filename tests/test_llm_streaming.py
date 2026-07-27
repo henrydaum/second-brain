@@ -74,7 +74,6 @@ def tree(tmp_path, monkeypatch):
     helpers.mkdir()
     monkeypatch.setattr("plugins.helpers.plugin_paths.helper_dirs",
                         lambda: ((None, helpers),))
-    monkeypatch.setattr(llm.registry, "_native_backends", dict)
     yield helpers
     llm.registry._BRAINS.clear()
     llm.registry._BACKENDS.clear()

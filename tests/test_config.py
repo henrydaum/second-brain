@@ -20,7 +20,7 @@ def _cfg(tmp_path):
 
 def test_kernel_defaults_are_minimal():
     """The kernel ships REPL plus the LLM router and Timekeeper, with no jobs."""
-    assert config_manager.DEFAULTS["autoload_services"] == ["llm", "timekeeper"]
+    assert config_manager.DEFAULTS["autoload_services"] == ["timekeeper"]
     assert config_manager.DEFAULTS["enabled_frontends"] == ["repl"]
     assert DEFAULT_SCHEDULED_JOBS == {}
     assert config_manager.DEFAULTS["scheduled_jobs"] == {}
@@ -41,7 +41,7 @@ def test_load_creates_default_config_when_missing(tmp_path):
     assert config["enabled_frontends"] == ["repl"]
     # The file is written so subsequent loads are stable.
     on_disk = json.loads((tmp_path / "config.json").read_text())
-    assert on_disk["autoload_services"] == ["llm", "timekeeper"]
+    assert on_disk["autoload_services"] == ["timekeeper"]
 
 
 def test_load_merges_missing_keys_and_persists(tmp_path):
@@ -55,6 +55,19 @@ def test_load_merges_missing_keys_and_persists(tmp_path):
     # Schema drift is healed on disk, not just in memory.
     on_disk = json.loads((tmp_path / "config.json").read_text())
     assert "enabled_frontends" in on_disk
+
+
+def test_load_removes_deprecated_llm_service_autoload(tmp_path):
+    path = _cfg(tmp_path)
+    (tmp_path / "config.json").write_text(json.dumps({
+        "autoload_services": ["llm", "timekeeper"],
+    }))
+
+    config = config_manager.load(path)
+
+    assert config["autoload_services"] == ["timekeeper"]
+    on_disk = json.loads((tmp_path / "config.json").read_text())
+    assert on_disk["autoload_services"] == ["timekeeper"]
 
 
 def test_load_strips_user_config_keys_from_disk(tmp_path):

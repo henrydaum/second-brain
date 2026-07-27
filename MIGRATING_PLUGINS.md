@@ -198,14 +198,12 @@ Requests, so a plugin importing one **loads with a disclaimer** and should
 declare `isolation = "subprocess"`. That is the answer the security contract
 already gives; it is not a reason to leave anything behind.
 
-Three files need a moment's thought, not an exemption:
+One family needs a moment's thought, not an exemption:
 
-- **`service_llm`** is hard-imported by kernel code
-  (`runtime/conversation_loop.py`) and `tests/test_kernel_boundary.py` pins
-  that import edge. Migrating it means changing what the kernel imports, so it
-  is a deliberate kernel edit plus a boundary-test update — not a plugin
-  migration. Do it late. (`parser_registry` used to be the second such case;
-  it stopped being a plugin at all and moved into the kernel as `parsing/`.)
+- **LLM backends** live in `helpers/llm_*.py` and implement
+  `guest.llm.BaseLLMBackend`. The kernel-owned `llm` registry discovers their
+  declarations and runs them in boxes; there is no `service_llm` plugin or
+  native-backend compatibility path.
 - **Console frontends** declare `uses_console = True`, drain input with
   `sdk.console.read_line()` from `poll`, and write with `sdk.console.write()`.
   The kernel owns stdin, so reads never block the box and subprocess stdin

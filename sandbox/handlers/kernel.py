@@ -878,12 +878,9 @@ def _config_write(ctx, args: dict) -> Result:
             runtime.config[key] = value
         if key in {"llm_profiles", "default_llm_profile"}:
             try:
-                from plugins.services.service_llm import (
-                    refresh_llm_profile_services,
-                )
+                import llm
 
-                refresh_llm_profile_services(
-                    getattr(ctx, "services", None), config)
+                llm.refresh(config)
             except Exception:
                 # The persisted profile is authoritative and discovery can
                 # reconcile it on restart when live refresh is unavailable.
@@ -1071,9 +1068,9 @@ def _plugin_list(ctx, args: dict) -> Result:
         if args.get("category") not in (None, "", "services"):
             return Result(data=[])
         try:
-            from plugins.services.service_llm import llm_backend_names
+            import llm
 
-            return Result(data=llm_backend_names())
+            return Result(data=llm.backend_names())
         except Exception as exc:
             return Result.failure(str(exc))
 

@@ -47,11 +47,11 @@ def _context(monkeypatch, profiles=None, default="a"):
         lambda values: saved.update(values),
     )
     monkeypatch.setattr(
-        "plugins.services.service_llm.refresh_llm_profile_services",
-        lambda services, values: False,
+        "llm.refresh",
+        lambda values: {},
     )
     monkeypatch.setattr(
-        "plugins.services.service_llm.llm_backend_names",
+        "llm.backend_names",
         lambda: ["FakeBackend"],
     )
     services = {"a": FakeLlm(), "b": FakeLlm()}

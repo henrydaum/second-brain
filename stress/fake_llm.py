@@ -20,7 +20,7 @@ import json
 import random
 from dataclasses import dataclass, field
 
-from plugins.services.service_llm import LLMResponse
+from llm import LLMResponse
 
 
 class _BaseFake:

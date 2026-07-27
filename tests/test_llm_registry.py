@@ -16,7 +16,7 @@ import pytest
 
 import sandbox  # noqa: F401  - installs the ``guest`` package alias
 import llm
-from llm.registry import Brain, NativeBrain, _pool_ceiling
+from llm.registry import Brain, _pool_ceiling
 
 BACKEND = '''
 """A backend that answers without a provider."""
@@ -81,7 +81,6 @@ def tree(tmp_path, monkeypatch):
     monkeypatch.setattr("plugins.helpers.plugin_paths.helper_dirs",
                         helper_dirs)
     # Native backends are a separate world; keep them out unless a test asks.
-    monkeypatch.setattr(llm.registry, "_native_backends", dict)
     yield helpers
     llm.registry._BRAINS.clear()
     llm.registry._BACKENDS.clear()
@@ -347,44 +346,29 @@ def test_an_uninstalled_backend_fails_honestly(tree):
     assert response.error_code == "not_loaded"
 
 
+def test_forced_refresh_replaces_loaded_backend_boxes(tree):
+    """A hot-edited backend cannot keep serving from its old process."""
+    _write(tree, BACKEND)
+    config = _config(tree)
+    llm.refresh(config)
+    original = llm.brain("gpt-test")
+    assert original.load()
+
+    llm.refresh(config, force=True)
+
+    replacement = llm.brain("gpt-test")
+    assert replacement is not original
+    assert replacement.loaded
+    assert not original.loaded
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Dual mode.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_an_unmigrated_backend_still_answers(tree, monkeypatch):
-    """Until every backend migrates, dual mode is the contract."""
-    class LegacyResponse:
-        """The old LLMResponse shape, duck-typed."""
-        content, tool_calls = "legacy", []
-        prompt_tokens = cached_prompt_tokens = None
-        error = error_code = None
-
-    class LegacyLLM:
-        """An unmigrated BaseLLM service."""
-        loaded, supports_streaming, supports_tool_choice = True, False, False
-
-        def chat_with_tools(self, messages, tools=None, **kwargs):
-            """Answer the old way."""
-            return LegacyResponse()
-
-    monkeypatch.setattr(llm.registry, "_native_backends",
-                        lambda: {"LegacyLLM": LegacyLLM})
-    monkeypatch.setattr("plugins.services.service_llm._build_llm_from_profile",
-                        lambda name, profile: LegacyLLM())
-
-    llm.refresh(_config(tree, backend="LegacyLLM"))
-    target = llm.brain("gpt-test")
-
-    assert isinstance(target, NativeBrain)
-    assert target.chat(llm.LLMRequest(
-        messages=[{"role": "user", "content": "x"}])).content == "legacy"
-
-
-def test_a_sandboxed_backend_wins_a_name_collision(tree, monkeypatch):
-    """Migration is the direction of travel, so the isolated one runs."""
+def test_a_sandboxed_backend_is_the_profile_brain(tree):
+    """Discovered backends always run through the isolated brain."""
     _write(tree, BACKEND)
-    monkeypatch.setattr(llm.registry, "_native_backends",
-                        lambda: {"EchoBackend": object})
 
     llm.refresh(_config(tree))
 

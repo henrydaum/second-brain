@@ -82,6 +82,12 @@ def load(path: str = None) -> dict:
         merged.pop(key, None)
     for key in _LIST_KEYS - USER_CONFIG_KEYS:
         merged[key] = _normalize_list(merged.get(key, DEFAULTS[key]))
+    # The LLM router is kernel-owned now and loads before service autoloading.
+    # Remove the retired service name from existing configurations.
+    merged["autoload_services"] = [
+        name for name in merged.get("autoload_services", [])
+        if name != "llm"
+    ]
     merged["enabled_frontends"] = _normalize_frontends(
         merged.get("enabled_frontends", DEFAULTS["enabled_frontends"])
     )

@@ -13,10 +13,11 @@ real SQLite DB, so each ``say`` invocation restores the last-active conversation
 drives one turn, prints the reply, persists, and exits. State survives across
 processes — which itself dogfoods the kernel's restore/persistence path.
 
-The MiniMax backend is wired with **zero global footprint**: the ``service-litellm``
-backend source is fetched from the ``origin/store`` git ref, written under the
-driver's data dir, imported, and instantiated from your real MiniMax profile in
-``config.json``. Nothing is installed into the global plugin tree.
+The MiniMax backend is wired with **zero global footprint**: the sandboxed
+LiteLLM helper is fetched from the ``origin/store`` git ref, written under the
+driver's data directory, and opened through a temporary `Brain` using your
+real MiniMax profile in ``config.json``. Nothing is installed into the global
+plugin tree.
 
 Usage::
 
@@ -31,9 +32,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import subprocess
-import sys
 from pathlib import Path
 
 from config import config_manager
@@ -48,23 +47,19 @@ MINIMAX_PROFILE = "minimax/MiniMax-M2.7"  # default; override with --profile
 # ── MiniMax backend wiring (no global install) ─────────────────────────
 
 def _fetch_litellm_backend(dest_dir: Path):
-    """Materialise the store's LiteLLM backend and return its class."""
-    dest = dest_dir / "_stress_litellm.py"
+    """Materialise the store's sandboxed LiteLLM backend."""
+    dest = dest_dir / "llm_litellm.py"
     if not dest.exists():
         src = subprocess.check_output(
-            ["git", "show", "origin/store:packages/service-litellm/files/services/service_litellm.py"],
+            ["git", "show", "origin/store:helpers/llm_litellm.py"],
             cwd=str(_ROOT),
         )
         dest.write_bytes(src)
-    spec = importlib.util.spec_from_file_location("_stress_litellm", dest)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["_stress_litellm"] = module
-    spec.loader.exec_module(module)
-    return module.LiteLLMService
+    return dest
 
 
 def _build_minimax_llm(real_config: dict, dest_dir: Path, profile_name: str):
-    """Build a loaded LiteLLM backend from the on-disk MiniMax profile."""
+    """Build a loaded sandboxed Brain from the on-disk MiniMax profile."""
     profiles = real_config.get("llm_profiles") or {}
     profile = profiles.get(profile_name)
     if profile is None:
@@ -72,26 +67,24 @@ def _build_minimax_llm(real_config: dict, dest_dir: Path, profile_name: str):
             f"No LLM profile {profile_name!r} found in config.json. "
             f"Available: {sorted(profiles)}"
         )
-    import os
-    cls = _fetch_litellm_backend(dest_dir)
-    api_key = (
-        profile.get("secret_llm_api_key")
-        or profile.get("llm_api_key", "")
-        or ""
-    )
-    resolved_key = os.environ.get(api_key, api_key) if api_key else None
-    base_url = profile.get("llm_endpoint") or None
-    llm = cls(profile_name, api_key=resolved_key, base_url=base_url)
-    llm.capabilities.update({
-        k: v for k, v in (profile.get("llm_capabilities") or {}).items()
-        if k in llm.capabilities
-    })
-    ctx = int(profile.get("llm_context_size", 0) or 0)
-    if ctx > 0:
-        llm.context_size = ctx
-    if not llm.load():
+    import llm.registry as registry
+
+    path = _fetch_litellm_backend(dest_dir)
+    registry._BACKENDS["LiteLLMBackend"] = {
+        "name": "LiteLLMBackend",
+        "path": path,
+        "stem": path.stem,
+        "display_name": "LiteLLM (any provider)",
+        "supports_streaming": True,
+        "supports_tool_choice": True,
+        "native_modalities": ["image", "audio", "video"],
+        "sandboxed": True,
+    }
+    registry._ALIASES["LiteLLMService"] = "LiteLLMBackend"
+    brain = registry.Brain(profile_name, profile, real_config)
+    if not brain.load():
         raise SystemExit("LiteLLM backend failed to load (check API key / network).")
-    return llm
+    return brain
 
 
 # ── kernel lifecycle ────────────────────────────────────────────────────

@@ -795,7 +795,11 @@ def _frontends(files: list[PlannedFile]) -> list[str]:
 
 
 def _services(files: list[PlannedFile]) -> list[str]:
-    return _unique(_service_autoload_name(file) for file in files if _entry_type(file.path) == "service")
+    return _unique(
+        _plugin_name(file.path, "service")
+        for file in files
+        if _entry_type(file.path) == "service"
+    )
 
 
 def _services_removed(files: list[PlannedFile]) -> list[str]:
@@ -808,59 +812,8 @@ def _services_removed(files: list[PlannedFile]) -> list[str]:
     return _unique(
         _plugin_name(file.path, "service")
         for file in files
-        if _entry_type(file.path) == "service" and not _is_llm_backend(file)
+        if _entry_type(file.path) == "service"
     )
-
-
-def _service_autoload_name(file: PlannedFile) -> str:
-    """Autoload-config name for a service file.
-
-    LLM backend classes (e.g. ``service_litellm``) register no service of their
-    own — they are instantiated by the kernel ``llm`` router via
-    ``llm_service_class``. Map them to ``llm`` so the autoloader loads the router
-    that ships in the kernel rather than a nonexistent ``litellm`` service.
-    """
-    if _is_llm_backend(file):
-        return "llm"
-    return _plugin_name(file.path, "service")
-
-
-def _is_llm_backend(file: PlannedFile) -> bool:
-    """Whether a service file defines an LLM backend (class with ``is_llm_backend = True``)."""
-    source = _service_source(file)
-    if not source:
-        return False
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return False
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        for item in node.body:
-            if not isinstance(item, ast.Assign):
-                continue
-            if any(isinstance(t, ast.Name) and t.id == "is_llm_backend" for t in item.targets) \
-                    and isinstance(item.value, ast.Constant) and item.value.value is True:
-                return True
-    return False
-
-
-def _service_source(file: PlannedFile) -> str | None:
-    """Source text for a planned file — from its in-memory content (install) or its
-    installed copy on disk (uninstall, where content is not carried)."""
-    if file.content is not None:
-        try:
-            return file.content.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
-    target = _target(file.path)
-    if not target.exists():
-        return None
-    try:
-        return target.read_text(encoding="utf-8")
-    except OSError:
-        return None
 
 
 def _entry_type(rel: str) -> str | None:

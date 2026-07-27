@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from plugins.services.service_llm import LLMProviderError
+from llm import LLMProviderError
 
 _REPO = Path(__file__).resolve().parents[1]
 _STORE_REL = "services/service_litellm.py"
