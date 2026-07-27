@@ -70,7 +70,8 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        PLUGIN_DESCRIBE, PLUGIN_INSTALL, PLUGIN_LIST,
                        PLUGIN_UNINSTALL, PLUGIN_UPDATE, PROC_RUN,
                        SECRET_REVEAL, SELF_RESPOND,
-                       SERVICE_CALL, SERVICE_LIST, SESSION_ADD_PROMPT,
+                       SERVICE_CALL, SERVICE_LIST, SERVICE_LOAD,
+                       SERVICE_UNLOAD, SESSION_ADD_PROMPT,
                        SESSION_ADD_TOOL, SESSION_CANCEL, SESSION_GET,
                        SESSION_LIST, SESSION_PUSH, SESSION_REMOVE_PROMPT,
                        SESSION_REMOVE_TOOL, SESSION_STATE_GET,
@@ -343,14 +344,22 @@ class _Plugins(_Namespace):
 class _Services(_Namespace):
     """Calling into loaded services."""
 
-    def list(self):
-        """Loaded services and whether each is ready."""
-        return self._ask(SERVICE_LIST)
+    def list(self, details: bool = False):
+        """Loaded services, optionally with lifecycle and setting metadata."""
+        return self._ask(SERVICE_LIST, details=details)
 
     def call(self, name: str, method: str, **kwargs):
         """Invoke an exported method. Simple data comes back, never objects."""
         return self._ask(SERVICE_CALL, name=name, method=method,
                          kwargs=kwargs)
+
+    def load(self, name: str):
+        """Load a user-managed service."""
+        return self._ask(SERVICE_LOAD, name=name)
+
+    def unload(self, name: str):
+        """Unload a user-managed service."""
+        return self._ask(SERVICE_UNLOAD, name=name)
 
 
 class _Tools(_Namespace):

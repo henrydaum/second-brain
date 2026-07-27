@@ -1,7 +1,4 @@
-from types import SimpleNamespace
-
 from plugins.BaseService import EXTENSION, BaseService, is_user_managed_service, should_autoload_service
-from plugins.commands.command_services import ServicesCommand
 from plugins.frontends.helpers.formatters import format_services
 
 
@@ -34,20 +31,6 @@ def test_extension_services_autoload_without_config_entry():
     assert should_autoload_service("extension", extension, {"autoload_services": []})
     assert is_user_managed_service(managed)
     assert not is_user_managed_service(extension)
-
-
-def test_services_command_does_not_offer_load_unload_for_extensions():
-    extension = ExtensionService()
-    extension.load()
-    context = SimpleNamespace(services={"extension": extension})
-
-    steps = ServicesCommand().form({"service_name": "extension"}, context)
-    result = ServicesCommand().run({"service_name": "extension"}, context)
-    blocked = ServicesCommand().run({"service_name": "extension", "action": "unload"}, context)
-
-    assert [step.name for step in steps] == ["service_name"]
-    assert "| Status | Extension |" in result
-    assert blocked == "extension is an installed extension and is loaded automatically."
 
 
 def test_format_services_labels_lifecycles():

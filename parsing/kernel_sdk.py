@@ -169,6 +169,16 @@ class _Services:
         """The service instance, or None. For parsers that check first."""
         return self._services.get(name)
 
+    def load(self, name: str):
+        """Parsers may inspect/call peers, never change their lifecycle."""
+        raise PermissionError(
+            f"parsers cannot load service {name!r}")
+
+    def unload(self, name: str):
+        """Parsers may inspect/call peers, never change their lifecycle."""
+        raise PermissionError(
+            f"parsers cannot unload service {name!r}")
+
 
 class KernelSDK:
     """What a parser sees when the kernel calls it."""

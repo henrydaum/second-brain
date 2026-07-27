@@ -10,7 +10,6 @@ from events.event_bus import bus
 from events.event_channels import SESSION_CONVERSATION_CHANGED
 from pipeline.database import Database
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
-from plugins.commands.command_services import ServicesCommand, _actions_for
 from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks
 from runtime.conversation_runtime import ConversationRuntime
 
@@ -59,68 +58,6 @@ def test_queued_ack_hook_suppresses_the_text_ack():
     fe.render_queued_ack = lambda _key: True  # reaction-capable frontend
     fe._render_result("s", queued)
     assert fe.rendered == []
-
-
-# ── /services toggles ────────────────────────────────────────────────
-
-class _ManagedService:
-    loaded = False
-    lifecycle = "managed"
-    config_settings = [("Embed Model", "embed_model_name", "Model.", "x", {"type": "text"})]
-
-    def load(self):
-        self.loaded = True
-        return True
-
-    def unload(self):
-        self.loaded = False
-
-
-def test_services_actions_are_toggles_with_quicklinks():
-    svc = _ManagedService()
-    context = SimpleNamespace(config={"autoload_services": []})
-
-    actions, labels = _actions_for(context, "embedder", svc)
-
-    assert actions[:2] == ["toggle_loaded", "toggle_autoload"]
-    assert labels[:2] == ["Load it", "Autoload on startup"]
-    assert actions[2] == "edit_setting:embed_model_name"
-    assert labels[2] == "Edit Embed Model"
-
-    svc.loaded = True
-    context.config["autoload_services"] = ["embedder"]
-    _, labels = _actions_for(context, "embedder", svc)
-    assert labels[:2] == ["Unload it", "Don't autoload on startup"]
-
-
-def test_toggle_loaded_flips_service_state():
-    svc = _ManagedService()
-    context = SimpleNamespace(services={"embedder": svc}, config={"autoload_services": []},
-                              orchestrator=None)
-
-    out = ServicesCommand().run({"service_name": "embedder", "action": "toggle_loaded"}, context)
-    assert out == "Loaded service: embedder" and svc.loaded
-
-    out = ServicesCommand().run({"service_name": "embedder", "action": "toggle_loaded"}, context)
-    assert out == "Unloaded service: embedder" and not svc.loaded
-
-
-def test_toggle_autoload_updates_config(monkeypatch):
-    import plugins.commands.command_services as mod
-    saved = {}
-    monkeypatch.setattr("config.config_manager.save", lambda cfg: saved.update(cfg))
-    svc = _ManagedService()
-    context = SimpleNamespace(services={"embedder": svc}, config={"autoload_services": ["llm"]},
-                              orchestrator=None, runtime=None)
-
-    out = mod.ServicesCommand().run({"service_name": "embedder", "action": "toggle_autoload"}, context)
-
-    assert "now" in out
-    assert saved["autoload_services"] == ["embedder", "llm"]
-
-    out = mod.ServicesCommand().run({"service_name": "embedder", "action": "toggle_autoload"}, context)
-    assert "no longer" in out
-    assert saved["autoload_services"] == ["llm"]
 
 
 # ── Quicklinks ───────────────────────────────────────────────────────

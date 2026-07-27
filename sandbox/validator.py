@@ -521,13 +521,47 @@ def _plugin_classes(walker: _Walker):
     return found
 
 
+def _formstep_nodes(tree):
+    """Imports/uses of the command-only guest form value."""
+    found = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module in {
+                "guest.forms", "sandbox.guest.forms", "guest",
+                "sandbox.guest",
+            }
+            and any(alias.name == "FormStep" for alias in node.names)
+        ) or (
+            isinstance(node, ast.Import)
+            and any(alias.name in {
+                "guest.forms", "sandbox.guest.forms",
+            } for alias in node.names)
+        ) or (
+            isinstance(node, ast.Attribute)
+            and node.attr == "FormStep"
+            and isinstance(node.value, ast.Name)
+            and node.value.id in {"guest", "forms"}
+        ):
+            found.append(node)
+    return found
+
+
 def _check_contract(tree, walker: _Walker, filename: str, known_names):
     """Check the BasePlugin contract, declared metadata, and name collisions."""
     stem = Path(filename).stem
     prefix = stem.split("_")[0] if "_" in stem else ""
     declared = _plugin_classes(walker)
+    formstep_nodes = _formstep_nodes(tree)
 
     if not declared:
+        for node in formstep_nodes:
+            walker.add(
+                ERROR,
+                node,
+                "FormStep is command-only; helper and scratch code cannot "
+                "present a multi-step command form",
+            )
         # A file *named* as a plugin has to be one. Anything else is a helper
         # or a script: effect checks only, no contract.
         if prefix in FAMILIES:
@@ -537,6 +571,14 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
         return
 
     family, base, cls = declared[0]
+    if family != "command":
+        for node in formstep_nodes:
+            walker.add(
+                ERROR,
+                node,
+                f"FormStep is command-only; a {family} cannot present a "
+                "multi-step command form",
+            )
     if len(declared) > 1:
         walker.add(ERROR, declared[1][2],
                    f"declares {len(declared)} plugin classes; a plugin file "

@@ -33,6 +33,7 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               PARSE_FILE, PARSE_MODALITY, PATH_GET, PLUGIN_DESCRIBE,
                               PLUGIN_INSTALL, PLUGIN_LIST, PLUGIN_UNINSTALL,
                               PLUGIN_UPDATE, SERVICE_CALL, SERVICE_LIST,
+                              SERVICE_LOAD, SERVICE_UNLOAD,
                               SESSION_ADD_PROMPT, SESSION_ADD_TOOL,
                               SESSION_CANCEL, SESSION_GET, SESSION_LIST,
                               SESSION_PUSH, SESSION_REMOVE_PROMPT,
@@ -542,8 +543,60 @@ def _config_write(ctx, args: dict) -> Result:
         return bad
     try:
         from config import config_manager
-        config[key] = args.get("value")
+        from config.config_data import SETTINGS_DATA
+        from plugins.plugin_discovery import (
+            get_plugin_setting_scope,
+            get_plugin_settings,
+        )
+
+        value = args.get("value")
+        entries = [*SETTINGS_DATA, *get_plugin_settings()]
+        entry = next((item for item in entries if item[1] == key), None)
+        info = (
+            entry[4]
+            if entry and isinstance(entry[4], dict)
+            else {}
+        )
+        plugin_keys = {item[1] for item in get_plugin_settings()}
+        user_scoped = (
+            info.get("scope") == "user"
+            or (key in plugin_keys and get_plugin_setting_scope(key) == "user")
+        )
+        if user_scoped:
+            db = _db(ctx)
+            getter = getattr(db, "get_user_config", None)
+            setter = getattr(db, "set_user_config", None)
+            if getter is None or setter is None:
+                return Result.failure(
+                    "user settings are not available in this context")
+            uid = getattr(ctx, "user_id", None)
+            user_config = getter(uid) or {}
+            user_config[key] = value
+            setter(uid, user_config)
+            config[key] = value
+            runtime = _runtime(ctx)
+            if (
+                runtime is not None
+                and getattr(runtime, "config", None) is not None
+            ):
+                runtime.config[key] = value
+            if (
+                runtime is not None
+                and hasattr(runtime, "refresh_session_specs")
+            ):
+                runtime.refresh_session_specs()
+            return Result(data=True)
+        config[key] = value
         config_manager.save(config)
+        if key in plugin_keys:
+            plugin_config = config_manager.load_plugin_config()
+            plugin_config[key] = value
+            config_manager.save_plugin_config(plugin_config)
+        runtime = _runtime(ctx)
+        if runtime is not None and getattr(runtime, "config", None) is not None:
+            runtime.config[key] = value
+        if runtime is not None and hasattr(runtime, "refresh_session_specs"):
+            runtime.refresh_session_specs()
         return Result(data=True)
     except Exception as exc:
         return Result.failure(f"config write failed: {exc}")
@@ -734,10 +787,96 @@ def _plugin_describe(ctx, args: dict) -> Result:
 def _service_list(ctx, args: dict) -> Result:
     """Loaded services and whether each is ready."""
     services = getattr(ctx, "services", None) or {}
+    if args.get("details"):
+        from plugins.BaseService import service_lifecycle
+
+        return Result(data=[{
+            "name": name,
+            "loaded": bool(getattr(service, "loaded", False)),
+            "model_name": getattr(service, "model_name", "") or "",
+            "lifecycle": service_lifecycle(service),
+            "config_settings": [
+                {
+                    "title": entry[0],
+                    "key": entry[1],
+                    "description": entry[2],
+                    "default": entry[3],
+                    "info": entry[4] if isinstance(entry[4], dict) else {},
+                    "current": _config_value(ctx, entry[1], entry),
+                }
+                for entry in (getattr(service, "config_settings", None) or [])
+                if isinstance(entry, (list, tuple))
+                and len(entry) == 5
+                and not (
+                    isinstance(entry[4], dict)
+                    and entry[4].get("hidden") is True
+                )
+            ],
+        } for name, service in sorted(services.items())])
     return Result(data={
         name: bool(getattr(service, "loaded", False))
         for name, service in services.items()
     })
+
+
+def _config_value(ctx, key, entry):
+    """Resolve a setting value with the same user/global scope semantics."""
+    info = entry[4] if isinstance(entry[4], dict) else {}
+    scope = "user" if info.get("scope") == "user" else "global"
+    if scope == "user":
+        db = _db(ctx)
+        getter = getattr(db, "get_user_config", None)
+        if getter is not None:
+            values = getter(getattr(ctx, "user_id", None)) or {}
+            return values.get(
+                key, (getattr(ctx, "config", None) or {}).get(key, entry[3]))
+    return (getattr(ctx, "config", None) or {}).get(key)
+
+
+def _clear_task_skip_cache(ctx):
+    orchestrator = getattr(ctx, "orchestrator", None)
+    clear = getattr(orchestrator, "clear_skip_cache", None)
+    if clear is not None:
+        clear()
+
+
+def _service_load(ctx, args: dict) -> Result:
+    """Load one user-managed service."""
+    name = args.get("name")
+    service = _service(ctx, name)
+    if service is None:
+        return Result.failure(f"service {name!r} is not registered")
+    from plugins.BaseService import is_user_managed_service
+
+    if not is_user_managed_service(service):
+        return Result.refusal(
+            f"{name} is an installed extension and is loaded automatically")
+    try:
+        loaded = service.load()
+        if loaded is not False:
+            _clear_task_skip_cache(ctx)
+        return Result(data=loaded is not False)
+    except Exception as exc:
+        return Result.failure(f"service load failed: {exc}")
+
+
+def _service_unload(ctx, args: dict) -> Result:
+    """Unload one user-managed service."""
+    name = args.get("name")
+    service = _service(ctx, name)
+    if service is None:
+        return Result.failure(f"service {name!r} is not registered")
+    from plugins.BaseService import is_user_managed_service
+
+    if not is_user_managed_service(service):
+        return Result.refusal(
+            f"{name} is an installed extension and is loaded automatically")
+    try:
+        service.unload()
+        _clear_task_skip_cache(ctx)
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"service unload failed: {exc}")
 
 
 def _service_call(ctx, args: dict) -> Result:
@@ -1358,6 +1497,7 @@ HANDLERS = {
     PLUGIN_INSTALL: _plugin_install, PLUGIN_UNINSTALL: _plugin_uninstall,
     PLUGIN_UPDATE: _plugin_update,
     SERVICE_LIST: _service_list, SERVICE_CALL: _service_call,
+    SERVICE_LOAD: _service_load, SERVICE_UNLOAD: _service_unload,
     TOOL_LIST: _tool_list, TOOL_CALL: _tool_call,
     COMMAND_LIST: _command_list, COMMAND_CALL: _command_call,
     AGENT_COMPLETE: _agent_complete,
