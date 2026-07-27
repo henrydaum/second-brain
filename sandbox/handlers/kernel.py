@@ -30,7 +30,7 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               FRONTEND_CANCEL, FRONTEND_PENDING,
                               FRONTEND_RESOLVE,
                               FRONTEND_SUBMIT, LEDGER_READ, LEDGER_RECORD,
-                              PARSE_FILE, PARSE_MODALITY, PLUGIN_DESCRIBE,
+                              PARSE_FILE, PARSE_MODALITY, PATH_GET, PLUGIN_DESCRIBE,
                               PLUGIN_LIST, SERVICE_CALL, SERVICE_LIST,
                               SESSION_ADD_PROMPT, SESSION_ADD_TOOL,
                               SESSION_CANCEL, SESSION_GET, SESSION_LIST,
@@ -487,6 +487,24 @@ def _config_write(ctx, args: dict) -> Result:
         return Result(data=True)
     except Exception as exc:
         return Result.failure(f"config write failed: {exc}")
+
+
+def _path_get(ctx, args: dict) -> Result:
+    """Resolve one of the application locations exposed to plugins."""
+    from paths import DATA_DIR, INSTALLED_PLUGINS, ROOT_DIR, SANDBOX_PLUGINS
+
+    locations = {
+        "project": getattr(ctx, "root_dir", None) or ROOT_DIR,
+        "data": DATA_DIR,
+        "installed_plugins": INSTALLED_PLUGINS,
+        "sandbox_plugins": SANDBOX_PLUGINS,
+    }
+    name = args.get("name")
+    if name not in locations:
+        return Result.failure(
+            f"unknown application path {name!r}; expected one of "
+            f"{sorted(locations)}")
+    return Result(data=str(locations[name]))
 
 
 def _visible_user(row) -> dict:
@@ -1150,6 +1168,7 @@ HANDLERS = {
     SESSION_REMOVE_PROMPT: _session_remove_prompt,
     UI_ASK: _ui_ask, UI_APPROVE: _ui_approve, UI_RENDER: _ui_render,
     CONFIG_READ: _config_read, CONFIG_WRITE: _config_write,
+    PATH_GET: _path_get,
     USER_READ: _user_read, USER_LIST: _user_list, USER_WRITE: _user_write,
     PLUGIN_LIST: _plugin_list, PLUGIN_DESCRIBE: _plugin_describe,
     SERVICE_LIST: _service_list, SERVICE_CALL: _service_call,

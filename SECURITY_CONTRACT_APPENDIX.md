@@ -164,6 +164,7 @@ kernel's existing default at the `unattended_call` gate.
 |---|---|---|---|
 | `config.read(key, scope)` | Global or user-scoped setting | `secret_` prefix | safe, **`secret_*` returned as handles** |
 | `config.write(key, value, scope)` | Change a setting | key, scope | unsafe |
+| `paths.get(name)` | Resolve a named application location | fixed name allowlist | safe |
 
 Scope (`global` / `user`) is an argument, not a separate Request.
 

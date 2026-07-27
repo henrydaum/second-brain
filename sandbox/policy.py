@@ -178,6 +178,7 @@ ALWAYS_SAFE = {
     R.UI_APPROVE, R.UI_RENDER,
     R.USER_READ,
     R.PLUGIN_LIST, R.PLUGIN_DESCRIBE, R.SERVICE_LIST, R.SERVICE_CALL,
+    R.PATH_GET,
     R.TOOL_LIST, R.TOOL_CALL, R.COMMAND_LIST, R.COMMAND_CALL,
     R.AGENT_COMPLETE, R.AGENT_SPAWN,
     # Safe because it widens nothing: the kernel handed this escort a call it

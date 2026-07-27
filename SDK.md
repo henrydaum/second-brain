@@ -171,6 +171,7 @@ sdk.conv.delete(conversation_id)
 
 sdk.config.read(key)           # omit key for everything
 sdk.config.write(key, value)
+sdk.paths.get(name)            # project, data, installed_plugins, sandbox_plugins
 sdk.users.read(user_id=None)   # defaults to the current user
 sdk.users.list()
 sdk.users.write(user_id=None, **fields)

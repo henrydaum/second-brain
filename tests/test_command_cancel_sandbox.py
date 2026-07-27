@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from sandbox.facade import Sandbox
 from sandbox.handlers.kernel import _session_cancel
-from sandbox.parity import compare
 
 
 def _result(ok=True, messages=None, error=None, data=None):
@@ -61,16 +61,18 @@ def _context(result=None, *, active=True, session_key="repl"):
         })), "Could not cancel."),
     ],
 )
-def test_cancel_command_matches_native_output(context, expected):
-    verdict = compare(
-        "plugins/commands/command_cancel.py",
-        "CancelCommand",
-        family="command",
-        payload={},
-        context=context,
-    )
-    assert verdict.matched, verdict.render()
-    assert verdict.sandboxed["data"] == expected
+def test_cancel_command_preserves_native_output(context, expected):
+    sandbox = Sandbox(context=context)
+    try:
+        result = sandbox.run(
+            "plugins/commands/command_cancel.py",
+            "CancelCommand",
+            kwargs={"args": {}},
+        )
+    finally:
+        sandbox.shutdown()
+    assert result.ok, result.error
+    assert result.data == expected
 
 
 def test_session_cancel_preserves_runtime_result():

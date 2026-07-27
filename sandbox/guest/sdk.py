@@ -66,7 +66,7 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        FS_SEARCH, FS_TEMP, FS_WRITE, FS_WRITE_BYTES,
                        LEDGER_READ,
                        LEDGER_RECORD, NET_HTTP, PARSE_FILE, PARSE_MODALITY,
-                       MODEL_DELTA, MODEL_PROCEED,
+                       MODEL_DELTA, MODEL_PROCEED, PATH_GET,
                        PLUGIN_DESCRIBE, PLUGIN_LIST, PROC_RUN,
                        SECRET_REVEAL, SELF_RESPOND,
                        SERVICE_CALL, SERVICE_LIST, SESSION_ADD_PROMPT,
@@ -283,6 +283,14 @@ class _Config(_Namespace):
     def write(self, key: str, value):
         """Change a setting."""
         return self._ask(CONFIG_WRITE, key=key, value=value)
+
+
+class _Paths(_Namespace):
+    """Kernel-owned application locations."""
+
+    def get(self, name: str):
+        """Resolve a named application location."""
+        return self._ask(PATH_GET, name=name)
 
 
 class _Users(_Namespace):
@@ -793,6 +801,7 @@ class SDK:
         self.session = _Session(self)
         self.ui = _UI(self)
         self.config = _Config(self)
+        self.paths = _Paths(self)
         self.users = _Users(self)
         self.plugins = _Plugins(self)
         self.services = _Services(self)
