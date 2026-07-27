@@ -55,8 +55,10 @@ Reuse that pattern wherever a Request would be too noisy to write by hand.
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `fs.read(path)` | File contents as text or bytes | path | safe |
-| `fs.write(path, data, mode)` | Create, overwrite, or append | path | safe in scratch/memory/sandbox, else unsafe |
+| `fs.read(path)` | File contents as text | path | safe |
+| `fs.write(path, data, mode)` | Create, overwrite, or append text | path | safe in scratch/memory/sandbox, else unsafe |
+| `fs.read_bytes(path)` | File contents as raw bytes | path | safe |
+| `fs.write_bytes(path, data, mode)` | Create, overwrite, or append bytes | path | safe in scratch/memory/sandbox, else unsafe |
 | `fs.list(path, pattern)` | Directory listing, glob, stat | path | safe |
 | `fs.search(pattern, root)` | Content search across a tree | root path | safe |
 | `fs.delete(path)` | Remove a file or tree | path | unsafe |
@@ -68,6 +70,16 @@ decision. Scratch space is granted, not requested by path.
 
 `fs.search` is derivable from `fs.list` + `fs.read`, and is a separate Request
 anyway: doing it by hand costs one round trip per file.
+
+**Bytes are a separate pair, not a flag.** `fs.read` decodes UTF-8 with
+replacement, which is right for text and silently destructive for anything
+else — a JPEG through it is no longer a JPEG. The byte Requests carry their
+payload base64-encoded because JSON has no bytes type; the SDK encodes and
+decodes, so a plugin only ever sees `bytes`. Policy treats each pair
+identically: the same act with a different encoding must get the same answer,
+or the encoding becomes a way around the rule. The one asymmetry is the size
+cap — binary reads get a larger one, because a 20 MB video is ordinary where a
+20 MB text file is a mistake.
 
 ## 2. Database
 
@@ -253,6 +265,7 @@ Everything that creates recurring unattended work is unsafe, for the same reason
 | `event.emit(channel, payload)` | Publish | channel | safe |
 | `event.request(channel, payload, timeout)` | Blocking request/response | channel | safe |
 | `model.proceed(request)` | Place the call an escort is holding | token | safe |
+| `model.delta(text)` | Push streamed assistant text out of a backend | token | safe |
 
 **Receiving is not a Request, and neither is standing at a doorway.** Both were
 once going to be (`event.subscribe`, `hook.register`) and both became
@@ -270,6 +283,22 @@ a one-shot token for exactly the duration of one `model_call` visit. Code
 holding no token reaches no call, so the limit is reachability rather than a
 verdict, and "proceed" only ever means *place the call the kernel already
 decided to make*.
+
+`model.delta` is scoped the same way, one call further in: the kernel parks a
+sink for the duration of one backend `chat` call. It is also the only Request
+sent **one-way** — a `notice` on the wire rather than a `request`, so the guest
+does not block for an answer. That is not a hole in the gate: a notice is still
+classified, recorded and executed by the same handler; the only thing given up
+is knowing the outcome. It exists because a reply per token would turn a
+stream into several hundred round trips, which would make streaming from a
+subprocess slower than not streaming at all.
+
+**There is deliberately no way to tell a backend to stop.** The old native
+contract had one — `on_delta` returned a bool — and it does not survive the
+boundary, nor should it: a rule that careless code can ignore is not a control.
+Stopping is cancellation, which the kernel already owns. Cancel the execution
+and the guest's next Request raises `Terminated`, a `BaseException` that a bare
+`except Exception` cannot swallow.
 
 **Note the latency cost.** Hooks fire inside the agent turn's hot path, and
 `model_call` wraps every model call. A hook on a subprocessed service pays IPC
@@ -361,6 +390,30 @@ id is enough to answer and only enough to answer.
 |---|---|---|---|
 | `parse.file(path, modality)` | Parse to text via the registry | path | safe |
 | `parse.modality(ext)` | Resolve a file's modality | — | safe |
+
+### 15a. LLM backends
+
+A backend is not a plugin and makes no Request of its own beyond
+`fs.read_bytes` (for attachments) and `model.delta` (when streaming). It is
+listed here because of what it *holds*.
+
+**`request.api_key` is plaintext, and that is a deliberate exception.**
+Everywhere else a credential is a `<secret:...>` handle the kernel substitutes
+inside `net.http`, so plugin code uses a credential it never has. That works
+only because the kernel makes the call. A provider SDK opens its own socket,
+so there is no outbound Request to substitute into, and the key must be inside
+the box to be usable at all.
+
+What remains is still worth having: the key lives in a separate process whose
+only route to the world is Requests the kernel classifies, and whose code was
+validated before it ran. What is *not* claimed is that the key is protected
+from the backend itself — it isn't, and closing that would need real OS
+containment rather than a linter. A backend that can reach its provider over
+plain HTTP should use `sdk.net.http` and keep the handle.
+
+Capability declarations (`supports_streaming`, `supports_tool_choice`,
+`native_modalities`) are read from the file by AST, never by importing it —
+so asking what a backend can do never costs a provider-library import.
 
 ## 16. Ledger
 

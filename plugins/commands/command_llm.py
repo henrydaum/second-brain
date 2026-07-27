@@ -5,12 +5,12 @@ import json
 from config import config_manager
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.formatters import detail_card
-from plugins.services.service_llm import llm_backend_names
+from llm import backend_names
 from state_machine.conversation import FormStep
 
 
-ACTIONS = ["edit", "set_default", "remove"]
-ACTION_LABELS = ["Edit", "Set default", "Remove"]
+ACTIONS = ["edit", "set_default", "load", "unload", "remove"]
+ACTION_LABELS = ["Edit", "Set default", "Load", "Unload", "Remove"]
 PROFILE_FIELDS = ["llm_endpoint", "llm_api_key", "llm_context_size", "llm_service_class", "llm_capability_image", "llm_capability_audio", "llm_capability_video"]
 FIELDS = ["llm_model_name", *PROFILE_FIELDS]
 FIELD_LABELS = ["Model name", "Endpoint", "API key", "Context size", "Service class", "Images", "Audio", "Video"]
@@ -40,7 +40,7 @@ class LlmCommand(BaseCommand):
         names = [*sorted(profiles), "add"]
         steps = [FormStep("model_name", _default_prompt(context), True, enum=names, enum_labels=[_model_label(context, n) for n in names])]
         if args.get("model_name") == "add":
-            backends = llm_backend_names() or [DEFAULT_BACKEND]
+            backends = backend_names() or [DEFAULT_BACKEND]
             return steps + [
                 FormStep("llm_service_class", "Choose how Second Brain should connect to this model.", True, enum=backends, default=backends[0]),
                 FormStep("new_model_name", "Enter the model name exactly, including provider prefix when needed (for example `openai/gpt-4o-mini` or `anthropic/claude-3-5-sonnet-latest`).", True),
@@ -58,9 +58,15 @@ class LlmCommand(BaseCommand):
         return steps
 
     def run(self, args, context):
-        """Execute `/llm` for the active session."""
+        """Execute `/llm` for the active session.
+
+        Profiles are config; *loading* is a separate, explicit act. That split
+        is new: models used to be registered one service per profile, so
+        editing a profile silently rebuilt a live object as a side effect.
+        Now a brain holds a pool of boxes — real processes under isolation —
+        and opening or closing one is something the user asks for.
+        """
         profiles = context.config.setdefault("llm_profiles", {})
-        router = (context.services or {}).get("llm")
         name = args.get("model_name")
         if name == "add":
             name = args.get("new_model_name", "").strip()
@@ -68,8 +74,6 @@ class LlmCommand(BaseCommand):
                 return "Model name is required."
             first_profile = not profiles
             profiles[name] = _profile(args)
-            if router and hasattr(router, "add_llm"):
-                router.add_llm(name, profiles[name])
             if first_profile:
                 context.config["default_llm_profile"] = name
             _save(context)
@@ -87,34 +91,61 @@ class LlmCommand(BaseCommand):
                 profiles[new_name] = profiles.pop(name)
                 if context.config.get("default_llm_profile") == name:
                     context.config["default_llm_profile"] = new_name
-                if router and hasattr(router, "remove_llm"):
-                    router.remove_llm(name)
-                if router and hasattr(router, "add_llm"):
-                    router.add_llm(new_name, profiles[new_name])
                 name = new_name
             elif field in CAPABILITY_FIELDS:
                 profiles[name].setdefault("llm_capabilities", {})[CAPABILITY_FIELDS[field]] = _coerce(field, args.get("value"))
             else:
                 profiles[name][field] = _coerce(field, args.get("value"))
-            if field != "llm_model_name" and router and hasattr(router, "add_llm"):
-                router.add_llm(name, profiles[name])
+            # An edited profile is rebuilt by ``refresh``; if it was loaded,
+            # reopen it so the new settings are actually in effect rather than
+            # waiting behind a box that still holds the old ones.
+            was_loaded = _is_loaded(name)
             _save(context)
+            if was_loaded:
+                _brain(name) and _brain(name).load()
             return f"Updated LLM profile: {name}"
         if args.get("action") == "set_default":
             context.config["default_llm_profile"] = name
             _save(context)
             return f"Default LLM profile set to: {name}"
+        if args.get("action") == "load":
+            _save(context)
+            target = _brain(name)
+            if target is None:
+                return f"No backend is installed for {name}."
+            return (f"Loaded LLM profile: {name}" if target.load()
+                    else f"Could not load {name}. Check the app log.")
+        if args.get("action") == "unload":
+            target = _brain(name)
+            if target is None or not target.loaded:
+                return f"LLM profile {name} is not loaded."
+            target.unload()
+            return f"Unloaded LLM profile: {name}"
         if args.get("action") == "remove":
             names = sorted(profiles)
+            target = _brain(name)
+            if target is not None:
+                target.unload()
             profiles.pop(name, None)
-            if router and hasattr(router, "remove_llm"):
-                router.remove_llm(name)
             if context.config.get("default_llm_profile") == name:
                 remaining = [n for n in names if n != name]
                 context.config["default_llm_profile"] = remaining[min(names.index(name), len(remaining) - 1)] if remaining else ""
             _save(context)
             return f"Removed LLM profile: {name}"
         return f"Unknown action: {args.get('action')}"
+
+
+def _brain(name):
+    """The registry's brain for a profile, or None."""
+    import llm
+
+    return llm.brain(name)
+
+
+def _is_loaded(name) -> bool:
+    """Whether a profile currently holds an open box."""
+    target = _brain(name)
+    return bool(target is not None and target.loaded)
 
 
 def _profile(args):
@@ -145,14 +176,17 @@ def _describe(context, name):
     p = (context.config.get("llm_profiles", {}) or {}).get(name)
     if not p:
         return "Action"
-    loaded = getattr((context.services or {}).get(name), "loaded", False)
+    target = _brain(name)
     mark = " (default)" if context.config.get("default_llm_profile") == name else ""
     ctx = int(p.get("llm_context_size", 0) or 0)
     ctx_str = "0 (reactive compaction)" if ctx == 0 else f"{ctx:,}"
     caps = ", ".join(k for k, v in (p.get("llm_capabilities") or {}).items() if v) or "none declared"
+    backend = p.get("llm_service_class", DEFAULT_BACKEND)
+    if target is not None and not target.available:
+        backend += " (not installed)"
     return detail_card(f"{name}{mark}", [
-        ("Status", "Loaded" if loaded else "Unloaded"),
-        ("Class", p.get("llm_service_class", DEFAULT_BACKEND)),
+        ("Status", "Loaded" if _is_loaded(name) else "Unloaded"),
+        ("Class", backend),
         ("Context", ctx_str),
         ("Native attachments", caps),
     ])
@@ -176,7 +210,7 @@ def _value_prompt(field):
         "llm_model_name": "Enter the model name for this profile.",
         "llm_api_key": "Enter the API key value or environment variable name. Leave blank to let the backend read its own environment.",
         "llm_context_size": "Enter the context window size in tokens. Use 0 if unknown.",
-        "llm_service_class": f"Enter one of: {', '.join(llm_backend_names() or [DEFAULT_BACKEND])}.",
+        "llm_service_class": f"Enter one of: {', '.join(backend_names() or [DEFAULT_BACKEND])}.",
         "llm_capability_image": "Can this model read images natively?",
         "llm_capability_audio": "Can this model read audio natively?",
         "llm_capability_video": "Can this model read video natively?",
@@ -193,3 +227,10 @@ def _save(context):
     if runtime is not None and getattr(runtime, "config", None) is not None:
         runtime.config["llm_profiles"] = config.get("llm_profiles", {})
         runtime.config["default_llm_profile"] = config.get("default_llm_profile", "")
+    # Config is the source of truth for which brains exist, so saving it is
+    # exactly when the registry should be rebuilt. Brains whose settings did
+    # not move keep their boxes; the rest are closed and replaced.
+    import llm
+
+    llm.refresh(runtime.config if runtime is not None
+                and getattr(runtime, "config", None) is not None else config)

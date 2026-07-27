@@ -25,6 +25,38 @@ CI or ad-hoc runs) still takes precedence.
 import os
 from pathlib import Path
 
+import pytest
+
 _TEMP_ROOT = Path(__file__).parent / ".pytest_tmp"
 _TEMP_ROOT.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("PYTEST_DEBUG_TEMPROOT", str(_TEMP_ROOT))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_llm_registry():
+    """Empty the LLM registry around every test.
+
+    The registry is module-global, which is right for a kernel with one set of
+    configured models and wrong for a test suite where each test configures
+    its own. Without this, a test that saves an LLM profile leaves a brain
+    behind, and the next test's model resolution silently prefers it — the
+    failure lands somewhere unrelated and only under a full run, which is the
+    worst kind to chase.
+
+    Boxes are closed on the way out, so a leaked one cannot become an orphaned
+    process for the rest of the session.
+    """
+    from llm import registry
+
+    registry._BRAINS.clear()
+    registry._BACKENDS.clear()
+    try:
+        yield
+    finally:
+        for brain in list(registry._BRAINS.values()):
+            try:
+                brain.unload()
+            except Exception:
+                pass
+        registry._BRAINS.clear()
+        registry._BACKENDS.clear()

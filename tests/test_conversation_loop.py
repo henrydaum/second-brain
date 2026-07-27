@@ -34,6 +34,10 @@ class _FakeLLM:
     """Returns queued responses, one per ``chat_with_tools`` call."""
 
     context_size = 0  # disables proactive compaction
+    # Attachment routing is the kernel's job now, and it asks the model what
+    # it can read. A fake that declares nothing gets the text fallback for
+    # everything — correct, but it would make a vision test assert nothing.
+    capabilities = {"image": True, "audio": True, "video": True}
 
     def __init__(self, responses):
         self._responses = list(responses)

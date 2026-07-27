@@ -180,6 +180,11 @@ class ConversationLoop:
         # The brain that actually took the most recent call (escorts may swap
         # request.llm per call); the ledger records this, not the default.
         self._last_llm_used = None
+        # ``self.llm`` may be a Brain or an object speaking the old contract;
+        # it is adapted once and remembered, keyed on the object itself so a
+        # caller swapping it mid-life is noticed.
+        self._adapted_llm = None
+        self._adapted_source = None
         # End-turn doorman state (reset per drive). The once-flags shape the
         # NEXT model call only: ephemeral notes are shown to the model without
         # entering history; the overrides narrow/force the toolbox for a
@@ -633,7 +638,7 @@ class ConversationLoop:
         from runtime.hooks import ModelRequest
 
         request = ModelRequest(
-            llm=self.llm, messages=messages, tools=tools,
+            llm=self._brain_name(), messages=messages, tools=tools,
             tool_choice=tool_choice, attachments=attachments or None,
         )
 
@@ -678,11 +683,112 @@ class ConversationLoop:
             return proceed(retry)
         return layer
 
+    def _route_attachments(self, llm, messages, attachments):
+        """Split a bundle into what this model reads natively and what it does not.
+
+        Kernel work, deliberately. It used to live on ``BaseLLM``, which meant
+        every backend inherited a method reaching into ``attachments.*`` — a
+        kernel import in the one place that most needs to be isolatable. Doing
+        it here means the box receives plain dicts and the fallback text is
+        already in the prompt.
+
+        Returns ``(messages, native)`` where ``native`` is a list of
+        ``{path, modality, file_name}`` dicts.
+        """
+        if not attachments:
+            return messages, []
+        from attachments.attachment import AttachmentBundle
+
+        bundle = (attachments if isinstance(attachments, AttachmentBundle)
+                  else AttachmentBundle.from_iterable(attachments))
+        if not bundle:
+            return messages, []
+        native, suffix = bundle.split_for_llm(
+            getattr(llm, "capabilities", {}) or {},
+            getattr(llm, "native_modalities", None)
+            or {"image", "audio", "video"})
+        # Everything a backend legitimately needs to build a provider payload:
+        # the bytes' location, what kind of thing it is, and the extension it
+        # will derive a mime type from. ``parsed_text`` rides along so a
+        # backend that decides at the last moment it cannot send the file
+        # natively still has the text to fall back to.
+        crossable = [{
+            "path": getattr(item, "path", ""),
+            "extension": getattr(item, "extension", ""),
+            "file_name": getattr(item, "file_name", ""),
+            "modality": getattr(item, "modality", ""),
+            "parsed_text": getattr(item, "parsed_text", None),
+        } for item in (native or [])]
+        if not suffix:
+            return messages, crossable
+        return self._append_to_last_user(messages, suffix), crossable
+
+    @staticmethod
+    def _append_to_last_user(messages, suffix: str):
+        """Add the text fallback to the last user message, whatever its shape.
+
+        ``content`` is usually a string but may already be a list of content
+        blocks when a caller pre-built them; both are handled rather than
+        assumed.
+        """
+        out = [dict(message) for message in messages]
+        for index in range(len(out) - 1, -1, -1):
+            if out[index].get("role") != "user":
+                continue
+            content = out[index].get("content")
+            if isinstance(content, list):
+                out[index]["content"] = [*content,
+                                         {"type": "text", "text": f"\n\n{suffix}"}]
+            else:
+                out[index]["content"] = f"{content or ''}\n\n{suffix}".strip()
+            break
+        return out
+
+    def _brain_name(self) -> str:
+        """The profile name of this loop's default brain.
+
+        ``ModelRequest.llm`` carries a *name*, not a brain. An escort swaps
+        models by naming one, which is the same handle-not-the-thing move as
+        ``<secret:...>``: it works identically for a native escort and a
+        sandboxed one (which could never be handed a live object anyway), and
+        it means a hook cannot hold a reference to a model past the call.
+        """
+        return getattr(self.llm, "name", "") or ""
+
+    def _brain(self, ref):
+        """The brain a request names, falling back to the loop's default.
+
+        Everything is put through ``as_brain`` on the way out, so a model
+        object injected directly — a test double, the stress harness's fake,
+        an unmigrated backend — is adapted rather than refused. The loop then
+        only ever knows one interface.
+        """
+        from llm import resolve
+        from llm.registry import as_brain
+
+        config = (getattr(self.runtime, "config", None) if self.runtime
+                  else None) or {}
+        if ref is None or ref == "":
+            return self._default_brain()
+        resolved = resolve(ref, config)
+        if resolved is None:
+            return self._default_brain()
+        return as_brain(resolved, config=config) or self._default_brain()
+
+    def _default_brain(self):
+        """This loop's own brain, adapted once and remembered."""
+        from llm.registry import as_brain
+
+        if self._adapted_llm is None or self._adapted_source is not self.llm:
+            self._adapted_source = self.llm
+            self._adapted_llm = as_brain(self.llm)
+        return self._adapted_llm
+
     def _call_backend(self, request):
         """The innermost step of the escort onion: the actual backend call,
         bracketed by the AGENT_LLM_CALL_STARTED / _FINISHED bus events (which
         report the brain that actually took the call, post-escorts)."""
-        llm = request.llm or self.llm
+        llm = self._brain(request.llm)
         self._last_llm_used = llm
         streaming = (self.on_delta is not None
                      and getattr(llm, "supports_streaming", False)
@@ -722,11 +828,20 @@ class ConversationLoop:
         backends and test fakes that don't accept them are never surprised.
         Failures — including error-shaped responses — are raised; the
         compaction layer above catches context-limit ones and retries."""
-        llm = request.llm or self.llm
-        messages, tools, bundle = request.messages, request.tools, request.attachments
+        from llm import LLMRequest
+
+        llm = self._brain(request.llm)
         kwargs = dict(request.params or {})
         if request.tool_choice is not None and getattr(llm, "supports_tool_choice", False):
             kwargs["tool_choice"] = request.tool_choice
+        # Attachment routing is the kernel's, not the backend's: split against
+        # this model's declared capabilities here, so what crosses the boundary
+        # is only what the backend should send natively.
+        messages, native = self._route_attachments(
+            llm, request.messages, request.attachments)
+        outgoing = LLMRequest(
+            messages=messages, tools=request.tools, attachments=native,
+            params=kwargs, stream=streaming)
         try:
             if streaming:
                 import uuid
@@ -734,10 +849,8 @@ class ConversationLoop:
                 self._stream_seq = 0
                 self._stream_emitted = False
                 self._stream_filter = StreamingTokenFilter()
-                response = llm.chat_with_tools_streaming(
-                    messages, tools, attachments=bundle, on_delta=self._emit_delta, **kwargs)
-            else:
-                response = llm.chat_with_tools(messages, tools, attachments=bundle, **kwargs)
+            response = llm.chat(
+                outgoing, on_delta=self._emit_delta if streaming else None)
         except Exception:
             # Any deltas already shown are now stale — tell frontends to
             # discard the partial line before the retry/raise above.
@@ -822,7 +935,7 @@ class ConversationLoop:
         after a successful call, compact when it used most of the brain's
         context window, so the next call starts small.
         """
-        from plugins.services.service_llm import is_context_limit_error
+        from llm import is_context_limit_error
         from runtime.hooks import ModelRequest
 
         def rebuilt(request):
@@ -903,7 +1016,7 @@ class ConversationLoop:
         # net. Measured against the brain that actually took the call
         # (post-escort), not the loop's default.
         """Internal helper to compact if needed."""
-        llm = request.llm or self.llm
+        llm = self._brain(request.llm)
         ctx, tok = getattr(llm, "context_size", 0), getattr(response, "prompt_tokens", 0)
         if not ctx or not tok or tok / ctx < 0.80 or len(history) <= 2:
             return

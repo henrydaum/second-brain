@@ -260,6 +260,19 @@ class PluginWatcherService(BaseService):
             runtime.refresh_session_specs()
 
     def _refresh_llm_backends(self):
+        """Rescan backends after a file changed, both worlds.
+
+        Sandboxed backends are found by scanning declarations, so discovery is
+        the whole update; native ones still need the legacy resync while the
+        old contract exists.
+        """
+        try:
+            import llm
+
+            llm.discover()
+            llm.refresh(self.config)
+        except Exception:
+            logger.exception("LLM backend rescan failed")
         try:
             from plugins.services.service_llm import refresh_llm_profile_services
         except Exception:

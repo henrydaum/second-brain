@@ -167,7 +167,8 @@ ALWAYS_UNSAFE = {
 
 # Requests that narrow capability, or only ever affect this execution.
 ALWAYS_SAFE = {
-    R.SELF_RESPOND, R.FS_TEMP, R.FS_READ, R.FS_LIST, R.FS_SEARCH,
+    R.SELF_RESPOND, R.FS_TEMP, R.FS_READ, R.FS_READ_BYTES,
+    R.FS_LIST, R.FS_SEARCH,
     R.DB_QUERY, R.DB_WRITE, R.DB_DEFINE,
     R.CONV_READ, R.CONV_LIST, R.CONV_CREATE, R.CONV_APPEND,
     R.CONV_SET_TITLE, R.CONV_SET_CATEGORY,
@@ -183,6 +184,11 @@ ALWAYS_SAFE = {
     # had already decided to place, and proceeding is placing that one. The
     # token is what limits it — code with no token reaches no call at all.
     R.MODEL_PROCEED,
+    # Same reachability argument, one call further in: the sink is parked for
+    # the duration of one ``chat`` call, so a backend can only push text into
+    # the call it was asked to place. It is also write-only and one-way —
+    # nothing comes back, so it cannot be used to read anything.
+    R.MODEL_DELTA,
     R.CRON_LIST, R.CRON_GET, R.CRON_ENABLE,
     R.EVENT_EMIT, R.EVENT_REQUEST,
     # Safe for the same reason MODEL_PROCEED is: the limit is reachability,
@@ -213,7 +219,8 @@ ALWAYS_SAFE = {
 # branch above. Checked at import so a new Request cannot be added without a
 # decision being made about it — silently defaulting to "unsafe" would look
 # like policy when it is really an oversight.
-_BRANCHED = {NET_HTTP, PROC_RUN, FS_WRITE, FS_MOVE, FS_DELETE, FS_TEMP,
+_BRANCHED = {NET_HTTP, PROC_RUN, FS_WRITE, R.FS_WRITE_BYTES,
+             FS_MOVE, FS_DELETE, FS_TEMP,
              CONFIG_READ, ENV_READ, R.SECRET_REVEAL, UI_ASK, SESSION_ADD_TOOL,
              SESSION_ADD_PROMPT, AGENT_SCHEDULE, CONV_DELETE}
 _UNDECIDED = R.ALL_TYPES - ALWAYS_SAFE - ALWAYS_UNSAFE - _BRANCHED
@@ -251,7 +258,10 @@ def classify(request: Request, chain: Chain) -> Decision:
         return Decision(UNSAFE, f"shell command: {shown[:200]}")
 
     # ── filesystem writes depend entirely on where ────────────────
-    if kind == FS_WRITE:
+    # Text and bytes are the same act with a different encoding, so they get
+    # the same answer — anything else would make the encoding a way around
+    # the rule.
+    if kind in (FS_WRITE, R.FS_WRITE_BYTES):
         if _within(args.get("path"), _scratch_roots()):
             return Decision(SAFE, "write to scratch")
         return Decision(UNSAFE, f"write to {args.get('path')}")

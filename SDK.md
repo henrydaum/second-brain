@@ -135,6 +135,8 @@ Each namespace is exactly one Request family, so `sdk.fs.read` *is* the
 ```python
 sdk.fs.read(path)                          # -> str
 sdk.fs.write(path, data, mode="overwrite") # mode="append" to add
+sdk.fs.read_bytes(path)                    # -> bytes; use for anything non-text
+sdk.fs.write_bytes(path, data, mode="overwrite")
 sdk.fs.list(path, pattern="*")             # -> [str]
 sdk.fs.search(pattern, root=".", glob="**/*")   # -> [{path, line, text}]
 sdk.fs.delete(path)
@@ -146,6 +148,11 @@ sdk.proc.run(argv, timeout=120.0, cwd=None)               # -> {code, stdout, st
 sdk.env.read(name)                         # credentials come back as handles
 sdk.secrets.reveal(name)                   # plaintext; always asks the user
 ```
+
+`read` decodes UTF-8 with replacement, which quietly mangles anything that is
+not text. Reach for `read_bytes` whenever the file is an image, audio, a PDF,
+or an archive. Base64 on the wire is the SDK's problem, not yours — you hand
+over `bytes` and get `bytes` back.
 
 ### Data
 
@@ -413,6 +420,84 @@ in a task if it is not quick. And a payload only carries what can cross the
 boundary — `bus.request`'s synchronous round-trip machinery is stripped, so a
 sandboxed subscriber sees it as an ordinary event and cannot answer it.
 
+### Talking to a model
+
+An LLM backend is the one thing here that is **not a plugin**: no family, no
+entry point, nothing discovery registers. It is a class in
+`helpers/llm_<provider>.py`, found by declaration, loaded into a box, and
+called. Copy `templates/llm_backend_template.py` rather than starting blank.
+
+```python
+dependencies_pip = ["some-provider-sdk"]
+isolation = "subprocess"
+lifetime = "persistent"
+supports_streaming = True
+supports_tool_choice = True
+display_name = "Some Provider"
+
+from guest.llm import BaseLLMBackend, LLMResponse
+
+
+class SomeProvider(BaseLLMBackend):
+    """Reach a model through some-provider-sdk."""
+
+    def start(self, sdk):
+        """Import the library once, for this box's whole life."""
+        import some_provider_sdk
+
+        self._client = some_provider_sdk
+        return True
+
+    def chat(self, sdk, request):
+        """Answer one request with one response."""
+        answer = self._client.chat(
+            model=request.model_name, messages=request.messages,
+            tools=request.tools or None, api_key=request.api_key or None,
+            **request.params)
+        return LLMResponse(content=answer.text, prompt_tokens=answer.tokens)
+```
+
+**Everything about the model arrives on the request, nothing lives on you.**
+`model_name`, `api_key`, `base_url`, `messages`, `tools`, `params`,
+`attachments`. That is what lets the kernel run a *pool* of these boxes for one
+model and serve concurrent calls in parallel — two boxes are interchangeable
+only if neither remembers who it was talking to. Keep in `start` what is truly
+per-process: the imported library, a connection pool.
+
+**Streaming pushes and returns.** When `request.stream` is set, call
+`sdk.model.delta(text)` as text arrives *and* return the accumulated response.
+The deltas are for the user's eyes; the response is what gets recorded.
+
+```python
+pieces = []
+for chunk in self._client.stream(...):
+    pieces.append(chunk.text)
+    sdk.model.delta(chunk.text)
+return LLMResponse(content="".join(pieces))
+```
+
+Notice there is no check for "did the user cancel?". There is nothing to check.
+`delta` is one-way and answers nothing; if the user cancels, the kernel cancels
+this execution and your next Request raises `Terminated`. Do not wrap a stream
+loop in a bare `except Exception` — `Terminated` is a `BaseException` precisely
+so that a careless catch cannot swallow it, but a careless `except BaseException`
+still can.
+
+**Raise on failure.** `chat` is wrapped: an exception is classified and turned
+into an error response for you, and a context-overflow is recognised, which is
+what makes the kernel compact the conversation and retry rather than fail the
+turn.
+
+**Attachments arrive pre-routed.** The kernel has already split the bundle
+against this model's declared capabilities and appended a text fallback for
+whatever it cannot read. Everything in `request.attachments` is meant to go on
+the wire; read its bytes with `sdk.fs.read_bytes`.
+
+`request.api_key` is plaintext, unlike every other credential in the SDK. A
+provider library opens its own socket, so there is no `net.http` for the kernel
+to substitute a handle into. If your provider speaks plain HTTP, prefer
+`sdk.net.http` and keep the handle.
+
 ### Machinery
 
 ```python
@@ -421,6 +506,9 @@ sdk.cron.remove(name) / enable(name, enabled=True)
 
 sdk.events.emit(channel, payload)
 sdk.events.request(channel, payload, timeout=120.0)
+
+sdk.model.delta(text)      # LLM backends only, inside chat()
+sdk.model.proceed(request) # model_call escorts only
 
 sdk.tasks.enqueue(name, paths) / status(name, path) / output(name, path=None)
 sdk.files.register(path, **meta) / list(modality="")

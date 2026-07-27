@@ -47,6 +47,8 @@ for ``sdk.ok(...)`` only to attach ``llm_summary`` or attachments, and
 
 from __future__ import annotations
 
+import base64
+
 from .channel import Terminated
 from .requests import Denied, RequestFailed
 from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
@@ -60,10 +62,12 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        FILE_REGISTER, FRONTEND_ATTEND, FRONTEND_BIND,
                        FRONTEND_CANCEL, FRONTEND_PENDING, FRONTEND_RESOLVE,
                        FRONTEND_SUBMIT,
-                       FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
-                       FS_SEARCH, FS_TEMP, FS_WRITE, LEDGER_READ,
+                       FS_DELETE, FS_LIST, FS_MOVE, FS_READ, FS_READ_BYTES,
+                       FS_SEARCH, FS_TEMP, FS_WRITE, FS_WRITE_BYTES,
+                       LEDGER_READ,
                        LEDGER_RECORD, NET_HTTP, PARSE_FILE, PARSE_MODALITY,
-                       MODEL_PROCEED, PLUGIN_DESCRIBE, PLUGIN_LIST, PROC_RUN,
+                       MODEL_DELTA, MODEL_PROCEED,
+                       PLUGIN_DESCRIBE, PLUGIN_LIST, PROC_RUN,
                        SECRET_REVEAL, SELF_RESPOND,
                        SERVICE_CALL, SERVICE_LIST, SESSION_ADD_PROMPT,
                        SESSION_ADD_TOOL, SESSION_CANCEL, SESSION_GET,
@@ -105,6 +109,27 @@ class _FS(_Namespace):
     def write(self, path, data: str, mode: str = "overwrite"):
         """Create, overwrite, or append. ``mode="append"`` to add."""
         return self._ask(FS_WRITE, path=str(path), data=data, mode=mode)
+
+    def read_bytes(self, path) -> bytes:
+        """Read a file as raw bytes.
+
+        Use this for anything that is not text — an image, audio, a PDF.
+        ``read`` decodes as UTF-8 with replacement, which silently mangles
+        binary content rather than failing.
+        """
+        return base64.b64decode(self._ask(FS_READ_BYTES, path=str(path)) or "")
+
+    def write_bytes(self, path, data, mode: str = "overwrite"):
+        """Write raw bytes. ``mode="append"`` to add.
+
+        A ``str`` is encoded as UTF-8 rather than refused — the mistake is
+        harmless and the alternative is a TypeError from deep inside the SDK.
+        """
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        return self._ask(FS_WRITE_BYTES, path=str(path),
+                         data=base64.b64encode(bytes(data)).decode("ascii"),
+                         mode=mode)
 
     def list(self, path, pattern: str = "*"):
         """List a directory, optionally filtered by glob pattern."""
@@ -343,12 +368,30 @@ class _Agent(_Namespace):
 
 
 class _Model(_Namespace):
-    """The call an escort is holding.
+    """The call in flight.
 
-    Only meaningful inside a ``model_call`` hook. Everywhere else there is no
-    call in flight and the Request is refused, which is the honest answer —
-    ``proceed`` is not "make a model call", it is "place *this* one".
+    Both members are scoped to a call the kernel already decided to place, and
+    neither means "make a model call". ``proceed`` is for an escort standing at
+    the ``model_call`` doorway; ``delta`` is for the backend actually placing
+    it. Outside those, there is no call and the Request is refused.
     """
+
+    def delta(self, text: str) -> None:
+        """Push one fragment of assistant text as it arrives.
+
+        Only meaningful inside a backend's ``chat`` when ``request.stream``
+        was set. One-way and unanswered, so streaming costs a frame per chunk
+        rather than a round trip per chunk.
+
+        There is deliberately nothing to check here. Whether the user wants
+        this stream to continue is the kernel's decision, not the backend's:
+        if they cancel, this execution is cancelled and the next Request
+        raises ``Terminated``.
+        """
+        if not text:
+            return
+        self._sdk._notify(Request(MODEL_DELTA, {
+            "token": self._sdk._delta_token, "text": text}))
 
     def proceed(self, request=None):
         """Place the call, optionally rewritten, and return the response.
@@ -761,6 +804,10 @@ class SDK:
         # ``model.proceed`` can name the call it is meant to place without the
         # author having to carry a token around.
         self._hook_token = ""
+        # Set by BaseLLMBackend.__chat__ for the duration of one call, the same
+        # shape as the hook token: it reaches the delta sink for *this* call
+        # and nothing else, and is cleared however the call ends.
+        self._delta_token = ""
         self.frontend = _Frontend(self)
         self.console = _Console(self)
         # Set once by BaseFrontend.__bind__ when this box opens, and it stays
@@ -787,6 +834,19 @@ class SDK:
     def _send(self, request: Request):
         """Send a Request and block until the kernel answers."""
         return self._channel.send(request)
+
+    def _notify(self, request: Request) -> None:
+        """Send a Request without waiting for an answer.
+
+        Falls back to ``send`` for a channel that predates the one-way path —
+        a test double, most often — since discarding an answer is always
+        possible and refusing to run is not.
+        """
+        notify = getattr(self._channel, "notify", None)
+        if notify is None:
+            self._channel.send(request)
+            return
+        notify(request)
 
     def log(self, message: str, level: str = "info") -> None:
         """Write to the kernel's log sink.

@@ -25,7 +25,7 @@ The kernel was produced by **moving** non-essential plugins into `store/` (a
 staging catalog that mirrors `plugins/`, preserved via `git mv` to seed the
 future store) — *not* by deleting them. What remains:
 
-- **Services:** `service_llm`, `service_compactor` (context-safety),
+- **Services:** `service_compactor` (context-safety),
   `service_timekeeper` (lightweight event clock), and
   `service_plugin_watcher` (hot-reload = the install/uninstall substrate).
   Parsing was here and deliberately is not any more — it is kernel routing,
@@ -120,6 +120,78 @@ effect live. `parsing.bind_services()` supplies peers for delegating parsers
 `attachments/parse.py` builds an `Attachment` via `parsing.get_modality` +
 `parsing.parse(path, "text")` (no separate attachment-parser registry).
 
+**The LLM.** Talking to a model is **kernel routing plus installable
+backends** — `llm/` — and it got there the same way parsing did, for the same
+reason. `service_llm.py` was a central service that *other services imported*:
+the store's `service_litellm.py` opened with `from plugins.services.service_llm
+import BaseLLM, LLMResponse, ...`, and a file importing a kernel module can
+never load in a subprocess. So the least trustworthy code in the system — a
+volatile third-party SDK, a network socket and an API key — was the one part
+that had to run unmediated in the kernel's process.
+
+Of `service_llm.py`'s 576 lines, roughly 250 were bookkeeping that existed
+*because backends were services*: one registered service per model profile,
+a resync when a backend file changed, `_mirror_active` copying five attributes
+off the default so the router could impersonate it, `/llm` mutating the live
+registry as a side effect of editing config. None of it was about talking to a
+model, and none of it survives.
+
+What replaces it: a **`Brain`** per configured profile (`llm/registry.py`),
+holding settings and a **pool of boxes**. `loaded` means a live process, not a
+flag. The pool exists because `PersistentBox.call` serializes under one lock —
+one box per profile would queue a scheduled subagent behind a foreground turn —
+and it *can* exist because a backend is stateless with respect to the profile:
+every model name, key and endpoint arrives on the `LLMRequest`, so any box
+serves any call. Its ceiling is `max_workers + 1`, derived rather than chosen,
+because a subagent runs on an orchestrator worker and that plus the foreground
+turn is the most concurrent calls that can exist.
+
+**A backend is `helpers/llm_*.py`, and belongs to no family** — same as a
+parser: no base class the kernel registers, no entry point, nothing discovery
+finds. `supports_streaming`, `supports_tool_choice`, `native_modalities` and
+`display_name` are **module-level declarations read by AST**, so asking what a
+backend can do never costs a provider-library import. The contract lives in the
+guest (`sandbox/guest/llm.py`: `LLMRequest`, `LLMResponse`, `BaseLLMBackend`,
+`is_context_limit_error`) and `llm/` re-exports it — the classifier is needed on
+both sides, since the backend recognises its own provider exception and the
+compaction layer classifies what it was handed.
+
+**`ModelRequest.llm` is a model *name*, not an object.** An escort swaps
+brains by naming one; the kernel resolves it when the call is placed. Same
+handle-not-the-thing move as `<secret:…>`, and it makes native and sandboxed
+hooks identical — a sandboxed one could never hold a live model anyway.
+
+**Streaming inverted, and lost a feature on purpose.** `on_delta` was a live
+callback whose *return value* aborted the stream; neither half crosses a
+boundary. Text now goes out through `sdk.model.delta` — token-scoped like
+`model.proceed`, and sent as a one-way `notice` on the wire (still classified
+and recorded, just not awaited), because a reply per token would make streaming
+from a subprocess slower than not streaming. The abort boolean is simply gone:
+stopping is *cancellation*, which the kernel already owns, and a cancelled
+guest's next Request raises `Terminated`. A native backend still gets the old
+boolean, since it runs in-process and can be told.
+
+**Attachment routing moved kernel-side.** It used to be `BaseLLM.
+_prepare_attachments`, which meant every backend inherited a method reaching
+into `attachments.*` — a kernel import in the file that most needs isolating.
+The loop now splits the bundle against the model's capabilities and the
+backend's `native_modalities`, appends the text fallback itself, and the box
+receives plain dicts whose bytes the backend reads with `sdk.fs.read_bytes`.
+
+**Dual mode is permanent-ish, not transitional.** Provider libraries are
+volatile and local-model backends will arrive on whichever contract their
+author knew, so a native `BaseLLM` service with `is_llm_backend = True` still
+resolves, wrapped as a `NativeBrain`. `llm.registry.as_brain` extends that to
+*anything* exposing `chat_with_tools` — a test double, the stress harness's
+fake — which is why the kernel speaks exactly one language internally without a
+flag day. `plugins/services/service_llm.py` survives only as a compat shim
+re-exporting from `llm/`, because the unmigrated `service_litellm.py` imports
+it; delete it once every backend has moved.
+
+`/llm` gained explicit `load` / `unload` actions. Loading used to be a side
+effect of editing a profile; now a brain holds real processes, so opening one
+is something the user asks for. Only the default profile loads at boot.
+
 **The store branch needs the matching migration**, five mechanical changes per
 parser:
 
@@ -140,20 +212,22 @@ in a box. Nothing shims the old paths — the files have to move anyway.
 ## The kernel boundary (the one rule)
 
 Core code (`pipeline/`, `runtime/`, `state_machine/`, `agent/`, `events/`,
-`config/`, `attachments/`, `main.pyw`) hard-imports **exactly one** plugin
-module. Keep it resolvable in any kernel:
-1. `service_llm` — `runtime/conversation_loop.py`.
+`config/`, `attachments/`, `main.pyw`) hard-imports **zero** plugin modules.
+Every capability, without exception, arrives by discovery.
 
-It was two until parsing stopped being a service (see **Parsers** below). The
-registry moved *into* the kernel as `parsing/`, so the boundary got narrower
-by adding kernel code — worth remembering the next time this rule looks like
-it needs widening.
+It was two, then one, now none, and each step down worked the same way: the
+*routing* moved into the kernel and the *implementations* became installable
+helpers. Parsing went first (`parsing/`, see **Parsers**), the LLM followed
+(`llm/`, see **The LLM**). Both times the boundary got narrower **by adding
+kernel code** — worth remembering the next time this rule looks like it needs
+widening. The question to ask is not "may core import this plugin?" but "is
+the part core actually needs standing knowledge, and is the rest a helper?"
 
 This rule is executable: `tests/test_kernel_boundary.py` AST-walks every core
 module and pins the complete set of `plugins.*` import edges (the plugin
-substrate plus the two implementations above, including lazy function-local
-imports). Widening the boundary fails the suite until the test's allowlist —
-and this section — are updated deliberately.
+substrate only, including lazy function-local imports), and asserts the
+sanctioned-implementation list is empty. Widening the boundary fails the suite
+until the test's allowlist — and this section — are updated deliberately.
 
 Everything else is discovery-based. The agent system prompt collects optional
 guidance from each in-scope plugin's `agent_prompt_for(ctx)` (see `_collect` in
@@ -262,6 +336,10 @@ from plugins.plugin_discovery import discover_services, discover_tasks, discover
 c=config_manager.load(); db=Database(c['db_path']); s=discover_services(_R,c); \
 o=Orchestrator(db,c,s); discover_tasks(_R,o,c); t=ToolRegistry(db,c,s); t.orchestrator=o; \
 discover_tools(_R,t,c); print(sorted(s), sorted(o.tasks), sorted(t.tools))"
+```
+Plus the two kernel authorities, which discover independently of plugins:
+```bash
+python -c "import parsing, llm; from config import config_manager; c=config_manager.load(); print('parsers:', parsing.discover(), 'backends:', llm.discover(), llm.backend_names()); llm.refresh(c); print('brains:', llm.describe())"
 ```
 For a hermetic smoke, point DATA_DIR at an empty temporary location first;
 otherwise local installed packages will appear in discovery and hide kernel
@@ -423,8 +501,8 @@ it unchanged. Unmigrated plugins load exactly as before. **Migrated and native
 plugins coexist, so the app works at every point in the migration** — one file,
 one commit, `git checkout` to revert. Detection is by AST, never by importing.
 
-**The kernel boundary is unchanged.** Core still hard-imports exactly two
-plugin modules. `sandbox/` is reached only from `plugin_discovery`, and nothing
+**The kernel boundary is unchanged.** Core hard-imports no plugin module at
+all. `sandbox/` is reached only from `plugin_discovery`, and nothing
 in `sandbox/` imports `plugins.*` except the bridge (which needs the native
 base classes to subclass).
 
@@ -452,7 +530,7 @@ containment to fix.
 
 **Docs:** `SDK.md` (hand this to an agent writing sandbox code — its examples
 are executed by `tests/test_sdk_docs.py`), `MIGRATING_PLUGINS.md` (the
-per-plugin procedure), `SECURITY_CONTRACT_APPENDIX.md` (the ~84-Request
+per-plugin procedure), `SECURITY_CONTRACT_APPENDIX.md` (the ~87-Request
 catalogue with policy inputs).
 
 **Migration tooling:** `sandbox.migrate.plan(path)` reports what converting a
@@ -678,6 +756,9 @@ move between built-in, sandbox, and installed trees.
 - [parsing/registry.py](parsing/registry.py) — the file-type authority:
   routing, discovery, and `parser_for` (the importable half). Not a service,
   on purpose.
+- [llm/registry.py](llm/registry.py) — the model authority: profiles to
+  `Brain`s, the box pools, load/unload, and the dual-mode adapter that keeps
+  unmigrated backends working. Not a service, for the same reason.
 - [agent/system_prompt.py](agent/system_prompt.py) — single entry point for
   building the agent system prompt; gates sections by which tools the
   current scope exposes.

@@ -18,7 +18,7 @@ Two conventions run through the file:
 from __future__ import annotations
 
 from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
-                              MODEL_PROCEED,
+                              MODEL_DELTA, MODEL_PROCEED,
                               CONFIG_READ, CONFIG_WRITE, CONV_APPEND,
                               CONV_CREATE, CONV_DELETE, CONV_LIST, CONV_READ,
                               CONV_SET_CATEGORY, CONV_SET_TITLE, CRON_CREATE,
@@ -660,6 +660,25 @@ def _model_proceed(ctx, args: dict) -> Result:
         return Result.failure(f"model call failed: {exc}")
 
 
+def _model_delta(ctx, args: dict) -> Result:
+    """Carry one fragment of streamed assistant text out of a backend's box.
+
+    Token-scoped exactly like ``model.proceed``, and one-way: the answer says
+    only whether it landed, never anything about the conversation. A backend
+    that is not inside a call the kernel asked for holds no token and is
+    refused.
+    """
+    from ..streams import deliver
+
+    text = args.get("text")
+    if not isinstance(text, str) or not text:
+        return Result(data=False)
+    if not deliver(args.get("token") or "", text):
+        return Result.refusal(
+            "model.delta is only available inside an LLM backend's chat call")
+    return Result(data=True)
+
+
 def _agent_complete(ctx, args: dict) -> Result:
     """A model call.
 
@@ -1113,7 +1132,7 @@ HANDLERS = {
     TOOL_LIST: _tool_list, TOOL_CALL: _tool_call,
     COMMAND_LIST: _command_list, COMMAND_CALL: _command_call,
     AGENT_COMPLETE: _agent_complete,
-    MODEL_PROCEED: _model_proceed,
+    MODEL_PROCEED: _model_proceed, MODEL_DELTA: _model_delta,
     CRON_LIST: _cron_list, CRON_GET: _cron_get, CRON_CREATE: _cron_create,
     CRON_UPDATE: _cron_update, CRON_REMOVE: _cron_remove,
     CRON_ENABLE: _cron_enable,

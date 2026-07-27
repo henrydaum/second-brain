@@ -26,7 +26,7 @@ TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 # contract anywhere.
 SANDBOXED = ["tool_template.py", "task_template.py", "command_template.py",
              "service_template.py", "script_template.py", "hook_template.py",
-             "frontend_template.py"]
+             "frontend_template.py", "llm_backend_template.py"]
 
 # Deliberately still native, each for a stated reason carried in a banner at
 # the top of the file. Listed explicitly so that adding a template forces a
@@ -67,13 +67,25 @@ def test_sandboxed_template_validates(filename):
         f.render() for f in real)
 
 
+# Templates that legitimately import no plugin base class. A script has no
+# base class at all; an LLM backend has one, but it is not a *plugin* base —
+# it lives in ``guest.llm`` beside the parser contract, because a backend
+# belongs to no family and discovery never registers it. ``imports_sdk`` asks
+# specifically "is this a migrated plugin?", which is the question the loader
+# needs and the wrong one here.
+NO_PLUGIN_BASE = {"script_template.py", "llm_backend_template.py"}
+
+
 @pytest.mark.parametrize("filename", SANDBOXED)
 def test_sandboxed_template_uses_the_sdk(filename):
-    """It must import guest.bases, not the native bases."""
+    """It must import a guest contract, not a native one."""
     source = (TEMPLATES / filename).read_text(encoding="utf-8")
     tree = ast.parse(source)
-    if filename != "script_template.py":       # a script needs no base class
+    if filename not in NO_PLUGIN_BASE:
         assert imports_sdk(tree), f"{filename} does not import the SDK contract"
+    if filename == "llm_backend_template.py":
+        assert "from guest.llm import" in source, (
+            "a backend template must teach the guest LLM contract")
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(

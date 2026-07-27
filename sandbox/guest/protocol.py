@@ -22,6 +22,7 @@ Message kinds, parent to child:
 Child to parent:
 
 - ``request`` — I want an effect; classify it
+- ``notice``  — the same, but I am not waiting for the answer
 - ``log``     — write this to the kernel's log sink
 - ``done``    — ephemeral only: I finished, here is my Result
 - ``ready``   — persistent only: loaded and standing by
@@ -37,6 +38,13 @@ While serving a ``call`` the child may still send Requests of its own, so the
 parent's loop expects *either* a ``request`` or the ``return``. That needs no
 message ids because a box serves one call at a time; concurrency here would
 require them.
+
+**A notice is a Request the child does not wait for.** It still passes the
+same gate — classified, recorded, executed by the same handler — so it is not
+a way around policy; the only thing given up is the answer. That matters for
+streaming, where a reply per token would turn a stream into a few hundred
+round trips. Because nothing is awaited, a notice never appears in the
+``expected`` set of a pump loop: it is serviced and the loop reads on.
 """
 
 from __future__ import annotations
@@ -52,6 +60,7 @@ STOP = "stop"      # persistent boxes: shut down gracefully
 
 # Child -> parent.
 REQUEST = "request"
+NOTICE = "notice"  # a Request wanting no answer; the child does not wait
 LOG = "log"
 DONE = "done"      # ephemeral boxes: the one and only result
 READY = "ready"    # persistent boxes: loaded, standing by for calls

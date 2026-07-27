@@ -6,6 +6,8 @@ argv. Everything else in this package reaches into ``ctx``.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 import shlex
 import shutil
@@ -16,11 +18,17 @@ import urllib.request
 from pathlib import Path
 
 from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
-                              FS_SEARCH, FS_TEMP, FS_WRITE, NET_HTTP, PROC_RUN,
+                              FS_READ_BYTES, FS_SEARCH, FS_TEMP, FS_WRITE,
+                              FS_WRITE_BYTES, NET_HTTP, PROC_RUN,
                               SECRET_REVEAL, Result)
 from ..secrets import lookup_from, redact, resolve
 
 MAX_READ_BYTES = 8 * 1024 * 1024
+# Binary reads get their own, larger cap: the things that need them are media
+# files headed for a model, and a 20 MB video is ordinary where a 20 MB text
+# file is a mistake. Base64 inflates by 4/3 on the wire, so this is the real
+# ceiling on one frame.
+MAX_READ_BINARY = 32 * 1024 * 1024
 MAX_SEARCH_HITS = 500
 HTTP_TIMEOUT = 30.0
 PROC_TIMEOUT = 120.0
@@ -40,6 +48,54 @@ def _fs_read(ctx, args: dict) -> Result:
         return Result(data=path.read_text(encoding="utf-8", errors="replace"))
     except OSError as exc:
         return Result.failure(f"read failed: {exc}", retryable=True)
+
+
+def _fs_read_bytes(ctx, args: dict) -> Result:
+    """Read a file as raw bytes, base64-encoded for the wire.
+
+    The guest decodes back to ``bytes``, so a plugin never sees the encoding.
+    It exists because the things that need bytes — an image on its way to a
+    vision model, audio a provider ingests natively — are exactly the things
+    ``fs.read``'s ``errors="replace"`` would silently corrupt.
+    """
+    raw = args.get("path")
+    if not raw:
+        return Result.failure("fs.read_bytes requires a path")
+    path = Path(raw)
+    try:
+        if not path.is_file():
+            return Result.failure(f"not a file: {raw}")
+        size = path.stat().st_size
+        if size > MAX_READ_BINARY:
+            return Result.failure(f"file exceeds {MAX_READ_BINARY} bytes")
+        return Result(data=base64.b64encode(path.read_bytes()).decode("ascii"))
+    except OSError as exc:
+        return Result.failure(f"read failed: {exc}", retryable=True)
+
+
+def _fs_write_bytes(ctx, args: dict) -> Result:
+    """Write raw bytes, supplied base64-encoded."""
+    raw = args.get("path")
+    if not raw:
+        return Result.failure("fs.write_bytes requires a path")
+    encoded = args.get("data")
+    if not isinstance(encoded, str):
+        return Result.failure("fs.write_bytes requires base64 string data")
+    try:
+        # validate=True so silently-dropped junk becomes an error rather than
+        # a truncated file.
+        data = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        return Result.failure(f"fs.write_bytes data is not valid base64: {exc}")
+    mode = "ab" if args.get("mode") == "append" else "wb"
+    path = Path(raw)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, mode) as handle:
+            handle.write(data)
+        return Result(data={"path": str(path), "bytes": len(data)})
+    except OSError as exc:
+        return Result.failure(f"write failed: {exc}", retryable=True)
 
 
 def _fs_write(ctx, args: dict) -> Result:
@@ -251,6 +307,8 @@ HANDLERS = {
     FS_READ: _fs_read,
     SECRET_REVEAL: _secret_reveal,
     FS_WRITE: _fs_write,
+    FS_READ_BYTES: _fs_read_bytes,
+    FS_WRITE_BYTES: _fs_write_bytes,
     FS_LIST: _fs_list,
     FS_SEARCH: _fs_search,
     FS_DELETE: _fs_delete,

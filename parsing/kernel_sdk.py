@@ -52,6 +52,21 @@ class _Fs:
             handle.write(data)
         return {"path": str(target), "bytes": len(data)}
 
+    def write_bytes(self, path, data, mode: str = "overwrite") -> dict:
+        """Write raw bytes, creating parents.
+
+        A ``str`` is encoded rather than refused, matching the real SDK — the
+        two must agree on everything a parser can observe, or a file works one
+        way and breaks the other.
+        """
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "ab" if mode == "append" else "wb") as handle:
+            handle.write(data)
+        return {"path": str(target), "bytes": len(data)}
+
     def list(self, path, pattern: str = "*") -> list:
         """Everything in a directory matching a glob."""
         target = Path(path)

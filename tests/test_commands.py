@@ -27,8 +27,11 @@ def test_llm_command_can_set_default(monkeypatch):
     result = LlmCommand().run({"model_name": "b", "action": "set_default"}, context)
 
     assert steps[0].prompt == "Select an LLM profile, or add a new one.\nDefault: a"
-    assert steps[1].enum == ["edit", "set_default", "remove"]
-    assert steps[1].enum_labels == ["Edit", "Set default", "Remove"]
+    # Loading is explicit now: a brain holds real boxes, so opening and
+    # closing them is something the user asks for rather than a side effect
+    # of editing a profile.
+    assert steps[1].enum == ["edit", "set_default", "load", "unload", "remove"]
+    assert steps[1].enum_labels == ["Edit", "Set default", "Load", "Unload", "Remove"]
     assert result == "Default LLM profile set to: b"
     assert context.config["default_llm_profile"] == "b"
     assert saved[-1]["default_llm_profile"] == "b"
@@ -76,9 +79,18 @@ def test_llm_command_add_stores_declared_capabilities(monkeypatch):
     assert saved[-1]["default_llm_profile"] == "openai/gpt-4o"
 
 def test_llm_command_can_rename_profile(monkeypatch):
-    saved, removed, added = [], [], []
+    """A rename is a config edit and nothing else.
+
+    It used to reach into the live service registry through the router's
+    ``add_llm``/``remove_llm``, because each profile was a registered service.
+    Profiles are config now and the registry is rebuilt from it when the
+    config is saved, so the command pokes nothing — which is why the router
+    below must stay untouched.
+    """
+    saved, poked = [], []
     monkeypatch.setattr("plugins.commands.command_llm._save", lambda context: saved.append(dict(context.config)))
-    router = SimpleNamespace(remove_llm=lambda name: removed.append(name), add_llm=lambda name, profile: added.append((name, profile)))
+    router = SimpleNamespace(remove_llm=lambda name: poked.append(("remove", name)),
+                             add_llm=lambda name, profile: poked.append(("add", name)))
     context = SimpleNamespace(config={"llm_profiles": {"bad": {"llm_endpoint": "https://api.atlascloud.ai/v1"}}, "default_llm_profile": "bad"}, services={"llm": router})
 
     steps = LlmCommand().form({"model_name": "bad", "action": "edit"}, context)
@@ -88,8 +100,7 @@ def test_llm_command_can_rename_profile(monkeypatch):
     assert result == "Updated LLM profile: deepseek-ai/deepseek-v4-pro"
     assert "bad" not in context.config["llm_profiles"]
     assert context.config["default_llm_profile"] == "deepseek-ai/deepseek-v4-pro"
-    assert removed == ["bad"]
-    assert added[-1][0] == "deepseek-ai/deepseek-v4-pro"
+    assert poked == []
     assert saved[-1]["default_llm_profile"] == "deepseek-ai/deepseek-v4-pro"
 
 

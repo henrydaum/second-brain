@@ -61,6 +61,23 @@ class PipeChannel:
                 f"expected a result, got {message.get('kind')}")
         return Result.from_dict(message["result"])
 
+    def notify(self, request: Request) -> None:
+        """Send a Request and do not wait for the answer.
+
+        The one-way half of the wire. It exists for effects issued in bulk —
+        streamed text, above all — where blocking for a Result per item would
+        cost a full round trip per token and make streaming across a process
+        boundary pointless.
+
+        Giving up the answer means giving up knowing whether it was allowed,
+        which is why this is not the default and why only a Request that can
+        do nothing on its own is sent this way.
+        """
+        protocol.write_message(self._writer, {
+            "kind": protocol.NOTICE,
+            "request": request.to_dict(),
+        })
+
     def log(self, level: str, message: str) -> None:
         """Send a log line upstream to the kernel's sink."""
         protocol.write_message(self._writer, {

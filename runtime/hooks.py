@@ -102,12 +102,21 @@ class HookContext:
 class ModelRequest:
     """One outgoing trip to the model, materialized so escorts can rewrite it.
 
-    ``llm`` is the brain that will take the call; ``messages`` is exactly what
-    it will be shown; ``tools`` is the toolbox offered (provider schemas);
-    ``tool_choice`` forces tool use when the backend supports it (see
-    ``BaseLLM.supports_tool_choice``); ``params`` are extra provider kwargs
-    forwarded to ``chat_with_tools`` only when non-empty; ``attachments`` is
-    the media bundle riding along on this call.
+    ``llm`` is the **name** of the LLM profile that will take the call — a
+    string like ``"gpt-4o-mini"``, not a live object. Swapping models is
+    therefore ``request.llm = "some-profile"``, and the kernel resolves it
+    when the call is placed. That is the same handle-not-the-thing move as
+    ``<secret:...>``: it reads identically for a native escort and a sandboxed
+    one (which could never be handed a live model anyway), and it stops a hook
+    holding a reference to a brain past the call that lent it. An empty name
+    means the session's default.
+
+    ``messages`` is exactly what the model will be shown; ``tools`` is the
+    toolbox offered (provider schemas); ``tool_choice`` forces tool use when
+    the backend supports it (``Brain.supports_tool_choice``); ``params`` are
+    extra provider kwargs forwarded only when non-empty; ``attachments`` is
+    the media bundle riding along, routed against the resolved model's
+    capabilities as the call is placed.
     """
 
     llm: Any

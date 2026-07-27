@@ -46,9 +46,9 @@ BASE_TO_FAMILY = {base: family for family, base in FAMILIES.items()}
 CONTRACT_MODULES = (
     {f"plugins.{base}" for base in FAMILIES.values()}
     | {"guest", "guest.bases", "guest.box", "guest.sdk", "guest.hooks",
-       "guest.parsing",
+       "guest.parsing", "guest.llm",
        "sandbox.guest", "sandbox.guest.bases", "sandbox.guest.box",
-       "sandbox.guest.hooks", "sandbox.guest.parsing"}
+       "sandbox.guest.hooks", "sandbox.guest.parsing", "sandbox.guest.llm"}
 )
 
 # Pure stdlib: computation only, no way to reach the environment.
@@ -625,7 +625,13 @@ DECLARATION_KEYS = ("name", "box", "isolation", "lifetime", "timeout",
                     "memory_mb", "requests", "exports", "dependencies_files",
                     "dependencies_pip", "requires_services", "max_calls",
                     "background_safe", "agent_prompt", "hooks",
-                    "subscribed_channels", "uses_console", "poll_interval")
+                    "subscribed_channels", "uses_console", "poll_interval",
+                    # LLM backends. Read rather than asked because the whole
+                    # point is to know what a backend can do without importing
+                    # it — deciding whether to stream a call must not cost a
+                    # provider library import.
+                    "supports_streaming", "supports_tool_choice",
+                    "native_modalities", "display_name")
 
 # Reading declarations without importing means *inherited* defaults are
 # invisible: ``class Counter(BaseService)`` never writes ``lifetime`` in the

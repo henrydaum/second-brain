@@ -1,4 +1,24 @@
-"""Service plugin for LLM."""
+"""The old LLM service — now a compatibility shim over the kernel's ``llm``.
+
+This file used to be the one plugin the kernel could not boot without. It no
+longer is: the routing moved into the kernel as :mod:`llm`, and backends
+became installable ``helpers/llm_*.py`` files that run in boxes. The kernel
+boundary is zero plugin imports because of it.
+
+What is left here exists for one reason — **unmigrated backends still import
+it**. The store's ``service_litellm.py`` opens with
+
+    from plugins.services.service_llm import BaseLLM, LLMResponse, ...
+
+and until that file moves to ``helpers/llm_litellm.py`` those names have to
+resolve. So the contract types are re-exported from :mod:`llm` (one
+definition, no drift) and the parts that genuinely have no new home — native
+backend discovery, the router, per-profile service registration — stay as
+they were.
+
+Delete this file once every backend has migrated. Nothing in the kernel
+imports it.
+"""
 
 from dataclasses import dataclass, field
 import importlib
@@ -12,129 +32,12 @@ import types
 from plugins.BaseService import BaseService
 from plugins.helpers.plugin_paths import PLUGIN_ROOTS, plugin_dirs
 
+# One definition of each, living in the guest where a sandboxed backend can
+# reach it, re-exported here so an unmigrated one still can too.
+from llm import (LLMProviderError, LLMResponse, extract_llm_error_text,
+                 is_context_limit_error)
+
 logger = logging.getLogger("LLMClass")
-
-"""This is the one plugin which is truly required for the application to run. All other plugins are technically optional."""
-
-
-_CONTEXT_LIMIT_HINTS = (
-    "context window",
-    "context length",
-    "context_length",
-    "maximum context",
-    "max context",
-    "too many tokens",
-    "too long",
-    "max_tokens",
-    "prompt is too long",
-    "prompt tokens",
-    "exceeds limit",
-    "exceeds limits",
-    "exceeded limit",
-    "token limit",
-    "request too large",
-)
-
-_CONTEXT_RELATED_TERMS = ("context", "token", "prompt", "input")
-_LIMIT_RELATED_TERMS = ("limit", "limits", "length", "maximum", "max", "too long", "too many", "exceed", "exceeds", "exceeded")
-_NON_CONTEXT_LIMIT_HINTS = (
-    "not support model",
-    "not supported model",
-    "current token plan",
-    "token plan not support",
-)
-
-
-def _stringify_error_detail(value) -> str:
-    """Best-effort conversion of SDK error payloads into searchable text."""
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    try:
-        return json.dumps(value, default=str)
-    except Exception:
-        return str(value)
-
-
-def extract_llm_error_text(error) -> str:
-    """Flatten provider exceptions and response payloads into one text blob."""
-    if error is None:
-        return ""
-
-    parts = [str(error)]
-    for attr in ("message", "body", "response", "error", "errors"):
-        value = getattr(error, attr, None)
-        text = _stringify_error_detail(value)
-        if text:
-            parts.append(text)
-
-    return " | ".join(part for part in parts if part)
-
-
-def is_context_limit_error(error) -> bool:
-    """Heuristic classifier for provider-specific context overflow failures."""
-    text = extract_llm_error_text(error).lower()
-    if not text:
-        return False
-
-    if any(hint in text for hint in _NON_CONTEXT_LIMIT_HINTS):
-        return False
-
-    if any(hint in text for hint in _CONTEXT_LIMIT_HINTS):
-        return True
-
-    has_context_signal = any(term in text for term in _CONTEXT_RELATED_TERMS)
-    has_limit_signal = any(term in text for term in _LIMIT_RELATED_TERMS)
-    if has_context_signal and has_limit_signal:
-        return True
-
-    if "invalid params" in text and "window" in text and "limit" in text:
-        return True
-
-    return False
-
-
-class LLMProviderError(RuntimeError):
-    """Structured provider error surfaced from a model backend."""
-
-    def __init__(self, message: str, code: str = "provider_error"):
-        """Initialize the llmprovider error."""
-        super().__init__(message)
-        self.code = code
-
-
-@dataclass
-class LLMResponse:
-    """
-    Standardized response from invoke() and chat_with_tools().
-    content is always populated. tool_calls is populated when
-    the model wants to call tools instead of (or before) answering.
-    """
-    content: str = ""
-    tool_calls: list[dict] = field(default_factory=list)
-    # Each tool_call dict: {"id": str, "name": str, "arguments": str (JSON)}
-    prompt_tokens: int | None = None   # tokens used by the prompt in this call
-    cached_prompt_tokens: int | None = None
-    error: str | None = None
-    error_code: str | None = None
-
-    @property
-    def has_tool_calls(self) -> bool:
-        """Return whether tool calls."""
-        return len(self.tool_calls) > 0
-
-    @property
-    def is_error(self) -> bool:
-        """Return whether error."""
-        return bool(self.error)
-
-    @property
-    def is_context_limit_error(self) -> bool:
-        """Return whether context limit error."""
-        if self.error_code == "context_limit":
-            return True
-        return is_context_limit_error(self.error or self.content)
 
 
 class BaseLLM(BaseService):

@@ -131,9 +131,16 @@ def active_llm(runtime, session: RuntimeSession | None = None):
     profile = profile_for(runtime, session)
     try:
         from runtime.agent_scope import resolve_agent_llm
-        return resolve_agent_llm(profile, runtime.config, runtime.services)
+        resolved = resolve_agent_llm(profile, runtime.config, runtime.services)
     except Exception:
-        return runtime.services.get("llm")
+        resolved = None
+    if resolved is not None:
+        return resolved
+    # The registry knows nothing about a model somebody injected directly —
+    # an unmigrated router registered as the ``llm`` service, a test's fake,
+    # the stress harness. Those are still legitimate brains; the loop adapts
+    # whatever this returns.
+    return (runtime.services or {}).get("llm")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -340,9 +347,11 @@ def build_loop(runtime, session_key: str | None = None) -> ConversationLoop:
         except Exception:
             logger.exception("Failed to load active LLM")
     if llm is not None and not getattr(llm, "loaded", True):
-        router = runtime.services.get("llm")
-        if router is not llm and getattr(router, "loaded", False):
-            llm = router
+        from llm import default_brain
+        fallback = (default_brain(getattr(runtime, "config", None) or {})
+                    or (runtime.services or {}).get("llm"))
+        if fallback is not None and fallback is not llm and getattr(fallback, "loaded", False):
+            llm = fallback
     if llm is None or not getattr(llm, "loaded", True):
         raise RuntimeError(
             "No LLM is configured or loaded. Run /setup to configure one "

@@ -110,15 +110,26 @@ def registry_with_tools(registry, tools=(), *, visible: bool = True):
     return cloned
 
 
-def resolve_agent_llm(profile_name: str, config: dict, services: dict):
-    """Resolve the LLM service an agent profile should use."""
+def resolve_agent_llm(profile_name: str, config: dict, services: dict = None):
+    """Resolve the brain an agent profile should drive with.
+
+    The registry answers first. ``services`` is the fallback and not a
+    vestige: while the native contract exists, a model may be registered as a
+    service the registry knows nothing about — the unmigrated router, a
+    harness's fake — and those are still legitimate brains.
+    """
+    from llm import default_brain
+    from llm.registry import usable_brain
+
     profile = (config.get("agent_profiles", {}) or {}).get(profile_name, {}) or {}
     llm_ref = profile.get("llm") or "default"
     if llm_ref == "default":
         llm_ref = config.get("default_llm_profile") or ""
+    services = services or {}
     if not llm_ref:
-        return services.get("llm")
-    return services.get(llm_ref) or services.get("llm")
+        return default_brain(config) or services.get("llm")
+    return (usable_brain(llm_ref) or services.get(llm_ref)
+            or default_brain(config) or services.get("llm"))
 
 
 def _expand_tool_dependencies(tools: dict, names: set[str]) -> set[str]:

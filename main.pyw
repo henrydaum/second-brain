@@ -199,6 +199,7 @@ logging.getLogger().addHandler(_file_handler)
 from dataclasses import dataclass, field
 from typing import Any
 
+import llm
 import parsing
 from config import config_manager
 from pipeline.database import Database
@@ -286,6 +287,19 @@ def main():
 	parsing.bind_services(services)
 	logger.info(f"Parsers discovered: {parsing.discover()} module(s) ({time.time() - t0:.2f}s)")
 
+	# --- 3a-ii. Discover LLM backends and build the brains. Kernel routing for
+	#            the same reason parsing is: which models exist is standing
+	#            knowledge, while the backends themselves are installable
+	#            packages that run in boxes. Only the default profile is
+	#            loaded — the rest open a box on first use, so a user with six
+	#            profiles written down does not start six processes. ---
+	t0 = time.time()
+	found = llm.discover()
+	llm.refresh(config)
+	loaded = llm.load_default(config)
+	logger.info(f"LLM backends discovered: {found}; default profile "
+	            f"{'loaded' if loaded else 'not loaded'} ({time.time() - t0:.2f}s)")
+
 	# --- 3b. Auto-load managed services from config plus installed extensions ---
 	for svc_name, svc in services.items():
 		if not should_autoload_service(svc_name, svc, config):
@@ -362,6 +376,10 @@ def main():
 		event_trigger.stop()
 		watcher.stop()
 		orchestrator.stop()
+		# Brains hold live boxes (processes, under isolation), so they are
+		# closed explicitly rather than left to the service loop below — which
+		# no longer knows about them.
+		llm.unload_all()
 		for svc in services.values():
 			if getattr(svc, 'loaded', False):
 				try:
@@ -423,6 +441,7 @@ def main():
 				event_trigger.stop()
 				watcher.stop()
 				orchestrator.stop()
+				llm.unload_all()
 				for svc in services.values():
 					if getattr(svc, "loaded", False):
 						try:

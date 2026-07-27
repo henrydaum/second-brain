@@ -215,7 +215,7 @@ def test_install_records_provenance_with_hashes(tmp_path, monkeypatch):
     plan = package_manager.InstallPlan(
         target="tool_demo",
         files=[package_manager.PlannedFile("tools/tool_demo.py", content)],
-        pip_packages=[], existing_files=[], parser_reload_needed=False,
+        pip_packages=[], existing_files=[], helper_rescan_needed=False,
         progress_steps=[], store_commit="abc123")
     context = SimpleNamespace(db=db, user_id=DEFAULT_USER_ID, config={},
                               runtime=None, services={})

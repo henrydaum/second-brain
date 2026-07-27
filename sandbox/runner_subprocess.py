@@ -159,6 +159,11 @@ def service_until(interpreter: Interpreter, execution: Execution, proc,
                                "result": result.to_dict()}):
                 return None
 
+        elif kind == protocol.NOTICE:
+            # Same gate, same provenance, same ledger — the only difference
+            # is that nothing is written back, because nobody is waiting.
+            interpreter.submit(execution, Request.from_dict(message["request"]))
+
         elif kind == protocol.LOG:
             level = str(message.get("level", "info")).upper()
             logger.log(getattr(logging, level, logging.INFO),

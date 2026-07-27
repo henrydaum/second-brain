@@ -1,16 +1,15 @@
 """The kernel boundary (CLAUDE.md's "one rule"), made executable.
 
 Core code may lean on the plugin *substrate* — base classes, discovery, shared
-path helpers, the command-registry adapter — but may hard-import exactly one
-plugin *implementation*: ``service_llm``. Everything else must arrive by
-discovery, so installing or uninstalling a package can never break the kernel.
+path helpers, the command-registry adapter — and may hard-import **no** plugin
+implementation at all. Everything else arrives by discovery, so installing or
+uninstalling a package can never break the kernel.
 
-It was two until parsing stopped being a service. The registry moved into the
-kernel as :mod:`parsing` — which is what it always was, standing knowledge
-about file types that nothing should have to load — leaving the parsers
-themselves as ordinary installable helpers. So the boundary got *narrower* by
-putting something in the kernel, which is worth remembering the next time this
-rule looks like it needs widening.
+It was two, then one, now none, and each step down worked the same way: the
+*routing* moved into the kernel and the *implementations* became installable
+helpers. Parsing went first (:mod:`parsing`), the LLM followed (:mod:`llm`),
+and both times the boundary got narrower by adding kernel code — which is
+worth remembering the next time this rule looks like it needs widening.
 
 These tests AST-walk every core module (nothing is imported or executed) and
 pin the complete set of ``plugins.*`` import edges, including lazy
@@ -43,14 +42,10 @@ SUBSTRATE = frozenset({
     "plugins.frontends.helpers.command_registry",
 })
 
-# The sanctioned plugin implementations, pinned to the exact core files
-# allowed to import them. Any other core file wanting these must go through
-# the services dict / discovery instead.
-SANCTIONED = {
-    "plugins.services.service_llm": {
-        "runtime/conversation_loop.py",
-    },
-}
+# Sanctioned plugin implementations, pinned to the exact core files allowed to
+# import them. Empty, and meant to stay that way: a core file that wants a
+# plugin goes through discovery (the services dict, a registry) instead.
+SANCTIONED: dict[str, set] = {}
 
 
 def _iter_core_files():
@@ -98,7 +93,7 @@ def _collect_edges():
 
 # ── The one rule ─────────────────────────────────────────────────────
 
-def test_core_imports_only_substrate_and_the_two_sanctioned_modules():
+def test_core_imports_only_substrate():
     edges = _collect_edges()
     allowed = SUBSTRATE | set(SANCTIONED)
     violations = {mod: sorted(files)
@@ -126,10 +121,26 @@ def test_sanctioned_imports_do_not_spread_to_new_core_files():
 
 
 def test_sanctioned_modules_resolve_in_the_kernel_tree():
-    """CLAUDE.md: 'Keep these two resolvable in any kernel.' They are the
-    only plugin files the kernel cannot boot without."""
+    """Any sanctioned module must actually ship in the built-in tree.
+
+    Vacuous while SANCTIONED is empty, and kept for exactly that reason: the
+    day something is added back, the rule it has to satisfy is already here.
+    """
     for mod in SANCTIONED:
         assert _is_module(mod), f"{mod} is missing from the built-in tree"
+
+
+def test_the_kernel_hard_imports_no_plugin_implementation():
+    """The rule, stated as its own claim rather than implied by the others.
+
+    This is the end of a long migration: parsing and the LLM were the last two
+    plugin modules core could not boot without, and both are now kernel
+    routing over installable helpers.
+    """
+    assert SANCTIONED == {}, (
+        "A plugin implementation was sanctioned back into the kernel. That may"
+        " be right, but it reverses a deliberate direction of travel — update"
+        " the kernel-boundary section of CLAUDE.md in the same commit.")
 
 
 def test_scanner_still_sees_known_edges():
@@ -137,4 +148,4 @@ def test_scanner_still_sees_known_edges():
     every test above would pass vacuously. Pin one known edge per group."""
     edges = _collect_edges()
     assert "plugins.plugin_discovery" in edges            # substrate
-    assert "plugins.services.service_llm" in edges        # implementation
+    assert "plugins.BaseService" in edges                 # base class

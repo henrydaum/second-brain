@@ -258,6 +258,22 @@ class InterpreterChannel:
             raise Terminated(None)
         return result
 
+    def notify(self, request: Request) -> None:
+        """Send a Request without waiting for its answer.
+
+        In-process there is no round trip to save, so this differs from
+        ``send`` only in discarding the Result — which is the point: the two
+        runners must agree on what a plugin can observe, or code written
+        against one would misbehave under the other. Cancellation still
+        unwinds, because a cancelled execution must stop making Requests
+        however it is making them.
+        """
+        if self._execution.cancelled:
+            raise Terminated(None)
+        self._interpreter.submit(self._execution, request)
+        if self._execution.cancelled:
+            raise Terminated(None)
+
     def log(self, level: str, message: str) -> None:
         """Buffer a log line for the runner to emit."""
         self._execution.logs.append((level, message))

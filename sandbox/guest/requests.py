@@ -19,6 +19,10 @@ from typing import Any
 # ── filesystem ────────────────────────────────────────────────────────
 FS_READ = "fs.read"
 FS_WRITE = "fs.write"
+# Bytes cross as base64 — JSON has no bytes type, and the same value has to
+# survive both a thread boundary and a pipe unchanged.
+FS_READ_BYTES = "fs.read_bytes"
+FS_WRITE_BYTES = "fs.write_bytes"
 FS_LIST = "fs.list"
 FS_SEARCH = "fs.search"
 FS_DELETE = "fs.delete"
@@ -93,6 +97,7 @@ AGENT_SCHEDULE = "agent.schedule"
 # ``model_call`` hook: it is the escort dialing the phone it holds, and the
 # kernel resolves it to the very call this hook was invoked for.
 MODEL_PROCEED = "model.proceed"
+MODEL_DELTA = "model.delta"
 
 # ── scheduling ────────────────────────────────────────────────────────
 CRON_LIST = "cron.list"
@@ -149,7 +154,8 @@ SELF_RESPOND = "self.respond"
 
 
 ALL_TYPES = {
-    FS_READ, FS_WRITE, FS_LIST, FS_SEARCH, FS_DELETE, FS_MOVE, FS_TEMP,
+    FS_READ, FS_WRITE, FS_READ_BYTES, FS_WRITE_BYTES,
+    FS_LIST, FS_SEARCH, FS_DELETE, FS_MOVE, FS_TEMP,
     DB_QUERY, DB_WRITE, DB_DEFINE,
     CONV_CREATE, CONV_READ, CONV_LIST, CONV_APPEND, CONV_SET_TITLE,
     CONV_SET_CATEGORY, CONV_DELETE,
@@ -163,7 +169,7 @@ ALL_TYPES = {
     PLUGIN_RELOAD, PLUGIN_INSTALL, PLUGIN_UNINSTALL,
     SERVICE_LIST, SERVICE_CALL, SERVICE_LOAD, SERVICE_UNLOAD,
     TOOL_LIST, TOOL_CALL, COMMAND_LIST, COMMAND_CALL,
-    AGENT_COMPLETE, AGENT_SPAWN, AGENT_SCHEDULE, MODEL_PROCEED,
+    AGENT_COMPLETE, AGENT_SPAWN, AGENT_SCHEDULE, MODEL_PROCEED, MODEL_DELTA,
     CRON_LIST, CRON_GET, CRON_CREATE, CRON_UPDATE, CRON_REMOVE, CRON_ENABLE,
     EVENT_EMIT, EVENT_REQUEST,
     FRONTEND_SUBMIT, FRONTEND_CANCEL, FRONTEND_BIND, FRONTEND_ATTEND,
@@ -176,7 +182,8 @@ ALL_TYPES = {
 # Requests that read rather than change. The policy function leans on this,
 # and so does anything asking whether a chain has done anything yet.
 READ_ONLY = {
-    FS_READ, FS_LIST, FS_SEARCH, DB_QUERY, CONV_READ, CONV_LIST, SESSION_GET,
+    FS_READ, FS_READ_BYTES, FS_LIST, FS_SEARCH,
+    DB_QUERY, CONV_READ, CONV_LIST, SESSION_GET,
     SESSION_LIST, SESSION_STATE_GET, CONFIG_READ, USER_READ, USER_LIST,
     PLUGIN_LIST, PLUGIN_DESCRIBE, SERVICE_LIST, TOOL_LIST, COMMAND_LIST,
     CRON_LIST, CRON_GET, TASK_STATUS, TASK_OUTPUT, FILE_LIST, PARSE_FILE,

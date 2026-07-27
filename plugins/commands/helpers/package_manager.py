@@ -60,7 +60,7 @@ class InstallPlan:
     files: list[PlannedFile]
     pip_packages: list[str]
     existing_files: list[str]
-    parser_reload_needed: bool
+    helper_rescan_needed: bool
     progress_steps: list[str]
     # Store commit the plan was resolved against — recorded in the action
     # ledger on install as provenance (and the seed of future versioning).
@@ -74,7 +74,7 @@ class UninstallPlan:
     keep_files: dict[str, str]
     pip_packages: list[str]
     kept_pip_packages: dict[str, str]
-    parser_reload_needed: bool
+    helper_rescan_needed: bool
     progress_steps: list[str]
 
 
@@ -183,12 +183,12 @@ def _install_plan_from_roots(store: GitStoreBackend, roots: list[str], target: s
     if pip_packages:
         steps.append(f"Installing Python package(s): {', '.join(pip_packages)}")
     steps.append("Copying package files")
-    if any(_is_parser_helper(rel) for rel in collected):
-        steps.append("Rescanning parsers")
+    if any(_is_rescannable_helper(rel) for rel in collected):
+        steps.append("Rescanning parsers and LLM backends")
     # Provenance is best-effort: stub/test backends may not resolve a commit.
     resolve_commit = getattr(store, "resolve_commit", lambda: None)
     return InstallPlan(target, list(collected.values()), pip_packages, existing,
-                       any(_is_parser_helper(rel) for rel in collected), steps,
+                       any(_is_rescannable_helper(rel) for rel in collected), steps,
                        store_commit=resolve_commit())
 
 
@@ -256,9 +256,9 @@ def _execute_install_plan(plan: InstallPlan, context=None, progress: Progress | 
                 path.unlink(missing_ok=True)
             _remove_empty_dirs()
             raise
-        if plan.parser_reload_needed:
-            _progress(progress, "Rescanning parsers")
-            _rescan_parsers(context, lines)
+        if plan.helper_rescan_needed:
+            _progress(progress, "Rescanning parsers and LLM backends")
+            _rescan_helpers(context, lines)
         if context is not None:
             services = _services(plan.files)
             _set_enabled_frontends(context, add=_frontends(plan.files), remove=[], lines=lines)
@@ -347,9 +347,9 @@ def _uninstall_plan_from_candidates(target: str, candidates: set[str]) -> Uninst
     steps = ["Resolving dependency plan", "Deleting package files"]
     if pip_remove:
         steps.append("Uninstalling Python package(s): " + ", ".join(pip_remove))
-    if any(_is_parser_helper(rel) for rel in candidates):
-        steps.append("Rescanning parsers")
-    return UninstallPlan(target, remove_files, keep_files, pip_remove, kept_pip, any(_is_parser_helper(rel) for rel in candidates), steps)
+    if any(_is_rescannable_helper(rel) for rel in candidates):
+        steps.append("Rescanning parsers and LLM backends")
+    return UninstallPlan(target, remove_files, keep_files, pip_remove, kept_pip, any(_is_rescannable_helper(rel) for rel in candidates), steps)
 
 
 def execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices=None, progress: Progress | None = None) -> PackageActionResult:
@@ -388,9 +388,9 @@ def _execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices=N
         if plan.kept_pip_packages:
             kept = ", ".join(f"{name} ({reason})" for name, reason in sorted(plan.kept_pip_packages.items(), key=lambda item: item[0].lower()))
             lines.append(f"Kept Python package(s): {kept}")
-        if plan.parser_reload_needed:
-            _progress(progress, "Rescanning parsers")
-            _rescan_parsers(context, lines)
+        if plan.helper_rescan_needed:
+            _progress(progress, "Rescanning parsers and LLM backends")
+            _rescan_helpers(context, lines)
     return PackageActionResult(True, lines)
 
 
@@ -879,7 +879,7 @@ def _plugin_name(rel: str, plugin_type: str) -> str:
     return stem[len(prefix):] if stem.startswith(prefix) else stem
 
 
-def _is_parser_helper(rel: str) -> bool:
+def _is_rescannable_helper(rel: str) -> bool:
     """Whether an installed file is a parser, i.e. ``helpers/parse_*.py``.
 
     Helpers live at a tree's root rather than under a family: a parser is not
@@ -888,22 +888,36 @@ def _is_parser_helper(rel: str) -> bool:
     """
     p = PurePosixPath(rel)
     return (len(p.parts) == 2 and p.parts[0] == "helpers"
-            and p.name.startswith("parse_"))
+            and (p.name.startswith("parse_") or p.name.startswith("llm_")))
 
 
-def _rescan_parsers(context, lines: list[str]) -> None:
-    """Re-import the installed parser helpers so a new one is live at once.
+def _rescan_helpers(context, lines: list[str]) -> None:
+    """Rescan the helper trees so a newly installed helper is live at once.
 
-    Parsing is kernel routing rather than a service, so this is a rescan, not
-    a load/unload cycle — there is nothing holding state to tear down.
+    Both families here are kernel *routing* rather than services, so this is a
+    rescan and not a load/unload cycle — there is nothing holding state to
+    tear down. An LLM backend additionally needs the brains rebuilt, since a
+    profile naming a backend that was missing a moment ago should start
+    working without a restart.
     """
-    import parsing
-
     try:
+        import parsing
+
         count = parsing.discover()
         lines.append(f"Rescanned parsers: {count} module(s) now active.")
     except Exception as e:
         lines.append(f"Parser rescan failed (restart to apply): {e}")
+
+    try:
+        import llm
+
+        count = llm.discover()
+        config = getattr(context, "config", None)
+        if config is not None:
+            llm.refresh(config)
+        lines.append(f"Rescanned LLM backends: {count} now available.")
+    except Exception as e:
+        lines.append(f"LLM backend rescan failed (restart to apply): {e}")
 
 
 def _remove_empty_dirs():
