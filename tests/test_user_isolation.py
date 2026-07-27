@@ -17,7 +17,7 @@ import state_machine  # noqa: F401
 from state_machine import ConversationRuntime
 from pipeline.database import Database, DEFAULT_USER_ID
 from plugins.BaseFrontend import BaseFrontend
-from plugins.commands.command_agent import AgentCommand
+from sandbox import Sandbox
 from sandbox.handlers.kernel import _config_write
 
 
@@ -264,7 +264,22 @@ def test_agent_switch_persists_active_profile_per_user(tmp_path):
         runtime=rt, session_key="alice", db=db, user_id=uid,
     )
 
-    assert AgentCommand().run({"profile_name": "writer", "action": "switch"}, context) == "Switched agent profile to: writer"
+    sandbox = Sandbox(context=context, approve=lambda *_: True)
+    try:
+        result = sandbox.run(
+            "plugins/commands/command_agent.py",
+            "AgentCommand",
+            kwargs={
+                "args": {
+                    "profile_name": "writer",
+                    "action": "switch",
+                },
+            },
+        )
+    finally:
+        sandbox.shutdown()
+
+    assert result.data == "Switched agent profile to: writer"
     assert db.get_user_config(uid)["active_agent_profile"] == "writer"
     assert "active_agent_profile" not in rt.config
 

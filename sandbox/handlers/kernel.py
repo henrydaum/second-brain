@@ -815,6 +815,7 @@ def _config_write(ctx, args: dict) -> Result:
             info.get("scope") == "user"
             or (key in plugin_keys and get_plugin_setting_scope(key) == "user")
         )
+        old = config.get(key)
         if user_scoped:
             db = _db(ctx)
             getter = getattr(db, "get_user_config", None)
@@ -829,13 +830,44 @@ def _config_write(ctx, args: dict) -> Result:
             config[key] = value
             runtime = _runtime(ctx)
             if (
+                key == "active_agent_profile"
+                and runtime is not None
+                and getattr(ctx, "session_key", None)
+                and hasattr(runtime, "set_agent_profile")
+            ):
+                runtime.set_agent_profile(
+                    getattr(ctx, "session_key"), value)
+            if (
                 runtime is not None
                 and hasattr(runtime, "refresh_session_specs")
             ):
                 runtime.refresh_session_specs()
             return Result(data=True)
-        old = config.get(key)
         config[key] = value
+        if (
+            key == "agent_profiles"
+            and isinstance(old, dict)
+            and isinstance(value, dict)
+        ):
+            removed = set(old) - set(value)
+            added = set(value) - set(old)
+            renames = {
+                source: target
+                for source in removed
+                for target in added
+                if old[source] == value[target]
+            }
+            runtime = _runtime(ctx)
+            for session in (
+                getattr(runtime, "sessions", {}) or {}
+            ).values():
+                active = getattr(
+                    session, "active_agent_profile", None)
+                override = getattr(session, "profile_override", None)
+                if active in renames:
+                    session.active_agent_profile = renames[active]
+                if override in renames:
+                    session.profile_override = renames[override]
         config_manager.save(config)
         if key in plugin_keys or args.get("scope") == "plugin":
             plugin_config = config_manager.load_plugin_config()
