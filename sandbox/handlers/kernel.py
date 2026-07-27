@@ -550,6 +550,15 @@ def _config_write(ctx, args: dict) -> Result:
         )
 
         value = args.get("value")
+        if args.get("merge"):
+            current = config.get(key)
+            if current is not None and not isinstance(current, dict):
+                return Result.failure(
+                    f"config setting {key!r} is not a mapping")
+            if not isinstance(value, dict):
+                return Result.failure(
+                    "config.write merge requires a mapping value")
+            value = {**(current or {}), **value}
         entries = [*SETTINGS_DATA, *get_plugin_settings()]
         entry = next((item for item in entries if item[1] == key), None)
         info = (
@@ -588,13 +597,25 @@ def _config_write(ctx, args: dict) -> Result:
             return Result(data=True)
         config[key] = value
         config_manager.save(config)
-        if key in plugin_keys:
+        if key in plugin_keys or args.get("scope") == "plugin":
             plugin_config = config_manager.load_plugin_config()
             plugin_config[key] = value
             config_manager.save_plugin_config(plugin_config)
         runtime = _runtime(ctx)
         if runtime is not None and getattr(runtime, "config", None) is not None:
             runtime.config[key] = value
+        if key in {"llm_profiles", "default_llm_profile"}:
+            try:
+                from plugins.services.service_llm import (
+                    refresh_llm_profile_services,
+                )
+
+                refresh_llm_profile_services(
+                    getattr(ctx, "services", None), config)
+            except Exception:
+                # The persisted profile is authoritative and discovery can
+                # reconcile it on restart when live refresh is unavailable.
+                pass
         if runtime is not None and hasattr(runtime, "refresh_session_specs"):
             runtime.refresh_session_specs()
         return Result(data=True)
@@ -704,6 +725,19 @@ def _plugin_list(ctx, args: dict) -> Result:
                     if item.get("family") == category
                 ]
             return Result(data=items)
+        except Exception as exc:
+            return Result.failure(str(exc))
+
+    role = args.get("role")
+    if role:
+        if role != "llm_backend":
+            return Result.failure(f"unknown plugin role {role!r}")
+        if args.get("category") not in (None, "", "services"):
+            return Result(data=[])
+        try:
+            from plugins.services.service_llm import llm_backend_names
+
+            return Result(data=llm_backend_names())
         except Exception as exc:
             return Result.failure(str(exc))
 

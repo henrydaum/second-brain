@@ -10,15 +10,8 @@ Three phases, all in one pass:
      installed.
 """
 
-import os
-import socket
-
-from config import config_manager
-from paths import DATA_DIR
-from plugins.BaseCommand import BaseCommand
-from plugins.commands.helpers import package_manager
-from plugins.services.service_llm import llm_backend_names
-from state_machine.conversation import FormStep
+from guest.bases import BaseCommand
+from guest.forms import FormStep
 
 
 ATLAS_BASE_URL = "https://api.atlascloud.ai/v1"
@@ -109,11 +102,16 @@ class SetupCommand(BaseCommand):
     name = "setup"
     description = "Onboarding: install a starter bundle, then configure an LLM and Telegram"
     category = "System"
+    requests = [
+        "plugin.list", "plugin.install", "config.read", "config.write",
+        "path.get", "env.read", "net.http",
+    ]
 
-    def form(self, args, context):
+    def form(self, sdk, args):
         """Build the dynamic onboarding form."""
         steps = []
-        backend_ready = bool(llm_backend_names())
+        backends = _llm_backends(sdk)
+        backend_ready = bool(backends)
 
         # Phase 1 — packages. Only lead with this when there's no LLM backend yet
         # (a fresh install). A returning user skips straight to reconfiguring.
@@ -134,7 +132,7 @@ class SetupCommand(BaseCommand):
             # starter and full both include the LiteLLM backend + Telegram frontend.
             will_have_telegram = True
         else:
-            will_have_telegram = _package_installed(TELEGRAM_PACKAGE)
+            will_have_telegram = _package_installed(sdk, TELEGRAM_PACKAGE)
 
         # Phase 2 — LLM profile.
         steps.append(FormStep(
@@ -147,7 +145,7 @@ class SetupCommand(BaseCommand):
         if llm_choice == "atlas":
             steps.extend(self._atlas_steps(args))
         elif llm_choice == "other":
-            steps.extend(self._other_steps(args))
+            steps.extend(self._other_steps(args, backends))
 
         # Phase 3 — Telegram, once the LLM branch is satisfied and the frontend
         # is (being) installed.
@@ -175,9 +173,9 @@ class SetupCommand(BaseCommand):
             ))
         return steps
 
-    def _other_steps(self, args):
+    def _other_steps(self, args, backends):
         """Generic LLM profile collection (mirrors /llm add)."""
-        backends = llm_backend_names() or [DEFAULT_BACKEND]
+        backends = backends or [DEFAULT_BACKEND]
         return [
             FormStep("other_model_name", OTHER_MODEL_PROMPT, True),
             FormStep("other_service_class", OTHER_SERVICE_PROMPT, True,
@@ -200,7 +198,7 @@ class SetupCommand(BaseCommand):
             steps.append(FormStep("telegram_allowed_user_id", TELEGRAM_USER_PROMPT, True, "integer"))
         return steps
 
-    def run(self, args, context):
+    def run(self, sdk, args):
         """Execute `/setup` for the active session."""
         install_choice = args.get("install_choice")
         if install_choice == "skip":
@@ -213,43 +211,45 @@ class SetupCommand(BaseCommand):
         # depends on it. Bail clearly if there's no connectivity or the install
         # fails, so we don't pretend a half-set-up instance is ready.
         if install_choice in (STARTER_BUNDLE, FULL_BUNDLE):
-            if not _has_internet():
+            if not _has_internet(sdk):
                 return (
                     f"No internet connection detected. Installing the `{install_choice}` "
                     "bundle needs to download packages and their dependencies. Connect "
                     "to the internet and run /setup again."
                 )
             try:
-                result = package_manager.install_package(context.root_dir, install_choice, context)
-            except Exception as e:
+                result = sdk.plugins.install(install_choice)
+            except sdk.Failed as e:
                 return (
-                    f"Couldn't install the `{install_choice}` bundle: {e}\n\n"
+                    f"Couldn't install the `{install_choice}` bundle: {e.error}\n\n"
                     f"Resolve the issue (or try `/packages install {install_choice}`), then re-run /setup."
                 )
-            sections.append(f"Installed the `{install_choice}` bundle.\n" + _indent(result.text()))
+            sections.append(
+                f"Installed the `{install_choice}` bundle.\n"
+                + _indent(result))
 
         # Phase 2 — LLM profile.
         llm_choice = args.get("llm_choice")
         if llm_choice == "atlas":
-            result = self._save_atlas(args, context)
+            result = self._save_atlas(sdk, args)
             if isinstance(result, str):
                 return result
             sections.append(result[0])
             env_warning = result[1]
         elif llm_choice == "other":
-            result = self._save_other(args, context)
+            result = self._save_other(sdk, args)
             if isinstance(result, str):
                 return result
             sections.append(result)
 
         # Phase 3 — Telegram.
         if args.get("telegram_choice") == "setup":
-            sections.append(self._save_telegram(args))
+            sections.append(self._save_telegram(sdk, args))
         elif args.get("telegram_choice") == "skip":
             sections.append("Telegram: skipped. Use /config to add `telegram_bot_token` and `telegram_allowed_user_id` later.")
 
         sections.append(PACKAGES_SECTION)
-        sections.append(self._location_section())
+        sections.append(self._location_section(sdk))
         sections.append(self._hint_section())
         if env_warning:
             sections.insert(0, env_warning)
@@ -259,7 +259,7 @@ class SetupCommand(BaseCommand):
     # Persistence helpers
     # ──────────────────────────────────────────────────────────────────
 
-    def _save_atlas(self, args, context):
+    def _save_atlas(self, sdk, args):
         """Persist an Atlas Cloud LLM profile. Returns (section, warning|None) or error string."""
         key_source = args.get("key_source")
         if key_source == "direct":
@@ -267,7 +267,7 @@ class SetupCommand(BaseCommand):
             env_var_set = True
         elif key_source == "env_var":
             api_key_field = (args.get("env_var_name") or DEFAULT_ENV_VAR).strip() or DEFAULT_ENV_VAR
-            env_var_set = bool(os.environ.get(api_key_field))
+            env_var_set = bool(sdk.env.read(api_key_field))
         else:
             return "Setup cancelled."
         if not api_key_field:
@@ -280,7 +280,7 @@ class SetupCommand(BaseCommand):
             "llm_context_size": DEFAULT_CONTEXT_SIZE,
             "llm_service_class": DEFAULT_BACKEND,
         }
-        _install_llm_profile(context, model_name, profile)
+        _install_llm_profile(sdk, model_name, profile)
 
         section = (
             f"LLM: Atlas Cloud set up. Default profile: {model_name}\n"
@@ -296,7 +296,7 @@ class SetupCommand(BaseCommand):
             )
         return section, warning
 
-    def _save_other(self, args, context):
+    def _save_other(self, sdk, args):
         """Persist a generic LLM profile. Returns section string or error string."""
         name = (args.get("other_model_name") or "").strip()
         if not name:
@@ -307,7 +307,7 @@ class SetupCommand(BaseCommand):
             "llm_context_size": int(args.get("other_context_size") or 0),
             "llm_service_class": (args.get("other_service_class") or DEFAULT_BACKEND).strip() or DEFAULT_BACKEND,
         }
-        _install_llm_profile(context, name, profile)
+        _install_llm_profile(sdk, name, profile)
         endpoint = profile["llm_endpoint"] or "(provider default)"
         return (
             f"LLM: profile `{name}` added and set as default.\n"
@@ -316,14 +316,14 @@ class SetupCommand(BaseCommand):
             "  Use /llm to edit or add more models."
         )
 
-    def _save_telegram(self, args):
+    def _save_telegram(self, sdk, args):
         """Persist Telegram credentials into plugin_config."""
         token = (args.get("telegram_bot_token") or "").strip()
         user_id = int(args.get("telegram_allowed_user_id") or 0)
-        saved = config_manager.load_plugin_config()
-        saved["telegram_bot_token"] = token
-        saved["telegram_allowed_user_id"] = user_id
-        config_manager.save_plugin_config(saved)
+        sdk.config.write(
+            "telegram_bot_token", token, scope="plugin")
+        sdk.config.write(
+            "telegram_allowed_user_id", user_id, scope="plugin")
         return (
             f"Telegram: configured for user {user_id}.\n"
             "  Restart Second Brain to bring the bot online, then send /start to your bot in Telegram."
@@ -341,11 +341,11 @@ class SetupCommand(BaseCommand):
             "Then run /setup again to configure your LLM and Telegram."
         )
 
-    def _location_section(self):
+    def _location_section(self, sdk):
         """One-paragraph summary of where things live on disk."""
         return (
             "Files & data:\n"
-            f"  DATA_DIR: {DATA_DIR}\n"
+            f"  DATA_DIR: {sdk.paths.get('data')}\n"
             "  Holds your config (config.json, plugin_config.json), the SQLite database, the attachment cache, installed packages, and any sandbox plugins the agent writes for itself.\n"
             "  Run /locations to see existing plugins, and /config to view and edit your config files."
         )
@@ -372,46 +372,41 @@ def _llm_steps_complete(args, choice):
     return False
 
 
-def _install_llm_profile(context, name, profile):
+def _install_llm_profile(sdk, name, profile):
     """Register a new LLM profile, set it as default, hot-load it, and persist."""
-    profiles = context.config.setdefault("llm_profiles", {})
-    profiles[name] = profile
-    context.config["default_llm_profile"] = name
-    router = (context.services or {}).get("llm")
-    if router and hasattr(router, "add_llm"):
-        try:
-            router.add_llm(name, profile)
-        except Exception:
-            # Config is still persisted below; the profile loads on next start
-            # even if hot-loading the backend now didn't take.
-            pass
-    _save(context.config)
+    sdk.config.write(
+        "llm_profiles", {name: profile}, merge=True, scope="plugin")
+    sdk.config.write(
+        "default_llm_profile", name, scope="plugin")
 
 
-def _save(config):
-    """Internal helper to save setup-affected keys to plugin config."""
-    saved = config_manager.load_plugin_config()
-    saved.update({k: config.get(k) for k in ("llm_profiles", "default_llm_profile")})
-    config_manager.save_plugin_config(saved)
-
-
-def _package_installed(package_id):
+def _package_installed(sdk, package_id):
     """Whether a package id has an install receipt."""
     try:
-        return any(p.get("id") == package_id for p in package_manager.installed_packages())
-    except Exception:
+        return any(
+            p.get("id") == package_id
+            for p in sdk.plugins.list(source="installed")
+        )
+    except sdk.Failed:
         return False
 
 
-def _has_internet(timeout: float = 3.0) -> bool:
+def _has_internet(sdk) -> bool:
     """Best-effort connectivity check before a package download."""
-    for host, port in (("github.com", 443), ("1.1.1.1", 53)):
-        try:
-            with socket.create_connection((host, port), timeout=timeout):
-                return True
-        except OSError:
-            continue
-    return False
+    try:
+        sdk.net.http("https://github.com", method="HEAD")
+        return True
+    except sdk.Failed:
+        return False
+
+
+def _llm_backends(sdk):
+    """Return installed LLM backend class names."""
+    try:
+        return sdk.plugins.list(
+            source="registered", category="services", role="llm_backend")
+    except sdk.Failed:
+        return []
 
 
 def _indent(text: str) -> str:

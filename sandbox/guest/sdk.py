@@ -287,9 +287,22 @@ class _Config(_Namespace):
         """Read a setting, or all of them."""
         return self._ask(CONFIG_READ, key=key or None)
 
-    def write(self, key: str, value):
-        """Change a setting."""
-        return self._ask(CONFIG_WRITE, key=key, value=value)
+    def write(
+        self,
+        key: str,
+        value,
+        *,
+        merge: bool = False,
+        scope: str = "",
+    ):
+        """Change a setting.
+
+        ``merge`` updates a mapping without returning its existing contents to
+        the guest. ``scope="plugin"`` explicitly persists plugin-owned data.
+        """
+        return self._ask(
+            CONFIG_WRITE, key=key, value=value, merge=merge,
+            scope=scope or None)
 
 
 class _Paths(_Namespace):
@@ -319,10 +332,16 @@ class _Users(_Namespace):
 class _Plugins(_Namespace):
     """Introspection over what is registered."""
 
-    def list(self, source: str = "registered", category: str = ""):
-        """List registered plugins or package-store entries."""
+    def list(
+        self,
+        source: str = "registered",
+        category: str = "",
+        role: str = "",
+    ):
+        """List plugins, optionally narrowed by a kernel-defined role."""
         return self._ask(
-            PLUGIN_LIST, source=source, category=category or None)
+            PLUGIN_LIST, source=source, category=category or None,
+            role=role or None)
 
     def describe(self, name: str):
         """Metadata for one plugin."""
