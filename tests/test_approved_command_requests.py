@@ -206,3 +206,51 @@ def test_update_declares_exactly_what_its_approval_grants():
     report = validate_file(Path("plugins/commands/command_update.py"))
     assert report.ok, report.render()
     assert set(report.declarations["requests"]) == {PATH_GET, PROC_RUN}
+
+
+def test_both_dialogs_speak_one_vocabulary():
+    """The up-front grant and the per-Request dialog describe a capability
+    the same way.
+
+    They ask different questions — "what will this command be allowed to do"
+    versus "may this specific thing happen now" — but a user who approved
+    "run shell commands" and then sees "Run shell commands: git pull" is
+    reading one system. Two hand-written tables would drift.
+    """
+    from sandbox.approval import _action_line, phrase_for
+
+    for kind in sorted(ALL_TYPES):
+        phrase = phrase_for(kind)
+        headline = _action_line(Request(kind, {})).split(":")[0].split("\n")[0]
+        assert headline.lower().startswith(phrase.lower()[:12]), (
+            f"{kind} reads as {headline!r} at execution time but "
+            f"{phrase!r} in a grant")
+
+
+def test_no_request_reaches_a_user_as_a_dotted_name():
+    """``_action_line`` used to fall through to ``fs.some_verb`` for 69 of
+    the 97 types.
+
+    That was invisible while nothing wired an approver, because the dialog
+    never rendered. The moment one was wired, most approvals would have asked
+    a person to authorise ``session.add_tool``.
+    """
+    from sandbox.approval import _action_line
+
+    bare = [k for k in sorted(ALL_TYPES)
+            if _action_line(Request(k, {})) == f"`{k}`"]
+    assert not bare, f"Requests rendering as a bare name: {bare}"
+
+
+def test_an_update_is_not_announced_as_a_removal():
+    """Overstating what is about to happen erodes the dialog's credibility.
+
+    The family fallback lumps install/remove/reload together, which named a
+    removal that was never going to occur.
+    """
+    from sandbox.approval import _action_line
+    from sandbox.guest.requests import PLUGIN_UPDATE
+
+    line = _action_line(Request(PLUGIN_UPDATE, {}))
+    assert "remove" not in line.lower()
+    assert "update" in line.lower()

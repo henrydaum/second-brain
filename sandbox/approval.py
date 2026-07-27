@@ -53,31 +53,66 @@ def describe(chain, request, decision) -> tuple:
 
 
 def _action_line(request) -> str:
-    """One line naming the effect, in the user's terms rather than ours."""
+    """One line naming the effect, in the user's terms rather than ours.
+
+    **One vocabulary, two levels of detail.** The phrase comes from
+    :func:`phrase_for` — the same table the grant dialog reads — and this adds
+    the arguments when it has any worth showing. So a capability is described
+    the same way whether the user meets it up front ("/update wants to: run
+    shell commands") or at the moment it happens ("Run shell commands:
+    `git pull`").
+
+    Before, this had its own hand-written branches and fell through to a bare
+    dotted name for **69 of the 97** Request types. That was invisible while
+    nothing wired an approver, because this dialog never rendered; the moment
+    it did, most approvals would have asked the user to authorise
+    ``session.add_tool``. The grant table is total and test-enforced, so
+    deriving from it makes this total too.
+    """
     args = request.args
     kind = request.type
-    if kind == "net.http":
-        method = (args.get("method") or "GET").upper()
-        return f"Send a **{method}** request to `{args.get('url', '?')}`"
+    phrase = phrase_for(kind)
+    headline = phrase[:1].upper() + phrase[1:]
+
+    if detail := _detail(kind, args):
+        return f"{headline}: {detail}"
+    return headline
+
+
+def _detail(kind: str, args: dict) -> str:
+    """The concrete part, when the arguments carry one worth showing.
+
+    Returns ``""`` when they do not — a Request with nothing but a session key
+    reads better as its phrase alone than as a phrase followed by noise.
+    """
     if kind == "proc.run":
         argv = args.get("argv")
-        shown = argv if isinstance(argv, str) else " ".join(map(str, argv or []))
-        return f"Run a shell command:\n```\n{shown}\n```"
+        shown = (argv if isinstance(argv, str)
+                 else " ".join(map(str, argv or [])))
+        return f"\n```\n{shown}\n```" if shown else ""
+    if kind == "net.http":
+        method = (args.get("method") or "GET").upper()
+        return f"**{method}** `{args.get('url', '?')}`"
     if kind.startswith("fs."):
-        target = args.get("path") or args.get("src") or "?"
-        verb = {"fs.write": "Write to", "fs.delete": "Delete",
-                "fs.move": "Move"}.get(kind, "Touch")
-        return f"{verb} `{target}`"
+        target = args.get("path") or args.get("src") or ""
+        if target and (destination := args.get("dst")):
+            # ASCII arrow, like ``Chain.render``: this lands on a Windows
+            # console under cp1252, where a unicode arrow raises rather than
+            # renders.
+            return f"`{target}` -> `{destination}`"
+        return f"`{target}`" if target else ""
     if kind == "secret.reveal":
-        return (f"Hand the **plaintext** of `{args.get('name')}` to sandboxed "
-                f"code, which will then hold it directly")
-    if kind == "config.write":
-        return f"Change the setting `{args.get('key')}`"
-    if kind.startswith("plugin."):
-        return f"`{kind}` — change what this system can do (`{args.get('name') or args.get('stem') or ''}`)"
-    if kind.startswith("cron.") or kind == "agent.schedule":
-        return f"`{kind}` — create or change unattended work"
-    return f"`{kind}`"
+        return (f"`{args.get('name')}` — sandboxed code will then hold it "
+                f"directly")
+    if kind in ("config.read", "config.write"):
+        return f"`{args.get('key')}`" if args.get("key") else ""
+    # Everything else names its subject the same way, so a new Request gets
+    # a useful line without a branch being added for it.
+    for field in ("name", "stem", "package_id", "tool", "key", "channel",
+                  "id", "path"):
+        if value := args.get(field):
+            return f"`{value}`"
+    return ""
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -120,6 +155,23 @@ GRANT_PHRASES = {
     "conv.list": "list conversations", "conv.read": "read conversations",
     "user.read": "read user accounts", "user.list": "read user accounts",
     "config.read": "read settings",
+    # The write half of those same families, split for the same reason in the
+    # other direction. The fallback lumps install/remove/reload together, so
+    # an *update* was announced as "install, remove or reload plugins" — which
+    # names a removal that is not going to happen. These matter more now that
+    # the phrase is also what the execution-time dialog leads with.
+    "plugin.install": "install a package",
+    "plugin.uninstall": "remove a package",
+    "plugin.update": "update installed packages",
+    "plugin.reload": "reload a plugin",
+    "plugin.register": "add a plugin", "plugin.unregister": "remove a plugin",
+    "service.load": "start a service", "service.unload": "stop a service",
+    # Widening what the agent may do next is the thing the policy singles out
+    # as always unsafe; "change this session" was too mild to answer.
+    "session.add_tool": "give the agent another tool",
+    "session.add_prompt_extra": "add instructions to the agent's prompt",
+    "session.remove_tool": "take a tool away from the agent",
+    "session.remove_prompt_extra": "remove instructions from the prompt",
     # Machinery. Neither is something a plugin declares, but the table is
     # total so that a new Request cannot quietly render as a dotted name.
     "agent.complete": "finish the agent's turn",
