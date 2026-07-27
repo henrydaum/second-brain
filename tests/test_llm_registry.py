@@ -285,6 +285,25 @@ def test_concurrent_calls_grow_the_pool_instead_of_queueing(tree):
     assert seen[0] is not seen[1], "both calls took the same box"
 
 
+def test_loading_then_calling_uses_one_box_not_two(tree):
+    """``load`` opens a box it does not use, so it must free it.
+
+    A box that is never released is never leased: the first call would open a
+    second box and the first would idle forever. Under isolation that is a
+    wasted process per profile, and nothing would ever surface it — both boxes
+    are alive and answering.
+    """
+    _write(tree, BACKEND)
+    llm.refresh(_config(tree))
+    target = llm.brain("gpt-test")
+
+    target.load()
+    target.chat(llm.LLMRequest(messages=[{"role": "user", "content": "x"}]))
+
+    assert len(target._boxes) == 1
+    target.unload()
+
+
 def test_the_pool_stops_growing_at_the_ceiling(tree):
     """Unbounded growth under a runaway loop would be a fork bomb."""
     _write(tree, BACKEND)

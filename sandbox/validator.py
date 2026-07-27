@@ -631,7 +631,7 @@ DECLARATION_KEYS = ("name", "box", "isolation", "lifetime", "timeout",
                     # it — deciding whether to stream a call must not cost a
                     # provider library import.
                     "supports_streaming", "supports_tool_choice",
-                    "native_modalities", "display_name")
+                    "native_modalities", "display_name", "replaces")
 
 # Reading declarations without importing means *inherited* defaults are
 # invisible: ``class Counter(BaseService)`` never writes ``lifetime`` in the

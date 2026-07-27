@@ -65,6 +65,11 @@ DEFAULT_BACKEND = "LiteLLMService"
 # ──────────────────────────────────────────────────────────────────────
 
 _BACKENDS: dict[str, dict] = {}
+# Old backend name -> the migrated one that claims it, built from each
+# backend's ``replaces`` declaration. Existing configs name the class that
+# used to serve them; without this, installing the migrated package would
+# silently orphan every profile a user already had.
+_ALIASES: dict[str, str] = {}
 _BRAINS: dict[str, "Brain"] = {}
 _LOCK = threading.RLock()
 
@@ -100,6 +105,7 @@ def discover() -> int:
 
     with _LOCK:
         _BACKENDS.clear()
+        _ALIASES.clear()
         seen: set[str] = set()
         for _root, helpers in helper_dirs():
             if not helpers.exists():
@@ -119,6 +125,14 @@ def discover() -> int:
                                    py_file.name, BACKEND_BASE)
                     continue
                 declared = report.declarations
+                # A migrated backend claims the name its predecessor had, so
+                # profiles written against the old contract keep resolving.
+                # Declared by the file rather than kept as a table here: the
+                # backend knows what it replaced, and the kernel should not
+                # accumulate a list of every rename anyone has ever done.
+                for old in (declared.get("replaces") or []):
+                    if isinstance(old, str) and old and old not in _ALIASES:
+                        _ALIASES[old] = entry
                 _BACKENDS[entry] = {
                     "name": entry,
                     "path": py_file,
@@ -268,11 +282,16 @@ class Brain:
 
     @property
     def spec(self) -> dict | None:
-        """The backend's declarations, or None when it is not installed."""
+        """The backend's declarations, or None when it is not installed.
+
+        Resolved through the alias table, so a profile naming a backend that
+        has since been migrated and renamed still finds its successor.
+        """
         with _LOCK:
             if not _BACKENDS:
                 discover()
-            return _BACKENDS.get(self.backend_name)
+            name = self.backend_name
+            return _BACKENDS.get(name) or _BACKENDS.get(_ALIASES.get(name, ""))
 
     @property
     def supports_streaming(self) -> bool:
@@ -320,12 +339,20 @@ class Brain:
     # --- lifecycle -------------------------------------------------
 
     def load(self) -> bool:
-        """Open the first box. Idempotent."""
+        """Open the first box. Idempotent.
+
+        The box is released into the free list immediately: ``load`` opens one
+        but does not use it, and a box that is never freed is never leased —
+        the next call would open a second one and the first would idle forever
+        as a wasted process.
+        """
         if self.loaded:
             return True
         try:
-            self._grow()
-            return True
+            box = self._grow()
+            if box is not None:
+                self._release(box)
+            return box is not None
         except Exception as exc:
             logger.error("LLM profile %r failed to load: %s", self.name, exc)
             return False
@@ -637,8 +664,9 @@ def _build(name: str, profile: dict, config: dict) -> Brain:
     with _LOCK:
         if not _BACKENDS:
             discover()
-        sandboxed = _BACKENDS.get(profile.get("llm_service_class")
-                                  or DEFAULT_BACKEND)
+        wanted = profile.get("llm_service_class") or DEFAULT_BACKEND
+        sandboxed = (_BACKENDS.get(wanted)
+                     or _BACKENDS.get(_ALIASES.get(wanted, "")))
     if sandboxed is not None:
         return Brain(name, profile, config)
 
