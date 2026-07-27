@@ -40,7 +40,9 @@ logger = logging.getLogger("Sandbox")
 
 # Modules whose import means "this file is written against the SDK".
 SANDBOX_MODULES = {"guest", "guest.bases", "guest.box", "guest.sdk",
+                   "guest.forms",
                    "sandbox.guest", "sandbox.guest.bases",
+                   "sandbox.guest.forms",
                    "sandbox.guest.box"}
 
 # The native base class each family's adapter must subclass, so the kernel

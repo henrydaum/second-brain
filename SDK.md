@@ -205,6 +205,8 @@ sdk.session.add_prompt(text) / remove_prompt(handle)
 ### Other code
 
 ```python
+from guest.forms import FormStep
+
 sdk.tools.list()
 sdk.tools.call(name, **kwargs)
 sdk.commands.list(details=False, visible=False)

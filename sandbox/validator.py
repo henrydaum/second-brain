@@ -45,9 +45,10 @@ BASE_TO_FAMILY = {base: family for family, base in FAMILIES.items()}
 
 CONTRACT_MODULES = (
     {f"plugins.{base}" for base in FAMILIES.values()}
-    | {"guest", "guest.bases", "guest.box", "guest.sdk", "guest.hooks",
+    | {"guest", "guest.bases", "guest.box", "guest.sdk", "guest.forms", "guest.hooks",
        "guest.parsing", "guest.llm",
        "sandbox.guest", "sandbox.guest.bases", "sandbox.guest.box",
+       "sandbox.guest.forms",
        "sandbox.guest.hooks", "sandbox.guest.parsing", "sandbox.guest.llm"}
 )
 

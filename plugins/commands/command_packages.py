@@ -1,6 +1,7 @@
 """Slash command plugin for `/packages`."""
 
 from guest.bases import BaseCommand
+from guest.forms import FormStep
 
 
 ACTIONS = ["available", "installed", "install", "uninstall", "update"]
@@ -42,42 +43,29 @@ class PackagesCommand(BaseCommand):
 
     def form(self, sdk, args):
         """Build dependent steps from the answers collected so far."""
-        steps = [{
-            "name": "action",
-            "prompt": "Choose a package action.",
-            "required": True,
-            "enum": ACTIONS,
-            "enum_labels": ACTION_LABELS,
-        }]
+        steps = [FormStep(
+            "action", "Choose a package action.", True,
+            enum=ACTIONS, enum_labels=ACTION_LABELS)]
         action = args.get("action")
         if action in {"available", "installed"}:
-            steps.append({
-                "name": "category",
-                "prompt": _category_prompt(sdk, action),
-                "required": True,
-                "enum": CATEGORIES,
-                "enum_labels": CATEGORY_LABELS,
-                "columns": 2,
-            })
+            steps.append(FormStep(
+                "category", _category_prompt(sdk, action), True,
+                enum=CATEGORIES, enum_labels=CATEGORY_LABELS, columns=2))
         elif action == "install":
-            steps.append({
-                "name": "package_id",
-                "prompt": (
-                    "Enter the plugin, helper, or bundle stem to install."
-                ),
-                "required": True,
-            })
+            steps.append(FormStep(
+                "package_id",
+                "Enter the plugin, helper, or bundle stem to install.",
+                True,
+            ))
         elif action == "uninstall":
             items = sdk.plugins.list(source="removable")
-            steps.append({
-                "name": "package_id",
-                "prompt": (
-                    "Choose the plugin, helper, or bundle stem to uninstall."
-                ),
-                "required": True,
-                "enum": [item["id"] for item in items],
-                "columns": 2,
-            })
+            steps.append(FormStep(
+                "package_id",
+                "Choose the plugin, helper, or bundle stem to uninstall.",
+                True,
+                enum=[item["id"] for item in items],
+                columns=2,
+            ))
         return steps
 
     def run(self, sdk, args):

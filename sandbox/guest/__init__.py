@@ -24,11 +24,12 @@ from .bases import (COMMAND, FRONTEND, SERVICE, TASK, TOOL, BaseCommand,
                     BaseFrontend, BasePlugin, BaseService, BaseTask, BaseTool)
 from .box import (EPHEMERAL, IN_PROCESS, PERSISTENT, SUBPROCESS, BoxSpec,
                   Membership, resolve, same_box)
+from .forms import FormStep
 from .requests import Request, Result
 from .sdk import SDK
 
 __all__ = [
-    "SDK", "Request", "Result",
+    "SDK", "Request", "Result", "FormStep",
     "BasePlugin", "BaseTool", "BaseTask", "BaseService", "BaseCommand",
     "BaseFrontend", "TOOL", "TASK", "SERVICE", "COMMAND", "FRONTEND",
     "BoxSpec", "Membership", "resolve", "same_box",
