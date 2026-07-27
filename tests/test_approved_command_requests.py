@@ -41,6 +41,41 @@ def test_approval_adds_a_one_shot_host_marker():
     assert calls == [{}]
 
 
+def test_completed_form_arguments_can_require_approval_dynamically():
+    """Read-only form outcomes stay free; mutating selections get a grant."""
+    calls = []
+    spec = CallableSpec(
+        "manage",
+        lambda _cs, _actor, args: calls.append(dict(args)) or "done",
+        approval_predicate=lambda args: args.get("action") == "unload",
+        approval_actor_id="user",
+    )
+    state = ConversationState([
+        Participant("user", "user", commands={"manage": spec}),
+        Participant("agent", "agent"),
+    ])
+
+    shown = state.enact(
+        "call_command",
+        {"name": "manage", "args": {"action": "show"}},
+        "user",
+    )
+    pending = state.enact(
+        "call_command",
+        {"name": "manage", "args": {"action": "unload"}},
+        "user",
+    )
+    resumed = state.enact(
+        "answer_approval",
+        {"value": True},
+        "user",
+    )
+
+    assert shown.ok and calls == [{"action": "show"}, {"action": "unload"}]
+    assert pending.message == "Approval required."
+    assert resumed.ok
+
+
 def test_external_payload_cannot_forge_command_approval():
     calls = []
     state = _state(calls)

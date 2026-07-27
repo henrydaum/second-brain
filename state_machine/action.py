@@ -270,12 +270,19 @@ class _CallableAction(Action):
         spec = self.spec(payload)
         supplied_token = payload.pop("_approval_token", None)
         expected_token = self.cs.cache.pop("_approved_callable_token", None)
-        approved = bool(
+        args = dict(payload.get("args") or {})
+        needs_approval = bool(
             spec.require_approval
+            or (
+                spec.approval_predicate is not None
+                and spec.approval_predicate(args)
+            )
+        )
+        approved = bool(
+            needs_approval
             and supplied_token
             and supplied_token == expected_token
         )
-        args = dict(payload.get("args") or {})
         raw_arg = "arg" in args
         resumed_call_id = payload.get("_call_id")
         if not resumed_call_id:
@@ -306,7 +313,7 @@ class _CallableAction(Action):
             event = self.cs.event("form_started", actor, name=spec.name, step=missing[0].name, prompt=missing[0].prompt)
             return ActionResult(True, self.action_type, events=[event], data={"step": missing[0].name, "call_id": call_id})
         self._validate(spec, args)
-        if spec.require_approval and not approved:
+        if needs_approval and not approved:
             return self._approval(payload, spec)
         return self._run(
             spec,

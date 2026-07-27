@@ -18,6 +18,7 @@ from state_machine.conversation_phases import BASE_PHASE, PHASE_AWAITING_INPUT
 Validator = Callable[[Any], tuple[bool, str | None]]
 Handler = Callable[["ConversationState", str, dict[str, Any]], Any]
 FormFactory = Callable[[dict[str, Any], Any], list["FormStep"]]
+ApprovalPredicate = Callable[[dict[str, Any]], bool]
 
 
 def normalize_path(value: Any) -> str:
@@ -142,6 +143,7 @@ class CallableSpec:
     handler: Handler | None = None
     form: list[FormStep] = field(default_factory=list)
     require_approval: bool = False
+    approval_predicate: ApprovalPredicate | None = None
     approval_actor_id: str | None = None
     # What the approval dialog asks. Rendered upstream from the callable's
     # declared Requests, because that is what a single approval authorizes —

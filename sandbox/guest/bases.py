@@ -270,6 +270,8 @@ class BaseCommand(BasePlugin):
     category: str = "Other"
     hide_from_help: bool = False
     require_approval: bool = False   # authority-bearing: clamped
+    approval_actions: tuple[str, ...] = ()
+    approval_action_prefixes: tuple[str, ...] = ()
     approval_actor_id: str = ""
 
     def form(self, sdk, args: dict) -> list:

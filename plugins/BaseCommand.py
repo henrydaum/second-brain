@@ -12,6 +12,8 @@ class BaseCommand:
     category: str = "Other"
     hide_from_help: bool = False
     require_approval: bool = False
+    approval_actions: tuple[str, ...] = ()
+    approval_action_prefixes: tuple[str, ...] = ()
     approval_actor_id: str | None = None
     config_settings: list = []
     dependencies_files: list[str] = []
@@ -36,6 +38,19 @@ class BaseCommand:
         ``ctx`` is a PromptContext (db/services/orchestrator/config/scope/...).
         Default returns the static ``agent_prompt``; override for dynamic text."""
         return self.agent_prompt
+
+    def requires_approval(self, args: dict) -> bool:
+        """Whether these completed form arguments perform a privileged action."""
+        if self.require_approval:
+            return True
+        action = str((args or {}).get("action") or "")
+        return (
+            action in self.approval_actions
+            or any(
+                action.startswith(prefix)
+                for prefix in self.approval_action_prefixes
+            )
+        )
 
     def form(self, args: dict, context) -> list[FormStep]:
         """Handle form."""

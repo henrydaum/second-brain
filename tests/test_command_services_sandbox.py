@@ -132,6 +132,18 @@ def test_services_form_uses_guest_formstep_for_dependent_actions():
         "service_name", "action", "value"]
 
 
+def test_services_approval_is_scoped_to_mutating_form_actions(tmp_path):
+    """Inspecting is free; lifecycle/config selections require approval."""
+    registry = CommandRegistry(lambda _key=None: _context({}))
+    discover_commands(tmp_path, registry, {})
+    spec = registry.to_callable_specs()["services"]
+
+    assert not spec.approval_predicate({"service_name": "timekeeper"})
+    assert spec.approval_predicate({"action": "toggle_loaded"})
+    assert spec.approval_predicate({"action": "toggle_autoload"})
+    assert spec.approval_predicate({"action": "edit_setting:model"})
+
+
 def test_service_lifecycle_requests_are_unsafe_and_clear_task_cache():
     managed = ManagedService()
     context = _context({"embedder": managed})

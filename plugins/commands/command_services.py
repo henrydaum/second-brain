@@ -13,6 +13,11 @@ class ServicesCommand(BaseCommand):
     name = "services"
     description = "Inspect services and load or unload managed ones"
     category = "System"
+    approval_actions = (
+        "toggle_loaded", "load", "unload", "toggle_autoload",
+    )
+    approval_action_prefixes = ("edit_setting:",)
+    approval_actor_id = "user"
     requests = [
         "service.list", "service.load", "service.unload",
         "config.read", "config.write",

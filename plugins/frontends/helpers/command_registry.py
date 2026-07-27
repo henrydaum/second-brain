@@ -138,6 +138,9 @@ class CommandRegistry:
                 ),
                 form_factory=lambda args, cs, e=entry: e.form(args, self.context((cs.cache or {}).get("session_key") if cs else None)),
                 require_approval=getattr(entry, "require_approval", False),
+                approval_predicate=lambda args, e=entry: (
+                    e.requires_approval(args)
+                ),
                 approval_actor_id=getattr(entry, "approval_actor_id", None),
                 approval_prompt=getattr(entry, "approval_prompt", "") or "",
             )
