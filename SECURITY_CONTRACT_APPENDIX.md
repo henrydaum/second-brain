@@ -381,6 +381,12 @@ id is enough to answer and only enough to answer.
 |---|---|---|---|
 | `task.enqueue(name, paths)` | Queue work | task name | safe |
 | `task.status(name, path)` | Check state | — | safe |
+| `task.output(name, path=None)` | Read task output | — | safe |
+| `task.list(details=False)` | Inspect registered tasks | — | safe |
+| `task.graph()` | Render the dependency pipeline | — | safe |
+| `task.pause(name, paused=True)` | Pause or resume a task | task name, desired state | pausing safe; resuming asks |
+| `task.reset(name, failed_only=False)` | Reset task state | task name, reset scope | asks |
+| `task.trigger(name, payload=None)` | Manually enqueue an event task | task name, schema-filtered payload | safe |
 | `task.output(name, filters)` | Read a task's output table | table | safe |
 | `task.reset(name, scope)` | Re-run, clear state | scope | unsafe |
 | `file.register(path, meta)` | Add to the watched-file table | path | safe |

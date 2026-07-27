@@ -40,8 +40,10 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               SESSION_CANCEL, SESSION_GET, SESSION_LIST,
                               SESSION_PUSH, SESSION_REMOVE_PROMPT,
                               SESSION_REMOVE_TOOL, SESSION_STATE_GET,
-                              SESSION_STATE_SET, TASK_ENQUEUE, TASK_OUTPUT,
-                              TASK_STATUS, TOOL_CALL, TOOL_LIST, UI_APPROVE,
+                              SESSION_STATE_SET, TASK_ENQUEUE, TASK_GRAPH,
+                              TASK_LIST, TASK_OUTPUT, TASK_PAUSE, TASK_RESET,
+                              TASK_STATUS, TASK_TRIGGER, TOOL_CALL, TOOL_LIST,
+                              UI_APPROVE,
                               UI_ASK, UI_RENDER, USER_LIST, USER_READ,
                               USER_WRITE, Result)
 from ..secrets import redact
@@ -1677,6 +1679,169 @@ def _task_output(ctx, args: dict) -> Result:
         return Result.failure(f"output failed: {exc}")
 
 
+def _task_list(ctx, args: dict) -> Result:
+    """Registered task names or structured management metadata."""
+    orchestrator = getattr(ctx, "orchestrator", None)
+    tasks = getattr(orchestrator, "tasks", None)
+    if (bad := _need(tasks, "the task orchestrator")) is not None:
+        return bad
+    if not args.get("details"):
+        return Result(data=sorted(tasks))
+
+    db = _db(ctx)
+    counts = {}
+    if db is not None:
+        counts.update((db.get_system_stats() or {}).get("tasks", {}) or {})
+        getter = getattr(db, "get_run_stats", None)
+        if getter is not None:
+            counts.update(getter() or {})
+    timekeeper = _service(ctx, "timekeeper")
+    jobs = (
+        timekeeper.list_jobs()
+        if timekeeper is not None
+        and getattr(timekeeper, "loaded", False)
+        and callable(getattr(timekeeper, "list_jobs", None))
+        else {}
+    )
+    paused = set(getattr(orchestrator, "paused", None) or [])
+    return Result(data=[
+        {
+            "name": name,
+            "trigger": getattr(task, "trigger", "path"),
+            "counts": dict(counts.get(name) or {}),
+            "paused": name in paused,
+            "requires_services": list(
+                getattr(task, "requires_services", None) or []),
+            "trigger_channels": list(
+                getattr(task, "trigger_channels", None) or []),
+            "event_payload_schema": dict(
+                getattr(task, "event_payload_schema", None) or {}),
+            "schedule_count": sum(
+                1 for job in jobs.values()
+                if (job.get("channel") or "") in set(
+                    getattr(task, "trigger_channels", None) or [])
+            ),
+            "config_settings": [
+                {
+                    "title": entry[0],
+                    "key": entry[1],
+                    "description": entry[2],
+                    "default": entry[3],
+                    "info": entry[4] if isinstance(entry[4], dict) else {},
+                    "current": redact(
+                        entry[1], _config_value(ctx, entry[1], entry),
+                        guess=True),
+                }
+                for entry in (getattr(task, "config_settings", None) or [])
+                if isinstance(entry, (list, tuple))
+                and len(entry) == 5
+                and not (
+                    isinstance(entry[4], dict)
+                    and entry[4].get("hidden") is True
+                )
+            ],
+        }
+        for name, task in sorted(tasks.items())
+    ])
+
+
+def _task_graph(ctx, args: dict) -> Result:
+    orchestrator = getattr(ctx, "orchestrator", None)
+    graph = getattr(orchestrator, "dependency_pipeline_graph", None)
+    if (bad := _need(graph, "the dependency pipeline")) is not None:
+        return bad
+    try:
+        return Result(data=graph())
+    except Exception as exc:
+        return Result.failure(f"pipeline graph failed: {exc}")
+
+
+def _task_pause(ctx, args: dict) -> Result:
+    orchestrator = getattr(ctx, "orchestrator", None)
+    tasks = getattr(orchestrator, "tasks", None)
+    if (bad := _need(tasks, "the task orchestrator")) is not None:
+        return bad
+    name = args.get("name")
+    if name not in tasks:
+        return Result.failure(f"unknown task {name!r}")
+    paused = getattr(orchestrator, "paused", None)
+    if (bad := _need(paused, "task pause state")) is not None:
+        return bad
+    if args.get("paused", True):
+        paused.add(name)
+    else:
+        paused.discard(name)
+        clear = getattr(orchestrator, "clear_skip_cache", None)
+        if clear is not None:
+            clear(name)
+    return Result(data=True)
+
+
+def _task_reset(ctx, args: dict) -> Result:
+    orchestrator = getattr(ctx, "orchestrator", None)
+    tasks = getattr(orchestrator, "tasks", None)
+    if (bad := _need(tasks, "the task orchestrator")) is not None:
+        return bad
+    name = args.get("name")
+    task = tasks.get(name)
+    if task is None:
+        return Result.failure(f"unknown task {name!r}")
+    if getattr(task, "trigger", "path") == "event":
+        return Result.failure("only path-driven tasks can be reset")
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+    try:
+        if args.get("failed_only"):
+            db.reset_failed_tasks(name)
+        else:
+            db.reset_task(name)
+        clear = getattr(orchestrator, "clear_skip_cache", None)
+        if clear is not None:
+            clear(name)
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"task reset failed: {exc}")
+
+
+def _task_trigger(ctx, args: dict) -> Result:
+    import json
+    from uuid import uuid4
+
+    orchestrator = getattr(ctx, "orchestrator", None)
+    tasks = getattr(orchestrator, "tasks", None)
+    if (bad := _need(tasks, "the task orchestrator")) is not None:
+        return bad
+    name = args.get("name")
+    task = tasks.get(name)
+    if task is None:
+        return Result.failure(f"unknown task {name!r}")
+    if getattr(task, "trigger", "path") != "event":
+        return Result.failure(
+            "only event-driven tasks can be triggered manually")
+    db = _db(ctx)
+    creator = getattr(db, "create_run", None)
+    if (bad := _need(creator, "task runs")) is not None:
+        return bad
+    schema = getattr(task, "event_payload_schema", None) or {}
+    properties = (schema.get("properties") or {}).keys()
+    payload = {
+        key: value for key, value in (args.get("payload") or {}).items()
+        if key in properties
+    }
+    run_id = f"{name}:{uuid4().hex[:12]}"
+    try:
+        creator(
+            run_id, name, triggered_by="manual",
+            payload_json=json.dumps(payload))
+        notify = getattr(orchestrator, "on_run_enqueued", None)
+        if notify is not None:
+            notify(run_id, name)
+        return Result(data=run_id)
+    except Exception as exc:
+        return Result.failure(f"task trigger failed: {exc}")
+
+
 def _file_register(ctx, args: dict) -> Result:
     """Add a path to the watched-file table."""
     db = _db(ctx)
@@ -1816,7 +1981,9 @@ HANDLERS = {
     FRONTEND_RESOLVE: _frontend_resolve, FRONTEND_PENDING: _frontend_pending,
     CONSOLE_READ: _console_read, CONSOLE_WRITE: _console_write,
     TASK_ENQUEUE: _task_enqueue, TASK_STATUS: _task_status,
-    TASK_OUTPUT: _task_output,
+    TASK_OUTPUT: _task_output, TASK_LIST: _task_list,
+    TASK_GRAPH: _task_graph, TASK_PAUSE: _task_pause,
+    TASK_RESET: _task_reset, TASK_TRIGGER: _task_trigger,
     FILE_REGISTER: _file_register, FILE_LIST: _file_list,
     PARSE_FILE: _parse_file, PARSE_MODALITY: _parse_modality,
     LEDGER_RECORD: _ledger_record, LEDGER_READ: _ledger_read,

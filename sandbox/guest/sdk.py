@@ -76,8 +76,9 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        SESSION_ADD_TOOL, SESSION_CANCEL, SESSION_GET,
                        SESSION_LIST, SESSION_PUSH, SESSION_REMOVE_PROMPT,
                        SESSION_REMOVE_TOOL, SESSION_STATE_GET,
-                       SESSION_STATE_SET, TASK_ENQUEUE, TASK_OUTPUT,
-                       TASK_STATUS, TOOL_CALL, TOOL_LIST, UI_APPROVE, UI_ASK,
+                       SESSION_STATE_SET, TASK_ENQUEUE, TASK_GRAPH, TASK_LIST,
+                       TASK_OUTPUT, TASK_PAUSE, TASK_RESET, TASK_STATUS,
+                       TASK_TRIGGER, TOOL_CALL, TOOL_LIST, UI_APPROVE, UI_ASK,
                        UI_RENDER, USER_LIST, USER_READ, USER_WRITE, Request,
                        Result)
 
@@ -685,6 +686,27 @@ class _Tasks(_Namespace):
         return self._ask(TASK_OUTPUT, name=name,
                          path=str(path) if path else None)
 
+    def list(self, details: bool = False):
+        """Registered tasks, optionally with status and setting metadata."""
+        return self._ask(TASK_LIST, details=details)
+
+    def graph(self):
+        """Render the dependency pipeline."""
+        return self._ask(TASK_GRAPH)
+
+    def pause(self, name: str, paused: bool = True):
+        """Pause or unpause a task."""
+        return self._ask(TASK_PAUSE, name=name, paused=paused)
+
+    def reset(self, name: str, failed_only: bool = False):
+        """Reset path-task rows, optionally only failed rows."""
+        return self._ask(
+            TASK_RESET, name=name, failed_only=failed_only)
+
+    def trigger(self, name: str, payload=None):
+        """Create a manual run for an event-driven task."""
+        return self._ask(TASK_TRIGGER, name=name, payload=payload or {})
+
 
 class _Files(_Namespace):
     """The watched-file table the pipeline runs on."""
@@ -902,6 +924,80 @@ class _Markdown:
             return json.dumps(data, indent=2, default=str)
         except Exception:
             return str(data)
+
+    @staticmethod
+    def tasks(tasks) -> str:
+        """Render structured task metadata in the standard status sections."""
+        if not tasks:
+            return "No tasks registered."
+        empty = {
+            "PENDING": 0,
+            "PROCESSING": 0,
+            "DONE": 0,
+            "FAILED": 0,
+        }
+        normalized = [
+            {
+                **task,
+                "trigger": task.get("trigger", "path"),
+                "counts": {**empty, **(task.get("counts") or {})},
+                "paused": bool(task.get("paused")),
+            }
+            for task in tasks
+        ]
+        normalized.sort(key=lambda task: task["name"])
+        sections = [
+            (
+                "Path-driven tasks",
+                [task for task in normalized
+                 if task["trigger"] == "path"],
+            ),
+            (
+                "Event-driven tasks",
+                [task for task in normalized
+                 if task["trigger"] == "event"],
+            ),
+        ]
+        other = [
+            task for task in normalized
+            if task["trigger"] not in {"path", "event"}
+        ]
+        if other:
+            sections.append(("Other tasks", other))
+
+        lines = ["Tasks:"]
+        for title, section in sections:
+            lines += ["", f"**{title}**", ""]
+            if not section:
+                lines.append("(none)")
+                continue
+            rows = []
+            for task in section:
+                details = []
+                if task["paused"]:
+                    details.append("paused")
+                channels = task.get("trigger_channels") or []
+                if channels:
+                    details.append(f"listens on: {', '.join(channels)}")
+                services = task.get("requires_services") or []
+                if services:
+                    details.append(f"needs: {services}")
+                details.extend(task.get("schedules") or [])
+                counts = task["counts"]
+                rows.append((
+                    task["name"],
+                    counts["PENDING"],
+                    counts["PROCESSING"],
+                    counts["DONE"],
+                    counts["FAILED"],
+                    "; ".join(details),
+                ))
+            lines.append(_Markdown.table(
+                ["Task", "Pending", "Running", "Done", "Failed", "Notes"],
+                rows,
+                leading_blank=False,
+            ))
+        return "\n".join(lines)
 
 
 class _Forms:

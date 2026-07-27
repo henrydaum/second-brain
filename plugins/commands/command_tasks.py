@@ -1,13 +1,7 @@
 """Slash command plugin for `/tasks`."""
 
-import json
-from uuid import uuid4
-
-from plugins.BaseCommand import BaseCommand
-from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks, setting_rows
-from plugins.frontends.helpers.formatters import detail_card, format_tasks
-from state_machine.conversation import FormStep
-from state_machine.forms import schema_to_form_steps
+from guest.bases import BaseCommand
+from guest.forms import FormStep
 
 
 PATH_ACTIONS = ["pause", "unpause", "reset", "retry"]
@@ -16,145 +10,149 @@ PIPELINE = "Show pipeline"
 
 
 class TasksCommand(BaseCommand):
-    """Slash-command handler for `/tasks`."""
+    """Inspect and manage registered pipeline tasks."""
+
     name = "tasks"
     description = "Pick a task — pause, unpause, reset, retry, or trigger"
     category = "System"
+    requests = [
+        "task.list", "task.graph", "task.pause", "task.reset",
+        "task.trigger", "config.write",
+    ]
 
-    def form(self, args, context):
-        """Handle form."""
-        tasks = sorted(getattr(getattr(context, "orchestrator", None), "tasks", {}))
-        steps = [FormStep("task_name", "Select a task to manage, or view the pipeline.", True, enum=[*tasks, PIPELINE], columns=2)]
+    def form(self, sdk, args):
+        """Build task, action, payload, and setting-value steps."""
+        tasks = sdk.tasks.list(details=True)
+        steps = [FormStep(
+            "task_name",
+            "Select a task to manage, or view the pipeline.",
+            True,
+            enum=[*[task["name"] for task in tasks], PIPELINE],
+            columns=2,
+        )]
         if args.get("task_name") == PIPELINE:
             return steps
-        task = _task(context, args.get("task_name"))
+        task = _find(tasks, args.get("task_name"))
         if task:
-            base = EVENT_ACTIONS if getattr(task, "trigger", "path") == "event" else PATH_ACTIONS
-            links, link_labels = quicklinks(task)
-            steps.append(FormStep("action", f"What do you want to do with this task?\n\n{_describe(context, args['task_name'])}", True, enum=base + links, enum_labels=list(base) + link_labels))
+            actions = (
+                EVENT_ACTIONS
+                if task.get("trigger", "path") == "event"
+                else PATH_ACTIONS
+            )
+            links, labels = sdk.forms.setting_actions(
+                task.get("config_settings"))
+            steps.append(FormStep(
+                "action",
+                "What do you want to do with this task?\n\n"
+                + _describe(sdk, task),
+                True,
+                enum=actions + links,
+                enum_labels=list(actions) + labels,
+            ))
         action = args.get("action")
         if task and action == "trigger":
-            steps += schema_to_form_steps(getattr(task, "event_payload_schema", {}) or {}, prompt_optional=True)
-        steps += quicklink_value_steps(action, context)
+            steps += sdk.forms.from_schema(
+                task.get("event_payload_schema"),
+                prompt_optional=True,
+            )
+        setting = sdk.forms.setting_for_action(
+            (task or {}).get("config_settings"), action)
+        if setting:
+            steps.append(sdk.forms.setting_value_step(setting))
         return steps
 
-    def run(self, args, context):
-        """Execute `/tasks` for the active session."""
-        action, name = args.get("action"), args.get("task_name")
+    def run(self, sdk, args):
+        """Execute the selected task-management action."""
+        action = args.get("action")
+        name = args.get("task_name")
+        tasks = sdk.tasks.list(details=True)
         if not name:
-            return _show(context)
-        orch = getattr(context, "orchestrator", None)
+            return sdk.md.tasks(tasks)
         if name == PIPELINE:
-            return orch.dependency_pipeline_graph() if orch and hasattr(orch, "dependency_pipeline_graph") else "Pipeline unavailable."
-        task = _task(context, name)
-        if not orch or not task:
+            try:
+                return sdk.tasks.graph()
+            except sdk.Failed:
+                return "Pipeline unavailable."
+        task = _find(tasks, name)
+        if not task:
             return "Unknown task."
-        handled = quicklink_run(action, args, context)
-        if handled is not None:
-            return handled
+
+        setting = sdk.forms.setting_for_action(
+            task.get("config_settings"), action)
+        if setting:
+            sdk.config.write(setting["key"], args.get("value"))
+            return (
+                f"Set {setting['key']} = "
+                f"{sdk.text.value(args.get('value'))}"
+            )
         if action == "pause":
-            orch.paused.add(name)
+            sdk.tasks.pause(name, True)
             return f"Paused task: {name}"
         if action == "unpause":
-            orch.paused.discard(name)
-            orch.clear_skip_cache(name)
+            sdk.tasks.pause(name, False)
             return f"Unpaused task: {name}"
         if action == "reset":
-            if getattr(task, "trigger", "path") == "event":
+            if task.get("trigger", "path") == "event":
                 return "Only path-driven tasks can be reset."
-            context.db.reset_task(name)
-            orch.clear_skip_cache(name)
+            sdk.tasks.reset(name)
             return f"Reset task: {name}"
         if action == "retry":
-            if getattr(task, "trigger", "path") == "event":
+            if task.get("trigger", "path") == "event":
                 return "Only path-driven tasks can be retried."
-            context.db.reset_failed_tasks(name)
-            orch.clear_skip_cache(name)
+            sdk.tasks.reset(name, failed_only=True)
             return f"Retried failed entries for task: {name}"
         if action == "trigger":
-            if getattr(task, "trigger", "path") != "event":
+            if task.get("trigger", "path") != "event":
                 return "Only event-driven tasks can be triggered manually."
-            return _trigger(context, task, args)
+            properties = (
+                task.get("event_payload_schema") or {}
+            ).get("properties") or {}
+            payload = {
+                key: args[key] for key in properties if key in args
+            }
+            try:
+                run_id = sdk.tasks.trigger(name, payload)
+            except sdk.Failed as exc:
+                if "task runs" in exc.error.lower():
+                    return "No database is available for task runs."
+                raise
+            return f"Triggered task: {name} ({run_id})"
         return f"Unknown action: {action}"
 
 
-def _show(context):
-    """Internal helper to handle show."""
-    orch, db = getattr(context, "orchestrator", None), getattr(context, "db", None)
-    counts = (db.get_system_stats().get("tasks", {}) if db else {}) | (db.get_run_stats() if db and hasattr(db, "get_run_stats") else {})
-    return format_tasks([{
-        "name": name,
-        "trigger": getattr(task, "trigger", "path"),
-        "counts": counts.get(name, {}),
-        "paused": name in getattr(orch, "paused", set()),
-        "requires_services": getattr(task, "requires_services", []),
-        "trigger_channels": getattr(task, "trigger_channels", []),
-    } for name, task in sorted((getattr(orch, "tasks", {}) or {}).items())])
+def _find(tasks, name):
+    return next(
+        (task for task in tasks if task["name"] == name),
+        None,
+    )
 
 
-def _describe(context, task_name):
-    """Internal helper to handle describe."""
-    orch = getattr(context, "orchestrator", None)
-    if not orch or task_name not in getattr(orch, "tasks", {}):
-        return "Action"
-    db = getattr(context, "db", None)
-    counts = (db.get_system_stats().get("tasks", {}) if db else {}) | (db.get_run_stats() if db and hasattr(db, "get_run_stats") else {})
-    c = {"PENDING": 0, "PROCESSING": 0, "DONE": 0, "FAILED": 0} | counts.get(task_name, {})
-    hint = _schedule_hint(context, orch.tasks[task_name])
+def _describe(sdk, task):
+    counts = {
+        "PENDING": 0,
+        "PROCESSING": 0,
+        "DONE": 0,
+        "FAILED": 0,
+        **(task.get("counts") or {}),
+    }
     pairs = [
-        ("Pending", c["PENDING"]),
-        ("Running", c["PROCESSING"]),
-        ("Done", c["DONE"]),
-        ("Failed", c["FAILED"]),
+        ("Pending", counts["PENDING"]),
+        ("Running", counts["PROCESSING"]),
+        ("Done", counts["DONE"]),
+        ("Failed", counts["FAILED"]),
     ]
-    card = detail_card(task_name, pairs + setting_rows(orch.tasks[task_name], context))
+    pairs += [
+        (setting["title"], sdk.text.value(setting.get("current")))
+        for setting in task.get("config_settings") or []
+    ]
+    card = sdk.md.card(task["name"], pairs)
+    hint = ""
+    if (
+        task.get("trigger", "path") == "event"
+        and task.get("schedule_count")
+    ):
+        hint = (
+            f"Scheduled jobs: {task['schedule_count']}. "
+            "Use /schedule to manage them."
+        )
     return card + (f"\n\n{hint}" if hint else "")
-
-
-def _task(context, name):
-    """Internal helper to handle task."""
-    return (getattr(getattr(context, "orchestrator", None), "tasks", {}) or {}).get(name)
-
-
-def _trigger(context, task, args):
-    """Internal helper to handle trigger."""
-    db = getattr(context, "db", None)
-    if db is None or not hasattr(db, "create_run"):
-        return "No database is available for task runs."
-    payload_keys = (getattr(task, "event_payload_schema", {}) or {}).get("properties", {}).keys()
-    payload = {k: args[k] for k in payload_keys if k in args}
-    name = getattr(task, "name", args.get("task_name"))
-    run_id = f"{name}:{uuid4().hex[:12]}"
-    db.create_run(run_id, name, triggered_by="manual", payload_json=json.dumps(payload))
-    orch = getattr(context, "orchestrator", None)
-    if orch and hasattr(orch, "on_run_enqueued"):
-        orch.on_run_enqueued(run_id, name)
-    return f"Triggered task: {name} ({run_id})"
-
-
-def _timekeeper(context):
-    """Internal helper to handle timekeeper."""
-    tk = (getattr(context, "services", None) or {}).get("timekeeper")
-    return tk if tk is not None and getattr(tk, "loaded", False) else None
-
-
-def _task_channels(task) -> list[str]:
-    """Internal helper to handle task channels."""
-    return [c for c in (getattr(task, "trigger_channels", []) or []) if c]
-
-
-def _jobs_for_task(context, task) -> list[str]:
-    """Internal helper to handle jobs for task."""
-    tk = _timekeeper(context)
-    if tk is None:
-        return []
-    channels = set(_task_channels(task))
-    return sorted(name for name, job in tk.list_jobs().items() if (job.get("channel") or "") in channels)
-
-
-def _schedule_hint(context, task) -> str:
-    """Internal helper to handle schedule hint."""
-    if getattr(task, "trigger", "path") != "event":
-        return ""
-    count = len(_jobs_for_task(context, task))
-    return f"Scheduled jobs: {count}. Use /schedule to manage them." if count else ""

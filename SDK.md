@@ -529,6 +529,9 @@ sdk.model.delta(text)      # LLM backends only, inside chat()
 sdk.model.proceed(request) # model_call escorts only
 
 sdk.tasks.enqueue(name, paths) / status(name, path) / output(name, path=None)
+sdk.tasks.list(details=False) / graph()
+sdk.tasks.pause(name, paused=True) / reset(name, failed_only=False)
+sdk.tasks.trigger(name, payload=None)
 sdk.files.register(path, **meta) / list(modality="")
 
 sdk.parse.file(path, modality="text")

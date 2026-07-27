@@ -217,6 +217,7 @@ ALWAYS_SAFE = {
     # mean asking permission to show the prompt that asks permission.
     R.CONSOLE_READ, R.CONSOLE_WRITE,
     R.TASK_ENQUEUE, R.TASK_STATUS, R.TASK_OUTPUT,
+    R.TASK_LIST, R.TASK_GRAPH, R.TASK_TRIGGER,
     R.FILE_REGISTER, R.FILE_LIST,
     R.PARSE_FILE, R.PARSE_MODALITY,
     R.LEDGER_RECORD, R.LEDGER_READ,
@@ -229,7 +230,8 @@ ALWAYS_SAFE = {
 _BRANCHED = {NET_HTTP, PROC_RUN, FS_WRITE, R.FS_WRITE_BYTES,
              FS_MOVE, FS_DELETE, FS_TEMP,
              CONFIG_READ, ENV_READ, R.SECRET_REVEAL, UI_ASK, SESSION_ADD_TOOL,
-             SESSION_ADD_PROMPT, AGENT_SCHEDULE, CONV_DELETE}
+             SESSION_ADD_PROMPT, AGENT_SCHEDULE, CONV_DELETE,
+             R.TASK_PAUSE, R.TASK_RESET}
 _UNDECIDED = R.ALL_TYPES - ALWAYS_SAFE - ALWAYS_UNSAFE - _BRANCHED
 assert not _UNDECIDED, f"unclassified Requests: {sorted(_UNDECIDED)}"
 
@@ -313,6 +315,17 @@ def classify(request: Request, chain: Chain) -> Decision:
     if kind in (SESSION_ADD_TOOL, SESSION_ADD_PROMPT, AGENT_SCHEDULE,
                 CONV_DELETE):
         return Decision(UNSAFE, f"{kind} ({chain.render()})")
+
+    if kind == R.TASK_PAUSE:
+        if args.get("paused", True):
+            return Decision(SAFE, "pausing narrows scheduled work")
+        return Decision(UNSAFE, "unpausing resumes scheduled work")
+
+    if kind == R.TASK_RESET:
+        return Decision(
+            UNSAFE,
+            "resetting task state makes pipeline work eligible to run again",
+        )
 
     if kind in ALWAYS_UNSAFE:
         return Decision(UNSAFE, f"{kind} changes what the system can do")
