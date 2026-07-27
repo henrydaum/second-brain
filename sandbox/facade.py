@@ -144,6 +144,25 @@ class Sandbox:
         self._runs: list[Run] = []
         self._lock = threading.Lock()
 
+    def bind_runtime(self, runtime, session_key=None) -> None:
+        """Wire approval to the kernel's doorway, once a runtime exists.
+
+        Boot order is why this is a separate call rather than a constructor
+        argument. Services and frontends are discovered and loaded well before
+        the conversation runtime is built, so the sandbox they run in has to
+        exist first — and a sandbox with nobody to ask refuses every unsafe
+        Request. That is the right default for the gap and the wrong answer
+        forever: without this, ``/packages install`` and every other
+        approval-gated capability fails with the policy's refusal reason
+        instead of putting a dialog in front of the user.
+
+        Idempotent, and it does not clobber an approver supplied explicitly —
+        a test that wired its own decision keeps it.
+        """
+        if runtime is None or self.interpreter.can_ask:
+            return
+        self.interpreter.set_approver(build_approver(runtime, session_key))
+
     # ──────────────────────────────────────────────────────────────
     # Resolving what a file asked for.
     # ──────────────────────────────────────────────────────────────

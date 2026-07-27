@@ -91,7 +91,10 @@ def get_sandbox() -> Sandbox:
     """The sandbox migrated plugins run in."""
     global _SANDBOX
     if _SANDBOX is None:
-        _SANDBOX = Sandbox()
+        # Through ``configure`` rather than assigned directly: that is what
+        # sets ``plugin_roots``, and a sandbox without them resolves
+        # ``dependencies_files`` only inside the plugin's own tree.
+        configure(Sandbox())
     return _SANDBOX
 
 

@@ -92,6 +92,7 @@ class Interpreter:
         self._approve = approve
         self._record = record
         self.context = context
+        self._approver_bound = approve is not None
         self._gate_queue: queue.Queue = queue.Queue()
         self._pool = ThreadPoolExecutor(max_workers=max_workers,
                                         thread_name_prefix="sandbox-exec")
@@ -211,6 +212,23 @@ class Interpreter:
             return Result.refusal("sandbox is shutting down")
         self._gate_queue.put((execution, request))
         return execution.inbox.get()
+
+    def set_approver(self, approve) -> None:
+        """Install the callable that asks the user, once there is one to ask.
+
+        Boot order forces this: services and frontends are discovered and
+        loaded before the conversation runtime exists, so a sandbox built
+        early has nobody to put a dialog in front of. Without it every unsafe
+        Request is refused outright for the life of the process — which is
+        the correct default and the wrong permanent state.
+        """
+        self._approve = approve
+        self._approver_bound = approve is not None
+
+    @property
+    def can_ask(self) -> bool:
+        """Whether an unsafe Request can reach a human at all."""
+        return self._approver_bound
 
     def cancel(self, execution: Execution):
         """Neutralize a running execution at its next Request."""

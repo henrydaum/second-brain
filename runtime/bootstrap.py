@@ -266,6 +266,16 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
     runtime.command_registry = registry
     runtime._orchestrator_ref = scaffold.orchestrator
     ref["runtime"] = runtime
+    # Give sandboxed plugins somebody to ask. Until this runs, the sandbox has
+    # no approver and refuses every unsafe Request outright — plugins are
+    # discovered and loaded long before a runtime exists, so the wiring cannot
+    # happen at construction. Approval then flows the kernel's usual way:
+    # vet_permission hooks, the user's trusted list, then a dialog.
+    try:
+        from sandbox.bridge import get_sandbox
+        get_sandbox().bind_runtime(runtime)
+    except Exception:
+        logger.exception("could not wire sandbox approval to the runtime")
     # Tasks running through the orchestrator reach the runtime via
     # context.runtime.
     if scaffold.orchestrator is not None:
