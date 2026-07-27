@@ -313,14 +313,34 @@ def _session_get(ctx, args: dict) -> Result:
     # is, the frontend must not also interpret the next line, or one keystroke
     # gets consumed twice.
     machine = getattr(session, "cs", None)
-    return Result(data={
+    data = {
         "key": key,
         "conversation_id": getattr(session, "conversation_id", None),
         "phase": getattr(machine, "phase", None),
         "busy": bool(getattr(session, "busy", False)),
         "attended": bool(runtime.is_attended(key))
         if hasattr(runtime, "is_attended") else None,
-    })
+    }
+    if args.get("details"):
+        if machine is None:
+            data["debug"] = None
+            return Result(data=data)
+        from state_machine.debug import format_recent_events, format_state
+
+        flags = [
+            flag
+            for service in (getattr(ctx, "services", None) or {}).values()
+            for flag in (
+                service.debug_flags(session)
+                if callable(getattr(service, "debug_flags", None)) else []
+            )
+        ]
+        data["debug"] = {
+            "state": format_state(machine),
+            "service_flags": flags,
+            "recent_events": format_recent_events(machine),
+        }
+    return Result(data=data)
 
 
 def _session_list(ctx, args: dict) -> Result:

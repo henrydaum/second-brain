@@ -1,64 +1,65 @@
 """Slash command plugin for `/debug`."""
 
-from pathlib import Path
-
-from paths import DATA_DIR
-from plugins.BaseCommand import BaseCommand
-from state_machine.debug import format_recent_events, format_state
+from guest.bases import BaseCommand
 
 
 class DebugCommand(BaseCommand):
-    """Slash-command handler for `/debug`.
+    """Read-only inspection of the active session and recent log errors."""
 
-    Read-only introspection of the active conversation: what the state
-    machine currently thinks is happening, plus the tail of recent log
-    warnings/errors. Useful when a form, approval, or phase flow gets stuck.
-    """
     name = "debug"
     description = "Inspect the live conversation state machine and recent log errors"
     category = "System"
+    requests = ["session.get", "paths.get", "fs.list", "fs.read"]
 
-    def run(self, _args, context):
+    def run(self, sdk, args):
         """Execute `/debug` for the active session."""
-        # Fenced blocks: rich renderers collapse single newlines in prose,
-        # so the multi-line dumps must travel as code to stay readable.
+        data_dir = sdk.paths.get("data")
+        log_path = _join(data_dir, "app.log")
         return (
-            "**Conversation state**\n```\n" + _state_section(context) + "\n```\n\n"
-            "**Recent log warnings/errors**\n```\n" + "\n".join(_log_lines(DATA_DIR / "app.log")) + "\n```"
+            "**Conversation state**\n```\n"
+            + _state_section(sdk)
+            + "\n```\n\n"
+            + "**Recent log warnings/errors**\n```\n"
+            + "\n".join(_log_lines(sdk, data_dir, log_path))
+            + "\n```"
         )
 
 
-def _state_section(context) -> str:
+def _state_section(sdk):
     """Return the active session's state-machine snapshot."""
-    runtime = getattr(context, "runtime", None)
-    session_key = getattr(context, "session_key", None)
-    session = (getattr(runtime, "sessions", {}) or {}).get(session_key) if runtime and session_key else None
-    cs = getattr(session, "cs", None) if session else None
-    if cs is None:
+    session = sdk.session.get(details=True)
+    if session is None or session.get("debug") is None:
         return "(no active session)"
 
-    parts = [format_state(cs)]
-    flags = [
-        flag
-        for svc in (getattr(context, "services", None) or {}).values()
-        for flag in (svc.debug_flags(session) if callable(getattr(svc, "debug_flags", None)) else [])
-    ]
+    debug = session["debug"]
+    parts = [debug["state"]]
+    flags = debug["service_flags"]
     if flags:
-        parts.append("Session: " + ", ".join(f for f in flags if f))
-    if getattr(session, "busy", False):
+        parts.append("Session: " + ", ".join(flag for flag in flags if flag))
+    if session["busy"]:
         parts.append("Session: agent turn in progress")
-    parts.append(format_recent_events(cs))
+    parts.append(debug["recent_events"])
+    return "\n".join(
+        line for block in parts for line in block.splitlines())
 
-    return "\n".join(line for block in parts for line in block.splitlines())
+
+def _join(root, name):
+    """Join an application path without consulting the guest environment."""
+    separator = "\\" if "\\" in root else "/"
+    return root.rstrip("/\\") + separator + name
 
 
-def _log_lines(path: Path, limit: int = 10) -> list[str]:
+def _log_lines(sdk, data_dir, path, limit=10):
     """Return recent warning/error/critical log lines."""
-    if not path.exists():
+    if path not in sdk.fs.list(data_dir, pattern="app.log"):
         return [f"No log file found at {path}."]
     hits = [
         line.strip()
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
-        if " | WARNING | " in line or " | ERROR | " in line or " | CRITICAL | " in line
+        for line in sdk.fs.read(path).splitlines()
+        if (
+            " | WARNING | " in line
+            or " | ERROR | " in line
+            or " | CRITICAL | " in line
+        )
     ]
     return hits[-limit:] or ["No warnings or errors in this run."]

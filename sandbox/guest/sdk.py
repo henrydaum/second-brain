@@ -215,9 +215,9 @@ class _Conv(_Namespace):
 class _Session(_Namespace):
     """Session Requests. Widening is unsafe, narrowing is safe."""
 
-    def get(self, key: str = ""):
-        """Describe a session; defaults to this one."""
-        return self._ask(SESSION_GET, key=key)
+    def get(self, key: str = "", details: bool = False):
+        """Describe a session, optionally including its debug snapshot."""
+        return self._ask(SESSION_GET, key=key, details=details)
 
     def list(self):
         """Every live session key."""

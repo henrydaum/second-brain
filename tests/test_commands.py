@@ -1,19 +1,14 @@
 """Tests for the kernel slash commands.
 
-Only the REPL/introspection commands ship in the kernel. These exercise the
-two with non-trivial logic: ``/llm`` (profile management form + handler) and
-``/debug`` (live state-machine snapshot + recent log tail). Both stub their
-context dependencies.
+Only the REPL/introspection commands ship in the kernel. These exercise their
+remaining native profile-management and form behavior with stub dependencies.
 """
 
 from types import SimpleNamespace
 
-from plugins.commands import command_debug
 from plugins.commands.command_frontends import FrontendsCommand
 from plugins.commands.command_agent import AgentCommand
-from plugins.commands.command_debug import DebugCommand
 from plugins.commands.command_llm import LlmCommand
-from state_machine.conversation import ConversationState, Participant
 
 
 # ── /llm ─────────────────────────────────────────────────────────────
@@ -175,50 +170,6 @@ def test_frontends_form_uses_runtime_cache_without_discovery(monkeypatch):
     steps = FrontendsCommand().form({}, context)
 
     assert steps[0].enum == ["repl", "telegram"]
-
-
-# ── /debug ───────────────────────────────────────────────────────────
-
-def _session_context(tmp_path, monkeypatch, cs, **session_attrs):
-    monkeypatch.setattr(command_debug, "DATA_DIR", tmp_path)
-    (tmp_path / "app.log").write_text(
-        "01:00PM | Main         | INFO  | ok\n"
-        "01:01PM | Discovery    | WARNING | Plugin registration failed: demo\n"
-        "01:02PM | Main         | ERROR | Auto-load failed for 'llm': boom\n",
-        encoding="utf-8",
-    )
-    session = SimpleNamespace(cs=cs, **session_attrs)
-    return SimpleNamespace(runtime=SimpleNamespace(sessions={"chat": session}), session_key="chat", services={})
-
-
-def test_debug_reports_state_machine_snapshot_and_log_tail(tmp_path, monkeypatch):
-    cs = ConversationState([Participant("user", "user"), Participant("agent", "agent")])
-    service = SimpleNamespace(debug_flags=lambda _session: ["sample extension"])
-    context = _session_context(tmp_path, monkeypatch, cs)
-    context.services["sample"] = service
-
-    out = DebugCommand().run({}, context)
-
-    assert "**Conversation state**" in out
-    assert "Turn: user (user)" in out
-    assert f"Phase: {cs.phase}" in out
-    assert "Participants: user(user), agent(agent)" in out
-    assert "Session: sample extension" in out
-    # The valuable part of the old /doctor: recent warnings/errors.
-    assert "**Recent log warnings/errors**" in out
-    assert "Plugin registration failed: demo" in out
-    assert "Auto-load failed for 'llm': boom" in out
-    assert "INFO  | ok" not in out  # info lines are filtered out
-
-
-def test_debug_handles_no_active_session(tmp_path, monkeypatch):
-    monkeypatch.setattr(command_debug, "DATA_DIR", tmp_path)
-    context = SimpleNamespace(runtime=SimpleNamespace(sessions={}), session_key="chat", services={})
-
-    out = DebugCommand().run({}, context)
-
-    assert "(no active session)" in out
-    assert "No log file found" in out
 
 
 # ── agent_prompt contributions ───────────────────────────────────────
