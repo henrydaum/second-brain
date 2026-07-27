@@ -2,7 +2,7 @@
   "description": "Starter plus all parsers and indexing/search.",
   "files": [
     "frontends/frontend_telegram.py",
-    "services/service_litellm.py",
+    "helpers/llm_litellm.py",
     "tasks/task_dream_memory.py",
     "tasks/task_update_titles.py",
     "tools/tool_ask_user_question.py",

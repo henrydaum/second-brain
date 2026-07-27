@@ -19,7 +19,7 @@ nothing replays every tick), but *not* while a row merely isn't ripe yet
 sidebars/banners live.
 """
 
-dependencies_files = ['services/service_litellm.py']
+dependencies_files = ['helpers/llm_litellm.py']
 dependencies_pip = []
 
 import json

@@ -9,7 +9,7 @@ to forget, index hooks), and applies it without a user approval step.
 
 from __future__ import annotations
 
-dependencies_files = ['services/service_litellm.py']
+dependencies_files = ['helpers/llm_litellm.py']
 dependencies_pip = []
 
 import json
