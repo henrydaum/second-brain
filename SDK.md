@@ -161,12 +161,14 @@ sdk.db.query(sql, params)      # -> [dict]
 sdk.db.write(sql, params)
 sdk.db.define(ddl)             # create a table your plugin owns
 
-sdk.conv.create(title)         # -> conversation id
-sdk.conv.read(conversation_id) # -> {conversation, messages}
-sdk.conv.list()
+sdk.conv.create(title, category=None, activate=False)
+sdk.conv.read(conversation_id, details=False)
+sdk.conv.list(category=None, limit=50, details=False)
 sdk.conv.append(conversation_id, role, content)
 sdk.conv.set_title(conversation_id, title)
 sdk.conv.set_category(conversation_id, category)
+sdk.conv.set_notification_mode(conversation_id, mode)
+sdk.conv.load(conversation_id)
 sdk.conv.clear(conversation_id=None) # defaults to the active conversation
 sdk.conv.delete(conversation_id)
 

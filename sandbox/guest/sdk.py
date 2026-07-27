@@ -54,7 +54,8 @@ from .requests import Denied, RequestFailed
 from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        COMMAND_CALL, COMMAND_LIST, CONFIG_READ, CONFIG_WRITE,
                        CONV_APPEND, CONV_CLEAR, CONV_CREATE, CONV_DELETE, CONV_LIST,
-                       CONV_READ, CONV_SET_CATEGORY, CONV_SET_TITLE,
+                       CONV_LOAD, CONV_READ, CONV_SET_CATEGORY,
+                       CONV_SET_NOTIFICATION_MODE, CONV_SET_TITLE,
                        CRON_CREATE, CRON_ENABLE, CRON_GET, CRON_LIST,
                        CONSOLE_READ, CONSOLE_WRITE,
                        CRON_REMOVE, CRON_UPDATE, DB_DEFINE, DB_QUERY, DB_WRITE,
@@ -179,17 +180,32 @@ class _DB(_Namespace):
 class _Conv(_Namespace):
     """Conversation Requests."""
 
-    def create(self, title: str = ""):
-        """Start a conversation."""
-        return self._ask(CONV_CREATE, title=title)
+    def create(
+        self,
+        title: str = "",
+        *,
+        category=None,
+        activate: bool = False,
+    ):
+        """Create a current-user conversation and optionally activate it."""
+        return self._ask(
+            CONV_CREATE, title=title, category=category, activate=activate)
 
-    def read(self, conversation_id):
-        """Messages and metadata."""
-        return self._ask(CONV_READ, id=conversation_id)
+    def read(self, conversation_id, details: bool = False):
+        """Messages and metadata, optionally with restored-state details."""
+        return self._ask(
+            CONV_READ, id=conversation_id, details=details)
 
-    def list(self):
-        """Conversations belonging to the current user."""
-        return self._ask(CONV_LIST)
+    def list(
+        self,
+        *,
+        category=None,
+        limit: int = 50,
+        details: bool = False,
+    ):
+        """Current-user conversations, optionally with category metadata."""
+        return self._ask(
+            CONV_LIST, category=category, limit=limit, details=details)
 
     def append(self, conversation_id, role: str, content: str):
         """Add a message."""
@@ -204,6 +220,15 @@ class _Conv(_Namespace):
         """Categorize."""
         return self._ask(CONV_SET_CATEGORY, id=conversation_id,
                          category=category)
+
+    def set_notification_mode(self, conversation_id, mode: str):
+        """Change background notification behavior."""
+        return self._ask(
+            CONV_SET_NOTIFICATION_MODE, id=conversation_id, mode=mode)
+
+    def load(self, conversation_id):
+        """Load a conversation and its saved state into this session."""
+        return self._ask(CONV_LOAD, id=conversation_id)
 
     def clear(self, conversation_id=None):
         """Clear messages and reload the active conversation."""
@@ -283,9 +308,10 @@ class _UI(_Namespace):
 class _Config(_Namespace):
     """Settings. Credentials come back as handles, never plaintext."""
 
-    def read(self, key: str = ""):
-        """Read a setting, or all of them."""
-        return self._ask(CONFIG_READ, key=key or None)
+    def read(self, key: str = "", *, present: bool = False):
+        """Read a setting, or check whether it has a non-empty value."""
+        return self._ask(
+            CONFIG_READ, key=key or None, present=present)
 
     def write(
         self,

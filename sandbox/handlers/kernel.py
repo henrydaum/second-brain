@@ -21,7 +21,9 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               MODEL_DELTA, MODEL_PROCEED,
                               CONFIG_READ, CONFIG_WRITE, CONV_APPEND, CONV_CLEAR,
                               CONV_CREATE, CONV_DELETE, CONV_LIST, CONV_READ,
-                              CONV_SET_CATEGORY, CONV_SET_TITLE, CRON_CREATE,
+                              CONV_LOAD, CONV_SET_CATEGORY,
+                              CONV_SET_NOTIFICATION_MODE, CONV_SET_TITLE,
+                              CRON_CREATE,
                               CRON_ENABLE, CRON_GET, CRON_LIST, CRON_REMOVE,
                               CONSOLE_READ, CONSOLE_WRITE,
                               CRON_UPDATE, DB_DEFINE, DB_QUERY, DB_WRITE,
@@ -164,8 +166,49 @@ def _conv_create(ctx, args: dict) -> Result:
     if (bad := _need(db, "the database")) is not None:
         return bad
     try:
-        cid = db.create_conversation(args.get("title") or "New conversation")
-        return Result(data=cid)
+        title = args.get("title") or "New conversation"
+        category = args.get("category")
+        uid = getattr(ctx, "user_id", None)
+        runtime = _runtime(ctx)
+        creator = getattr(runtime, "create_conversation", None)
+        if creator is not None:
+            cid = creator(
+                title, kind="user", category=category, user_id=uid)
+        else:
+            try:
+                cid = db.create_conversation(
+                    title, kind="user", category=category, user_id=uid)
+            except TypeError:
+                # Compatibility with small database doubles predating
+                # ownership. Activation still requires the real runtime.
+                if args.get("activate"):
+                    return Result.failure(
+                        "conversation activation is not available "
+                        "in this context")
+                cid = db.create_conversation(title)
+        if cid is None:
+            return Result.failure("failed to create conversation")
+        if not args.get("activate"):
+            return Result(data=cid)
+
+        key = getattr(ctx, "session_key", None)
+        loader = getattr(runtime, "load_conversation", None)
+        if (bad := _need(loader, "conversation loading")) is not None:
+            return bad
+        existing = (getattr(runtime, "sessions", None) or {}).get(key)
+        if (
+            existing is not None
+            and getattr(existing, "conversation_id", None) not in (None, cid)
+        ):
+            runtime.close_session(key)
+            runtime.set_session_user(key, uid)
+        session = loader(key, cid)
+        profile = (
+            getattr(session, "profile_override", None)
+            or getattr(session, "active_agent_profile", None)
+            or "default"
+        )
+        return Result(data={"id": cid, "profile": profile})
     except Exception as exc:
         return Result.failure(f"create failed: {exc}")
 
@@ -179,10 +222,25 @@ def _conv_read(ctx, args: dict) -> Result:
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
     try:
-        return Result(data={
+        messages = _rows(db.get_conversation_messages(cid))
+        data = {
             "conversation": dict(db.get_conversation(cid) or {}),
-            "messages": _rows(db.get_conversation_messages(cid)),
-        })
+            "messages": messages,
+        }
+        if args.get("details"):
+            from runtime.notifications import notification_mode
+            from state_machine.serialization import latest_state
+
+            state = latest_state(messages) or {}
+            data["state"] = state
+            data["agent_profile"] = (
+                state.get("profile_override")
+                or state.get("active_agent_profile")
+                or ""
+            ).strip()
+            data["notification_mode"] = notification_mode(
+                state.get("notification_mode"))
+        return Result(data=data)
     except Exception as exc:
         return Result.failure(f"read failed: {exc}")
 
@@ -194,11 +252,60 @@ def _conv_list(ctx, args: dict) -> Result:
         return bad
     try:
         user_id = getattr(ctx, "user_id", None)
+        if args.get("details"):
+            import time
+
+            category = args.get("category")
+            limit = max(1, min(int(args.get("limit") or 50), 200))
+            rows, has_more = db.list_conversations_page(
+                offset=0,
+                limit=limit,
+                category=category,
+                user_id=user_id,
+            )
+            items = _rows(rows)
+            for row in items:
+                row["updated_ago"] = _relative_time(
+                    row.get("updated_at"), time.time())
+            return Result(data={
+                "items": items,
+                "has_more": bool(has_more),
+                "categories": list(
+                    db.list_conversation_categories(user_id=user_id)),
+            })
         if user_id is not None and hasattr(db, "list_user_conversations"):
             return Result(data=_rows(db.list_user_conversations(user_id)))
         return Result(data=_rows(db.list_conversations()))
     except Exception as exc:
         return Result.failure(f"list failed: {exc}")
+
+
+def _relative_time(timestamp, now) -> str:
+    """Coarse relative age matching the conversation picker."""
+    try:
+        value = max(0.0, float(now) - float(timestamp))
+    except (TypeError, ValueError):
+        return ""
+    units = (
+        (60, "second", "seconds"),
+        (60, "minute", "minutes"),
+        (24, "hour", "hours"),
+        (7, "day", "days"),
+        (4, "week", "weeks"),
+        (12, "month", "months"),
+        (None, "year", "years"),
+    )
+    for step, singular, plural in units:
+        if step is None or value < step:
+            number = int(value) if value >= 1 else 1
+            if singular == "second" and number < 5:
+                return "just now"
+            return (
+                f"{number} "
+                f"{singular if number == 1 else plural} ago"
+            )
+        value /= step
+    return ""
 
 
 def _conv_append(ctx, args: dict) -> Result:
@@ -237,11 +344,58 @@ def _conv_set_category(ctx, args: dict) -> Result:
     setter = getattr(runtime, "set_conversation_category", None)
     if (bad := _need(setter, "conversation categories")) is not None:
         return bad
+    cid = args.get("id")
+    if (refused := _check_access(ctx, cid)) is not None:
+        return refused
     try:
-        setter(args.get("id"), args.get("category") or "")
-        return Result(data=True)
+        changed = setter(
+            getattr(ctx, "session_key", None),
+            cid,
+            args.get("category") or None,
+        )
+        return Result(data=bool(changed))
     except Exception as exc:
         return Result.failure(f"categorize failed: {exc}")
+
+
+def _conv_set_notification_mode(ctx, args: dict) -> Result:
+    """Set one conversation's normalized background notification mode."""
+    runtime = _runtime(ctx)
+    setter = getattr(runtime, "set_conversation_notification_mode", None)
+    if (bad := _need(setter, "conversation notifications")) is not None:
+        return bad
+    cid = args.get("id")
+    if (refused := _check_access(ctx, cid)) is not None:
+        return refused
+    try:
+        mode = setter(
+            getattr(ctx, "session_key", None), cid, args.get("mode"))
+        if mode is None:
+            return Result.failure("no such conversation")
+        return Result(data=mode)
+    except Exception as exc:
+        return Result.failure(f"notification change failed: {exc}")
+
+
+def _conv_load(ctx, args: dict) -> Result:
+    """Load an owned conversation and restore its persisted runtime state."""
+    runtime = _runtime(ctx)
+    loader = getattr(runtime, "load_history", None)
+    if (bad := _need(loader, "conversation loading")) is not None:
+        return bad
+    cid = args.get("id")
+    if (refused := _check_access(ctx, cid)) is not None:
+        return refused
+    try:
+        outcome = loader(getattr(ctx, "session_key", None), cid)
+        return Result(data={
+            "ok": bool(getattr(outcome, "ok", True)),
+            "messages": list(getattr(outcome, "messages", None) or []),
+            "error": getattr(outcome, "error", None),
+            "data": dict(getattr(outcome, "data", None) or {}),
+        })
+    except Exception as exc:
+        return Result.failure(f"load failed: {exc}")
 
 
 def _conv_clear(ctx, args: dict) -> Result:
@@ -291,8 +445,11 @@ def _conv_delete(ctx, args: dict) -> Result:
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
     try:
-        deleter(cid)
-        return Result(data=True)
+        if runtime is not None and hasattr(runtime, "delete_conversation"):
+            deleted = deleter(getattr(ctx, "session_key", None), cid)
+        else:
+            deleted = deleter(cid)
+        return Result(data=bool(deleted))
     except Exception as exc:
         return Result.failure(f"delete failed: {exc}")
 
@@ -526,6 +683,9 @@ def _config_read(ctx, args: dict) -> Result:
     """Read a setting, redacting credentials into handles."""
     config = getattr(ctx, "config", None) or {}
     key = args.get("key")
+    if args.get("present"):
+        return Result(data=bool(config.get(key))) if key else Result(
+            data=bool(config))
     if key is None:
         return Result(data={k: redact(k, v) for k, v in config.items()})
     if key not in config:
@@ -1563,7 +1723,9 @@ HANDLERS = {
     DB_QUERY: _db_query, DB_WRITE: _db_write, DB_DEFINE: _db_define,
     CONV_CREATE: _conv_create, CONV_READ: _conv_read, CONV_LIST: _conv_list,
     CONV_APPEND: _conv_append, CONV_SET_TITLE: _conv_set_title,
-    CONV_SET_CATEGORY: _conv_set_category, CONV_CLEAR: _conv_clear,
+    CONV_SET_CATEGORY: _conv_set_category,
+    CONV_SET_NOTIFICATION_MODE: _conv_set_notification_mode,
+    CONV_LOAD: _conv_load, CONV_CLEAR: _conv_clear,
     CONV_DELETE: _conv_delete,
     SESSION_GET: _session_get, SESSION_LIST: _session_list,
     SESSION_PUSH: _session_push, SESSION_STATE_GET: _session_state_get,
