@@ -268,6 +268,13 @@ class _CallableAction(Action):
         """Run the callable immediately or suspend into form/approval flow first."""
         payload, actor = self.payload(), self.actor_id
         spec = self.spec(payload)
+        supplied_token = payload.pop("_approval_token", None)
+        expected_token = self.cs.cache.pop("_approved_callable_token", None)
+        approved = bool(
+            spec.require_approval
+            and supplied_token
+            and supplied_token == expected_token
+        )
         args = dict(payload.get("args") or {})
         raw_arg = "arg" in args
         resumed_call_id = payload.get("_call_id")
@@ -299,9 +306,14 @@ class _CallableAction(Action):
             event = self.cs.event("form_started", actor, name=spec.name, step=missing[0].name, prompt=missing[0].prompt)
             return ActionResult(True, self.action_type, events=[event], data={"step": missing[0].name, "call_id": call_id})
         self._validate(spec, args)
-        if spec.require_approval and not payload.get("_approved"):
+        if spec.require_approval and not approved:
             return self._approval(payload, spec)
-        return self._run(spec, args, call_id=resumed_call_id)
+        return self._run(
+            spec,
+            args,
+            call_id=resumed_call_id,
+            approved=approved,
+        )
 
     def _validate(self, spec: CallableSpec, args: dict[str, Any]) -> None:
         """Internal helper to validate collected args against the callable form."""
@@ -318,33 +330,54 @@ class _CallableAction(Action):
 
     def _approval(self, payload: dict[str, Any], spec: CallableSpec):
         # Approval temporarily gives priority to the approver; approving later
-        # reconstructs this same callable payload with `_approved=True`.
+        # reconstructs this payload with a one-shot host-issued token.
         """Internal helper to suspend a callable behind an approval frame."""
         approver = spec.approval_actor_id or self.cs.other_id(self.actor_id)
+        import uuid
+
         self.cs.push_phase(PhaseFrame(PHASE_APPROVING_REQUEST, "answer_approval", approver, spec.name, {
             "type": "boolean",
             "title": spec.name,
             "prompt": f"Approve {spec.name}?",
             "required": True,
+            "approval_token": uuid.uuid4().hex,
             "pending": {"type": self.action_type, "actor_id": self.actor_id, "content": payload},
         }))
         self.cs.set_priority(approver)
         event = self.cs.event("approval_requested", self.actor_id, name=spec.name, approver=approver, payload=payload)
         return ActionResult(True, self.action_type, "Approval required.", events=[event])
 
-    def _run(self, spec: CallableSpec, args: dict[str, Any], *, call_id: str | None = None):
+    def _run(
+        self,
+        spec: CallableSpec,
+        args: dict[str, Any],
+        *,
+        call_id: str | None = None,
+        approved: bool = False,
+    ):
         """Internal helper to invoke the callable and translate its result into events."""
         old_phase = self.cs.phase
         self.cs.phase = self.calling_phase
         started = call_id or self._emit_invocation_started(spec, args)
+        prior_approval = self.cs.cache.get("_approved_command_execution")
+        if self.action_type == "call_command":
+            self.cs.cache["_approved_command_execution"] = approved
         try:
-            value = spec.handler(self.cs, self.actor_id, args) if spec.handler else None
+            value = (
+                spec.handler(self.cs, self.actor_id, dict(args))
+                if spec.handler else None
+            )
             if isinstance(value, ActionResult) and not value.ok:
                 raise value.error or self.error(ERROR_EXECUTION_FAILED, value.message or "Action failed.")
         except Exception as e:
             self._emit_command_finished(started, spec, False, str(e))
             raise
         finally:
+            if self.action_type == "call_command":
+                if prior_approval is None:
+                    self.cs.cache.pop("_approved_command_execution", None)
+                else:
+                    self.cs.cache["_approved_command_execution"] = prior_approval
             self.cs.reset_phase()
         self._emit_command_finished(started, spec, True, None)
         event = self.cs.event(self.action_type, self.actor_id, name=spec.name, args=args, previous_phase=old_phase)
@@ -458,7 +491,7 @@ class AnswerApproval(Action):
     Despite the historical name, this carries any typed value (string,
     integer, number, boolean, array, object, enum). For a frame whose
     `data["type"]` is "boolean" with a `pending` action, a truthy value
-    re-enacts the gated action with `_approved=True`. For other types, the
+    re-enacts the gated action with a one-shot approval token. For other types, the
     value is simply returned in the result data for the caller to consume.
     """
 
@@ -485,7 +518,9 @@ class AnswerApproval(Action):
                 self.cs.reset_phase()
                 return ActionResult(True, self.action_type, "Denied.", events=[event], data={"approved": False, "value": False})
             content = dict(pending["content"])
-            content["_approved"] = True
+            token = frame.data.get("approval_token")
+            self.cs.cache["_approved_callable_token"] = token
+            content["_approval_token"] = token
             from state_machine.action_map import create_action
 
             result = create_action(self.cs, pending["type"], content, pending["actor_id"]).enact()

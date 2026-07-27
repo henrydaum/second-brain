@@ -540,3 +540,9 @@ plugin, pop when that plugin terminates. Plugins never report their own
 identity, so they cannot misstate it. A persistent container, being in no one's
 call stack, carries the chain captured at its creation. The stack is capped for
 depth, which also detects cycles.
+
+An approved command carries that one-shot approval on its host-maintained
+chain. Requests made while that command executes do not ask a second time;
+the authority disappears when the command returns. The approval token is
+generated and consumed by the state machine, never accepted from plugin
+arguments.

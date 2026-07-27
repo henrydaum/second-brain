@@ -209,7 +209,12 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         # Only the root is set here. ``Sandbox.start`` pushes the execution's
         # own name, and pushing it here too would put the plugin in the chain
         # twice — which the cycle detector correctly refuses.
-        chain = Chain(root=_root_for(context))
+        chain = Chain(
+            root=_root_for(context),
+            approved=bool(
+                getattr(context, "approved_by_state_machine", False)
+            ),
+        )
         result = get_sandbox().run(
             source_path, entry, kwargs=payload, chain=chain, context=context,
             name=self.name or path.stem, method=method)

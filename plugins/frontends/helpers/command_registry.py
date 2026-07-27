@@ -67,7 +67,15 @@ class CommandRegistry:
         prefix = prefix.lower()
         return sorted([c for c in self._commands.values() if c.name.startswith(prefix)], key=lambda c: c.name)
 
-    def dispatch_dict(self, name: str, args: dict | None = None, *, session_key: str | None = None, _emit: bool = True) -> str | None:
+    def dispatch_dict(
+        self,
+        name: str,
+        args: dict | None = None,
+        *,
+        session_key: str | None = None,
+        _emit: bool = True,
+        _approved: bool = False,
+    ) -> str | None:
         """Handle dispatch dict."""
         entry = self._commands.get(name)
         if entry is None:
@@ -76,7 +84,10 @@ class CommandRegistry:
         if _emit:
             call_id = _emit_started(name, args or {}, session_key)
         try:
-            out = entry.run(dict(args or {}), self.context(session_key))
+            context = self.context(session_key)
+            if context is not None:
+                context.approved_by_state_machine = bool(_approved)
+            out = entry.run(dict(args or {}), context)
         except Exception as e:
             logger.exception(f"Command '/{name}' handler raised")
             if _emit:
@@ -116,7 +127,15 @@ class CommandRegistry:
         for entry in self.all_commands():
             specs[entry.name] = CallableSpec(
                 entry.name,
-                lambda cs, _actor, args, e=entry: self.dispatch_dict(e.name, args, session_key=(cs.cache or {}).get("session_key"), _emit=False),
+                lambda cs, _actor, args, e=entry: self.dispatch_dict(
+                    e.name,
+                    args,
+                    session_key=(cs.cache or {}).get("session_key"),
+                    _emit=False,
+                    _approved=bool(
+                        (cs.cache or {}).get("_approved_command_execution")
+                    ),
+                ),
                 form_factory=lambda args, cs, e=entry: e.form(args, self.context((cs.cache or {}).get("session_key") if cs else None)),
                 require_approval=getattr(entry, "require_approval", False),
                 approval_actor_id=getattr(entry, "approval_actor_id", None),

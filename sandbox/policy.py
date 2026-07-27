@@ -66,10 +66,15 @@ class Chain:
     """
     root: str = "user"
     links: tuple = ()
+    approved: bool = False
 
     def push(self, name: str) -> "Chain":
         """Descend into a nested call."""
-        return Chain(root=self.root, links=self.links + (name,))
+        return Chain(
+            root=self.root,
+            links=self.links + (name,),
+            approved=self.approved,
+        )
 
     @property
     def depth(self) -> int:
@@ -241,6 +246,8 @@ def classify(request: Request, chain: Chain) -> Decision:
         return Decision(UNSAFE, f"call chain deeper than {MAX_DEPTH}")
     if chain.cyclic:
         return Decision(UNSAFE, f"call cycle: {chain.render()}")
+    if chain.approved:
+        return Decision(SAFE, "approved command")
 
     kind = request.type
     args = request.args

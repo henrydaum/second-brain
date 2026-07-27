@@ -57,6 +57,7 @@ class SecondBrainContext:
     current_user: Any = None     # callable() -> user row dict (config parsed) or None.
     user_config: dict = field(default_factory=dict)
     user_initiated: bool = False # Explicit user command, not an autonomous agent call.
+    approved_by_state_machine: bool = False
     current_tool_name: str | None = None
     approval_denial_reason: str = ""
 
