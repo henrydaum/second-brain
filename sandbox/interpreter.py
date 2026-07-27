@@ -221,9 +221,17 @@ class Interpreter:
         return InterpreterChannel(self, execution)
 
     def shutdown(self):
-        """Stop the gate and the execution pool."""
+        """Stop the gate, then close the execution pool.
+
+        The gate may already have dequeued a Request when shutdown begins.
+        Joining it before closing the pool lets that Request either dispatch
+        normally or be refused by the drain, instead of racing a late
+        ``submit`` against a closed executor.
+        """
         self._running = False
         self._gate_queue.put(None)
+        if self._gate is not threading.current_thread():
+            self._gate.join()
         self._pool.shutdown(wait=False)
 
 

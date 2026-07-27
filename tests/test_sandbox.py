@@ -2,15 +2,18 @@
 contract, plus a round-trip benchmark so the cost is measured rather than
 argued about."""
 
+import threading
 import time
 
 import pytest
 
+import sandbox.interpreter as interpreter_module
 from sandbox import Chain, Interpreter, Request, Result, run_in_process
-from sandbox.policy import MAX_DEPTH, classify
-from sandbox.interpreter import (DEFAULT_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS,
+from sandbox.interpreter import (DEFAULT_TIMEOUT_SECONDS, HANDLERS,
+                                 MAX_TIMEOUT_SECONDS, Execution,
                                  clamp_timeout)
-from sandbox.guest.requests import NET_HTTP
+from sandbox.policy import MAX_DEPTH, SAFE, Decision, classify
+from sandbox.guest.requests import CONFIG_READ, NET_HTTP
 
 
 @pytest.fixture
@@ -53,6 +56,51 @@ def test_helpers_can_make_requests_without_being_generators(interp, tmp_path):
         return sdk.ok(load(sdk, str(tmp_path / "a.txt")))
 
     assert run_in_process(interp, plugin, name="helper").data == "A"
+
+
+def test_shutdown_waits_for_a_request_already_inside_the_gate(monkeypatch):
+    """A late console poll must not race executor shutdown."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def paused_classify(_request, _chain):
+        entered.set()
+        assert release.wait(2)
+        return Decision(SAFE, "test request")
+
+    monkeypatch.setattr(interpreter_module, "classify", paused_classify)
+    monkeypatch.setitem(
+        HANDLERS,
+        CONFIG_READ,
+        lambda _context, _args: Result(data="settled"),
+    )
+
+    interpreter = Interpreter()
+    execution = Execution("race", Chain().push("race"))
+    answer = {}
+    submitting = threading.Thread(
+        target=lambda: answer.setdefault(
+            "result",
+            interpreter.submit(
+                execution,
+                Request(CONFIG_READ, {"key": "shutdown_race"}),
+            ),
+        ),
+    )
+    submitting.start()
+    assert entered.wait(2)
+
+    stopping = threading.Thread(target=interpreter.shutdown)
+    stopping.start()
+    assert stopping.is_alive()
+
+    release.set()
+    submitting.join(2)
+    stopping.join(2)
+
+    assert not submitting.is_alive()
+    assert not stopping.is_alive()
+    assert answer["result"].data == "settled"
 
 
 # ──────────────────────────────────────────────────────────────────────
