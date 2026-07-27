@@ -70,6 +70,43 @@ class BasePlugin:
     # the author forgot to declare. It grants nothing — the gate decides.
     requests: list = []
 
+    # ── the bus, inbound ───────────────────────────────────────────
+    # Channels this plugin wants to hear. ``sdk.events.emit`` is the outbound
+    # half and needs no declaration; receiving does, for the same reason
+    # ``hooks`` does — a subscription the plugin never registered is one it
+    # cannot forget to undo, and uninstalling the file takes it away.
+    #
+    # Only a plugin that *stays loaded* can be delivered to: a tool is a call
+    # that ends. Services and frontends, then.
+    #
+    # Channel names are not a closed vocabulary. The kernel's are in
+    # ``events/event_channels.py``, but a plugin owns its own and may listen to
+    # another plugin's, so nothing here validates the string.
+    subscribed_channels: list = []
+
+    def on_event(self, sdk, channel: str, payload):
+        """One bus event on a channel this plugin declared. Return nothing.
+
+        Handlers run on whichever thread emitted, so this must be quick and
+        must not raise — the bus is fire-and-forget, and a slow subscriber
+        slows down the code that published.
+        """
+        return None
+
+    def __event__(self, sdk, channel: str, payload=None):
+        """Receive one delivery. The kernel calls this, never an author.
+
+        Undeclared channels are refused here as well as host-side. The host
+        only subscribes to what was declared, so this is belt-and-braces —
+        but the declaration is the security story, and a story that is only
+        told in one place is one edit away from not being true.
+        """
+        if channel not in (self.subscribed_channels or []):
+            raise ValueError(
+                f"{self.name}: {channel!r} was not declared in "
+                f"subscribed_channels")
+        return self.on_event(sdk, channel, payload)
+
     # ── prompt contribution ────────────────────────────────────────
     agent_prompt: str = ""
 
@@ -106,6 +143,7 @@ class BasePlugin:
             "dependencies_pip": list(cls.dependencies_pip),
             "requires_services": list(cls.requires_services),
             "requests": list(cls.requests),
+            "subscribed_channels": list(cls.subscribed_channels),
             "box": cls.box, "isolation": cls.isolation,
             "lifetime": cls.lifetime, "timeout": cls.timeout,
             "memory_mb": cls.memory_mb,

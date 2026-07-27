@@ -77,6 +77,26 @@ the kernel to call into. Declare them and write the methods:
 See templates/hook_template.py for all six moments and their payloads.
 
 
+LISTENING TO THE BUS
+--------------------
+Same shape, same reason: declare the channels and write one handler.
+
+    subscribed_channels = ["task_completed"]
+
+    def on_event(self, sdk, channel, payload):
+        ...
+
+A channel you did not declare is never delivered. Only services and frontends
+can subscribe at all — a tool is a call that ends, so there would be nothing
+left to deliver to.
+
+Two things bite here. Handlers run **on the thread that emitted**, so a slow
+on_event slows down whoever published — enqueue a task instead of doing real
+work. And a channel name is just a string: the kernel's live in
+events/event_channels.py, but plugins own their own, so nothing checks the
+spelling and a typo is silence rather than an error.
+
+
 DRIVING WORK ON A SCHEDULE
 --------------------------
 A service never imports the orchestrator or the tasks it drives. It emits, and
@@ -104,6 +124,10 @@ class Embedder(BaseService):
     # The public surface. _model and _normalize stay internal.
     exports = ["embed", "similarity"]
 
+    # Bus channels this service hears. Declared, so there is no subscription
+    # to drop at unload and none can survive an uninstall.
+    subscribed_channels = ["config_changed"]
+
     config_settings = [
         ("Embedding model", "embedder_model_name",
          "Which sentence-transformers model to load.",
@@ -112,21 +136,41 @@ class Embedder(BaseService):
 
     def start(self, sdk):
         """Load the model once. Return True on success."""
-        from sentence_transformers import SentenceTransformer
-
-        model_name = sdk.config.read("embedder_model_name")
-        sdk.log(f"loading {model_name}")
-        # Held on the instance, which lives in the box and never crosses out.
-        self._model = SentenceTransformer(model_name)
+        self._model = None
+        self._load(sdk)
         return True
+
+    def _load(self, sdk):
+        """Load the model if it is not already held. Internal, so unexported."""
+        if self._model is None:
+            from sentence_transformers import SentenceTransformer
+
+            model_name = sdk.config.read("embedder_model_name")
+            sdk.log(f"loading {model_name}")
+            # Held on the instance, which lives in the box and never crosses out.
+            self._model = SentenceTransformer(model_name)
+        return self._model
 
     def stop(self, sdk):
         """Release the model. Must tolerate never having started."""
         self._model = None
 
+    def on_event(self, sdk, channel, payload):
+        """React to a declared channel. One handler for all of them.
+
+        Note what this does *not* do: reload the model right here. The handler
+        runs on the thread that emitted, so whoever saved the config would wait
+        out a model load. Dropping a reference is the right amount of work.
+        """
+        if channel == "config_changed" and "embedder_model_name" in (
+                payload.get("keys") or []):
+            sdk.log("model setting changed; will reload on next use")
+            self._model = None
+
     def embed(self, sdk, texts):
         """Return one vector per text. Simple data, so it can cross out."""
-        return [list(map(float, v)) for v in self._model.encode(texts)]
+        model = self._load(sdk)
+        return [list(map(float, v)) for v in model.encode(texts)]
 
     def similarity(self, sdk, a, b):
         """Cosine similarity between two texts."""

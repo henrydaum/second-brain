@@ -253,6 +253,38 @@ simply abstains — it can never break a turn.
 Hooks run synchronously on the drive thread, so they are paid on every turn
 they touch. Keep them fast.
 
+### Listening to the bus
+
+`sdk.events.emit` is the outbound half and needs no declaration. Hearing back
+does — and like a hook, it is declared rather than registered, so there is no
+subscription to forget to drop:
+
+```python
+class Watcher(BaseService):
+    name = "watcher"
+    subscribed_channels = ["task_completed", "session_turn_completed"]
+
+    def on_event(self, sdk, channel, payload):
+        if channel == "task_completed":
+            sdk.log(f"{payload['task_name']} finished")
+```
+
+One `on_event` receives every declared channel; a channel you did not declare
+is never delivered. **Only services and frontends can subscribe** — a tool is a
+call that ends, so there would be nothing to deliver to, and the validator says
+so rather than letting the declaration sit there doing nothing.
+
+Channel names are not a closed vocabulary. The kernel's are in
+`events/event_channels.py`, but a plugin owns its own channels and you may
+listen to another plugin's, so nothing validates the string — a typo is
+silence, not an error.
+
+Two things are worth knowing about the payload. Handlers run **on the thread
+that emitted**, so a slow `on_event` slows down whoever published; do the work
+in a task if it is not quick. And a payload only carries what can cross the
+boundary — `bus.request`'s synchronous round-trip machinery is stripped, so a
+sandboxed subscriber sees it as an ordinary event and cannot answer it.
+
 ### Machinery
 
 ```python
@@ -325,7 +357,13 @@ Services declare what other code may reach:
 class Embedder(BaseService):
     name = "embedder"
     exports = ["embed", "similarity"]   # everything else stays internal
+    hooks = {"end_turn": "check"}       # doorways to stand at
+    subscribed_channels = ["task_completed"]   # bus channels to hear
 ```
+
+Those last three are the same idea three times: **the kernel reads the
+declaration and does the registering**, so a plugin holds no handle it could
+leak and uninstalling the file takes the wiring with it.
 
 **Declaring a file makes it importable.** `dependencies_files` names files
 from other folders; they join your box's namespace, so you reach them as

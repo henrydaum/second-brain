@@ -444,6 +444,46 @@ def _check_hooks(walker: _Walker, node, cls):
                        f"defines no such method")
 
 
+def _check_subscribed_channels(walker: _Walker, node, cls, family: str):
+    """Check a ``subscribed_channels`` declaration can actually be honoured.
+
+    Deliberately *not* checked: whether the channel names exist. The kernel's
+    channels are listed in ``events/event_channels.py``, but that file is
+    explicit that a plugin owns its own channels and must not register them
+    there — so an allowlist would refuse the one case this feature is for, a
+    plugin listening to another plugin.
+
+    What is checked is the two ways a declaration silently does nothing: a
+    family that cannot be delivered to, and a missing handler.
+    """
+    value = _literal(node.value)
+    if not isinstance(value, list) or not all(
+            isinstance(v, str) and v.strip() for v in value):
+        walker.add(ERROR, node,
+                   "subscribed_channels must be a literal list of non-empty "
+                   "strings — the kernel reads it without importing")
+        return
+    if not value:
+        return
+
+    # Delivery needs something to deliver *to*. A tool is a call that ends, so
+    # by the time an event arrived there would be no box holding the plugin.
+    if family not in ("service", "frontend"):
+        walker.add(ERROR, node,
+                   f"a {family} cannot subscribe to the bus — it does not stay "
+                   f"loaded, so nothing would ever be delivered; move the "
+                   f"subscription to a service")
+        return
+
+    defined = {item.name for item in cls.body
+               if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    if "on_event" not in defined:
+        walker.add(ERROR, node,
+                   "subscribed_channels is declared but this class defines no "
+                   "on_event(self, sdk, channel, payload) — every delivery "
+                   "would reach the base class and be discarded")
+
+
 def _check_secret_names(walker: _Walker, node):
     """Warn about a config setting that looks like a credential but is not
     declared as one."""
@@ -544,6 +584,13 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
     if "hooks" in assigned:
         _check_hooks(walker, assigned["hooks"], cls)
 
+    # Bus subscriptions are declared the same way and fail the same way: the
+    # listener is simply never stood up, and the plugin waits forever for an
+    # event that was never routed to it.
+    if "subscribed_channels" in assigned:
+        _check_subscribed_channels(walker, assigned["subscribed_channels"],
+                                   cls, family)
+
     # A setting holding a credential is declared by its name. Catching the
     # omission here is the whole reason the name heuristic still exists: it
     # costs the author one message at authoring time instead of quietly
@@ -573,7 +620,8 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
 DECLARATION_KEYS = ("name", "box", "isolation", "lifetime", "timeout",
                     "memory_mb", "requests", "exports", "dependencies_files",
                     "dependencies_pip", "requires_services", "max_calls",
-                    "background_safe", "agent_prompt", "hooks")
+                    "background_safe", "agent_prompt", "hooks",
+                    "subscribed_channels")
 
 # Reading declarations without importing means *inherited* defaults are
 # invisible: ``class Counter(BaseService)`` never writes ``lifetime`` in the

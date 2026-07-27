@@ -346,6 +346,21 @@ a scope shaper sees tool *names* and can only narrow (widening is
 `sdk.session.add_tool`), and `ModelRequest.llm` is a model *name* the kernel
 resolves, the same handle-not-the-thing move as `<secret:…>`.
 
+**The bus, inbound, is declared the same way.** `sdk.events.emit` always
+worked — publishing is an ordinary Request — but sandboxed code could not
+*hear*. A plugin now names `subscribed_channels = [...]` and writes one
+`on_event(sdk, channel, payload)`; the bridge subscribes at load and drops
+every listener at unload, so a subscription cannot outlive its plugin (a leak
+with no symptom: deliveries land on a dead box and are swallowed forever).
+`sandbox/events.py` is the host half, `project()` the counterpart to hook
+projection — it strips `bus.request`'s live `threading.Event` and result list,
+so a sandboxed subscriber sees a round-trip event as fire-and-forget and cannot
+stall a publisher it was never trusted to answer. Two rules are enforced
+rather than documented: **only services and frontends may subscribe** (a tool
+is a call that ends), and channel names are **not** validated against
+`events/event_channels.py` — that file is explicit that plugins own their own
+channels, so an allowlist would refuse one plugin listening to another.
+
 `sdk.model.proceed` is the sole Request whose handler is a **per-call closure**
 rather than a static table entry: an escort's `proceed` is parked host-side
 under a one-shot token for exactly the duration of one doorway visit. Code

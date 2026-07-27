@@ -331,6 +331,42 @@ def _unhook(service) -> None:
     service._shims = None
 
 
+def _listen(service) -> None:
+    """Subscribe this service to every channel it declared.
+
+    Called only from ``_load``, unlike ``_sync_hooks``: a subscription needs a
+    box to deliver into but no runtime, so there is only one moment it can
+    happen and no ordering problem to be idempotent about.
+    """
+    channels = getattr(service, "_channels", None) or []
+    if not channels or service._listeners is not None:
+        return
+
+    from .events import subscribe_all
+
+    def deliver(channel: str, payload):
+        """Carry one event into the box, if the box is still there."""
+        box = getattr(service, "_sandbox_box", None)
+        if box is None or not box.alive:
+            return
+        result = box.call("__event__", channel=channel, payload=payload)
+        if not result.ok:
+            # A subscriber that raises is the publisher's problem only if we
+            # make it one, and the bus contract says we must not.
+            logger.warning("%s failed handling %s: %s",
+                           service.name, channel, result.error)
+
+    service._listeners = subscribe_all(service, channels, deliver)
+
+
+def _deafen(service) -> None:
+    """Drop every subscription. Symmetrical with ``_unhook``."""
+    from .events import unsubscribe_all
+
+    unsubscribe_all(getattr(service, "_listeners", None))
+    service._listeners = None
+
+
 class ServiceCallFailed(RuntimeError):
     """An exported service method failed inside its box.
 
@@ -377,12 +413,14 @@ def _adapt_service(path, entry: str, base, declarations: dict, box_name: str):
         # Binding and loading happen in either order depending on whether this
         # is boot or a live reload, so both ends call the same idempotent sync.
         _sync_hooks(self)
+        _listen(self)
         return True
 
     def unload(self):
-        """Close the box and step away from every doorway."""
+        """Close the box and step away from every doorway and channel."""
         self.loaded = False
         _unhook(self)
+        _deafen(self)
         self._sandbox_box = None
         try:
             get_sandbox().close(box_name)
@@ -419,7 +457,9 @@ def _adapt_service(path, entry: str, base, declarations: dict, box_name: str):
         "_sandbox_box": None,
         "_runtime": None,
         "_shims": None,
+        "_listeners": None,
         "_hooks": dict(declarations.get("hooks") or {}),
+        "_channels": list(declarations.get("subscribed_channels") or []),
         "_box": box_name,
         "_entry": entry,
         # Native services are named by model_name; the guest calls it name.
