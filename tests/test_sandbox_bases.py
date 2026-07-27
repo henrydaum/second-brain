@@ -54,11 +54,21 @@ def test_every_family_descends_from_baseplugin(cls, family):
 @pytest.mark.parametrize("attr", [
     "name", "description", "dependencies_files", "dependencies_pip",
     "requires_services", "config_settings", "agent_prompt", "requests",
-    "box", "isolation", "lifetime", "timeout", "memory_mb",
+    "box", "lifetime", "timeout", "memory_mb",
 ])
 def test_shared_declarations_live_on_the_ancestor(attr):
     """Declared once, not five times."""
     assert hasattr(BasePlugin, attr)
+
+
+def test_isolation_is_not_a_declaration_a_plugin_can_make():
+    """The base class must not even offer the attribute.
+
+    A guest class asserting its own containment is the vulnerability this
+    replaced; leaving the slot on the ancestor would let one drift back in
+    and read as authoritative.
+    """
+    assert not hasattr(BasePlugin, "isolation")
 
 
 def test_family_is_not_the_authors_to_set():
@@ -152,16 +162,26 @@ def test_the_import_rule_and_the_isolation_rule_are_one_rule():
 
 
 def test_a_plugin_declares_its_membership():
-    """The class knows which box it wants."""
+    """The class knows which box it wants — but not how isolated it is.
+
+    ``box`` is intent the kernel honours. Isolation arrives from the host,
+    resolved from the file's tree, so a class writing ``isolation`` changes
+    nothing: the membership it builds carries whatever the host put there,
+    which here is nothing.
+    """
     class Boxed(BaseTool):
         """In a shared box."""
         name = "boxed"
         box = "shared"
-        isolation = SUBPROCESS
+        isolation = SUBPROCESS      # ignored: not the plugin's call
 
     m = Boxed.membership("tool_boxed")
     assert m.box_name == "shared"
-    assert resolve([m])["shared"].isolated
+    assert not resolve([m])["shared"].isolated
+
+    # And the host's answer is what lands, whatever the class said.
+    from dataclasses import replace
+    assert resolve([replace(m, isolation=SUBPROCESS)])["shared"].isolated
 
 
 # ──────────────────────────────────────────────────────────────────────

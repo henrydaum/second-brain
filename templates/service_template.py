@@ -48,8 +48,10 @@ FOREIGN LIBRARIES AND CREDENTIALS
 Services are where foreign libraries usually live, and the honest position is:
 a library that does its own I/O cannot be mediated. Two consequences:
 
-  1. Declare `isolation = "subprocess"`. The library's actions are past the
-     kernel's reach, so put a process boundary around them.
+  1. You get a subprocess automatically, and cannot decline one. Isolation is
+     decided by the kernel from where the file lives — an installed package
+     that imports a foreign library is subprocessed because the validator can
+     see the import. There is nothing to declare.
   2. If it needs a credential, you genuinely need the plaintext, because there
      is no Request for the kernel to substitute a handle into.
 
@@ -117,8 +119,8 @@ class Embedder(BaseService):
     name = "embedder"
     description = "Sentence embeddings for search and clustering."
 
-    # A foreign library does its own work, so put a process around it.
-    isolation = "subprocess"
+    # A foreign library does its own work, so the kernel puts a process around
+    # this automatically — the import is what decides, not a declaration.
     dependencies_pip = ["sentence-transformers"]
 
     # The public surface. _model and _normalize stay internal.

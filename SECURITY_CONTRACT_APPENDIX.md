@@ -51,14 +51,59 @@ Reuse that pattern wherever a Request would be too noisy to write by hand.
 
 ---
 
+## Isolation: decided by provenance, never declared
+
+How isolated a plugin runs is **not** a Request, and it is not a declaration
+either. It was one — `isolation = "subprocess"`, read off the file by AST — and
+that put the choice of containment in the hands of the code being contained. An
+agent authoring a plugin could author its own escape from the process boundary
+by leaving a line out. Code does not get a vote on how contained it is.
+
+The replacement is provenance, which a file cannot assert about itself: writing
+into `sandbox_plugins/` is what *makes* something an agent-authored plugin.
+Three trees, three answers (`sandbox/isolation.py`):
+
+| Tree | Isolation | Why |
+|---|---|---|
+| `sandbox_plugins/` | always subprocess | agent-authored; this is what the boundary is for, and it is what buys free authorship above |
+| `plugins/` | always in-process | first-party kernel code, trusted by definition; a pipe would buy nothing and cost every call |
+| `installed_plugins/` | subprocess **iff** it imports something unmediated | a store package that is pure computation over the SDK is as inspectable as kernel code |
+| anything else | subprocess | unknown provenance fails closed |
+
+"Unmediated" is **computed, not declared** — for exactly the same reason the
+tree is. `dependencies_pip` is a declaration and would reintroduce the bug one
+level down, so the answer comes from the validator's import walk
+(`report.unmediated`): foreign libraries, plus the stdlib modules that do their
+own path I/O (`sqlite3`, `zipfile`, `tarfile`). Declaring no dependencies while
+importing `fitz` still gets you a subprocess.
+
+A file that still declares `isolation` gets an advisory note saying it is
+ignored, and the value is dropped rather than carried — a stale declaration
+that reads as authoritative is how this became a vulnerability in the first
+place.
+
+**Boxes cannot be used to escape this.** Files group into a shared box by
+declaring `box = "name"`, and a box takes the tightest isolation any member
+asked for. The worry is a `sandbox_plugins` file naming the kernel's box to
+ride in-process beside it; it cannot, because isolation is computed per file
+from that file's own path *before* any grouping, and tightest-wins can only
+ever tighten from there. The worst a mislabelled file achieves is dragging its
+box into a subprocess it did not need — a performance mistake, not an
+escalation.
+
+A user-facing override (a config allowlist) is planned. That is a different
+thing and stays a different thing: a person may decide what the code may not.
+
+---
+
 ## 1. Filesystem
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
 | `fs.read(path)` | File contents as text | path | safe, except protected files |
-| `fs.write(path, data, mode)` | Create, overwrite, or append text | path | safe in scratch/memory/sandbox, else unsafe |
+| `fs.write(path, data, mode)` | Create, overwrite, or append text | path | safe in scratch and the agent's plugin tree, else unsafe |
 | `fs.read_bytes(path)` | File contents as raw bytes | path | safe, except protected files |
-| `fs.write_bytes(path, data, mode)` | Create, overwrite, or append bytes | path | safe in scratch/memory/sandbox, else unsafe |
+| `fs.write_bytes(path, data, mode)` | Create, overwrite, or append bytes | path | safe in scratch and the agent's plugin tree, else unsafe |
 | `fs.list(path, pattern)` | Directory listing, glob, stat | path | safe |
 | `fs.search(pattern, root)` | Content search across a tree | root path | safe; protected files skipped |
 | `fs.delete(path)` | Remove a file or tree | path | unsafe |
@@ -67,6 +112,24 @@ Reuse that pattern wherever a Request would be too noisy to write by hand.
 
 `fs.temp` exists so that "I need somewhere to put this" never requires a policy
 decision. Scratch space is granted, not requested by path.
+
+**The agent writes its own plugins freely.** Every path under
+`sandbox_plugins/` is writable, deletable and movable without a dialog, and
+that grant is the return on the whole boundary. Code in that tree runs in a
+subprocess — not because it asked, but because of where it is (see
+*Isolation*) — so it is contained before it ever runs. Approving each edit
+would buy nothing containment has not already bought, while costing the thing
+that makes an authoring agent worth having: writing a plugin is a dozen edits,
+and a dialog on each is a dozen interruptions to approve something that cannot
+act unmediated anyway.
+
+Be precise about what this does *not* grant, because it is the LibOS
+invariant exactly. Writing a file changes what the system can **ask**. It does
+not change what it may **affect**: the new plugin's own Requests are classified
+like anybody else's, and it inherits no authority from having been written
+without a dialog. Free authorship, unchanged authorization. The grant is also
+scoped to that one tree — writing into `plugins/` or anywhere else is unsafe as
+before, because containment does not apply there.
 
 `fs.search` is derivable from `fs.list` + `fs.read`, and is a separate Request
 anyway: doing it by hand costs one round trip per file.

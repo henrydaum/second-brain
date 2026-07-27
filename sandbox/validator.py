@@ -88,8 +88,8 @@ PURE_MODULES = {
 #
 # Anything here has to be installed wherever guest code runs, which for a
 # container means shipping it in the image. That is the cost of the list, and
-# it is why the list is short and stays short: a plugin wanting something
-# heavier should declare ``isolation = "subprocess"`` and take the disclaimer.
+# it is why the list is short and stays short: anything heavier counts as
+# unmediated, which takes the disclaimer and a process boundary with it.
 SDK_PACKAGES = {
     "croniter": "parsing and stepping cron expressions",
     "cron_descriptor": "describing cron expressions in English",
@@ -234,12 +234,11 @@ CEILINGS = {"load_timeout": 600.0, "timeout": 600.0, "max_calls": 25,
 # Declarations the kernel reads without importing, so they must be literals.
 LITERAL_LISTS = ("dependencies_files", "dependencies_pip",
                  "requires_services", "requests", "exports")
-LITERAL_STRINGS = ("name", "box", "isolation", "lifetime")
+LITERAL_STRINGS = ("name", "box", "lifetime")
 
 # Closed vocabularies. A typo here is silent otherwise: an unrecognised
-# isolation reads as "unset" and the file quietly gets the default.
-ENUMS = {"isolation": {"", "in_process", "subprocess"},
-         "lifetime": {"", "ephemeral", "persistent"}}
+# lifetime reads as "unset" and the file quietly gets the default.
+ENUMS = {"lifetime": {"", "ephemeral", "persistent"}}
 
 
 @dataclass(frozen=True)
@@ -268,6 +267,14 @@ class Report:
     findings: tuple = field(default_factory=tuple)
     source: str = ""
     declarations: dict = field(default_factory=dict)
+    # Imports the validator cannot see inside — foreign libraries, and stdlib
+    # modules that do their own path I/O. This is what decides whether an
+    # installed package needs a process boundary (``sandbox/isolation.py``),
+    # so it is carried as a set rather than inferred from warning text.
+    #
+    # A syntax error yields an empty set, which is safe only because a file
+    # that does not parse never runs at all.
+    unmediated: frozenset = frozenset()
 
     @property
     def ok(self) -> bool:
@@ -311,6 +318,12 @@ class _Walker(ast.NodeVisitor):
     def __init__(self):
         self.findings: list[Finding] = []
         self.classes: list[ast.ClassDef] = []
+        # Modules whose behaviour the validator cannot see inside: foreign
+        # libraries, and the stdlib modules that do their own path I/O. Kept
+        # as data rather than left implicit in the warning text, because
+        # isolation is decided from it — a security decision should not be
+        # made by matching on a human-readable string.
+        self.unmediated: set[str] = set()
 
     def add(self, level, node, message, fix=""):
         """Record a finding."""
@@ -329,9 +342,10 @@ class _Walker(ast.NodeVisitor):
         if key in SDK_PACKAGES:
             return
         if key in UNMEDIATED_STDLIB:
+            self.unmediated.add(key)
             self.add(WARNING, node,
                      f"imports {name!r}, which {UNMEDIATED_STDLIB[key]} and so "
-                     f"cannot be mediated - run this plugin in a subprocess")
+                     f"cannot be mediated - this plugin runs in a subprocess")
             return
         if key in EFFECT_MODULES:
             self.add(ERROR, node, f"imports {name!r}, which reaches the "
@@ -342,10 +356,11 @@ class _Walker(ast.NodeVisitor):
                      f"imports {name!r}, which lives on the kernel side of "
                      f"the boundary", "a Request for whatever it needed")
             return
+        self.unmediated.add(key)
         self.add(WARNING, node,
                  f"imports {name!r}, a foreign library. Its actions cannot be "
-                 f"turned into Requests, so they are not mediated - run this "
-                 f"plugin in a subprocess")
+                 f"turned into Requests, so they are not mediated - this "
+                 f"plugin runs in a subprocess")
 
     def visit_Import(self, node):
         """import x"""
@@ -748,7 +763,11 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
                            f"{ceiling:g} and will be clamped")
 
 
-DECLARATION_KEYS = ("name", "box", "isolation", "lifetime", "timeout",
+# ``isolation`` is deliberately absent. It was here, and it made the code
+# being contained the authority on its own containment — see
+# ``sandbox/isolation.py``. The kernel now derives it from the file's tree, so
+# reading it off the file would at best be ignored and at worst be believed.
+DECLARATION_KEYS = ("name", "box", "lifetime", "timeout",
                     "memory_mb", "requests", "exports", "dependencies_files",
                     "dependencies_pip", "requires_services", "max_calls",
                     "background_safe", "agent_prompt", "hooks",
@@ -817,6 +836,23 @@ def _collect_declarations(tree, walker: _Walker, filename: str) -> dict:
             if value is not None:
                 declared[key] = value
 
+    # ``isolation`` is dropped rather than merely unused. Everything literal
+    # gets collected here, not just the documented keys, so leaving it in
+    # would put a value nothing honours within reach of anything that later
+    # goes looking — and a stale declaration that reads as authoritative is
+    # how this became a vulnerability in the first place. The author is told
+    # once, at the line, rather than left to wonder why it does nothing.
+    for scope in scopes:
+        if (node := scope.get("isolation")) is not None:
+            walker.add(NOTE, node,
+                       "declares 'isolation', which is ignored",
+                       "the kernel decides this from the plugin's tree: "
+                       "sandbox_plugins is always subprocessed, plugins/ "
+                       "always in-process, installed_plugins by whether it "
+                       "imports a foreign library")
+            break
+    declared.pop("isolation", None)
+
     declared.setdefault("name", Path(filename).stem)
     return declared
 
@@ -842,7 +878,8 @@ def validate(source: str, *, filename: str = "<plugin>",
         tuple(sorted(walker.findings,
                      key=lambda f: (f.level != ERROR, f.line))),
         source,
-        _collect_declarations(tree, walker, filename))
+        _collect_declarations(tree, walker, filename),
+        frozenset(walker.unmediated))
 
 
 def validate_file(path, known_names=()) -> Report:

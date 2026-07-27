@@ -60,7 +60,10 @@ class BasePlugin:
     # ── execution ──────────────────────────────────────────────────
     # All intent. The kernel resolves and clamps; see guest.box.
     box: str = ""             # "" means a box of its own
-    isolation: str = ""       # "" means the kernel's default
+    # No ``isolation`` here, deliberately. How isolated a plugin runs is
+    # decided by the kernel from which tree the file lives in
+    # (``sandbox/isolation.py``) — a guest class asserting its own containment
+    # is the thing that vulnerability was.
     lifetime: str = ""        # "" means ephemeral
     timeout: float = 0.0      # 0 means the kernel's default
     memory_mb: int = 0
@@ -124,7 +127,7 @@ class BasePlugin:
     def membership(cls, source: str) -> Membership:
         """This plugin's declared wishes about its execution context."""
         return Membership(
-            source=source, box=cls.box, isolation=cls.isolation,
+            source=source, box=cls.box,
             lifetime=cls.lifetime, timeout=cls.timeout,
             memory_mb=cls.memory_mb)
 
@@ -144,7 +147,7 @@ class BasePlugin:
             "requires_services": list(cls.requires_services),
             "requests": list(cls.requests),
             "subscribed_channels": list(cls.subscribed_channels),
-            "box": cls.box, "isolation": cls.isolation,
+            "box": cls.box,
             "lifetime": cls.lifetime, "timeout": cls.timeout,
             "memory_mb": cls.memory_mb,
         }

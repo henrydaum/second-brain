@@ -8,7 +8,6 @@ class ReplFrontend(BaseFrontend):
 
     name = "repl"
     description = "Terminal frontend backed by the conversation state machine."
-    isolation = "subprocess"
     uses_console = True
     background_submit = True
     restore_on_start = True

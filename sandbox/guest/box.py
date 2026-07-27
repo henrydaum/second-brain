@@ -16,8 +16,14 @@ attribute access into an IPC round trip and make ordinary code unwritable.
 
 **Membership.** A file declares ``box = "name"`` (module level, or as a class
 attribute on a plugin). Undeclared files get a box of their own, named after
-the file — so the default is maximum isolation and grouping is a deliberate
-act.
+the file — so grouping is a deliberate act rather than something a file drifts
+into. Box names are qualified by tree before they reach here, so joining a box
+can never mean joining a *more trusted* one.
+
+**Isolation is not declared.** How isolated a box runs is decided by the host
+from where its files live, and arrives here already resolved; a file saying
+``isolation = "subprocess"`` is ignored. The grouping rule below still applies
+to it, because a box with a subprocess member is a subprocess box.
 
 **Lifetime.** An ephemeral box is torn down when its work finishes; a
 persistent one stays open and keeps its state, which is what a loaded service
@@ -50,13 +56,19 @@ DEFAULT_LIFETIME = EPHEMERAL
 
 @dataclass(frozen=True)
 class Membership:
-    """One file's declared wishes about the box it runs in.
+    """One file's place in a box.
 
-    Every field is *intent*. The kernel resolves and clamps; nothing here
-    grants anything.
+    Every field but one is *intent*: the file asks, the kernel resolves and
+    clamps, and nothing here grants anything.
+
+    ``isolation`` is the exception, and it is not declared at all — the host
+    fills it in from the file's tree before resolution (see
+    ``sandbox/isolation.py``). It was a declaration, which made the code being
+    contained the authority on its own containment.
     """
     source: str
     box: str = ""
+    #: Filled in by the host from provenance. Never read off the file.
     isolation: str = ""
     lifetime: str = ""
     timeout: float = 0.0

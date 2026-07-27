@@ -201,8 +201,8 @@ parser:
 3. signature `(path, config, services)` → `(sdk, path, config)`
 4. `open(path)` → `sdk.fs.read(path)`; `services["x"].m()` →
    `sdk.services.call("x", "m")`; `logger.*` → `sdk.log`
-5. drop `pathlib`; declare `dependencies_pip` for the heavy library and
-   `isolation = "subprocess"`
+5. drop `pathlib`; declare `dependencies_pip` for the heavy library (isolation
+   is not declared — the kernel subprocesses it because it sees the import)
 
 Run `sandbox.validator.validate_file` on each: `conforms.` means it will load
 in a box. Nothing shims the old paths — the files have to move anyway.
@@ -386,11 +386,33 @@ with `sandbox/` as its cwd.
 
 **Boxes.** A box is one execution context: one process, one memory space, one
 lifetime. Files in the same box import each other; files in different boxes
-cannot reach each other at all — the only way across is a Request. Declaring
-nothing gets an ephemeral in-process box of your own. Services and frontends
-are persistent (loaded once, called into, serialized one call at a time).
-Persistence is resolved *before* code runs, so nothing can drift into it by
-refusing to finish — that is a hang, and it times out.
+cannot reach each other at all — the only way across is a Request. Services and
+frontends are persistent (loaded once, called into, serialized one call at a
+time). Persistence is resolved *before* code runs, so nothing can drift into it
+by refusing to finish — that is a hang, and it times out.
+
+**Isolation is provenance, not declaration** (`sandbox/isolation.py`). It was
+`isolation = "subprocess"`, an AST-read declaration — which made the code being
+contained the authority on its own containment, so an agent authoring a plugin
+could author its own escape by leaving a line out. The tree decides instead,
+because a file cannot assert which tree it is in: `sandbox_plugins/` is always
+subprocessed, `plugins/` is always in-process, and `installed_plugins/` is
+subprocessed exactly when the validator sees an import it cannot mediate —
+computed from the AST (`report.unmediated`), never from `dependencies_pip`,
+which would be the same bug one level down. Unknown paths fail closed. A file
+still declaring `isolation` gets an advisory note and the value is dropped.
+Box grouping cannot be used to escape it: isolation is resolved per file before
+grouping, and tightest-wins only ever tightens. A user-facing override
+(config allowlist) is planned and is a different thing — a person may decide
+what the code may not.
+
+**That boundary is what buys free authorship.** The agent reads, writes, edits
+and deletes anywhere under `sandbox_plugins/` with no approval, because
+everything there is contained before it runs. This is the LibOS invariant
+rather than an exception to it: writing a file changes what the system can
+*ask*, not what it may *affect* — the new plugin's Requests are classified like
+anybody else's, and it inherits nothing from having been written without a
+dialog. The grant stops at that tree.
 
 **Ending code is the kernel's decision**, escalating ask → starve → kill.
 Starvation only reaches code that propagates failures; killing reaches the

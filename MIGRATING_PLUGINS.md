@@ -116,7 +116,6 @@ Only if the defaults are wrong:
 
 ```python
 box = "gmail"                 # share a process with helper files
-isolation = "subprocess"      # this one imports a foreign library
 timeout = 120                 # clamped by the kernel; ask freely
 requests = ["fs.read"]        # advisory, shown at install time
 exports = ["embed"]           # services: what service.call may reach
@@ -201,9 +200,10 @@ path, not to test it.
 ### Everything gets migrated
 
 Including plugins that drive foreign libraries. A library cannot be reduced to
-Requests, so a plugin importing one **loads with a disclaimer** and should
-declare `isolation = "subprocess"`. That is the answer the security contract
-already gives; it is not a reason to leave anything behind.
+Requests, so a plugin importing one **loads with a disclaimer** and is run in a
+subprocess automatically — the kernel sees the import and decides. That is the
+answer the security contract already gives; it is not a reason to leave
+anything behind.
 
 One family needs a moment's thought, not an exemption:
 

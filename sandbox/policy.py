@@ -130,6 +130,9 @@ def _scratch_roots() -> list:
     environment, so this agrees with where the kernel actually keeps things.
     Falls back to the system temp directory when the kernel is absent, which
     is the case in tests and in a bare container.
+
+    ``sandbox_plugins`` is here for a different reason than the rest, and it
+    is the point of the whole boundary — see :func:`_authoring_root`.
     """
     import tempfile
 
@@ -139,7 +142,48 @@ def _scratch_roots() -> list:
         roots.extend([Path(SCRATCH_DIR), Path(ATTACHMENT_CACHE)])
     except Exception:
         pass
+    if (authoring := _authoring_root()) is not None:
+        roots.append(authoring)
     return [r for r in roots if r]
+
+
+def _authoring_root():
+    """The tree an agent may write code into freely, or None.
+
+    This is what the process boundary is *for*. Every file under
+    ``sandbox_plugins`` runs in a subprocess — not because it asked to, but
+    because of where it is (``sandbox/isolation.py``) — so code the agent
+    writes there is contained before it ever runs. Asking a human to approve
+    each edit would buy nothing that containment has not already bought, and
+    would cost the thing that makes an authoring agent useful: writing a
+    plugin is a dozen edits, and a dialog on each is a dozen interruptions to
+    approve something that cannot act unmediated anyway.
+
+    What this does *not* grant is worth being precise about, because it is the
+    LibOS invariant exactly. Writing a file changes what the system can *ask*.
+    It does not change what it may *affect*: the new plugin's own Requests are
+    classified like anything else's, and it inherits no authority from having
+    been written without a dialog. Free authorship, unchanged authorization.
+    """
+    try:
+        from paths import SANDBOX_PLUGINS
+        return Path(SANDBOX_PLUGINS)
+    except Exception:
+        return None
+
+
+def _write_reason(path, verb: str = "write") -> str:
+    """Why an allowed write was allowed — scratch, or code authoring.
+
+    Two different grants land in the same branch and the ledger should not
+    have to guess which: one is "somewhere to put a temporary file", the other
+    is "the agent is writing a plugin", and only the second is interesting
+    when reading back what happened overnight.
+    """
+    root = _authoring_root()
+    if root is not None and _within(path, [root]):
+        return f"{verb} in the agent's own plugin tree"
+    return f"{verb} in scratch"
 
 
 def _within(path, roots) -> bool:
@@ -301,7 +345,7 @@ def classify(request: Request, chain: Chain) -> Decision:
     # the rule.
     if kind in (FS_WRITE, R.FS_WRITE_BYTES):
         if _within(args.get("path"), _scratch_roots()):
-            return Decision(SAFE, "write to scratch")
+            return Decision(SAFE, _write_reason(args.get("path")))
         return Decision(UNSAFE, f"write to {args.get('path')}")
 
     if kind == FS_MOVE:
@@ -313,7 +357,8 @@ def classify(request: Request, chain: Chain) -> Decision:
 
     if kind == FS_DELETE:
         if _within(args.get("path"), _scratch_roots()):
-            return Decision(SAFE, "delete from scratch")
+            return Decision(SAFE, _write_reason(args.get("path"),
+                                                verb="delete"))
         return Decision(UNSAFE, f"delete {args.get('path')}")
 
     if kind == FS_TEMP:

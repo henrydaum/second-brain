@@ -485,7 +485,6 @@ called. Copy `templates/llm_backend_template.py` rather than starting blank.
 
 ```python
 dependencies_pip = ["some-provider-sdk"]
-isolation = "subprocess"
 lifetime = "persistent"
 supports_streaming = True
 supports_tool_choice = True
@@ -614,7 +613,6 @@ class Indexer(BaseTool):
     parameters = {...}         # JSON schema for the arguments
 
     box = "search"             # share a process with helper files
-    isolation = "subprocess"   # needed if you import a foreign library
     timeout = 120              # seconds; the kernel clamps it
     memory_mb = 512            # subprocess only, POSIX only
     requests = ["fs.read", "db.query"]   # what you may do; see below
@@ -733,9 +731,10 @@ checked cannot execute anything.
 | `eval`, `exec`, `__import__` | build the value directly |
 
 Importing a third-party library that isn't vouched for is **not** an error —
-it loads with a disclaimer, and you should declare
-`isolation = "subprocess"`, because that library's actions cannot be mediated.
-Everything can be written this way; nothing is off-limits for needing one.
+it loads with a disclaimer, and the kernel puts it in a subprocess, because
+that library's actions cannot be mediated. You do not ask for this and cannot
+decline it: **isolation is not something code declares.** Everything can be
+written this way; nothing is off-limits for needing one.
 
 A few stdlib modules get the same treatment for the same reason: `sqlite3`,
 `zipfile` and `tarfile` open a file *you* name and do their own I/O. Reading a

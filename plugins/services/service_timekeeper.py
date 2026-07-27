@@ -26,7 +26,6 @@ class TimekeeperService(BaseService):
     name = "timekeeper"
     description = "Persist schedules and emit their events when due."
     shared = True
-    isolation = "subprocess"
     poll_interval = 1.0
     max_poll_failures = 5
     dependencies_pip = ["croniter", "cron-descriptor"]

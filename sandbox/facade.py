@@ -36,6 +36,7 @@ from pathlib import Path
 from .approval import build_approver
 from .boxes import DEFAULT_START_TIMEOUT, BoxError, PersistentBox, open_box
 from .guest.box import PERSISTENT, SUBPROCESS, Membership, resolve
+from .isolation import required_isolation
 from .guest.loader import load_entry, unload_box
 from .guest.requests import Result
 from .interpreter import Execution, Interpreter
@@ -154,10 +155,14 @@ class Sandbox:
         """
         report = validate_file(source)
         declared = report.declarations
+        # Isolation is the one field the file does not get a vote on: it comes
+        # from which tree the file lives in, which is not something the file
+        # can assert. Everything else here is still declared intent, resolved
+        # and clamped downstream.
         membership = Membership(
             source=Path(source).stem,
             box=str(declared.get("box") or ""),
-            isolation=str(declared.get("isolation") or ""),
+            isolation=required_isolation(source, report),
             lifetime=str(declared.get("lifetime") or ""),
             timeout=float(declared.get("timeout") or 0),
             memory_mb=int(declared.get("memory_mb") or 0),

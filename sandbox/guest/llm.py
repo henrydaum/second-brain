@@ -293,7 +293,10 @@ class BaseLLMBackend:
         supports_tool_choice = True
         display_name = "LiteLLM"
         dependencies_pip = ["litellm"]
-        isolation = "subprocess"
+
+    Isolation is not among them. A backend importing a provider library is
+    subprocessed because the kernel can see that import, not because the file
+    asked — see ``sandbox/isolation.py``.
     """
 
     def start(self, sdk):

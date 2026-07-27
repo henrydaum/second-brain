@@ -212,7 +212,12 @@ def test_turn_finish_observes_the_outcome(tmp_path, box, runtime, registry,
     service = _service(tmp_path, runtime)
     registry.finish_turn(session, TurnOutcome(ok=False, cancelled=True,
                                               final_text="partial"), runtime)
-    assert ("turn_finish", False, True, "partial") in service.seen()
+    # Compared element-wise, not as a tuple: what the guest appended crosses
+    # as plain data, and a tuple comes back a list. The sibling tests unpack
+    # for the same reason — an assertion that only holds in-process would
+    # quietly stop testing the isolated path.
+    assert [list(row) for row in service.seen()] == [
+        ["turn_finish", False, True, "partial"]]
     service.unload()
 
 

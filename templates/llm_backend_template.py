@@ -37,8 +37,11 @@ connection pool, a tokenizer.
 dependencies_pip = ["some-provider-sdk"]
 
 # Backends are the strongest case for isolation in the whole system: foreign
-# code, a network socket, and an API key, all at once. Take the subprocess.
-isolation = "subprocess"
+# code, a network socket, and an API key, all at once — and they get it without
+# asking. Isolation is not declared: the kernel decides it from where the file
+# lives, and an installed package importing a provider SDK is subprocessed
+# because the validator can see that import. Code does not get a say in how
+# contained it is.
 
 # Loading a provider library is expensive and must happen once, not per call.
 lifetime = "persistent"
