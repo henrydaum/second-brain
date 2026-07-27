@@ -207,7 +207,7 @@ sdk.session.add_prompt(text) / remove_prompt(handle)
 ```python
 sdk.tools.list()
 sdk.tools.call(name, **kwargs)
-sdk.commands.list()
+sdk.commands.list(details=False, visible=False)
 sdk.commands.run(name, **args)
 sdk.services.list()
 sdk.services.call(name, method, **kwargs)   # only exported methods

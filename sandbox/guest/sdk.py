@@ -353,9 +353,9 @@ class _Tools(_Namespace):
 class _Commands(_Namespace):
     """Running slash commands."""
 
-    def list(self):
-        """Registered slash commands."""
-        return self._ask(COMMAND_LIST)
+    def list(self, details: bool = False, visible: bool = False):
+        """Registered commands, optionally with metadata and session filtering."""
+        return self._ask(COMMAND_LIST, details=details, visible=visible)
 
     def run(self, name: str, **args):
         """Run a slash command in one shot."""

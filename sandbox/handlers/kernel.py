@@ -684,7 +684,40 @@ def _command_list(ctx, args: dict) -> Result:
     registry = getattr(ctx, "command_registry", None)
     if (bad := _need(registry, "the command registry")) is not None:
         return bad
-    return Result(data=sorted(getattr(registry, "commands", None) or {}))
+    registered = (
+        getattr(registry, "commands", None)
+        or getattr(registry, "_commands", None)
+        or {}
+    )
+    if not args.get("details"):
+        return Result(data=sorted(registered))
+
+    predicate = None
+    if args.get("visible"):
+        from plugins.frontends.helpers.command_registry import (
+            frontend_command_filter,
+        )
+
+        runtime = _runtime(ctx)
+        session = (getattr(runtime, "sessions", None) or {}).get(
+            getattr(ctx, "session_key", None)
+        )
+        frontend = getattr(session, "frontend_name", None)
+        predicate = frontend_command_filter(
+            getattr(ctx, "config", None), frontend
+        )
+
+    commands = registry.visible_commands(predicate)
+    form_context = registry.context(None)
+    return Result(data=[{
+        "name": command.name,
+        "description": command.description,
+        "category": command.category or "Other",
+        "form": [{
+            "name": step.name,
+            "required": bool(step.required),
+        } for step in command.form({}, form_context)],
+    } for command in commands])
 
 
 def _command_call(ctx, args: dict) -> Result:
