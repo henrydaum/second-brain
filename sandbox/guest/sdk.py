@@ -315,10 +315,12 @@ class _Config(_Namespace):
         *,
         present: bool = False,
         keys: bool = False,
+        details: bool = False,
     ):
-        """Read a setting, test presence, or return mapping keys."""
+        """Read a setting, test presence, list keys, or inspect descriptors."""
         return self._ask(
-            CONFIG_READ, key=key or None, present=present, keys=keys)
+            CONFIG_READ, key=key or None, present=present, keys=keys,
+            details=details)
 
     def write(
         self,

@@ -173,6 +173,7 @@ sdk.conv.clear(conversation_id=None) # defaults to the active conversation
 sdk.conv.delete(conversation_id)
 
 sdk.config.read(key)           # omit key for everything
+sdk.config.read(details=True)  # visible, redacted setting descriptors
 sdk.config.write(key, value)
 sdk.paths.get(name)            # project, data, installed_plugins, sandbox_plugins
 sdk.users.read(user_id=None)   # defaults to the current user

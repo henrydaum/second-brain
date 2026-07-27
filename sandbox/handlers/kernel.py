@@ -685,6 +685,70 @@ def _config_read(ctx, args: dict) -> Result:
     """Read a setting, redacting credentials into handles."""
     config = getattr(ctx, "config", None) or {}
     key = args.get("key")
+    if args.get("details"):
+        try:
+            from config.config_data import SETTINGS_DATA
+            from plugins.plugin_discovery import (
+                get_plugin_setting_scope,
+                get_plugin_settings,
+                get_setting_plugin_names,
+            )
+
+            plugin_entries = list(get_plugin_settings())
+            plugin_keys = {entry[1] for entry in plugin_entries}
+            items = []
+            for entry in [*SETTINGS_DATA, *plugin_entries]:
+                if (
+                    not isinstance(entry, (list, tuple))
+                    or len(entry) != 5
+                ):
+                    continue
+                title, name, description, default, raw_info = entry
+                info = raw_info if isinstance(raw_info, dict) else {}
+                if info.get("hidden") is True or (key and name != key):
+                    continue
+                scope = (
+                    "user"
+                    if info.get("scope") == "user"
+                    or (
+                        name in plugin_keys
+                        and get_plugin_setting_scope(name) == "user"
+                    )
+                    else "global"
+                )
+                owners = list(get_setting_plugin_names(name) or [])
+                category = (
+                    "user" if scope == "user"
+                    else "plugin" if name in plugin_keys
+                    else "kernel"
+                )
+                items.append({
+                    "title": title,
+                    "key": name,
+                    "description": description,
+                    "default": default,
+                    "info": info,
+                    "scope": scope,
+                    "category": category,
+                    "storage": {
+                        "kernel": "config.json",
+                        "plugin": "plugin_config.json",
+                        "user": "per-user",
+                    }[category],
+                    "owners": owners,
+                    "current": redact(
+                        name, _config_value(ctx, name, entry), guess=True),
+                    "restart_required": False,
+                })
+            # Plugin discovery already tracks the declaring family. Use its
+            # public query rather than exposing plugin objects to the guest.
+            from plugins.plugin_discovery import get_plugin_setting_type
+            for item in items:
+                item["restart_required"] = (
+                    get_plugin_setting_type(item["key"]) == "frontend")
+            return Result(data=sorted(items, key=lambda item: item["key"]))
+        except Exception as exc:
+            return Result.failure(f"config details failed: {exc}")
     if args.get("present"):
         return Result(data=bool(config.get(key))) if key else Result(
             data=bool(config))
@@ -760,6 +824,7 @@ def _config_write(ctx, args: dict) -> Result:
             ):
                 runtime.refresh_session_specs()
             return Result(data=True)
+        old = config.get(key)
         config[key] = value
         config_manager.save(config)
         if key in plugin_keys or args.get("scope") == "plugin":
@@ -783,6 +848,18 @@ def _config_write(ctx, args: dict) -> Result:
                 pass
         if runtime is not None and hasattr(runtime, "refresh_session_specs"):
             runtime.refresh_session_specs()
+        if (
+            value != old
+            and key in {
+                "sync_directories", "ignored_extensions",
+                "ignored_folders", "skip_hidden_folders",
+            }
+        ):
+            watcher = getattr(
+                getattr(ctx, "orchestrator", None), "watcher", None)
+            rescan = getattr(watcher, "rescan", None)
+            if rescan is not None:
+                rescan()
         return Result(data=True)
     except Exception as exc:
         return Result.failure(f"config write failed: {exc}")

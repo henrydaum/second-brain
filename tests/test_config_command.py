@@ -1,188 +1,218 @@
-"""Tests for the /config drill-down gate: settings browse by category (kernel /
-plugin / user / all), and plugin settings drill down a second level by owning
-plugin. One-shot ``/config <setting>`` keeps working because the category (and
-plugin_name) steps are optional enums the parser can skip.
-"""
+"""Structured config metadata and sandboxed ``/config`` coverage."""
 
 from types import SimpleNamespace
 
-import state_machine  # noqa: F401  (import-order: break the runtime import cycle)
-
-from plugins.commands import command_config as cc
-from plugins.frontends.helpers.command_registry import parse_command_line
-
-_PLUGIN_SETTINGS = [
-    ("Brave Search API Key", "brave_search_api_key", "API key.", "", {"type": "text"}),
-    ("Title Delay (minutes)", "title_delay_minutes", "Delay.", 10,
-     {"type": "slider", "range": (0, 60, 60), "is_float": False}),
-]
-
-# Owning-plugin map for the plugin settings above; title_delay is intentionally
-# shared by two plugins to exercise the double-listing + shared-note paths.
-_OWNERS = {
-    "brave_search_api_key": ["tool_web_search"],
-    "title_delay_minutes": ["service_llm", "service_titler"],
-}
+from plugins import plugin_discovery
+from sandbox import Sandbox
+from sandbox.handlers.kernel import _config_read
 
 
-def _patch_plugins(monkeypatch):
-    monkeypatch.setattr(cc, "get_plugin_settings", lambda: _PLUGIN_SETTINGS)
-    monkeypatch.setattr(cc, "get_plugin_setting_scope", lambda key: "global")
-    monkeypatch.setattr(cc, "get_setting_plugin_names", lambda key: _OWNERS.get(key, []))
+class DemoFrontend:
+    name = "demo_frontend"
+    config_settings = [
+        (
+            "Demo color",
+            "demo_color_config_test",
+            "Controls the demo color.",
+            "blue",
+            {"type": "text"},
+        ),
+        (
+            "Hidden token",
+            "demo_secret_config_test",
+            "Never expose this.",
+            "",
+            {"hidden": True},
+        ),
+    ]
 
 
-def _ctx():
-    return SimpleNamespace(config={}, db=None, user_id=None)
+class SharedService:
+    name = "shared_service"
+    config_settings = [
+        (
+            "Demo color",
+            "demo_color_config_test",
+            "Controls the demo color.",
+            "blue",
+            {"type": "text"},
+        ),
+    ]
 
 
-def _form(args, monkeypatch):
-    _patch_plugins(monkeypatch)
-    return cc.ConfigCommand().form(args, _ctx())
+def _register():
+    plugin_discovery._collect_config_settings(
+        DemoFrontend(), plugin_type="frontend")
+    plugin_discovery._collect_config_settings(
+        SharedService(), service_names=["shared_service"],
+        plugin_type="service")
 
 
-def test_categories_partition_all_settings(monkeypatch):
-    _patch_plugins(monkeypatch)
-
-    assert cc._category_of("stream_responses") == "kernel"
-    assert cc._category_of("brave_search_api_key") == "plugin"
-    assert cc._category_of("skip_permissions") == "user"  # user-scoped core setting
-
-    counts = cc._category_counts()
-    assert counts["plugin"] == 2
-    assert counts["all"] == len(cc._settings())
-    # The three real categories partition every setting; "all" is the total.
-    assert sum(counts[c] for c in cc._REAL_CATEGORIES) == len(cc._settings())
+def _remove():
+    for key in ("demo_color_config_test", "demo_secret_config_test"):
+        plugin_discovery._setting_to_services.pop(key, None)
+        plugin_discovery._setting_to_plugins.pop(key, None)
+        plugin_discovery._plugin_setting_types.pop(key, None)
+        plugin_discovery._plugin_settings_keys.discard(key)
+    plugin_discovery._plugin_settings[:] = [
+        entry for entry in plugin_discovery._plugin_settings
+        if entry[1] not in {
+            "demo_color_config_test", "demo_secret_config_test"}]
 
 
-def test_plugin_groups_group_by_owner(monkeypatch):
-    _patch_plugins(monkeypatch)
-    groups = cc._plugin_groups()
-    assert groups["tool_web_search"] == ["brave_search_api_key"]
-    # Shared setting is listed under each owning plugin.
-    assert "title_delay_minutes" in groups["service_llm"]
-    assert "title_delay_minutes" in groups["service_titler"]
+def _context(monkeypatch):
+    config = {
+        "demo_color_config_test": "red",
+        "stream_responses": True,
+    }
+    saved = {}
+    rescans = []
+    monkeypatch.setattr(
+        "config.config_manager.save", lambda values: saved.update(values))
+    monkeypatch.setattr(
+        "config.config_manager.load_plugin_config", lambda: {})
+    monkeypatch.setattr(
+        "config.config_manager.save_plugin_config",
+        lambda values: saved.update(values),
+    )
+    runtime = SimpleNamespace(
+        config=config, refresh_session_specs=lambda: None)
+    context = SimpleNamespace(
+        config=dict(config),
+        runtime=runtime,
+        db=None,
+        user_id=1,
+        session_key="chat",
+        orchestrator=SimpleNamespace(
+            watcher=SimpleNamespace(rescan=lambda: rescans.append(True))),
+        services={},
+    )
+    return context, saved, rescans
 
 
-def test_form_gates_settings_by_category(monkeypatch):
-    steps = _form({}, monkeypatch)
-    assert steps[0].name == "category"
-    # Required: the category gate is the always-shown default (four buttons) and,
-    # being required, never offers a redundant "skip" (skip == "all").
-    assert steps[0].required is True
-    assert steps[0].enum == ["kernel", "plugin", "user", "all"]
-    assert steps[0].enum_labels == ["Kernel Settings", "Plugin Settings", "User Settings", "All Settings"]
-    assert steps[1].name == "setting_name"
-    assert set(steps[1].enum) == set(cc._settings())  # unfiltered until chosen
-
-    steps = _form({"category": "user"}, monkeypatch)
-    assert steps[1].name == "setting_name"
-    assert "skip_permissions" in steps[1].enum
-    assert "stream_responses" not in steps[1].enum
-
-    steps = _form({"category": "all"}, monkeypatch)
-    assert set(steps[-1].enum) == set(cc._settings())
+def _run(context, args, *, method="run", approve=None):
+    sandbox = Sandbox(context=context, approve=approve)
+    try:
+        return sandbox.run(
+            "plugins/commands/command_config.py",
+            "ConfigCommand",
+            kwargs={"args": args},
+            method=method,
+        )
+    finally:
+        sandbox.shutdown()
 
 
-def test_form_plugin_category_drills_into_plugin_level(monkeypatch):
-    # Choosing plugin inserts an optional plugin_name enum before setting_name.
-    steps = _form({"category": "plugin"}, monkeypatch)
-    assert [s.name for s in steps][:2] == ["category", "plugin_name"]
-    assert steps[1].required is False
-    assert set(steps[1].enum) == {"tool_web_search", "service_llm", "service_titler"}
+def test_config_details_are_structured_redacted_and_hide_private_settings(
+        monkeypatch):
+    _register()
+    context, _, _ = _context(monkeypatch)
+    try:
+        result = _config_read(context, {"details": True})
+    finally:
+        _remove()
 
-    # With a plugin chosen, setting_name is filtered to that plugin's settings.
-    steps = _form({"category": "plugin", "plugin_name": "service_llm"}, monkeypatch)
-    name_step = next(s for s in steps if s.name == "setting_name")
-    assert name_step.enum == ["title_delay_minutes"]
-
-
-def test_quicklink_args_skip_the_category_gate(monkeypatch):
-    steps = _form({"setting_name": "stream_responses"}, monkeypatch)
-    assert [s.name for s in steps][:2] == ["setting_name", "action"]
-
-
-def test_one_shot_requires_category(monkeypatch):
-    # The legacy `/config <setting>` fall-through is gone: a setting is always
-    # reached through its category. `/config kernel stream_responses` works...
-    _patch_plugins(monkeypatch)
-    cmd = cc.ConfigCommand()
-
-    args = parse_command_line("kernel stream_responses", lambda a, c: cmd.form(a, _ctx()))
-
-    assert args["category"] == "kernel"
-    assert args["setting_name"] == "stream_responses"
+    demo = next(
+        item for item in result.data
+        if item["key"] == "demo_color_config_test")
+    assert demo["category"] == "plugin"
+    assert demo["storage"] == "plugin_config.json"
+    assert demo["owners"] == ["demo_frontend", "shared_service"]
+    assert demo["restart_required"] is True
+    assert not any(
+        item["key"] == "demo_secret_config_test" for item in result.data)
 
 
-def test_one_shot_all_category_reaches_any_setting(monkeypatch):
-    # ...and `all` is the explicit escape hatch for any setting, flat.
-    _patch_plugins(monkeypatch)
-    cmd = cc.ConfigCommand()
+def test_config_form_drills_through_category_plugin_and_typed_value(
+        monkeypatch):
+    _register()
+    context, _, _ = _context(monkeypatch)
+    try:
+        initial = _run(context, {}, method="form")
+        plugins = _run(
+            context, {"category": "plugin"}, method="form")
+        chosen = _run(
+            context,
+            {
+                "category": "plugin",
+                "plugin_name": "demo_frontend",
+            },
+            method="form",
+        )
+        edit = _run(
+            context,
+            {
+                "setting_name": "demo_color_config_test",
+                "action": "edit",
+            },
+            method="form",
+        )
+    finally:
+        _remove()
 
-    args = parse_command_line("all max_workers edit 6", lambda a, c: cmd.form(a, _ctx()))
-
-    assert args["category"] == "all"
-    assert args["setting_name"] == "max_workers"
-    assert args["action"] == "edit"
-    assert args["value"] == 6
-
-
-def test_one_shot_category_setting_skips_plugin_level(monkeypatch):
-    # `/config plugin <setting>` (no plugin name) still resolves: plugin_name is
-    # an optional enum the parser skips when the token isn't a known plugin.
-    _patch_plugins(monkeypatch)
-    cmd = cc.ConfigCommand()
-
-    args = parse_command_line("plugin title_delay_minutes", lambda a, c: cmd.form(a, _ctx()))
-
-    assert args["category"] == "plugin"
-    assert args.get("plugin_name") is None
-    assert args["setting_name"] == "title_delay_minutes"
-
-
-def test_one_shot_plugin_drilldown_parses(monkeypatch):
-    # The new canonical plugin path: `/config plugin <plugin> <setting> edit <val>`.
-    _patch_plugins(monkeypatch)
-    cmd = cc.ConfigCommand()
-
-    args = parse_command_line("plugin service_llm title_delay_minutes edit 25",
-                              lambda a, c: cmd.form(a, _ctx()))
-
-    assert args["category"] == "plugin"
-    assert args["plugin_name"] == "service_llm"
-    assert args["setting_name"] == "title_delay_minutes"
-    assert args["action"] == "edit"
-    assert args["value"] == 25
+    assert initial.data[0]["enum"] == [
+        "kernel", "plugin", "user", "all"]
+    assert "demo_frontend" in plugins.data[1]["enum"]
+    assert "shared_service" in plugins.data[1]["enum"]
+    assert chosen.data[-1]["enum"] == ["demo_color_config_test"]
+    assert edit.data[-1]["type"] == "string"
+    assert "Shared setting" in edit.data[-2]["prompt"]
 
 
-def test_list_groups_by_category(monkeypatch):
-    _patch_plugins(monkeypatch)
-    context = SimpleNamespace(config={}, db=None, user_id=None)
+def test_config_lists_categories_and_plugin_groups(monkeypatch):
+    _register()
+    context, _, _ = _context(monkeypatch)
+    try:
+        all_settings = _run(context, {})
+        plugin_settings = _run(context, {"category": "plugin"})
+        selected = _run(
+            context,
+            {"category": "plugin", "plugin_name": "demo_frontend"},
+        )
+    finally:
+        _remove()
 
-    out = cc._list(context)
-    assert "Kernel Settings (config.json):" in out
-    assert "Plugin Settings (plugin_config.json):" in out
-    assert "User Settings (per-user):" in out
-
-    # Plugin category with no plugin chosen groups by owning plugin.
-    out = cc._list(context, "plugin")
-    assert "Kernel Settings" not in out
-    assert "tool_web_search:" in out
-    assert "service_llm:" in out
-    assert "brave_search_api_key" in out
-
-    # Drilled into one plugin.
-    out = cc._list(context, "plugin", "tool_web_search")
-    assert "brave_search_api_key" in out
-    assert "title_delay_minutes" not in out
+    assert "Kernel Settings (config.json):" in all_settings.data
+    assert "Plugin Settings (plugin_config.json):" in all_settings.data
+    assert "User Settings (per-user):" in all_settings.data
+    assert "demo_frontend:" in plugin_settings.data
+    assert "shared_service:" in plugin_settings.data
+    assert selected.data.startswith("demo_frontend:")
 
 
-def test_describe_notes_shared_settings(monkeypatch):
-    _patch_plugins(monkeypatch)
-    context = SimpleNamespace(config={}, db=None, user_id=None)
+def test_config_edit_preserves_output_and_restart_note(monkeypatch):
+    _register()
+    context, saved, _ = _context(monkeypatch)
+    try:
+        result = _run(
+            context,
+            {
+                "setting_name": "demo_color_config_test",
+                "action": "edit",
+                "value": "green",
+            },
+            approve=lambda *_: True,
+        )
+    finally:
+        _remove()
 
-    out = cc._describe(context, "title_delay_minutes")
-    assert "Shared setting" in out
-    assert "service_titler" in out
+    assert result.data == (
+        "Set demo_color_config_test = green. Restart required.")
+    assert saved["demo_color_config_test"] == "green"
 
-    out = cc._describe(context, "brave_search_api_key")
-    assert "Shared setting" not in out
+
+def test_config_write_rescans_watcher_settings(monkeypatch):
+    context, _, rescans = _context(monkeypatch)
+
+    result = _run(
+        context,
+        {
+            "setting_name": "sync_directories",
+            "action": "edit",
+            "value": ["C:\\Notes"],
+        },
+        approve=lambda *_: True,
+    )
+
+    assert result.data == "Set sync_directories = C:\\Notes"
+    assert rescans == [True]

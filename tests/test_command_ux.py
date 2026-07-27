@@ -10,7 +10,6 @@ from events.event_bus import bus
 from events.event_channels import SESSION_CONVERSATION_CHANGED
 from pipeline.database import Database
 from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
-from plugins.commands.helpers.setting_links import quicklink_run, quicklink_value_steps, quicklinks
 from runtime.conversation_runtime import ConversationRuntime
 
 
@@ -61,31 +60,6 @@ def test_queued_ack_hook_suppresses_the_text_ack():
 
 
 # ── Quicklinks ───────────────────────────────────────────────────────
-
-def test_quicklinks_skip_hidden_and_missing_settings():
-    class Tool:
-        config_settings = [
-            ("Visible", "vis_key", "d", 1, {"type": "text"}),
-            ("Hidden", "hid_key", "d", 1, {"hidden": True}),
-        ]
-    values, labels = quicklinks(Tool())
-    assert values == ["edit_setting:vis_key"]
-    assert labels == ["Edit Visible"]
-    assert quicklinks(None) == ([], [])
-    assert quicklink_run("call", {}, None) is None
-    assert quicklink_value_steps("call", None) == []
-
-
-def test_quicklink_value_step_and_run_route_to_config(monkeypatch):
-    steps = quicklink_value_steps("edit_setting:data_retention_days", None)
-    assert len(steps) == 1 and steps[0].name == "value"
-
-    monkeypatch.setattr("config.config_manager.save", lambda cfg: None)
-    context = SimpleNamespace(config={"data_retention_days": 0}, db=None, user_id=1, runtime=None)
-    out = quicklink_run("edit_setting:data_retention_days", {"value": "30"}, context)
-    assert out == "Set data_retention_days = 30"
-    assert context.config["data_retention_days"] == 30
-
 
 # ── Used-by map ──────────────────────────────────────────────────────
 
