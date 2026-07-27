@@ -34,7 +34,9 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               FRONTEND_SUBMIT, LEDGER_READ, LEDGER_RECORD,
                               PARSE_FILE, PARSE_MODALITY, PATH_GET, PLUGIN_DESCRIBE,
                               PLUGIN_INSTALL, PLUGIN_LIST, PLUGIN_UNINSTALL,
-                              PLUGIN_UPDATE, SERVICE_CALL, SERVICE_LIST,
+                              PLUGIN_REGISTER, PLUGIN_RELOAD,
+                              PLUGIN_UNREGISTER, PLUGIN_UPDATE,
+                              SERVICE_CALL, SERVICE_LIST,
                               SERVICE_LOAD, SERVICE_UNLOAD,
                               SESSION_ADD_PROMPT, SESSION_ADD_TOOL,
                               SESSION_CANCEL, SESSION_GET, SESSION_LIST,
@@ -1151,6 +1153,80 @@ def _plugin_describe(ctx, args: dict) -> Result:
     return Result.failure(f"no plugin named {name!r}")
 
 
+def _plugin_watcher(ctx):
+    """The kernel coordinator shared by filesystem and SDK changes."""
+    runtime = _runtime(ctx)
+    return getattr(runtime, "plugin_watcher", None)
+
+
+def _plugin_target(ctx, args: dict):
+    """Resolve and validate one requested plugin source path."""
+    watcher = _plugin_watcher(ctx)
+    if watcher is None:
+        return None, Result.failure("the plugin watcher is not available")
+    raw_path = args.get("path") or ""
+    if raw_path:
+        from plugins.helpers.plugin_paths import plugin_info, resolve_plugin_path
+
+        path, error = resolve_plugin_path(raw_path)
+        if error:
+            return None, Result.failure(error)
+        _info, error = plugin_info(path)
+        if error:
+            return None, Result.failure(error)
+        return path, None
+    name = args.get("name") or ""
+    if not name:
+        return None, Result.failure("path or name is required")
+    path, error = watcher.resolve_registered(
+        name,
+        args.get("family") or "",
+    )
+    if error:
+        return None, Result.failure(error)
+    return path, None
+
+
+def _plugin_register(ctx, args: dict) -> Result:
+    """Load one path through the kernel plugin coordinator."""
+    watcher = _plugin_watcher(ctx)
+    if watcher is None:
+        return Result.failure("the plugin watcher is not available")
+    path, failure = _plugin_target(ctx, args)
+    if failure is not None:
+        return failure
+    outcome = watcher.register(path)
+    if not outcome.get("ok"):
+        return Result.failure(outcome.get("error") or "plugin registration failed")
+    return Result(data=outcome)
+
+
+def _plugin_unregister(ctx, args: dict) -> Result:
+    """Unload one path through the kernel plugin coordinator."""
+    watcher = _plugin_watcher(ctx)
+    path, failure = _plugin_target(ctx, args)
+    if failure is not None:
+        return failure
+    outcome = watcher.unregister(path)
+    if not outcome.get("ok"):
+        return Result.failure(
+            outcome.get("error") or "plugin unregistration failed"
+        )
+    return Result(data=outcome)
+
+
+def _plugin_reload(ctx, args: dict) -> Result:
+    """Reload one path through the kernel plugin coordinator."""
+    watcher = _plugin_watcher(ctx)
+    path, failure = _plugin_target(ctx, args)
+    if failure is not None:
+        return failure
+    outcome = watcher.reload(path)
+    if not outcome.get("ok"):
+        return Result.failure(outcome.get("error") or "plugin reload failed")
+    return Result(data=outcome)
+
+
 def _service_list(ctx, args: dict) -> Result:
     """Loaded services and whether each is ready."""
     services = getattr(ctx, "services", None) or {}
@@ -2095,6 +2171,8 @@ HANDLERS = {
     PATH_GET: _path_get,
     USER_READ: _user_read, USER_LIST: _user_list, USER_WRITE: _user_write,
     PLUGIN_LIST: _plugin_list, PLUGIN_DESCRIBE: _plugin_describe,
+    PLUGIN_REGISTER: _plugin_register, PLUGIN_UNREGISTER: _plugin_unregister,
+    PLUGIN_RELOAD: _plugin_reload,
     PLUGIN_INSTALL: _plugin_install, PLUGIN_UNINSTALL: _plugin_uninstall,
     PLUGIN_UPDATE: _plugin_update,
     SERVICE_LIST: _service_list, SERVICE_CALL: _service_call,

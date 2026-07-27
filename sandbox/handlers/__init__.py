@@ -21,8 +21,7 @@ Split by what they need:
 
 A Request with no handler is not an error in the catalogue; it means that
 capability is not wired yet, and the caller gets an ordinary failure saying
-so. Plugin registration is the current example — deliberately deferred until
-the sandbox is hooked to the plugin watcher.
+so. The explicit ``UNWIRED`` inventory keeps those gaps visible.
 """
 
 from ..guest.requests import ALL_TYPES, SELF_RESPOND

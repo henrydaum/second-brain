@@ -115,10 +115,50 @@ def test_plugin_watcher_add_or_edit_loads_plugin(tmp_path, monkeypatch):
     service = PluginWatcher({})
     service.bind_runtime(tool_registry=_ToolRegistry())
 
-    service.handle_create_or_modify(str(path))
+    outcome = service.register(str(path))
 
     assert calls and calls[0][0][0] == "tool"
     assert calls[0][0][1] == path.resolve()
+    assert outcome == {
+        "ok": True,
+        "name": "demo",
+        "family": "tool",
+        "path": str(path.resolve()),
+    }
+
+
+def test_kernel_coordinator_live_registers_and_unregisters_sandbox_tool(
+    tmp_path,
+    monkeypatch,
+):
+    """The real discovery bridge is shared by watcher and SDK mutations."""
+    path = _watched_dir(tmp_path, monkeypatch) / "tool_demo.py"
+    path.write_text(
+        '"""A live registration fixture."""\n\n'
+        "from guest.bases import BaseTool\n\n"
+        "class DemoTool(BaseTool):\n"
+        '    """A tiny sandboxed tool."""\n'
+        '    name = "demo"\n'
+        '    description = "Demo."\n'
+        "    parameters = {}\n\n"
+        "    def run(self, sdk):\n"
+        '        """Return a stable answer."""\n'
+        '        return "ok"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "plugins.plugin_watcher.PluginWatcher._reconcile_plugin_config",
+        lambda self: None,
+    )
+    registry = _ToolRegistry()
+    watcher = PluginWatcher({}, tool_registry=registry)
+
+    loaded = watcher.register(path)
+    unloaded = watcher.unregister(path)
+
+    assert loaded["ok"] and loaded["name"] == "demo"
+    assert unloaded["ok"] and unloaded["names"] == ["demo"]
+    assert registry.unregistered == ["demo"]
 
 
 def test_plugin_watcher_emits_registered_and_edit_messages(tmp_path, monkeypatch):

@@ -192,8 +192,8 @@ belongs. API keys and OAuth tokens live in config and the environment. See
 | `plugin.list(family)` | Enumerate installed plugins | — | safe |
 | `plugin.describe(name)` | Metadata, path, dependencies | — | safe |
 | `plugin.register(path)` | Load a plugin live | path, family | unsafe |
-| `plugin.unregister(name)` | Unload | name | unsafe |
-| `plugin.reload(name)` | Reload in place | name | unsafe |
+| `plugin.unregister(path=... / name, family)` | Unload | recognized path or registered identity | unsafe |
+| `plugin.reload(path=... / name, family)` | Reload in place | recognized path or registered identity | unsafe |
 | `plugin.install(stem)` | Install from the store | stem, store commit | unsafe |
 | `plugin.uninstall(stem)` | Remove, with dependency scan | stem | unsafe |
 | `plugin.update()` | Update installed store packages | store commit | unsafe |

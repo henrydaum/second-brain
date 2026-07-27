@@ -137,7 +137,7 @@ class PluginWatcher:
             if old is not None and abs(mtime - old) < 0.1:
                 return
             self._known_mtimes[key] = mtime
-        self._load_plugin(path, edited=old is not None)
+        self.register(path, edited=old is not None)
 
     def handle_delete(self, raw_path: str):
         """Handle delete."""
@@ -146,17 +146,25 @@ class PluginWatcher:
         with self._lock:
             known = self._known_mtimes.pop(key, None)
         if known is not None or path.suffix == ".py":
-            self._unload_plugin(path)
+            self.unregister(path)
 
-    def _load_plugin(self, path: Path, edited: bool = False):
-        """Internal helper to load plugin."""
+    def register(self, raw_path, *, edited: bool = False) -> dict:
+        """Load or reload one recognized plugin source file."""
+        path = Path(raw_path).resolve()
+        if not path.exists() or path.suffix != ".py":
+            error = f"Plugin file does not exist: {path}"
+            self._notify(f"✕ Plugin registration failed: {path.name}\n{error}")
+            return {"ok": False, "error": error}
         if self._is_llm_backend(path):
             self._refresh_llm_backends()
             self._notify(
                 f"✓ Registered LLM backend{' edit' if edited else ''}: "
                 f"{path.stem}"
             )
-            return
+            return {
+                "ok": True, "name": path.stem, "family": "llm_backend",
+                "path": str(path),
+            }
         # A (re)load is a fresh start: forget any prior strikes/quarantine so a
         # fixed-and-resaved plugin gets a clean strike budget.
         supervisor.health.clear(str(path))
@@ -164,7 +172,7 @@ class PluginWatcher:
         if err:
             logger.warning(f"Plugin watcher skipped {path}: {err}")
             self._notify(f"✕ Plugin registration failed: {path.name}\n{err}")
-            return
+            return {"ok": False, "error": err}
         logger.info(f"Plugin watcher loading {info.plugin_type}: {path.name}")
         try:
             name, error = load_single_plugin(
@@ -182,7 +190,7 @@ class PluginWatcher:
         if error:
             logger.warning(f"Plugin watcher failed to load {path.name}: {error}")
             self._notify(f"✕ Plugin registration failed: {name or path.name}\n{error}")
-            return
+            return {"ok": False, "error": error}
         if info.plugin_type == "service":
             wire_peer_services(self.services)
         if info.plugin_type == "command":
@@ -190,23 +198,38 @@ class PluginWatcher:
         self._reconcile_plugin_config()
         self._notify(f"✓ Registered plugin{' edit' if edited else ''}: {name}")
         logger.info(f"Plugin watcher loaded {info.plugin_type}: {name}")
+        return {
+            "ok": True, "name": name, "family": info.plugin_type,
+            "path": str(path),
+        }
 
-    def _unload_plugin(self, path: Path):
-        """Internal helper to handle unload plugin."""
+    def reload(self, raw_path) -> dict:
+        """Reload one recognized plugin source file."""
+        return self.register(raw_path, edited=True)
+
+    def unregister(self, raw_path) -> dict:
+        """Unload everything registered from one recognized source file."""
+        path = Path(raw_path).resolve()
         if self._is_llm_backend(path):
             self._refresh_llm_backends()
             self._notify(f"Deregistered LLM backend: {path.stem}")
-            return
+            return {
+                "ok": True, "names": [path.stem], "family": "llm_backend",
+                "path": str(path),
+            }
         info, err = plugin_info(path)
         if err:
             logger.warning(f"Plugin watcher could not infer deleted plugin {path}: {err}")
-            return
+            return {"ok": False, "error": err}
         if info.plugin_type == "frontend" and info.built_in:
             # git pull (e.g. /update) replaces files as delete+create; tearing
             # down a kernel frontend mid-churn kills the surface the user is
             # typing into. Built-in frontends only change on restart anyway.
             logger.info(f"Plugin watcher ignoring delete of built-in frontend {path.name} (restart applies changes).")
-            return
+            return {
+                "ok": True, "names": [], "family": info.plugin_type,
+                "path": str(path), "restart_required": True,
+            }
         names = self._names_registered_from(info.plugin_type, path)
         unload_plugin(
             info.plugin_type, "",
@@ -225,6 +248,38 @@ class PluginWatcher:
         for name in names:
             self._notify(f"Deregistered plugin: {name}")
         logger.info(f"Plugin watcher unloaded deleted {info.plugin_type}: {path.name}")
+        return {
+            "ok": True, "names": names, "family": info.plugin_type,
+            "path": str(path),
+        }
+
+    def resolve_registered(self, name: str, family: str = "") -> tuple:
+        """Resolve a registered name to one unambiguous source path."""
+        normalized = (family or "").strip().lower().rstrip("s")
+        families = (
+            [normalized]
+            if normalized
+            else ["tool", "task", "service", "command", "frontend"]
+        )
+        matches = []
+        for plugin_type in families:
+            if plugin_type not in {
+                "tool", "task", "service", "command", "frontend"
+            }:
+                return None, f"Unknown plugin family: {family}"
+            item = self._items(plugin_type).get(name)
+            source = getattr(item, "_source_path", "") if item else ""
+            if source:
+                matches.append((plugin_type, Path(source).resolve()))
+        if not matches:
+            return None, f"No registered plugin named '{name}'."
+        if len(matches) > 1:
+            kinds = ", ".join(kind for kind, _path in matches)
+            return None, (
+                f"Plugin name '{name}' is ambiguous across: {kinds}. "
+                "Specify family."
+            )
+        return matches[0][1], None
 
     def _on_quarantine(self, payload: dict):
         """Unload a plugin the supervisor's circuit breaker has condemned.
@@ -265,6 +320,11 @@ class PluginWatcher:
     def _names_registered_from(self, plugin_type: str, path: Path) -> list[str]:
         """Internal helper to handle names registered from."""
         source = str(path.resolve())
+        items = self._items(plugin_type)
+        return [name for name, item in items.items() if getattr(item, "_source_path", "") == source]
+
+    def _items(self, plugin_type: str) -> dict:
+        """Return the live registry mapping for one plugin family."""
         if plugin_type == "tool":
             items = getattr(self._runtime.get("tool_registry"), "tools", {})
         elif plugin_type == "task":
@@ -278,7 +338,7 @@ class PluginWatcher:
             items = {k: v.__class__ for k, v in getattr(self._runtime.get("frontend_manager"), "adapters", {}).items()}
         else:
             items = {}
-        return [name for name, item in items.items() if getattr(item, "_source_path", "") == source]
+        return items
 
     def _reconcile_plugin_config(self):
         """Internal helper to handle reconcile plugin config."""

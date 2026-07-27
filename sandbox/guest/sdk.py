@@ -69,6 +69,7 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        LEDGER_RECORD, NET_HTTP, PARSE_FILE, PARSE_MODALITY,
                        MODEL_DELTA, MODEL_PROCEED, PATH_GET,
                        PLUGIN_DESCRIBE, PLUGIN_INSTALL, PLUGIN_LIST,
+                       PLUGIN_REGISTER, PLUGIN_RELOAD, PLUGIN_UNREGISTER,
                        PLUGIN_UNINSTALL, PLUGIN_UPDATE, PROC_RUN,
                        SECRET_REVEAL, SELF_RESPOND,
                        SERVICE_CALL, SERVICE_LIST, SERVICE_LOAD,
@@ -382,6 +383,40 @@ class _Plugins(_Namespace):
     def describe(self, name: str):
         """Metadata for one plugin."""
         return self._ask(PLUGIN_DESCRIBE, name=name)
+
+    def register(self, path: str):
+        """Load a recognized plugin source file into the live runtime."""
+        return self._ask(PLUGIN_REGISTER, path=str(path))
+
+    def unregister(
+        self,
+        *,
+        path: str = "",
+        name: str = "",
+        family: str = "",
+    ):
+        """Unload a plugin by source path or unambiguous registered identity."""
+        return self._ask(
+            PLUGIN_UNREGISTER,
+            path=str(path) if path else "",
+            name=name,
+            family=family,
+        )
+
+    def reload(
+        self,
+        *,
+        path: str = "",
+        name: str = "",
+        family: str = "",
+    ):
+        """Reload a plugin by source path or unambiguous registered identity."""
+        return self._ask(
+            PLUGIN_RELOAD,
+            path=str(path) if path else "",
+            name=name,
+            family=family,
+        )
 
     def install(self, package_id: str):
         """Install a package or bundle from the kernel store."""

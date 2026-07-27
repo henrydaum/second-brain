@@ -9,6 +9,8 @@ Three properties matter more than any individual handler:
 """
 
 import sqlite3
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -40,13 +42,74 @@ def test_every_request_is_serviced_or_declared_unwired(kind):
     assert kind in HANDLERS or kind in UNWIRED or kind == R.SELF_RESPOND
 
 
-def test_only_plugin_lifecycle_is_still_unwired():
-    """The deferred set is deliberate, and it is the one we chose to defer."""
+def test_only_explicitly_deferred_capabilities_are_unwired():
+    """The deferred set stays deliberate as lifecycle holes are closed."""
     assert set(UNWIRED) <= {
-        R.PLUGIN_REGISTER, R.PLUGIN_UNREGISTER, R.PLUGIN_RELOAD,
         R.PLUGIN_INSTALL, R.PLUGIN_UNINSTALL, R.SERVICE_LOAD, R.SERVICE_UNLOAD,
         R.AGENT_SPAWN, R.AGENT_SCHEDULE,
     }
+
+
+def test_plugin_lifecycle_handlers_share_the_kernel_watcher():
+    """SDK mutations enter the same coordinator as filesystem events."""
+    source = Path("plugins/commands/command_clear.py").resolve()
+
+    class Watcher:
+        def __init__(self):
+            self.calls = []
+
+        def register(self, path):
+            self.calls.append(("register", Path(path)))
+            return {"ok": True, "name": "clear", "family": "command",
+                    "path": str(path)}
+
+        def unregister(self, path):
+            self.calls.append(("unregister", Path(path)))
+            return {"ok": True, "names": ["clear"], "family": "command",
+                    "path": str(path)}
+
+        def reload(self, path):
+            self.calls.append(("reload", Path(path)))
+            return {"ok": True, "name": "clear", "family": "command",
+                    "path": str(path)}
+
+        def resolve_registered(self, name, family):
+            assert (name, family) == ("clear", "command")
+            return source, None
+
+    watcher = Watcher()
+    ctx = SimpleNamespace(
+        runtime=SimpleNamespace(plugin_watcher=watcher),
+    )
+    registered = HANDLERS[R.PLUGIN_REGISTER](
+        ctx, {"path": str(source)})
+    unloaded = HANDLERS[R.PLUGIN_UNREGISTER](
+        ctx, {"name": "clear", "family": "command"})
+    reloaded = HANDLERS[R.PLUGIN_RELOAD](
+        ctx, {"path": str(source)})
+
+    assert registered.ok and unloaded.ok and reloaded.ok
+    assert watcher.calls == [
+        ("register", source),
+        ("unregister", source),
+        ("reload", source),
+    ]
+
+
+def test_plugin_lifecycle_rejects_paths_outside_plugin_roots(tmp_path):
+    """Approval never turns an arbitrary filesystem path into a plugin."""
+    class Watcher:
+        def register(self, _path):
+            raise AssertionError("outside path reached coordinator")
+
+    ctx = SimpleNamespace(
+        runtime=SimpleNamespace(plugin_watcher=Watcher()),
+    )
+    result = HANDLERS[R.PLUGIN_REGISTER](
+        ctx, {"path": str(tmp_path / "tool_bad.py")})
+
+    assert not result.ok
+    assert "must live in one of" in result.error
 
 
 def test_the_sdk_reaches_every_wired_request():

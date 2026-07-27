@@ -224,6 +224,9 @@ sdk.services.call(name, method, **kwargs)   # only exported methods
 sdk.services.load(name) / unload(name)
 sdk.plugins.list(source="registered", category="")
 sdk.plugins.describe(name)
+sdk.plugins.register(path)
+sdk.plugins.unregister(path=...)          # or name=..., family=...
+sdk.plugins.reload(path=...)              # or name=..., family=...
 sdk.plugins.install(package_id)
 sdk.plugins.uninstall(package_id)
 sdk.plugins.update()
@@ -232,6 +235,11 @@ sdk.agent.complete(prompt)           # a model call
 sdk.agent.spawn(prompt, wait=True)   # a subagent now
 sdk.agent.schedule(prompt, cron)     # a subagent later
 ```
+
+Plugin lifecycle mutations are approval-gated. Paths must resolve to a
+recognized built-in, sandbox, or installed plugin file. A name-only unload or
+reload must identify exactly one registered plugin; supply `family` when the
+same name exists in more than one registry.
 
 ### Standing at a doorway
 
