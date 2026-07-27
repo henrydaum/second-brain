@@ -377,6 +377,27 @@ def _literal(node):
         return None
 
 
+def _check_secret_names(walker: _Walker, node):
+    """Warn about a config setting that looks like a credential but is not
+    declared as one."""
+    from .secrets import SECRET_PREFIX, looks_secret
+
+    entries = _literal(node.value)
+    if not isinstance(entries, (list, tuple)):
+        return
+    for entry in entries:
+        if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+            continue
+        key = entry[1]
+        if not isinstance(key, str) or key.startswith(SECRET_PREFIX):
+            continue
+        if looks_secret(key):
+            walker.add(NOTE, node,
+                       f"setting {key!r} looks like a credential but is not "
+                       f"declared as one, so it will be handed out in "
+                       f"plaintext", f"{SECRET_PREFIX}{key}")
+
+
 def _plugin_classes(walker: _Walker):
     """Every class subclassing a known plugin base, with the family it names."""
     found = []
@@ -450,6 +471,13 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
                 walker.add(ERROR, assigned[key],
                            f"{key} must be a literal list of strings — the "
                            f"kernel reads it without importing")
+
+    # A setting holding a credential is declared by its name. Catching the
+    # omission here is the whole reason the name heuristic still exists: it
+    # costs the author one message at authoring time instead of quietly
+    # handing plaintext to a plugin that only ever needed a handle.
+    if "config_settings" in assigned:
+        _check_secret_names(walker, assigned["config_settings"])
 
     # Closed vocabularies: a typo would otherwise read as "unset".
     for key, allowed in ENUMS.items():

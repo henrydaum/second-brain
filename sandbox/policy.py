@@ -192,7 +192,7 @@ ALWAYS_SAFE = {
 # decision being made about it — silently defaulting to "unsafe" would look
 # like policy when it is really an oversight.
 _BRANCHED = {NET_HTTP, PROC_RUN, FS_WRITE, FS_MOVE, FS_DELETE, FS_TEMP,
-             CONFIG_READ, ENV_READ, UI_ASK, SESSION_ADD_TOOL,
+             CONFIG_READ, ENV_READ, R.SECRET_REVEAL, UI_ASK, SESSION_ADD_TOOL,
              SESSION_ADD_PROMPT, AGENT_SCHEDULE, CONV_DELETE}
 _UNDECIDED = R.ALL_TYPES - ALWAYS_SAFE - ALWAYS_UNSAFE - _BRANCHED
 assert not _UNDECIDED, f"unclassified Requests: {sorted(_UNDECIDED)}"
@@ -248,6 +248,11 @@ def classify(request: Request, chain: Chain) -> Decision:
 
     if kind == FS_TEMP:
         return Decision(SAFE, "scratch space")
+
+    # ── plaintext is the one thing always worth asking about ──
+    if kind == R.SECRET_REVEAL:
+        return Decision(UNSAFE,
+                        f"plaintext of {args.get('name', 'a secret')}")
 
     # ── secrets are readable as handles, so reading them is safe ──
     if kind in (CONFIG_READ, ENV_READ):

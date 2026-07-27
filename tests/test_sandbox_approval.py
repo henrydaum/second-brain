@@ -12,6 +12,7 @@ from sandbox import Chain, Interpreter, Request, Sandbox
 from sandbox.approval import build_approver, describe
 from sandbox.guest import requests as R
 from sandbox.policy import classify
+from sandbox.guest.requests import SECRET_REVEAL
 
 
 class FakeRequest:
@@ -376,3 +377,71 @@ def test_tool_approvals_still_report_themselves_as_tools():
     query = PermissionQuery(tool_name="run_command", command="ls")
     assert query.origin == "tool"
     assert query.request is None and query.chain is None
+
+
+# ──────────────────────────────────────────────────────────────────────
+# A secret belongs to the plugin that declared it.
+# ──────────────────────────────────────────────────────────────────────
+
+def _reveal(name="litellm_api_key"):
+    """A reveal Request and its decision."""
+    request = Request(R.SECRET_REVEAL, {"name": name})
+    return request, classify(request, Chain())
+
+
+def test_a_plugin_revealing_its_own_credential_is_not_asked(monkeypatch):
+    """Configuring a key *for* a service is the consent.
+
+    Asking again on every service load is exactly the approval fatigue that
+    kills permission systems - and the user already answered by setting it up.
+    """
+    monkeypatch.setattr(
+        "plugins.plugin_discovery.get_setting_plugin_names",
+        lambda key: ["litellm"] if key == "litellm_api_key" else [])
+
+    runtime = FakeRuntime(answer=False)
+    request, decision = _reveal()
+    chain = Chain(root="user").push("litellm")
+
+    assert build_approver(runtime)(chain, request, decision) is True
+    assert runtime.asked == []
+
+
+def test_a_different_plugin_asking_for_it_is_asked(monkeypatch):
+    """That one is a genuinely different question."""
+    monkeypatch.setattr(
+        "plugins.plugin_discovery.get_setting_plugin_names",
+        lambda key: ["litellm"] if key == "litellm_api_key" else [])
+
+    runtime = FakeRuntime(answer=False)
+    request, decision = _reveal()
+    chain = Chain(root="user").push("some_other_tool")
+
+    assert build_approver(runtime)(chain, request, decision) is False
+    assert len(runtime.asked) == 1
+    assert "litellm_api_key" in runtime.asked[0]["prompt"]
+
+
+def test_an_unowned_secret_is_always_asked(monkeypatch):
+    """No declared owner means nobody has agreed to anything yet."""
+    monkeypatch.setattr(
+        "plugins.plugin_discovery.get_setting_plugin_names", lambda key: [])
+
+    runtime = FakeRuntime(answer=False)
+    request, decision = _reveal("some_loose_token")
+    assert build_approver(runtime)(Chain().push("x"), request,
+                                   decision) is False
+    assert len(runtime.asked) == 1
+
+
+def test_ownership_never_short_circuits_anything_else(monkeypatch):
+    """The rule is about secrets only - it must not soften egress."""
+    monkeypatch.setattr(
+        "plugins.plugin_discovery.get_setting_plugin_names",
+        lambda key: ["litellm"])
+
+    runtime = FakeRuntime(answer=False)
+    request, decision = _egress()
+    assert build_approver(runtime)(Chain().push("litellm"), request,
+                                   decision) is False
+    assert len(runtime.asked) == 1

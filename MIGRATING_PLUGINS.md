@@ -191,18 +191,22 @@ path, not to test it.
 | 4 | Services, `timekeeper` first | First persistent boxes, `exports` |
 | 5 | Store frontends | Needs the inbound protocol |
 
-### What does not get migrated
+### Everything gets migrated
 
-The sandbox boundary and the kernel boundary are the same boundary. What is
-*inside* the kernel is not a plugin on the other side of it:
+Including plugins that drive foreign libraries. A library cannot be reduced to
+Requests, so a plugin importing one **loads with a disclaimer** and should
+declare `isolation = "subprocess"`. That is the answer the security contract
+already gives; it is not a reason to leave anything behind.
 
-- **`service_llm`** and **`parser_registry`** — the two plugin modules the
-  kernel hard-imports (see CLAUDE.md).
-- **`frontend_repl`** — the kernel's own frontend. It *drives* the sandbox;
-  it does not run inside it.
+Three files need a moment's thought, not an exemption:
 
-That removes the three scariest items from the list, and it is why frontends
-can safely be last.
+- **`service_llm`** and **`parser_registry`** are hard-imported by kernel code
+  (`runtime/conversation_loop.py` and `pipeline/orchestrator.py`), and
+  `tests/test_kernel_boundary.py` pins those two import edges. Migrating them
+  means changing what the kernel imports, so it is a deliberate kernel edit
+  plus a boundary-test update — not a plugin migration. Do them late.
+- **`frontend_repl`** needs the inbound half of the protocol, like every
+  frontend. Last.
 
 ---
 

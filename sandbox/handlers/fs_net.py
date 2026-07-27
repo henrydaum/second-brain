@@ -17,7 +17,7 @@ from pathlib import Path
 
 from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                               FS_SEARCH, FS_TEMP, FS_WRITE, NET_HTTP, PROC_RUN,
-                              Result)
+                              SECRET_REVEAL, Result)
 from ..secrets import lookup_from, redact, resolve
 
 MAX_READ_BYTES = 8 * 1024 * 1024
@@ -220,11 +220,36 @@ def _env_read(ctx, args: dict) -> Result:
     value = os.environ.get(name)
     if value is None:
         return Result(data=None)
-    return Result(data=redact(name, value))
+    # Nothing declares an environment variable, so the name is all there is.
+    return Result(data=redact(name, value, guess=True))
+
+
+def _secret_reveal(ctx, args: dict) -> Result:
+    """Hand over a credential in plaintext.
+
+    The handle mechanism works when the *kernel* performs the effect, because
+    it can substitute on the way out. A plugin driving a foreign library —
+    an OAuth client, a provider SDK — performs its own I/O, so there is no
+    such moment and it genuinely needs the value.
+
+    That is the same foreign-library limit the security contract already
+    names, not a separate one. The answer is the answer to everything else
+    here: not forbidden, gated. This Request is always unsafe, so the user
+    sees which secret, which plugin, and what chain asked for it, and the
+    ledger keeps the record.
+    """
+    name = args.get("name")
+    if not name:
+        return Result.failure("secret.reveal requires a name")
+    value = lookup_from(ctx)(name)
+    if value is None:
+        return Result.failure(f"no secret named {name!r}")
+    return Result(data=value)
 
 
 HANDLERS = {
     FS_READ: _fs_read,
+    SECRET_REVEAL: _secret_reveal,
     FS_WRITE: _fs_write,
     FS_LIST: _fs_list,
     FS_SEARCH: _fs_search,

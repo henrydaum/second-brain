@@ -31,24 +31,47 @@ SUFFIX = ">"
 
 _HANDLE = re.compile(r"<secret:([A-Za-z0-9_.\-]+)>")
 
-# Word parts that make a config key or environment variable a credential.
-# Matched against the name's *parts* rather than as substrings, because
-# substring matching redacts ``max_tokens`` for containing "token" — and a
-# rule that redacts ordinary settings trains people to work around it.
+# The declaration is the name. A config setting holding a credential is
+# called ``secret_something``, and that is the whole rule.
 #
-# Still deliberately generous within that: a false positive costs a plugin
-# the plaintext of something it probably should not have had, which is the
-# safe direction to be wrong in.
+# Second Brain already declares things this way — ``tool_``, ``command_`` and
+# ``service_`` prefixes are how discovery knows what a file is — so this is
+# the same convention one level down. It also puts the fact where it is
+# useful: reading ``sdk.config.read("secret_brave_key")`` in a plugin, you can
+# see you are getting a handle without going to look anything up.
+SECRET_PREFIX = "secret_"
+
+# Word parts that *look* like a credential. Deliberately not policy: this is
+# what the validator warns about at authoring time ("this looks like a secret
+# and is not marked — rename it"), so a bad guess costs a developer one
+# message rather than surprising anybody at runtime.
+#
+# It is still the rule for environment variables, because nothing declares
+# those — no plugin owns ``OPENAI_API_KEY`` and its name was chosen by
+# somebody else entirely.
 SECRET_WORDS = {"key", "apikey", "secret", "token", "password", "passwd",
                 "credential", "credentials", "auth"}
 
 _SPLIT = re.compile(r"[^a-z0-9]+")
 
 
-def is_secret(name: str) -> bool:
-    """Whether a config key or variable name holds a credential."""
+def looks_secret(name: str) -> bool:
+    """Whether a name reads like a credential. A guess, and used as one."""
     parts = set(_SPLIT.split((name or "").lower()))
     return bool(parts & SECRET_WORDS)
+
+
+def is_secret(name: str, *, guess: bool = False) -> bool:
+    """Whether a name holds a credential.
+
+    ``guess`` is for names nobody declared — environment variables — where
+    the heuristic is all there is. For config settings it stays False: the
+    prefix is the declaration, and an unmarked setting is not a secret.
+    """
+    lowered = (name or "").lower()
+    if lowered.startswith(SECRET_PREFIX):
+        return True
+    return guess and looks_secret(name)
 
 
 def handle_for(name: str) -> str:
@@ -61,9 +84,9 @@ def looks_like_handle(value) -> bool:
     return isinstance(value, str) and bool(_HANDLE.fullmatch(value))
 
 
-def redact(name: str, value):
+def redact(name: str, value, *, guess: bool = False):
     """Return the value, or a handle if the name says it is a credential."""
-    return handle_for(name) if is_secret(name) else value
+    return handle_for(name) if is_secret(name, guess=guess) else value
 
 
 def resolve(value, lookup):

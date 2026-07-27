@@ -198,6 +198,111 @@ confirm a REPL round-trip + clean compaction on a long conversation.
 
 ---
 
+# 🧪 THE SANDBOX (`sandbox/`)
+
+**Naming warning, read this first.** Two unrelated things are called "sandbox"
+here. `DATA_DIR/sandbox_plugins/` is the *agent-authored plugin tree* (see
+"Sandbox plugin system" below). `sandbox/` is the **security boundary** — the
+subject of this section. They have nothing to do with each other.
+
+Plugins are arbitrary code on the other side of a boundary. The sandbox
+mediates it: sandboxed code **cannot act, it can only ask**. Anything touching
+disk, network, clock, or process is a typed **Request** the kernel classifies,
+executes, and answers. The threat model is *carelessness, not malice* — an
+agent with good intentions and no judgement — which is why the validator is a
+linter rather than a proof, and why the subprocess (not the linter) is the
+actual boundary. Design rationale: `The Second Brain Security Contract` +
+`SECURITY_CONTRACT_APPENDIX.md`.
+
+**Two halves, and the one rule.** `sandbox/guest/` runs *inside*: the Request
+vocabulary, the wire protocol, the SDK, the plugin base classes, the child
+entry point. Stdlib-only and self-contained — it is the shippable unit a
+container image would copy. Everything else is *host*: `policy` (the single
+`classify()` that decides safe/unsafe), `handlers` (the only code that touches
+the world), `interpreter` (serial gate, parallel execution), the two runners,
+`boxes`, `facade`, `bridge`, `validator`, `parity`, `migrate`. **The guest never
+imports the host** — pinned by `tests/test_sandbox_guest_boundary.py`, the
+sandbox's counterpart to the kernel boundary test.
+
+`sandbox/__init__.py` aliases the guest package under the bare name `guest` in
+`sys.modules` (every submodule, derived from the directory). Plugin source
+therefore says `from guest.bases import BaseTool` and resolves identically
+in-process and in a subprocess, where the child runs `python -m guest.child`
+with `sandbox/` as its cwd.
+
+**Boxes.** A box is one execution context: one process, one memory space, one
+lifetime. Files in the same box import each other; files in different boxes
+cannot reach each other at all — the only way across is a Request. Declaring
+nothing gets an ephemeral in-process box of your own. Services and frontends
+are persistent (loaded once, called into, serialized one call at a time).
+Persistence is resolved *before* code runs, so nothing can drift into it by
+refusing to finish — that is a hang, and it times out.
+
+**Ending code is the kernel's decision**, escalating ask → starve → kill.
+Starvation only reaches code that propagates failures; killing reaches the
+rest, and in-process there is no kill. A cancelled execution raises
+`Terminated` (a `BaseException`, so a bare `except Exception` cannot swallow
+it) rather than returning a failure — denial and cancellation are different
+things.
+
+**Provenance.** Every Request carries a chain rooted in what *caused* the work
+(`user`, `cron:nightly_index`, a subagent). The kernel owns it as its own call
+stack, so plugins can neither read nor misstate it; it is what makes an
+approval dialog answerable, and it doubles as the cycle detector. Approval
+reuses the kernel's existing `vet_permission` doorway (enriched with
+`origin="request"` plus the typed `request`/`chain`/`decision`), then
+`skip_permissions`, then a dialog; unattended sessions refuse rather than block.
+
+**The dual-mode loader is how migration works.** `plugins/plugin_discovery.py`
+→ `_load_plugin_module` asks `sandbox.bridge.adapt()` first. A file importing
+`guest.bases` gets wrapped in a *native-looking adapter* subclassing the real
+`BaseTool`/`BaseTask`/`BaseCommand`; everything downstream registers and calls
+it unchanged. Unmigrated plugins load exactly as before. **Migrated and native
+plugins coexist, so the app works at every point in the migration** — one file,
+one commit, `git checkout` to revert. Detection is by AST, never by importing.
+
+**The kernel boundary is unchanged.** Core still hard-imports exactly two
+plugin modules. `sandbox/` is reached only from `plugin_discovery`, and nothing
+in `sandbox/` imports `plugins.*` except the bridge (which needs the native
+base classes to subclass).
+
+**The SDK idiom** — Requests return their value and raise on failure; a bare
+return is wrapped:
+
+```python
+def run(self, sdk, path):
+    return len(sdk.fs.read(path).split())     # no Result to unwrap
+```
+
+`sdk.Denied` (refused) subclasses `sdk.Failed` (anything). `sdk.ok(x,
+llm_summary=...)` only when attaching extras. `sdk.log(...)`, never `logging`.
+
+**Secrets.** A config setting holding a credential is *named* `secret_*` —
+that prefix is the declaration, matching how the rest of the system declares
+things by name. Those read back as `<secret:name>` handles which the kernel
+substitutes inside `net.http`, so code uses a credential it never held.
+Environment variables are guessed by name instead, because nothing declares
+them. `sdk.secrets.reveal(name)` gets plaintext for foreign libraries that do
+their own I/O; a plugin reading its *own* declared setting is not asked
+(configuring it was the consent), anyone else is. A credential inside a foreign
+library is past the kernel's reach — accepted, documented, would need real OS
+containment to fix.
+
+**Docs:** `SDK.md` (hand this to an agent writing sandbox code — its examples
+are executed by `tests/test_sdk_docs.py`), `MIGRATING_PLUGINS.md` (the
+per-plugin procedure), `SECURITY_CONTRACT_APPENDIX.md` (the ~77-Request
+catalogue with policy inputs).
+
+**Migration tooling:** `sandbox.migrate.plan(path)` reports what converting a
+plugin involves, line by line, with the Request each effect becomes.
+`sandbox.parity.compare(path, entry, ...)` runs the working tree against
+`git show HEAD:<path>` with the *same context object* and diffs the return
+values — so **commit before migrating**, since HEAD is the baseline. Templates
+in `templates/` still teach the old contract and should be migrated before any
+plugin, since they are what gets copied.
+
+---
+
 ## Recent work — state machine unification
 
 The conversation layer was unified around a single state machine
@@ -315,7 +420,10 @@ conversation title on a persistent surface; fed by the
   the sandbox, installed package tree, or deliberately in [plugins/commands/](plugins/commands/)
   when it is true kernel behavior. Commands receive `SecondBrainContext` in both
   `form(args, context)` and `run(args, context)`.
-- **Add a tool**: write a `BaseTool` subclass as `tool_*.py` in the sandbox,
+- **Add a *sandboxed* tool** (the direction of travel): write a `BaseTool`
+  subclass from `guest.bases` as `tool_*.py`. It receives `sdk`, not
+  `context`, and the bridge registers it like any other tool. See `SDK.md`.
+- **Add a tool** (the pre-migration contract): write a `BaseTool` subclass as `tool_*.py` in the sandbox,
   installed package tree, or deliberately in [plugins/tools/](plugins/tools/)
   when it is true kernel behavior. Tools receive `SecondBrainContext` from
   [runtime/context.py](runtime/context.py).
@@ -381,7 +489,10 @@ clean command slate: add built-ins as `command_*.py` files under
 is only the adapter: it builds context-aware forms, parses one-shot `/cmd ...`
 input mechanically, and dispatches structured dict args.
 
-## Sandbox plugin system
+## Sandbox plugin system (the *plugin tree*, not `sandbox/`)
+
+Unrelated to the security sandbox above — this is where agent-authored plugins
+live on disk.
 
 The agent can author tools/tasks/services/commands/frontends into
 `DATA_DIR/sandbox_plugins/<family>/` when an editing/package-authoring tool is
@@ -405,3 +516,14 @@ move between built-in, sandbox, and installed trees.
 - [agent/system_prompt.py](agent/system_prompt.py) — single entry point for
   building the agent system prompt; gates sections by which tools the
   current scope exposes.
+- [sandbox/policy.py](sandbox/policy.py) — `classify()`: the entire
+  authorization surface for sandboxed code, plus `Chain` (provenance).
+- [sandbox/interpreter.py](sandbox/interpreter.py) — the drive loop the whole
+  sandbox hangs off: serial gate, parallel execution.
+- [sandbox/facade.py](sandbox/facade.py) — `Sandbox`: the one API.
+  `run()` blocks, `start()` returns a `Run` to wait on or cancel, `open()`
+  loads a resident box.
+- [sandbox/bridge.py](sandbox/bridge.py) — the dual-mode loader that lets
+  migrated and unmigrated plugins coexist.
+- [sandbox/guest/sdk.py](sandbox/guest/sdk.py) — what plugin authors actually
+  type. Each namespace is exactly one Request family.

@@ -176,26 +176,30 @@ def test_reads_stay_broad():
 # Secret handles.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_credential_names_are_recognised():
-    """Generous on purpose: a false positive costs plaintext nobody needed."""
+def test_the_lint_heuristic_recognises_credential_names():
+    """Not policy any more - this is what the validator warns about, and
+    what environment variables are still judged by."""
+    from sandbox.secrets import looks_secret
+
     for name in ("brave_api_key", "OPENAI_API_KEY", "client_secret",
                  "db_password", "access_token"):
-        assert is_secret(name), name
+        assert looks_secret(name), name
     for name in ("model", "max_tokens", "db_path"):
-        assert not is_secret(name), name
+        assert not looks_secret(name), name
 
 
 def test_a_secret_reads_back_as_a_handle():
     """The sandbox cannot leak what it was never given."""
-    assert redact("brave_api_key", "sk-real") == "<secret:brave_api_key>"
+    assert (redact("secret_brave_api_key", "sk-real")
+            == "<secret:secret_brave_api_key>")
     assert redact("model", "opus") == "opus"
 
 
 def test_handles_resolve_on_the_way_out():
     """Substitution happens in the handler, after policy has decided."""
-    lookup = {"brave_api_key": "sk-real"}.get
-    payload = {"headers": {"X-Key": handle_for("brave_api_key")},
-               "list": [handle_for("brave_api_key")]}
+    lookup = {"secret_brave_api_key": "sk-real"}.get
+    payload = {"headers": {"X-Key": handle_for("secret_brave_api_key")},
+               "list": [handle_for("secret_brave_api_key")]}
     resolved = resolve(payload, lookup)
     assert resolved["headers"]["X-Key"] == "sk-real"
     assert resolved["list"] == ["sk-real"]
@@ -210,13 +214,14 @@ def test_an_unknown_handle_is_left_visible():
 
 def test_config_read_redacts(tmp_path):
     """The clause belongs on config, not on the database."""
-    ctx = type("Ctx", (), {"config": {"brave_api_key": "sk-real",
+    ctx = type("Ctx", (), {"config": {"secret_brave_api_key": "sk-real",
                                       "model": "opus"}})()
     handler = HANDLERS[R.CONFIG_READ]
-    assert handler(ctx, {"key": "brave_api_key"}).data == "<secret:brave_api_key>"
+    assert (handler(ctx, {"key": "secret_brave_api_key"}).data
+            == "<secret:secret_brave_api_key>")
     assert handler(ctx, {"key": "model"}).data == "opus"
     everything = handler(ctx, {"key": None}).data
-    assert everything["brave_api_key"] == "<secret:brave_api_key>"
+    assert everything["secret_brave_api_key"] == "<secret:secret_brave_api_key>"
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -349,15 +354,15 @@ def test_a_service_that_raises_fails_the_call_only():
 
 def test_a_secret_is_usable_without_being_readable(tmp_path):
     """The property the whole mechanism exists for."""
-    ctx = type("Ctx", (), {"config": {"brave_api_key": "sk-real"}})()
+    ctx = type("Ctx", (), {"config": {"secret_brave_api_key": "sk-real"}})()
     interpreter = Interpreter(context=ctx)
     try:
         from sandbox.interpreter import Execution
         execution = Execution(name="probe", chain=Chain().push("probe"))
         sdk = SDK(interpreter.channel(execution))
 
-        seen = sdk.config.read("brave_api_key")
-        assert seen == "<secret:brave_api_key>"
+        seen = sdk.config.read("secret_brave_api_key")
+        assert seen == "<secret:secret_brave_api_key>"
         assert "sk-real" not in str(seen)
     finally:
         interpreter.shutdown()
@@ -411,3 +416,142 @@ def test_every_namespace_is_exactly_one_request_family():
     mixed = {name: families for name, families in sent.items()
              if len(families) > 1}
     assert not mixed, f"namespaces spanning several families: {mixed}"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Plaintext: the limit of handles, and the door through it.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_revealing_a_secret_always_asks():
+    """Handles work when the kernel makes the call. A plugin driving a
+    foreign library performs its own I/O, so it genuinely needs the value —
+    and that is worth a dialog every single time."""
+    decision = classify(Request(R.SECRET_REVEAL, {"name": "gmail_secret"}),
+                        Chain(root="user"))
+    assert not decision.safe
+    assert "gmail_secret" in decision.reason
+
+
+def test_reveal_hands_over_the_real_value():
+    """It is a door, not a decoration."""
+    ctx = type("Ctx", (), {"config": {"brave_api_key": "sk-real"}})()
+    result = HANDLERS[R.SECRET_REVEAL](ctx, {"name": "brave_api_key"})
+    assert result.ok
+    assert result.data == "sk-real"
+
+
+def test_reveal_of_something_absent_fails_cleanly():
+    """A missing secret is a failure, not an empty string quietly used."""
+    ctx = type("Ctx", (), {"config": {}})()
+    result = HANDLERS[R.SECRET_REVEAL](ctx, {"name": "nope"})
+    assert not result.ok
+
+
+def test_the_dialog_says_plainly_what_reveal_means():
+    """The user has to understand they are handing over the value itself."""
+    from sandbox.approval import describe
+
+    request = Request(R.SECRET_REVEAL, {"name": "gmail_client_secret"})
+    _, body = describe(Chain(root="user").push("service_gmail"), request,
+                       classify(request, Chain(root="user")))
+    assert "plaintext" in body.lower()
+    assert "gmail_client_secret" in body
+    assert "user -> service_gmail" in body
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Knowing which settings are secrets.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_the_prefix_is_the_declaration():
+    """A config setting holding a credential is called secret_something."""
+    from sandbox import secrets as S
+
+    assert S.is_secret("secret_brave_api_key")
+    assert S.is_secret("secret_notion_integration")   # name says nothing
+    assert not S.is_secret("max_tokens")
+
+
+def test_an_unmarked_setting_is_not_a_secret():
+    """Not marked is an answer, not a maybe. The prefix is the whole rule."""
+    from sandbox import secrets as S
+
+    assert not S.is_secret("brave_api_key")
+
+
+def test_environment_variables_are_guessed_because_nothing_declares_them():
+    """No plugin owns OPENAI_API_KEY, and its name was chosen elsewhere."""
+    from sandbox import secrets as S
+
+    assert S.is_secret("OPENAI_API_KEY", guess=True)
+    assert S.is_secret("GMAIL_CLIENT_SECRET", guess=True)
+    assert not S.is_secret("PATH", guess=True)
+    assert not S.is_secret("max_tokens", guess=True)
+
+
+def test_env_read_redacts_but_config_read_obeys_the_prefix():
+    """The two sources answer to different rules, at the handler."""
+    import os
+
+    ctx = type("Ctx", (), {"config": {"secret_brave_key": "sk-a",
+                                      "brave_api_key": "sk-b"}})()
+    read = HANDLERS[R.CONFIG_READ]
+    assert read(ctx, {"key": "secret_brave_key"}).data == "<secret:secret_brave_key>"
+    assert read(ctx, {"key": "brave_api_key"}).data == "sk-b"
+
+    os.environ["SB_TEST_API_KEY"] = "sk-env"
+    try:
+        out = HANDLERS[R.ENV_READ](ctx, {"name": "SB_TEST_API_KEY"})
+        assert out.data == "<secret:SB_TEST_API_KEY>"
+    finally:
+        os.environ.pop("SB_TEST_API_KEY", None)
+
+
+def test_the_validator_flags_an_unmarked_credential(tmp_path):
+    """The heuristic stops being policy and becomes a warning to the author."""
+    from sandbox.validator import NOTE, validate_file
+
+    plugin = tmp_path / "tool_search.py"
+    plugin.write_text('''"""A tool."""
+
+from plugins.BaseTool import BaseTool
+
+
+class Search(BaseTool):
+    """Search the web."""
+
+    name = "search"
+    config_settings = [
+        ("Brave key", "brave_api_key", "The key.", "", {}),
+        ("Result count", "brave_results", "How many.", 5, {}),
+    ]
+''', encoding="utf-8")
+
+    report = validate_file(plugin)
+    assert report.ok          # a warning to the author, not a refusal
+    notes = " ".join(f.message + " " + f.fix for f in report.of(NOTE))
+    assert "brave_api_key" in notes
+    assert "secret_brave_api_key" in notes
+    assert "brave_results" not in notes
+
+
+def test_an_already_marked_setting_is_not_flagged(tmp_path):
+    """Doing it right must be silent, or the warning becomes noise."""
+    from sandbox.validator import NOTE, validate_file
+
+    plugin = tmp_path / "tool_search.py"
+    plugin.write_text('''"""A tool."""
+
+from plugins.BaseTool import BaseTool
+
+
+class Search(BaseTool):
+    """Search the web."""
+
+    name = "search"
+    config_settings = [
+        ("Brave key", "secret_brave_api_key", "The key.", "", {}),
+    ]
+''', encoding="utf-8")
+
+    assert not validate_file(plugin).of(NOTE)

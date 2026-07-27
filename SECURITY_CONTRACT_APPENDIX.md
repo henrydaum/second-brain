@@ -150,7 +150,7 @@ kernel's existing default at the `unattended_call` gate.
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `config.read(key, scope)` | Global or user-scoped setting | key sensitivity | safe, **secrets returned as handles** |
+| `config.read(key, scope)` | Global or user-scoped setting | `secret_` prefix | safe, **`secret_*` returned as handles** |
 | `config.write(key, value, scope)` | Change a setting | key, scope | unsafe |
 
 Scope (`global` / `user`) is an argument, not a separate Request.
@@ -327,7 +327,8 @@ it wholesale rather than rewriting it.
 | `self.respond(result)` | Return a result and terminate | — | safe |
 | `self.terminate()` | End without a result | — | safe |
 | `self.yield()` | Persistent containers: sleep until next input | — | safe |
-| `env.read(name)` | Environment variable | name sensitivity | safe, **secrets returned as handles** |
+| `env.read(name)` | Environment variable | name sensitivity | safe, **credential-looking names returned as handles** |
+| `secret.reveal(name)` | A credential in plaintext | — | **unsafe, always** |
 
 `time.now()` is SDK, not a Request — determinism is not a goal.
 
@@ -359,13 +360,36 @@ denial as fatal is the most likely thing a careless author will write.
 
 ## Three supporting mechanisms
 
-**Secret handles.** A Request that would return an API key, token, or
-credential returns an opaque handle instead — `<secret:brave_api_key>`. The
+**Secret handles.** A config setting holding a credential is *named*
+`secret_something`; that prefix is the declaration, matching how the rest of
+the system declares things by name. A Request that would return one returns an
+opaque handle instead — `<secret:secret_brave_api_key>`. The
 handle can be passed into other Requests; the kernel substitutes the real value
 at the point of use, inside `net.http`. Sandboxed code can therefore *use* a
 credential it can never *read*, which is exactly the property a careless plugin
 needs. This is what the contract's "private information" clause means in
 practice.
+
+**The limit of that, stated plainly.** Substitution is possible because the
+kernel performs the effect. A plugin driving a foreign library that does its
+own network I/O — an OAuth client, a provider SDK — offers no such moment, and
+no amount of handle machinery changes that. It is the same limit the contract
+already names for foreign libraries, not a second one.
+
+So plaintext is reachable, through one Request classified **unsafe**:
+`secret.reveal`. The ledger keeps the record either way, and the dialog names
+the secret, the plugin, and the chain.
+
+It is not asked every time, because that would be noise rather than security.
+A plugin declares its `config_settings`, so the kernel knows which plugin a key
+belongs to: **the owner reads its own credential silently — configuring the key
+for that service was the consent — and any other plugin reaching for the same
+key is asked.** That is the question with actual information in it.
+
+Which leaves the honest ceiling: a credential handed to a foreign library is
+past the kernel's reach, and no arrangement of Requests recovers it. Only real
+OS-level containment would, and until then this is a known, accepted cost of
+running useful code.
 
 **Per-user views.** Tables carrying a `user_id` are exposed to sandboxed code as
 views filtered to the session's current user, not as base tables. Scoping is

@@ -59,7 +59,8 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        FILE_REGISTER, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                        FS_SEARCH, FS_TEMP, FS_WRITE, LEDGER_READ,
                        LEDGER_RECORD, NET_HTTP, PARSE_FILE, PARSE_MODALITY,
-                       PLUGIN_DESCRIBE, PLUGIN_LIST, PROC_RUN, SELF_RESPOND,
+                       PLUGIN_DESCRIBE, PLUGIN_LIST, PROC_RUN,
+                       SECRET_REVEAL, SELF_RESPOND,
                        SERVICE_CALL, SERVICE_LIST, SESSION_ADD_PROMPT,
                        SESSION_ADD_TOOL, SESSION_CANCEL, SESSION_GET,
                        SESSION_LIST, SESSION_PUSH, SESSION_REMOVE_PROMPT,
@@ -465,6 +466,24 @@ class _Env(_Namespace):
         return self._ask(ENV_READ, name=name)
 
 
+class _Secrets(_Namespace):
+    """Credentials.
+
+    Prefer the handle. ``sdk.config.read`` and ``sdk.env.read`` give you one
+    for anything credential-shaped, and passing it to ``sdk.net.http`` works
+    without your code ever holding the value.
+
+    ``reveal`` is for the case handles cannot cover: driving a library that
+    performs its own network I/O, so there is no Request for the kernel to
+    substitute into. It always asks the user, naming the secret and what asked
+    for it.
+    """
+
+    def reveal(self, name: str):
+        """The plaintext of a secret. Always asks."""
+        return self._ask(SECRET_REVEAL, name=name)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Helpers: no Request, no cost, no ledger row.
 # ──────────────────────────────────────────────────────────────────────
@@ -548,6 +567,7 @@ class SDK:
         self.net = _Net(self)
         self.proc = _Proc(self)
         self.env = _Env(self)
+        self.secrets = _Secrets(self)
         self.text = _Text()
         self.md = _Markdown()
 

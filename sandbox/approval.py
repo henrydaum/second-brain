@@ -68,6 +68,9 @@ def _action_line(request) -> str:
         verb = {"fs.write": "Write to", "fs.delete": "Delete",
                 "fs.move": "Move"}.get(kind, "Touch")
         return f"{verb} `{target}`"
+    if kind == "secret.reveal":
+        return (f"Hand the **plaintext** of `{args.get('name')}` to sandboxed "
+                f"code, which will then hold it directly")
     if kind == "config.write":
         return f"Change the setting `{args.get('key')}`"
     if kind.startswith("plugin."):
@@ -138,6 +141,16 @@ def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
         if _trusted(runtime, key, chain):
             return True
 
+        # 2b. A plugin asking for its own credential. Configuring a key *for*
+        #     a service is the consent; re-asking on every load would be the
+        #     approval fatigue this whole design is trying to avoid. Another
+        #     plugin asking for that same key still gets a dialog, which is
+        #     the part actually worth a question.
+        if _owns_secret(chain, request):
+            logger.debug("%s revealing its own %s", _leaf(chain),
+                         request.args.get("name"))
+            return True
+
         # 3. Nobody to ask means no.
         if not attended:
             logger.info("refusing %s from unattended %s",
@@ -164,6 +177,31 @@ def build_approver(runtime, session_key=None, timeout: float = DIALOG_TIMEOUT):
         return bool(pending.approved)
 
     return approve
+
+
+def _owns_secret(chain, request) -> bool:
+    """Whether the plugin asking for a secret is the one that declared it.
+
+    Plugins declare their ``config_settings``, so the kernel already knows who
+    a key belongs to. A service reading the credential it was configured with
+    is the setup the user already agreed to; a *different* plugin reaching for
+    it is a genuinely different question, and only that one is asked.
+
+    Anything the kernel cannot answer falls through to the dialog.
+    """
+    if request.type != "secret.reveal":
+        return False
+    name = request.args.get("name")
+    if not name:
+        return False
+    try:
+        from plugins.plugin_discovery import get_setting_plugin_names
+        owners = set(get_setting_plugin_names(name))
+    except Exception:
+        return False
+    if not owners:
+        return False
+    return bool(owners & (set(chain.links) | {chain.root}))
 
 
 def _leaf(chain) -> str:

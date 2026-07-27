@@ -116,6 +116,7 @@ LEDGER_READ = "ledger.read"
 NET_HTTP = "net.http"
 PROC_RUN = "proc.run"
 ENV_READ = "env.read"
+SECRET_REVEAL = "secret.reveal"
 SELF_RESPOND = "self.respond"
 
 
@@ -139,7 +140,7 @@ ALL_TYPES = {
     EVENT_EMIT, EVENT_REQUEST,
     TASK_ENQUEUE, TASK_STATUS, TASK_OUTPUT, FILE_REGISTER, FILE_LIST,
     PARSE_FILE, PARSE_MODALITY, LEDGER_RECORD, LEDGER_READ,
-    NET_HTTP, PROC_RUN, ENV_READ, SELF_RESPOND,
+    NET_HTTP, PROC_RUN, ENV_READ, SECRET_REVEAL, SELF_RESPOND,
 }
 
 # Requests that read rather than change. The policy function leans on this,

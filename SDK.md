@@ -144,6 +144,7 @@ sdk.fs.temp(directory=False, suffix="")    # scratch space; always allowed
 sdk.net.http(url, method="GET", headers=None, body=None)  # -> {status, body}
 sdk.proc.run(argv, timeout=120.0, cwd=None)               # -> {code, stdout, stderr}
 sdk.env.read(name)                         # credentials come back as handles
+sdk.secrets.reveal(name)                   # plaintext; always asks the user
 ```
 
 ### Data
@@ -326,6 +327,7 @@ checked cannot execute anything.
 Importing a third-party library that isn't vouched for is **not** an error —
 it loads with a disclaimer, and you should declare
 `isolation = "subprocess"`, because that library's actions cannot be mediated.
+Everything can be written this way; nothing is off-limits for needing one.
 
 ---
 
@@ -343,10 +345,43 @@ tool to a session asks; removing one does not.
 **You never see the chain of provenance.** The kernel tracks who called whom
 and shows it to the user when it asks. You cannot read it or affect it.
 
-**Secrets are usable but not readable.** `sdk.config.read("brave_api_key")`
-returns `<secret:brave_api_key>`. Pass that straight into `sdk.net.http` and
-the kernel substitutes the real value on the way out. You can use a credential
-you were never given — which means you cannot leak one by accident.
+**Name a credential setting `secret_something`.** That prefix is the whole
+declaration — the same way `tool_`, `command_` and `service_` prefixes tell
+discovery what a file is:
+
+```python
+config_settings = [
+    ("Brave key", "secret_brave_api_key", "API key for search.", "", {}),
+]
+```
+
+`sdk.config.read("secret_brave_api_key")` then returns
+`<secret:secret_brave_api_key>` rather than the value. Pass that straight into
+`sdk.net.http` and the kernel substitutes the real thing on the way out, so
+your code uses a credential it never held and cannot leak one by accident. A
+setting *without* the prefix is not a secret and is handed over as-is — the
+validator warns if one looks like it should have been marked.
+
+Environment variables are the exception, judged by their names, because
+nothing declares them: `OPENAI_API_KEY` was named by somebody else entirely.
+
+That works because the *kernel* makes the call. If you are driving a library
+that performs its own network I/O — an OAuth client, a provider SDK — there is
+no Request to substitute into and you genuinely need the value:
+
+```python
+key = sdk.secrets.reveal("gmail_client_secret")   # always asks the user
+```
+
+**Asking for your own credential does not interrupt anyone.** A plugin that
+declares a setting in its `config_settings` owns that key: configuring it was
+the consent, and re-asking on every load would be pointless noise. A
+*different* plugin reaching for the same key does get a dialog — that is the
+question actually worth asking.
+
+Use a handle wherever a handle can work, because once you hold plaintext you
+are responsible for it. And be honest about the ceiling: a credential inside a
+foreign library is beyond the kernel's reach.
 
 **Nothing survives between ephemeral runs.** Module state is discarded after
 each call. A service, or a persistent box, is how you keep something.
