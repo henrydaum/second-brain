@@ -404,6 +404,21 @@ reuses the kernel's existing `vet_permission` doorway (enriched with
 `origin="request"` plus the typed `request`/`chain`/`decision`), then
 `skip_permissions`, then a dialog; unattended sessions refuse rather than block.
 
+**An approval is scoped to what the command declared.** `Chain.approved` is a
+frozenset of Request types — the command's own `requests` list, read by AST —
+never a boolean. It was a boolean, and that made one "yes" to `/update`
+authorize all 87 Requests including egress and plugin installation. The grant
+is the *declaration* rather than an argument allowlist because that is the
+only decidable question: predicting what `git pull` does is Rice's theorem,
+while asking whether the command said it runs a shell is set membership. It is
+also the honest reading of what the user answered — they approved a command,
+and a command's scope is the capability classes it declared. `push` copies the
+grant down unchanged, so a callee can never widen it. This made `requests`
+load-bearing after a long career as documentation, so the validator now checks
+every name against the closed Request vocabulary (`_check_requests`) — the
+audit that motivated it found `/setup` declaring `path.get`, which is not a
+Request type and never was.
+
 **Services are resident boxes.** A sandboxed `BaseService` bridges to a native
 one whose `_load()` opens a persistent box and whose `unload()` closes it.
 Methods named in `exports` become real attributes on the adapter, because

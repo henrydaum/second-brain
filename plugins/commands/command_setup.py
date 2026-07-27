@@ -103,8 +103,8 @@ class SetupCommand(BaseCommand):
     description = "Onboarding: install a starter bundle, then configure an LLM and Telegram"
     category = "System"
     requests = [
-        "plugin.list", "plugin.install", "config.read", "config.write",
-        "path.get", "env.read", "net.http",
+        "plugin.list", "plugin.install", "config.write",
+        "paths.get", "env.read", "net.http",
     ]
 
     def form(self, sdk, args):

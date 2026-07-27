@@ -190,6 +190,11 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     source_path = str(path)
     box_name = declarations.get("box") or path.stem
 
+    # What one approval is allowed to buy. Read here, once, from the same
+    # declaration the validator checks and the approval dialog names — so the
+    # grant a user answers and the grant the policy honours cannot disagree.
+    granted = frozenset(declarations.get("requests") or ())
+
     # A service is not a call, it is a residency: it opens a box and stays.
     # Different enough that it gets its own builder rather than a branch in
     # the per-call machinery below.
@@ -213,8 +218,10 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         # twice — which the cycle detector correctly refuses.
         chain = Chain(
             root=_root_for(context),
-            approved=bool(
-                getattr(context, "approved_by_state_machine", False)
+            approved=(
+                granted
+                if getattr(context, "approved_by_state_machine", False)
+                else None
             ),
         )
         result = get_sandbox().run(

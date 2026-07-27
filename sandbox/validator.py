@@ -27,8 +27,11 @@ Three severities:
 from __future__ import annotations
 
 import ast
+import difflib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .guest.requests import ALL_TYPES
 
 ERROR = "error"
 WARNING = "warning"
@@ -449,6 +452,26 @@ def _check_hooks(walker: _Walker, node, cls):
                        f"defines no such method")
 
 
+def _check_requests(walker: _Walker, node):
+    """Check every name in a ``requests`` declaration is a real Request type.
+
+    This declaration used to be documentation, and drifted the way
+    documentation does. It is now load-bearing: it is exactly what a single
+    user approval authorizes, so a name that matches nothing grants nothing
+    and the misspelling surfaces as an approval dialog the user thought they
+    had already answered.
+    """
+    value = _literal(node.value)
+    if not isinstance(value, list):
+        return          # already reported by the literal-list check
+    for name in value:
+        if not isinstance(name, str) or name in ALL_TYPES:
+            continue
+        close = difflib.get_close_matches(name, sorted(ALL_TYPES), 1, 0.7)
+        walker.add(ERROR, node, f"{name!r} is not a Request type",
+                   close[0] if close else "")
+
+
 def _check_subscribed_channels(walker: _Walker, node, cls, family: str):
     """Check a ``subscribed_channels`` declaration can actually be honoured.
 
@@ -625,6 +648,14 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
                 walker.add(ERROR, assigned[key],
                            f"{key} must be a literal list of strings — the "
                            f"kernel reads it without importing")
+
+    # ``requests`` is the grant an approval spends, so a typo in it is the one
+    # that costs something: the misspelled Request is not in the set, and the
+    # command stops mid-run asking about a capability the user already
+    # approved. Checked against a closed vocabulary because, unlike bus
+    # channels, a plugin cannot invent a Request type.
+    if "requests" in assigned:
+        _check_requests(walker, assigned["requests"])
 
     # Hooks are declared, not registered, so a typo here is silent: the shim
     # is never stood up and the doorway is simply never visited.

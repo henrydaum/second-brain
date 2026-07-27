@@ -63,13 +63,30 @@ class Chain:
 
     ``links`` is who called whom, innermost last. The kernel maintains this as
     its own stack, so plugins can neither report nor misstate their identity.
+
+    ``approved`` is what the user said yes to, and it is a *set of Request
+    types*, never a boolean. A person approving ``/update`` is approving a
+    command, not a syscall list — and the honest reading of a command's scope
+    is the capability classes it declared in ``requests``, which is the only
+    thing the approval dialog can truthfully name. Predicting what
+    ``git pull`` will actually do is undecidable; asking whether the command
+    said it would run a shell is not.
+
+    ``None`` means nothing was approved. An empty set means a command was
+    approved but declared no Requests, which grants nothing — deliberately
+    different from ``None`` only in intent, not in effect.
     """
     root: str = "user"
     links: tuple = ()
-    approved: bool = False
+    approved: frozenset | None = None
 
     def push(self, name: str) -> "Chain":
-        """Descend into a nested call."""
+        """Descend into a nested call.
+
+        The grant is copied down unchanged. It was fixed when the user
+        answered, so a callee can only ever spend what the approved command
+        was given — it can never widen the set by declaring more itself.
+        """
         return Chain(
             root=self.root,
             links=self.links + (name,),
@@ -249,11 +266,15 @@ def classify(request: Request, chain: Chain) -> Decision:
         return Decision(UNSAFE, f"call chain deeper than {MAX_DEPTH}")
     if chain.cyclic:
         return Decision(UNSAFE, f"call cycle: {chain.render()}")
-    if chain.approved:
-        return Decision(SAFE, "approved command")
-
     kind = request.type
     args = request.args
+
+    # An approval covers what the command declared and nothing else. Anything
+    # outside the grant falls through to the branches below and is asked about
+    # on its own — so a command that reaches past its manifest gets caught
+    # rather than riding in on the one "yes" the user already gave.
+    if chain.approved and kind in chain.approved:
+        return Decision(SAFE, "approved command")
 
     # ── egress: checked regardless of verb ────────────────────────
     if kind == NET_HTTP:

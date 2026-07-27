@@ -353,6 +353,29 @@ def test_reaching_around_the_kernel_database_is_still_an_error():
     assert "sdk.db" in _messages(report)
 
 
+def test_a_misspelled_request_declaration_is_an_error():
+    """``requests`` is the grant an approval spends, so typos cost something.
+
+    Unlike a bus channel, a plugin cannot invent a Request type, so this is a
+    closed vocabulary and a name outside it grants nothing.
+    """
+    report = _validate(GOOD_TOOL.replace(
+        "    max_calls = 3",
+        '    max_calls = 3\n    requests = ["path.get", "totally.bogus"]'))
+    assert not report.ok
+    messages = _messages(report)
+    assert "'path.get' is not a Request type" in messages
+    assert "paths.get" in messages          # and it suggests the right one
+    assert "'totally.bogus' is not a Request type" in messages
+
+
+def test_a_correct_request_declaration_passes():
+    report = _validate(GOOD_TOOL.replace(
+        "    max_calls = 3",
+        '    max_calls = 3\n    requests = ["fs.read", "proc.run"]'))
+    assert report.ok, report.render()
+
+
 def test_kernel_modules_are_not_called_foreign_libraries():
     """They are the boundary, not an unvalidatable dependency."""
     for module in ("paths", "runtime.context", "plugins.helpers.plugin_paths"):

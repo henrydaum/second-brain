@@ -585,7 +585,7 @@ class Indexer(BaseTool):
     isolation = "subprocess"   # needed if you import a foreign library
     timeout = 120              # seconds; the kernel clamps it
     memory_mb = 512            # subprocess only, POSIX only
-    requests = ["fs.read", "db.query"]   # advisory; shown at install time
+    requests = ["fs.read", "db.query"]   # what you may do; see below
 
     # Frontends only:
     background_submit = True   # submit off poll() when replies may render
@@ -597,6 +597,14 @@ class Indexer(BaseTool):
 
 Declarations are **intent**. The kernel reads them without importing your file,
 resolves them, and clamps them. Asking for a longer timeout does not grant one.
+
+`requests` is the exception that goes the other way: it does not grant, it
+*limits*. When a command declares `require_approval = True` and the user says
+yes, that single approval covers exactly the Request types listed here —
+anything else still prompts on its own. So list what you actually use and
+nothing more, and expect the validator to reject a name that is not a real
+Request type. A misspelling grants nothing and shows up as a dialog the user
+thought they had already answered.
 
 Services declare what other code may reach:
 

@@ -550,7 +550,25 @@ call stack, carries the chain captured at its creation. The stack is capped for
 depth, which also detects cycles.
 
 An approved command carries that one-shot approval on its host-maintained
-chain. Requests made while that command executes do not ask a second time;
-the authority disappears when the command returns. The approval token is
-generated and consumed by the state machine, never accepted from plugin
-arguments.
+chain, and the authority disappears when the command returns. The approval
+token is generated and consumed by the state machine, never accepted from
+plugin arguments.
+
+**The approval is scoped, not a skeleton key.** `Chain.approved` is a *set of
+Request types* — the command's own `requests` declaration, read by AST at
+adapt time — never a boolean. Requests inside that set do not ask a second
+time. Requests outside it fall through to their ordinary branch and are asked
+about on their own, so a command reaching past its manifest is caught rather
+than riding in on the one "yes" the user already gave. `push` copies the grant
+down unchanged: a callee can spend what the approved command was given and can
+never widen it by declaring more itself.
+
+The grant is the declaration rather than an argument allowlist because that is
+the only question with a decidable answer. Predicting what `git pull` will do
+is Rice's theorem; asking whether the command declared that it runs a shell is
+a set membership test. It is also what the user is actually being asked — a
+person approves a *command*, and the honest statement of a command's scope is
+the capability classes it declared. `requests` is therefore load-bearing, and
+the validator checks every name against the closed Request vocabulary: a
+misspelling would otherwise grant nothing and surface as a dialog the user
+thought they had already answered.
