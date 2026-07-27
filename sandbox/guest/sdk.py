@@ -457,10 +457,16 @@ class _Commands(_Namespace):
 class _Agent(_Namespace):
     """The model, and other agents."""
 
-    def complete(self, prompt: str = "", messages=None):
+    def complete(
+        self,
+        prompt: str = "",
+        messages=None,
+        session_key: str | None = None,
+    ):
         """A model call. Keys and sockets stay kernel-side."""
         return self._ask(AGENT_COMPLETE, prompt=prompt,
-                         messages=list(messages or []))
+                         messages=list(messages or []),
+                         session_key=session_key or None)
 
     def spawn(self, prompt: str, wait: bool = True):
         """Run a subagent now."""

@@ -1,17 +1,16 @@
 """Conversation compaction service."""
 
-import logging
-
-from plugins.BaseService import BaseService, EXTENSION
-
-logger = logging.getLogger("CompactorService")
+from guest.bases import BaseService
 
 
 class CompactorService(BaseService):
     """Summarize conversation history when the active LLM context is tight."""
 
-    model_name = "Conversation Compactor"
-    lifecycle = EXTENSION
+    name = "compactor"
+    description = "Summarize conversation history when the active LLM context is tight."
+    lifecycle = "extension"
+    exports = ["compact"]
+    requests = ["agent.complete"]
 
     SYSTEM_PROMPT = (
         "Produce a continuation summary of this Second Brain conversation that a "
@@ -25,34 +24,33 @@ class CompactorService(BaseService):
         "unless knowing an approach failed prevents repeating the mistake."
     )
 
-    def compact(self, *, runtime, session_key: str | None, transcript: str) -> str | None:
+    def start(self, sdk):
+        """The service holds no resources between calls."""
+        return True
+
+    def stop(self, sdk):
+        """The service holds no resources between calls."""
+        return None
+
+    def compact(
+        self,
+        sdk,
+        *,
+        session_key: str | None = None,
+        transcript: str,
+    ) -> str | None:
         """Return a continuation summary for a rendered transcript."""
         if not transcript:
             return ""
-        llm = self._llm_for_session(runtime, session_key) or self.services.get("llm")
-        if llm is None or not getattr(llm, "loaded", False):
-            logger.warning("Compaction skipped: LLM service is not loaded.")
-            return None
-        response = llm.chat_with_tools([
-            {"role": "system", "content": self.SYSTEM_PROMPT},
-            {"role": "user", "content": transcript},
-        ], None)
-        if getattr(response, "is_error", False):
-            logger.warning("Compaction failed: %s", getattr(response, "error", None) or "unknown error")
-            return None
-        return (getattr(response, "content", "") or "").strip()
-
-    @staticmethod
-    def _llm_for_session(runtime, session_key: str | None):
-        if not runtime or not session_key:
-            return None
         try:
-            from runtime.runtime_config import active_llm
-            return active_llm(runtime, runtime.sessions.get(session_key))
-        except Exception:
-            logger.exception("Failed to resolve session LLM for compaction")
+            response = sdk.agent.complete(
+                messages=[
+                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "user", "content": transcript},
+                ],
+                session_key=session_key,
+            )
+        except sdk.Failed as exc:
+            sdk.log(f"Compaction failed: {exc}", level="warning")
             return None
-
-
-def build_services(config: dict) -> dict:
-    return {"compactor": CompactorService()}
+        return (response.get("content") or "").strip()

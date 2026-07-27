@@ -1456,7 +1456,22 @@ def _agent_complete(ctx, args: dict) -> Result:
     Its own Request, never a generic ``service.call``: keys, sockets and
     provider details stay kernel-side and the sandbox sees a prompt.
     """
-    llm = _service(ctx, "llm")
+    llm = None
+    session_key = args.get("session_key")
+    runtime = _runtime(ctx)
+    if runtime is not None and session_key:
+        try:
+            from runtime.runtime_config import active_llm
+
+            session = (getattr(runtime, "sessions", None) or {}).get(
+                session_key
+            )
+            llm = active_llm(runtime, session)
+        except Exception:
+            logger.exception(
+                "could not resolve the active LLM for %s", session_key
+            )
+    llm = llm or _service(ctx, "llm")
     if (bad := _need(llm, "an LLM")) is not None:
         return bad
     messages = args.get("messages")

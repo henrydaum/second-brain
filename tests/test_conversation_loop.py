@@ -605,8 +605,10 @@ def test_compaction_uses_compactor_service_directly():
 
     loop._compact(history)
 
-    assert compactor.calls[0]["runtime"] is runtime
-    assert compactor.calls[0]["session_key"] == "chat"
+    assert compactor.calls[0] == {
+        "session_key": "chat",
+        "transcript": "USER: one\nASSISTANT: two\nUSER: three",
+    }
     assert history[0]["content"].startswith("[Conversation summary from earlier]")
     assert history[0]["content"].endswith("Earlier summary.")
     # The synthesized turn carries the compaction ground rules: the full

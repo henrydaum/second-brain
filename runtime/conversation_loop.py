@@ -1038,7 +1038,10 @@ class ConversationLoop:
             transcript = _truncate_middle(transcript, 20000)
             if self.on_notice:
                 self.on_notice("Compacting conversation...")
-            summary = compactor.compact(runtime=self.runtime, session_key=self.session_key, transcript=transcript)
+            summary = compactor.compact(
+                session_key=self.session_key,
+                transcript=transcript,
+            )
             if not summary:
                 logger.warning("Compaction returned no summary. History will not shrink via summary.")
                 return
