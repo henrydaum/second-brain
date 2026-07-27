@@ -167,6 +167,7 @@ sdk.conv.list()
 sdk.conv.append(conversation_id, role, content)
 sdk.conv.set_title(conversation_id, title)
 sdk.conv.set_category(conversation_id, category)
+sdk.conv.clear(conversation_id=None) # defaults to the active conversation
 sdk.conv.delete(conversation_id)
 
 sdk.config.read(key)           # omit key for everything

@@ -53,7 +53,7 @@ from .channel import Terminated
 from .requests import Denied, RequestFailed
 from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        COMMAND_CALL, COMMAND_LIST, CONFIG_READ, CONFIG_WRITE,
-                       CONV_APPEND, CONV_CREATE, CONV_DELETE, CONV_LIST,
+                       CONV_APPEND, CONV_CLEAR, CONV_CREATE, CONV_DELETE, CONV_LIST,
                        CONV_READ, CONV_SET_CATEGORY, CONV_SET_TITLE,
                        CRON_CREATE, CRON_ENABLE, CRON_GET, CRON_LIST,
                        CONSOLE_READ, CONSOLE_WRITE,
@@ -201,6 +201,10 @@ class _Conv(_Namespace):
         """Categorize."""
         return self._ask(CONV_SET_CATEGORY, id=conversation_id,
                          category=category)
+
+    def clear(self, conversation_id=None):
+        """Clear messages and reload the active conversation."""
+        return self._ask(CONV_CLEAR, id=conversation_id)
 
     def delete(self, conversation_id):
         """Delete a conversation and its messages."""

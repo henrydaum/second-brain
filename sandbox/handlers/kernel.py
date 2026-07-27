@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               MODEL_DELTA, MODEL_PROCEED,
-                              CONFIG_READ, CONFIG_WRITE, CONV_APPEND,
+                              CONFIG_READ, CONFIG_WRITE, CONV_APPEND, CONV_CLEAR,
                               CONV_CREATE, CONV_DELETE, CONV_LIST, CONV_READ,
                               CONV_SET_CATEGORY, CONV_SET_TITLE, CRON_CREATE,
                               CRON_ENABLE, CRON_GET, CRON_LIST, CRON_REMOVE,
@@ -147,9 +147,12 @@ def _check_access(ctx, conversation_id) -> Result | None:
     if check is None or conversation_id is None:
         return None
     try:
-        check(conversation_id, getattr(ctx, "user_id", None))
+        allowed = check(getattr(ctx, "session_key", None), conversation_id)
     except Exception as exc:
         return Result.refusal(f"conversation {conversation_id}: {exc}")
+    if not allowed:
+        return Result.refusal(
+            f"conversation {conversation_id} is not available to this user")
     return None
 
 
@@ -237,6 +240,42 @@ def _conv_set_category(ctx, args: dict) -> Result:
         return Result(data=True)
     except Exception as exc:
         return Result.failure(f"categorize failed: {exc}")
+
+
+def _conv_clear(ctx, args: dict) -> Result:
+    """Clear a conversation and refresh any active session displaying it."""
+    runtime = _runtime(ctx)
+    db = _db(ctx)
+    if (bad := _need(runtime, "the runtime")) is not None:
+        return bad
+    if (bad := _need(db, "the database")) is not None:
+        return bad
+
+    key = getattr(ctx, "session_key", None)
+    session = (getattr(runtime, "sessions", None) or {}).get(key)
+    cid = args.get("id")
+    if cid is None:
+        cid = getattr(session, "conversation_id", None)
+    if cid is None:
+        return Result.failure("no conversation loaded")
+    if (refused := _check_access(ctx, cid)) is not None:
+        return refused
+
+    try:
+        db.clear_conversation_messages(cid)
+        conversation = db.get_conversation(cid) or {}
+        title = (conversation.get("title") or "").strip()
+        if title and not title.endswith(" (cleared)"):
+            db.update_conversation_title(cid, f"{title} (cleared)")
+
+        if session is not None and getattr(session, "conversation_id", None) == cid:
+            uid = runtime.session_user_id(key)
+            runtime.close_session(key)
+            runtime.set_session_user(key, uid)
+            runtime.load_conversation(key, cid)
+        return Result(data=True)
+    except Exception as exc:
+        return Result.failure(f"clear failed: {exc}")
 
 
 def _conv_delete(ctx, args: dict) -> Result:
@@ -1158,7 +1197,8 @@ HANDLERS = {
     DB_QUERY: _db_query, DB_WRITE: _db_write, DB_DEFINE: _db_define,
     CONV_CREATE: _conv_create, CONV_READ: _conv_read, CONV_LIST: _conv_list,
     CONV_APPEND: _conv_append, CONV_SET_TITLE: _conv_set_title,
-    CONV_SET_CATEGORY: _conv_set_category, CONV_DELETE: _conv_delete,
+    CONV_SET_CATEGORY: _conv_set_category, CONV_CLEAR: _conv_clear,
+    CONV_DELETE: _conv_delete,
     SESSION_GET: _session_get, SESSION_LIST: _session_list,
     SESSION_PUSH: _session_push, SESSION_STATE_GET: _session_state_get,
     SESSION_STATE_SET: _session_state_set, SESSION_CANCEL: _session_cancel,

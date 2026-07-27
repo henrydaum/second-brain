@@ -116,7 +116,7 @@ these three Requests. Transaction scoping becomes an argument
 | `conv.set_title(id, title)` | Retitle | id, owning user | safe (own) |
 | `conv.set_category(id, cat)` | Categorize | id, owning user | safe (own) |
 | `conv.set_notify(id, mode)` | Notification mode | id, owning user | safe (own) |
-| `conv.clear(id)` | Drop messages, keep conversation | id, owning user | unsafe |
+| `conv.clear(id)` | Drop messages, keep conversation | id, owning user | safe (own) |
 | `conv.delete(id)` | Delete conversation and messages | id, owning user | unsafe |
 | `conv.enact(id, action)` | Drive an agent turn | id, owning user, root | unsafe from an unattended root |
 
