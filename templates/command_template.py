@@ -1,129 +1,140 @@
 """
 COMMAND TEMPLATE
 ================
-This file is a self-contained reference for creating slash commands.
-It is NOT imported by the running system — it exists for LLM consumption only.
+A command is a slash command a person types. Reference for authoring one; not
+imported by the running system.
 
-Commands are user-facing conversation actions. They are invoked with `/name`,
-can collect form fields, and return text to the frontend. Use commands for
-interactive UI/workflow control; use tools for agent-callable capabilities.
-Commands are normally sandbox drafts or installed package files; add
-one to plugins/commands/ only when it is true kernel operation or introspection.
+Read SDK.md for the Request surface and sandbox/guest/bases.py for every
+attribute a command can declare. This file covers what is specific to commands.
 
-Command authoring flow:
-  1. Read this template, then read one similar installed or built-in command for style.
-  2. Create sandbox_plugins/commands/command_<your_name>.py using whatever
-     file-editing capability is installed and in scope.
-  3. The code MUST inherit from BaseCommand and include:
-       from plugins.BaseCommand import BaseCommand
-       from state_machine.conversation import FormStep
-  4. Fill in name, description, category, optional form(), and run().
-  5. If a test_plugin tool is installed, call
-     test_plugin(plugin_path="sandbox_plugins/commands/command_<your_name>.py").
-     Otherwise run focused pytest/compile checks from outside the runtime.
-  6. If testing fails, read the error, edit the same file, and retry.
-  7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
-  8. To update: edit the file; plugin_watcher reloads it when enabled.
-  9. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
+  Where it goes:  DATA_DIR/sandbox_plugins/commands/command_<name>.py
+  Filename:       must start with "command_"
+  Entry points:   run(self, sdk, args) and optionally form(self, sdk, args)
 
-AUTO-DISCOVERY RULES
---------------------
-- File must be in plugins/commands/, sandbox_plugins/commands/, or installed_plugins/commands/
-- File name must start with "command_"
-- Class must inherit from BaseCommand
-- Class must have a non-empty `name`
-- Import host APIs from plugins.* and helper code with relative imports.
+WATCH THE ARGUMENT ORDER. The native contract was run(self, args, context);
+the sandboxed one is run(self, sdk, args).
 
-FORMS
------
-`form(args, context)` returns FormStep objects for missing input. The runtime
-collects each field, coerces types, and calls run(args, context) when complete.
-For dynamic forms, inspect already-collected args and return the next needed
-steps. Write each FormStep prompt as a user-facing instruction, not just a
-field label: "Enter the note text." is better than "Text".
+Commands are for interactive UI and workflow control. If the agent should be
+able to call it, write a tool instead.
 
-COMMAND RESULT
---------------
-Return a short string for the frontend, or None for no visible message.
-Commands should not call the LLM directly; route agent work through tools,
-tasks, or runtime methods exposed in context.
+
+FORM STEPS ARE PLAIN DICTS
+--------------------------
+This is the one thing that will catch you. Natively, `form()` returned FormStep
+objects. A FormStep is a live kernel object, so sandboxed code cannot hold one
+— you return plain dicts and the kernel rebuilds them:
+
+    return [{"name": "text", "prompt": "Enter the note text.", "required": True}]
+
+Recognized keys: name, prompt, required, type, enum, enum_labels, default,
+prompt_when_missing, columns. Unknown keys are dropped silently, so a typo
+costs you that field rather than raising — check your spelling. `validator`
+cannot be passed at all, because it is a callable; validate inside `run`.
+
+Types are coerced before `run` sees them: "string" (default), "integer",
+"number", "boolean".
+
+Write each prompt as a user-facing instruction, not a field label:
+"Enter the note text." beats "Text".
+
+
+FORMS SUSPEND, AND THEY SURVIVE RESTARTS
+----------------------------------------
+Returning steps does not block. The command suspends onto the cache stack and
+resumes when the user has answered — across an app restart, if it takes that
+long. So `form()` may be called several times for one invocation, and it must
+be cheap and free of side effects. Do the work in `run`.
+
+For a dynamic form, look at what has been collected already and return only
+the next steps needed. Returning [] means "ready, run now".
+
+
+RETURN MARKDOWN
+---------------
+Command output is a string of GitHub-flavored markdown. Each frontend renders
+it by its own policy — the REPL aligns tables and strips fences, rich
+frontends render natively. Do not invent a structured return type; markdown is
+deliberately the interchange format.
+
+Build it with the SDK helpers so it renders consistently everywhere:
+
+    sdk.md.table(headers, rows)     data tables
+    sdk.md.card(title, pairs)       describe-style key/value cards
+
+Tables must start their own block — put a blank line before one, or markdown
+parsers fold it into the preceding paragraph.
+
+Return None for no visible message.
+
+
+The two examples below are separate commands, shown together for contrast. A
+real file declares exactly ONE plugin class.
 """
 
-# =====================================================================
-# BASE CLASS (copied from plugins/BaseCommand.py for self-containment)
-# =====================================================================
-
-from state_machine.conversation import FormStep
+from guest.bases import BaseCommand
 
 
-class BaseCommand:
-    """Base command."""
-    name: str = ""
-    description: str = ""
-    category: str = "Other"
-    hide_from_help: bool = False
-    require_approval: bool = False
-    approval_actor_id: str | None = None
-    config_settings: list = []
+class Note(BaseCommand):
+    """The simplest useful command: one field, one answer."""
 
-    def form(self, args: dict, context) -> list[FormStep]:
-        """Handle form."""
+    name = "note"
+    description = "Append a short note to the current conversation."
+    category = "Conversation"
+
+    def form(self, sdk, args):
+        """Ask for the text if it was not given on the command line."""
+        if args.get("text"):
+            return []          # /note "already provided" — run immediately
+        return [{"name": "text", "prompt": "Enter the note text.", "required": True}]
+
+    def run(self, sdk, args):
+        """Store the note and confirm."""
+        text = (args.get("text") or "").strip()
+        if not text:
+            return "Nothing to note."
+        sdk.conv.append(sdk.session.get()["conversation_id"], "user", f"Note: {text}")
+        return f"Noted: {text}"
+
+
+class Digest(BaseCommand):
+    """A dynamic form plus a markdown table — the two things worth copying."""
+
+    name = "digest"
+    description = "Summarize recent conversations."
+    category = "Conversation"
+
+    def form(self, sdk, args):
+        """Build the form one decision at a time."""
+        # Step one: what scope? Nothing else can be asked until this is known.
+        if "scope" not in args:
+            return [{
+                "name": "scope",
+                "prompt": "Summarize which conversations?",
+                "required": True,
+                "enum": ["recent", "category"],
+                "enum_labels": ["Most recent", "By category"],
+            }]
+        # Step two depends on the answer to step one.
+        if args["scope"] == "category" and "category" not in args:
+            categories = sorted({c["category"] for c in sdk.conv.list() if c.get("category")})
+            return [{
+                "name": "category",
+                "prompt": "Which category?",
+                "required": True,
+                "enum": categories,
+            }]
         return []
 
-    def arg_completions(self, context) -> list[str]:
-        """Handle arg completions."""
-        return []
+    def run(self, sdk, args):
+        """Render the matching conversations as a table."""
+        rows = [c for c in sdk.conv.list()
+                if args["scope"] == "recent" or c.get("category") == args.get("category")]
+        if not rows:
+            return "No matching conversations."
 
-    def run(self, args: dict, context) -> str | None:
-        """Execute `/template` for the active session."""
-        raise NotImplementedError
-
-
-# =====================================================================
-# EXAMPLE: A command with a one-field form
-# =====================================================================
-
-# from plugins.BaseCommand import BaseCommand
-# from state_machine.conversation import FormStep
-#
-#
-# class NoteCommand(BaseCommand):
-#     name = "note"
-#     description = "Echo a short note back to the current frontend"
-#     category = "Other"
-#
-#     def form(self, args, context):
-#         return [FormStep("text", "Enter the note text to append.", True)]
-#
-#     def run(self, args, context):
-#         text = (args.get("text") or "").strip()
-#         if not text:
-#             return "No note provided."
-#         return f"Note: {text}"
-
-
-# =====================================================================
-# EXAMPLE: A dynamic command form
-# =====================================================================
-
-# from plugins.BaseCommand import BaseCommand
-# from state_machine.conversation import FormStep
-#
-#
-# class DemoCommand(BaseCommand):
-#     name = "demo"
-#     description = "Demonstrate dynamic command forms"
-#     category = "System"
-#
-#     def form(self, args, context):
-#         steps = [FormStep("mode", "Choose what the demo command should do.", True, enum=["say", "count"])]
-#         if args.get("mode") == "say":
-#             steps.append(FormStep("text", "Enter the text to return.", True))
-#         if args.get("mode") == "count":
-#             steps.append(FormStep("n", "Enter the number to count up to.", True, type="integer"))
-#         return steps
-#
-#     def run(self, args, context):
-#         if args["mode"] == "say":
-#             return args["text"]
-#         return ", ".join(str(i) for i in range(1, args["n"] + 1))
+        table = sdk.md.table(
+            ["Title", "Updated"],
+            [[c["title"], c["updated_at"]] for c in rows[:20]],
+        )
+        # Blank line before the table, or it folds into the sentence above it.
+        return f"**{len(rows)} conversation(s).**\n\n{table}"

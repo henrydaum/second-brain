@@ -130,11 +130,11 @@ Everything user-extensible has its own plugin family:
 
 | Family | Built-in path | Sandbox path | Contract |
 |---|---|---|---|
-| Tools | `plugins/tools/` | `sandbox_tools/` | LLM-callable actions via `BaseTool` |
-| Tasks | `plugins/tasks/` | `sandbox_tasks/` | Pipeline and event work via `BaseTask` |
-| Services | `plugins/services/` | `sandbox_services/` | Shared backends via `BaseService` |
-| Commands | `plugins/commands/` | `sandbox_commands/` | User slash commands via `BaseCommand` |
-| Frontends | `plugins/frontends/` | `sandbox_frontends/` | User transports via `BaseFrontend` |
+| Tools | `plugins/tools/` | `sandbox_plugins/tools/` | LLM-callable actions via `BaseTool` |
+| Tasks | `plugins/tasks/` | `sandbox_plugins/tasks/` | Pipeline and event work via `BaseTask` |
+| Services | `plugins/services/` | `sandbox_plugins/services/` | Shared backends via `BaseService` |
+| Commands | `plugins/commands/` | `sandbox_plugins/commands/` | User slash commands via `BaseCommand` |
+| Frontends | `plugins/frontends/` | `sandbox_plugins/frontends/` | User transports via `BaseFrontend` |
 
 Built-in plugins are source-controlled. Sandbox plugins live in the Second Brain data directory and can be created while the app is running. Valid plugins are discovered on startup; and adds, edits, and deletes are synced live when `plugin_watcher` is loaded (which is always).
 
@@ -423,6 +423,8 @@ Second Brain/
 ├── templates/
 │   ├── command_template.py
 │   ├── frontend_template.py
+│   ├── hook_template.py
+│   ├── script_template.py
 │   ├── service_template.py
 │   ├── task_template.py
 │   └── tool_template.py
@@ -432,28 +434,38 @@ Second Brain/
     ├── database.db
     ├── memory.md
     ├── attachment_cache/
-    ├── sandbox_tools/
-    ├── sandbox_tasks/
-    ├── sandbox_services/
-    ├── sandbox_commands/
-    └── sandbox_frontends/
+    ├── sandbox_plugins/
+    │   ├── tools/
+    │   ├── tasks/
+    │   ├── services/
+    │   ├── commands/
+    │   └── frontends/
+    └── installed_plugins/
 ```
 
 ## Extension Authoring Guide
 
-Use the templates as the source of truth:
+New plugins are written against the sandbox SDK. Read `SDK.md` for the Request
+vocabulary and the return idiom, `sandbox/guest/bases.py` for what each family
+may declare, and then the template for what is specific to that family:
 
 - `templates/tool_template.py`
 - `templates/task_template.py`
 - `templates/service_template.py`
 - `templates/command_template.py`
-- `templates/frontend_template.py`
+- `templates/script_template.py` — sandboxed code that is not a plugin
+- `templates/frontend_template.py` — still the native contract
+- `templates/hook_template.py` — still the native contract
+
+`MIGRATING_PLUGINS.md` covers converting an existing native plugin.
 
 Authoring rules:
 
-- Tools expose LLM-callable capabilities and return `ToolResult`.
+- Tools expose LLM-callable capabilities and return whatever they like; reach
+  for `sdk.ok(...)` only to attach an `llm_summary` or attachments.
 - Tasks are pipeline/event workers and should be idempotent where possible.
-- Services own reusable backends with explicit load/unload lifecycle.
+- Services own reusable backends and are the natural persistent box; their
+  state stays inside it and never crosses out.
 - Commands are user-facing conversation actions and can define `FormStep` flows.
 - Frontends are transports; they submit runtime actions and render runtime output.
 - Plugins can declare `config_settings`, which appear in config views and are stored in `plugin_config.json`.

@@ -215,9 +215,15 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         arguments, which is worse than not bridging commands at all — so the
         second entry point is forwarded too, and only when the migrated file
         actually defines one.
+
+        Form steps cross the boundary as plain data, because a ``FormStep``
+        is a live kernel object and sandboxed code cannot hold one. The
+        registry does want the real thing — it reads ``step.name`` and calls
+        ``step.coerce`` — so the dicts are rebuilt into ``FormStep``s here.
         """
-        return _forward(self, context, {"args": dict(args or {})},
-                        method="form") or []
+        steps = _forward(self, context, {"args": dict(args or {})},
+                         method="form") or []
+        return [s for s in map(_form_step, steps) if s is not None]
 
     run = {"tool": run_tool, "task": run_task,
            "command": run_command}.get(family)
@@ -246,6 +252,28 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     module.__file__ = source_path
     setattr(module, adapter.__name__, adapter)
     return module
+
+
+def _form_step(step):
+    """Rebuild one form step from the plain data a sandboxed command returned.
+
+    Unknown keys are dropped rather than raising: a command that names a field
+    the kernel does not have should lose that field, not its whole form. The
+    ``validator`` field is deliberately unreachable — it is a callable, so it
+    could never have crossed the boundary in the first place.
+    """
+    if not isinstance(step, dict):
+        return step
+    from state_machine.conversation import FormStep
+
+    allowed = set(FormStep.__dataclass_fields__) - {"validator"}
+    fields = {k: v for k, v in step.items() if k in allowed}
+    if not fields.get("name"):
+        # Nothing can be collected under no name, and raising here would cost
+        # the command its whole form over one bad step.
+        logger.warning("dropping a form step with no 'name': %r", step)
+        return None
+    return FormStep(**fields)
 
 
 def _root_for(context) -> str:

@@ -1,315 +1,178 @@
 """
 TOOL TEMPLATE
 =============
-This file is a self-contained reference for creating new tools.
-It is NOT imported by the running system — it exists for LLM consumption only.
+A tool is something the agent can call during a turn. Reference for authoring
+one; not imported by the running system.
 
-Second Brain keeps the kernel small. Tools are normally sandbox drafts or
-installed package files; add one to plugins/tools/ only when the capability is
-true kernel behavior.
+Read SDK.md first — it covers the Request surface, the return idiom, and what
+the validator rejects. Read sandbox/guest/bases.py for every attribute a tool
+can declare. This file covers only what is specific to tools and cannot be
+guessed from either.
 
-Write tools in the same voice the system expects elsewhere:
-- grounded and practical
-- explicit about what the tool does
-- clear about when to use it
-- clear about important limits or safety constraints
+  Where it goes:  DATA_DIR/sandbox_plugins/tools/tool_<name>.py
+                  (or plugins/tools/ only when it is true kernel behavior)
+  Filename:       must start with "tool_" — discovery is by filename
+  Entry point:    run(self, sdk, **kwargs)
 
-Tool authoring flow:
-  1. Read this template, then read one similar installed or built-in tool for style.
-  2. Create sandbox_plugins/tools/tool_<your_name>.py using whatever file-editing
-     capability is installed and in scope.
-  3. The code MUST inherit from BaseTool and include:
-       from plugins.BaseTool import BaseTool, ToolResult
-  4. Fill in the class attributes and implement run().
-  5. If a test_plugin tool is installed, call
-     test_plugin(plugin_path="sandbox_plugins/tools/tool_<your_name>.py").
-     Otherwise run focused pytest/compile checks from outside the runtime.
-  6. If testing fails, read the error, edit the same file, and retry.
-  7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
-  8. To update: edit the file; plugin_watcher reloads it when enabled.
-  9. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
- 10. If the tool needs extra packages, prefer a package manifest. For sandbox
-     experiments, install dependencies only through an installed shell/package
-     tool or out-of-band user action.
-
-test_plugin diagnostics cover:
-  - Correct import (from plugins.BaseTool import BaseTool, ToolResult)
-  - Class inheriting BaseTool with a `name` attribute
-  - No name collisions with baked-in tools
-  - File naming conventions (must start with "tool_")
-  - Suggestions for contract improvements
-  - The pytest suite summary as broad app regression context
+Live-loading is automatic when the plugin watcher is enabled: adding, editing,
+or deleting the file loads, reloads, or unloads the tool.
 
 
-AUTO-DISCOVERY RULES
---------------------
-- File must be in plugins/tools/, sandbox_plugins/tools/, or installed_plugins/tools/
-- File name must start with "tool_"
-- Class must inherit from BaseTool
-- One tool class per file (recommended)
-- Import host APIs from plugins.* and helper code with relative imports.
+THE DESCRIPTION IS THE PROMPT
+-----------------------------
+`description` is not documentation — it is the text the model reads when
+deciding whether to call this tool, and it is the single biggest factor in
+whether the tool gets used correctly. Write it as short operational docs:
+
+  - what it does
+  - when it is the right choice
+  - the most important limit or failure mode
+
+    "Read a UTF-8 text file by exact path. Use when the user has named a
+     specific local file. Fails if the path is missing or is not readable text."
+
+Vague hype and trigger words ("ALWAYS use this!") make a tool worse, not
+better. Weak models read this literally, so ambiguity here costs real accuracy.
 
 
-TOOLS vs TASKS
---------------
-Tasks run in the background on every file (batch processing).
-Tools are called on-demand and return results immediately.
+WHAT THE MODEL SEES VERSUS WHAT THE USER SEES
+---------------------------------------------
+This split is Second Brain specific and easy to get backwards:
 
-Tools can be called by:
-  - The LLM agent (subject to the active agent_profile's tool mode and tools_list)
-  - The user via /tools or an installed command bridge
-  - Other tools via context.call_tool("tool_name", arg="value")
+  return value / data   -> the frontend, for display. NEVER sent to the model.
+  llm_summary           -> what the model receives as the tool result.
+  attachments           -> file paths the frontend renders (images, exports).
 
+A bare `return x` sends a rendering of x to the model, which is what you want
+most of the time. Reach for `sdk.ok(...)` when the model needs a different
+view of the answer than the user does — a thousand rows to display, one
+sentence to reason about:
 
-TRIGGERING EVENT TASKS FROM A TOOL
-----------------------------------
-Event-triggered tasks (trigger="event") subscribe to bus channels. A tool
-can fire one by emitting on the channel the task declared:
+    return sdk.ok(rows, llm_summary=f"{len(rows)} matching rows.")
 
-    from events.event_bus import bus
-    bus.emit("trigger.cluster_now", {"reason": "user asked"})
-
-This enqueues a run in task_runs; the orchestrator dispatches it on its
-next tick. The tool returns immediately — it doesn't wait for the run
-to complete. Inspect results in the event-driven section of /tasks.
+Put the facts the model needs to act on next in `llm_summary`: what was found,
+what changed, what failed, and any counts or paths it will need.
 
 
-CONTEXT OBJECT
---------------
-Every tool receives a `context` object with:
-
-  context.db        Database instance (SQLite). Key methods:
-                      .conn  (raw connection, use with context.db.lock)
-                      .lock  (threading.Lock for direct SQL)
-                      .get_task_output(table, path) -> list[dict]
-
-  context.config    Global settings dict (from config.json).
-
-  context.services  Dict of {name: service_instance}. Check service presence:
-                      llm = context.services.get("llm")
-                      embedder = context.services.get("text_embedder")  # package-installed
-
-  context.call_tool Call another tool (tool-to-tool chaining):
-                      result = context.call_tool("lexical_search", query="hello")
-                    Returns a ToolResult. Only call tools that are registered.
+TOOLS VERSUS TASKS
+------------------
+Tools are called on demand and answer immediately. Tasks run in the background
+over every file that appears. If it processes a corpus, it is a task.
 
 
-WRITING GOOD TOOL DESCRIPTIONS
-------------------------------
-`description` becomes the tool description shown to the LLM.
-Write it like short operational documentation:
+BUDGETS AND BACKGROUND SAFETY
+-----------------------------
+  max_calls = 3          how many times the agent may call this per message
+  background_safe = True whether it may run with no human present
 
-- say what the tool does
-- say when the tool is the right choice
-- mention the most important limits or constraints
-- avoid vague hype or trigger-word instructions
+Set `background_safe = False` for anything that asks the user something —
+sdk.ui.ask, sdk.ui.approve, anything interactive. The kernel refuses such tools
+from unattended sessions (scheduled subagents, background drivers) rather than
+letting them hang forever waiting for an answer nobody is there to give.
 
-Good pattern:
-  "Read a UTF-8 text file by exact path. Use this when the user has named a
-   specific local file. Fails if the path is missing or is not readable text."
-
-
-TOOL RESULT
------------
-Return a ToolResult from run():
-
-  ToolResult(
-      success=True,
-      data=any_structured_data,    # for frontend display (never sent to LLM)
-      llm_summary="text for LLM",  # what the LLM sees as the tool result
-      attachment_paths=["path"],  # file paths for frontend attachment rendering
-  )
-
-  ToolResult.failed("error message")  # shorthand for failures
-
-`llm_summary` should be concise but informative. Include the facts the model
-needs to act on next: what was found, what was changed, what failed, and any
-important paths, counts, or constraints.
+Both are authority-bearing, so both are clamped. Declaring a bigger number is a
+request, not a grant.
 
 
-PARAMETERS (JSON Schema)
--------------------------
-The `parameters` dict defines the tool's input arguments using JSON Schema.
-This is the exact format used by OpenAI function calling:
-
-  parameters = {
-      "type": "object",
-      "properties": {
-          "query": {
-              "type": "string",
-              "description": "What to search for in the indexed local files.",
-          },
-          "top_k": {
-              "type": "integer",
-              "description": "Max results. Default 5.",
-              "default": 5,
-          },
-      },
-      "required": ["query"],
-  }
-
-In run(), access these via kwargs: query = kwargs.get("query", "")
-
-
-CONFIG SETTINGS
----------------
-Plugins can declare config settings that appear in frontend config views and are
-stored in plugin_config.json. Values are accessible via context.config.get().
-
-  config_settings = [
-      ("My Setting Title", "my_setting_key",
-       "Description shown in frontend config views.",
-       "default_value",
-       {"type": "text"}),
-  ]
-
-Each entry is a tuple: (title, variable_name, description, default, type_info)
-
-type_info controls the UI widget:
-  {"type": "text"}                                          — text field
-  {"type": "bool"}                                          — checkbox
-  {"type": "json_list"}                                     — JSON array editor
-  {"type": "slider", "range": (min, max, divs), "is_float": False} — slider
-
-Multiple plugins can declare the same variable_name — the value is shared.
-In run(), access via: context.config.get("my_setting_key", "default")
+The three examples below are three separate tools, shown together for
+contrast. A real file declares exactly ONE plugin class — the validator
+enforces it, because discovery expects one class per file.
 """
 
-# =====================================================================
-# BASE CLASS (copied from plugins/BaseTool.py for self-containment)
-# =====================================================================
-
-import logging
-from dataclasses import dataclass, field
-from typing import Any
+from guest.bases import BaseTool
 
 
-@dataclass
-class ToolResult:
-    """Tool result."""
-    success: bool = True
-    error: str = ""
-    data: Any = None
-    llm_summary: str = ""
-    attachment_paths: list[str] = field(default_factory=list)
+class WordCount(BaseTool):
+    """The smallest useful tool: one Request, a plain return."""
 
-    @staticmethod
-    def failed(error: str) -> "ToolResult":
-        """Handle failed."""
-        return ToolResult(success=False, error=error)
+    name = "word_count"
+    description = (
+        "Count the words in a UTF-8 text file. Use when the user asks how "
+        "long a specific local file is. Fails if the path is not readable text."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Exact path to the file to count.",
+            },
+        },
+        "required": ["path"],
+    }
 
-
-class BaseTool:
-    # --- Identity ---
-    """Base tool."""
-    name: str = ""
-    description: str = ""               # doubles as the LLM tool description
-    parameters: dict = {}               # JSON Schema for input arguments
-
-    # --- Service requirements ---
-    requires_services: list[str] = []   # services that must be loaded
-
-    # --- Agent controls ---
-    max_calls: int = 3                  # max times the agent can call this tool per message
-
-    # --- Config settings ---
-    config_settings: list = []          # settings shown in frontend config views
-
-    def run(self, context, **kwargs) -> ToolResult:
-        """Execute the tool. Return a ToolResult."""
-        raise NotImplementedError
-
-    def to_schema(self) -> dict:
-        """Export as an OpenAI-compatible function schema."""
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.parameters,
-            }
-        }
+    def run(self, sdk, path):
+        """Read the file and count its words."""
+        # No error branch: if the read fails, that failure becomes this tool's
+        # failure, carrying the original reason. Which is what the caller
+        # wanted anyway.
+        return len(sdk.fs.read(path).split())
 
 
-# =====================================================================
-# EXAMPLE: A simple database query tool
-# =====================================================================
+class RecentNotes(BaseTool):
+    """Shows the two things worth demonstrating: the user/model split, and
+    reaching user-owned rows through the ``my_`` prefix."""
 
-# from plugins.BaseTool import BaseTool, ToolResult
-#
-#
-# class SQLQuery(BaseTool):
-#     name = "sql_query"
-#     description = "Execute a read-only SQL query against the local database."
-#     parameters = {
-#         "type": "object",
-#         "properties": {
-#             "sql": {
-#                 "type": "string",
-#                 "description": "A read-only SQL query. Only SELECT and PRAGMA statements are allowed.",
-#             },
-#         },
-#         "required": ["sql"],
-#     }
-#     requires_services = []
-#     max_calls = 5
-#
-#     def run(self, context, **kwargs):
-#         sql = kwargs.get("sql", "").strip()
-#         if not sql:
-#             return ToolResult.failed("No SQL provided.")
-#
-#         # Safety: only allow SELECT and PRAGMA
-#         first_word = sql.split()[0].upper()
-#         if first_word not in ("SELECT", "PRAGMA"):
-#             return ToolResult.failed("Only SELECT and PRAGMA allowed.")
-#
-#         try:
-#             with context.db.lock:
-#                 cur = context.db.conn.execute(sql)
-#                 columns = [d[0] for d in cur.description] if cur.description else []
-#                 rows = [list(row) for row in cur.fetchmany(100)]
-#             return ToolResult(
-#                 data={"columns": columns, "rows": rows},
-#                 llm_summary=f"Query returned {len(rows)} row(s).",
-#             )
-#         except Exception as e:
-#             return ToolResult.failed(f"SQL error: {e}")
+    name = "recent_notes"
+    description = (
+        "List the current user's most recently updated conversations. Use to "
+        "orient yourself before answering questions about past discussions."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "limit": {
+                "type": "integer",
+                "description": "How many to return. Default 10.",
+                "default": 10,
+            },
+        },
+    }
+
+    def run(self, sdk, limit=10):
+        """Query the current user's conversations, newest first."""
+        # my_conversations is expanded by the kernel to this user's rows only.
+        # Querying the base table directly is refused — see SDK.md.
+        rows = sdk.db.query(
+            "SELECT title, updated_at FROM my_conversations "
+            "ORDER BY updated_at DESC LIMIT ?",
+            [int(limit)],
+        )
+        if not rows:
+            return sdk.ok([], llm_summary="No conversations yet.")
+
+        # The user gets the table; the model gets the titles it needs to
+        # reason about. Sending a hundred rows of SQL to the model would
+        # spend context on formatting it cannot use.
+        titles = ", ".join(r["title"] for r in rows[:5])
+        return sdk.ok(rows, llm_summary=f"{len(rows)} conversations. Most recent: {titles}.")
 
 
-# =====================================================================
-# EXAMPLE: A tool that calls another tool (tool chaining)
-# =====================================================================
+class FetchPage(BaseTool):
+    """Demonstrates the one case where catching a failure is right."""
 
-# from plugins.BaseTool import BaseTool, ToolResult
-#
-#
-# class HybridSearch(BaseTool):
-#     name = "hybrid_search"
-#     description = (
-#         "Search indexed files using both keyword and semantic retrieval. "
-#         "Use this when you need the best default search over local files."
-#     )
-#     parameters = {
-#         "type": "object",
-#         "properties": {
-#             "query": {"type": "string", "description": "What to search for in the indexed local files."},
-#             "top_k": {"type": "integer", "description": "Max results.", "default": 5},
-#         },
-#         "required": ["query"],
-#     }
-#
-#     def run(self, context, **kwargs):
-#         query = kwargs.get("query", "")
-#         top_k = kwargs.get("top_k", 5)
-#
-#         # Call sub-tools via context.call_tool
-#         lexical = context.call_tool("lexical_search", query=query, top_k=top_k * 10)
-#         semantic = context.call_tool("semantic_search", query=query, top_k=top_k * 10)
-#
-#         # Fuse results...
-#         all_results = (lexical.data or []) + (semantic.data or [])
-#         return ToolResult(
-#             data=all_results[:top_k],
-#             llm_summary=f"Found {len(all_results)} results for '{query}'.",
-#         )
+    name = "fetch_page"
+    description = (
+        "Fetch a URL and return its body. Use when the user gives a specific "
+        "link. Requires the user's approval on each new host."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {"url": {"type": "string", "description": "The URL to fetch."}},
+        "required": ["url"],
+    }
+
+    # Network access is unsafe by policy, so this asks the user. Nothing to
+    # declare for that — the gate decides. `requests` below is advisory only:
+    # it lets someone installing this see what it intends to do.
+    requests = ["net.http"]
+
+    def run(self, sdk, url):
+        """Fetch the page, turning a refusal into something the model can act on."""
+        try:
+            response = sdk.net.http(url)
+        except sdk.Denied:
+            # Worth catching: the model should stop retrying and tell the user.
+            # A transport failure is NOT worth catching — let it raise.
+            return sdk.fail("The user declined the request to fetch that URL.")
+        return sdk.ok(response["body"], llm_summary=f"Fetched {url} ({response['status']}).")

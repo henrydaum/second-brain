@@ -4,6 +4,22 @@ FRONTEND TEMPLATE
 This file is a self-contained reference for creating frontend plugins.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
+  ┌────────────────────────────────────────────────────────────────────┐
+  │ STILL THE NATIVE CONTRACT. Unlike the other templates, this one    │
+  │ has NOT been migrated to the SDK, and deliberately so.             │
+  │                                                                    │
+  │ Frontends are inbound-driven — the kernel calls them — which the   │
+  │ Request model does not describe yet. sandbox/guest/bases.py calls  │
+  │ its BaseFrontend "the shape, not the finished contract", and       │
+  │ sandbox/bridge.py does not load sandboxed frontends at all.        │
+  │ Frontends are the LAST family to migrate.                          │
+  │                                                                    │
+  │ So write frontends against plugins/BaseFrontend as shown below.    │
+  │ Everything here is current and correct for that contract. The USER │
+  │ BINDING section is architecture, not contract, and stays true      │
+  │ either way.                                                        │
+  └────────────────────────────────────────────────────────────────────┘
+
 Frontends are transports: REPL, Telegram, HTTP, desktop UI, etc. They turn
 user input into state-machine actions and render RuntimeResult/events back to
 the user. Prefer commands/tools/tasks for app behavior; create a frontend only
@@ -104,12 +120,12 @@ conversation guard protects the built-in conversation surface; a permissive tool
 like raw SQL can still read across users).
 """
 
-# =====================================================================
-# BASE SHAPE (shortened from plugins/BaseFrontend.py)
-# =====================================================================
-
-from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
-from pipeline.database import DEFAULT_USER_ID
+# The base class lives in plugins/BaseFrontend.py — read it there rather than
+# from a copy that can drift. DEFAULT_USER_ID comes from pipeline/database.py.
+#
+# Nothing is imported here on purpose: this file is documentation, and a
+# template that imports the kernel is a template that can break the app by
+# being read.
 
 
 # =====================================================================

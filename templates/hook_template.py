@@ -4,6 +4,15 @@ HOOK TEMPLATE
 This file is a self-contained reference for writing runtime hooks.
 It is NOT imported by the running system — it exists for LLM consumption only.
 
+  ┌────────────────────────────────────────────────────────────────────┐
+  │ STILL THE NATIVE CONTRACT, like frontend_template.py. There is no  │
+  │ hook Request and no SDK surface for doorways yet, so a hook must   │
+  │ ride in a NATIVE extension service (plugins/BaseService) with a    │
+  │ bind_runtime() — not a sandboxed one. Hooks are a kernel extension │
+  │ point rather than a plugin family, and giving them a Request       │
+  │ surface is its own piece of design work.                           │
+  └────────────────────────────────────────────────────────────────────┘
+
 Every agent turn is the same short ritual: the turn starts, the model thinks,
 the agent acts, think/act repeats, the turn ends. The hook system
 (runtime/hooks.py) puts a labeled doorway at every moment of that ritual, and

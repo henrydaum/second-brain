@@ -1,352 +1,150 @@
 """
 TASK TEMPLATE
 =============
-This file is a self-contained reference for creating new tasks.
-It is NOT imported by the running system — it exists for LLM consumption only.
+A task is background pipeline work: it runs over files as they appear, or when
+an event fires. Reference for authoring one; not imported by the running
+system.
 
-Second Brain ships the pipeline substrate, not a built-in indexing stack.
-Tasks are normally sandbox drafts or installed package files; add one to
-plugins/tasks/ only when it is true kernel behavior.
+Read SDK.md for the Request surface and sandbox/guest/bases.py for every
+attribute a task can declare. This file covers what is specific to tasks.
 
-Write tasks in a practical, explicit style. A task should make its trigger,
-inputs, outputs, and failure modes easy to inspect from code and database rows.
+  Where it goes:  DATA_DIR/sandbox_plugins/tasks/task_<name>.py
+  Filename:       must start with "task_"
+  Entry point:    run(self, sdk, paths)
 
-Task authoring flow:
-  1. Read this template, then read one similar installed or built-in task for style.
-  2. Create sandbox_plugins/tasks/task_<your_name>.py using whatever file-editing
-     capability is installed and in scope.
-  3. The code MUST inherit from BaseTask and include:
-       from plugins.BaseTask import BaseTask, TaskResult
-  4. Fill in the class attributes and implement run() or run_event().
-  5. If a test_plugin tool is installed, call
-     test_plugin(plugin_path="sandbox_plugins/tasks/task_<your_name>.py").
-     Otherwise run focused pytest/compile checks from outside the runtime.
-  6. If testing fails, read the error, edit the same file, and retry.
-  7. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
-  8. To update: edit the file; plugin_watcher reloads it when enabled.
-  9. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
- 10. If the task needs extra packages, prefer a package manifest. For sandbox
-     experiments, install dependencies only through an installed shell/package
-     tool or out-of-band user action.
-
-test_plugin diagnostics cover:
-  - Correct import (from plugins.BaseTask import BaseTask, TaskResult)
-  - Class inheriting BaseTask with a `name` attribute
-  - No name collisions with baked-in tasks
-  - File naming conventions (must start with "task_")
-  - Suggestions for contract improvements
-  - The pytest suite summary as broad app regression context
-
-
-AUTO-DISCOVERY RULES
---------------------
-- File must be in plugins/tasks/, sandbox_plugins/tasks/, or installed_plugins/tasks/
-- File name must start with "task_"
-- Class must inherit from BaseTask
-- One task class per file (recommended)
-- Import host APIs from plugins.* and helper code with relative imports.
+WATCH THE ARGUMENT ORDER. The native contract was run(self, paths, context);
+the sandboxed one is run(self, sdk, paths). Getting this backwards binds your
+paths to the sdk and fails in a confusing way.
 
 
 TRIGGER KINDS
 -------------
-Every task picks ONE trigger kind:
+Every task picks exactly one:
 
-  trigger = "path"   (default) — keyed by file path. Root tasks (reads=[])
-                     fire on file discovery; downstream tasks fire when
-                     upstream completes. Implements run(paths, context)
-                     returning a list[TaskResult] (one per path).
+  trigger = "path"    (default) keyed by file path. Root tasks (reads = [])
+                      fire when a file is discovered; downstream tasks fire
+                      when their upstream finishes.
 
-  trigger = "event"  — keyed by run_id. Fires whenever a declared bus
-                     channel emits. Use this for cron-like jobs,
-                     tool-triggered work, or anything that isn't per-file.
-                     Must also set trigger_channels = ["chan1", ...].
-                     Implements run_event(run_id, payload, context) and
-                     returns a single TaskResult. Rows in result.data
-                     must include the run_id.
+  trigger = "event"   keyed by run_id. Fires when a declared bus channel
+                      emits. Use for cron-like work, tool-triggered work, or
+                      anything not per-file. Also set
+                      trigger_channels = ["channel.name"].
 
 
-DEPENDENCY GRAPH
-----------------
-Tasks never reference each other by name. Dependencies are derived
-automatically from reads/writes — but ONLY between tasks of the same
-trigger kind:
+THE DEPENDENCY GRAPH (the part you cannot guess)
+------------------------------------------------
+Tasks never reference each other by name. The orchestrator derives the graph
+from `reads` and `writes` — but ONLY between tasks of the same trigger kind:
 
-  If TaskA (path) writes "text_chunks" and TaskB (path) reads it,
-  TaskB is downstream of TaskA in the path graph.
+  TaskA (path) writes "text_chunks", TaskB (path) reads it
+    -> TaskB is downstream of TaskA and fires when it completes.
 
-  If TaskA (event) writes "daily_summary" and TaskB (event) reads it,
-  TaskB auto-fires after TaskA completes, with parent_run_id set.
+  TaskA (event) writes "daily_summary", TaskB (event) reads it
+    -> TaskB auto-fires after TaskA, with parent_run_id set.
 
-Cross-kind reads are AMBIENT SQL JOINS, not graph edges. An event task
-that reads a path-keyed table just SELECTs it at run time. Path-data
-changes do NOT auto-invalidate event runs. If a path task wants to
-kick off an event run, it can bus.emit(...) explicitly.
+Cross-kind reads are AMBIENT SQL JOINS, not graph edges. An event task that
+reads a path-keyed table just SELECTs it at run time; changes to path data do
+NOT invalidate event runs. If a path task needs to kick off an event run, it
+emits on the channel explicitly with sdk.events.emit(...).
 
-
-CONTEXT OBJECT
---------------
-Every task receives a `context` object with:
-
-  context.db        Database instance (SQLite). Key methods:
-                      .get_task_output(table, path) -> list[dict]
-                      .conn  (raw connection, use with context.db.lock)
-                      .lock  (threading.Lock for direct SQL)
-
-  context.config    Global settings dict (from config.json).
-
-  context.services  Dict of {name: service_instance}. Check optional services:
-                      embedder = context.services.get("text_embedder")  # package-installed
-                      if embedder and embedder.loaded:
-                          embedder.encode(texts)
-
-  context.parse     Parse a file using the Stage 1 parser system:
-                      result = context.services.get("parser").parse(path)           # default modality
-                      result = context.services.get("parser").parse(path, "image")  # specific modality
-                    Returns ParseResult with .success, .output, .also_contains
+This is why adding a `reads` entry can silently change when your task runs.
 
 
-TASK RESULT
------------
-Return one TaskResult per input path:
+ROWS ARE THE INTERFACE
+----------------------
+What you return is written to your output table and becomes the input of every
+downstream task. Prefer explicit, stable column names — downstream tasks, SQL
+inspection, and debugging all read them. Renaming a column is a breaking
+change to a contract you cannot see from inside your own file.
 
-  TaskResult(
-      success=True,
-      data=[{"col": "value", ...}],  # rows written to your output table
-      also_contains=["image"],        # modalities discovered (from parser)
-      discovered_paths=["/new/file"], # new files to register (e.g. extracted from archive)
-  )
+Two fields exist for the pipeline rather than for you:
 
-  TaskResult.failed("error message")  # shorthand for failures
-
-Keep TaskResult.data explicit and inspection-friendly. Prefer rows with clear,
-stable column names so downstream tasks, SQL inspection, and debugging stay easy.
+  also_contains     modalities discovered inside the file ("image" in a PDF),
+                    which routes it to further parsers.
+  discovered_paths  new files to register — how an archive extractor feeds
+                    its contents back into the pipeline.
 
 
-CONFIG SETTINGS
----------------
-Tasks can declare config settings that appear in the Settings UI and are
-stored in plugin_config.json. Values are accessible via context.config.get().
+SHIPPING A SCHEDULE
+-------------------
+Declare `default_jobs` and the orchestrator seeds the timekeeper job when the
+task registers, and removes it when the task unregisters. A reinstall picks up
+an updated declaration. To silence one durably, disable it — do not delete it,
+or the next registration seeds it again.
 
-  config_settings = [
-      ("Chunk Overlap", "embed_chunk_overlap",
-       "Overlapping tokens between chunks.",
-       50,
-       {"type": "slider", "range": (0, 200, 40), "is_float": False}),
-  ]
+    default_jobs = {
+        "nightly_summary": {
+            "channel": "schedule.tick.nightly",
+            "cron": "0 3 * * *",
+            "payload": {"scope": "all"},
+        },
+    }
 
-Each entry is a tuple: (title, variable_name, description, default, type_info)
-See tool_template.py for full type_info options.
 
-Multiple plugins can declare the same variable_name — the value is shared.
-In run(), access via: context.config.get("embed_chunk_overlap", 50)
+The two examples below are separate tasks, shown together for contrast. A real
+file declares exactly ONE plugin class.
 """
 
-# =====================================================================
-# BASE CLASS (copied from plugins/BaseTask.py for self-containment)
-# =====================================================================
-
-import logging
-from dataclasses import dataclass, field
-from typing import Any
+from guest.bases import BaseTask
 
 
-@dataclass
-class TaskResult:
-    """Task result."""
-    success: bool = True
-    error: str = ""
-    data: list[dict] = field(default_factory=list)
-    also_contains: list[str] = field(default_factory=list)
-    discovered_paths: list[str] = field(default_factory=list)
+class WordStats(BaseTask):
+    """A root path task: fires on file discovery, writes rows others can read."""
 
-    @staticmethod
-    def failed(error: str) -> "TaskResult":
-        """Handle failed."""
-        return TaskResult(success=False, error=error)
+    name = "word_stats"
+    description = "Count words and lines in every text file discovered."
 
+    trigger = "path"
+    modalities = ["text"]
+    reads = []                  # no upstream, so this is a root task
+    writes = ["word_stats"]     # downstream tasks read this table by name
+    batch_size = 8
 
-class BaseTask:
-    # --- Identity ---
-    """Base task."""
-    name: str = ""
-
-    # --- Trigger kind ---
-    trigger: str = "path"               # "path" | "event"
-    trigger_channels: list[str] = []    # bus channels (event tasks only)
-
-    # --- Routing ---
-    modalities: list[str] = []          # file types (root path tasks only). e.g. ["text", "image"]
-
-    # --- Data flow ---
-    reads: list[str] = []               # input tables (dependencies derived automatically)
-    writes: list[str] = []              # output tables
-    require_all_inputs: bool = True     # True=AND (all inputs needed), False=OR (any suffices)
-
-    # --- Service requirements ---
-    requires_services: list[str] = []   # services that must be loaded before dispatch
-
-    # --- Schema ---
-    output_schema: str = ""             # raw SQL to create output table(s)
-
-    # --- Execution ---
-    batch_size: int = 1                 # files per run() call
-    max_workers: int = 0                # 0 = use global setting
-    timeout: int = 300                  # seconds before considered stuck
-
-    # --- Config settings ---
-    config_settings: list = []          # settings shown in the Settings UI
-
-    def setup(self, config: dict):
-        """Called once at registration. Optional."""
-        pass
-
-    def teardown(self):
-        """Called on shutdown. Optional."""
-        pass
-
-    def run(self, paths: list[str], context) -> list[TaskResult]:
-        """Path-keyed entry point. Override for trigger='path' (default)."""
-        return [TaskResult.failed("Not implemented") for _ in paths]
-
-    def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
-        """Event-keyed entry point. Override for trigger='event'.
-        Rows in the returned TaskResult.data must include run_id."""
-        return TaskResult.failed("Not implemented")
+    def run(self, sdk, paths):
+        """Process a batch of paths, returning one row per file."""
+        rows = []
+        for path in paths:
+            # Parsing goes through the registry, so an installed parser
+            # package lights up here without this task changing.
+            text = sdk.parse.file(path, modality="text")
+            rows.append({
+                "path": path,
+                "words": len(text.split()),
+                "lines": len(text.splitlines()),
+            })
+        return rows
 
 
-# =====================================================================
-# EXAMPLE: A simple task that extracts text from files
-# =====================================================================
+class DailyDigest(BaseTask):
+    """An event task on a schedule: no paths, driven by the clock."""
 
-# import time
-# from pathlib import Path
-# from plugins.BaseTask import BaseTask, TaskResult
-#
-# logger = logging.getLogger("ExtractText")
-#
-#
-# class ExtractText(BaseTask):
-#     name = "extract_text"
-#     modalities = ["text"]
-#     reads = []                          # root task — no upstream dependencies
-#     writes = ["extracted_text"]
-#     requires_services = []              # no models needed
-#     output_schema = """
-#         CREATE TABLE IF NOT EXISTS extracted_text (
-#             path TEXT PRIMARY KEY,
-#             content TEXT,
-#             char_count INTEGER,
-#             extracted_at REAL
-#         );
-#     """
-#     batch_size = 8
-#     timeout = 120
-#
-#     def run(self, paths, context):
-#         results = []
-#         for path in paths:
-#             try:
-#                 parse_result = context.services.get("parser").parse(path, "text")
-#                 if not parse_result.success:
-#                     results.append(TaskResult.failed(f"Parse failed: {parse_result.error}"))
-#                     continue
-#
-#                 content = parse_result.output or ""
-#                 results.append(TaskResult(
-#                     success=True,
-#                     data=[{
-#                         "path": path,
-#                         "content": content,
-#                         "char_count": len(content),
-#                         "extracted_at": time.time(),
-#                     }],
-#                     also_contains=parse_result.also_contains,
-#                 ))
-#             except Exception as e:
-#                 results.append(TaskResult.failed(str(e)))
-#         return results
+    name = "daily_digest"
+    description = "Summarize yesterday's activity once a night."
 
+    trigger = "event"
+    trigger_channels = ["schedule.tick.nightly"]
+    reads = []
+    writes = ["daily_digest"]
 
-# =====================================================================
-# EXAMPLE: A downstream task that depends on extracted_text
-# =====================================================================
+    default_jobs = {
+        "nightly_digest": {
+            "channel": "schedule.tick.nightly",
+            "cron": "0 3 * * *",
+            "payload": {},
+        },
+    }
 
-# from plugins.BaseTask import BaseTask, TaskResult
-#
-#
-# class EmbedText(BaseTask):
-#     name = "embed_text"
-#     modalities = ["text"]
-#     reads = ["text_chunks"]             # downstream — triggered after chunk_text completes
-#     writes = ["text_embeddings"]
-#     requires_services = ["text_embedder"]  # must be loaded before dispatch
-#     output_schema = """
-#         CREATE TABLE IF NOT EXISTS text_embeddings (
-#             path TEXT,
-#             chunk_index INTEGER,
-#             embedding BLOB,
-#             model_name TEXT,
-#             embedded_at REAL,
-#             PRIMARY KEY (path, chunk_index)
-#         );
-#     """
-#     batch_size = 4
-#
-#     def run(self, paths, context):
-#         embedder = context.services.get("text_embedder")
-#         if not embedder or not embedder.loaded:
-#             return [TaskResult.failed("text_embedder not loaded") for _ in paths]
-#
-#         results = []
-#         for path in paths:
-#             rows = context.db.get_task_output("text_chunks", path)
-#             texts = [r["content"] for r in rows]
-#             embeddings = embedder.encode(texts)
-#             data = [
-#                 {"path": path, "chunk_index": i, "embedding": emb.tobytes(),
-#                  "model_name": embedder.model_name, "embedded_at": time.time()}
-#                 for i, emb in enumerate(embeddings)
-#             ]
-#             results.append(TaskResult(success=True, data=data))
-#         return results
+    def run(self, sdk, paths):
+        """Summarize the day. Event tasks get no paths — ignore the argument."""
+        # Cross-kind read: word_stats is a PATH table, so this is an ambient
+        # SQL join rather than a graph edge. Nothing re-runs this when
+        # word_stats changes; the schedule is what drives it.
+        rows = sdk.db.query(
+            "SELECT path, words FROM word_stats ORDER BY words DESC LIMIT 5")
+        if not rows:
+            return []
 
-
-# =====================================================================
-# EXAMPLE: An event-triggered task (cron-like / tool-triggered)
-# =====================================================================
-
-# import time
-# from plugins.BaseTask import BaseTask, TaskResult
-#
-#
-# class ClusterEmbeddings(BaseTask):
-#     name = "cluster_embeddings"
-#     trigger = "event"
-#     trigger_channels = ["schedule.tick.daily", "trigger.cluster_now"]
-#     reads = ["text_embeddings"]         # ambient read (path-keyed) — SQL join at run time
-#     writes = ["embedding_clusters"]
-#     requires_services = []
-#     output_schema = """
-#         CREATE TABLE IF NOT EXISTS embedding_clusters (
-#             run_id TEXT,
-#             cluster_id INTEGER,
-#             path TEXT,
-#             chunk_index INTEGER,
-#             created_at REAL,
-#             PRIMARY KEY (run_id, path, chunk_index)
-#         );
-#     """
-#
-#     def run_event(self, run_id, payload, context):
-#         # Cross-kind read: pull all embeddings as an ambient SQL join.
-#         with context.db.lock:
-#             rows = context.db.conn.execute(
-#                 "SELECT path, chunk_index, embedding FROM text_embeddings"
-#             ).fetchall()
-#         # ... run your clustering here ...
-#         data = [
-#             {"run_id": run_id, "cluster_id": 0, "path": r[0],
-#              "chunk_index": r[1], "created_at": time.time()}
-#             for r in rows
-#         ]
-#         return TaskResult(success=True, data=data)
+        listing = "\n".join(f"- {r['path']}: {r['words']} words" for r in rows)
+        summary = sdk.agent.complete(
+            f"Write two sentences summarizing today's largest documents:\n{listing}")
+        return [{"summary": summary, "documents": len(rows)}]

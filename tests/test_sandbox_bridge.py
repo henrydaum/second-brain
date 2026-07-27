@@ -352,7 +352,10 @@ class Deploy(BaseCommand):
 
     def form(self, sdk, args):
         """Ask for the target if it was not given."""
-        return [] if args.get("target") else [{"field": "target"}]
+        if args.get("target"):
+            return []
+        return [{"name": "target", "prompt": "Where to?", "nonsense": 1},
+                {"prompt": "no name, so unusable"}]
 
     def run(self, sdk, args):
         """Do it."""
@@ -361,8 +364,12 @@ class Deploy(BaseCommand):
     module = adapt(_write(tmp_path, "command_deploy.py", source))
     instance = next(v() for v in vars(module).values() if isinstance(v, type))
 
-    assert instance.form({}, SimpleNamespace(config={})) == [
-        {"field": "target"}]
+    # Steps cross the boundary as data and must come back as real FormSteps:
+    # the command registry reads step.name and calls step.coerce, so a bare
+    # dict would fail at the point of use rather than here.
+    steps = instance.form({}, SimpleNamespace(config={}))
+    assert [type(s).__name__ for s in steps] == ["FormStep"]
+    assert (steps[0].name, steps[0].prompt) == ("target", "Where to?")
     assert instance.form({"target": "prod"}, SimpleNamespace(config={})) == []
     assert instance.run({"target": "prod"},
                         SimpleNamespace(config={})) == "deploying prod"

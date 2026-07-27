@@ -1,343 +1,167 @@
 """
 SERVICE TEMPLATE
 ================
-This file is a self-contained reference for creating new services.
-It is NOT imported by the running system — it exists for LLM consumption only.
+A service is a long-lived capability other plugins call: a loaded model, a
+connection pool, a cache. Reference for authoring one; not imported by the
+running system.
 
-Second Brain keeps long-lived capability behind services but keeps the
-kernel dependency-light. Services are normally sandbox drafts or installed
-package files; add one to plugins/services/ only when it is true kernel
-infrastructure.
+Read SDK.md for the Request surface and sandbox/guest/bases.py for every
+attribute a service can declare. This file covers what is specific to services.
 
-Write services so their role is obvious: what capability they provide, what
-config they need, when they are loaded, and how callers should access them.
+  Where it goes:  DATA_DIR/sandbox_plugins/services/service_<name>.py
+  Filename:       must start with "service_"
+  Entry points:   start(self, sdk) and stop(self, sdk), plus its exports
 
-Service authoring flow:
-  1. Read this template, then read one similar installed or built-in service for style.
-  2. Create sandbox_plugins/services/service_<your_name>.py using whatever
-     file-editing capability is installed and in scope.
-  3. The code MUST inherit from BaseService and include:
-       from plugins.BaseService import BaseService
-  4. Choose lifecycle:
-       - managed (default): user-loadable backend, implement _load()/unload() if it owns resources.
-       - extension: runtime hook/prompt/scope helper, set lifecycle = "extension".
-  5. Implement your service methods. Override _load()/unload() only when real setup/cleanup is needed.
-  6. Add a build_services(config) factory function at the bottom.
-  7. If a test_plugin tool is installed, call
-     test_plugin(plugin_path="sandbox_plugins/services/service_<your_name>.py").
-     Otherwise run focused pytest/compile checks from outside the runtime.
-  8. If testing fails, read the error, edit the same file, and retry.
-  9. Valid plugins are discovered on startup; plugin_watcher live-loads adds/edits when enabled.
- 10. To update: edit the file; plugin_watcher reloads it when enabled.
- 11. To remove live and durably: delete the sandbox file; plugin_watcher unloads it when enabled.
- 12. If the service needs extra packages, prefer a package manifest. For sandbox
-     experiments, install dependencies only through an installed shell/package
-     tool or out-of-band user action.
-
-test_plugin diagnostics cover:
-  - Correct import (from plugins.BaseService import BaseService)
-  - Class inheriting BaseService
-  - Presence of build_services() function
-  - File naming conventions
-  - Suggestions for contract improvements
-  - The pytest suite summary as broad app regression context
+  ┌────────────────────────────────────────────────────────────────────┐
+  │ NOT LOADABLE YET. sandbox/bridge.py bridges tools, tasks, and      │
+  │ commands; services and frontends still return None. The contract   │
+  │ below is settled and correct to write against, but a sandboxed     │
+  │ service will not load until the bridge grows a service branch.     │
+  │ Until then, a service that must run today stays native — see       │
+  │ MIGRATING_PLUGINS.md.                                              │
+  └────────────────────────────────────────────────────────────────────┘
 
 
-AUTO-DISCOVERY RULES
---------------------
-- File must be in plugins/services/, sandbox_plugins/services/, or installed_plugins/services/
-- File name must start with "service_"
-- Module must have a top-level build_services(config) -> dict function
-- The returned dict maps service names to service instances
-- Service names are how tasks/tools reference the service in requires_services
-- Import host APIs from plugins.* and helper code with relative imports.
+A SERVICE IS A PERSISTENT BOX
+-----------------------------
+Services are the natural persistent box, and the only family that is one by
+default. The box is loaded once, keeps its state, and is serialized — one call
+at a time. You do not manage this; it follows from the family.
+
+The rule that shapes everything else: STATE STAYS INSIDE THE BOX. The model,
+the connection, the cache — those never cross the boundary. Callers get simple
+data back and the thing itself never leaves. If you find yourself wanting to
+return a client object so the caller can use it, export a method that does the
+work instead.
+
+Note the two similar words. Native services declare
+`lifecycle = "managed" | "extension"`, about *who loads them*. Sandboxed
+plugins declare `lifetime = "ephemeral" | "persistent"`, about *whether the
+box survives between calls*. Services set the second one for you.
 
 
-SERVICE LIFECYCLE
------------------
-  1. build_services(config) is called at startup — creates the instance
-  2. load() is called when a user or the system needs the service
-     - Calls your _load() implementation, or the BaseService no-op default
-     - Sets self.loaded = True on success
-     - Handles timing and logging automatically
-  3. The service is used by tasks/tools via context.services.get("name")
-     - Inside a service, use self.services.get("name") to reach peers.
-  4. unload() is called to free resources (GPU memory, connections, etc.)
+EXPORTS ARE THE PUBLIC SURFACE
+------------------------------
+Only methods named in `exports` are reachable through sdk.services.call.
+Everything else is internal. This is what makes "which service methods can a
+plugin call?" answerable by reading the file instead of guessing.
 
-Lifecycle modes:
-  lifecycle = "managed"    (default)
-      User-loadable backend. Listed in autoload_services if it should start
-      with the app. /services offers load/unload controls.
+    exports = ["embed", "similarity"]
 
-  lifecycle = "extension"
-      Runtime extension. Auto-loads whenever installed, independent of
-      autoload_services. /services shows it as an extension but does not offer
-      load/unload controls. Use for hook carriers, policy plugins, prompt/scope
-      modifiers, and other tiny runtime add-ons.
-
-Services that need runtime objects such as the tool registry, orchestrator,
-command registry, frontend manager, or runtime should implement bind_runtime()
-and make it idempotent. load() can run before those objects exist.
-
-If your service does not own resources, do not override _load() or unload();
-BaseService marks it loaded/unloaded for you. Override only for real setup or
-cleanup.
+Every exported method must return simple data — the same constraint as any
+Request return value. Exports are read without importing the file, so the list
+must be a literal.
 
 
-TRIGGERING EVENT TASKS FROM A SERVICE
--------------------------------------
-Services can fire event-triggered tasks by emitting on the bus. This is
-how a cron-like service drives periodic work: emit on a channel the task
-subscribes to, and the orchestrator enqueues a run on its next tick.
+FOREIGN LIBRARIES AND CREDENTIALS
+---------------------------------
+Services are where foreign libraries usually live, and the honest position is:
+a library that does its own I/O cannot be mediated. Two consequences:
 
-    from events.event_bus import bus
+  1. Declare `isolation = "subprocess"`. The library's actions are past the
+     kernel's reach, so put a process boundary around them.
+  2. If it needs a credential, you genuinely need the plaintext, because there
+     is no Request for the kernel to substitute a handle into.
 
-    class SchedulerService(BaseService):
-        model_name = "scheduler"
+Name any credential setting `secret_something` — that prefix IS the
+declaration. It then reads back as a `<secret:name>` handle, which the kernel
+substitutes inside sdk.net.http, so code uses a credential it never held.
 
-        def _load(self):
-            import threading
-            self._stop = threading.Event()
-            self._thread = threading.Thread(target=self._loop, daemon=True)
-            self._thread.start()
-            return True
+When a foreign library needs the real value:
 
-        def _loop(self):
-            while not self._stop.wait(timeout=86400):   # every 24h
-                bus.emit("schedule.tick.daily", {"source": "scheduler"})
+    key = sdk.secrets.reveal("secret_my_api_key")
 
-        def unload(self):
-            self._stop.set()
-            self.loaded = False
-
-The service never imports the orchestrator or the tasks — it just emits.
-Any task declaring trigger_channels=["schedule.tick.daily"] will fire.
+A plugin reading a key it declared in its own `config_settings` is not asked —
+configuring it was the consent, and prompting on every load would be exactly
+the approval fatigue this design avoids. A DIFFERENT plugin reaching for that
+same key does get a dialog. Once you hold plaintext you are responsible for it.
 
 
-SHARED vs PER-CALL
-------------------
-  shared = True  (default) — One instance used by all threads.
-                 Good for: thread-safe models (LLM, embedders).
-                 Access directly: service.encode(text)
+DRIVING WORK ON A SCHEDULE
+--------------------------
+A service never imports the orchestrator or the tasks it drives. It emits, and
+whatever declared that channel fires:
 
-  shared = False           — Callers use get_client() for thread safety.
-                 Good for: API clients with auth state (Google Drive).
-                 Override get_client() to return a fresh client.
+    sdk.events.emit("schedule.tick.daily", {"source": "my_service"})
 
-Choose the simplest access pattern that matches the service's real concurrency
-model, and document it clearly in method names and comments.
-
-
-CONFIG SETTINGS
----------------
-Services can declare config settings that appear in the Settings UI and are
-stored in plugin_config.json. Values are passed to build_services(config).
-
-  config_settings = [
-      ("Whisper Model", "whisper_model_name",
-       "Model size for transcription.",
-       "base",
-       {"type": "text"}),
-  ]
-
-Each entry is a tuple: (title, variable_name, description, default, type_info)
-
-type_info controls the UI widget:
-  {"type": "text"}                                          — text field
-  {"type": "bool"}                                          — checkbox
-  {"type": "json_list"}                                     — JSON array editor
-  {"type": "slider", "range": (min, max, divs), "is_float": False} — slider
-
-Multiple plugins can declare the same variable_name — the value is shared.
-In build_services(), access via: config.get("whisper_model_name", "base")
+Prefer a task's `default_jobs` over a thread in a service — the timekeeper
+already owns the clock.
 """
 
-# =====================================================================
-# BASE CLASS (copied from plugins/BaseService.py for self-containment)
-# =====================================================================
-
-import logging
-import time
-from abc import ABC
-
-MANAGED = "managed"
-EXTENSION = "extension"
+from guest.bases import BaseService
 
 
-class BaseService(ABC):
-    """Base service."""
-    model_name: str = ""    # human-readable name shown in frontends
-    shared: bool = True     # True = one instance for all threads
-    lifecycle: str = MANAGED # "managed" or "extension"
-    config_settings: list = []  # settings shown in the Settings UI
+class Embedder(BaseService):
+    """A loaded model held inside the box; callers get vectors, never the model."""
 
-    def __init__(self):
-        """Initialize the base service."""
-        self._loaded = False
-        self.services = {}  # Every service gets the full registry for peer access, but use it wisely to avoid tight coupling.
+    name = "embedder"
+    description = "Sentence embeddings for search and clustering."
 
-    @property
-    def loaded(self) -> bool:
-        """Handle loaded."""
-        return self._loaded
+    # A foreign library does its own work, so put a process around it.
+    isolation = "subprocess"
+    dependencies_pip = ["sentence-transformers"]
 
-    @loaded.setter
-    def loaded(self, value: bool):
-        """Handle loaded."""
-        self._loaded = value
+    # The public surface. _model and _normalize stay internal.
+    exports = ["embed", "similarity"]
 
-    def load(self) -> bool:
-        """Wraps _load() with automatic timing. Subclasses override _load()."""
-        name = self.model_name or self.__class__.__name__
-        logger = logging.getLogger("BaseService")
-        logger.info(f"Loading model: {name}...")
-        t0 = time.time()
-        try:
-            result = self._load()
-            if result:
-                logger.info(f"Model loaded: {name} ({time.time() - t0:.2f}s)")
-            else:
-                logger.warning(f"Model failed to load: {name} ({time.time() - t0:.2f}s)")
-            return result
-        except Exception as e:
-            logger.error(f"Model crashed during load: {name}: {e}")
-            raise
+    config_settings = [
+        ("Embedding model", "embedder_model_name",
+         "Which sentence-transformers model to load.",
+         "all-MiniLM-L6-v2", {"type": "text"}),
+    ]
 
-    def _load(self) -> bool:
-        """Initialize the service. Return True on success."""
-        self.loaded = True
+    def start(self, sdk):
+        """Load the model once. Return True on success."""
+        from sentence_transformers import SentenceTransformer
+
+        model_name = sdk.config.read("embedder_model_name")
+        sdk.log(f"loading {model_name}")
+        # Held on the instance, which lives in the box and never crosses out.
+        self._model = SentenceTransformer(model_name)
         return True
 
-    def unload(self):
-        """Release all resources. Must be safe to call even if not loaded."""
-        self.loaded = False
+    def stop(self, sdk):
+        """Release the model. Must tolerate never having started."""
+        self._model = None
 
-    def get_client(self):
-        """Override for per-call services (shared=False)."""
-        raise NotImplementedError
+    def embed(self, sdk, texts):
+        """Return one vector per text. Simple data, so it can cross out."""
+        return [list(map(float, v)) for v in self._model.encode(texts)]
 
-    def set_peer_services(self, services: dict):
-        """Receive the live runtime service registry."""
-        self.services = services
-
-
-# =====================================================================
-# EXAMPLE: A simple shared service (e.g. audio transcription)
-# =====================================================================
-
-# import gc
-# import os
-# from pathlib import Path
-# from plugins.BaseService import BaseService
-#
-# logger = logging.getLogger("WhisperService")
-#
-#
-# class FasterWhisperService(BaseService):
-#     shared = True  # transcribe() is stateless
-#
-#     def __init__(self, model_name="base", device="cuda"):
-#         super().__init__()
-#         self.model_name = model_name
-#         self.device = device
-#         self.model = None
-#
-#     def _load(self):
-#         from faster_whisper import WhisperModel
-#         self.model = WhisperModel(self.model_name, device=self.device)
-#         self.loaded = True
-#         return True
-#
-#     def unload(self):
-#         if self.model:
-#             del self.model
-#             self.model = None
-#         self.loaded = False
-#         gc.collect()
-#         logger.info("Whisper model unloaded.")
-#
-#     def transcribe(self, audio_path: str) -> str:
-#         """Transcribe an audio file. Returns transcript text."""
-#         if not self.loaded or not self.model:
-#             return ""
-#         segments, info = self.model.transcribe(audio_path, beam_size=5)
-#         return " ".join(seg.text.strip() for seg in segments)
-#
-#
-# def build_services(config: dict) -> dict:
-#     return {
-#         "whisper": FasterWhisperService(
-#             model_name=config.get("whisper_model_name", "base"),
-#             device="cuda" if config.get("whisper_use_cuda", True) else "cpu",
-#         ),
-#     }
+    def similarity(self, sdk, a, b):
+        """Cosine similarity between two texts."""
+        first, second = self.embed(sdk, [a, b])
+        # A pure helper — no Request, no cost, runs right here.
+        return sdk.text.cosine(first, second)
 
 
-# =====================================================================
-# EXAMPLE: A tiny runtime extension service (a hook carrier)
-# =====================================================================
-# Hooks are how an extension service bends per-turn kernel decisions: the
-# runtime puts a doorway at every moment of the agent turn and a service
-# registers functions at them. See templates/hook_template.py for the six
-# moments, the (ctx, payload) contract, and worked examples of each kind.
+class Weather(BaseService):
+    """The credential case, done the way that does not leak: a handle."""
 
-# from plugins.BaseService import EXTENSION, BaseService
-#
-#
-# class PolicyExtension(BaseService):
-#     model_name = "Policy Extension"
-#     lifecycle = EXTENSION
-#
-#     def bind_runtime(self, *, runtime=None, **_):
-#         self.runtime = runtime
-#         if runtime and getattr(runtime, "hooks", None):
-#             runtime.hooks.add("vet_permission", self.permission_gate)
-#
-#     def unload(self):
-#         # Walk the hook away from its doorway; pass the ORIGINAL function.
-#         if getattr(self, "runtime", None) and getattr(self.runtime, "hooks", None):
-#             self.runtime.hooks.remove(self.permission_gate)
-#         self.loaded = False
-#
-#     def permission_gate(self, ctx, query):
-#         # query.tool_name / query.command; ctx.session / ctx.runtime.
-#         return None  # No opinion; let other gates/default approval decide.
-#
-#
-# def build_services(config: dict) -> dict:
-#     return {"policy_extension": PolicyExtension()}
+    name = "weather"
+    description = "Current conditions from a weather API."
 
+    exports = ["current"]
+    requests = ["net.http"]
 
-# =====================================================================
-# EXAMPLE: A per-call service (e.g. API client with auth)
-# =====================================================================
+    config_settings = [
+        ("Weather API key", "secret_weather_api_key",
+         "API key for the weather provider.", "", {"type": "text"}),
+    ]
 
-# from plugins.BaseService import BaseService
-#
-#
-# class GoogleDriveService(BaseService):
-#     shared = False  # each caller gets a fresh API client
-#
-#     def __init__(self):
-#         super().__init__()
-#         self.model_name = "Google Drive"
-#         self.credentials = None
-#
-#     def _load(self):
-#         # Load OAuth credentials from disk
-#         self.credentials = load_credentials()
-#         self.loaded = True
-#         return True
-#
-#     def unload(self):
-#         self.credentials = None
-#         self.loaded = False
-#
-#     def get_client(self):
-#         """Return a fresh Drive API client for thread-safe usage."""
-#         from googleapiclient.discovery import build
-#         return build("drive", "v3", credentials=self.credentials)
-#
-#
-# def build_services(config: dict) -> dict:
-#     return {"drive": GoogleDriveService()}
+    def start(self, sdk):
+        """Nothing to acquire — the key is fetched per call, as a handle."""
+        return True
+
+    def current(self, sdk, city):
+        """Fetch conditions for a city."""
+        # This is a <secret:...> handle, not the key. It is safe to hold, log,
+        # and pass around; the kernel swaps in the real value on the way out
+        # of sdk.net.http. No approval dialog, because this plugin declared
+        # the setting itself.
+        key = sdk.config.read("secret_weather_api_key")
+        response = sdk.net.http(
+            f"https://api.example.com/current?city={city}",
+            headers={"Authorization": f"Bearer {key}"},
+        )
+        return response["body"]
