@@ -445,3 +445,34 @@ def test_ownership_never_short_circuits_anything_else(monkeypatch):
     assert build_approver(runtime)(Chain().push("litellm"), request,
                                    decision) is False
     assert len(runtime.asked) == 1
+
+
+def test_resident_service_may_persist_its_own_declared_setting(monkeypatch):
+    monkeypatch.setattr(
+        "plugins.plugin_discovery.get_setting_plugin_names",
+        lambda key: ["timekeeper"] if key == "scheduled_jobs" else [],
+    )
+    request = Request(
+        R.CONFIG_WRITE,
+        {"key": "scheduled_jobs", "value": {}, "scope": "plugin"},
+    )
+
+    decision = classify(request, Chain(root="service:timekeeper"))
+
+    assert decision.safe
+    assert "persists its own" in decision.reason
+
+
+def test_resident_service_cannot_persist_another_plugins_setting(monkeypatch):
+    monkeypatch.setattr(
+        "plugins.plugin_discovery.get_setting_plugin_names",
+        lambda key: ["other_plugin"],
+    )
+    request = Request(
+        R.CONFIG_WRITE,
+        {"key": "scheduled_jobs", "value": {}, "scope": "plugin"},
+    )
+
+    decision = classify(request, Chain(root="service:timekeeper"))
+
+    assert not decision.safe

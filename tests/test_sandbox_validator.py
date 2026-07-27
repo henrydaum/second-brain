@@ -66,6 +66,37 @@ def test_the_fixture_plugin_conforms():
     assert report.ok, report.render()
 
 
+def test_polling_is_only_available_to_resident_plugins():
+    source = GOOD_TOOL.replace(
+        "max_calls = 3",
+        "max_calls = 3\n    poll_interval = 1.0",
+    ).replace(
+        "def run(self, sdk, path):",
+        "def poll(self, sdk):\n"
+        "        return False\n\n"
+        "    def run(self, sdk, path):",
+    )
+    report = _validate(source)
+    assert not report.ok
+    assert "only valid for resident services and frontends" in _messages(report)
+
+
+def test_enabled_resident_polling_requires_a_poll_method():
+    source = GOOD_TOOL.replace(
+        "from plugins.BaseTool import BaseTool",
+        "from guest.bases import BaseService",
+    ).replace(
+        "class ReadNotes(BaseTool):",
+        "class ReadNotes(BaseService):",
+    ).replace(
+        "max_calls = 3",
+        "poll_interval = 1.0",
+    )
+    report = _validate(source, filename="service_read_notes.py")
+    assert not report.ok
+    assert "defines no poll(self, sdk)" in _messages(report)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Reaching for the environment.
 # ──────────────────────────────────────────────────────────────────────

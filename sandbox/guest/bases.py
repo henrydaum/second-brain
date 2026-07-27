@@ -206,6 +206,8 @@ class BaseService(BasePlugin):
 
     shared: bool = True
     is_llm_backend: bool = False
+    poll_interval: float = 0.0
+    max_poll_failures: int = 5
 
     # Methods reachable through ``service.call``. Anything not listed is
     # internal. Declaring the surface explicitly is what makes "which service
@@ -226,6 +228,10 @@ class BaseService(BasePlugin):
     def stop(self, sdk):
         """Release it. Must tolerate never having started."""
         return None
+
+    def poll(self, sdk):
+        """Perform one small unit of periodic work."""
+        return False
 
     def __hook__(self, sdk, moment: str, handler: str, ctx: dict,
                  payload=None, token: str = ""):
@@ -307,6 +313,7 @@ class BaseFrontend(BasePlugin):
     # How long the kernel waits after a poll that found nothing. Only paid
     # when idle: a poll that reports work is called straight back.
     poll_interval: float = 0.05
+    max_poll_failures: int = 5
 
     # Whether this frontend's transport is the machine's own console. The
     # kernel lends it to exactly one frontend — two readers would split a

@@ -147,7 +147,11 @@ def _serve_persistent(wire_in, wire_out, sdk, instance,
             continue
 
         try:
-            raw = method(sdk, **(message.get("kwargs") or {}))
+            raw = method(
+                sdk,
+                *(message.get("args") or []),
+                **(message.get("kwargs") or {}),
+            )
             result = raw if isinstance(raw, Result) else Result(data=raw)
         except Terminated:
             # Requests are being refused: the kernel is tearing us down and a

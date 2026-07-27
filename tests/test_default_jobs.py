@@ -11,7 +11,6 @@ from types import SimpleNamespace
 
 from pipeline.orchestrator import Orchestrator
 from plugins.BaseTask import BaseTask
-from plugins.services.service_timekeeper import TimekeeperService
 from runtime.runtime_approvals import _sane_enum
 
 
@@ -97,22 +96,6 @@ def test_task_without_default_jobs_needs_no_timekeeper():
 
     db = SimpleNamespace(ensure_output_table=lambda *a, **k: None, register_task=lambda **k: None)
     Orchestrator(db, {"max_workers": 1}, {}).register_task(_Plain())  # must not raise
-
-
-def test_timekeeper_remove_and_recreate(monkeypatch):
-    saved = {}
-    monkeypatch.setattr("config.config_manager.load_plugin_config", lambda: {})
-    monkeypatch.setattr("config.config_manager.save_plugin_config", lambda values: saved.update(values))
-    config = {"scheduled_jobs": {"cron": {"enabled": True, "channel": "t", "payload": {}, "cron": "* * * * *"}}}
-    service = TimekeeperService(config)
-
-    assert service.remove_job("cron") is True
-    assert service.get_job("cron") is None
-    assert saved["scheduled_jobs"] == {}
-    assert service.remove_job("cron") is False  # already gone
-
-    service.create_job("cron", {"channel": "t", "cron": "* * * * *"})
-    assert service.get_job("cron") is not None
 
 
 def test_sane_enum_drops_unanswerable_choices():

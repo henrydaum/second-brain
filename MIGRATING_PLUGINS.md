@@ -63,6 +63,13 @@ them:
 A command's `form(args, context)` becomes `form(sdk, args)` and is bridged
 alongside `run`, so a migrated command keeps collecting its arguments.
 
+For resident services or frontends that need periodic work, move the body of
+the old loop or timer into `poll(self, sdk)` and declare `poll_interval`.
+Return truthy when more work is already queued (the kernel calls again
+immediately) or falsy to wait the interval. Do not create a guest thread or an
+`sdk.poll()` request: the kernel owns cadence, serialization, shutdown, and
+the repeated-failure limit (`max_poll_failures`, default five).
+
 Then convert each effect the plan listed. The common ones:
 
 ```python

@@ -426,6 +426,13 @@ not through `service.call`. The synthetic module supplies `build_services`,
 since that is how discovery finds services. The box owns the start deadline,
 so the adapter sets `load_timeout = 0` rather than race two timers.
 
+**Resident polling is shared infrastructure.** Services and frontends may
+define `poll(self, sdk)` and a positive `poll_interval`; the kernel owns the
+thread and drives the serialized box call. Truthy drains immediately, falsy
+waits the interval, and `max_poll_failures` (default five) bounds repeated
+errors. Services default to polling disabled; frontends retain their 50 ms
+default. This is an inbound lifecycle contract, not an `sdk.poll()` request.
+
 **Frontends are resident boxes the kernel *drives*.** All five families are now
 bridged. A frontend is a residency like a service, but with the loop inverted:
 a native frontend blocks in `start()` forever, and a box takes one call at a

@@ -76,20 +76,20 @@ class PersistentBox:
         """Whether this box can still take calls."""
         return self._alive
 
-    def call(self, method: str, **kwargs) -> Result:
+    def call(self, method: str, *args, **kwargs) -> Result:
         """Invoke a method and wait for its answer. Serialized per box."""
         if not self._alive:
             return Result.failure(f"box {self.name!r} is not running")
         with self._lock:
             if not self._alive:
                 return Result.failure(f"box {self.name!r} is not running")
-            return self._call(method, kwargs)
+            return self._call(method, args, kwargs)
 
     def stop(self, timeout: float = 10.0) -> Result:
         """Shut down: ask, then starve, then kill."""
         raise NotImplementedError
 
-    def _call(self, method: str, kwargs: dict) -> Result:
+    def _call(self, method: str, args: tuple, kwargs: dict) -> Result:
         """Runner-specific call."""
         raise NotImplementedError
 
@@ -117,13 +117,19 @@ class InProcessBox(PersistentBox):
         self._interpreter = interpreter
         start_fn = getattr(self.target, "start", None)
         if self.manage_lifecycle and callable(start_fn):
-            outcome = self._invoke(start_fn, {}, clamp_timeout(timeout))
+            outcome = self._invoke(start_fn, (), {}, clamp_timeout(timeout))
             if not outcome.ok:
                 return outcome
         self._alive = True
         return Result(data=True)
 
-    def _invoke(self, fn, kwargs: dict, deadline: float) -> Result:
+    def _invoke(
+        self,
+        fn,
+        args: tuple,
+        kwargs: dict,
+        deadline: float,
+    ) -> Result:
         """Run one callable on a worker thread under a deadline."""
         from .guest.channel import Terminated
         from .guest.requests import RequestFailed
@@ -134,7 +140,7 @@ class InProcessBox(PersistentBox):
         def _worker():
             """Call it and capture whatever comes back."""
             try:
-                raw = fn(self.sdk, **kwargs)
+                raw = fn(self.sdk, *args, **kwargs)
                 box["result"] = raw if isinstance(raw, Result) else Result(
                     data=raw)
             except Terminated as stop:
@@ -156,12 +162,12 @@ class InProcessBox(PersistentBox):
                                   retryable=True)
         return box.get("result", Result(data=None))
 
-    def _call(self, method: str, kwargs: dict) -> Result:
+    def _call(self, method: str, args: tuple, kwargs: dict) -> Result:
         """Invoke a method on the resident instance."""
         fn = getattr(self.target, method, None)
         if not callable(fn):
             return Result.failure(f"no such method: {method!r}")
-        return self._invoke(fn, kwargs, self.call_timeout)
+        return self._invoke(fn, args, kwargs, self.call_timeout)
 
     def stop(self, timeout: float = 10.0) -> Result:
         """Ask it to stop, then starve it. There is no kill for a thread."""
@@ -170,7 +176,7 @@ class InProcessBox(PersistentBox):
         self._alive = False
         stop_fn = getattr(self.target, "stop", None)
         if self.manage_lifecycle and callable(stop_fn):
-            self._invoke(stop_fn, {}, clamp_timeout(timeout))
+            self._invoke(stop_fn, (), {}, clamp_timeout(timeout))
         self._interpreter.cancel(self.execution)
         unload_box(self.name)
         return Result(data=True)
@@ -233,7 +239,7 @@ class SubprocessBox(PersistentBox):
         self._alive = True
         return Result(data=True)
 
-    def _call(self, method: str, kwargs: dict) -> Result:
+    def _call(self, method: str, args: tuple, kwargs: dict) -> Result:
         """Send a call and service Requests until the answer comes back.
 
         The deadline escalates rather than merely starving. Refusing a
@@ -250,8 +256,12 @@ class SubprocessBox(PersistentBox):
         timer.daemon = True
         timer.start()
         try:
-            if not send(self.proc, {"kind": protocol.CALL, "method": method,
-                                    "kwargs": kwargs}):
+            if not send(self.proc, {
+                "kind": protocol.CALL,
+                "method": method,
+                "args": list(args),
+                "kwargs": kwargs,
+            }):
                 self._alive = False
                 return Result.failure("box channel closed")
             message = service_until(self._interpreter, self.execution,

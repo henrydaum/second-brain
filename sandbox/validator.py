@@ -212,7 +212,8 @@ EFFECT_METHODS = {
 # Ceilings mirrored from the interpreter. Exceeding one is not an error —
 # the plugin declares intent, the kernel clamps.
 CEILINGS = {"load_timeout": 600.0, "timeout": 600.0, "max_calls": 25,
-            "memory_mb": 4096, "batch_size": 1000}
+            "memory_mb": 4096, "batch_size": 1000,
+            "poll_interval": 3600.0, "max_poll_failures": 100}
 
 # Declarations the kernel reads without importing, so they must be literals.
 LITERAL_LISTS = ("dependencies_files", "dependencies_pip",
@@ -625,6 +626,35 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
         elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
             assigned[item.target.id] = item
 
+    if "poll_interval" in assigned:
+        node = assigned["poll_interval"]
+        interval = _literal(node.value)
+        methods = {
+            item.name
+            for item in cls.body
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        if family not in {"service", "frontend"}:
+            walker.add(
+                ERROR,
+                node,
+                "poll_interval is only valid for resident services and "
+                "frontends",
+            )
+        elif not isinstance(interval, (int, float)) or interval < 0:
+            walker.add(
+                ERROR,
+                node,
+                "poll_interval must be a non-negative number",
+            )
+        elif interval > 0 and "poll" not in methods:
+            walker.add(
+                ERROR,
+                node,
+                "poll_interval is enabled but this class defines no "
+                "poll(self, sdk)",
+            )
+
     # The declared name: must exist, be a literal, and not already be taken.
     if "name" not in assigned:
         walker.add(ERROR, cls, f"{base} subclass declares no 'name'")
@@ -700,7 +730,8 @@ DECLARATION_KEYS = ("name", "box", "isolation", "lifetime", "timeout",
                     "dependencies_pip", "requires_services", "max_calls",
                     "background_safe", "agent_prompt", "hooks",
                     "subscribed_channels", "uses_console", "poll_interval",
-                    "background_submit", "restore_on_start",
+                    "max_poll_failures", "background_submit",
+                    "restore_on_start",
                     # LLM backends. Read rather than asked because the whole
                     # point is to know what a backend can do without importing
                     # it — deciding whether to stream a call must not cost a

@@ -303,6 +303,30 @@ Channel names are not a closed vocabulary. The kernel's are in
 listen to another plugin's, so nothing validates the string — a typo is
 silence, not an error.
 
+### Polling a resident plugin
+
+Services and frontends may ask the kernel to call a short `poll(self, sdk)`
+method repeatedly:
+
+```python
+class Clock(BaseService):
+    name = "clock"
+    poll_interval = 1.0
+    max_poll_failures = 5
+
+    def poll(self, sdk):
+        did_work = self._fire_due_jobs(sdk)
+        return did_work
+```
+
+The kernel owns the thread, cadence, shutdown, and failure limit. A truthy
+return means work remains and requests another call immediately; a falsy
+return waits `poll_interval`. Calls are serialized through the resident box,
+so exported methods, events, renders, and polls never mutate guest state at
+the same time. Polling is disabled for a service unless it declares a positive
+interval; frontends default to 0.05 seconds. It is invalid on commands, tools,
+and tasks.
+
 ### Being a frontend
 
 A frontend is inbound-driven, and that inverts the usual shape twice.

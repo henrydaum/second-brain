@@ -182,7 +182,7 @@ ALWAYS_UNSAFE = {
     R.CRON_CREATE, R.CRON_UPDATE, R.CRON_REMOVE,
     R.AGENT_SCHEDULE,
     # Identity and settings.
-    R.CONFIG_WRITE, R.USER_WRITE, R.USER_LIST,
+    R.USER_WRITE, R.USER_LIST,
     # Destructive.
     R.CONV_DELETE, R.FS_DELETE,
 }
@@ -246,7 +246,8 @@ ALWAYS_SAFE = {
 # like policy when it is really an oversight.
 _BRANCHED = {NET_HTTP, PROC_RUN, FS_WRITE, R.FS_WRITE_BYTES,
              FS_MOVE, FS_DELETE, FS_TEMP,
-             CONFIG_READ, ENV_READ, R.SECRET_REVEAL, UI_ASK, SESSION_ADD_TOOL,
+             CONFIG_READ, R.CONFIG_WRITE, ENV_READ, R.SECRET_REVEAL,
+             UI_ASK, SESSION_ADD_TOOL,
              SESSION_ADD_PROMPT, AGENT_SCHEDULE, CONV_DELETE,
              R.TASK_PAUSE, R.TASK_RESET}
 _UNDECIDED = R.ALL_TYPES - ALWAYS_SAFE - ALWAYS_UNSAFE - _BRANCHED
@@ -324,6 +325,29 @@ def classify(request: Request, chain: Chain) -> Decision:
         if is_secret(name):
             return Decision(SAFE, f"{name} (returned as a handle)")
         return Decision(SAFE, "read setting")
+
+    # A resident plugin may persist its own declared state without asking.
+    # The setting registry, not the guest's requested scope, establishes
+    # ownership; every other config write still requires approval.
+    if kind == R.CONFIG_WRITE:
+        key = args.get("key") or ""
+        try:
+            from plugins.plugin_discovery import get_setting_plugin_names
+
+            owners = set(get_setting_plugin_names(key))
+        except Exception:
+            owners = set()
+        callers = set(chain.links)
+        # Resident roots are assigned by the kernel adapter, not supplied by
+        # guest code. Include that authenticated service/frontend identity in
+        # ownership checks; the box link is commonly the source-file stem
+        # (for example ``service_timekeeper``), not the public plugin name.
+        if chain.root.startswith(("service:", "frontend:")):
+            callers.add(chain.root.split(":", 1)[1])
+        if args.get("scope") == "plugin" and owners & callers:
+            owner = sorted(owners & callers)[0]
+            return Decision(SAFE, f"{owner} persists its own {key}")
+        return Decision(UNSAFE, f"config.write: change setting {key}")
 
     # ── asking a human is only possible when one is there ─────────
     if kind == UI_ASK:

@@ -188,7 +188,7 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     base = _native_base(family)
     native_module = __import__(NATIVE_BASES[family][0],
                                fromlist=["ToolResult"])
-    source_path = str(path)
+    source_path = str(Path(path).resolve())
     box_name = declarations.get("box") or path.stem
 
     # What one approval is allowed to buy. Read here, once, from the same
@@ -200,7 +200,14 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     # Different enough that it gets its own builder rather than a branch in
     # the per-call machinery below.
     if family == "service":
-        return _adapt_service(path, entry, base, declarations, box_name)
+        return _adapt_service(
+            path,
+            entry,
+            base,
+            declarations,
+            box_name,
+            report.source,
+        )
 
     # A frontend is a residency too, but one the kernel drives rather than
     # calls: it owns a loop and nine render doorways. Its own builder for the
@@ -422,7 +429,81 @@ class ServiceCallFailed(RuntimeError):
     """
 
 
-def _adapt_service(path, entry: str, base, declarations: dict, box_name: str):
+MIN_POLL_INTERVAL = 0.01
+MAX_POLL_INTERVAL = 3600.0
+DEFAULT_POLL_FAILURES = 5
+
+
+def _poll_settings(declarations: dict, default_interval: float) -> tuple:
+    """Clamp a resident plugin's polling wishes to kernel-owned limits."""
+    try:
+        raw = float(declarations.get("poll_interval", default_interval))
+    except (TypeError, ValueError):
+        raw = default_interval
+    interval = (
+        0.0
+        if raw <= 0
+        else max(MIN_POLL_INTERVAL, min(raw, MAX_POLL_INTERVAL))
+    )
+    try:
+        failures = int(
+            declarations.get("max_poll_failures", DEFAULT_POLL_FAILURES)
+        )
+    except (TypeError, ValueError):
+        failures = DEFAULT_POLL_FAILURES
+    return interval, max(1, min(failures, 100))
+
+
+def _drive_polls(
+    *,
+    family: str,
+    name: str,
+    box,
+    stopping,
+    interval: float,
+    max_failures: int,
+    done=None,
+):
+    """Drive one resident plugin's kernel-owned poll loop."""
+    failures = 0
+    while box.alive and not stopping.is_set() and not (
+        callable(done) and done()
+    ):
+        outcome = box.call("poll")
+        if outcome.ok:
+            failures = 0
+            # Truthy means work remains: drain it before sleeping.
+            if not outcome.data:
+                stopping.wait(interval)
+            continue
+
+        failures += 1
+        logger.warning(
+            "%s %s poll failed (%d/%d): %s",
+            family,
+            name,
+            failures,
+            max_failures,
+            outcome.error,
+        )
+        if failures >= max_failures:
+            logger.error(
+                "%s %s stopped polling after repeated failures",
+                family,
+                name,
+            )
+            break
+        stopping.wait(interval)
+
+
+def _adapt_service(
+    path,
+    entry: str,
+    base,
+    declarations: dict,
+    box_name: str,
+    source: str,
+):
     """Build a native-looking service backed by a resident box.
 
     The other families are *calls*: run once, translate the answer, tear down.
@@ -436,9 +517,11 @@ def _adapt_service(path, entry: str, base, declarations: dict, box_name: str):
     the adapter, because native callers reach services by attribute access
     rather than through ``service.call``.
     """
-    source_path = str(path)
+    source_path = str(path.resolve())
     name = declarations.get("name") or path.stem.split("_", 1)[-1]
     exports = list(declarations.get("exports") or [])
+    interval, max_failures = _poll_settings(declarations, 0.0)
+    polls = interval > 0 and _defines(source, entry, "poll")
 
     if not exports:
         # Not fatal — a service may exist only for its side effects — but it
@@ -447,11 +530,22 @@ def _adapt_service(path, entry: str, base, declarations: dict, box_name: str):
         logger.warning("sandboxed service %s declares no exports; nothing "
                        "will be able to call it", path.name)
 
+    def __init__(self):
+        """Initialize native adapter state without importing guest code."""
+        base.__init__(self)
+        self._poll_stop = threading.Event()
+        self._poll_thread = None
+
     def _load(self) -> bool:
         """Open the resident box. Its start() runs inside."""
+        self._poll_stop.clear()
         try:
             self._sandbox_box = get_sandbox().open(
-                source_path, entry, name=box_name)
+                source_path,
+                entry,
+                name=box_name,
+                chain=Chain(root=f"service:{name}"),
+            )
         except Exception as exc:
             logger.error("service %s did not start: %s", name, exc)
             return False
@@ -460,11 +554,34 @@ def _adapt_service(path, entry: str, base, declarations: dict, box_name: str):
         # is boot or a live reload, so both ends call the same idempotent sync.
         _sync_hooks(self)
         _listen(self)
+        if polls:
+            box = self._sandbox_box
+            self._poll_thread = threading.Thread(
+                target=_drive_polls,
+                kwargs={
+                    "family": "service",
+                    "name": name,
+                    "box": box,
+                    "stopping": self._poll_stop,
+                    "interval": interval,
+                    "max_failures": max_failures,
+                },
+                daemon=True,
+                name=f"{name}-poll",
+            )
+            self._poll_thread.start()
         return True
 
     def unload(self):
         """Close the box and step away from every doorway and channel."""
         self.loaded = False
+        self._poll_stop.set()
+        thread, self._poll_thread = self._poll_thread, None
+        if (
+            thread is not None
+            and thread is not threading.current_thread()
+        ):
+            thread.join(timeout=5.0)
         _unhook(self)
         _deafen(self)
         self._sandbox_box = None
@@ -481,13 +598,13 @@ def _adapt_service(path, entry: str, base, declarations: dict, box_name: str):
 
     def _export(method: str):
         """One forwarding method, so callers see an ordinary service."""
-        def call(self, **kwargs):
+        def call(self, *args, **kwargs):
             """Invoke an exported method inside the box."""
             box = getattr(self, "_sandbox_box", None)
             if box is None or not box.alive:
                 raise ServiceCallFailed(
                     f"service {name!r} is not loaded")
-            result = box.call(method, **kwargs)
+            result = box.call(method, *args, **kwargs)
             if not result.ok:
                 raise ServiceCallFailed(f"{name}.{method}: {result.error}")
             return result.data
@@ -516,6 +633,7 @@ def _adapt_service(path, entry: str, base, declarations: dict, box_name: str):
         # timer racing the first, and whichever fired first would report a
         # failure the other could not see.
         "load_timeout": 0,
+        "__init__": __init__,
         "_load": _load,
         "unload": unload,
     }
@@ -561,19 +679,9 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
     """
     from .frontends import park, project_payload, unpark
 
-    source_path = str(path)
+    source_path = str(Path(path).resolve())
     name = declarations.get("name") or path.stem.split("_", 1)[-1]
-    interval = declarations.get("poll_interval")
-    try:
-        interval = max(0.0, min(float(interval), 5.0))
-    except (TypeError, ValueError):
-        interval = 0.05
-
-    # A poll that keeps failing is a broken box, not a busy one. Spinning on it
-    # would burn a core and fill the log; stopping makes the failure visible.
-    # It is also how a console frontend ends at end-of-input: reading a closed
-    # console fails, so a piped stdin runs out and the frontend stops itself.
-    max_failures = 5
+    interval, max_failures = _poll_settings(declarations, 0.05)
 
     wants_console = bool(declarations.get("uses_console"))
     restore_on_start = bool(declarations.get("restore_on_start"))
@@ -604,7 +712,12 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
         """
         try:
             self._sandbox_box = get_sandbox().open(
-                source_path, entry, name=box_name, manage_lifecycle=False)
+                source_path,
+                entry,
+                name=box_name,
+                chain=Chain(root=f"frontend:{name}"),
+                manage_lifecycle=False,
+            )
         except Exception as exc:
             logger.error("frontend %s did not start: %s", name, exc)
             return
@@ -664,25 +777,15 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
             except Exception:
                 logger.exception("frontend %s restore_last_active failed", name)
 
-        failures = 0
-        while not self._done() and box.alive:
-            outcome = box.call("poll")
-            if outcome.ok:
-                failures = 0
-                # Truthy means "I did work" — go straight back rather than
-                # sleeping, so a busy transport is not rate-limited by us.
-                if not outcome.data:
-                    self._stopping.wait(interval)
-                continue
-
-            failures += 1
-            logger.warning("frontend %s poll failed (%d/%d): %s", name,
-                           failures, max_failures, outcome.error)
-            if failures >= max_failures:
-                logger.error("frontend %s stopped after repeated poll "
-                             "failures", name)
-                break
-            self._stopping.wait(interval)
+        _drive_polls(
+            family="frontend",
+            name=name,
+            box=box,
+            stopping=self._stopping,
+            interval=interval,
+            max_failures=max_failures,
+            done=self._done,
+        )
 
         self.stop()
 
