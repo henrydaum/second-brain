@@ -21,6 +21,7 @@ from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                               FS_READ_BYTES, FS_SEARCH, FS_TEMP, FS_WRITE,
                               FS_WRITE_BYTES, NET_HTTP, PROC_RUN,
                               SECRET_REVEAL, Result)
+from ..protected import is_protected, reason_for
 from ..secrets import lookup_from, redact, resolve
 
 MAX_READ_BYTES = 8 * 1024 * 1024
@@ -40,6 +41,8 @@ def _fs_read(ctx, args: dict) -> Result:
     if not raw:
         return Result.failure("fs.read requires a path")
     path = Path(raw)
+    if (why := reason_for(path)):
+        return Result.refusal(f"{raw} is not readable: {why}")
     try:
         if not path.is_file():
             return Result.failure(f"not a file: {raw}")
@@ -62,6 +65,10 @@ def _fs_read_bytes(ctx, args: dict) -> Result:
     if not raw:
         return Result.failure("fs.read_bytes requires a path")
     path = Path(raw)
+    # Same answer as fs.read: the encoding a caller asks for cannot be a way
+    # around which bytes may leave.
+    if (why := reason_for(path)):
+        return Result.refusal(f"{raw} is not readable: {why}")
     try:
         if not path.is_file():
             return Result.failure(f"not a file: {raw}")
@@ -157,6 +164,12 @@ def _fs_search(ctx, args: dict) -> Result:
     try:
         for path in root.glob(glob):
             if not path.is_file() or path.stat().st_size > MAX_READ_BYTES:
+                continue
+            # Skipped rather than refused: a search over a whole tree should
+            # not fail because a protected file happens to sit in it. It
+            # matters as much as fs.read here — hits carry matching *lines*,
+            # so pattern="secret_" would otherwise do the job on its own.
+            if is_protected(path):
                 continue
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")

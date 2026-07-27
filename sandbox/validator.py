@@ -179,6 +179,22 @@ BANNED_BUILTINS = {
     # box and stop it rendering until the next keypress.
     "input": "sdk.ui.ask, or sdk.console.read_line in a console frontend",
     "breakpoint": "nothing",
+    # Reaching the namespace is reaching everything in it. Banning ``open``
+    # while leaving ``globals()["open"]`` open would be a rule that only stops
+    # people who were not going around it anyway.
+    "globals": "nothing — name what you need directly",
+    "locals": "nothing — name what you need directly",
+}
+
+# Names that hand back a namespace rather than a value. Checked wherever they
+# are *read*, not just called: ``getattr(__builtins__, "open")`` is a plain
+# attribute fetch off a Name, so the call-shaped checks above never see it.
+#
+# This does not make the linter a proof — nothing does, and the contract says
+# so. It closes the one escape that sits directly beside a rule already
+# enforced, which is worth a line.
+BANNED_NAMES = {
+    "__builtins__": "nothing — name what you need directly",
 }
 
 # Database-shaped attribute names. Native plugins reach past the Database
@@ -384,6 +400,13 @@ class _Walker(ast.NodeVisitor):
                      f"reads context.{field_name} via getattr; sandboxed code "
                      f"is handed an sdk, not a context",
                      CONTEXT_MAP[field_name])
+
+    def visit_Name(self, node):
+        """Namespace escapes, wherever the name is mentioned."""
+        if isinstance(node.ctx, ast.Load) and node.id in BANNED_NAMES:
+            self.add(ERROR, node, f"reaches {node.id}",
+                     BANNED_NAMES[node.id])
+        self.generic_visit(node)
 
     def visit_Attribute(self, node):
         """Catch effects performed through the old ``context`` object.

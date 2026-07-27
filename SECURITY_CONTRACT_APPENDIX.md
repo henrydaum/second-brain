@@ -55,12 +55,12 @@ Reuse that pattern wherever a Request would be too noisy to write by hand.
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `fs.read(path)` | File contents as text | path | safe |
+| `fs.read(path)` | File contents as text | path | safe, except protected files |
 | `fs.write(path, data, mode)` | Create, overwrite, or append text | path | safe in scratch/memory/sandbox, else unsafe |
-| `fs.read_bytes(path)` | File contents as raw bytes | path | safe |
+| `fs.read_bytes(path)` | File contents as raw bytes | path | safe, except protected files |
 | `fs.write_bytes(path, data, mode)` | Create, overwrite, or append bytes | path | safe in scratch/memory/sandbox, else unsafe |
 | `fs.list(path, pattern)` | Directory listing, glob, stat | path | safe |
-| `fs.search(pattern, root)` | Content search across a tree | root path | safe |
+| `fs.search(pattern, root)` | Content search across a tree | root path | safe; protected files skipped |
 | `fs.delete(path)` | Remove a file or tree | path | unsafe |
 | `fs.move(src, dst)` | Copy, rename, replace | both paths | unsafe outside scratch |
 | `fs.temp()` | Allocate a scratch file or directory | — | safe, always |
@@ -70,6 +70,20 @@ decision. Scratch space is granted, not requested by path.
 
 `fs.search` is derivable from `fs.list` + `fs.read`, and is a separate Request
 anyway: doing it by hand costs one round trip per file.
+
+**Protected files** (`sandbox/protected.py`) are the one place a read Request
+refuses on the path alone: `config.json`, `plugin_config.json`, and the SQLite
+database with its sidecars. Both exist because a control enforced on one
+Request was walkable around on the next. `config.read` hands back a
+`<secret:…>` handle and `secret.reveal` prompts — but `config.json` holds the
+same credentials in plaintext, so an unrestricted `fs.read` made the handle
+decorative. The database is reachable through `db.query`, which scopes rows per
+user and refuses `password_hash`; reading the file walks around all of it.
+`fs.search` counts as a read here because its hits carry matching *lines* —
+`pattern="secret_"` would do the job by itself. Writes need no rule: a write
+outside scratch is already unsafe, so editing these asks like any other.
+Directories are not protected; listing a folder reveals nothing the path
+constants do not already say.
 
 **Bytes are a separate pair, not a flag.** `fs.read` decodes UTF-8 with
 replacement, which is right for text and silently destructive for anything
@@ -86,8 +100,8 @@ cap — binary reads get a larger one, because a 20 MB video is ordinary where a
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
 | `db.query(sql, params)` | Read rows | resolved tables/columns, user | safe |
-| `db.write(sql, params)` | Insert, update, delete | resolved tables, user | unsafe on kernel tables, safe on plugin-owned |
-| `db.define(ddl)` | Create or alter a plugin-owned table | table name | safe for new tables, unsafe to alter kernel tables |
+| `db.write(sql, params)` | Insert, update, delete | mentioned tables | **refused** on kernel tables, safe on plugin-owned |
+| `db.define(ddl)` | Create or alter a plugin-owned table | mentioned tables | **refused** on kernel tables, safe otherwise |
 
 Reads stay deliberately unrestricted. Free reads are safe **because the exits
 are gated** — a plugin that reads everything still cannot send anything
@@ -100,6 +114,28 @@ Two narrow exceptions, both structural rather than policy:
 - `users.password_hash` is denied at the column level. It is the only secret
   column in the schema.
 - User-scoped tables are reached through **per-user views**, not base tables.
+
+**Writes are narrower than reads**, which is the reverse of how the two usually
+go, and it follows from what each can be walked around. A broad read is
+contained by egress being gated; a broad write is contained by nothing, because
+it *is* the effect. So the kernel's own tables (`users`, `conversations`,
+`conversation_messages`, `action_ledger`, `files`, `registered_tasks`,
+`task_queue`, `task_runs`) are refused outright and reached through the
+Requests that carry their access checks — `conv.append`, `user.write`,
+`ledger.record`, `file.register`, the `task.*` family. Without this, `db.write`
+was a way around the rest of the catalogue: `conv.delete` prompts and
+`DELETE FROM conversations` did not; `user.write` prompts and
+`UPDATE users SET password_hash` did not.
+
+Refused rather than merely unsafe, because there is no narrowing available. A
+read can be rewritten to the caller's own rows; SQLite cannot `UPDATE` a
+subquery, so the virtual-name trick has nothing to expand into. And refusal
+costs nothing here — every one of those tables already has a Request that does
+the job properly. Plugin-owned tables stay freely writable, which is what
+`db.write` is actually for. The check is a **table-name** check, not a
+statement parser: which tables a statement mentions is answerable, what an
+arbitrary statement does is not, and a fragile SQL parser standing where a
+security boundary should be is exactly what this module refuses to build.
 
 Raw `db.conn` and `db.lock` access is withdrawn — every current use migrates to
 these three Requests. Transaction scoping becomes an argument
@@ -227,7 +263,20 @@ keeps it inside its persistent container; callers get simple data back.
 | `tool.list()` / `tool.schema(name)` | Discover callable tools | — | safe |
 | `tool.call(name, args)` | Tool-to-tool composition | target tool | safe — callee's Requests gated with the chain |
 | `command.list()` | Discover slash commands | — | safe |
-| `command.call(name, args)` | One-shot slash command | target command, `require_approval` | inherits the command's own declaration |
+| `command.call(name, args)` | One-shot slash command | target command name | unsafe; **refused** if the command needs approval |
+
+`tool.call` is safe and `command.call` is not, which is worth the distinction.
+A tool is narrowed by the agent's scope and written to be called by other code,
+and its own Requests are classified with the caller still in the chain — so
+routing through one launders nothing. A command is the surface a *person*
+types: not scope-narrowed, and the set includes package installation and config
+editing. Running one on somebody's behalf gets a sentence, and the dialog names
+the command.
+
+Commands declaring `require_approval` are refused here rather than dispatched.
+That answer comes from the state machine, which sets the approved flag on the
+execution it authorized; nothing on this path can obtain it, and passing it
+anyway would forge the consent the mechanism exists to collect.
 
 ## 11. Agent
 

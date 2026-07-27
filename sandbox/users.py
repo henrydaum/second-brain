@@ -36,6 +36,32 @@ FORBIDDEN_COLUMNS = ("password_hash",)
 VIRTUAL_PREFIX = "my_"
 
 
+# Tables the kernel owns, and the Request that maintains each properly.
+#
+# Reads and writes need different shapes of answer. A read can be *narrowed* —
+# rewrite the table name and the caller gets its own rows — but there is no
+# equivalent for a write: SQLite cannot UPDATE a subquery, so the virtual-name
+# trick has nothing to expand into. Refusing outright is the honest version,
+# and it costs nothing, because every one of these tables already has a
+# dedicated Request that does the same job *with* the access check.
+#
+# Without this, ``db.write`` was a way around the rest of the catalogue:
+# ``conv.delete`` prompts, ``DELETE FROM conversations`` did not; ``user.write``
+# prompts, ``UPDATE users SET password_hash`` did not. Plugin-owned tables —
+# anything a plugin made with ``db.define`` — stay freely writable, which is
+# what ``db.write`` is actually for.
+KERNEL_TABLES = {
+    "users": "sdk.user.write",
+    "conversations": "sdk.conv.* (create, set_title, delete, ...)",
+    "conversation_messages": "sdk.conv.append",
+    "action_ledger": "sdk.ledger.record",
+    "files": "sdk.file.register",
+    "registered_tasks": "sdk.task.* (enqueue, pause, trigger, ...)",
+    "task_queue": "sdk.task.enqueue",
+    "task_runs": "sdk.task.* (status, reset, ...)",
+}
+
+
 class ScopeError(Exception):
     """A query reached for rows it may not have."""
 
@@ -83,3 +109,25 @@ def scope_sql(sql: str, params, user_id):
                 f"read {VIRTUAL_PREFIX}{table} instead")
 
     return scoped, params
+
+
+def scope_write(sql: str):
+    """Refuse a statement that reaches a table the kernel maintains.
+
+    Returns ``sql`` unchanged, or raises :class:`ScopeError` naming the
+    Request that does the job properly. Used by ``db.write`` and ``db.define``
+    alike: creating, altering or dropping a kernel table is the same
+    trespass as writing rows into one.
+
+    Deliberately a *table* check rather than a statement parser. Which tables
+    a statement touches is answerable by looking for their names; what an
+    arbitrary statement does is not, and a fragile SQL parser standing where a
+    security boundary should be is the thing this module already refuses to
+    build.
+    """
+    for table, instead in KERNEL_TABLES.items():
+        if _mentions(sql, table):
+            raise ScopeError(
+                f"{table} is a kernel table and is not writable through a "
+                f"Request; use {instead} instead")
+    return sql

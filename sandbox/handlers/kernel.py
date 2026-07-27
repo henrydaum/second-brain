@@ -49,7 +49,7 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               UI_ASK, UI_RENDER, USER_LIST, USER_READ,
                               USER_WRITE, Result)
 from ..secrets import lookup_from, redact, redact_nested, resolve
-from ..users import scope_sql
+from ..users import ScopeError, scope_sql, scope_write
 
 # Never returned by any Request, at any level.
 HIDDEN_USER_COLUMNS = {"password_hash"}
@@ -109,19 +109,38 @@ def _db_query(ctx, args: dict) -> Result:
     try:
         scoped, params = scope_sql(sql, args.get("params") or [],
                                    getattr(ctx, "user_id", None))
+    except ScopeError as exc:
+        # Policy, not breakage — so ``except sdk.Denied`` catches it, which is
+        # the distinction the whole Result contract rests on.
+        return Result.refusal(str(exc))
+    try:
         return Result(data=_rows(db.query(scoped, params)))
     except Exception as exc:
         return Result.failure(f"query failed: {exc}")
 
 
 def _db_write(ctx, args: dict) -> Result:
-    """Insert, update or delete."""
-    db = _db(ctx)
-    if (bad := _need(db, "the database")) is not None:
-        return bad
+    """Insert, update or delete in a plugin-owned table.
+
+    Writes are narrower than reads, which is the reverse of how the two
+    usually go, and it follows from what each can be walked around. A broad
+    read is contained by egress being gated; a broad write is contained by
+    nothing — it is the effect itself. So the kernel's own tables are refused
+    here and reached through the Requests that carry their access checks.
+    """
     sql = args.get("sql")
     if not sql:
         return Result.failure("db.write requires sql")
+    # Before the database is even resolved: whether this may be asked is a
+    # policy question, and the answer must not depend on whether a database
+    # happens to be wired up in this execution.
+    try:
+        scope_write(sql)
+    except ScopeError as exc:
+        return Result.refusal(str(exc))
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
     try:
         db.execute_write(sql, args.get("params") or [])
         return Result(data=True)
@@ -130,13 +149,22 @@ def _db_write(ctx, args: dict) -> Result:
 
 
 def _db_define(ctx, args: dict) -> Result:
-    """Create a plugin-owned table."""
-    db = _db(ctx)
-    if (bad := _need(db, "the database")) is not None:
-        return bad
+    """Create a plugin-owned table.
+
+    Same table check as ``db.write``: redefining or dropping a kernel table is
+    the same trespass as writing rows into one, and DDL is the obvious way to
+    try it once the write path is closed.
+    """
     ddl = args.get("ddl")
     if not ddl:
         return Result.failure("db.define requires ddl")
+    try:
+        scope_write(ddl)
+    except ScopeError as exc:
+        return Result.refusal(str(exc))
+    db = _db(ctx)
+    if (bad := _need(db, "the database")) is not None:
+        return bad
     try:
         db.execute_write(ddl, [])
         return Result(data=True)
@@ -1468,13 +1496,40 @@ def _command_list(ctx, args: dict) -> Result:
 
 
 def _command_call(ctx, args: dict) -> Result:
-    """Run a slash command in one shot."""
+    """Run a slash command in one shot.
+
+    Two things this must not do, both of which it did before.
+
+    It looked for ``registry.run`` or ``registry.execute``, and
+    ``CommandRegistry`` has neither — only ``dispatch_dict`` — so the Request
+    was unreachable however it was classified.
+
+    And the gate: a command with ``require_approval`` is answered by the state
+    machine, which sets ``_approved`` on the execution it authorized. There is
+    no such answer here, so those commands are refused outright rather than
+    dispatched without one. Never pass ``_approved=True`` from this path — it
+    would forge the approval the whole mechanism exists to obtain. This matches
+    what the native ``slash_command`` tool already does.
+    """
     registry = getattr(ctx, "command_registry", None)
-    runner = getattr(registry, "run", None) or getattr(registry, "execute", None)
+    runner = getattr(registry, "dispatch_dict", None)
     if (bad := _need(runner, "running commands")) is not None:
         return bad
+
+    name = args.get("name")
+    command = (getattr(registry, "_commands", None) or {}).get(name)
+    if command is None:
+        return Result.failure(f"unknown command: /{name}")
+    if getattr(command, "require_approval", False):
+        return Result.refusal(
+            f"/{name} requires the user's approval, which only the state "
+            f"machine can obtain; it is not callable through a Request")
+
     try:
-        return Result(data=runner(args.get("name"), args.get("args") or {}))
+        return Result(data=runner(
+            name, args.get("args") or {},
+            session_key=getattr(ctx, "session_key", None),
+        ))
     except Exception as exc:
         return Result.failure(f"command failed: {exc}")
 

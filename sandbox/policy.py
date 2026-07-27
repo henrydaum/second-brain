@@ -202,7 +202,11 @@ ALWAYS_SAFE = {
     R.USER_READ,
     R.PLUGIN_LIST, R.PLUGIN_DESCRIBE, R.SERVICE_LIST, R.SERVICE_CALL,
     R.PATH_GET,
-    R.TOOL_LIST, R.TOOL_CALL, R.COMMAND_LIST, R.COMMAND_CALL,
+    # TOOL_CALL is safe for the reason SERVICE_CALL is: the callee's own
+    # Requests are classified with the caller still in the chain, so routing
+    # through a tool launders nothing, and the scope already decides which
+    # tools exist. COMMAND_CALL is not — see the branch below.
+    R.TOOL_LIST, R.TOOL_CALL, R.COMMAND_LIST,
     R.AGENT_COMPLETE, R.AGENT_SPAWN,
     # Safe because it widens nothing: the kernel handed this escort a call it
     # had already decided to place, and proceeding is placing that one. The
@@ -247,6 +251,7 @@ ALWAYS_SAFE = {
 _BRANCHED = {NET_HTTP, PROC_RUN, FS_WRITE, R.FS_WRITE_BYTES,
              FS_MOVE, FS_DELETE, FS_TEMP,
              CONFIG_READ, R.CONFIG_WRITE, ENV_READ, R.SECRET_REVEAL,
+             R.COMMAND_CALL,
              UI_ASK, SESSION_ADD_TOOL,
              SESSION_ADD_PROMPT, AGENT_SCHEDULE, CONV_DELETE,
              R.TASK_PAUSE, R.TASK_RESET}
@@ -348,6 +353,17 @@ def classify(request: Request, chain: Chain) -> Decision:
             owner = sorted(owners & callers)[0]
             return Decision(SAFE, f"{owner} persists its own {key}")
         return Decision(UNSAFE, f"config.write: change setting {key}")
+
+    # ── a slash command is the user's own surface ─────────────────
+    # Unlike a tool, a command is not scoped by the agent's tool catalogue and
+    # is not written to be called by other code: it is what the *person* types,
+    # and the set includes things like package installation and config editing.
+    # Running one on someone's behalf is worth a sentence, and the dialog can
+    # name it exactly. (Commands that carry ``require_approval`` never reach
+    # here at all — the handler refuses them, because the answer they need is
+    # one only the state machine can obtain.)
+    if kind == R.COMMAND_CALL:
+        return Decision(UNSAFE, f"run the command /{args.get('name', '')}")
 
     # ── asking a human is only possible when one is there ─────────
     if kind == UI_ASK:
