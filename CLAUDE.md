@@ -417,7 +417,9 @@ grant down unchanged, so a callee can never widen it. This made `requests`
 load-bearing after a long career as documentation, so the validator now checks
 every name against the closed Request vocabulary (`_check_requests`) — the
 audit that motivated it found `/setup` declaring `path.get`, which is not a
-Request type and never was.
+Request type and never was. The dialog states the grant rather than the
+command name (`approval.describe_grant`, rendered by the bridge from the same
+declaration) — a scope nobody is shown is not consent.
 
 **Services are resident boxes.** A sandboxed `BaseService` bridges to a native
 one whose `_load()` opens a persistent box and whose `unload()` closes it.

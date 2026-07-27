@@ -32,6 +32,7 @@ import threading
 import types
 from pathlib import Path
 
+from .approval import describe_grant
 from .facade import Sandbox
 from .policy import Chain
 from .validator import FAMILIES, validate_file
@@ -281,6 +282,11 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         "_box": box_name,
         "_entry": entry,
         "run": run,
+        # The sentence the approval dialog asks, rendered from the same
+        # declaration the grant is built from so the question a user answers
+        # and the authority they hand over cannot drift apart.
+        "approval_prompt": describe_grant(
+            declarations.get("name") or path.stem.split("_", 1)[-1], granted),
     }
     for key, value in declarations.items():
         if key not in NOT_CARRIED:

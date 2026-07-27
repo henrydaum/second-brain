@@ -80,6 +80,124 @@ def _action_line(request) -> str:
     return f"`{kind}`"
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Grants: the type-level question, asked once before a command runs.
+# ──────────────────────────────────────────────────────────────────────
+
+# What a Request type means to a person, with no arguments to lean on.
+# Deliberately coarser than ``_action_line``: that renders one concrete
+# effect at the moment it happens, this summarises a whole capability class
+# before anything has run. Phrases are plural and verb-first so they read as
+# a list under "wants to:".
+GRANT_PHRASES = {
+    "proc.run": "run shell commands",
+    "net.http": "make network requests",
+    "secret.reveal": "read your credentials in plaintext",
+    "config.write": "change settings",
+    "fs.write": "write files", "fs.write_bytes": "write files",
+    "fs.delete": "delete files", "fs.move": "move files",
+    "fs.read": "read files", "fs.read_bytes": "read files",
+    "fs.list": "list folders", "fs.search": "search files",
+    "env.read": "read environment variables",
+    "paths.get": "look up application folders",
+    "db.write": "write to the database", "db.query": "read the database",
+    "db.define": "create database tables",
+    "conv.delete": "delete conversations",
+    "agent.schedule": "schedule unattended work",
+    "agent.spawn": "start a subagent",
+    "user.write": "change user accounts",
+    # Read-only members of families whose fallback phrase is a write. Without
+    # these, declaring ``plugin.list`` would be announced as "install, remove
+    # or reload plugins" — overstating the grant, which erodes trust in the
+    # dialog exactly as fast as understating it erodes safety.
+    "plugin.list": "see what plugins are installed",
+    "plugin.describe": "see what plugins are installed",
+    "cron.list": "see scheduled jobs", "cron.get": "see scheduled jobs",
+    "tool.list": "see what tools exist",
+    "command.list": "see what commands exist",
+    "service.list": "see what services exist",
+    "task.list": "see background work", "task.status": "see background work",
+    "conv.list": "list conversations", "conv.read": "read conversations",
+    "user.read": "read user accounts", "user.list": "read user accounts",
+    "config.read": "read settings",
+    # Machinery. Neither is something a plugin declares, but the table is
+    # total so that a new Request cannot quietly render as a dotted name.
+    "agent.complete": "finish the agent's turn",
+    "self.respond": "answer its own request",
+}
+
+# Families that share one phrase when no specific entry matched. Keeps a new
+# Request from rendering as a bare dotted name in front of a user.
+GRANT_FAMILIES = {
+    "plugin": "install, remove or reload plugins",
+    "cron": "create or change scheduled jobs",
+    "conv": "read and change conversations",
+    "session": "change this session",
+    "service": "call other services",
+    "tool": "call other tools",
+    "command": "run other commands",
+    "task": "queue background work",
+    "ledger": "read the action log",
+    "user": "read user accounts",
+    "ui": "ask you questions",
+    "frontend": "act as a frontend",
+    "console": "use the terminal",
+    "event": "publish events",
+    "model": "talk to the model",
+    "parse": "parse files",
+    "file": "register files",
+    "db": "use the database",
+    "fs": "use the filesystem",
+}
+
+
+def phrase_for(kind: str) -> str:
+    """One human phrase for a Request *type*, arguments unknown."""
+    if kind in GRANT_PHRASES:
+        return GRANT_PHRASES[kind]
+    family = kind.split(".", 1)[0]
+    return GRANT_FAMILIES.get(family, kind)
+
+
+def describe_grant(name: str, requests) -> str:
+    """The prompt for approving a command, naming what the yes covers.
+
+    A single approval authorizes exactly the Request types a command
+    declared, so this is the sentence that makes the grant answerable: the
+    user is told the scope rather than just the name. Ordered by how much
+    the capability is worth thinking about, not alphabetically — a person
+    skimming should meet the shell and the network first.
+
+    Falls back to the bare question when a command declares nothing, which
+    is every unmigrated native command.
+    """
+    seen, phrases = set(), []
+    for kind in sorted(set(requests or ()), key=_grant_rank):
+        phrase = phrase_for(kind)
+        if phrase not in seen:
+            seen.add(phrase)
+            phrases.append(phrase)
+    if not phrases:
+        return f"Approve /{name}?"
+    return f"/{name} wants to:\n" + "\n".join(f"  - {p}" for p in phrases)
+
+
+# Ordering for the list above. The two that carry the most consequence lead,
+# then everything that changes state, then reads.
+_GRANT_ORDER = ("proc.run", "net.http", "secret.reveal")
+
+
+def _grant_rank(kind: str) -> tuple:
+    """Sort key: consequential first, then writes, then reads, then name."""
+    if kind in _GRANT_ORDER:
+        return (0, _GRANT_ORDER.index(kind), kind)
+    verb = kind.split(".", 1)[-1]
+    writes = verb.startswith(("write", "delete", "move", "install",
+                             "uninstall", "create", "register", "set_",
+                             "add_", "remove", "update", "spawn", "schedule"))
+    return (1 if writes else 2, 0, kind)
+
+
 def _trusted(runtime, session_key, chain) -> bool:
     """Whether the user has already decided about the thing that caused this.
 

@@ -572,3 +572,24 @@ the capability classes it declared. `requests` is therefore load-bearing, and
 the validator checks every name against the closed Request vocabulary: a
 misspelling would otherwise grant nothing and surface as a dialog the user
 thought they had already answered.
+
+**The dialog states the scope.** A grant nobody is shown is not consent, so
+the prompt is rendered from the declaration rather than the command name:
+
+```
+/update wants to:
+  - run shell commands
+  - look up application folders
+```
+
+`approval.describe_grant` builds it, from the same `requests` list the bridge
+turns into the grant, so the question asked and the authority handed over
+cannot drift apart. Phrases are the type-level counterpart to `_action_line`:
+that renders one concrete effect as it happens, this summarises a capability
+class before anything runs. The table is **total** over Request types and
+tested to stay that way — a new Request with no phrase would render as a
+dotted name, which is a question nobody can answer. Read-only members of
+write-shaped families (`plugin.list`, `conv.read`) carry their own phrases,
+because overstating a grant erodes trust in the dialog as fast as
+understating it erodes safety. A command declaring nothing falls back to the
+bare `Approve /x?`, which is every unmigrated native command.

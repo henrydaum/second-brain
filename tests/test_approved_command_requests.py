@@ -5,8 +5,10 @@ from types import SimpleNamespace
 
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.command_registry import CommandRegistry
-from sandbox.guest.requests import (FS_WRITE, NET_HTTP, PATH_GET, PROC_RUN,
-                                    Request)
+from sandbox.approval import describe_grant, phrase_for
+from sandbox.bridge import adapt
+from sandbox.guest.requests import (ALL_TYPES, FS_WRITE, NET_HTTP, PATH_GET,
+                                    PROC_RUN, Request)
 from sandbox.policy import Chain, SAFE, UNSAFE, classify
 from sandbox.validator import validate_file
 from state_machine.conversation import CallableSpec, ConversationState, Participant
@@ -113,6 +115,50 @@ def test_a_grant_cannot_be_widened_by_descending():
     assert deeper.approved == frozenset({PROC_RUN})
     assert classify(Request(NET_HTTP, {"url": "https://example.invalid"}),
                     deeper).level == UNSAFE
+
+
+def test_the_dialog_names_the_scope_rather_than_just_the_command():
+    """The user has to be told what the yes covers, or it is not answerable."""
+    prompt = describe_grant("update", [PATH_GET, PROC_RUN])
+
+    assert "/update wants to:" in prompt
+    assert "run shell commands" in prompt
+    assert "look up application folders" in prompt
+    # Consequence leads: nobody reads past the first line of a dialog.
+    assert prompt.index("run shell commands") < prompt.index("look up")
+
+
+def test_a_command_declaring_nothing_falls_back_to_the_bare_question():
+    """Every unmigrated native command lands here, and must still render."""
+    assert describe_grant("legacy", []) == "Approve /legacy?"
+
+
+def test_every_request_type_has_a_human_phrase():
+    """A dotted name in an approval dialog is a question nobody can answer.
+
+    Totality is the point: a Request added without a phrase would render as
+    ``fs.some_new_verb`` in front of a user, which is exactly the failure the
+    dialog exists to prevent.
+    """
+    bare = sorted(k for k in ALL_TYPES if phrase_for(k) == k)
+    assert not bare, f"Request types with no human phrase: {bare}"
+
+
+def test_the_prompt_is_rendered_from_the_same_declaration_as_the_grant():
+    """The question asked and the authority handed over share one source.
+
+    ``requests`` is deliberately not copied onto the adapter — it means
+    something to the sandbox, not to the kernel — so the declaration is read
+    back from the validator, which is where the bridge got it too.
+    """
+    path = Path("plugins/commands/command_update.py")
+    declared = validate_file(path).declarations["requests"]
+    module = adapt(path)
+    command = next(
+        value for value in vars(module).values()
+        if isinstance(value, type) and value.__name__.endswith("UpdateCommand"))
+
+    assert command.approval_prompt == describe_grant("update", declared)
 
 
 def test_update_declares_exactly_what_its_approval_grants():

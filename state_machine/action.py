@@ -338,7 +338,7 @@ class _CallableAction(Action):
         self.cs.push_phase(PhaseFrame(PHASE_APPROVING_REQUEST, "answer_approval", approver, spec.name, {
             "type": "boolean",
             "title": spec.name,
-            "prompt": f"Approve {spec.name}?",
+            "prompt": spec.approval_prompt or f"Approve {spec.name}?",
             "required": True,
             "approval_token": uuid.uuid4().hex,
             "pending": {"type": self.action_type, "actor_id": self.actor_id, "content": payload},
