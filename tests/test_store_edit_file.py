@@ -192,3 +192,57 @@ def test_cap_eviction(env, mods):
     bag = env.session.plugin_state["file_reads"]
     assert len(bag) == mods.reads.MAX_ENTRIES
     assert mods.reads._key(env.tmp / "f0.txt") not in bag
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The agent's own plugin tree is frictionless.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_editing_the_agents_plugin_tree_needs_no_approval(env, mods,
+                                                          monkeypatch):
+    """Authoring a plugin must not cost a dialog per edit.
+
+    Everything under ``sandbox_plugins`` runs in a subprocess, decided by the
+    kernel from the path (``sandbox/isolation.py``), so the code is contained
+    before it runs. This tool is *native* and never consults ``classify()``,
+    so without its own answer the grant would depend on which tool happened to
+    be doing the writing — sandboxed plugins free, the one the agent actually
+    uses prompting.
+    """
+    tree = env.tmp / "sandbox_plugins"
+    (tree / "tools").mkdir(parents=True)
+    monkeypatch.setattr(mods.edit, "SANDBOX_PLUGINS", tree)
+
+    asked = []
+    env.context.approve_command = lambda cmd, why: asked.append(cmd) or True
+
+    target = tree / "tools" / "tool_new.py"
+    created = env.edit(operation="create", path=str(target),
+                       content="# drafted\n")
+    env.read(target)
+    replaced = env.edit(operation="replace", path=str(target),
+                        old_text="drafted", new_text="revised")
+    env.read(target)
+    deleted = env.edit(operation="delete", path=str(target))
+
+    assert created.success and replaced.success and deleted.success
+    assert asked == [], f"approval was requested for: {asked}"
+
+
+def test_the_grant_stops_at_that_tree(env, mods, monkeypatch):
+    """Free authorship is scoped to where containment applies.
+
+    A path outside the tree still goes through the dialog, because nothing
+    contains it.
+    """
+    tree = env.tmp / "sandbox_plugins"
+    tree.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(mods.edit, "SANDBOX_PLUGINS", tree)
+
+    asked = []
+    env.context.approve_command = lambda cmd, why: asked.append(cmd) or True
+
+    outside = env.tmp / "elsewhere.py"
+    assert env.edit(operation="create", path=str(outside),
+                    content="x\n").success
+    assert len(asked) == 1
