@@ -1,19 +1,9 @@
 """Slash command plugin for `/locations`."""
 
-from pathlib import Path
-
-from paths import DATA_DIR, INSTALLED_PLUGINS, ROOT_DIR, SANDBOX_PLUGINS
-from plugins.BaseCommand import BaseCommand
-from plugins.frontends.helpers.formatters import format_locations
-from state_machine.conversation import FormStep
+from guest.bases import BaseCommand
 
 
-KINDS = {
-    "root": (ROOT_DIR, DATA_DIR),
-    "plugins": (ROOT_DIR / "plugins", DATA_DIR),
-    "sandbox": (SANDBOX_PLUGINS, SANDBOX_PLUGINS),
-    "installed": (INSTALLED_PLUGINS, INSTALLED_PLUGINS),
-}
+KINDS = ["root", "plugins", "sandbox", "installed"]
 
 
 class LocationsCommand(BaseCommand):
@@ -21,20 +11,64 @@ class LocationsCommand(BaseCommand):
     name = "locations"
     description = "Show project and plugin directories"
     category = "System"
+    requests = ["paths.get", "fs.list"]
 
-    def form(self, args, context):
+    def form(self, sdk, args):
         """Handle form."""
-        return [FormStep("kind", "Choose which location map to show.", True, enum=list(KINDS))]
+        return [{
+            "name": "kind",
+            "prompt": "Choose which location map to show.",
+            "required": True,
+            "enum": KINDS,
+        }]
 
-    def run(self, args, context):
+    def run(self, sdk, args):
         """Execute `/locations` for the active session."""
-        root, data = KINDS.get(args.get("kind") or "root", KINDS["root"])
-        return format_locations({"root_path": str(root), "root_tree": _tree(root), "data_path": str(data), "data_tree": _tree(data)})
+        project = sdk.paths.get("project")
+        data_dir = sdk.paths.get("data")
+        sandbox_plugins = sdk.paths.get("sandbox_plugins")
+        installed_plugins = sdk.paths.get("installed_plugins")
+        locations = {
+            "root": (project, data_dir),
+            "plugins": (_join(project, "plugins"), data_dir),
+            "sandbox": (sandbox_plugins, sandbox_plugins),
+            "installed": (installed_plugins, installed_plugins),
+        }
+        root, data = locations.get(
+            args.get("kind") or "root", locations["root"])
+        return _format_locations(
+            root, _tree(sdk, root), data, _tree(sdk, data))
 
 
-def _tree(path):
+def _join(root, name):
+    """Join an application root without consulting the guest environment."""
+    separator = "\\" if "\\" in root else "/"
+    return root.rstrip("/\\") + separator + name
+
+
+def _tree(sdk, path):
     """Internal helper to handle tree."""
-    path = Path(path)
-    if not path.exists():
-        return ["(missing)"]
-    return [p.name + ("/" if p.is_dir() else "") for p in sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))]
+    try:
+        entries = sdk.fs.list(path, details=True)
+    except sdk.Failed as exc:
+        if exc.error == f"not a directory: {path}":
+            return ["(missing)"]
+        raise
+    entries.sort(key=lambda entry: (
+        not entry["is_dir"], entry["name"].lower()))
+    return [
+        entry["name"] + ("/" if entry["is_dir"] else "")
+        for entry in entries
+    ]
+
+
+def _format_locations(root_path, root_tree, data_path, data_tree):
+    """Render the same fenced location map as the native command."""
+    def section(label, path, tree):
+        listing = "\n".join(tree) if tree else "(empty)"
+        return f"**{label}**\n`{path}`\n```\n{listing}\n```"
+
+    return "\n\n".join([
+        section("Project root", root_path, root_tree),
+        section("Data directory", data_path, data_tree),
+    ])

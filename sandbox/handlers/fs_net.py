@@ -127,7 +127,17 @@ def _fs_list(ctx, args: dict) -> Result:
     try:
         if not path.is_dir():
             return Result.failure(f"not a directory: {raw}")
-        return Result(data=sorted(str(p) for p in path.glob(pattern)))
+        entries = sorted(path.glob(pattern))
+        if args.get("details"):
+            return Result(data=[
+                {
+                    "path": str(entry),
+                    "name": entry.name,
+                    "is_dir": entry.is_dir(),
+                }
+                for entry in entries
+            ])
+        return Result(data=[str(entry) for entry in entries])
     except OSError as exc:
         return Result.failure(f"list failed: {exc}", retryable=True)
 

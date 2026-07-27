@@ -131,9 +131,10 @@ class _FS(_Namespace):
                          data=base64.b64encode(bytes(data)).decode("ascii"),
                          mode=mode)
 
-    def list(self, path, pattern: str = "*"):
-        """List a directory, optionally filtered by glob pattern."""
-        return self._ask(FS_LIST, path=str(path), pattern=pattern)
+    def list(self, path, pattern: str = "*", details: bool = False):
+        """List a directory, optionally with entry type metadata."""
+        return self._ask(
+            FS_LIST, path=str(path), pattern=pattern, details=details)
 
     def search(self, pattern: str, root=".", glob: str = "**/*"):
         """Search file contents beneath a root."""
