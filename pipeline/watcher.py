@@ -10,7 +10,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from pipeline.database import set_thread_priority_low
-from plugins.services.helpers.parser_registry import get_modality, get_supported_extensions
+from parsing import get_modality, get_supported_extensions
 logger = logging.getLogger("Watcher")
 
 """

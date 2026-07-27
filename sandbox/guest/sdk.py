@@ -59,7 +59,7 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        FILE_REGISTER, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                        FS_SEARCH, FS_TEMP, FS_WRITE, LEDGER_READ,
                        LEDGER_RECORD, NET_HTTP, PARSE_FILE, PARSE_MODALITY,
-                       PLUGIN_DESCRIBE, PLUGIN_LIST, PROC_RUN,
+                       MODEL_PROCEED, PLUGIN_DESCRIBE, PLUGIN_LIST, PROC_RUN,
                        SECRET_REVEAL, SELF_RESPOND,
                        SERVICE_CALL, SERVICE_LIST, SESSION_ADD_PROMPT,
                        SESSION_ADD_TOOL, SESSION_CANCEL, SESSION_GET,
@@ -338,6 +338,34 @@ class _Agent(_Namespace):
         return self._ask(AGENT_SCHEDULE, prompt=prompt, cron=cron)
 
 
+class _Model(_Namespace):
+    """The call an escort is holding.
+
+    Only meaningful inside a ``model_call`` hook. Everywhere else there is no
+    call in flight and the Request is refused, which is the honest answer —
+    ``proceed`` is not "make a model call", it is "place *this* one".
+    """
+
+    def proceed(self, request=None):
+        """Place the call, optionally rewritten, and return the response.
+
+        Call it more than once to retry: each is a fresh trip to the model.
+        Not calling it at all is allowed too — return a response you built
+        yourself and the model is never troubled.
+        """
+        from .hooks import ModelRequest, ModelResponse
+
+        payload = None
+        if request is not None:
+            payload = {k: getattr(request, k)
+                       for k in ModelRequest.__dataclass_fields__}
+        answer = self._ask(MODEL_PROCEED, token=self._sdk._hook_token,
+                           request=payload)
+        allowed = set(ModelResponse.__dataclass_fields__)
+        return ModelResponse(**{k: v for k, v in dict(answer or {}).items()
+                                if k in allowed})
+
+
 class _Cron(_Namespace):
     """Scheduled jobs."""
 
@@ -558,6 +586,11 @@ class SDK:
         self.tools = _Tools(self)
         self.commands = _Commands(self)
         self.agent = _Agent(self)
+        self.model = _Model(self)
+        # Set by BasePlugin.__hook__ for the duration of one doorway visit, so
+        # ``model.proceed`` can name the call it is meant to place without the
+        # author having to carry a token around.
+        self._hook_token = ""
         self.cron = _Cron(self)
         self.events = _Events(self)
         self.tasks = _Tasks(self)

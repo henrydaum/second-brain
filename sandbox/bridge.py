@@ -57,7 +57,7 @@ NATIVE_BASES = {
 # an allowlist because the base classes will grow, and an allowlist that
 # drifts silently drops a plugin's schema.
 NOT_CARRIED = {"family", "box", "isolation", "lifetime", "timeout",
-               "memory_mb", "requests", "exports"}
+               "memory_mb", "requests", "exports", "hooks"}
 
 _SANDBOX: Sandbox | None = None
 
@@ -176,6 +176,12 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     source_path = str(path)
     box_name = declarations.get("box") or path.stem
 
+    # A service is not a call, it is a residency: it opens a box and stays.
+    # Different enough that it gets its own builder rather than a branch in
+    # the per-call machinery below.
+    if family == "service":
+        return _adapt_service(path, entry, base, declarations, box_name)
+
     def _forward(self, context, payload, method: str = "run"):
         """Run the migrated plugin and translate the answer back.
 
@@ -251,6 +257,193 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     module = types.ModuleType(f"sandboxed_{path.stem}")
     module.__file__ = source_path
     setattr(module, adapter.__name__, adapter)
+    return module
+
+
+def _make_response(answer: dict):
+    """Build an ``LLMResponse`` for an escort that answered without dialing.
+
+    Lives here rather than in ``sandbox.hooks`` because that type is a plugin
+    type, and the bridge is the one part of the sandbox sanctioned to import
+    across that line — the same reason it holds the native base classes.
+    """
+    from plugins.services.service_llm import LLMResponse
+
+    return LLMResponse(content=str(answer.get("content") or ""),
+                       tool_calls=list(answer.get("tool_calls") or []),
+                       error=(answer.get("error") or None))
+
+
+def _sync_hooks(service) -> None:
+    """Stand this service's declared hooks at their doorways, exactly once.
+
+    Called from both ``bind_runtime`` and ``_load`` because the two arrive in
+    different orders at boot and on reload, and neither alone is enough: a
+    hook needs a runtime to register with and a box to call into.
+    """
+    declared = getattr(service, "_hooks", None) or {}
+    runtime = getattr(service, "_runtime", None)
+    registry = getattr(runtime, "hooks", None)
+    if not declared or registry is None or service._shims is not None:
+        return
+
+    from .hooks import build_shim
+
+    shims = []
+    for moment, method in declared.items():
+        try:
+            shim = build_shim(service, moment, method, _make_response)
+        except ValueError as exc:
+            logger.error("service %s: %s", service.name, exc)
+            continue
+        registry.add(moment, shim)
+        shims.append(shim)
+    service._shims = shims
+    if shims:
+        logger.info("service %s stands at %s", service.name,
+                    ", ".join(sorted(declared)))
+
+
+def _unhook(service) -> None:
+    """Walk this service away from every doorway.
+
+    A hook outliving its plugin is a leak with no symptom — it keeps being
+    consulted and keeps abstaining — so unload has to be thorough.
+    """
+    registry = getattr(getattr(service, "_runtime", None), "hooks", None)
+    for shim in getattr(service, "_shims", None) or []:
+        if registry is not None:
+            try:
+                registry.remove(shim)
+            except Exception:
+                logger.exception("could not remove a hook for %s", service.name)
+    service._shims = None
+
+
+class ServiceCallFailed(RuntimeError):
+    """An exported service method failed inside its box.
+
+    Raised rather than returned because native callers reach a service by
+    attribute access — ``services.get("embedder").embed(texts)`` — and expect
+    a value or an exception, not a Result they have to unwrap.
+    """
+
+
+def _adapt_service(path, entry: str, base, declarations: dict, box_name: str):
+    """Build a native-looking service backed by a resident box.
+
+    The other families are *calls*: run once, translate the answer, tear down.
+    A service is a *residency*, so the adapter maps the native lifecycle onto
+    the box lifecycle instead:
+
+        _load()   ->  open the box (start() runs inside it)
+        unload()  ->  close the box (stop() runs inside it)
+
+    and every method the plugin lists in ``exports`` becomes a real method on
+    the adapter, because native callers reach services by attribute access
+    rather than through ``service.call``.
+    """
+    source_path = str(path)
+    name = declarations.get("name") or path.stem.split("_", 1)[-1]
+    exports = list(declarations.get("exports") or [])
+
+    if not exports:
+        # Not fatal — a service may exist only for its side effects — but it
+        # is nearly always a forgotten declaration, and the symptom (every
+        # call failing as "not exported") points nowhere near the cause.
+        logger.warning("sandboxed service %s declares no exports; nothing "
+                       "will be able to call it", path.name)
+
+    def _load(self) -> bool:
+        """Open the resident box. Its start() runs inside."""
+        try:
+            self._sandbox_box = get_sandbox().open(
+                source_path, entry, name=box_name)
+        except Exception as exc:
+            logger.error("service %s did not start: %s", name, exc)
+            return False
+        self.loaded = True
+        # Binding and loading happen in either order depending on whether this
+        # is boot or a live reload, so both ends call the same idempotent sync.
+        _sync_hooks(self)
+        return True
+
+    def unload(self):
+        """Close the box and step away from every doorway."""
+        self.loaded = False
+        _unhook(self)
+        self._sandbox_box = None
+        try:
+            get_sandbox().close(box_name)
+        except Exception:
+            logger.exception("failed to close box %s", box_name)
+
+    def bind_runtime(self, *, runtime=None, **_):
+        """Receive the runtime. Idempotent, and may arrive before or after load."""
+        if runtime is not None:
+            self._runtime = runtime
+        _sync_hooks(self)
+
+    def _export(method: str):
+        """One forwarding method, so callers see an ordinary service."""
+        def call(self, **kwargs):
+            """Invoke an exported method inside the box."""
+            box = getattr(self, "_sandbox_box", None)
+            if box is None or not box.alive:
+                raise ServiceCallFailed(
+                    f"service {name!r} is not loaded")
+            result = box.call(method, **kwargs)
+            if not result.ok:
+                raise ServiceCallFailed(f"{name}.{method}: {result.error}")
+            return result.data
+        call.__name__ = method
+        call.__qualname__ = f"{entry}.{method}"
+        call.__doc__ = f"Call {name}.{method} inside its sandbox box."
+        return call
+
+    attributes = {
+        "__doc__": f"Sandboxed service loaded from {path.name}.",
+        "_source_path": source_path,
+        "_sandboxed": True,
+        "_sandbox_box": None,
+        "_runtime": None,
+        "_shims": None,
+        "_hooks": dict(declarations.get("hooks") or {}),
+        "_box": box_name,
+        "_entry": entry,
+        # Native services are named by model_name; the guest calls it name.
+        "model_name": name,
+        "name": name,
+        # The box owns the start deadline (boxes.DEFAULT_START_TIMEOUT). Left
+        # at its default, BaseService.load() would wrap _load in a *second*
+        # timer racing the first, and whichever fired first would report a
+        # failure the other could not see.
+        "load_timeout": 0,
+        "_load": _load,
+        "unload": unload,
+    }
+    for key, value in declarations.items():
+        if key not in NOT_CARRIED:
+            attributes[key] = value
+    # exports rides along on purpose: handlers._service_call reads it to
+    # refuse anything unexported, so the declaration keeps working when the
+    # caller is other sandboxed code rather than the kernel.
+    attributes["exports"] = exports
+    attributes["bind_runtime"] = bind_runtime
+    for method in exports:
+        attributes[method] = _export(method)
+
+    adapter = type(f"Sandboxed{entry}", (base,), attributes)
+
+    module = types.ModuleType(f"sandboxed_{path.stem}")
+    module.__file__ = source_path
+    setattr(module, adapter.__name__, adapter)
+
+    def build_services(config: dict) -> dict:
+        """Services are discovered by calling this, not by scanning classes."""
+        return {name: adapter()}
+
+    module.build_services = build_services
     return module
 
 

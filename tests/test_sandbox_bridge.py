@@ -107,7 +107,8 @@ def clean_boxes():
     """Boxes are module caches; a leak hides staleness."""
     yield
     for name in ("tool_word_count", "tool_shout", "task_extract",
-                 "command_status", "tool_broken"):
+                 "command_status", "tool_broken", "service_counter",
+                 "command_deploy", "frontend_web"):
         unload_box(name)
 
 
@@ -287,24 +288,159 @@ def test_an_invalid_migrated_plugin_does_not_load(tmp_path, box):
 
 
 def test_an_unbridged_family_declines_cleanly(tmp_path, box):
-    """Services and frontends are not bridged yet; say so, do not guess."""
+    """Frontends are not bridged yet; say so, do not guess."""
     source = '''
+"""A migrated frontend."""
+
+from guest.bases import BaseFrontend
+
+
+class Web(BaseFrontend):
+    """A surface."""
+
+    name = "web"
+
+    def start(self, sdk):
+        """Start."""
+        return True
+'''
+    assert adapt(_write(tmp_path, "frontend_web.py", source)) is None
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Services: a residency rather than a call.
+# ──────────────────────────────────────────────────────────────────────
+
+MIGRATED_SERVICE = '''
 """A migrated service."""
 
 from guest.bases import BaseService
 
 
 class Counter(BaseService):
-    """Counts."""
+    """Counts things, and remembers between calls."""
 
     name = "counter"
-    exports = ["total"]
+    exports = ["bump", "total"]
+    ISOLATION
 
     def start(self, sdk):
-        """Start."""
+        """Begin at zero."""
+        self._n = 0
         return True
+
+    def bump(self, sdk, by=1):
+        """Add to the counter."""
+        self._n += by
+        return self._n
+
+    def total(self, sdk):
+        """Read the counter."""
+        return self._n
+
+    def internal(self, sdk):
+        """Deliberately not exported."""
+        return "unreachable"
+
+    def stop(self, sdk):
+        """Forget."""
+        self._n = 0
 '''
-    assert adapt(_write(tmp_path, "service_counter.py", source)) is None
+
+
+def _service(tmp_path, isolation=""):
+    """Build and instantiate a migrated service the way discovery would."""
+    source = MIGRATED_SERVICE.replace(
+        "ISOLATION", f'isolation = "{isolation}"' if isolation else "")
+    module = adapt(_write(tmp_path, "service_counter.py", source))
+    # Services are found by calling build_services, not by scanning classes,
+    # so the synthetic module has to provide one.
+    return module.build_services({})["counter"]
+
+
+@pytest.mark.parametrize("isolation", ["", "subprocess"])
+def test_a_migrated_service_keeps_state_between_calls(tmp_path, box, isolation):
+    """The point of a service: the box stays open and remembers.
+
+    Both runners, because the promise is that isolation changes nothing a
+    caller can observe.
+    """
+    service = _service(tmp_path, isolation)
+    assert service.load() is True
+    assert service.loaded is True
+
+    assert service.bump() == 1
+    assert service.bump(by=5) == 6
+    assert service.total() == 6          # state survived three separate calls
+
+    service.unload()
+    assert service.loaded is False
+
+
+def test_a_migrated_service_looks_native(tmp_path, box):
+    """Native callers reach services by attribute access, not .call()."""
+    service = _service(tmp_path)
+    from plugins.BaseService import BaseService
+
+    assert isinstance(service, BaseService)
+    # Named the way the native side names services.
+    assert service.model_name == "counter"
+    # The box owns the start deadline; a second timer would race it.
+    assert service.load_timeout == 0
+
+
+def test_only_exported_methods_exist(tmp_path, box):
+    """``exports`` is the public surface, and it is enforced by absence."""
+    service = _service(tmp_path)
+    assert callable(getattr(service, "bump", None))
+    assert callable(getattr(service, "total", None))
+    assert not hasattr(service, "internal")
+    # Carried onto the adapter so handlers._service_call refuses unexported
+    # methods when the caller is other sandboxed code rather than the kernel.
+    assert service.exports == ["bump", "total"]
+
+
+def test_calling_an_unloaded_service_fails_clearly(tmp_path, box):
+    """The failure names the service, rather than surfacing a None box."""
+    from sandbox.bridge import ServiceCallFailed
+
+    service = _service(tmp_path)
+    with pytest.raises(ServiceCallFailed, match="not loaded"):
+        service.bump()
+
+    service.load()
+    service.unload()
+    with pytest.raises(ServiceCallFailed, match="not loaded"):
+        service.bump()
+
+
+def test_a_failing_export_raises_rather_than_returning(tmp_path, box):
+    """Native callers expect a value or an exception, never a Result."""
+    from sandbox.bridge import ServiceCallFailed
+
+    source = MIGRATED_SERVICE.replace("ISOLATION", "").replace(
+        "self._n += by\n        return self._n",
+        "raise ValueError('nope')")
+    module = adapt(_write(tmp_path, "service_counter.py", source))
+    service = module.build_services({})["counter"]
+    service.load()
+    with pytest.raises(ServiceCallFailed, match="nope"):
+        service.bump()
+    service.unload()
+
+
+def test_unloading_closes_the_box(tmp_path, box):
+    """A reloaded service must not leave its old box resident.
+
+    This is what makes the watcher's edit-a-service path safe: discovery
+    calls unload() on the old instance, and the box has to go with it or the
+    next load talks to a stale process.
+    """
+    service = _service(tmp_path)
+    service.load()
+    assert box.box("service_counter") is not None
+    service.unload()
+    assert box.box("service_counter") is None
 
 
 # ──────────────────────────────────────────────────────────────────────

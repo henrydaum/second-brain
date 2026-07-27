@@ -89,6 +89,11 @@ AGENT_COMPLETE = "agent.complete"
 AGENT_SPAWN = "agent.spawn"
 AGENT_SCHEDULE = "agent.schedule"
 
+# Placing the model call an escort was handed. Only meaningful inside a
+# ``model_call`` hook: it is the escort dialing the phone it holds, and the
+# kernel resolves it to the very call this hook was invoked for.
+MODEL_PROCEED = "model.proceed"
+
 # ── scheduling ────────────────────────────────────────────────────────
 CRON_LIST = "cron.list"
 CRON_GET = "cron.get"
@@ -135,7 +140,7 @@ ALL_TYPES = {
     PLUGIN_RELOAD, PLUGIN_INSTALL, PLUGIN_UNINSTALL,
     SERVICE_LIST, SERVICE_CALL, SERVICE_LOAD, SERVICE_UNLOAD,
     TOOL_LIST, TOOL_CALL, COMMAND_LIST, COMMAND_CALL,
-    AGENT_COMPLETE, AGENT_SPAWN, AGENT_SCHEDULE,
+    AGENT_COMPLETE, AGENT_SPAWN, AGENT_SCHEDULE, MODEL_PROCEED,
     CRON_LIST, CRON_GET, CRON_CREATE, CRON_UPDATE, CRON_REMOVE, CRON_ENABLE,
     EVENT_EMIT, EVENT_REQUEST,
     TASK_ENQUEUE, TASK_STATUS, TASK_OUTPUT, FILE_REGISTER, FILE_LIST,

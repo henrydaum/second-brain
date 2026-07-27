@@ -18,6 +18,7 @@ Two conventions run through the file:
 from __future__ import annotations
 
 from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
+                              MODEL_PROCEED,
                               CONFIG_READ, CONFIG_WRITE, CONV_APPEND,
                               CONV_CREATE, CONV_DELETE, CONV_LIST, CONV_READ,
                               CONV_SET_CATEGORY, CONV_SET_TITLE, CRON_CREATE,
@@ -627,6 +628,27 @@ def _command_call(ctx, args: dict) -> Result:
 # Agent, scheduling, events, pipeline, parsing, ledger.
 # ──────────────────────────────────────────────────────────────────────
 
+def _model_proceed(ctx, args: dict) -> Result:
+    """Place the model call an escort is holding.
+
+    Unlike every other handler this one resolves through a token rather than
+    a static table, because what it invokes is a closure the kernel built for
+    one particular call and will discard the moment the escort returns. Code
+    that is not standing at the ``model_call`` doorway holds no token, reaches
+    no closure, and is refused — which is the correct answer, not an omission.
+    """
+    from ..hooks import phone
+
+    dial = phone(args.get("token") or "")
+    if dial is None:
+        return Result.refusal(
+            "model.proceed is only available inside a model_call hook")
+    try:
+        return Result(data=dial(args.get("request")))
+    except Exception as exc:
+        return Result.failure(f"model call failed: {exc}")
+
+
 def _agent_complete(ctx, args: dict) -> Result:
     """A model call.
 
@@ -796,24 +818,50 @@ def _file_list(ctx, args: dict) -> Result:
         return Result.failure(f"file list failed: {exc}")
 
 
+# What a parse can hand back across the boundary. The other modalities
+# (image, audio, video, tabular) resolve to live objects from foreign
+# libraries — PIL images, numpy arrays, an open ``av.Container`` — which are
+# the whole point of asking for them and cannot be sent anywhere. Code that
+# needs one imports the parser into its own box and consumes it there; what
+# leaves the box is the text or the paths it produced.
+CROSSABLE_MODALITIES = {"text", "container"}
+
+
 def _parse_file(ctx, args: dict) -> Result:
-    """Parse a file to text through the parser registry."""
-    parser = _service(ctx, "parser")
-    if (bad := _need(parser, "the parser service")) is not None:
-        return bad
+    """Parse a file and return its text, or the paths it contained."""
+    import parsing
+
+    modality = args.get("modality") or "text"
+    if modality not in CROSSABLE_MODALITIES:
+        return Result.failure(
+            f"{modality!r} parsing produces live objects that cannot cross the "
+            f"sandbox boundary; import the parser into your own box, or ask "
+            f"for {sorted(CROSSABLE_MODALITIES)}")
+
     try:
-        parsed = parser.parse(args.get("path"), args.get("modality") or "text")
-        return Result(data=getattr(parsed, "text", parsed))
+        parsed = parsing.parse(args.get("path"), modality)
     except Exception as exc:
         return Result.failure(f"parse failed: {exc}")
 
+    if not getattr(parsed, "success", True):
+        return Result.failure(str(getattr(parsed, "error", "") or "parse failed"))
+
+    # ``output`` is the payload — there has never been a ``.text`` attribute,
+    # so the old getattr fell through to the ParseResult itself and handed
+    # back an object that only looked right in-process.
+    return Result(data=getattr(parsed, "output", None),
+                  also_contains=list(getattr(parsed, "also_contains", None) or []))
+
 
 def _parse_modality(ctx, args: dict) -> Result:
-    """Resolve a file extension's modality."""
-    parser = _service(ctx, "parser")
-    if (bad := _need(parser, "the parser service")) is not None:
-        return bad
-    return Result(data=parser.get_modality(args.get("extension") or ""))
+    """Resolve a file extension's modality.
+
+    Always answerable: the kernel's native defaults cover image/audio/video
+    with no parser installed at all, which is what attachment routing needs.
+    """
+    import parsing
+
+    return Result(data=parsing.get_modality(args.get("extension") or ""))
 
 
 def _ledger_record(ctx, args: dict) -> Result:
@@ -866,6 +914,7 @@ HANDLERS = {
     TOOL_LIST: _tool_list, TOOL_CALL: _tool_call,
     COMMAND_LIST: _command_list, COMMAND_CALL: _command_call,
     AGENT_COMPLETE: _agent_complete,
+    MODEL_PROCEED: _model_proceed,
     CRON_LIST: _cron_list, CRON_GET: _cron_get, CRON_CREATE: _cron_create,
     CRON_UPDATE: _cron_update, CRON_REMOVE: _cron_remove,
     CRON_ENABLE: _cron_enable,

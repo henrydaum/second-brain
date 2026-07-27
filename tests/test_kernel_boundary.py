@@ -1,10 +1,16 @@
 """The kernel boundary (CLAUDE.md's "one rule"), made executable.
 
 Core code may lean on the plugin *substrate* — base classes, discovery, shared
-path helpers, the command-registry adapter — but may hard-import exactly two
-plugin *implementations*: ``service_llm`` and ``parser_registry``. Everything
-else must arrive by discovery, so installing or uninstalling a package can
-never break the kernel.
+path helpers, the command-registry adapter — but may hard-import exactly one
+plugin *implementation*: ``service_llm``. Everything else must arrive by
+discovery, so installing or uninstalling a package can never break the kernel.
+
+It was two until parsing stopped being a service. The registry moved into the
+kernel as :mod:`parsing` — which is what it always was, standing knowledge
+about file types that nothing should have to load — leaving the parsers
+themselves as ordinary installable helpers. So the boundary got *narrower* by
+putting something in the kernel, which is worth remembering the next time this
+rule looks like it needs widening.
 
 These tests AST-walk every core module (nothing is imported or executed) and
 pin the complete set of ``plugins.*`` import edges, including lazy
@@ -37,16 +43,12 @@ SUBSTRATE = frozenset({
     "plugins.frontends.helpers.command_registry",
 })
 
-# The two sanctioned plugin implementations, pinned to the exact core files
+# The sanctioned plugin implementations, pinned to the exact core files
 # allowed to import them. Any other core file wanting these must go through
 # the services dict / discovery instead.
 SANCTIONED = {
     "plugins.services.service_llm": {
         "runtime/conversation_loop.py",
-    },
-    "plugins.services.helpers.parser_registry": {
-        "pipeline/orchestrator.py",
-        "pipeline/watcher.py",
     },
 }
 

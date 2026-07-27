@@ -90,7 +90,7 @@ class ToolResult:
         """
         from pathlib import Path
         from urllib.parse import quote
-        from plugins.services.helpers.parser_registry import get_modality
+        from parsing import get_modality
 
         attachments = []
         for p in self.attachment_paths:

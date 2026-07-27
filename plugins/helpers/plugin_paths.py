@@ -136,6 +136,21 @@ def plugin_dirs(plugin_type: str) -> tuple[PluginDir, ...]:
     return PLUGIN_CONFIG[plugin_type]
 
 
+HELPERS_FAMILY = "helpers"
+
+
+def helper_dirs() -> tuple[tuple[PluginRoot, Path], ...]:
+    """Return each tree's ``helpers/`` directory in precedence order.
+
+    Helpers are shared code that is *not* a plugin — no base class, no entry
+    point, nothing discovery registers. They sit at the root of a tree rather
+    than under a family because they do not belong to one: a parser is
+    imported by whatever consumes it, which may be a task, a tool, or nothing
+    at all.
+    """
+    return tuple((root, root.path / HELPERS_FAMILY) for root in PLUGIN_ROOTS)
+
+
 def _infer_type(file_name: str) -> str | None:
     """Internal helper to handle infer type."""
     for plugin_type, (_family, prefix) in PLUGIN_FAMILIES.items():

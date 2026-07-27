@@ -45,8 +45,9 @@ BASE_TO_FAMILY = {base: family for family, base in FAMILIES.items()}
 
 CONTRACT_MODULES = (
     {f"plugins.{base}" for base in FAMILIES.values()}
-    | {"guest", "guest.bases", "guest.box", "guest.sdk",
-       "sandbox.guest", "sandbox.guest.bases", "sandbox.guest.box"}
+    | {"guest", "guest.bases", "guest.box", "guest.sdk", "guest.hooks",
+       "sandbox.guest", "sandbox.guest.bases", "sandbox.guest.box",
+       "sandbox.guest.hooks"}
 )
 
 # Pure stdlib: computation only, no way to reach the environment.
@@ -377,6 +378,36 @@ def _literal(node):
         return None
 
 
+def _check_hooks(walker: _Walker, node, cls):
+    """Check a ``hooks`` declaration names real moments and real methods.
+
+    Both halves fail silently otherwise — an unknown moment is a doorway
+    nobody stands at, and a missing method only raises when the turn reaches
+    that doorway, which may be much later and somewhere confusing.
+    """
+    from .guest.hooks import MOMENTS
+
+    value = _literal(node.value)
+    if not isinstance(value, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in value.items()):
+        walker.add(ERROR, node,
+                   "hooks must be a literal {moment: method_name} dict — the "
+                   "kernel reads it without importing")
+        return
+
+    defined = {item.name for item in cls.body
+               if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    for moment, method in value.items():
+        if moment not in MOMENTS:
+            walker.add(ERROR, node,
+                       f"{moment!r} is not a hook moment; "
+                       f"they are {sorted(MOMENTS)}")
+        if method not in defined:
+            walker.add(ERROR, node,
+                       f"hooks names {method!r} for {moment!r}, but this class "
+                       f"defines no such method")
+
+
 def _check_secret_names(walker: _Walker, node):
     """Warn about a config setting that looks like a credential but is not
     declared as one."""
@@ -472,6 +503,11 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
                            f"{key} must be a literal list of strings — the "
                            f"kernel reads it without importing")
 
+    # Hooks are declared, not registered, so a typo here is silent: the shim
+    # is never stood up and the doorway is simply never visited.
+    if "hooks" in assigned:
+        _check_hooks(walker, assigned["hooks"], cls)
+
     # A setting holding a credential is declared by its name. Catching the
     # omission here is the whole reason the name heuristic still exists: it
     # costs the author one message at authoring time instead of quietly
@@ -501,7 +537,7 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
 DECLARATION_KEYS = ("name", "box", "isolation", "lifetime", "timeout",
                     "memory_mb", "requests", "exports", "dependencies_files",
                     "dependencies_pip", "requires_services", "max_calls",
-                    "background_safe")
+                    "background_safe", "agent_prompt", "hooks")
 
 # Reading declarations without importing means *inherited* defaults are
 # invisible: ``class Counter(BaseService)`` never writes ``lifetime`` in the

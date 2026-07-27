@@ -354,20 +354,27 @@ def test_uninstall_keeps_dependency_referenced_by_builtin_or_sandbox(tmp_path, m
     assert "Kept Python package(s): shared-lib" in "\n".join(result.lines)
 
 
-def test_parser_helper_install_and_uninstall_reload_parser(tmp_path, monkeypatch):
+def test_parser_helper_install_and_uninstall_rescan_parsers(tmp_path, monkeypatch):
+    """Installing a parser helper makes it live without a restart.
+
+    Parsing is kernel routing rather than a service, so this is a rescan and
+    not a load/unload cycle — there is nothing holding state to tear down.
+    """
+    import parsing
+
     _patch_roots(monkeypatch, tmp_path)
-    parser = _Parser()
+    scans = []
+    monkeypatch.setattr(parsing, "discover", lambda: scans.append(1) or len(scans))
+
     context = _Context(tmp_path)
-    context.services = {"parser": parser}
-    files = {"services/helpers/parse_pdf.py": _helper()}
+    files = {"helpers/parse_pdf.py": _helper()}
     monkeypatch.setattr(package_manager, "GitStoreBackend", lambda _root: _Backend(files))
     monkeypatch.setattr(package_manager.subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "", ""))
 
     package_manager.install_package(tmp_path, "parse_pdf", context)
     package_manager.uninstall_package("parse_pdf", context)
 
-    assert parser.loads == 2
-    assert parser.unloads == 2
+    assert len(scans) == 2, "both install and uninstall must rescan"
 
 
 # ──────────────────────────────────────────────────────────────────────

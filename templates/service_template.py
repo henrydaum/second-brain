@@ -12,16 +12,6 @@ attribute a service can declare. This file covers what is specific to services.
   Filename:       must start with "service_"
   Entry points:   start(self, sdk) and stop(self, sdk), plus its exports
 
-  ┌────────────────────────────────────────────────────────────────────┐
-  │ NOT LOADABLE YET. sandbox/bridge.py bridges tools, tasks, and      │
-  │ commands; services and frontends still return None. The contract   │
-  │ below is settled and correct to write against, but a sandboxed     │
-  │ service will not load until the bridge grows a service branch.     │
-  │ Until then, a service that must run today stays native — see       │
-  │ MIGRATING_PLUGINS.md.                                              │
-  └────────────────────────────────────────────────────────────────────┘
-
-
 A SERVICE IS A PERSISTENT BOX
 -----------------------------
 Services are the natural persistent box, and the only family that is one by
@@ -75,6 +65,16 @@ A plugin reading a key it declared in its own `config_settings` is not asked —
 configuring it was the consent, and prompting on every load would be exactly
 the approval fatigue this design avoids. A DIFFERENT plugin reaching for that
 same key does get a dialog. Once you hold plaintext you are responsible for it.
+
+
+STANDING AT A DOORWAY
+---------------------
+Services are also where hooks live, because something has to be resident for
+the kernel to call into. Declare them and write the methods:
+
+    hooks = {"end_turn": "check_done"}
+
+See templates/hook_template.py for all six moments and their payloads.
 
 
 DRIVING WORK ON A SCHEDULE

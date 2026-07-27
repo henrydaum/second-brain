@@ -287,10 +287,23 @@ def test_scoping_reaches_the_real_query_handler():
 def test_a_missing_capability_is_an_ordinary_failure():
     """This is a microkernel: the timekeeper may simply not be installed."""
     ctx = type("Ctx", (), {"services": {}, "db": None, "runtime": None})()
-    for kind in (R.CRON_LIST, R.PARSE_MODALITY, R.AGENT_COMPLETE, R.DB_QUERY):
+    for kind in (R.CRON_LIST, R.AGENT_COMPLETE, R.DB_QUERY):
         result = HANDLERS[kind](ctx, {"sql": "select 1"})
         assert not result.ok
         assert "not available" in result.error or "requires" in result.error
+
+
+def test_asking_what_a_file_is_always_answers():
+    """``parse.modality`` is the exception: it is kernel routing, not a service.
+
+    The native-modality defaults cover image/audio/video with no parser
+    installed at all, which is what lets attachment routing inline a .png
+    into a vision model on a bare install.
+    """
+    ctx = type("Ctx", (), {"services": {}, "db": None, "runtime": None})()
+    result = HANDLERS[R.PARSE_MODALITY](ctx, {"extension": ".png"})
+    assert result.ok
+    assert result.data == "image"
 
 
 def test_password_hash_never_leaves_through_user_read():
@@ -555,3 +568,96 @@ class Search(BaseTool):
 ''', encoding="utf-8")
 
     assert not validate_file(plugin).of(NOTE)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Parsing: what can leave the parser, and what cannot.
+# ──────────────────────────────────────────────────────────────────────
+
+def _register(output, modality="text", success=True, error="",
+              also_contains=()):
+    """Register a real parser for .probe and return the handler's answer."""
+    import parsing
+    from parsing.result import ParseResult
+
+    calls = []
+
+    def parser(path, config, services):
+        """Stand in for a real parse_*.py helper."""
+        calls.append(path)
+        return ParseResult(modality=modality, success=success, error=error,
+                           output=output, also_contains=list(also_contains))
+
+    parsing.register([".probe"], modality, parser)
+    return calls
+
+
+def _parse(modality="text"):
+    """Run the parse.file handler the way sandboxed code reaches it."""
+    from types import SimpleNamespace
+
+    ctx = SimpleNamespace(services={})
+    return HANDLERS[R.PARSE_FILE](ctx, {"path": "notes.probe",
+                                        "modality": modality})
+
+
+@pytest.fixture(autouse=True)
+def _clean_registry():
+    """The registry is module-global; a leaked parser hides a real failure."""
+    import parsing
+
+    yield
+    parsing.clear()
+
+
+def test_parsing_returns_the_output_not_the_result_object():
+    """``ParseResult`` has ``output``; there has never been a ``text``.
+
+    The old handler reached for ``.text`` and fell through to the whole
+    ParseResult, which looked right in-process and could not be serialized
+    at all through a subprocess.
+    """
+    _register("hello world")
+    result = _parse()
+    assert result.ok
+    assert result.data == "hello world"
+
+
+def test_parsing_carries_multi_modal_discovery():
+    """``also_contains`` is how the pipeline learns a PDF holds images."""
+    _register("text", also_contains=["image", "tabular"])
+    assert _parse().also_contains == ["image", "tabular"]
+
+
+def test_a_failed_parse_is_a_failed_request():
+    """A parse that did not work must not read as an empty success."""
+    _register(None, success=False, error="not readable")
+    result = _parse()
+    assert not result.ok
+    assert "not readable" in result.error
+
+
+@pytest.mark.parametrize("modality", ["image", "audio", "video", "tabular"])
+def test_live_object_modalities_are_refused_with_an_explanation(modality):
+    """These resolve to PIL images, numpy arrays, an open av.Container.
+
+    None of them can cross, and handing back a broken object would be worse
+    than saying so — the message has to point at the way that does work.
+    """
+    calls = _register(object(), modality=modality)
+    result = _parse(modality)
+    assert not result.ok
+    assert "own box" in result.error
+    # Refused before the parser ran: no work done, no live object created.
+    assert calls == []
+
+
+@pytest.mark.parametrize("modality", ["text", "container"])
+def test_crossable_modalities_are_allowed(modality):
+    """Text and extracted paths are what the rest of the system consumes."""
+    payload = "words" if modality == "text" else ["/tmp/a.png"]
+    calls = _register(payload, modality=modality)
+    result = _parse(modality)
+    assert result.ok
+    assert result.data == payload
+    assert calls == ["notes.probe"]

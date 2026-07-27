@@ -175,6 +175,12 @@ class BaseService(BasePlugin):
     # listed method must return simple data.
     exports: list = []
 
+    # Doorways this service stands at: ``{moment: method_name}``. Declared
+    # rather than registered because a hook is *inbound* — the kernel calls
+    # it — so there is nothing for the plugin to call at load time, and
+    # nothing it can forget to undo at unload. See :mod:`guest.hooks`.
+    hooks: dict = {}
+
     def start(self, sdk):
         """Acquire whatever this service holds. Return True on success."""
         raise NotImplementedError
@@ -182,6 +188,34 @@ class BaseService(BasePlugin):
     def stop(self, sdk):
         """Release it. Must tolerate never having started."""
         return None
+
+    def __hook__(self, sdk, moment: str, handler: str, ctx: dict,
+                 payload=None, token: str = ""):
+        """Receive one doorway visit. The kernel calls this, never an author.
+
+        It exists so hook methods can be written in ordinary Python — real
+        objects with attributes, returning a verdict — while the wire between
+        the kernel and this box carries nothing but data. Rehydrating here
+        rather than in the shim keeps that translation on the guest side,
+        where the dataclasses live.
+        """
+        from .hooks import HookContext, unwrap, wrap
+
+        fn = getattr(self, handler, None)
+        if not callable(fn):
+            raise AttributeError(
+                f"{self.name}: hooks names {handler!r} for {moment!r}, "
+                f"but there is no such method")
+        envelope = HookContext(**{k: v for k, v in dict(ctx or {}).items()
+                                  if k in HookContext.__dataclass_fields__})
+        # An escort's ``sdk.model.proceed()`` has to name the call it is
+        # placing. Carrying that on the sdk rather than on the payload keeps
+        # it off the author's hands: a rewritten request still proceeds.
+        sdk._hook_token = token
+        try:
+            return unwrap(fn(sdk, envelope, wrap(moment, payload)))
+        finally:
+            sdk._hook_token = ""
 
 
 class BaseCommand(BasePlugin):

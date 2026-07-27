@@ -25,7 +25,7 @@ TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 # Migrated to the SDK: these must validate and must not mention the old
 # contract anywhere.
 SANDBOXED = ["tool_template.py", "task_template.py", "command_template.py",
-             "service_template.py", "script_template.py"]
+             "service_template.py", "script_template.py", "hook_template.py"]
 
 # Deliberately still native, each for a stated reason carried in a banner at
 # the top of the file. Listed explicitly so that adding a template forces a
@@ -33,14 +33,18 @@ SANDBOXED = ["tool_template.py", "task_template.py", "command_template.py",
 # into the unchecked one.
 NATIVE = {
     "frontend_template.py": "inbound protocol does not exist yet",
-    "hook_template.py": "no hook Request surface yet",
 }
 
-# The one validator rule a template is allowed to break. It exists because
-# *discovery* expects one plugin class per file; templates are not discovered,
-# and showing two or three variants side by side is worth more than obeying a
-# rule that cannot apply here. Every other finding is a real failure.
-MULTI_CLASS = "plugin classes; a plugin file must declare exactly one"
+# The validator rules a template is allowed to break, and only these. Both are
+# rules about DISCOVERY — one class per file, and the family prefix in the
+# filename — which cannot apply to files that are never discovered. Showing
+# several variants side by side is worth more than obeying them here, and
+# hook_template.py has to hold services because that is where hooks live.
+# Every other finding is a real failure.
+DISCOVERY_ONLY = (
+    "plugin classes; a plugin file must declare exactly one",
+    "discovery finds plugins by filename",
+)
 
 
 def _templates() -> list:
@@ -57,7 +61,8 @@ def test_every_template_is_accounted_for():
 def test_sandboxed_template_validates(filename):
     """The examples must be code that would actually load."""
     report = validate_file(TEMPLATES / filename)
-    real = [f for f in report.of(ERROR) if MULTI_CLASS not in f.message]
+    real = [f for f in report.of(ERROR)
+            if not any(rule in f.message for rule in DISCOVERY_ONLY)]
     assert not real, f"{filename} would not load:\n" + "\n".join(
         f.render() for f in real)
 

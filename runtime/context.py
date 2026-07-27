@@ -3,9 +3,13 @@ Runtime context passed into plugins.
 
 The context packages together the database handle, config, shared
 services, and a few runtime helpers so plugins do not need to know how
-the surrounding application is wired. Parsing is reached uniformly via
-``context.services.get("parser").parse(path, modality)`` — no special
-shortcut on the context.
+the surrounding application is wired.
+
+Parsing is deliberately *not* here and is not a service: it is kernel
+routing plus importable parser functions. Use ``parsing.get_modality`` to
+ask what a file is and ``parsing.parse`` to read one as text, or
+``parsing.parser_for`` to pull a parser into your own box when you need a
+heavier modality whose result cannot travel.
 """
 
 from dataclasses import dataclass, field
@@ -25,8 +29,8 @@ class SecondBrainContext:
     config:
         Global settings dict.
     services:
-        Mapping of service name to service instance. Includes the
-        "parser" service for file parsing.
+        Mapping of service name to service instance. Parsing is not among
+        them — see the module docstring.
     call_tool:
         Helper for tool-to-tool composition. Only populated for tools.
         Example:

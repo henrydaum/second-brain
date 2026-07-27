@@ -209,6 +209,50 @@ sdk.agent.spawn(prompt, wait=True)   # a subagent now
 sdk.agent.schedule(prompt, cron)     # a subagent later
 ```
 
+### Standing at a doorway
+
+A **hook** is the one inbound thing here: the kernel calls *you*, once per turn,
+at a labeled moment. Declare it on a service — there is nothing to register and
+therefore nothing to leak:
+
+```python
+class Doorman(BaseService):
+    name = "doorman"
+    hooks = {"end_turn": "check_done"}
+
+    def check_done(self, sdk, ctx, ending):
+        if ending.reason == "budget_exhausted":
+            return SendBack("Summarize what you found.", ephemeral=True)
+        return None                      # abstain
+```
+
+Six moments: `turn_start`, `shape_scope`, `vet_permission`, `model_call`,
+`end_turn`, `turn_finish`. Every one is `method(self, sdk, ctx, payload)`, and
+returning `None` abstains. Payloads and verdicts live in `guest.hooks`.
+
+The `model_call` escort holds the phone as well as the request:
+
+```python
+def escort(self, sdk, ctx, request):
+    response = sdk.model.proceed(request)     # place the call
+    if not response.content.strip():
+        request.messages += [{"role": "user", "content": "Answer."}]
+        response = sdk.model.proceed(request)  # go around again
+    return response
+```
+
+`request.llm` is the backend's **name** — assign another loaded one to swap
+brains for that call. `sdk.model.proceed` works only inside a `model_call`
+hook; anywhere else there is no call in flight and it is refused.
+
+A scope shaper is handed tool **names** and returns the ones to keep: it can
+hide and reorder but never synthesize, so adding a tool is
+`sdk.session.add_tool`. And a hook that raises, or whose service is unloaded,
+simply abstains — it can never break a turn.
+
+Hooks run synchronously on the drive thread, so they are paid on every turn
+they touch. Keep them fast.
+
 ### Machinery
 
 ```python
@@ -269,7 +313,7 @@ class Indexer(BaseTool):
     requests = ["fs.read", "db.query"]   # advisory; shown at install time
 
     dependencies_pip = ["numpy"]
-    dependencies_files = ["services/helpers/shared.py"]
+    dependencies_files = ["helpers/shared.py"]
 ```
 
 Declarations are **intent**. The kernel reads them without importing your file,

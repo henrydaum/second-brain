@@ -26,9 +26,10 @@ staging catalog that mirrors `plugins/`, preserved via `git mv` to seed the
 future store) — *not* by deleting them. What remains:
 
 - **Services:** `service_llm`, `service_compactor` (context-safety),
-  `service_parser` (text + image helper discovery), `service_timekeeper`
-  (lightweight event clock), and `service_plugin_watcher` (hot-reload = the
-  install/uninstall substrate). If another tracked service remains, treat it as
+  `service_timekeeper` (lightweight event clock), and
+  `service_plugin_watcher` (hot-reload = the install/uninstall substrate).
+  Parsing was here and deliberately is not any more — it is kernel routing,
+  see **Parsers** below. If another tracked service remains, treat it as
   kernel-boundary debt unless the user explicitly keeps it.
 - **Tasks:** none.
 - **Tools:** none in the tracked kernel tree. `tool_read_file`,
@@ -52,29 +53,63 @@ The pipeline substrate (`pipeline/` — orchestrator, watcher, event_trigger) st
 boots, but ships **zero pipeline tasks**: it idles until a pipeline plugin
 (extract/chunk/index/embed) is installed.
 
-**Parsers.** The kernel keeps only the dependency-light `parse_text` parser
-(UTF-8 / code / CSV / TSV, stdlib). Shared text helpers live in
-`parsing_utils.py`. The registry (`parser_registry.py`) carries a static
-native-modality default map so `get_modality` resolves image/audio/video even
-with no parser installed (attachment routing relies on this). Every heavier
-parser is an installable store package (`parser-pdf`, `parser-office`,
-`parser-tabular`, `parser-image`, `parser-audio`, `parser-video`, `parser-gdoc`,
-`parser-container`) that ships a `services/helpers/parse_*.py` file —
-**not** a plugin entrypoint. `ParserService._load()` rebuilds the registry by
-discovery-scanning `services/helpers/parse_*.py` across the built-in, sandbox,
-and installed roots, so installed parsers light up on load; `package_manager`
-reloads the parser service on install/uninstall of any such file so it takes
-effect live. The attachment system is unified onto this one registry:
-`attachments/parse.py` builds an `Attachment` via `parser.get_modality` +
-`parser.parse(path, "text")` (no separate attachment-parser registry).
+**Parsers.** Parsing is **kernel routing plus importable functions, not a
+service** — `parsing/` (`registry.py`, `result.py`). It was a service, and that
+forced every result to travel as a live object: a PIL image, a numpy array, an
+open `av.Container`. Those cannot cross a process boundary, so nothing that
+parsed could be sandboxed, and the least trustworthy code in the system —
+foreign C libraries chewing arbitrary files — was the one part that had to run
+unmediated in the kernel's process.
+
+The split that fixes it: **text and `container` (child paths) are parse
+*results*; image/audio/video/tabular are *intermediates*.** Every intermediate
+is on the way to text or to a file, consumed by exactly one specialist that
+immediately transforms it. So `ParseResult.crossable` is the line, and code
+needing a heavy modality calls `parsing.parser_for(ext, modality)` to pull the
+parser into *its own box* alongside the thing that consumes it — the waveform
+never crosses anything, the transcript does. `sdk.parse.file` refuses
+non-crossable modalities with a message pointing at that route.
+
+**Parsers live in `helpers/` at a plugin tree's root**, not under a family —
+`plugins/helpers/parse_text.py`, `DATA_DIR/installed_plugins/helpers/
+parse_pdf.py`. A parser belongs to no family because it is not a plugin: no
+base class, no entry point, nothing discovery registers. `helpers/` is a
+fourth tree root beside the five families (`plugin_paths.helper_dirs()`,
+`package_manager.TREE_ROOTS`), and files there carry no name prefix.
+
+The kernel keeps only the dependency-light `parse_text` parser (UTF-8 / code /
+CSV / TSV, stdlib); shared text helpers are `parsing/utils.py`, re-exported
+from `parsing` so every parser reaches them by one absolute path regardless of
+which tree it landed in. The registry carries a static native-modality default
+map so `get_modality` resolves image/audio/video with **no parser installed**
+(attachment routing relies on this). Every heavier parser is an installable
+store package (`parser-pdf`, `parser-office`, `parser-tabular`,
+`parser-image`, `parser-audio`, `parser-video`, `parser-gdoc`,
+`parser-container`) shipping a `helpers/parse_*.py` file. `parsing.discover()`
+rebuilds the registry by scanning those across the built-in, sandbox, and
+installed roots; `package_manager` rescans on install/uninstall so it takes
+effect live. `parsing.bind_services()` supplies peers for delegating parsers
+(`parse_gdoc` → `google_drive`) — a reference, not a lifecycle.
+`attachments/parse.py` builds an `Attachment` via `parsing.get_modality` +
+`parsing.parse(path, "text")` (no separate attachment-parser registry).
+
+**The store branch needs the matching move**: `services/helpers/parse_*.py` →
+`helpers/parse_*.py`, and their imports from
+`plugins.services.helpers.{ParseResult,parser_registry,parsing_utils}` →
+`parsing`. Nothing shims the old paths — the files have to move anyway, so
+changing the import line is free.
 
 ## The kernel boundary (the one rule)
 
 Core code (`pipeline/`, `runtime/`, `state_machine/`, `agent/`, `events/`,
-`config/`, `attachments/`, `main.pyw`) hard-imports **exactly two** plugin
-modules. Keep these two resolvable in any kernel:
+`config/`, `attachments/`, `main.pyw`) hard-imports **exactly one** plugin
+module. Keep it resolvable in any kernel:
 1. `service_llm` — `runtime/conversation_loop.py`.
-2. `parser_registry` — `pipeline/orchestrator.py`, `pipeline/watcher.py`.
+
+It was two until parsing stopped being a service (see **Parsers** below). The
+registry moved *into* the kernel as `parsing/`, so the boundary got narrower
+by adding kernel code — worth remembering the next time this rule looks like
+it needs widening.
 
 This rule is executable: `tests/test_kernel_boundary.py` AST-walks every core
 module and pins the complete set of `plugins.*` import edges (the plugin
@@ -252,6 +287,32 @@ approval dialog answerable, and it doubles as the cycle detector. Approval
 reuses the kernel's existing `vet_permission` doorway (enriched with
 `origin="request"` plus the typed `request`/`chain`/`decision`), then
 `skip_permissions`, then a dialog; unattended sessions refuse rather than block.
+
+**Services are resident boxes.** A sandboxed `BaseService` bridges to a native
+one whose `_load()` opens a persistent box and whose `unload()` closes it.
+Methods named in `exports` become real attributes on the adapter, because
+native callers reach a service by attribute access (`services.get("x").m()`),
+not through `service.call`. The synthetic module supplies `build_services`,
+since that is how discovery finds services. The box owns the start deadline,
+so the adapter sets `load_timeout = 0` rather than race two timers.
+
+**Hooks are declared, not registered.** A service names doorways in
+`hooks = {moment: method}`, read by AST like `exports`. The bridge stands a
+shim at each and removes it on unload — a hook cannot leak, because the plugin
+never registered one. Payloads are **projections**, not encoded kernel
+objects: `guest/hooks.py` holds the guest vocabulary and `sandbox/hooks.py` is
+the only place that knows both. Every failure mode (unloaded service, dead
+box, raising method, unrecognised verdict) collapses to `None` — abstention —
+so a sandboxed hook can never break a turn. Two consequences are load-bearing:
+a scope shaper sees tool *names* and can only narrow (widening is
+`sdk.session.add_tool`), and `ModelRequest.llm` is a model *name* the kernel
+resolves, the same handle-not-the-thing move as `<secret:…>`.
+
+`sdk.model.proceed` is the sole Request whose handler is a **per-call closure**
+rather than a static table entry: an escort's `proceed` is parked host-side
+under a one-shot token for exactly the duration of one doorway visit. Code
+holding no token reaches no call, which is why the Request is refused outside
+a `model_call` hook rather than being ambient authority.
 
 **The dual-mode loader is how migration works.** `plugins/plugin_discovery.py`
 → `_load_plugin_module` asks `sandbox.bridge.adapt()` first. A file importing
@@ -513,6 +574,9 @@ move between built-in, sandbox, and installed trees.
 - [pipeline/orchestrator.py](pipeline/orchestrator.py) — task scheduling and
   the dependency-pipeline DAG. `runtime` is wired in
   [runtime/bootstrap.py](runtime/bootstrap.py).
+- [parsing/registry.py](parsing/registry.py) — the file-type authority:
+  routing, discovery, and `parser_for` (the importable half). Not a service,
+  on purpose.
 - [agent/system_prompt.py](agent/system_prompt.py) — single entry point for
   building the agent system prompt; gates sections by which tools the
   current scope exposes.
@@ -527,3 +591,6 @@ move between built-in, sandbox, and installed trees.
   migrated and unmigrated plugins coexist.
 - [sandbox/guest/sdk.py](sandbox/guest/sdk.py) — what plugin authors actually
   type. Each namespace is exactly one Request family.
+- [sandbox/hooks.py](sandbox/hooks.py) — the two-way translation between the
+  kernel's doorways (live objects) and the guest's (plain data), plus the
+  escort's parked-closure mechanism.

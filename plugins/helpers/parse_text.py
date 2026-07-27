@@ -4,16 +4,19 @@ Reads any UTF-8 (falling back to latin-1) text or code file and returns a
 standardized ``ParseResult(modality="text")``. This is the kernel's minimal
 parsing floor; richer document parsers (PDF, Office, Google Drive, audio,
 image, …) are installable packages that drop their own ``parse_*.py`` helper
-into ``services/helpers`` and are picked up by the parser service's discovery
-scan.
+into ``helpers/`` at a plugin tree's root, where ``parsing.discover()`` finds
+them.
+
+A parser is a *library*, not a plugin: no base class, no entry point. Code
+that wants a modality whose result cannot cross a process boundary imports the
+parser into its own box and calls it there.
 """
 
 import logging
 from pathlib import Path
 
-from plugins.services.helpers.ParseResult import ParseResult
-from plugins.services.helpers import parser_registry as registry
-from plugins.services.helpers.parsing_utils import clean_text, max_chars
+import parsing
+from parsing import ParseResult, clean_text, max_chars
 
 logger = logging.getLogger("ParseText")
 
@@ -52,7 +55,7 @@ def parse_plaintext(path: str, config: dict, services: dict = None) -> ParseResu
         return ParseResult.failed(str(e), modality="text")
 
 
-registry.register([
+parsing.register([
     ".txt", ".md", ".markdown", ".rst", ".tex", ".log", ".rtf",
     ".csv", ".tsv",
     ".json", ".yaml", ".yml", ".xml",

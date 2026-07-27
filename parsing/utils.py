@@ -1,10 +1,14 @@
 """Shared text utilities for parser helpers.
 
-This module lives permanently in the kernel (``plugins/services/helpers``),
-so parser *packages* can import it with a stable absolute path
-(``from plugins.services.helpers.parsing_utils import clean_text``) no matter
-which tree their ``parse_*.py`` physically lands in. Keep it dependency-free
-(stdlib only) — every parser, heavy or light, relies on it.
+Kernel code, alongside :class:`~parsing.result.ParseResult`, and re-exported
+from :mod:`parsing` so every parser reaches it the same way::
+
+    from parsing import clean_text, max_chars
+
+One stable absolute path matters here: a parser package physically lands in
+whichever tree it was installed into, and a relative import would resolve
+against *that* tree rather than the kernel. Keep it dependency-free (stdlib
+only) — every parser, heavy or light, relies on it.
 """
 
 import re

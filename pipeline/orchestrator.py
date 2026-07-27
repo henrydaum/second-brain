@@ -24,7 +24,7 @@ from runtime.context import build_context
 from runtime.supervisor import run_supervised
 from runtime.heartbeat import heartbeat
 from pipeline.database import set_thread_priority_low
-from plugins.services.helpers.parser_registry import get_modality
+from parsing import get_modality
 from plugins.helpers.plugin_paths import is_builtin_path
 from plugins.BaseTask import BaseTask, TaskResult
 from events.event_bus import bus
@@ -457,7 +457,7 @@ class Orchestrator:
 
 	def on_paths_discovered(self, child_paths: list[str]):
 		"""Handle on paths discovered."""
-		from plugins.services.helpers.parser_registry import get_modality, get_supported_extensions
+		from parsing import get_modality, get_supported_extensions
 		supported = get_supported_extensions()
 
 		for child_path in child_paths:

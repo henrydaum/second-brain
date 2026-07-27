@@ -1,10 +1,10 @@
-"""Build an :class:`Attachment` for a file on disk via the parser service.
+"""Build an :class:`Attachment` for a file on disk.
 
 This is the attachment system's single integration point with parsing. There
-is no separate attachment-parser registry anymore: modality detection and the
-LLM-readable text rendering both come from the unified parser service
-(``services["parser"]``), so anything the pipeline can parse, an attachment
-can too — and installing a parser package lights up both at once.
+is no separate attachment-parser registry: modality detection and the
+LLM-readable text rendering both come from the kernel's parser registry
+(:mod:`parsing`), so anything the pipeline can parse, an attachment can too —
+and installing a parser package lights up both at once.
 
 Routing happens later in ``AttachmentBundle.split_for_llm(capabilities)``:
     1. Native  - the LLM has the capability for this modality -> raw path inlined.
@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import parsing
 from attachments.attachment import Attachment
 
 logger = logging.getLogger("AttachmentParse")
@@ -45,25 +46,26 @@ def parse_attachment(
     services = services or {}
     config = config or {}
 
-    parser = services.get("parser")
-    modality = "binary"
     parsed_text: str | None = None
     metadata: dict = {}
 
-    if parser is not None:
-        try:
-            modality = parser.get_modality(ext) or "binary"
-        except Exception:
-            modality = "binary"
-        try:
-            result = parser.parse(str(p), "text", config=config)
-        except Exception as e:
-            logger.warning(f"Attachment text parse for {ext} failed on {p.name}: {e}")
-            result = None
-        output = getattr(result, "output", None)
-        if isinstance(output, str) and output.strip():
-            parsed_text = output
-            metadata = dict(getattr(result, "metadata", {}) or {})
+    try:
+        modality = parsing.get_modality(ext) or "binary"
+    except Exception:
+        modality = "binary"
+
+    # Only ever text: an attachment is something shown to a model, and the
+    # heavier modalities resolve to live library objects that would be no use
+    # here even if they could be produced.
+    try:
+        result = parsing.parse(str(p), "text", config=config)
+    except Exception as e:
+        logger.warning(f"Attachment text parse for {ext} failed on {p.name}: {e}")
+        result = None
+    output = getattr(result, "output", None)
+    if isinstance(output, str) and output.strip():
+        parsed_text = output
+        metadata = dict(getattr(result, "metadata", {}) or {})
 
     if modality in (None, "unknown"):
         modality = "binary"

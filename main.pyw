@@ -199,6 +199,7 @@ logging.getLogger().addHandler(_file_handler)
 from dataclasses import dataclass, field
 from typing import Any
 
+import parsing
 from config import config_manager
 from pipeline.database import Database
 from pipeline.orchestrator import Orchestrator
@@ -278,6 +279,12 @@ def main():
 	t0 = time.time()
 	services = discover_services(_ROOT, config)
 	logger.info(f"Services discovered: {list(services.keys())} ({time.time() - t0:.2f}s)")
+
+	# --- 3a. Discover parsers. Kernel routing, not a service: nothing loads it,
+	#         and it has to be answerable before anything asks what a file is. ---
+	t0 = time.time()
+	parsing.bind_services(services)
+	logger.info(f"Parsers discovered: {parsing.discover()} module(s) ({time.time() - t0:.2f}s)")
 
 	# --- 3b. Auto-load managed services from config plus installed extensions ---
 	for svc_name, svc in services.items():

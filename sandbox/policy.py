@@ -179,6 +179,10 @@ ALWAYS_SAFE = {
     R.PLUGIN_LIST, R.PLUGIN_DESCRIBE, R.SERVICE_LIST, R.SERVICE_CALL,
     R.TOOL_LIST, R.TOOL_CALL, R.COMMAND_LIST, R.COMMAND_CALL,
     R.AGENT_COMPLETE, R.AGENT_SPAWN,
+    # Safe because it widens nothing: the kernel handed this escort a call it
+    # had already decided to place, and proceeding is placing that one. The
+    # token is what limits it — code with no token reaches no call at all.
+    R.MODEL_PROCEED,
     R.CRON_LIST, R.CRON_GET, R.CRON_ENABLE,
     R.EVENT_EMIT, R.EVENT_REQUEST,
     R.TASK_ENQUEUE, R.TASK_STATUS, R.TASK_OUTPUT,

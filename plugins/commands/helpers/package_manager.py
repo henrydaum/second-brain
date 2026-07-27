@@ -15,10 +15,14 @@ from typing import Callable
 
 from paths import INSTALLED_PLUGINS, ROOT_DIR
 from plugins.commands.helpers.store_backend import GitStoreBackend
-from plugins.helpers.plugin_paths import PLUGIN_FAMILIES, PLUGIN_ROOTS
+from plugins.helpers.plugin_paths import (HELPERS_FAMILY, PLUGIN_FAMILIES,
+                                          PLUGIN_ROOTS)
 
 
-TREE_ROOTS = {family for family, _prefix in PLUGIN_FAMILIES.values()}
+# The family folders, plus ``helpers/`` — shared code that belongs to no
+# family because it is not a plugin at all. Parsers live there: a package
+# ships ``helpers/parse_pdf.py`` and whatever needs it imports it.
+TREE_ROOTS = {family for family, _prefix in PLUGIN_FAMILIES.values()} | {HELPERS_FAMILY}
 DEPENDENCY_FIELDS = ("dependencies_files", "dependencies_pip")
 _PACKAGE_LOCK = threading.RLock()
 Progress = Callable[[str], None]
@@ -180,7 +184,7 @@ def _install_plan_from_roots(store: GitStoreBackend, roots: list[str], target: s
         steps.append(f"Installing Python package(s): {', '.join(pip_packages)}")
     steps.append("Copying package files")
     if any(_is_parser_helper(rel) for rel in collected):
-        steps.append("Reloading parser service")
+        steps.append("Rescanning parsers")
     # Provenance is best-effort: stub/test backends may not resolve a commit.
     resolve_commit = getattr(store, "resolve_commit", lambda: None)
     return InstallPlan(target, list(collected.values()), pip_packages, existing,
@@ -253,8 +257,8 @@ def _execute_install_plan(plan: InstallPlan, context=None, progress: Progress | 
             _remove_empty_dirs()
             raise
         if plan.parser_reload_needed:
-            _progress(progress, "Reloading parser service")
-            _reload_parser_service(context, lines)
+            _progress(progress, "Rescanning parsers")
+            _rescan_parsers(context, lines)
         if context is not None:
             services = _services(plan.files)
             _set_enabled_frontends(context, add=_frontends(plan.files), remove=[], lines=lines)
@@ -344,7 +348,7 @@ def _uninstall_plan_from_candidates(target: str, candidates: set[str]) -> Uninst
     if pip_remove:
         steps.append("Uninstalling Python package(s): " + ", ".join(pip_remove))
     if any(_is_parser_helper(rel) for rel in candidates):
-        steps.append("Reloading parser service")
+        steps.append("Rescanning parsers")
     return UninstallPlan(target, remove_files, keep_files, pip_remove, kept_pip, any(_is_parser_helper(rel) for rel in candidates), steps)
 
 
@@ -385,8 +389,8 @@ def _execute_uninstall_plan(plan: UninstallPlan, context=None, cleanup_choices=N
             kept = ", ".join(f"{name} ({reason})" for name, reason in sorted(plan.kept_pip_packages.items(), key=lambda item: item[0].lower()))
             lines.append(f"Kept Python package(s): {kept}")
         if plan.parser_reload_needed:
-            _progress(progress, "Reloading parser service")
-            _reload_parser_service(context, lines)
+            _progress(progress, "Rescanning parsers")
+            _rescan_parsers(context, lines)
     return PackageActionResult(True, lines)
 
 
@@ -667,10 +671,28 @@ def _rel_id(rel: str) -> str:
 
 
 def _is_valid_tree_rel(rel: str) -> bool:
+    """Whether a store path is a plugin, a family helper, or shared code.
+
+    Three shapes are legal:
+
+        tools/tool_x.py            a plugin, prefixed by its family
+        tools/helpers/x.py         a helper belonging to one family
+        helpers/parse_pdf.py       shared code belonging to no family
+
+    The last has no prefix rule because it is not a plugin: nothing discovers
+    it, and whoever needs it imports it by name.
+    """
     p = PurePosixPath(rel)
+    if p.suffix != ".py":
+        return False
     if len(p.parts) == 2:
-        return any(p.parts[0] == family and p.name.startswith(prefix) for family, prefix in PLUGIN_FAMILIES.values())
-    return len(p.parts) == 3 and p.parts[0] in TREE_ROOTS and p.parts[1] == "helpers" and p.suffix == ".py"
+        if p.parts[0] == HELPERS_FAMILY:
+            return True
+        return any(p.parts[0] == family and p.name.startswith(prefix)
+                   for family, prefix in PLUGIN_FAMILIES.values())
+    return (len(p.parts) == 3 and p.parts[1] == "helpers"
+            and any(p.parts[0] == family
+                    for family, _prefix in PLUGIN_FAMILIES.values()))
 
 
 def _target(rel_path: str) -> Path:
@@ -858,21 +880,30 @@ def _plugin_name(rel: str, plugin_type: str) -> str:
 
 
 def _is_parser_helper(rel: str) -> bool:
+    """Whether an installed file is a parser, i.e. ``helpers/parse_*.py``.
+
+    Helpers live at a tree's root rather than under a family: a parser is not
+    a plugin and belongs to no family, it is a library whoever needs it
+    imports.
+    """
     p = PurePosixPath(rel)
-    return len(p.parts) == 3 and p.parts[0] == "services" and p.parts[1] == "helpers" and p.name.startswith("parse_")
+    return (len(p.parts) == 2 and p.parts[0] == "helpers"
+            and p.name.startswith("parse_"))
 
 
-def _reload_parser_service(context, lines: list[str]) -> None:
-    parser = (getattr(context, "services", None) or {}).get("parser") if context is not None else None
-    if parser is None:
-        return
+def _rescan_parsers(context, lines: list[str]) -> None:
+    """Re-import the installed parser helpers so a new one is live at once.
+
+    Parsing is kernel routing rather than a service, so this is a rescan, not
+    a load/unload cycle — there is nothing holding state to tear down.
+    """
+    import parsing
+
     try:
-        if getattr(parser, "loaded", False):
-            parser.unload()
-        parser.load()
-        lines.append("Reloaded parser service; file parsers are now active.")
+        count = parsing.discover()
+        lines.append(f"Rescanned parsers: {count} module(s) now active.")
     except Exception as e:
-        lines.append(f"Parser service reload failed (restart to apply): {e}")
+        lines.append(f"Parser rescan failed (restart to apply): {e}")
 
 
 def _remove_empty_dirs():
