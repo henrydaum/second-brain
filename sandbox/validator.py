@@ -114,7 +114,7 @@ UNMEDIATED_STDLIB = {
 # wrong and unhelpful.
 KERNEL_MODULES = {
     "agent", "attachments", "config", "events", "paths", "pipeline",
-    "plugins", "runtime", "state_machine", "stress",
+    "plugins", "runtime", "state_machine",
 }
 
 # What a native plugin reached for on its context, and the SDK route that

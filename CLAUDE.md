@@ -194,7 +194,7 @@ receives plain dicts whose bytes the backend reads with `sdk.fs.read_bytes`.
 `helpers/llm_*.py` backend and runs through a `Brain` pool. The deprecated
 `plugins/services/service_llm.py` compatibility shim is gone.
 `llm.registry.as_brain` still adapts directly injected objects exposing
-`chat_with_tools` — test doubles and the stress harness use that seam — but
+`chat_with_tools` — test doubles use that seam — but
 plugin discovery never imports a native provider into the kernel.
 
 `/llm` gained explicit `load` / `unload` actions. Loading used to be a side
@@ -308,9 +308,8 @@ tables into this one.
 The ledger is write-optimized filler by volume — read it *targeted*
 (by conversation_id / session_key / origin), never linearly; agent-facing
 guidance lives in the store `sb-troubleshooting` skill, not the kernel
-prompt. The stress oracle checks recent-row well-formedness
-(`_check_ledger` in `stress/invariants.py`); tests in
-`tests/test_ledger.py`. Query/inspection UX (`/ledger`) is deliberately a
+prompt. Row well-formedness is pinned by `tests/test_ledger.py`.
+Query/inspection UX (`/ledger`) is deliberately a
 future store package, not kernel.
 
 ## Package store V1

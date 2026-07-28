@@ -137,8 +137,8 @@ def active_llm(runtime, session: RuntimeSession | None = None):
     if resolved is not None:
         return resolved
     # The registry knows nothing about a model somebody injected directly —
-    # an unmigrated router registered as the ``llm`` service, a test's fake,
-    # the stress harness. Those are still legitimate brains; the loop adapts
+    # an unmigrated router registered as the ``llm`` service, a test's fake.
+    # Those are still legitimate brains; the loop adapts
     # whatever this returns.
     return (runtime.services or {}).get("llm")
 

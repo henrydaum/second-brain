@@ -759,8 +759,8 @@ class ConversationLoop:
         """The brain a request names, falling back to the loop's default.
 
         Everything is put through ``as_brain`` on the way out, so a model
-        object injected directly — a test double, the stress harness's fake,
-        an unmigrated backend — is adapted rather than refused. The loop then
+        object injected directly — a test double, an unmigrated backend —
+        is adapted rather than refused. The loop then
         only ever knows one interface.
         """
         from llm import resolve
