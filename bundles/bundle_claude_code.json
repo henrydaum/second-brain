@@ -11,6 +11,7 @@
     "tools/tool_run_command.py",
     "tools/tool_slash_command.py",
     "tools/tool_spawn_agent.py",
+    "tools/tool_sql_query.py",
     "tools/tool_test_plugin.py",
     "tools/tool_todo.py",
     "tools/tool_use_skill.py",
