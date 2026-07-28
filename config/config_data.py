@@ -136,16 +136,6 @@ SETTINGS_DATA = [
      120,
      {"type": "slider", "range": (0, 600, 20), "is_float": False}),
 
-    # --- Plugin Supervisor ---
-    # Fully automatic: quarantines sandbox/installed plugins that repeatedly
-    # crash or time out, and warns on runaway memory. Built-in kernel plugins are
-    # supervised but never auto-disabled. One knob — leave it on.
-    ("Plugin Supervisor", "plugin_supervisor",
-     "Automatically quarantine misbehaving plugins (repeated crashes/timeouts) "
-     "and warn on runaway memory. Turn off only to debug a plugin.",
-     True,
-     {"type": "bool"}),
-
     ("Reprocess Interval", "reprocess_interval",
      "Seconds between re-checking files for changes.",
      300,

@@ -11,9 +11,7 @@ import threading
 import time
 
 from runtime.context import build_context
-from runtime.supervisor import run_supervised
 from plugins.BaseTool import BaseTool, ToolResult
-from plugins.helpers.plugin_paths import is_builtin_path
 from events.event_bus import bus
 from events.event_channels import TOOLS_CHANGED
 
@@ -124,41 +122,20 @@ class ToolRegistry:
 
         t0 = time.time()
 
-        # Reentrant calls (tool -> call_tool -> tool) run inline — the outer
-        # call already owns a timeout budget, and a nested submit would double
-        # the thread count without adding safety.
-        if getattr(_exec_state, "in_tool", False):
-            try:
-                result = tool.run(context, **kwargs)
-                logger.debug(f"Tool '{tool_name}' completed in {time.time() - t0:.3f}s")
-                return result
-            except Exception as e:
-                logger.error(f"Tool '{tool_name}' failed after {time.time() - t0:.3f}s: {e}")
-                return ToolResult.failed(str(e))
-
-        timeout = int(self.config.get("tool_timeout", 600))
-
-        def _run_with_flag():
-            """Internal helper to run with flag (sets the reentrancy flag in the
-            supervised worker thread so nested call_tool runs inline)."""
-            _exec_state.in_tool = True
-            try:
-                return tool.run(context, **kwargs)
-            finally:
-                _exec_state.in_tool = False
-
-        source = getattr(tool, "_source_path", "")
-        res = run_supervised(
-            _run_with_flag, timeout=timeout, plugin_key=source,
-            kind="tool", name=tool_name, eligible=not is_builtin_path(source))
-        if res.ok:
+        # A tool runs on the calling thread, including the reentrant case
+        # (tool -> call_tool -> tool). The flag is still set so a nested call
+        # can tell it is nested; nothing branches on it here any more.
+        nested = getattr(_exec_state, "in_tool", False)
+        _exec_state.in_tool = True
+        try:
+            result = tool.run(context, **kwargs)
             logger.debug(f"Tool '{tool_name}' completed in {time.time() - t0:.3f}s")
-            return res.value
-        if res.timed_out:
-            logger.error(f"Tool '{tool_name}' timed out after {timeout}s — abandoning thread")
-        else:
-            logger.error(f"Tool '{tool_name}' failed after {time.time() - t0:.3f}s: {res.error}")
-        return ToolResult.failed(res.error)
+            return result
+        except Exception as e:
+            logger.error(f"Tool '{tool_name}' failed after {time.time() - t0:.3f}s: {e}")
+            return ToolResult.failed(str(e))
+        finally:
+            _exec_state.in_tool = nested
 
     @property
     def max_tool_calls(self) -> int:

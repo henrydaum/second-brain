@@ -138,8 +138,8 @@ def _scratch_roots() -> list:
 
     roots = [Path(tempfile.gettempdir())]
     try:
-        from paths import ATTACHMENT_CACHE, SCRATCH_DIR
-        roots.extend([Path(SCRATCH_DIR), Path(ATTACHMENT_CACHE)])
+        from paths import ATTACHMENT_CACHE
+        roots.append(Path(ATTACHMENT_CACHE))
     except Exception:
         pass
     if (authoring := _authoring_root()) is not None:

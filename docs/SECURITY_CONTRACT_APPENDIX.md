@@ -19,7 +19,7 @@ stated in the contract:
 
 The **Default** column is the level when nothing unusual is present. It is a
 starting point for the policy function, not a fixed property of the Request —
-`fs.write` to the scratch directory is safe; the same Request aimed at
+`fs.write` to a scratch directory is safe; the same Request aimed at
 `main.pyw` is not.
 
 Three mechanisms referenced throughout are defined at the bottom: **secret
@@ -304,11 +304,9 @@ belongs. API keys and OAuth tokens live in config and the environment. See
 | `plugin.install(stem)` | Install from the store | stem, store commit | unsafe |
 | `plugin.uninstall(stem)` | Remove, with dependency scan | stem | unsafe |
 | `plugin.update()` | Update installed store packages | store commit | unsafe |
-| `plugin.quarantine(name, reason)` | Disable a misbehaving plugin | name | safe |
 
 This family is the literal subject of the LibOS quote: the agent extends itself
-here, and every widening Request in it is unsafe by default. Quarantine is safe
-because it only removes capability.
+here, and every widening Request in it is unsafe by default.
 
 ## 9. Services
 

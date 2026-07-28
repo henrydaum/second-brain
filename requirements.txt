@@ -11,7 +11,7 @@ watchdog
 cron-descriptor
 croniter
 
-# --- Plugin supervisor memory watchdog (degrades to no-op if absent) ---
+# --- Stall watchdog process-tree walk (degrades to no-op if absent) ---
 psutil
 
 # --- Pytest ---

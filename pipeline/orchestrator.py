@@ -21,11 +21,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from runtime.context import build_context
-from runtime.supervisor import run_supervised
 from runtime.heartbeat import heartbeat
 from pipeline.database import set_thread_priority_low
 from parsing import get_modality
-from plugins.helpers.plugin_paths import is_builtin_path
 from plugins.BaseTask import BaseTask, TaskResult
 from events.event_bus import bus
 from events.event_channels import TASK_STARTED, TASK_COMPLETED, TASK_FAILED, SERVICE_LOADED, TASKS_CHANGED
@@ -650,8 +648,7 @@ class Orchestrator:
 
 		# Stall-watchdog probe: one beat per iteration suffices — the idle
 		# path sleeps poll_interval (~1s) and the busy path only does
-		# non-blocking executor submits (task bodies run on worker threads
-		# under run_supervised timeouts).
+		# non-blocking executor submits (task bodies run on worker threads).
 		probe = heartbeat.register("dispatch")
 		try:
 			self._run_dispatch(probe, stuck_check_interval, last_stuck_check)
@@ -785,19 +782,15 @@ class Orchestrator:
 		)
 
 		t0 = time.time()
-		source = getattr(task, "_source_path", "")
 		bus.emit(TASK_STARTED, {"task_name": task.name, "run_id": run_id})
-		res = run_supervised(
-			lambda: task.run_event(run_id, payload, context),
-			timeout=task.timeout, plugin_key=source, kind="task",
-			name=task.name, eligible=not is_builtin_path(source))
-		if not res.ok:
+		try:
+			result = task.run_event(run_id, payload, context)
+		except Exception as e:
 			elapsed = time.time() - t0
-			logger.error(f"Event task '{task.name}' (run {run_id}) failed after {elapsed:.2f}s: {res.error}")
-			self.db.fail_run(run_id, res.error)
-			bus.emit(TASK_FAILED, {"task_name": task.name, "run_id": run_id, "error": res.error})
+			logger.error(f"Event task '{task.name}' (run {run_id}) failed after {elapsed:.2f}s: {e}")
+			self.db.fail_run(run_id, str(e))
+			bus.emit(TASK_FAILED, {"task_name": task.name, "run_id": run_id, "error": str(e)})
 			return
-		result = res.value
 
 		elapsed = time.time() - t0
 
@@ -877,20 +870,16 @@ class Orchestrator:
 		)
 
 		t0 = time.time()
-		source = getattr(task, "_source_path", "")
 		bus.emit(TASK_STARTED, {"task_name": task.name, "paths": list(paths)})
-		res = run_supervised(
-			lambda: task.run(paths, context),
-			timeout=task.timeout, plugin_key=source, kind="task",
-			name=task.name, eligible=not is_builtin_path(source))
-		if not res.ok:
-			logger.error(f"Task '{task.name}' batch failed after {time.time() - t0:.2f}s: {res.error}")
+		try:
+			results = task.run(paths, context)
+		except Exception as e:
+			logger.error(f"Task '{task.name}' batch failed after {time.time() - t0:.2f}s: {e}")
 			for path in paths:
-				self.db.fail_task(path, task.name, res.error)
-				bus.emit(TASK_FAILED, {"task_name": task.name, "path": path, "error": res.error})
+				self.db.fail_task(path, task.name, str(e))
+				bus.emit(TASK_FAILED, {"task_name": task.name, "path": path, "error": str(e)})
 			self._invalidate_downstream(task.name, paths)
 			return
-		results = res.value
 
 		elapsed = time.time() - t0
 		per_path = elapsed / len(paths) if paths else 0.0

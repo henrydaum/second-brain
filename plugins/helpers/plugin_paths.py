@@ -67,10 +67,9 @@ _BUILTIN_ROOT = next((r.path.resolve() for r in PLUGIN_ROOTS if r.built_in), Non
 def is_builtin_path(path) -> bool:
     """Whether a plugin source path lives under the built-in (kernel) tree.
 
-    Used by the supervisor to decide quarantine eligibility: only sandbox /
-    installed plugins are quarantinable. An empty or unresolvable path is
-    treated as built-in (conservative — never auto-disable something we can't
-    locate)."""
+    An empty or unresolvable path is treated as built-in — the conservative
+    answer for callers deciding how much to trust a plugin they cannot
+    locate."""
     if not path:
         return True
     try:
