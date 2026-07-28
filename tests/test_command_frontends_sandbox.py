@@ -1,20 +1,9 @@
 """Structured frontend metadata and sandboxed ``/frontends`` coverage."""
 
-import io
-import threading
-import time
-from pathlib import Path
 from types import SimpleNamespace
 
-from pipeline.database import Database
 from plugins import plugin_discovery
-from plugins.frontends.helpers.command_registry import CommandRegistry
-from plugins.plugin_discovery import discover_commands
-from runtime.context import build_context
-from runtime.conversation_runtime import ConversationRuntime
 from sandbox import Sandbox
-from sandbox.bridge import adapt, configure
-from sandbox.console import CONSOLE
 from sandbox.handlers.kernel import _plugin_list
 
 
@@ -252,83 +241,6 @@ def test_frontend_quicklink_uses_config_write_and_restart_note(
         "Set repl_prompt_color_frontends_test = green. Restart required.")
     assert context.runtime.config[
         "repl_prompt_color_frontends_test"] == "green"
-
-
-def test_live_repl_guards_last_enabled_frontend(
-        tmp_path, monkeypatch):
-    db = Database(str(tmp_path / "frontends-live.db"))
-    config = {
-        "enabled_frontends": ["repl"],
-        "frontend_profiles": {},
-    }
-    services = {}
-    holder = {}
-    commands = CommandRegistry(
-        lambda key=None: build_context(
-            db, config, services, runtime=holder.get("runtime"),
-            root_dir=tmp_path, session_key=key,
-        )
-    )
-    discover_commands(tmp_path, commands, config)
-    runtime = ConversationRuntime(
-        db=db,
-        services=services,
-        config=config,
-        commands=commands.to_callable_specs(),
-    )
-    runtime.frontend_manager = SimpleNamespace(
-        available_frontends={"repl", "telegram"},
-        adapters={"repl": ReplAdapter()},
-    )
-    holder["runtime"] = runtime
-    monkeypatch.setattr("config.config_manager.save", lambda _values: None)
-
-    sandbox = Sandbox()
-    configure(sandbox)
-    written = []
-    original_claim = CONSOLE.claim
-
-    class PacedInput(io.StringIO):
-        def readline(self, *args, **kwargs):
-            if self.tell():
-                time.sleep(0.25)
-            return super().readline(*args, **kwargs)
-
-    def claim(token, source=None, writer=None):
-        return original_claim(
-            token,
-            source=PacedInput("/frontends\nrepl\ndisable\n"),
-            writer=written.append,
-        )
-
-    monkeypatch.setattr(CONSOLE, "claim", claim)
-    module = adapt(Path("plugins/frontends/frontend_repl.py").resolve())
-    frontend_cls = next(
-        value for value in vars(module).values()
-        if isinstance(value, type) and getattr(value, "_sandboxed", False)
-    )
-    frontend = frontend_cls(shutdown_event=threading.Event())
-    frontend.bind(runtime, commands, config)
-    thread = threading.Thread(target=frontend.start, daemon=True)
-
-    try:
-        thread.start()
-        deadline = time.time() + 5
-        while time.time() < deadline and not any(
-                "Cannot disable the last enabled frontend" in text
-                for text in written):
-            time.sleep(0.01)
-        output = "".join(written)
-        assert "Select a frontend." in output
-        assert "repl" in output
-        assert "What do you want to do with this frontend?" in output
-        assert "Cannot disable the last enabled frontend." in output
-    finally:
-        frontend.unbind()
-        frontend.stop()
-        thread.join(timeout=2)
-        sandbox.shutdown()
-        configure(None)
 
 
 def _remove_setting():

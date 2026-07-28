@@ -144,7 +144,17 @@ class InProcessBox(PersistentBox):
                 box["result"] = raw if isinstance(raw, Result) else Result(
                     data=raw)
             except Terminated as stop:
-                box["result"] = Result(data=stop.value)
+                # A cancelled execution is the kernel tearing this box down,
+                # not the code answering. Reporting it as ``ok`` with no data
+                # is what let a starved REPL look healthy: ``_drive_polls``
+                # read the success, reset its failure count, and spun on a
+                # dead box forever while the user typed into nothing. The only
+                # ``Terminated`` carrying a real value comes from
+                # ``sdk.respond``, which a persistent box may not use.
+                box["result"] = (
+                    Result.failure(f"box {self.name!r} was cancelled")
+                    if self.execution.cancelled
+                    else Result(data=stop.value))
             except RequestFailed as failed:
                 box["result"] = failed.result
             except Exception as exc:
@@ -156,10 +166,18 @@ class InProcessBox(PersistentBox):
                          name=f"box-{self.name}").start()
         if not done.wait(timeout=deadline):
             # Starve it: the thread survives, but its next Request is refused
-            # so it can no longer affect anything.
+            # so it can no longer affect anything. For a *resident* box that
+            # also ends the box, because cancellation is per-execution and a
+            # resident box has exactly one for its whole life — there is no
+            # way back. Two further reasons the box cannot be reused: the
+            # starved worker is still alive, so a later call would put two
+            # threads on one Execution and two Requests in one inbox; and
+            # every later call would answer ``Terminated`` immediately. Saying
+            # the box is dead lets ``_drive_polls`` stop and report, instead
+            # of a frontend that accepts keystrokes and does nothing.
             self._interpreter.cancel(self.execution)
-            return Result.failure(f"timed out after {deadline:.1f}s",
-                                  retryable=True)
+            self._alive = False
+            return Result.failure(f"timed out after {deadline:.1f}s")
         return box.get("result", Result(data=None))
 
     def _call(self, method: str, args: tuple, kwargs: dict) -> Result:

@@ -38,6 +38,14 @@ class PackagesCommand(BaseCommand):
         "install, re-check the tool catalog before concluding a capability is "
         "missing or broken."
     )
+    # Browsing is a read; the other three change what this system can do. The
+    # declaration is what keeps them on the *up-front* approval path, where
+    # the state machine asks before the body runs and the answer becomes a
+    # grant covering the Requests below. Without it the command ran ungranted
+    # and hit the execution-time approver mid-run, which is the path a command
+    # cannot be asked from.
+    approval_actions = ("install", "uninstall", "update")
+    approval_actor_id = "user"
     requests = [
         "plugin.list", "plugin.install", "plugin.uninstall", "plugin.update"]
 

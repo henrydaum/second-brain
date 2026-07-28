@@ -4,7 +4,7 @@ COMMAND TEMPLATE
 A command is a slash command a person types. Reference for authoring one; not
 imported by the running system.
 
-Read SDK.md for the Request surface and sandbox/guest/bases.py for every
+Read docs/SDK.md for the Request surface and sandbox/guest/bases.py for every
 attribute a command can declare. This file covers what is specific to commands.
 
   Where it goes:  DATA_DIR/sandbox_plugins/commands/command_<name>.py

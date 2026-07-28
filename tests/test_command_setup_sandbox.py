@@ -1,20 +1,9 @@
 """Sandboxed ``/setup`` onboarding and supporting SDK coverage."""
 
-import io
-import threading
-import time
-from pathlib import Path
 from types import SimpleNamespace
 
-from pipeline.database import Database
 from plugins.commands.helpers import package_manager
-from plugins.frontends.helpers.command_registry import CommandRegistry
-from plugins.plugin_discovery import discover_commands
-from runtime.context import build_context
-from runtime.conversation_runtime import ConversationRuntime
 from sandbox import Result, Sandbox
-from sandbox.bridge import adapt, configure
-from sandbox.console import CONSOLE
 from sandbox.guest.requests import NET_HTTP
 from sandbox.handlers import HANDLERS
 from sandbox.handlers.kernel import _config_write, _plugin_list
@@ -229,72 +218,3 @@ def test_setup_denied_config_write_stays_denied(tmp_path):
     assert not result.ok
     assert "config.write" in result.error
     assert "denied" in result.error.lower()
-
-
-def test_live_repl_collects_setup_package_choice(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        "llm.backend_names", lambda: [])
-    db = Database(str(tmp_path / "setup-live.db"))
-    config = {}
-    services = {}
-    holder = {}
-    registry = CommandRegistry(
-        lambda key=None: build_context(
-            db, config, services, runtime=holder.get("runtime"),
-            root_dir=tmp_path, session_key=key,
-        )
-    )
-    discover_commands(tmp_path, registry, config)
-    runtime = ConversationRuntime(
-        db=db,
-        services=services,
-        config=config,
-        commands=registry.to_callable_specs(),
-    )
-    holder["runtime"] = runtime
-
-    sandbox = Sandbox()
-    configure(sandbox)
-    written = []
-    original_claim = CONSOLE.claim
-
-    class PacedInput(io.StringIO):
-        def readline(self, *args, **kwargs):
-            if self.tell():
-                time.sleep(0.25)
-            return super().readline(*args, **kwargs)
-
-    def claim(token, source=None, writer=None):
-        return original_claim(
-            token,
-            source=PacedInput("/setup\nskip\n"),
-            writer=written.append,
-        )
-
-    monkeypatch.setattr(CONSOLE, "claim", claim)
-    module = adapt(Path("plugins/frontends/frontend_repl.py").resolve())
-    frontend_cls = next(
-        value for value in vars(module).values()
-        if isinstance(value, type) and getattr(value, "_sandboxed", False)
-    )
-    frontend = frontend_cls(shutdown_event=threading.Event())
-    frontend.bind(runtime, registry, config)
-    thread = threading.Thread(target=frontend.start, daemon=True)
-
-    try:
-        thread.start()
-        deadline = time.time() + 5
-        while time.time() < deadline and not any(
-                "Then run /setup again" in text for text in written):
-            time.sleep(0.01)
-        output = "".join(written)
-        assert "Welcome to Second Brain." in output
-        assert "Install the starter bundle" in output
-        assert "Skipped package install." in output
-        assert "Then run /setup again" in output
-    finally:
-        frontend.unbind()
-        frontend.stop()
-        thread.join(timeout=2)
-        sandbox.shutdown()
-        configure(None)

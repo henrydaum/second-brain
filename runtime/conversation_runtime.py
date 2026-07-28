@@ -199,6 +199,14 @@ class ConversationRuntime:
         # round-trip. Per-mutation atomicity is preserved by the dispatch
         # lock above and the lock acquired in ``inject_user_message`` and
         # in ``iterate_agent_turn`` after the handle_action returns.
+        #
+        # A *command* body is the same hazard and was not covered by this for
+        # a long time: it runs inside ``_dispatch``, and therefore inside the
+        # lock taken just above. ``/packages install`` asked for approval from
+        # there and froze the process. It is handled one level down instead —
+        # ``_CallableAction._run`` wraps only the plugin body in
+        # ``cs.unlocked()`` (``RuntimeSession.unlocked``), so the dispatch
+        # mutations around it keep this lock and the body does not.
         drives = 0
         restart_drive = False
         while out.data.pop("_drive_agent_turn", False) and drives < 5:

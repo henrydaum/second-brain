@@ -52,11 +52,79 @@ def _runtime(approved: bool, asked: list):
 
 
 def _gate(sandbox, request):
-    """Push one Request through the real gate and return its Result."""
+    """Push one Request through the real gate and return its Result.
+
+    The read blocks because the answer is now *asynchronous*: the gate hands
+    an unsafe Request to an approval worker and returns immediately, so the
+    settle lands on another thread.
+    """
     execution = Execution(name="packages",
                           chain=Chain(root="user").push("packages"))
     sandbox.interpreter._gate_one(execution, request)
     return execution.inbox.get(timeout=5)
+
+
+def test_asking_the_user_does_not_block_the_gate():
+    """The deadlock, stated.
+
+    The gate is the single ordering point for every Request in the process,
+    including the ones the frontend makes to *draw* the dialog and to read the
+    answer. Asking on the gate thread therefore made the question unaskable:
+    ``/packages install`` showed no dialog, ignored ``y``, and froze the whole
+    app until the wait expired.
+
+    So while one dialog is open, an unrelated Request must still be classified
+    and served.
+    """
+    import threading
+
+    from sandbox.guest.requests import PATH_GET
+
+    opened = threading.Event()
+    release = threading.Event()
+
+    def request_input(key, title, body, **kwargs):
+        opened.set()
+        release.wait(5)
+        return _Pending(True)
+
+    runtime = _runtime(True, [])
+    runtime.request_input = request_input
+
+    sandbox = Sandbox()
+    sandbox.bind_runtime(runtime)
+    interpreter = sandbox.interpreter
+
+    def ask():
+        """Occupy an approval with a dialog nobody has answered."""
+        interpreter.submit(
+            Execution(name="packages",
+                      chain=Chain(root="user").push("packages")),
+            Request(PLUGIN_UPDATE, {"name": "tool_edit_file"}))
+
+    served: list = []
+
+    def unrelated():
+        """A perfectly safe Request from somewhere else entirely."""
+        served.append(interpreter.submit(
+            Execution(name="repl", chain=Chain(root="frontend:repl")),
+            Request(PATH_GET, {"name": "data"})))
+
+    try:
+        # Both go through the real gate queue and the real gate thread —
+        # calling ``_gate_one`` directly would run the approver on the test's
+        # own thread and prove nothing about the gate.
+        threading.Thread(target=ask, daemon=True).start()
+        assert opened.wait(5), "the approver was never reached"
+
+        answered = threading.Thread(target=unrelated, daemon=True)
+        answered.start()
+        answered.join(timeout=5)
+        assert served, "the gate was blocked behind an open dialog"
+        assert served[0].ok
+    finally:
+        release.set()
+        sandbox.shutdown()
 
 
 @pytest.fixture()

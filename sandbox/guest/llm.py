@@ -149,7 +149,7 @@ class LLMRequest:
     params: dict = field(default_factory=dict)
     # Connection. ``api_key`` is plaintext: a provider library does its own
     # I/O, so there is no outbound Request for the kernel to substitute a
-    # ``<secret:...>`` handle into. See SECURITY_CONTRACT_APPENDIX.md.
+    # ``<secret:...>`` handle into. See docs/SECURITY_CONTRACT_APPENDIX.md.
     api_key: str = ""
     base_url: str = ""
     # Whether the caller wants deltas pushed through ``sdk.model.delta``. A

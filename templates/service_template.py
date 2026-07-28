@@ -5,7 +5,7 @@ A service is a long-lived capability other plugins call: a loaded model, a
 connection pool, a cache. Reference for authoring one; not imported by the
 running system.
 
-Read SDK.md for the Request surface and sandbox/guest/bases.py for every
+Read docs/SDK.md for the Request surface and sandbox/guest/bases.py for every
 attribute a service can declare. This file covers what is specific to services.
 
   Where it goes:  DATA_DIR/sandbox_plugins/services/service_<name>.py

@@ -170,6 +170,12 @@ def new_state(
     )
     # Restore persisted attachments (only present when lifecycle == "persistent"
     # and the marker was saved mid-conversation).
+    if session is not None:
+        # Lets a command or tool body run outside the session lock the
+        # dispatcher holds. Bound here because this is the one place a state
+        # machine is built *with* a session behind it; one built without keeps
+        # the no-op default and behaves as before.
+        cs.unlocked = session.unlocked
     from attachments.attachment import Attachment
     cs.pending_attachments = [
         Attachment.from_dict(a) if isinstance(a, dict) else a

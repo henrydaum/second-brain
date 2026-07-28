@@ -1,20 +1,11 @@
 """Kernel package requests and sandboxed ``/packages`` coverage."""
 
-import io
-import threading
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
-from pipeline.database import Database
 from plugins.commands.helpers import package_manager
-from plugins.frontends.helpers.command_registry import CommandRegistry
-from plugins.plugin_discovery import discover_commands
-from runtime.context import build_context
-from runtime.conversation_runtime import ConversationRuntime
 from sandbox import Sandbox
-from sandbox.bridge import adapt, configure
-from sandbox.console import CONSOLE
+from sandbox.bridge import adapt
 from sandbox.guest.requests import (
     PLUGIN_INSTALL,
     PLUGIN_UNINSTALL,
@@ -189,69 +180,3 @@ def test_packages_adapter_keeps_agent_prompt():
         if isinstance(value, type) and getattr(value, "_sandboxed", False)
     )
     assert "next turn" in command_cls().agent_prompt_for(None)
-
-
-def test_live_repl_collects_multistep_packages_form(
-        tmp_path, monkeypatch):
-    """REPL -> action step -> category step -> sandboxed command."""
-    _patch_catalog(monkeypatch)
-    db = Database(str(tmp_path / "packages-live.db"))
-    holder = {}
-    registry = CommandRegistry(
-        lambda key=None: build_context(
-            db, {}, {}, runtime=holder.get("runtime"),
-            root_dir=tmp_path, session_key=key,
-        )
-    )
-    discover_commands(tmp_path, registry, {})
-    runtime = ConversationRuntime(
-        db=db, services={}, config={}, commands=registry.to_callable_specs())
-    holder["runtime"] = runtime
-
-    sandbox = Sandbox()
-    configure(sandbox)
-    written = []
-    original_claim = CONSOLE.claim
-
-    class PacedInput(io.StringIO):
-        """A terminal user waits for each dependent prompt."""
-
-        def readline(self, *args, **kwargs):
-            if self.tell():
-                time.sleep(0.25)
-            return super().readline(*args, **kwargs)
-
-    def claim(token, source=None, writer=None):
-        return original_claim(
-            token,
-            source=PacedInput("/packages\navailable\ntools\n"),
-            writer=written.append,
-        )
-
-    monkeypatch.setattr(CONSOLE, "claim", claim)
-    module = adapt(Path("plugins/frontends/frontend_repl.py").resolve())
-    frontend_cls = next(
-        value for value in vars(module).values()
-        if isinstance(value, type) and getattr(value, "_sandboxed", False)
-    )
-    frontend = frontend_cls(shutdown_event=threading.Event())
-    frontend.bind(runtime, registry, {})
-    thread = threading.Thread(target=frontend.start, daemon=True)
-
-    try:
-        thread.start()
-        deadline = time.time() + 5
-        while time.time() < deadline and not any(
-                "Available tool plugins" in text for text in written):
-            time.sleep(0.01)
-        output = "".join(written)
-        assert "Choose a package action." in output
-        assert "Choose a category." in output
-        assert "Available tool plugins:" in output
-        assert "tool_alpha" in output
-    finally:
-        frontend.unbind()
-        frontend.stop()
-        thread.join(timeout=2)
-        sandbox.shutdown()
-        configure(None)

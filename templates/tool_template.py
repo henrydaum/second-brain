@@ -4,7 +4,7 @@ TOOL TEMPLATE
 A tool is something the agent can call during a turn. Reference for authoring
 one; not imported by the running system.
 
-Read SDK.md first — it covers the Request surface, the return idiom, and what
+Read docs/SDK.md first — it covers the Request surface, the return idiom, and what
 the validator rejects. Read sandbox/guest/bases.py for every attribute a tool
 can declare. This file covers only what is specific to tools and cannot be
 guessed from either.
@@ -132,7 +132,7 @@ class RecentNotes(BaseTool):
     def run(self, sdk, limit=10):
         """Query the current user's conversations, newest first."""
         # my_conversations is expanded by the kernel to this user's rows only.
-        # Querying the base table directly is refused — see SDK.md.
+        # Querying the base table directly is refused — see docs/SDK.md.
         rows = sdk.db.query(
             "SELECT title, updated_at FROM my_conversations "
             "ORDER BY updated_at DESC LIMIT ?",

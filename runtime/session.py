@@ -14,6 +14,7 @@ on its own:
 from __future__ import annotations
 
 
+import contextlib
 import threading
 from dataclasses import dataclass, field
 from typing import Any
@@ -129,6 +130,40 @@ class RuntimeSession:
     has_compaction_checkpoint: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
+
+    @contextlib.contextmanager
+    def unlocked(self):
+        """Fully release this thread's hold on ``lock`` for the duration.
+
+        Installed on the session's :class:`ConversationState` so a command or
+        tool *body* runs outside the lock that ``handle_action`` holds around
+        dispatch, exactly as an agent turn already does. A body can block
+        waiting for the user — an approval dialog, an interactive tool — and
+        the answer arrives as a second action on another thread, which needs
+        this same lock. Holding it through the call deadlocks that round trip;
+        ``/packages install`` froze the whole app on precisely that cycle.
+
+        ``lock`` is an RLock, so a nested ``handle_action`` on this thread may
+        hold it several times over. Releasing once would leave it held and fix
+        nothing, so the count is unwound and restored exactly.
+
+        Concurrency is still guarded while parked: ``_run`` puts the state
+        machine into a phase from ``BUSY_PHASES`` for the length of the call,
+        and the busy guard in ``handle_action`` reads that phase — so only the
+        ``answer_approval``/``cancel`` pair the dialog needs can get in.
+        """
+        depth = 0
+        while True:
+            try:
+                self.lock.release()
+            except RuntimeError:
+                break
+            depth += 1
+        try:
+            yield
+        finally:
+            for _ in range(depth):
+                self.lock.acquire()
 
     def to_marker(self) -> dict[str, Any]:
         """Handle to marker."""

@@ -22,7 +22,7 @@ It is the shippable unit; a container image copies this directory alone.
 Both runners share one gate, so policy, provenance and the ledger are
 identical whichever way code is run.
 
-See ``SECURITY_CONTRACT_APPENDIX.md`` for the full Request catalogue.
+See ``docs/SECURITY_CONTRACT_APPENDIX.md`` for the full Request catalogue.
 """
 
 import sys as _sys

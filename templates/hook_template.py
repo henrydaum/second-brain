@@ -4,7 +4,7 @@ HOOK TEMPLATE
 A hook stands at a doorway in the agent turn and gets a say in what happens.
 Reference for authoring one; not imported by the running system.
 
-Read SDK.md for the Request surface and sandbox/guest/hooks.py for the payload
+Read docs/SDK.md for the Request surface and sandbox/guest/hooks.py for the payload
 and verdict definitions. This file covers what is specific to hooks.
 
   Where they live:  inside a SERVICE — see templates/service_template.py

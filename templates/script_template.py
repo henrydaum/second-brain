@@ -9,7 +9,7 @@ Use a script for one-off computation, scratch work, analysis, or anything the
 kernel does not need to register and schedule. If nothing has to *find* your
 code by name, it does not need a plugin class.
 
-Read SDK.md for the Request surface. This file covers what is specific to
+Read docs/SDK.md for the Request surface. This file covers what is specific to
 scripts and helper files.
 
   Where it goes:  anywhere the caller can point at

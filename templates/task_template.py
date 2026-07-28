@@ -5,7 +5,7 @@ A task is background pipeline work: it runs over files as they appear, or when
 an event fires. Reference for authoring one; not imported by the running
 system.
 
-Read SDK.md for the Request surface and sandbox/guest/bases.py for every
+Read docs/SDK.md for the Request surface and sandbox/guest/bases.py for every
 attribute a task can declare. This file covers what is specific to tasks.
 
   Where it goes:  DATA_DIR/sandbox_plugins/tasks/task_<name>.py

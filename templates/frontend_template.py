@@ -4,7 +4,7 @@ FRONTEND TEMPLATE
 Reference for writing a frontend against the SDK. Not imported by the running
 system — it exists to be read.
 
-Read SDK.md for the Request surface and sandbox/guest/bases.py for every
+Read docs/SDK.md for the Request surface and sandbox/guest/bases.py for every
 attribute and method BaseFrontend defines. What follows is only what is
 specific to frontends, and most of it is not guessable.
 

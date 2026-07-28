@@ -116,7 +116,10 @@ class PluginWatcher:
             for _root, directory in helper_dirs():
                 if not directory.exists():
                     continue
-                for path in directory.glob("llm_*.py"):
+                # Every helper, not just backends. Seeding only ``llm_*``
+                # meant a parser or library had no baseline mtime, so its
+                # first save after startup looked like a brand-new file.
+                for path in directory.glob("*.py"):
                     try:
                         self._known_mtimes[str(path.resolve())] = path.stat().st_mtime
                     except OSError:
@@ -155,7 +158,8 @@ class PluginWatcher:
             error = f"Plugin file does not exist: {path}"
             self._notify(f"✕ Plugin registration failed: {path.name}\n{error}")
             return {"ok": False, "error": error}
-        if self._is_llm_backend(path):
+        helper = self._helper_kind(path)
+        if helper == "llm":
             self._refresh_llm_backends()
             self._notify(
                 f"✓ Registered LLM backend{' edit' if edited else ''}: "
@@ -163,6 +167,26 @@ class PluginWatcher:
             )
             return {
                 "ok": True, "name": path.stem, "family": "llm_backend",
+                "path": str(path),
+            }
+        if helper == "parser":
+            self._refresh_parsers()
+            self._notify(
+                f"✓ Registered parser{' edit' if edited else ''}: {path.stem}"
+            )
+            return {
+                "ok": True, "name": path.stem, "family": "parser",
+                "path": str(path),
+            }
+        if helper == "library":
+            # Recognized and inert. A shared library under helpers/ is already
+            # imported by whatever uses it, so a restart is what applies the
+            # edit — that is not a failed plugin registration, and announcing
+            # it as one put a red ✕ in the user's chat for saving a file.
+            logger.info("Plugin watcher: helper library %s changed; a restart "
+                        "applies it", path.name)
+            return {
+                "ok": True, "name": path.stem, "family": "helper",
                 "path": str(path),
             }
         # A (re)load is a fresh start: forget any prior strikes/quarantine so a
@@ -210,11 +234,26 @@ class PluginWatcher:
     def unregister(self, raw_path) -> dict:
         """Unload everything registered from one recognized source file."""
         path = Path(raw_path).resolve()
-        if self._is_llm_backend(path):
+        helper = self._helper_kind(path)
+        if helper == "llm":
             self._refresh_llm_backends()
             self._notify(f"Deregistered LLM backend: {path.stem}")
             return {
                 "ok": True, "names": [path.stem], "family": "llm_backend",
+                "path": str(path),
+            }
+        if helper == "parser":
+            self._refresh_parsers()
+            self._notify(f"Deregistered parser: {path.stem}")
+            return {
+                "ok": True, "names": [path.stem], "family": "parser",
+                "path": str(path),
+            }
+        if helper == "library":
+            logger.info("Plugin watcher: helper library %s removed; a restart "
+                        "applies it", path.name)
+            return {
+                "ok": True, "names": [], "family": "helper",
                 "path": str(path),
             }
         info, err = plugin_info(path)
@@ -371,18 +410,53 @@ class PluginWatcher:
         except Exception:
             logger.exception("LLM backend rescan failed")
 
-    @staticmethod
-    def _is_llm_backend(path: Path) -> bool:
-        """Whether a changed helper is a sandboxed LLM backend."""
-        if path.suffix != ".py" or not path.stem.startswith("llm_"):
-            return False
+    def _refresh_parsers(self):
+        """Rescan parsers after a file changed.
+
+        The counterpart to ``_refresh_llm_backends``, and the same full
+        idempotent rebuild ``package_manager`` runs on install — the watcher
+        only ever did the LLM half, so editing a parser did nothing until
+        restart.
+        """
         try:
-            return any(
+            import parsing
+
+            parsing.discover()
+        except Exception:
+            logger.exception("parser rescan failed")
+
+    @staticmethod
+    def _helper_kind(path: Path) -> str | None:
+        """Classify a changed file in a ``helpers/`` tree root.
+
+        ``helpers/`` is the fourth tree root beside the five families, and
+        nothing in it is a plugin — no base class, no entry point, nothing
+        discovery registers. ``plugin_info`` only knows the families, so every
+        helper that was not an LLM backend came back as "not in a known plugin
+        folder": a warning plus a red failure notice in chat, for saving an
+        ordinary library file.
+
+        Returns ``"llm"``, ``"parser"``, ``"library"``, or ``None`` when the
+        path is not a top-level helper at all. Top-level only, matching
+        ``package_manager._is_rescannable_helper`` — a family-local
+        ``tools/helpers/x.py`` belongs to its plugin, not to this root.
+        """
+        if path.suffix != ".py":
+            return None
+        try:
+            in_root = any(
                 path.parent.resolve() == directory.resolve()
                 for _root, directory in helper_dirs()
             )
         except OSError:
-            return False
+            return None
+        if not in_root:
+            return None
+        if path.stem.startswith("llm_"):
+            return "llm"
+        if path.stem.startswith("parse_"):
+            return "parser"
+        return "library"
 
 
 # Load priority: services must register before the tasks that require them, so
@@ -435,7 +509,9 @@ class _PluginEventHandler(FileSystemEventHandler):
 
         def _priority(raw_path: str) -> int:
             path = Path(raw_path)
-            if self.watcher._is_llm_backend(path):
+            # Helpers load first: a parser or backend is what a plugin
+            # arriving in the same batch may be about to look for.
+            if self.watcher._helper_kind(path):
                 return _LOAD_PRIORITY["service"]
             info, err = plugin_info(path)
             return _LOAD_PRIORITY.get(info.plugin_type, len(_LOAD_PRIORITY)) if info and not err else len(_LOAD_PRIORITY)

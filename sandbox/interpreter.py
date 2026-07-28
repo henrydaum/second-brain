@@ -11,6 +11,11 @@ execution is not. A plugin's 30-second HTTP call is dispatched to a pool, so it
 never blocks anyone else's classification. Concurrency is cheap here;
 *granularity* is what costs, which is why the SDK offers batch forms.
 
+**Asking the user leaves the gate for the same reason, only more so.** A
+dialog is drawn by a frontend, and a frontend reaches the kernel only through
+Requests that arrive at this gate — so asking on the gate thread meant the
+question could never be shown and the answer could never be read.
+
 Cancellation works by starvation. A thread cannot be killed, but every effect
 must pass through this loop, so refusing to service a cancelled execution's
 Requests stops it doing anything at its very next Request.
@@ -96,6 +101,18 @@ class Interpreter:
         self._gate_queue: queue.Queue = queue.Queue()
         self._pool = ThreadPoolExecutor(max_workers=max_workers,
                                         thread_name_prefix="sandbox-exec")
+        # Asking a human is the slowest thing this system does, and it gets its
+        # own pool for two separate reasons. It is not the *gate*, because the
+        # gate is the single ordering point for every Request in the process —
+        # including the ones the frontend rendering the dialog has to make to
+        # print it and to read the answer. And it is not the *execution* pool,
+        # because a dialog that sits for the full DIALOG_TIMEOUT would occupy a
+        # worker that running plugins need. More than one worker so an
+        # unattended session's immediate refusal is never queued behind a
+        # foreground dialog nobody has answered yet.
+        self._approvals = ThreadPoolExecutor(
+            max_workers=max(2, max_workers),
+            thread_name_prefix="sandbox-approve")
         self._gate = threading.Thread(target=self._gate_loop, daemon=True,
                                       name="sandbox-gate")
         self._running = True
@@ -150,19 +167,65 @@ class Interpreter:
                 self._settle(execution, request, decision,
                              Result.refusal(decision.reason))
                 return
-            try:
-                allowed = self._approve(execution.chain, request, decision)
-            except Exception:
-                logger.exception("approval callback raised")
-                allowed = False
-            if not allowed:
-                self._settle(execution, request, decision,
-                             Result.refusal(decision.reason))
-                return
+            # Asking leaves the gate too, and for a sharper reason than slow
+            # work does. The approver renders a dialog through a frontend, and
+            # that frontend reaches the kernel only by making Requests of its
+            # own — which arrive *here*. Asking on this thread meant the dialog
+            # could never be drawn and the answer could never be read, so the
+            # REPL froze until the wait expired. It also let the approver block
+            # on a lock held by the very thread waiting for its answer.
+            self._approvals.submit(self._ask_then_execute,
+                                   execution, request, decision)
+            return
 
         # Execution leaves the gate immediately so slow work never blocks
         # classification for anyone else.
-        self._pool.submit(self._execute, execution, request, decision)
+        self._hand_to_pool(execution, request, decision)
+
+    def _hand_to_pool(self, execution: Execution, request: Request,
+                      decision: Decision):
+        """Give a permitted Request to the execution pool.
+
+        Guarded because shutdown closes that pool, and a Request that is never
+        answered is a thread waiting on ``inbox.get()`` for as long as the
+        process lives. Refusing is the one thing worse than executing and the
+        one thing better than hanging.
+        """
+        try:
+            self._pool.submit(self._execute, execution, request, decision)
+        except RuntimeError:
+            self._settle(execution, request, decision,
+                         Result.refusal("sandbox is shutting down"))
+
+    def _ask_then_execute(self, execution: Execution, request: Request,
+                          decision: Decision):
+        """Put one unsafe Request to the user, then run it or refuse it."""
+        # Re-checked because the wait for a worker is time the execution could
+        # have been cancelled in, and a cancelled execution is answered rather
+        # than serviced — the same rule the gate applies on the way in.
+        if execution.cancelled or not self._running:
+            execution.inbox.put(Result.refusal(
+                "execution cancelled" if execution.cancelled
+                else "sandbox is shutting down"))
+            return
+        try:
+            allowed = self._approve(execution.chain, request, decision)
+        except Exception:
+            logger.exception("approval callback raised")
+            allowed = False
+        if not allowed:
+            self._settle(execution, request, decision,
+                         Result.refusal(decision.reason))
+            return
+        # Shutdown may have begun while the dialog was up. The execution still
+        # has to be answered — an unanswered Request is a thread blocked for
+        # the life of the process — but it does not get to act on a yes given
+        # to a sandbox that is already going away.
+        if not self._running:
+            self._settle(execution, request, decision,
+                         Result.refusal("sandbox is shutting down"))
+            return
+        self._hand_to_pool(execution, request, decision)
 
     def _execute(self, execution: Execution, request: Request,
                  decision: Decision):
@@ -250,6 +313,12 @@ class Interpreter:
         self._gate_queue.put(None)
         if self._gate is not threading.current_thread():
             self._gate.join()
+        # Approvals close before the execution pool because an approved
+        # Request is submitted *to* that pool from an approval worker. Neither
+        # waits: a dialog nobody answered would otherwise hold shutdown open
+        # for the full DIALOG_TIMEOUT. ``_running`` is already False, so a
+        # worker coming back from a dialog refuses instead of executing.
+        self._approvals.shutdown(wait=False)
         self._pool.shutdown(wait=False)
 
 

@@ -420,6 +420,10 @@ Second Brain/
 ├── attachments/
 ├── config/
 ├── events/
+├── docs/
+│   ├── SDK.md                      # The sandbox SDK reference
+│   ├── SECURITY_CONTRACT_APPENDIX.md # The Request catalogue
+│   └── MIGRATING_PLUGINS.md        # Converting a native plugin
 ├── templates/
 │   ├── command_template.py
 │   ├── frontend_template.py
@@ -445,7 +449,7 @@ Second Brain/
 
 ## Extension Authoring Guide
 
-New plugins are written against the sandbox SDK. Read `SDK.md` for the Request
+New plugins are written against the sandbox SDK. Read `docs/SDK.md` for the Request
 vocabulary and the return idiom, `sandbox/guest/bases.py` for what each family
 may declare, and then the template for what is specific to that family:
 
@@ -457,7 +461,7 @@ may declare, and then the template for what is specific to that family:
 - `templates/frontend_template.py`
 - `templates/hook_template.py`
 
-`MIGRATING_PLUGINS.md` covers converting an existing native plugin.
+`docs/MIGRATING_PLUGINS.md` covers converting an existing native plugin.
 
 Authoring rules:
 

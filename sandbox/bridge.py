@@ -467,11 +467,19 @@ def _drive_polls(
     max_failures: int,
     done=None,
 ):
-    """Drive one resident plugin's kernel-owned poll loop."""
+    """Drive one resident plugin's kernel-owned poll loop.
+
+    Returns whether the loop ended because it was asked to. A box that dies
+    under the loop used to end it in complete silence — the ``while``
+    condition simply went false — which is indistinguishable from a clean
+    stop and was how a starved REPL disappeared without a word.
+    """
     failures = 0
-    while box.alive and not stopping.is_set() and not (
-        callable(done) and done()
-    ):
+    while not stopping.is_set() and not (callable(done) and done()):
+        if not box.alive:
+            logger.error("%s %s stopped: its box is no longer running",
+                         family, name)
+            return False
         outcome = box.call("poll")
         if outcome.ok:
             failures = 0
@@ -495,8 +503,9 @@ def _drive_polls(
                 family,
                 name,
             )
-            break
+            return False
         stopping.wait(interval)
+    return True
 
 
 def _adapt_service(
@@ -780,7 +789,7 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
             except Exception:
                 logger.exception("frontend %s restore_last_active failed", name)
 
-        _drive_polls(
+        asked = _drive_polls(
             family="frontend",
             name=name,
             box=box,
@@ -789,6 +798,18 @@ def _adapt_frontend(path, entry: str, base, declarations: dict, box_name: str):
             max_failures=max_failures,
             done=self._done,
         )
+        if not asked:
+            # The guest cannot say this — its box is the thing that died — so
+            # the host says it, on the console it already owns. Without this a
+            # dead console frontend is a terminal that echoes nothing and
+            # explains nothing, which is exactly how the deadlock presented.
+            logger.error("frontend %s died; it is no longer accepting input",
+                         name)
+            if wants_console:
+                from .console import CONSOLE
+                CONSOLE.write(
+                    f"\n[frontend {name} stopped: see app.log. Restart the "
+                    f"app to recover.]")
 
         self.stop()
 

@@ -105,6 +105,17 @@ base class, no entry point, nothing discovery registers. `helpers/` is a
 fourth tree root beside the five families (`plugin_paths.helper_dirs()`,
 `package_manager.TREE_ROOTS`), and files there carry no name prefix.
 
+The **watcher** classifies a changed helper by stem rather than asking
+`plugin_info`, which only knows the five families and answered "not in a known
+plugin folder" for everything under `helpers/` that was not an `llm_*` backend
+— a warning plus a red failure notice in chat for saving an ordinary library
+file, and no parser rescan at all. `PluginWatcher._helper_kind` returns
+`llm` (rescan backends), `parser` (rescan `parsing.discover()`), `library`
+(recognized and inert — a restart applies it), or `None`. Top-level only,
+matching `package_manager._is_rescannable_helper`. Family-local helpers
+(`plugins/frontends/helpers/…`) are still not watched at all: observers are
+scheduled non-recursively, so editing one silently requires a restart.
+
 The kernel keeps only the dependency-light `parse_text` parser (UTF-8 / code /
 CSV / TSV, stdlib); shared text helpers are `parsing/utils.py`, re-exported
 from `parsing` so every parser reaches them by one absolute path regardless of
@@ -366,7 +377,7 @@ executes, and answers. The threat model is *carelessness, not malice* — an
 agent with good intentions and no judgement — which is why the validator is a
 linter rather than a proof, and why the subprocess (not the linter) is the
 actual boundary. Design rationale: `The Second Brain Security Contract` +
-`SECURITY_CONTRACT_APPENDIX.md`.
+`docs/SECURITY_CONTRACT_APPENDIX.md`.
 
 **Two halves, and the one rule.** `sandbox/guest/` runs *inside*: the Request
 vocabulary, the wire protocol, the SDK, the plugin base classes, the child
@@ -419,7 +430,14 @@ Starvation only reaches code that propagates failures; killing reaches the
 rest, and in-process there is no kill. A cancelled execution raises
 `Terminated` (a `BaseException`, so a bare `except Exception` cannot swallow
 it) rather than returning a failure — denial and cancellation are different
-things.
+things. **Starving a *resident* box ends it**: cancellation is per-execution
+and a resident box has one `Execution` for its whole life, so there is no way
+back — the starved worker is still alive, and reusing the box would put two
+threads on one execution. `PersistentBox` therefore marks itself dead on a
+call timeout, and a cancelled `Terminated` surfaces as a failure rather than
+`ok` with no data. It used to surface as success, which is how a starved REPL
+kept polling a dead box forever: `_drive_polls` read the success, reset its
+failure count, and the terminal accepted keystrokes and did nothing.
 
 **Provenance.** Every Request carries a chain rooted in what *caused* the work
 (`user`, `cron:nightly_index`, a subagent). The kernel owns it as its own call
@@ -428,6 +446,37 @@ approval dialog answerable, and it doubles as the cycle detector. Approval
 reuses the kernel's existing `vet_permission` doorway (enriched with
 `origin="request"` plus the typed `request`/`chain`/`decision`), then
 `skip_permissions`, then a dialog; unattended sessions refuse rather than block.
+
+**Asking never happens on the gate thread, and never under the session lock.**
+Both are the same lesson learned twice, from one freeze. The gate is the single
+ordering point for every Request in the process — *including* the ones the
+frontend makes to draw the dialog (`console.write`) and to read the answer
+(`console.read`) — so an approver called inline made its own question
+unanswerable. Unsafe Requests now leave the gate for a small dedicated approval
+pool (`Interpreter._ask_then_execute`), separate from the execution pool so a
+dialog waiting on a human cannot occupy a worker running plugins. Symmetrically,
+a command *body* runs outside `session.lock`: `handle_action` holds that lock
+across `_dispatch`, so a command that asked mid-run waited for an answer that
+could only arrive as a second action needing the same lock. `_CallableAction.
+_run` wraps only the handler in `cs.unlocked()` (`RuntimeSession.unlocked`,
+which unwinds and restores the RLock's full depth), exactly as the agent turn
+has always run outside it. What keeps a second action out meanwhile is the busy
+guard, not the lock — `calling_command`/`calling_tool` are in `BUSY_PHASES` —
+and `pop_phase` restores `previous_phase` so answering a mid-run approval does
+not drop the session back to the base phase while the call is still running.
+
+**Commands should still ask up front.** The mid-run path works now, but the
+*right* path for a command is the state machine's: declare `require_approval`
+or the per-action `approval_actions`/`approval_action_prefixes`, and the grant
+is stated and answered before the body runs — non-blocking, and it states the
+whole scope instead of interrupting half-done work with one Request in
+isolation. `/packages` declared `plugin.install` and no gate, which is what
+made it take the mid-run path and freeze;
+`tests/test_command_approval_declarations.py` now pins the invariant across
+every command tree, deriving the consequential set from `policy.ALWAYS_UNSAFE`
+rather than restating it. Note declarations are read by **AST**, so they must
+be literals — `approval_actions = tuple(ACTIONS)` or `(_DELETE,)` reads as
+nothing at all.
 
 **An approval is scoped to what the command declared.** `Chain.approved` is a
 frozenset of Request types — the command's own `requests` list, read by AST —
@@ -577,9 +626,9 @@ their own I/O; a plugin reading its *own* declared setting is not asked
 library is past the kernel's reach — accepted, documented, would need real OS
 containment to fix.
 
-**Docs:** `SDK.md` (hand this to an agent writing sandbox code — its examples
-are executed by `tests/test_sdk_docs.py`), `MIGRATING_PLUGINS.md` (the
-per-plugin procedure), `SECURITY_CONTRACT_APPENDIX.md` (the ~87-Request
+**Docs:** `docs/SDK.md` (hand this to an agent writing sandbox code — its examples
+are executed by `tests/test_sdk_docs.py`), `docs/MIGRATING_PLUGINS.md` (the
+per-plugin procedure), `docs/SECURITY_CONTRACT_APPENDIX.md` (the ~87-Request
 catalogue with policy inputs).
 
 **Migration tooling:** `sandbox.migrate.plan(path)` reports what converting a
@@ -711,7 +760,7 @@ conversation title on a persistent surface; fed by the
   `form(args, context)` and `run(args, context)`.
 - **Add a *sandboxed* tool** (the direction of travel): write a `BaseTool`
   subclass from `guest.bases` as `tool_*.py`. It receives `sdk`, not
-  `context`, and the bridge registers it like any other tool. See `SDK.md`.
+  `context`, and the bridge registers it like any other tool. See `docs/SDK.md`.
 - **Add a tool** (the pre-migration contract): write a `BaseTool` subclass as `tool_*.py` in the sandbox,
   installed package tree, or deliberately in [plugins/tools/](plugins/tools/)
   when it is true kernel behavior. Tools receive `SecondBrainContext` from

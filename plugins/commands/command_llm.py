@@ -30,6 +30,15 @@ class LlmCommand(BaseCommand):
     name = "llm"
     description = "Select an LLM profile, then edit, set default, or remove it"
     category = "System"
+    # Every one of the five actions is consequential — they open or close real
+    # processes and rewrite profile settings including API keys. The read-only
+    # path is `run()` with no profile named, which never reaches an action, so
+    # this stays a per-action predicate rather than a blanket
+    # ``require_approval`` that would gate merely looking at the list.
+    # Spelled out rather than derived from ACTIONS: declarations are read by
+    # AST, which sees literals and not a call.
+    approval_actions = ("edit", "set_default", "load", "unload", "remove")
+    approval_actor_id = "user"
     requests = [
         "config.read", "config.write", "plugin.list",
         "service.list", "service.load", "service.unload",

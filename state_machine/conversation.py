@@ -8,12 +8,19 @@ current phase decides what is legal, and multi-step flows live in `cache`.
 from __future__ import annotations
 
 
+import contextlib
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from state_machine.conversation_phases import BASE_PHASE, PHASE_AWAITING_INPUT
+
+
+@contextlib.contextmanager
+def _nothing_to_park():
+    """The default ``ConversationState.unlocked``: the driver holds no lock."""
+    yield
 
 Validator = Callable[[Any], tuple[bool, str | None]]
 Handler = Callable[["ConversationState", str, dict[str, Any]], Any]
@@ -256,6 +263,15 @@ class ConversationState:
         # Holds Attachment dataclasses produced by SendAttachment until the
         # next agent turn pulls them.
         self.pending_attachments: list[Any] = []
+        # A context manager the driver may install so that the *body* of a
+        # command or tool runs without whatever lock the driver holds around
+        # dispatch. A plugin body can block waiting for the user — an approval
+        # dialog, an interactive tool — and the answer arrives on another
+        # thread, which then needs the same lock. Holding it through the call
+        # deadlocks that round trip; the agent turn already runs outside the
+        # lock for exactly this reason. The default does nothing, so a state
+        # machine built without a runtime behind it behaves as before.
+        self.unlocked: Callable[[], Any] = _nothing_to_park
 
     @property
     def active(self) -> Participant:
@@ -294,9 +310,21 @@ class ConversationState:
         self.phase = frame.phase
 
     def pop_phase(self) -> PhaseFrame | None:
-        """Handle pop phase."""
+        """Handle pop phase.
+
+        Popping restores what pushing displaced. ``push_phase`` has always
+        recorded ``previous_phase`` for exactly this and it was never read
+        back, so an approval raised *during* a command dropped the session to
+        BASE_PHASE the moment it was answered — while the command was still
+        running. That reopened the busy guard mid-call and let a second action
+        in. Falling back to BASE_PHASE only when nothing was recorded keeps the
+        common case (a form pushed from the base phase) identical.
+        """
         frame = self.cache.setdefault("phases", []).pop() if self.cache.setdefault("phases", []) else None
-        self.phase = self.frame.phase if self.frame else BASE_PHASE
+        if self.frame:
+            self.phase = self.frame.phase
+        else:
+            self.phase = frame.previous_phase if frame else BASE_PHASE
         return frame
 
     def reset_phase(self) -> None:

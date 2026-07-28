@@ -8,7 +8,7 @@ Everything that touches disk, network, clock, or process is a Request.
 Everything else belongs in the SDK and never reaches the kernel.
 
 The catalogue below is the complete list of what any plugin can ever do, and
-is documented family by family in ``SECURITY_CONTRACT_APPENDIX.md``.
+is documented family by family in ``docs/SECURITY_CONTRACT_APPENDIX.md``.
 """
 
 from __future__ import annotations

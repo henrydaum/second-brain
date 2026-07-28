@@ -102,6 +102,13 @@ class SetupCommand(BaseCommand):
     name = "setup"
     description = "Onboarding: install a starter bundle, then configure an LLM and Telegram"
     category = "System"
+    # No per-action split is available — the wizard has no ``action``
+    # argument, and every route through it installs packages or writes
+    # settings. So it asks once, at the door, naming the whole grant. That is
+    # also the honest shape for onboarding: the user is being told what the
+    # wizard is about to do before it starts, not interrupted halfway.
+    require_approval = True
+    approval_actor_id = "user"
     requests = [
         "plugin.list", "plugin.install", "config.write",
         "paths.get", "env.read", "net.http",

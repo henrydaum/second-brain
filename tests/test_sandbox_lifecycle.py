@@ -228,8 +228,16 @@ def test_stopping_twice_is_harmless(interp, boxes, isolated):
     assert box.stop().data is False
 
 
-def test_a_hung_call_is_starved_and_the_box_survives_in_process(interp, boxes):
-    """Tier two, in-process: no kill available, so starve the call."""
+def test_a_hung_call_starves_and_ends_the_in_process_box(interp, boxes):
+    """Tier two, in-process: no kill available, so starve the call.
+
+    Starving ends the *box*, not just the call. Cancellation is per-execution
+    and a resident box has exactly one for its whole life, so there is no way
+    back: every later call would answer ``Terminated`` at once, and the
+    starved worker is still alive, so reusing the box would put two threads on
+    one execution. A box that reported itself healthy after this is how a
+    starved REPL went silently deaf instead of stopping.
+    """
     box = boxes(interp, SERVICE, "Counter", name="counter",
                 isolated=False, call_timeout=0.3)
     started = time.perf_counter()
@@ -237,6 +245,8 @@ def test_a_hung_call_is_starved_and_the_box_survives_in_process(interp, boxes):
     assert not result.ok
     assert "timed out" in result.error
     assert time.perf_counter() - started < 5.0
+    assert not box.alive
+    assert not box.call("bump").ok
 
 
 def test_a_hung_call_is_starved_in_a_subprocess(interp, boxes):

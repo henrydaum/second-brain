@@ -1,6 +1,6 @@
 """The SDK documentation, checked against the SDK.
 
-``SDK.md`` is written to be handed to an agent as the whole context for
+``docs/SDK.md`` is written to be handed to an agent as the whole context for
 writing sandbox code. If an example in it does not run, the agent writes code
 that does not run — so the examples are executed here rather than trusted.
 """
@@ -15,7 +15,7 @@ from guest.loader import unload_box
 from sandbox import Sandbox
 from sandbox.validator import validate
 
-DOC = Path(__file__).resolve().parents[1] / "SDK.md"
+DOC = Path(__file__).resolve().parents[1] / "docs/SDK.md"
 
 
 @pytest.fixture
@@ -155,7 +155,7 @@ def test_the_left_column_really_is_rejected(snippet):
     assert not report.ok, f"{snippet} was allowed"
 
 
-# Stdlib that opens a file the plugin names. SDK.md says these are disclaimed
+# Stdlib that opens a file the plugin names. docs/SDK.md says these are disclaimed
 # rather than refused, so "not an error" and "not silently fine" both matter.
 DISCLAIMED = ["import sqlite3", "import zipfile", "import tarfile"]
 
@@ -199,7 +199,7 @@ def test_every_documented_namespace_exists():
     named = set(re.findall(r"\bsdk\.([a-z_]+)\.", text))
     sdk = SDK(None)
     for namespace in named:
-        assert hasattr(sdk, namespace), f"SDK.md documents missing sdk.{namespace}"
+        assert hasattr(sdk, namespace), f"docs/SDK.md documents missing sdk.{namespace}"
 
 
 def test_every_documented_method_exists():
@@ -213,4 +213,4 @@ def test_every_documented_method_exists():
         target = getattr(sdk, namespace, None)
         assert target is not None, f"no sdk.{namespace}"
         assert hasattr(target, method), \
-            f"SDK.md documents missing sdk.{namespace}.{method}()"
+            f"docs/SDK.md documents missing sdk.{namespace}.{method}()"

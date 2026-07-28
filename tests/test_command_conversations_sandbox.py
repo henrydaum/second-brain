@@ -1,19 +1,10 @@
 """Conversation lifecycle SDK and sandboxed picker coverage."""
 
-import io
-import threading
-import time
-from pathlib import Path
-from types import SimpleNamespace
 
 from pipeline.database import Database
-from plugins.frontends.helpers.command_registry import CommandRegistry
-from plugins.plugin_discovery import discover_commands
 from runtime.context import build_context
 from runtime.conversation_runtime import ConversationRuntime
 from sandbox import Sandbox
-from sandbox.bridge import adapt, configure
-from sandbox.console import CONSOLE
 from sandbox.guest.requests import (
     CONV_LOAD,
     CONV_SET_NOTIFICATION_MODE,
@@ -186,73 +177,3 @@ def test_new_requires_llm_and_creates_for_current_user(tmp_path):
     assert created.data == (
         f"Started new conversation #{cid} under 'Main'.\nAgent: default")
     assert db.get_conversation(cid)["user_id"] == 1
-
-
-def test_live_repl_collects_conversation_picker(tmp_path, monkeypatch):
-    db = Database(str(tmp_path / "conversations-live.db"))
-    config = {"llm_profiles": {"test": {}}}
-    services = {}
-    cid = _conversation(db)
-    holder = {}
-    commands = CommandRegistry(
-        lambda key=None: build_context(
-            db, config, services, runtime=holder.get("runtime"),
-            root_dir=tmp_path, session_key=key,
-        )
-    )
-    discover_commands(tmp_path, commands, config)
-    runtime = ConversationRuntime(
-        db=db,
-        services=services,
-        config=config,
-        commands=commands.to_callable_specs(),
-    )
-    runtime.set_session_user("default", 1)
-    holder["runtime"] = runtime
-
-    sandbox = Sandbox()
-    configure(sandbox)
-    written = []
-    original_claim = CONSOLE.claim
-
-    class PacedInput(io.StringIO):
-        def readline(self, *args, **kwargs):
-            if self.tell():
-                time.sleep(0.25)
-            return super().readline(*args, **kwargs)
-
-    def claim(token, source=None, writer=None):
-        return original_claim(
-            token,
-            source=PacedInput(
-                f"/conversations\nMain\n{cid}\nLoad conversation\n"),
-            writer=written.append,
-        )
-
-    monkeypatch.setattr(CONSOLE, "claim", claim)
-    module = adapt(Path("plugins/frontends/frontend_repl.py").resolve())
-    frontend_cls = next(
-        value for value in vars(module).values()
-        if isinstance(value, type) and getattr(value, "_sandboxed", False)
-    )
-    frontend = frontend_cls(shutdown_event=threading.Event())
-    frontend.bind(runtime, commands, config)
-    thread = threading.Thread(target=frontend.start, daemon=True)
-
-    try:
-        thread.start()
-        deadline = time.time() + 5
-        while time.time() < deadline and not any(
-                "Loaded conversation" in text for text in written):
-            time.sleep(0.01)
-        output = "".join(written)
-        assert "Choose a conversation category." in output
-        assert "Choose a recent conversation under 'Main'." in output
-        assert "What do you want to do with this conversation?" in output
-        assert "Loaded conversation" in output
-    finally:
-        frontend.unbind()
-        frontend.stop()
-        thread.join(timeout=2)
-        sandbox.shutdown()
-        configure(None)

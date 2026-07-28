@@ -20,6 +20,14 @@ class ConversationsCommand(BaseCommand):
     name = "conversations"
     description = "Browse, switch, or manage conversations"
     category = "Conversation"
+    # Deleting is the only destructive action here; loading and relabelling
+    # are not, and asking about them would be the approval fatigue this design
+    # exists to avoid. Declared so the state machine asks before the body runs
+    # rather than leaving ``conv.delete`` to the execution-time approver.
+    # Spelled out rather than written as ``(_DELETE,)``: declarations are read
+    # by AST, which sees literals and not a name it would have to resolve.
+    approval_actions = ("Delete conversation",)
+    approval_actor_id = "user"
     requests = [
         "conv.list", "conv.read", "conv.load", "conv.delete",
         "conv.set_category", "conv.set_notification_mode", "session.get",

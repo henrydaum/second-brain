@@ -370,10 +370,18 @@ class _CallableAction(Action):
         if self.action_type == "call_command":
             self.cs.cache["_approved_command_execution"] = approved
         try:
-            value = (
-                spec.handler(self.cs, self.actor_id, dict(args))
-                if spec.handler else None
-            )
+            # The plugin body runs outside whatever lock the driver holds, and
+            # everything around it stays inside. A command that asks the user
+            # mid-run blocks here; the answer arrives through a second action
+            # on another thread, which needs the lock this one would otherwise
+            # still be sitting on. `calling_phase` is in BUSY_PHASES, so the
+            # driver's own busy guard — not the lock — is what keeps a second
+            # action out while this one runs.
+            with self.cs.unlocked():
+                value = (
+                    spec.handler(self.cs, self.actor_id, dict(args))
+                    if spec.handler else None
+                )
             if isinstance(value, ActionResult) and not value.ok:
                 raise value.error or self.error(ERROR_EXECUTION_FAILED, value.message or "Action failed.")
         except Exception as e:

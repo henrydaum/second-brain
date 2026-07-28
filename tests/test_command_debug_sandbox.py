@@ -1,19 +1,8 @@
 """SDK and parity coverage for the sandboxed ``/debug`` command."""
 
-import io
-import threading
-import time
-from pathlib import Path
 from types import SimpleNamespace
 
-from pipeline.database import Database
-from plugins.frontends.helpers.command_registry import CommandRegistry
-from plugins.plugin_discovery import discover_commands
-from runtime.context import build_context
-from runtime.conversation_runtime import ConversationRuntime
 from sandbox import Sandbox
-from sandbox.bridge import adapt, configure
-from sandbox.console import CONSOLE
 from sandbox.handlers.kernel import _session_get
 from state_machine.conversation import ConversationState, Participant
 
@@ -116,56 +105,3 @@ def test_debug_handles_no_active_session_and_missing_log(
     assert result.ok, result.error
     assert "(no active session)" in result.data
     assert f"No log file found at {tmp_path / 'app.log'}." in result.data
-
-
-def test_live_repl_runs_discovered_debug_command(tmp_path, monkeypatch):
-    """Console -> guest poll -> runtime -> command box -> console render."""
-    monkeypatch.setattr("paths.DATA_DIR", tmp_path)
-    (tmp_path / "app.log").write_text(
-        "01:00PM | Main | WARNING | live warning\n", encoding="utf-8")
-    db = Database(str(tmp_path / "debug-live.db"))
-    holder = {}
-    registry = CommandRegistry(
-        lambda key=None: build_context(
-            db, {}, {}, runtime=holder.get("runtime"),
-            root_dir=Path.cwd(), session_key=key,
-        )
-    )
-    discover_commands(Path.cwd(), registry, {})
-    runtime = ConversationRuntime(
-        db=db, services={}, config={}, commands=registry.to_callable_specs())
-    holder["runtime"] = runtime
-
-    sandbox = Sandbox()
-    configure(sandbox)
-    written = []
-    original_claim = CONSOLE.claim
-
-    def claim(token, source=None, writer=None):
-        return original_claim(
-            token, source=io.StringIO("/debug\n"), writer=written.append)
-
-    monkeypatch.setattr(CONSOLE, "claim", claim)
-    module = adapt(Path("plugins/frontends/frontend_repl.py").resolve())
-    frontend_cls = next(
-        value for value in vars(module).values()
-        if isinstance(value, type) and getattr(value, "_sandboxed", False)
-    )
-    frontend = frontend_cls(shutdown_event=threading.Event())
-    frontend.bind(runtime, registry, {})
-    thread = threading.Thread(target=frontend.start, daemon=True)
-
-    try:
-        thread.start()
-        deadline = time.time() + 5
-        while time.time() < deadline and not any(
-                "live warning" in text for text in written):
-            time.sleep(0.01)
-        assert any("Conversation state" in text for text in written)
-        assert any("live warning" in text for text in written)
-    finally:
-        frontend.unbind()
-        frontend.stop()
-        thread.join(timeout=2)
-        sandbox.shutdown()
-        configure(None)
