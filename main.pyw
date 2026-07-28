@@ -215,7 +215,6 @@ from pipeline.watcher import Watcher
 from pipeline.event_trigger import EventTrigger
 from agent.tool_registry import ToolRegistry
 from runtime.bootstrap import start_frontends
-from runtime.supervisor import supervisor
 from runtime.heartbeat import heartbeat
 from plugins.BaseService import should_autoload_service
 from plugins.plugin_discovery import discover_services, discover_tasks, discover_tools, get_plugin_settings
@@ -270,10 +269,7 @@ def main():
 	# --- 1c. Load existing plugin config into runtime config ---
 	config_manager.load_plugin_config_early(config)
 
-	# --- 1d. Bind the plugin supervisor to the live config ---
-	supervisor.configure(config)
-
-	# --- 1e. Start the stall-watchdog heartbeat ---
+	# --- 1d. Start the stall-watchdog heartbeat ---
 	# Always beats when healthy regardless of stall_timeout (the knob gates
 	# only launcher enforcement), so a config mismatch between the two
 	# processes can never kill a healthy child.
@@ -320,9 +316,6 @@ def main():
 	for svc_name in config.get("autoload_services", []):
 		if svc_name not in services:
 			logger.warning(f"Auto-load: unknown service '{svc_name}', skipping.")
-
-	# --- 3c. Start the memory watchdog (Phase-1 stopgap; no-op without psutil) ---
-	supervisor.start_memory_watchdog()
 
 	# --- 4. Initialize orchestrator ---
 	orchestrator = Orchestrator(database, config, services)
@@ -381,7 +374,6 @@ def main():
 		heartbeat.unregister_all()
 		logger.info("-----------------------------")
 		logger.info("Shutting down...")
-		supervisor.stop_memory_watchdog()
 		if plugin_watcher is not None:
 			plugin_watcher.stop()
 		event_trigger.stop()
