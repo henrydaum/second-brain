@@ -385,8 +385,8 @@ Everything that creates recurring unattended work is unsafe, for the same reason
 |---|---|---|---|
 | `event.emit(channel, payload)` | Publish | channel | safe |
 | `event.request(channel, payload, timeout)` | Blocking request/response | channel | safe |
-| `model.proceed(request)` | Place the call an escort is holding | token | safe |
-| `model.delta(text)` | Push streamed assistant text out of a backend | token | safe |
+| `llm.proceed(request)` | Place the call an escort is holding | token | safe |
+| `llm.delta(text)` | Push streamed assistant text out of a backend | token | safe |
 
 **Receiving is not a Request, and neither is standing at a doorway.** Both were
 once going to be (`event.subscribe`, `hook.register`) and both became
@@ -398,14 +398,14 @@ plugin holds and can forget to release. A declaration cannot leak, because the
 plugin never registered anything — the kernel did, and the kernel undoes it at
 unload. It is also visible at install time, which a runtime call never is.
 
-`model.proceed` is safe for an unusual reason: it is the only Request whose
+`llm.proceed` is safe for an unusual reason: it is the only Request whose
 handler is a **per-call closure**. The kernel parks an escort's `proceed` under
-a one-shot token for exactly the duration of one `model_call` visit. Code
+a one-shot token for exactly the duration of one `llm_call` visit. Code
 holding no token reaches no call, so the limit is reachability rather than a
 verdict, and "proceed" only ever means *place the call the kernel already
 decided to make*.
 
-`model.delta` is scoped the same way, one call further in: the kernel parks a
+`llm.delta` is scoped the same way, one call further in: the kernel parks a
 sink for the duration of one backend `chat` call. It is also the only Request
 sent **one-way** — a `notice` on the wire rather than a `request`, so the guest
 does not block for an answer. That is not a hole in the gate: a notice is still
@@ -422,7 +422,7 @@ and the guest's next Request raises `Terminated`, a `BaseException` that a bare
 `except Exception` cannot swallow.
 
 **Note the latency cost.** Hooks fire inside the agent turn's hot path, and
-`model_call` wraps every model call. A hook on a subprocessed service pays IPC
+`llm_call` wraps every model call. A hook on a subprocessed service pays IPC
 on each fire. This is the strongest argument for validated in-process execution
 being the default for services, with subprocess as opt-in. Bus deliveries have
 the same shape but a worse failure mode: handlers run on the thread that
@@ -439,7 +439,7 @@ the same shape but a worse failure mode: handlers run on the thread that
 | `frontend.pending(session_key)` | Whether an approval is still waiting | token | safe |
 | `frontend.resolve(session_key, value, request_id)` | Answer a pending approval | token, request_id | safe |
 
-These are the same shape as `model.proceed`: **scoped by reachability, not by a
+These are the same shape as `llm.proceed`: **scoped by reachability, not by a
 verdict.** When a frontend's box opens, its native adapter is parked under a
 token that is handed into the box; every one of these carries it back and
 resolves to *that adapter and no other*. A tool, a service, or a script that
@@ -521,7 +521,7 @@ id is enough to answer and only enough to answer.
 ### 15a. LLM backends
 
 A backend is not a plugin and makes no Request of its own beyond
-`fs.read_bytes` (for attachments) and `model.delta` (when streaming). It is
+`fs.read_bytes` (for attachments) and `llm.delta` (when streaming). It is
 listed here because of what it *holds*.
 
 **`request.api_key` is plaintext, and that is a deliberate exception.**

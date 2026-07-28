@@ -175,8 +175,8 @@ hooks identical — a sandboxed one could never hold a live model anyway.
 
 **Streaming inverted, and lost a feature on purpose.** `on_delta` was a live
 callback whose *return value* aborted the stream; neither half crosses a
-boundary. Text now goes out through `sdk.model.delta` — token-scoped like
-`model.proceed`, and sent as a one-way `notice` on the wire (still classified
+boundary. Text now goes out through `sdk.llm.delta` — token-scoped like
+`llm.proceed`, and sent as a one-way `notice` on the wire (still classified
 and recorded, just not awaited), because a reply per token would make streaming
 from a subprocess slower than not streaming. The abort boolean is simply gone:
 stopping is *cancellation*, which the kernel already owns, and a cancelled
@@ -256,7 +256,7 @@ the difference between a microkernel and a pile of assumptions:
   synchronous service call from the conversation loop, so the kernel does not
   route a blocking request through the event task queue. Its trigger lives in
   the loop's own **compaction layer** (`_compaction_layer`), a kernel escort
-  always stacked inside registered `model_call` escorts (onion: registered
+  always stacked inside registered `llm_call` escorts (onion: registered
   escorts → context guard → empty-response nudge → backend) — context safety
   is hook-shaped but never registry-dependent. Reactive overflow retries
   rebuild the prompt from compacted history and re-enter the inner onion, so
@@ -278,7 +278,7 @@ the difference between a microkernel and a pile of assumptions:
 The kernel's flight recorder: an append-only `action_ledger` table
 (`pipeline/database.py`) recording **every action the system takes**, so
 unattended operation is auditable and anything is reconstructable after the
-fact. Three origins:
+fact. Four origins:
 
 - `user_enact` — written at the labeled enact site in
   `ConversationRuntime._dispatch`.
@@ -290,6 +290,16 @@ fact. Three origins:
   `package_manager` — the seed of future versioning), `config_save`
   (changed key **names** only, never values), and conversation lifecycle
   ops including **refused** cross-user attempts (`ok=0, access_denied`).
+- `sandbox` — every effect a plugin performs, written by the sink
+  `runtime/ledger.sandbox_sink` builds and `main.pyw` hands to
+  `Sandbox.bind_ledger`. Nothing wired that sink until recently, so the
+  flight recorder was blind to exactly the code it most needed to watch.
+  Rows carry the provenance chain in `data_json.chain`, which is the reason
+  it is worth reading: `cron:nightly -> task_index -> service_web` says what
+  a bare Request type cannot. **Reads are dropped** at the sink
+  (`requests.READ_ONLY`) or a polling frontend would write twenty
+  `console.read` rows a second forever; anything refused is kept regardless
+  of type, since a denied read is a real event.
 
 Failure policy: ledger writes are best-effort at every layer
 (`db.record_action` swallows + logs; `runtime/ledger.py` helpers tolerate
@@ -424,6 +434,25 @@ rather than an exception to it: writing a file changes what the system can
 anybody else's, and it inherits nothing from having been written without a
 dialog. The grant stops at that tree.
 
+**A deadline measures guest execution, not wall clock** (`sandbox/watchdog.py`).
+A box that has made a Request is not stuck — it is waiting for something the
+kernel itself started, and the kernel may take as long as that takes. Charging
+it anyway killed every legitimate slow call at thirty seconds: an escort
+placing a model call, a service inside `sdk.ui.ask`, anything reaching
+`proc.run`. So `Execution.running_for` is elapsed time minus time blocked on
+the kernel, and a box is overdue only on *that*.
+
+The subtraction is of **blocked time**, not "time since the guest last did
+something" — the two look equivalent and are not. A runaway spinning on
+`while True: sdk.fs.list(".")` is never idle for more than a millisecond, so
+the second reading would make it immortal, which is the exact case a deadline
+exists for. Subtracting blocked time takes one ninety-second wait off in full
+and a thousand short ones off to nearly nothing. A `HARD_CEILING` on wall clock
+backs it up, since a runaway can otherwise hide inside long Requests. One
+shared watchdog thread enforces this for every box, which also retired the
+per-call `threading.Timer` — at a 50 ms frontend poll that was twenty timer
+threads a second for the life of the process.
+
 **Ending code is the kernel's decision**, escalating ask → starve → kill.
 Starvation only reaches code that propagates failures; killing reaches the
 rest, and in-process there is no kill. A cancelled execution raises
@@ -445,6 +474,42 @@ approval dialog answerable, and it doubles as the cycle detector. Approval
 reuses the kernel's existing `vet_permission` doorway (enriched with
 `origin="request"` plus the typed `request`/`chain`/`decision`), then
 `skip_permissions`, then a dialog; unattended sessions refuse rather than block.
+
+**The chain only became a stack once it could survive re-entry**
+(`sandbox/provenance.py`). `Chain.push` was called at the outermost run and
+nowhere else, so every chain was one link deep: a tool reached through
+`tool.call` started a *fresh* chain rooted at whatever caused the outer call,
+with no memory of its caller. Three things rested on that and none of them
+worked — `MAX_DEPTH` and the cycle detector were unreachable, the dialog had
+one link to show, and the SAFE classification of `tool.call`/`service.call`
+rests explicitly on "the callee's Requests are classified with the caller
+still in the chain", which was not happening.
+
+The re-entry happens inside a *handler*, whose signature is `(ctx, args)` —
+about a hundred of them, three of which care — so the caller is ambient rather
+than a parameter: `Interpreter._execute` marks the thread for the duration of
+the handler, and `bridge._forward` and `PersistentBox.call` adopt it. That
+works because the whole nested call is synchronous on one thread, which is to
+say the thread *is* the call stack. The `ContextVar` is set and reset with a
+token in a `finally`, since a pool worker does not reset its context between
+tasks and a leaked value would be believed by the next Request to land on it.
+
+A callee therefore **spends its caller's grant** and never re-derives one from
+its own `requests` declaration — that re-derivation was the widening
+`Chain.push` exists to prevent. A command's own manifest is read only when the
+command is the root of the call.
+
+**A handler answers from a context, and resident boxes had none.** `ctx` is the
+host-side `SecondBrainContext` — it never crosses into the guest; it is what
+*answers*. Tools and commands are handed one per call and frontends when their
+box opens, but a service is loaded at boot with no session to build one from,
+so every config, database and runtime Request a service made was answered from
+nothing. `config.read` returned `None` for every key — indistinguishable from
+unset — and `config.write` failed outright, which is how the timekeeper came to
+hold jobs it could not persist. The composition root now installs a factory
+(`runtime.context.kernel_context`, fed by `set_kernel_parts` as each piece is
+built) via `Sandbox.bind_context`, and a box called *from* a session adopts
+that caller's context so it reads the right user's rows.
 
 **Asking never happens on the gate thread, and never under the session lock.**
 Both are the same lesson learned twice, from one freeze. The gate is the single
@@ -530,7 +595,7 @@ crosses as a literal dict and is rebuilt into `FrontendCapabilities`.
 
 The inbound half — `sdk.frontend.submit_text/submit_attachment/submit_action/
 cancel/bind/attended/resolve` — is five Requests scoped the same way
-`model.proceed` is: **by reachability, not by a verdict.** The adapter is
+`llm.proceed` is: **by reachability, not by a verdict.** The adapter is
 parked at a *desk* under a token when its box opens, every Request carries it
 back, and it resolves to that adapter and no other. A tool importing the same
 namespace holds no token and is refused; the desk is cleared at stop, so a
@@ -584,11 +649,11 @@ is a call that ends), and channel names are **not** validated against
 `events/event_channels.py` — that file is explicit that plugins own their own
 channels, so an allowlist would refuse one plugin listening to another.
 
-`sdk.model.proceed` is the sole Request whose handler is a **per-call closure**
+`sdk.llm.proceed` is the sole Request whose handler is a **per-call closure**
 rather than a static table entry: an escort's `proceed` is parked host-side
 under a one-shot token for exactly the duration of one doorway visit. Code
 holding no token reaches no call, which is why the Request is refused outside
-a `model_call` hook rather than being ambient authority.
+an `llm_call` hook rather than being ambient authority.
 
 **The dual-mode loader is how migration works.** `plugins/plugin_discovery.py`
 → `_load_plugin_module` asks `sandbox.bridge.adapt()` first. A file importing
@@ -776,7 +841,7 @@ conversation title on a persistent surface; fed by the
   `shape_scope` (adjuster — inject/hide tools per session), `vet_permission`
   (verdict — allow/deny sensitive calls; asked at two stages, `"approval"`
   for sensitive commands and `"unattended_call"` for interactive tools in
-  unattended sessions, where the kernel's default on abstain is to refuse), `model_call` (**escort** —
+  unattended sessions, where the kernel's default on abstain is to refuse), `llm_call` (**escort** —
   `fn(ctx, request, proceed)` owns the round trip to the model: rewrite the
   `ModelRequest` (swap `request.llm`, edit messages, set `tool_choice` on
   backends with `supports_tool_choice`), place the call, inspect the
