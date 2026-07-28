@@ -101,10 +101,14 @@ def read_message(stream) -> dict | None:
     End of stream is not an error — it is how a child that exited cleanly, or
     was killed, reports itself. The caller decides what that means.
     """
-    line = stream.readline()
+    # Bounded, because an unbounded ``readline`` would buffer whatever the
+    # other side sent *before* the size check could refuse it — which made the
+    # cap above describe a protection it did not provide. One extra byte, so a
+    # message exactly at the limit still reads its terminator.
+    line = stream.readline(MAX_MESSAGE_BYTES + 1)
     if not line:
         return None
-    if len(line) > MAX_MESSAGE_BYTES:
+    if len(line) > MAX_MESSAGE_BYTES or not line.endswith(b"\n"):
         raise ProtocolError("oversized message")
     try:
         message = json.loads(line.decode("utf-8"))

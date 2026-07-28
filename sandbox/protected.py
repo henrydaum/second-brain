@@ -14,8 +14,14 @@ that these bytes must not cross regardless. Keeping it in the handlers means
 one place — ``fs.search`` matters as much as ``fs.read``, since it returns
 matching *lines* and ``pattern="secret_"`` would do the job by itself.
 
-Writes need nothing here: ``fs.write`` outside scratch is already UNSAFE, so
-editing these files asks the user like any other write.
+**Writes go through here too**, which they did not always. The old reasoning
+was that ``fs.write`` outside scratch is UNSAFE and therefore asked about — but
+an approval is *type-level*: a command declaring ``fs.write`` in ``requests``
+carries ``fs.write`` in ``chain.approved``, and every write it then makes is
+classified SAFE. One "yes" to a command is not a person agreeing to have their
+database overwritten, so these paths are refused outright rather than left to a
+dialog that may never be shown. The kernel edits both files through its own
+code and never through a Request, so nothing legitimate loses anything.
 
 The database is on the list for a different reason — it is reachable through
 ``db.query``, which scopes rows per user and refuses ``password_hash``. Reading

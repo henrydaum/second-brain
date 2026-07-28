@@ -31,6 +31,7 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from pathlib import Path
 
 from .approval import build_approver
@@ -46,6 +47,12 @@ from .runner_subprocess import run_in_subprocess
 from .validator import validate_file
 
 logger = logging.getLogger("Sandbox")
+
+# How long ``Run.wait()`` blocks when nobody named a limit. Comfortably past
+# the runner's own ceiling (``MAX_TIMEOUT_SECONDS``), so it never pre-empts a
+# run that is legitimately still going — it exists only to break the case
+# where the run has not begun because the pool is saturated.
+WAIT_CEILING = 660.0
 
 
 class Run:
@@ -85,12 +92,20 @@ class Run:
         return self._cancelled
 
     def wait(self, timeout: float | None = None) -> Result:
-        """Block for the result. Safe to call more than once."""
+        """Block for the result. Safe to call more than once.
+
+        The default is bounded rather than forever. The work itself is already
+        deadlined by its runner, so waiting past that means the run never
+        started — which happens when the background pool is full of runs
+        waiting on *this* pool, and an unbounded wait there is a hang with no
+        way out.
+        """
         if self._future is None:
             return Result.failure("run was never started")
+        deadline = WAIT_CEILING if timeout is None else timeout
         try:
-            return self._future.result(timeout=timeout)
-        except TimeoutError:
+            return self._future.result(timeout=deadline)
+        except FuturesTimeout:
             return Result.failure("still running", retryable=True)
         except Exception as exc:
             return Result.failure(f"run failed: {exc}")
@@ -118,7 +133,7 @@ class Sandbox:
 
     def __init__(self, interpreter: Interpreter | None = None, *,
                  context=None, approve=None, record=None, runtime=None,
-                 session_key=None, max_background: int = 4):
+                 session_key=None, max_background: int = 16):
         """
         context:
             The kernel's context object, passed to every handler — Second
@@ -141,6 +156,13 @@ class Sandbox:
         self._pool = ThreadPoolExecutor(max_workers=max_background,
                                         thread_name_prefix="sandbox-bg")
         self._boxes: dict[str, PersistentBox] = {}
+        # One lock per box name, held across the open so two callers cannot
+        # both spawn. Keyed by name rather than one global lock so opening a
+        # slow service does not block opening an unrelated one.
+        self._opening: dict[str, threading.Lock] = {}
+        #: box name -> the file it was opened from, so a name collision
+        #: across trees is caught rather than silently resolved.
+        self._source_of: dict[str, str] = {}
         self._runs: list[Run] = []
         self._lock = threading.Lock()
 
@@ -162,6 +184,35 @@ class Sandbox:
         if runtime is None or self.interpreter.can_ask:
             return
         self.interpreter.set_approver(build_approver(runtime, session_key))
+
+    def bind_context(self, factory) -> None:
+        """Wire the host object that *answers* Requests.
+
+        ``factory(session_key) -> context`` — Second Brain's
+        ``SecondBrainContext``, which lives on this side of the boundary and
+        never crosses. An ephemeral run is handed one per call, and a frontend
+        is handed one when its box opens, but a *service* has neither: it is
+        resident, it opens before any session exists, and nothing was giving
+        it anything. Every config, database and runtime Request from a service
+        therefore failed, which is how the timekeeper came to hold jobs it
+        could not persist.
+
+        Injected rather than imported because the sandbox must stay ignorant
+        of ``runtime.*``; the composition root supplies it, exactly as it
+        supplies the approver.
+        """
+        self.interpreter.set_context_factory(factory)
+
+    def bind_ledger(self, record) -> None:
+        """Wire the flight recorder.
+
+        ``record(chain, request, decision, result)``. Without it every effect
+        a plugin performs is invisible to the action ledger, which is the one
+        place unattended work is supposed to be reconstructable from. Injected
+        for the same reason the context is: the sink writes to a kernel table
+        and the sandbox does not know what a database is.
+        """
+        self.interpreter.set_record(record)
 
     # ──────────────────────────────────────────────────────────────
     # Resolving what a file asked for.
@@ -206,6 +257,10 @@ class Sandbox:
             "memory_mb": spec.memory_mb or None,
             "extra_roots": self.dependency_roots(
                 source, report.declarations.get("dependencies_files")),
+            # Carried to the loader so the bytes that ran are the bytes that
+            # passed. Validation reads a path and execution opens it again;
+            # without this the two could disagree and nothing would notice.
+            "digest": report.digest,
         }
 
     def dependency_roots(self, source, declared) -> list:
@@ -295,10 +350,11 @@ class Sandbox:
                         box_root=str(Path(source).parent),
                         extra_roots=[str(p) for p in opts["extra_roots"]],
                         execution=execution, on_proc=run._attach_proc,
-                        method=method)
+                        method=method, digest=opts["digest"])
                 target = load_entry(source, entry, box_name=spec.name,
                                     method=method,
-                                    extra_roots=opts["extra_roots"])
+                                    extra_roots=opts["extra_roots"],
+                                    digest=opts["digest"])
                 return run_in_process(
                     self.interpreter, target, name=run_name, kwargs=kwargs,
                     timeout=opts["timeout"], execution=execution)
@@ -338,11 +394,36 @@ class Sandbox:
         report, spec, opts = self._prepare(source, isolated=isolated,
                                            timeout=call_timeout, name=name)
         box_name = opts["name"]
+        # One opener per name at a time. The check and the insert used to be
+        # under the lock with the *open* between them, so two callers could
+        # both miss, both spawn a process, and the second overwrite the first
+        # in ``_boxes`` — leaving a live box nothing held a handle to, which
+        # ``shutdown`` could never close. A per-name lock is enough and does
+        # not serialize opens of different boxes against each other.
         with self._lock:
-            existing = self._boxes.get(box_name)
-            if existing is not None and existing.alive:
-                return existing
+            opening = self._opening.setdefault(box_name, threading.Lock())
+        with opening:
+            with self._lock:
+                existing = self._boxes.get(box_name)
+                if existing is not None and existing.alive:
+                    # Box names are not namespaced by tree, so two files with
+                    # the same stem in different trees land here asking for
+                    # the same box. Handing back the other one would run the
+                    # wrong code under the right name; say so instead.
+                    if self._source_of.get(box_name) not in (None,
+                                                             str(source)):
+                        raise BoxError(
+                            f"box {box_name!r} is already open from "
+                            f"{self._source_of[box_name]}; two plugins cannot "
+                            f"share a box name across trees — rename one, or "
+                            f"declare box = \"...\" on it")
+                    return existing
+            return self._open_locked(source, entry, box_name, opts, chain,
+                                     start_timeout, manage_lifecycle)
 
+    def _open_locked(self, source, entry, box_name, opts, chain,
+                     start_timeout, manage_lifecycle) -> PersistentBox:
+        """Open one box, with this name's opener lock already held."""
         box = open_box(self.interpreter, source, entry, name=box_name,
                        isolated=opts["isolated"], chain=chain,
                        call_timeout=opts["timeout"],
@@ -350,9 +431,20 @@ class Sandbox:
                        box_root=str(Path(source).parent),
                        extra_roots=[str(p) for p in opts["extra_roots"]],
                        memory_mb=opts["memory_mb"],
-                       manage_lifecycle=manage_lifecycle)
+                       manage_lifecycle=manage_lifecycle,
+                       digest=opts["digest"])
         with self._lock:
+            stale = self._boxes.get(box_name)
             self._boxes[box_name] = box
+            self._source_of[box_name] = str(source)
+        # A dead box under this name still owns a process or a thread until
+        # somebody closes it. Replacing the handle without stopping it is how
+        # an orphan outlives its own registry entry.
+        if stale is not None and stale is not box:
+            try:
+                stale.stop()
+            except Exception:
+                logger.exception("could not stop the box %s replaced", box_name)
         return box
 
     def box(self, name: str) -> PersistentBox | None:
@@ -368,6 +460,7 @@ class Sandbox:
         """Stop one resident box."""
         with self._lock:
             box = self._boxes.pop(name, None)
+            self._source_of.pop(name, None)
         if box is None:
             return Result(data=False)
         outcome = box.stop()

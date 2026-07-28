@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -33,6 +34,19 @@ MAX_READ_BINARY = 32 * 1024 * 1024
 MAX_SEARCH_HITS = 500
 HTTP_TIMEOUT = 30.0
 PROC_TIMEOUT = 120.0
+
+# The only schemes ``net.http`` will open. ``urllib`` speaks several others,
+# and two of them make this Request a way around controls it sits beside:
+# ``file://`` reads any path — including the ones ``protected.py`` exists to
+# keep from crossing — and ``data:`` is not egress at all. Neither is what
+# anybody means by "make an HTTP request", and both were reachable because the
+# scheme was never looked at.
+#
+# This is sharper than it looks. ``net.http`` is UNSAFE and normally prompts,
+# but a command declaring it in ``requests`` puts it in ``chain.approved``, and
+# the policy function then returns SAFE — so ``file:///…/config.json`` returned
+# every API key in plaintext with no dialog at all.
+ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 
 def _fs_read(ctx, args: dict) -> Result:
@@ -80,11 +94,34 @@ def _fs_read_bytes(ctx, args: dict) -> Result:
         return Result.failure(f"read failed: {exc}", retryable=True)
 
 
+def _guard_write(*paths) -> Result | None:
+    """Refuse a write aimed at a file the kernel owns absolutely.
+
+    Reads have always consulted this list; writes relied on the approval
+    dialog instead, on the reasoning that a write outside scratch is UNSAFE
+    and therefore asked about. That reasoning has a hole in it: a grant is
+    *type-level*, so one "yes" to a command declaring ``fs.write`` covers every
+    write it makes, and clobbering ``config.json`` or the live database is not
+    something a person meant to authorise by approving a command.
+
+    The kernel edits these files through its own code, never through a
+    Request, so nothing legitimate is lost.
+    """
+    for raw in paths:
+        if not raw:
+            continue
+        if (why := reason_for(raw)):
+            return Result.refusal(f"{raw} is not writable: {why}")
+    return None
+
+
 def _fs_write_bytes(ctx, args: dict) -> Result:
     """Write raw bytes, supplied base64-encoded."""
     raw = args.get("path")
     if not raw:
         return Result.failure("fs.write_bytes requires a path")
+    if (refused := _guard_write(raw)) is not None:
+        return refused
     encoded = args.get("data")
     if not isinstance(encoded, str):
         return Result.failure("fs.write_bytes requires base64 string data")
@@ -110,6 +147,8 @@ def _fs_write(ctx, args: dict) -> Result:
     raw = args.get("path")
     if not raw:
         return Result.failure("fs.write requires a path")
+    if (refused := _guard_write(raw)) is not None:
+        return refused
     data = args.get("data")
     if not isinstance(data, str):
         return Result.failure("fs.write requires string data")
@@ -216,6 +255,8 @@ def _fs_delete(ctx, args: dict) -> Result:
     raw = args.get("path")
     if not raw:
         return Result.failure("fs.delete requires a path")
+    if (refused := _guard_write(raw)) is not None:
+        return refused
     path = Path(raw)
     try:
         if path.is_dir():
@@ -234,6 +275,10 @@ def _fs_move(ctx, args: dict) -> Result:
     src, dst = args.get("src"), args.get("dst")
     if not src or not dst:
         return Result.failure("fs.move requires src and dst")
+    # Both ends: moving the database away is as destructive as writing over
+    # it, and moving something *onto* it is the same act as a write.
+    if (refused := _guard_write(src, dst)) is not None:
+        return refused
     try:
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
         if args.get("copy"):
@@ -278,6 +323,14 @@ def _net_http(ctx, args: dict) -> Result:
 
     lookup = lookup_from(ctx)
     url = resolve(url, lookup)
+    # After substitution, so a handle cannot smuggle a scheme in, and before
+    # anything is opened.
+    scheme = urllib.parse.urlparse(url).scheme.lower()
+    if scheme not in ALLOWED_SCHEMES:
+        named = scheme or "no scheme"
+        return Result.refusal(
+            f"net.http speaks http and https, not {named}; "
+            f"read files with sdk.fs.read")
     headers = resolve(dict(args.get("headers") or {}), lookup)
     body = resolve(args.get("body"), lookup)
     method = (args.get("method") or "GET").upper()

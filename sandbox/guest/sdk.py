@@ -76,7 +76,7 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        FS_SEARCH, FS_TEMP, FS_WRITE, FS_WRITE_BYTES,
                        LEDGER_READ,
                        LEDGER_RECORD, NET_HTTP, PARSE_FILE, PARSE_MODALITY,
-                       MODEL_DELTA, MODEL_PROCEED, PATH_GET,
+                       LLM_DELTA, LLM_PROCEED, PATH_GET,
                        PLUGIN_DESCRIBE, PLUGIN_INSTALL, PLUGIN_LIST,
                        PLUGIN_REGISTER, PLUGIN_RELOAD, PLUGIN_UNREGISTER,
                        PLUGIN_UNINSTALL, PLUGIN_UPDATE, PROC_RUN,
@@ -529,12 +529,12 @@ class _Agent(_Namespace):
         return self._ask(AGENT_SCHEDULE, prompt=prompt, cron=cron)
 
 
-class _Model(_Namespace):
+class _LLM(_Namespace):
     """The call in flight.
 
     Both members are scoped to a call the kernel already decided to place, and
     neither means "make a model call". ``proceed`` is for an escort standing at
-    the ``model_call`` doorway; ``delta`` is for the backend actually placing
+    the ``llm_call`` doorway; ``delta`` is for the backend actually placing
     it. Outside those, there is no call and the Request is refused.
     """
 
@@ -552,7 +552,7 @@ class _Model(_Namespace):
         """
         if not text:
             return
-        self._sdk._notify(Request(MODEL_DELTA, {
+        self._sdk._notify(Request(LLM_DELTA, {
             "token": self._sdk._delta_token, "text": text}))
 
     def proceed(self, request=None):
@@ -568,7 +568,7 @@ class _Model(_Namespace):
         if request is not None:
             payload = {k: getattr(request, k)
                        for k in ModelRequest.__dataclass_fields__}
-        answer = self._ask(MODEL_PROCEED, token=self._sdk._hook_token,
+        answer = self._ask(LLM_PROCEED, token=self._sdk._hook_token,
                            request=payload)
         allowed = set(ModelResponse.__dataclass_fields__)
         return ModelResponse(**{k: v for k, v in dict(answer or {}).items()
@@ -1355,9 +1355,9 @@ class SDK:
         self.tools = _Tools(self)
         self.commands = _Commands(self)
         self.agent = _Agent(self)
-        self.model = _Model(self)
+        self.llm = _LLM(self)
         # Set by BasePlugin.__hook__ for the duration of one doorway visit, so
-        # ``model.proceed`` can name the call it is meant to place without the
+        # ``llm.proceed`` can name the call it is meant to place without the
         # author having to carry a token around.
         self._hook_token = ""
         # Set by BaseLLMBackend.__chat__ for the duration of one call, the same

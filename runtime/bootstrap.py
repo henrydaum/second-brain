@@ -17,7 +17,7 @@ from events.event_bus import bus
 from plugins.BaseCommand import BaseCommand
 from plugins.frontends.helpers.command_registry import CommandRegistry
 from plugins.plugin_discovery import discover_commands, discover_frontends, get_plugin_settings
-from runtime.context import build_context
+from runtime.context import build_context, set_kernel_parts
 from runtime.agent_scope import load_scope, scoped_registry
 from runtime.conversation_runtime import ConversationRuntime
 
@@ -243,6 +243,10 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
         get_sandbox().bind_runtime(runtime)
     except Exception:
         logger.exception("could not wire sandbox approval to the runtime")
+    # The last two pieces of the kernel context. Everything a resident service
+    # reaches through sdk.session / sdk.conv / sdk.commands hangs off these,
+    # and neither exists until here.
+    set_kernel_parts(runtime=runtime, command_registry=registry)
     # Tasks running through the orchestrator reach the runtime via
     # context.runtime.
     if scaffold.orchestrator is not None:

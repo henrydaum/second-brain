@@ -170,3 +170,51 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         current_tool_name=current_tool_name,
     )
     return ctx
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The kernel's own context, for code that belongs to no session.
+# ──────────────────────────────────────────────────────────────────────
+#
+# Handlers on the host side of the sandbox answer Requests *from* a context.
+# An ephemeral run is handed one per call and a frontend when its box opens,
+# but a resident service has neither: it is loaded at boot, it acts on its own
+# initiative, and there is no session to build one from. Without this it
+# answered from nothing — ``sdk.config.read`` returned None for every key and
+# ``sdk.config.write`` failed outright.
+#
+# It is a mutable holder rather than a value because boot order is fixed:
+# services load at main.pyw step 3, long before the orchestrator (step 4), the
+# tool registry (5b) or the runtime (bootstrap). The same problem the command
+# registry solves with a ``ref`` closure, solved the same way and in the place
+# that already owns context construction.
+
+_KERNEL_PARTS: dict = {}
+
+
+def set_kernel_parts(**parts) -> None:
+    """Record whatever the composition root has built so far.
+
+    ``None`` values are ignored, so a later call only ever adds: passing
+    ``runtime=None`` before there is a runtime cannot erase a real one.
+    """
+    _KERNEL_PARTS.update({k: v for k, v in parts.items() if v is not None})
+
+
+_POSITIONAL = ("db", "config", "services")
+
+
+def kernel_context(session_key: str | None = None) -> SecondBrainContext:
+    """A context for work that belongs to the kernel rather than a session.
+
+    Builds from whatever has been wired so far rather than requiring the full
+    set, since a service loading at step 3 must not fail because the tool
+    registry does not exist until 5b.
+    """
+    return build_context(
+        _KERNEL_PARTS.get("db"),
+        _KERNEL_PARTS.get("config") or {},
+        _KERNEL_PARTS.get("services") or {},
+        session_key=session_key,
+        **{k: v for k, v in _KERNEL_PARTS.items() if k not in _POSITIONAL},
+    )

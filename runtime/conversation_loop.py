@@ -627,7 +627,7 @@ class ConversationLoop:
         """Issue one model call through the escort chain.
 
         The request is materialized as a ``ModelRequest`` so escorts standing
-        at the ``model_call`` doorway can rewrite it (swap the brain, edit
+        at the ``llm_call`` doorway can rewrite it (swap the brain, edit
         messages, force a tool), place the call themselves, and inspect the
         response before the loop sees it. The onion, outermost first:
         registered escorts → the kernel's context guard (compaction) → the
@@ -648,7 +648,7 @@ class ConversationLoop:
         session = self._session()
         hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
         if hooks is not None and session is not None:
-            handler = hooks.wrap_model_call(session, self.runtime, handler)
+            handler = hooks.wrap_llm_call(session, self.runtime, handler)
         return handler(request)
 
     def _empty_response_layer(self, proceed):

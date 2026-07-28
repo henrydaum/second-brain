@@ -50,7 +50,8 @@ def run_in_subprocess(interpreter: Interpreter, module_path: str,
                       extra_roots: list | None = None,
                       root_dir: str | None = None,
                       execution: Execution | None = None,
-                      on_proc=None, method: str = "run") -> Result:
+                      on_proc=None, method: str = "run",
+                      digest: str = "") -> Result:
     """Run ``func_name`` from ``module_path`` in a child process.
 
     ``timeout`` and ``memory_mb`` are the plugin's *declared* values and are
@@ -97,6 +98,7 @@ def run_in_subprocess(interpreter: Interpreter, module_path: str,
             "extra_roots": list(extra_roots or []),
             "memory_mb": memory_mb,
             "cpu_seconds": int(deadline) + 1,
+            "digest": digest,
         })
     finally:
         timer.cancel()
@@ -151,7 +153,18 @@ def service_until(interpreter: Interpreter, execution: Execution, proc,
             return message
 
         if kind == protocol.REQUEST:
-            request = Request.from_dict(message["request"])
+            # A child naming a Request type that does not exist raises out of
+            # ``Request.from_dict``. Letting that escape left the box marked
+            # alive with the child still waiting for a RESULT that would never
+            # come — a wedge, from a typo. Answer it instead.
+            try:
+                request = Request.from_dict(message["request"])
+            except (KeyError, TypeError, ValueError) as exc:
+                if not send(proc, {"kind": protocol.RESULT,
+                                   "result": Result.failure(
+                                       f"unusable request: {exc}").to_dict()}):
+                    return None
+                continue
             # The same gate the in-process runner uses: one classification
             # path, one provenance stack, one ledger.
             result = interpreter.submit(execution, request)
@@ -161,8 +174,16 @@ def service_until(interpreter: Interpreter, execution: Execution, proc,
 
         elif kind == protocol.NOTICE:
             # Same gate, same provenance, same ledger — the only difference
-            # is that nothing is written back, because nobody is waiting.
-            interpreter.submit(execution, Request.from_dict(message["request"]))
+            # is that nothing is written back, because nobody is waiting. A
+            # malformed one is dropped for the same reason: there is no reply
+            # channel to report it down.
+            try:
+                notice = Request.from_dict(message["request"])
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("[%s] discarded an unusable notice: %s",
+                               execution.name, exc)
+                continue
+            interpreter.submit(execution, notice)
 
         elif kind == protocol.LOG:
             level = str(message.get("level", "info")).upper()

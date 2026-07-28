@@ -281,8 +281,26 @@ def main():
 	logger.info(f"Database ready: {config['db_path']} ({time.time() - t0:.2f}s)")
 
 	# --- 3. Initialize services ---
+	# The sandbox's host context is wired *first*. Handlers answer Requests
+	# from a SecondBrainContext, and a resident service has no session to
+	# build one from — so without this every config/db Request a service makes
+	# is answered from nothing, silently. Discovery loads services, so this has
+	# to be in place before the next line and not after it.
+	from runtime.context import kernel_context, set_kernel_parts
+	from runtime.ledger import sandbox_sink
+	set_kernel_parts(db=database, config=config, root_dir=_ROOT)
+	try:
+		from sandbox.bridge import get_sandbox
+		get_sandbox().bind_context(kernel_context)
+		# The flight recorder. Reads are filtered out at the sink or a
+		# polling frontend would write twenty rows a second forever.
+		get_sandbox().bind_ledger(sandbox_sink(database))
+	except Exception:
+		logger.exception("could not wire the sandbox host context")
+
 	t0 = time.time()
 	services = discover_services(_ROOT, config)
+	set_kernel_parts(services=services)
 	logger.info(f"Services discovered: {list(services.keys())} ({time.time() - t0:.2f}s)")
 
 	# --- 3a. Discover parsers. Kernel routing, not a service: nothing loads it,
@@ -319,6 +337,7 @@ def main():
 
 	# --- 4. Initialize orchestrator ---
 	orchestrator = Orchestrator(database, config, services)
+	set_kernel_parts(orchestrator=orchestrator)
 
 	# --- 5. Register tasks ---
 	t0 = time.time()
@@ -330,6 +349,10 @@ def main():
 	tool_registry = ToolRegistry(database, config, services)
 	tool_registry.orchestrator = orchestrator
 	orchestrator.tool_registry = tool_registry
+	# ``call_tool`` too: tool.call is classified ALWAYS_SAFE, so a service is
+	# meant to be able to reach a tool, and the handler refuses for want of
+	# the callable when nothing supplies one.
+	set_kernel_parts(tool_registry=tool_registry, call_tool=tool_registry.call)
 	discover_tools(_ROOT, tool_registry, config)
 	logger.info(f"Tools registered: {list(tool_registry.tools.keys())} ({time.time() - t0:.2f}s)")
 

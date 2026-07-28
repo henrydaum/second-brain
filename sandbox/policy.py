@@ -255,15 +255,15 @@ ALWAYS_SAFE = {
     # Safe because it widens nothing: the kernel handed this escort a call it
     # had already decided to place, and proceeding is placing that one. The
     # token is what limits it — code with no token reaches no call at all.
-    R.MODEL_PROCEED,
+    R.LLM_PROCEED,
     # Same reachability argument, one call further in: the sink is parked for
     # the duration of one ``chat`` call, so a backend can only push text into
     # the call it was asked to place. It is also write-only and one-way —
     # nothing comes back, so it cannot be used to read anything.
-    R.MODEL_DELTA,
+    R.LLM_DELTA,
     R.CRON_LIST, R.CRON_GET, R.CRON_ENABLE,
     R.EVENT_EMIT, R.EVENT_REQUEST,
-    # Safe for the same reason MODEL_PROCEED is: the limit is reachability,
+    # Safe for the same reason LLM_PROCEED is: the limit is reachability,
     # not a verdict. Each resolves to the calling frontend's *own* adapter
     # through a token parked when its box opened, so code that is not a loaded
     # frontend reaches nothing and is refused. Carrying a person's input into

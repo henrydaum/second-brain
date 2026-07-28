@@ -40,7 +40,7 @@ logger = logging.getLogger("Sandbox")
 #
 # The token is what makes this safe. It is unguessable, it lives only for the
 # duration of one doorway visit, and code holding no token cannot reach any
-# call — so ``model.proceed`` outside a ``model_call`` hook resolves to
+# call — so ``llm.proceed`` outside an ``llm_call`` hook resolves to
 # nothing and is refused, which is exactly right.
 # ──────────────────────────────────────────────────────────────────────
 
@@ -143,7 +143,7 @@ def project_payload(moment: str, payload) -> dict | None:
         # different act with its own Request (sdk.session.add_tool).
         return {"tools": sorted(getattr(payload, "tools", None) or {})}
 
-    if moment == "model_call":
+    if moment == "llm_call":
         return project_model_request(payload)
 
     return None
@@ -152,13 +152,19 @@ def project_payload(moment: str, payload) -> dict | None:
 def project_model_request(request) -> dict:
     """One outgoing model call as data.
 
-    ``llm`` becomes the backend's *name*. A live backend could not cross, and
-    a name is the better contract anyway: it is the same handle-not-the-thing
-    move as ``<secret:...>``, and swapping brains stays one assignment.
+    ``llm`` is the profile's *name*. A live backend could not cross, and a name
+    is the better contract anyway: it is the same handle-not-the-thing move as
+    ``<secret:...>``, and swapping brains stays one assignment.
+
+    It is read straight off the request because ``ModelRequest.llm`` already
+    *is* a name — see ``runtime/hooks.py``. This used to reach for
+    ``.model_name`` on it, which is an attribute a string does not have, so
+    every escort ever built was shown an empty model name. That dated from
+    before the LLM became kernel routing, when ``llm`` really did hold a
+    service object.
     """
-    llm = getattr(request, "llm", None)
     return {
-        "llm": str(getattr(llm, "model_name", "") or ""),
+        "llm": str(getattr(request, "llm", "") or ""),
         "messages": list(getattr(request, "messages", None) or []),
         "tools": list(getattr(request, "tools", None) or []),
         "tool_choice": getattr(request, "tool_choice", None),
@@ -179,8 +185,15 @@ def apply_model_request(request, changed: dict, runtime):
     """Fold an escort's rewrite back onto the live ModelRequest.
 
     Only the fields an escort is allowed to touch, and ``llm`` only when the
-    name resolves to a backend that is actually loaded — an escort naming a
-    brain that is not there should leave the call alone rather than break it.
+    name matches a configured profile — an escort naming a brain that does not
+    exist should leave the call alone rather than silently retarget it.
+
+    What is assigned is the **name**, not a brain. ``ModelRequest.llm`` is a
+    handle the loop resolves when it places the call
+    (``ConversationLoop._brain``), and putting an object there would work only
+    by accident. This looked profiles up in ``runtime.services``, which is
+    where backends lived before they became ``llm/`` routing — so it found
+    nothing, warned, and no sandboxed escort could ever swap a model.
     """
     if not isinstance(changed, dict):
         return request
@@ -189,15 +202,29 @@ def apply_model_request(request, changed: dict, runtime):
         if field in changed and changed[field] is not None:
             setattr(request, field, changed[field])
 
+    if "llm" not in changed:
+        return request
     wanted = str(changed.get("llm") or "")
-    current = str(getattr(getattr(request, "llm", None), "model_name", "") or "")
-    if wanted and wanted != current:
-        backend = (getattr(runtime, "services", None) or {}).get(wanted)
-        if backend is not None and getattr(backend, "loaded", False):
-            request.llm = backend
-        else:
-            logger.warning("escort asked for brain %r, which is not loaded; "
-                           "keeping %r", wanted, current)
+    current = str(getattr(request, "llm", "") or "")
+    if wanted == current:
+        return request
+    if not wanted:
+        # Clearing the name is meaningful: the loop reads empty as "this
+        # session's default", so an escort can hand the call back that way.
+        request.llm = ""
+        return request
+    try:
+        import llm as llm_registry
+
+        known = llm_registry.brain(wanted) is not None
+    except Exception:
+        logger.exception("could not check whether brain %r exists", wanted)
+        return request
+    if known:
+        request.llm = wanted
+    else:
+        logger.warning("escort asked for brain %r, which is not a configured "
+                       "profile; keeping %r", wanted, current or "the default")
     return request
 
 
@@ -286,7 +313,7 @@ def build_shim(service, moment: str, method: str, make_response=None):
     if moment not in MOMENTS:
         raise ValueError(f"unknown hook moment: {moment!r}")
 
-    if moment == "model_call":
+    if moment == "llm_call":
         return _build_escort(service, method, make_response)
 
     def shim(ctx, payload, *rest):
@@ -324,7 +351,7 @@ def _live_box(service):
 
 
 def _build_escort(service, method: str, make_response=None):
-    """Build the ``model_call`` escort, which holds a phone as well as a request.
+    """Build the ``llm_call`` escort, which holds a phone as well as a request.
 
     The escort is the one doorway where the hook decides *when* the kernel
     acts, not just whether. That means a callback going the other way, and a
@@ -345,7 +372,7 @@ def _build_escort(service, method: str, make_response=None):
         placed = {"response": None, "called": False}
 
         def dial(changed: dict | None = None):
-            """What ``sdk.model.proceed`` reaches. Rewrites, then calls."""
+            """What ``sdk.llm.proceed`` reaches. Rewrites, then calls."""
             apply_model_request(request, changed or {}, runtime)
             placed["response"] = proceed(request)
             placed["called"] = True
@@ -353,8 +380,8 @@ def _build_escort(service, method: str, make_response=None):
 
         token = _park(dial)
         try:
-            result = box.call("__hook__", moment="model_call", handler=method,
-                              ctx=project_context(ctx, "model_call"),
+            result = box.call("__hook__", moment="llm_call", handler=method,
+                              ctx=project_context(ctx, "llm_call"),
                               payload=project_model_request(request),
                               token=token)
         finally:
@@ -363,7 +390,7 @@ def _build_escort(service, method: str, make_response=None):
             _unpark(token)
 
         if not result.ok:
-            logger.warning("model_call escort %s.%s: %s",
+            logger.warning("llm_call escort %s.%s: %s",
                            getattr(service, "name", "?"), method, result.error)
             return placed["response"] if placed["called"] else proceed(request)
 
@@ -383,7 +410,7 @@ def _build_escort(service, method: str, make_response=None):
 
         return placed["response"] if placed["called"] else proceed(request)
 
-    escort.__name__ = f"sandboxed_model_call_{method}"
+    escort.__name__ = f"sandboxed_llm_call_{method}"
     escort.__doc__ = (f"{getattr(service, 'name', '?')}.{method} escorting the "
                       f"model call.")
     return escort

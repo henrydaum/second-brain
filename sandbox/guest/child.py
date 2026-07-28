@@ -1,4 +1,4 @@
-"""The child half of a subprocessed sandbox — ``python -m sandbox.child``.
+"""The child half of a subprocessed sandbox — ``python -m guest.child``.
 
 Reads a ``start`` message, imports the target file, runs the function with an
 SDK bound to the pipe, and reports a ``done``. It holds no interpreter, no
@@ -192,7 +192,8 @@ def main() -> int:
                             root=start.get("root") or None,
                             extra_roots=start.get("extra_roots") or (),
                             bound=not start.get("persistent"),
-                            method=start.get("method") or "run")
+                            method=start.get("method") or "run",
+                            digest=start.get("digest") or "")
     except Exception as exc:
         return _fault(wire_out, exc)
 

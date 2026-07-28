@@ -124,7 +124,7 @@ def active_llm(runtime, session: RuntimeSession | None = None):
     """Return the LLM service instance that should drive this session.
 
     This is drive-time profile resolution only — the default brain. Plugins
-    that want a different brain stand at the ``model_call`` doorway and
+    that want a different brain stand at the ``llm_call`` doorway and
     rewrite ``request.llm`` per call (see runtime/hooks.py), so their choice
     is invisible here and to any non-drive caller (e.g. /debug).
     """

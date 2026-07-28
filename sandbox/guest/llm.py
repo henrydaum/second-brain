@@ -24,7 +24,7 @@ Three things cross, and all three are plain data:
 
 - :class:`LLMRequest` in,
 - :class:`LLMResponse` out,
-- text deltas, pushed one at a time through ``sdk.model.delta``.
+- text deltas, pushed one at a time through ``sdk.llm.delta``.
 
 Nothing else. In particular there is no ``on_delta`` callback: a live callable
 cannot cross a pipe, and the boolean it used to return — "stop consuming" —
@@ -152,7 +152,7 @@ class LLMRequest:
     # ``<secret:...>`` handle into. See docs/SECURITY_CONTRACT_APPENDIX.md.
     api_key: str = ""
     base_url: str = ""
-    # Whether the caller wants deltas pushed through ``sdk.model.delta``. A
+    # Whether the caller wants deltas pushed through ``sdk.llm.delta``. A
     # backend that cannot stream ignores it; the response shape is identical
     # either way, which is what lets the kernel decide per call.
     stream: bool = False
@@ -311,7 +311,7 @@ class BaseLLMBackend:
         """Answer one :class:`LLMRequest` with one :class:`LLMResponse`.
 
         When ``request.stream`` is set and this backend declared
-        ``supports_streaming``, push text through ``sdk.model.delta(text)`` as
+        ``supports_streaming``, push text through ``sdk.llm.delta(text)`` as
         it arrives *and* return the accumulated response — the deltas are for
         the user's eyes, the response is what the kernel records. Nothing
         needs to check whether the user cancelled: they cannot, without the

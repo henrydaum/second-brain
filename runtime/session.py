@@ -123,7 +123,7 @@ class RuntimeSession:
     # verdict from an end_turn hook; setting the flag directly remains
     # supported for tools that decide mid-turn. Ephemeral — deliberately NOT
     # persisted in to_marker(); a restart request must not survive a process
-    # restart. Note a per-call ``model_call`` escort can swap the brain
+    # restart. Note a per-call ``llm_call`` escort can swap the brain
     # without any restart at all — prefer that when a re-drive was only ever
     # a vehicle for swapping the LLM.
     restart_turn: bool = False

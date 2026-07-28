@@ -17,8 +17,19 @@ attribute access into an IPC round trip and make ordinary code unwritable.
 **Membership.** A file declares ``box = "name"`` (module level, or as a class
 attribute on a plugin). Undeclared files get a box of their own, named after
 the file — so grouping is a deliberate act rather than something a file drifts
-into. Box names are qualified by tree before they reach here, so joining a box
-can never mean joining a *more trusted* one.
+into.
+
+Box names are **not** qualified by tree, and this paragraph used to claim they
+were. What actually stops a sandbox file joining the kernel's box is that
+isolation is resolved *per file from its own path* before any grouping, and
+tightest-wins can only tighten (``sandbox/isolation.py`` sets that out) — so
+the security property holds without namespacing. What namespacing would have
+bought is collision avoidance, and that is a real gap rather than a security
+one: two files with the same stem in different trees resolve to the same box
+name, and therefore to the same synthetic package in ``sys.modules`` and the
+same key in the sandbox's registry of open boxes. The host refuses that
+collision when it sees it rather than silently serving one file's box to the
+other's caller.
 
 **Isolation is not declared.** How isolated a box runs is decided by the host
 from where its files live, and arrives here already resolved; a file saying

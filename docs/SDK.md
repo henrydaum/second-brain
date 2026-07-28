@@ -263,23 +263,23 @@ class Doorman(BaseService):
         return None                      # abstain
 ```
 
-Six moments: `turn_start`, `shape_scope`, `vet_permission`, `model_call`,
+Six moments: `turn_start`, `shape_scope`, `vet_permission`, `llm_call`,
 `end_turn`, `turn_finish`. Every one is `method(self, sdk, ctx, payload)`, and
 returning `None` abstains. Payloads and verdicts live in `guest.hooks`.
 
-The `model_call` escort holds the phone as well as the request:
+The `llm_call` escort holds the phone as well as the request:
 
 ```python
 def escort(self, sdk, ctx, request):
-    response = sdk.model.proceed(request)     # place the call
+    response = sdk.llm.proceed(request)     # place the call
     if not response.content.strip():
         request.messages += [{"role": "user", "content": "Answer."}]
-        response = sdk.model.proceed(request)  # go around again
+        response = sdk.llm.proceed(request)  # go around again
     return response
 ```
 
 `request.llm` is the backend's **name** — assign another loaded one to swap
-brains for that call. `sdk.model.proceed` works only inside a `model_call`
+brains for that call. `sdk.llm.proceed` works only inside an `llm_call`
 hook; anywhere else there is no call in flight and it is refused.
 
 A scope shaper is handed tool **names** and returns the ones to keep: it can
@@ -525,14 +525,14 @@ only if neither remembers who it was talking to. Keep in `start` what is truly
 per-process: the imported library, a connection pool.
 
 **Streaming pushes and returns.** When `request.stream` is set, call
-`sdk.model.delta(text)` as text arrives *and* return the accumulated response.
+`sdk.llm.delta(text)` as text arrives *and* return the accumulated response.
 The deltas are for the user's eyes; the response is what gets recorded.
 
 ```python
 pieces = []
 for chunk in self._client.stream(...):
     pieces.append(chunk.text)
-    sdk.model.delta(chunk.text)
+    sdk.llm.delta(chunk.text)
 return LLMResponse(content="".join(pieces))
 ```
 
@@ -567,8 +567,8 @@ sdk.cron.remove(name) / enable(name, enabled=True)
 sdk.events.emit(channel, payload)
 sdk.events.request(channel, payload, timeout=120.0)
 
-sdk.model.delta(text)      # LLM backends only, inside chat()
-sdk.model.proceed(request) # model_call escorts only
+sdk.llm.delta(text)      # LLM backends only, inside chat()
+sdk.llm.proceed(request) # llm_call escorts only
 
 sdk.tasks.enqueue(name, paths) / status(name, path) / output(name, path=None)
 sdk.tasks.list(details=False) / graph()

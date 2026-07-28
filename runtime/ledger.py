@@ -18,6 +18,13 @@ from typing import Any
 
 logger = logging.getLogger("Ledger")
 
+#: Its own origin rather than ``system``, because the useful ledger question
+#: is "what did plugin code do", and the guidance is to read the table
+#: targeted rather than linearly. Folding these in with config saves and
+#: package installs would make the one high-volume origin indistinguishable
+#: from the ones you go looking for.
+SANDBOX_ORIGIN = "sandbox"
+
 
 def _args_of(content: Any) -> Any:
     """Ledger-facing view of an action's content. Private plumbing keys
@@ -70,6 +77,58 @@ def record_enact(db, *, origin: str, session_key: str | None,
         )
     except Exception as e:
         logger.warning(f"Ledger enact record failed (ignored): {e}")
+
+
+def sandbox_sink(db):
+    """Build the ledger sink an :class:`~sandbox.interpreter.Interpreter` takes.
+
+    Returns ``callable(chain, request, decision, result)``. Without one the
+    sandbox records nothing at all, which left the flight recorder blind to
+    every effect a plugin performed — the one part of the system where
+    unattended operation most needs to be reconstructable after the fact.
+
+    **Reads are not recorded, effects and refusals always are.** A console
+    frontend issues a ``console.read`` Request every poll; at the 50 ms default
+    that is twenty rows a second, forever, and it would bury the rows worth
+    reading under about 1.7 million a day of nothing happening. The
+    ``READ_ONLY`` set already draws exactly this line and exists for exactly
+    this question. Anything the kernel had to *ask* about, and anything it
+    refused, is kept regardless of type — a denied read is a real event even
+    though the read itself would not have been.
+
+    Built here rather than in the sandbox because it is the sandbox's *origin*
+    on a kernel table; ``sandbox/`` stays ignorant of the database, and the
+    composition root hands this in like it hands in the approver.
+    """
+    from sandbox.guest.requests import READ_ONLY
+
+    def record(chain, request, decision, result) -> None:
+        """Append one serviced Request. Never raises; never blocks a turn."""
+        write = getattr(db, "record_action", None)
+        if write is None:
+            return
+        try:
+            ok = bool(getattr(result, "ok", False))
+            refused = bool(getattr(result, "denied", False))
+            if request.type in READ_ONLY and ok and decision.safe:
+                return
+            write(
+                origin=SANDBOX_ORIGIN,
+                action_type=request.type,
+                ok=ok,
+                name=chain.links[-1] if chain.links else chain.root,
+                actor_id=chain.root,
+                args=request.args,
+                error_code=("denied" if refused
+                            else None if ok else "failed"),
+                error_message=getattr(result, "error", None) or None,
+                data={"chain": chain.render(), "level": decision.level,
+                      "reason": decision.reason},
+            )
+        except Exception as exc:
+            logger.warning(f"Sandbox ledger record failed (ignored): {exc}")
+
+    return record
 
 
 def record_system(db, *, action_type: str, ok: bool, session_key: str | None = None,

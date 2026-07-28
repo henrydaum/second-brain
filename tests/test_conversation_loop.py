@@ -529,7 +529,7 @@ def test_queued_message_is_absorbed_mid_turn():
     assert any(m.get("content") == "wait, also do X" for m in llm.calls[1])
 
 
-def test_tool_can_stage_attachment_for_followup_model_call():
+def test_tool_can_stage_attachment_for_followup_llm_call():
     runtime = SimpleNamespace(sessions={}, hooks=HookRegistry())
     runtime.sessions["chat"] = SimpleNamespace(key="chat")
 
@@ -730,7 +730,7 @@ def test_overflow_retry_stays_on_the_escort_swapped_brain():
         request.llm = swapped
         return proceed(request)
 
-    runtime.hooks.add("model_call", escort)
+    runtime.hooks.add("llm_call", escort)
     cs = _agent_state()
     history = [
         {"role": "user", "content": "one"},
@@ -761,7 +761,7 @@ def test_proactive_compaction_measures_the_brain_that_took_the_call():
         request.llm = small
         return proceed(request)
 
-    runtime.hooks.add("model_call", escort)
+    runtime.hooks.add("llm_call", escort)
     cs = _agent_state()
     history = [
         {"role": "user", "content": "one"},

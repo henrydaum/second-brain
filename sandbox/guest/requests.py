@@ -99,10 +99,10 @@ AGENT_SPAWN = "agent.spawn"
 AGENT_SCHEDULE = "agent.schedule"
 
 # Placing the model call an escort was handed. Only meaningful inside a
-# ``model_call`` hook: it is the escort dialing the phone it holds, and the
+# ``llm_call`` hook: it is the escort dialing the phone it holds, and the
 # kernel resolves it to the very call this hook was invoked for.
-MODEL_PROCEED = "model.proceed"
-MODEL_DELTA = "model.delta"
+LLM_PROCEED = "llm.proceed"
+LLM_DELTA = "llm.delta"
 
 # ── scheduling ────────────────────────────────────────────────────────
 CRON_LIST = "cron.list"
@@ -180,7 +180,7 @@ ALL_TYPES = {
     PLUGIN_RELOAD, PLUGIN_INSTALL, PLUGIN_UNINSTALL, PLUGIN_UPDATE,
     SERVICE_LIST, SERVICE_CALL, SERVICE_LOAD, SERVICE_UNLOAD,
     TOOL_LIST, TOOL_CALL, COMMAND_LIST, COMMAND_CALL,
-    AGENT_COMPLETE, AGENT_SPAWN, AGENT_SCHEDULE, MODEL_PROCEED, MODEL_DELTA,
+    AGENT_COMPLETE, AGENT_SPAWN, AGENT_SCHEDULE, LLM_PROCEED, LLM_DELTA,
     CRON_LIST, CRON_GET, CRON_CREATE, CRON_UPDATE, CRON_REMOVE, CRON_ENABLE,
     EVENT_EMIT, EVENT_REQUEST,
     FRONTEND_SUBMIT, FRONTEND_CANCEL, FRONTEND_BIND, FRONTEND_ATTEND,

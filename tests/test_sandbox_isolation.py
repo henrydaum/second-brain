@@ -16,7 +16,7 @@ from sandbox.isolation import (INSTALLED, KERNEL, SANDBOX, UNKNOWN,
                                required_isolation, tree_of)
 from sandbox.policy import SAFE, UNSAFE, Chain, classify
 from sandbox.guest.requests import (FS_DELETE, FS_MOVE, FS_WRITE, Request)
-from sandbox.validator import DECLARATION_KEYS, validate_file
+from sandbox.validator import validate_file
 
 TOOL = '''\
 from guest.bases import BaseTool
@@ -75,9 +75,22 @@ def test_a_file_cannot_declare_its_way_out_of_a_subprocess(tmp_path,
     assert required_isolation(source, validate_file(source)) == SUBPROCESS
 
 
-def test_isolation_is_not_a_declaration_any_more():
-    """Reading it at all would be at best ignored, at worst believed."""
-    assert "isolation" not in DECLARATION_KEYS
+def test_isolation_is_not_a_declaration_any_more(tmp_path, monkeypatch):
+    """Reading it at all would be at best ignored, at worst believed.
+
+    Asserted against the collector rather than against a list of keys: the
+    collector takes every literal class attribute, so "not in the allowlist"
+    was never what kept ``isolation`` out — dropping it explicitly is.
+    """
+    tree = tmp_path / "sandbox_plugins"
+    monkeypatch.setattr("paths.SANDBOX_PLUGINS", tree)
+    source = _write(tree / "tools" / "tool_sample.py",
+                    'isolation = "in_process"')
+    report = validate_file(source)
+
+    assert "isolation" not in report.declarations
+    # And the author is told once, at the line, rather than left to wonder.
+    assert any("isolation" in f.message for f in report.findings)
     assert "isolation" not in validate_file(
         Path("plugins/commands/command_update.py")).declarations
 

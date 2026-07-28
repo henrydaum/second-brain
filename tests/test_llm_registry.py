@@ -37,7 +37,7 @@ class EchoBackend(BaseLLMBackend):
         last = request.messages[-1]["content"] if request.messages else ""
         if request.stream:
             for piece in str(last).split():
-                sdk.model.delta(piece + " ")
+                sdk.llm.delta(piece + " ")
         return LLMResponse(
             content=f"echo:{last}",
             prompt_tokens=len(request.messages),

@@ -19,7 +19,7 @@ Moment             Kind        What standing there means
                                a changed one.
 ``vet_permission`` verdict     The agent wants to run something sensitive; say
                                yes, say no, or stay silent.
-``model_call``     escort      Own the round trip to the model: rewrite the
+``llm_call``     escort      Own the round trip to the model: rewrite the
                                request, place the call yourself, inspect the
                                answer, and go around again if you don't like it.
 ``end_turn``       verdict     The doorman at the exit: the agent says "I'm
@@ -76,11 +76,11 @@ logger = logging.getLogger("Hooks")
 TURN_START = "turn_start"
 SHAPE_SCOPE = "shape_scope"
 VET_PERMISSION = "vet_permission"
-MODEL_CALL = "model_call"
+LLM_CALL = "llm_call"
 END_TURN = "end_turn"
 TURN_FINISH = "turn_finish"
 
-MOMENTS = (TURN_START, SHAPE_SCOPE, VET_PERMISSION, MODEL_CALL, END_TURN, TURN_FINISH)
+MOMENTS = (TURN_START, SHAPE_SCOPE, VET_PERMISSION, LLM_CALL, END_TURN, TURN_FINISH)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -370,7 +370,7 @@ class HookRegistry:
         if getattr(session, "staged_attachments", None):
             session.staged_attachments.clear()
 
-    def wrap_model_call(self, session, runtime, base: Callable[[ModelRequest], Any]) -> Callable[[ModelRequest], Any]:
+    def wrap_llm_call(self, session, runtime, base: Callable[[ModelRequest], Any]) -> Callable[[ModelRequest], Any]:
         """Build the escort onion around one model call.
 
         ``base`` is the innermost step — the actual backend call. Each
@@ -380,9 +380,9 @@ class HookRegistry:
         if it raised before dialing, the call proceeds as if the escort were
         not there.
         """
-        ctx = self._ctx(session, runtime, MODEL_CALL)
+        ctx = self._ctx(session, runtime, LLM_CALL)
         handler = base
-        for fn in reversed(self._hooks[MODEL_CALL]):
+        for fn in reversed(self._hooks[LLM_CALL]):
             handler = self._escort_layer(ctx, fn, handler)
         return handler
 

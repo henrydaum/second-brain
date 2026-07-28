@@ -255,7 +255,7 @@ class BaseService(BasePlugin):
                 f"but there is no such method")
         envelope = HookContext(**{k: v for k, v in dict(ctx or {}).items()
                                   if k in HookContext.__dataclass_fields__})
-        # An escort's ``sdk.model.proceed()`` has to name the call it is
+        # An escort's ``sdk.llm.proceed()`` has to name the call it is
         # placing. Carrying that on the sdk rather than on the payload keeps
         # it off the author's hands: a rewritten request still proceeds.
         sdk._hook_token = token

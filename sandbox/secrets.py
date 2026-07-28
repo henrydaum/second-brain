@@ -120,6 +120,22 @@ def redact_nested(name: str, value):
     return walk(value, [name])
 
 
+def resolvable(name: str) -> bool:
+    """Whether a handle naming this may be swapped for a real value.
+
+    A handle is meant to stand for something the kernel *gave* the guest: a
+    ``secret_*`` setting read back through ``config.read``, an environment
+    variable the name heuristic caught, or an encoded ``path_`` token this
+    module minted itself. Nothing checked that, so any name at all resolved —
+    guest code could write ``<secret:AWS_SECRET_ACCESS_KEY>`` into a header,
+    or ``<secret:db_path>`` into a URL, and the kernel would substitute a value
+    it had never handed over. Substitution now only reaches names that could
+    have been a handle in the first place.
+    """
+    return bool(name) and (name.startswith("path_")
+                           or is_secret(name, guess=True))
+
+
 def resolve(value, lookup):
     """Swap handles for real values, recursively, on the way out.
 
@@ -130,8 +146,11 @@ def resolve(value, lookup):
     """
     if isinstance(value, str):
         def _swap(match):
-            """Replace one handle if we know it."""
-            found = lookup(match.group(1))
+            """Replace one handle if we know it, and may hand it over."""
+            name = match.group(1)
+            if not resolvable(name):
+                return match.group(0)
+            found = lookup(name)
             return found if isinstance(found, str) else match.group(0)
         return _HANDLE.sub(_swap, value)
     if isinstance(value, list):

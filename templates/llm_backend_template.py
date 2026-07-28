@@ -46,7 +46,7 @@ dependencies_pip = ["some-provider-sdk"]
 # Loading a provider library is expensive and must happen once, not per call.
 lifetime = "persistent"
 
-# Whether ``sdk.model.delta`` works here. Declaring False is fine and costs
+# Whether ``sdk.llm.delta`` works here. Declaring False is fine and costs
 # nothing but the typing animation — the kernel simply never sets
 # ``request.stream``.
 supports_streaming = True
@@ -121,7 +121,7 @@ class SomeProviderBackend(BaseLLMBackend):
         what gets recorded in the conversation.
 
         Notice there is nothing here about the user cancelling. That is
-        deliberate: ``sdk.model.delta`` is one-way and answers nothing, so
+        deliberate: ``sdk.llm.delta`` is one-way and answers nothing, so
         stopping is not something you are told. If the user cancels, the
         kernel cancels this execution and your next Request raises
         ``Terminated`` — a ``BaseException``, so do not wrap this loop in a
@@ -136,7 +136,7 @@ class SomeProviderBackend(BaseLLMBackend):
                 tools=request.tools or None, **request.params):
             if chunk.text:
                 pieces.append(chunk.text)
-                sdk.model.delta(chunk.text)
+                sdk.llm.delta(chunk.text)
             for call in (chunk.tool_calls or []):
                 entry = tool_calls.setdefault(
                     call.index, {"id": None, "name": None, "arguments": ""})

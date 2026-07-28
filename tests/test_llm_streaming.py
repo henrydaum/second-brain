@@ -5,7 +5,7 @@ value* was the abort signal. Neither half can cross a boundary: a callable
 cannot be serialized, and answering a boolean per token would cost a round
 trip per token.
 
-Both are replaced by one idea. Text goes out through ``sdk.model.delta`` —
+Both are replaced by one idea. Text goes out through ``sdk.llm.delta`` —
 one-way, token-scoped, a frame per chunk and no reply. Stopping is not
 something the backend is told; it is cancellation, which the kernel already
 owns, and a cancelled backend's next Request raises ``Terminated``.
@@ -44,7 +44,7 @@ class StreamBackend(BaseLLMBackend):
         if not request.stream:
             return LLMResponse(content="".join(words))
         for word in words:
-            sdk.model.delta(word)
+            sdk.llm.delta(word)
         return LLMResponse(content="".join(words), prompt_tokens=7)
 '''
 
@@ -62,7 +62,7 @@ class LeakyBackend(BaseLLMBackend):
     def chat(self, sdk, request):
         """Forge a token and try to reach somebody else's stream."""
         sdk._delta_token = "not-a-real-token"
-        sdk.model.delta("smuggled")
+        sdk.llm.delta("smuggled")
         return LLMResponse(content="tried")
 '''
 
@@ -198,7 +198,7 @@ def test_the_token_is_cleared_when_the_call_ends(tree):
     target.unload()
 
 
-def test_a_raising_sink_cannot_fail_the_model_call(tree):
+def test_a_raising_sink_cannot_fail_the_llm_call(tree):
     """A frontend that cannot draw a character must not lose the response."""
     target = _brain(tree, STREAMER)
 
@@ -235,11 +235,11 @@ def test_parking_and_unparking_are_symmetric():
 
 
 def test_delta_is_safe_because_it_is_scoped_not_because_it_is_harmless():
-    """Classified safe on reachability, exactly like model.proceed."""
-    assert classify(R.Request(R.MODEL_DELTA, {"token": "x", "text": "y"}),
+    """Classified safe on reachability, exactly like llm.proceed."""
+    assert classify(R.Request(R.LLM_DELTA, {"token": "x", "text": "y"}),
                     Chain()).safe
     # But it is not read-only: it pushes text at a person.
-    assert not R.Request(R.MODEL_DELTA, {}).read_only
+    assert not R.Request(R.LLM_DELTA, {}).read_only
 
 
 def test_a_delta_does_not_wait_for_an_answer():
@@ -270,9 +270,9 @@ def test_a_delta_does_not_wait_for_an_answer():
 
     sdk = SDK(Channel())
     sdk._delta_token = "t"
-    sdk.model.delta("hello")
+    sdk.llm.delta("hello")
 
-    assert notified == [R.MODEL_DELTA]
+    assert notified == [R.LLM_DELTA]
     assert sent == []
 
 
@@ -288,9 +288,9 @@ def test_a_notice_still_passes_the_gate():
 
     from sandbox.interpreter import Execution
     channel = interpreter.channel(Execution(name="t", chain=Chain()))
-    channel.notify(R.Request(R.MODEL_DELTA, {"token": "", "text": "x"}))
+    channel.notify(R.Request(R.LLM_DELTA, {"token": "", "text": "x"}))
 
-    assert seen == [R.MODEL_DELTA]
+    assert seen == [R.LLM_DELTA]
     interpreter.shutdown()
 
 

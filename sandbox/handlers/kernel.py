@@ -18,7 +18,7 @@ Two conventions run through the file:
 from __future__ import annotations
 
 from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
-                              MODEL_DELTA, MODEL_PROCEED,
+                              LLM_DELTA, LLM_PROCEED,
                               CONFIG_READ, CONFIG_WRITE, CONV_APPEND, CONV_CLEAR,
                               CONV_CREATE, CONV_DELETE, CONV_LIST, CONV_READ,
                               CONV_LOAD, CONV_SET_CATEGORY,
@@ -1544,7 +1544,7 @@ def _model_proceed(ctx, args: dict) -> Result:
     Unlike every other handler this one resolves through a token rather than
     a static table, because what it invokes is a closure the kernel built for
     one particular call and will discard the moment the escort returns. Code
-    that is not standing at the ``model_call`` doorway holds no token, reaches
+    that is not standing at the ``llm_call`` doorway holds no token, reaches
     no closure, and is refused — which is the correct answer, not an omission.
     """
     from ..hooks import phone
@@ -1552,7 +1552,7 @@ def _model_proceed(ctx, args: dict) -> Result:
     dial = phone(args.get("token") or "")
     if dial is None:
         return Result.refusal(
-            "model.proceed is only available inside a model_call hook")
+            "llm.proceed is only available inside an llm_call hook")
     try:
         return Result(data=dial(args.get("request")))
     except Exception as exc:
@@ -1562,7 +1562,7 @@ def _model_proceed(ctx, args: dict) -> Result:
 def _model_delta(ctx, args: dict) -> Result:
     """Carry one fragment of streamed assistant text out of a backend's box.
 
-    Token-scoped exactly like ``model.proceed``, and one-way: the answer says
+    Token-scoped exactly like ``llm.proceed``, and one-way: the answer says
     only whether it landed, never anything about the conversation. A backend
     that is not inside a call the kernel asked for holds no token and is
     refused.
@@ -1574,7 +1574,7 @@ def _model_delta(ctx, args: dict) -> Result:
         return Result(data=False)
     if not deliver(args.get("token") or "", text):
         return Result.refusal(
-            "model.delta is only available inside an LLM backend's chat call")
+            "llm.delta is only available inside an LLM backend's chat call")
     return Result(data=True)
 
 
@@ -1706,7 +1706,7 @@ def _event_request(ctx, args: dict) -> Result:
 # adapter, so the authority is the frontend's identity rather than anything
 # the Request says about itself. A caller that is not a loaded frontend holds
 # no token, reaches no adapter, and is refused — which is the correct answer
-# rather than an omission, exactly as it is for ``model.proceed``.
+# rather than an omission, exactly as it is for ``llm.proceed``.
 # ──────────────────────────────────────────────────────────────────────
 
 def _at_desk(args: dict):
@@ -2235,7 +2235,7 @@ HANDLERS = {
     TOOL_LIST: _tool_list, TOOL_CALL: _tool_call,
     COMMAND_LIST: _command_list, COMMAND_CALL: _command_call,
     AGENT_COMPLETE: _agent_complete,
-    MODEL_PROCEED: _model_proceed, MODEL_DELTA: _model_delta,
+    LLM_PROCEED: _model_proceed, LLM_DELTA: _model_delta,
     CRON_LIST: _cron_list, CRON_GET: _cron_get, CRON_CREATE: _cron_create,
     CRON_UPDATE: _cron_update, CRON_REMOVE: _cron_remove,
     CRON_ENABLE: _cron_enable,

@@ -1,9 +1,9 @@
 """Contract tests for the unified hook system (``runtime/hooks.py``).
 
-The six moments — turn_start, shape_scope, vet_permission, model_call,
+The six moments — turn_start, shape_scope, vet_permission, llm_call,
 end_turn, turn_finish — share one contract: every hook receives
 ``(ctx, payload)``, returns None to abstain, and can never break a turn by
-raising. Escorts (``model_call``) additionally receive ``proceed`` and own
+raising. Escorts (``llm_call``) additionally receive ``proceed`` and own
 the round trip; doormen (``end_turn``) return verdicts the loop obeys under
 a hard fire budget. These tests pin that contract with a real
 ``ConversationState`` + ``ConversationLoop`` and fake LLMs (no network).
@@ -21,7 +21,7 @@ from state_machine.conversation_phases import BASE_PHASE
 from runtime.conversation_loop import ConversationLoop
 from runtime.hooks import (
     END_TURN,
-    MODEL_CALL,
+    LLM_CALL,
     SHAPE_SCOPE,
     VET_PERMISSION,
     Allow,
@@ -106,7 +106,7 @@ def _echo_tools(record):
 
 
 # ──────────────────────────────────────────────────────────────────────
-# model_call — the escort doorway
+# llm_call — the escort doorway
 # ──────────────────────────────────────────────────────────────────────
 
 def test_escort_swaps_the_brain_per_call():
@@ -117,7 +117,7 @@ def test_escort_swaps_the_brain_per_call():
         request.llm = strong
         return proceed(request)
 
-    hooks.add(MODEL_CALL, escort)
+    hooks.add(LLM_CALL, escort)
     reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
 
     assert reply == "from the strong brain"
@@ -139,7 +139,7 @@ def test_escort_can_inspect_and_retry():
             ))
         return response
 
-    hooks.add(MODEL_CALL, escort)
+    hooks.add(LLM_CALL, escort)
     reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
 
     assert reply == "better answer"
@@ -154,7 +154,7 @@ def test_raising_escort_before_dialing_is_transparent():
     def escort(ctx, request, proceed):
         raise RuntimeError("escort exploded before dialing")
 
-    hooks.add(MODEL_CALL, escort)
+    hooks.add(LLM_CALL, escort)
     reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
 
     assert reply == "fine."
@@ -169,7 +169,7 @@ def test_raising_escort_after_dialing_keeps_the_response():
         proceed(request)
         raise RuntimeError("escort exploded after dialing")
 
-    hooks.add(MODEL_CALL, escort)
+    hooks.add(LLM_CALL, escort)
     reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
 
     assert reply == "fine."
@@ -184,7 +184,7 @@ def test_escort_abstaining_with_none_uses_its_fetched_response():
         proceed(request)
         return None  # abstain after dialing
 
-    hooks.add(MODEL_CALL, escort)
+    hooks.add(LLM_CALL, escort)
     reply, _, _ = loop.drive(cs, "agent", [{"role": "user", "content": "hi"}])
 
     assert reply == "fine."
@@ -359,7 +359,7 @@ def test_every_doorway_threads_a_real_runtime_into_ctx(tmp_path):
     from pipeline.database import Database
     from runtime.conversation_runtime import ConversationRuntime
     from runtime.hooks import (
-        END_TURN, MODEL_CALL, SHAPE_SCOPE, TURN_FINISH, TURN_START,
+        END_TURN, LLM_CALL, SHAPE_SCOPE, TURN_FINISH, TURN_START,
         VET_PERMISSION, SendBack,
     )
 
@@ -388,7 +388,7 @@ def test_every_doorway_threads_a_real_runtime_into_ctx(tmp_path):
     rt.hooks.add(TURN_START, record(TURN_START))
     rt.hooks.add(SHAPE_SCOPE, lambda ctx, reg: seen.__setitem__(SHAPE_SCOPE, ctx.runtime) or reg)
     rt.hooks.add(VET_PERMISSION, record(VET_PERMISSION))
-    rt.hooks.add(MODEL_CALL, lambda ctx, req, proceed: (seen.__setitem__(MODEL_CALL, ctx.runtime), proceed(req))[1])
+    rt.hooks.add(LLM_CALL, lambda ctx, req, proceed: (seen.__setitem__(LLM_CALL, ctx.runtime), proceed(req))[1])
     rt.hooks.add(END_TURN, record(END_TURN))
     rt.hooks.add(TURN_FINISH, record(TURN_FINISH))
 
@@ -396,7 +396,7 @@ def test_every_doorway_threads_a_real_runtime_into_ctx(tmp_path):
 
     # vet_permission only fires when a tool asks to run; the other five are
     # reached by any driven turn. Assert none of the reached ones saw None.
-    for moment in (TURN_START, SHAPE_SCOPE, MODEL_CALL, END_TURN, TURN_FINISH):
+    for moment in (TURN_START, SHAPE_SCOPE, LLM_CALL, END_TURN, TURN_FINISH):
         assert moment in seen, f"{moment} doorway was never reached"
         assert seen[moment] is rt, f"{moment} handed ctx.runtime={seen[moment]!r}, expected the runtime"
 

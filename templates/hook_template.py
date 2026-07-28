@@ -47,7 +47,7 @@ THE SIX MOMENTS (in the order a turn meets them)
                                return the ones to keep.
   "vet_permission"  verdict    Something sensitive wants to happen; say yes,
                                say no, or stay silent.
-  "model_call"      escort     Own the round trip to the model: rewrite the
+  "llm_call"      escort     Own the round trip to the model: rewrite the
                                request, place the call, inspect the answer,
                                go around again if you don't like it.
   "end_turn"        verdict    The doorman at the exit: let the agent leave,
@@ -205,7 +205,7 @@ class Retrier(BaseService):
 
     name = "retrier"
     description = "Retries an empty model answer once."
-    hooks = {"model_call": "escort", "shape_scope": "narrow"}
+    hooks = {"llm_call": "escort", "shape_scope": "narrow"}
 
     def start(self, sdk):
         """Nothing to hold."""
@@ -214,17 +214,17 @@ class Retrier(BaseService):
     def escort(self, sdk, ctx, request):
         """Hold both the request and the phone.
 
-        sdk.model.proceed() places the call. Call it more than once to retry,
+        sdk.llm.proceed() places the call. Call it more than once to retry,
         or not at all to answer for yourself — a cached reply never troubles
         the model. Returning None abstains, and the kernel dials for you.
         """
-        response = sdk.model.proceed(request)
+        response = sdk.llm.proceed(request)
 
         if not (response.content or "").strip() and not response.has_tool_calls:
             # Rewrite and go around again. The change reaches the live call.
             request.messages = request.messages + [
                 {"role": "user", "content": "You replied with nothing. Answer."}]
-            response = sdk.model.proceed(request)
+            response = sdk.llm.proceed(request)
 
         return response
 

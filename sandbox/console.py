@@ -21,6 +21,22 @@ dropping characters. A frontend declares ``uses_console = True`` and the kernel
 refuses a second claim, the same way an operating system does not hand the same
 tty to two foreground processes.
 
+**Releasing does not stop the reader**, and that is the fix for the way the
+above used to fail in practice. Releasing *did* stop it, which meant clearing
+``_reader`` while that thread was still blocked in ``readline`` — so the
+liveness guard could no longer see it, the next claim started a *second*
+reader, and both then appended to one buffer. Worse, whichever orphan woke
+first ran its ``finally`` and set ``_closed``, so the frontend that had just
+successfully claimed the console got ``EOFError`` on its next read and stopped
+itself. A frontend restart therefore killed the terminal.
+
+There is one stdin per process and the reader is a daemon filling a bounded
+buffer, so stopping it on release bought nothing. Release now drops ownership
+and empties the buffer; the reader keeps running. The one case that genuinely
+needs a new reader — a test injecting a different source — is handled by
+generation, so a superseded reader can neither append nor declare the console
+closed.
+
 **The source is injectable.** ``start(source=...)`` takes any iterator of
 lines, so tests drive a console without a terminal and a future frontend could
 be fed from somewhere other than stdin. That is most of why this is a Request
@@ -53,6 +69,12 @@ class Console:
         self._closed = False
         self._owner: str = ""
         self._writer = None
+        # Which reader is the live one. A thread blocked in ``readline``
+        # cannot be woken, so a superseded reader stays alive until its next
+        # line arrives; it checks this on the way back and, finding itself
+        # out of date, neither appends nor reports the console closed.
+        self._generation = 0
+        self._source = None
 
     # ── claiming ───────────────────────────────────────────────────
 
@@ -80,42 +102,61 @@ class Console:
 
     def release(self, token: str) -> None:
         """Give the console back. Only the holder can, so a stale token from a
-        frontend that already stopped cannot revoke its successor's claim."""
+        frontend that already stopped cannot revoke its successor's claim.
+
+        The reader is left running. Whoever claims next inherits it, which is
+        what stops a restart from putting two readers on one stdin.
+        """
         with self._lock:
-            if token and self._owner == token:
-                self._owner = ""
-        self.stop()
+            if not token or self._owner != token:
+                return
+            self._owner = ""
+            self._writer = None
+            # Whatever arrived was typed at the frontend that has now gone
+            # away, and handing it to the next one would replay a stranger's
+            # keystrokes into a fresh session.
+            self._lines.clear()
 
     # ── the reader ─────────────────────────────────────────────────
 
     def start(self, source=None) -> None:
-        """Begin reading. Idempotent — a second claim does not start a second
-        thread, which would race two readers over the same stdin."""
+        """Begin reading. Idempotent for the same source.
+
+        A second claim reuses the running reader rather than starting another,
+        which is what keeps one person's keystrokes going to one place. A
+        *different* source supersedes: the old reader is retired by generation
+        and cannot touch the buffer again.
+        """
         with self._lock:
-            if self._reader is not None and self._reader.is_alive():
+            live = self._reader is not None and self._reader.is_alive()
+            same_source = source is None or source is self._source
+            if live and same_source:
                 return
+            self._generation += 1
+            generation = self._generation
             self._stopping.clear()
             self._closed = False
             self._lines.clear()
+            self._source = source
             self._reader = threading.Thread(
-                target=self._read, args=(source,), daemon=True,
+                target=self._read, args=(source, generation), daemon=True,
                 name="console-reader")
             self._reader.start()
 
-    def _read(self, source=None) -> None:
+    def _read(self, source=None, generation: int = 0) -> None:
         """Pull lines until the source ends. Runs on its own thread.
 
         Daemon, and deliberately not interruptible: a thread blocked in
-        ``readline`` cannot be woken, so stopping is a flag the loop checks
+        ``readline`` cannot be woken, so retirement is something this checks
         after each line rather than something done *to* it. The process
         exiting is what finally ends it.
         """
         stream = source if source is not None else sys.stdin
         try:
             for line in stream:
-                if self._stopping.is_set():
-                    return
                 with self._lock:
+                    if self._stopping.is_set() or generation != self._generation:
+                        return
                     self._lines.append(line.rstrip("\n").rstrip("\r"))
                     while len(self._lines) > MAX_BUFFERED:
                         self._lines.popleft()
@@ -123,14 +164,24 @@ class Console:
             logger.debug("console reader ended: %s", exc)
         finally:
             with self._lock:
-                self._closed = True
+                # Only the live reader may declare the console closed. A
+                # retired one saying so would hand ``EOFError`` to a frontend
+                # whose own reader is alive and well.
+                if generation == self._generation:
+                    self._closed = True
 
     def stop(self) -> None:
-        """Stop reading and forget what was buffered."""
+        """Retire the reader and forget what was buffered.
+
+        For process teardown and tests. Ordinary release does *not* come
+        through here — see :meth:`release`.
+        """
         self._stopping.set()
         with self._lock:
+            self._generation += 1
             self._lines.clear()
             self._reader = None
+            self._source = None
 
     # ── what the Requests reach ────────────────────────────────────
 

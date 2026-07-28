@@ -28,6 +28,9 @@ ALLOWED_ABSOLUTE = {
     "__future__", "base64", "importlib", "importlib.util", "json", "re",
     "sys", "traceback", "pathlib", "time", "typing", "dataclasses",
     "resource",
+    # The loader re-hashes a file before executing it, so the bytes that ran
+    # are the bytes the validator passed. Pure computation over a string.
+    "hashlib",
     # Pure path *arithmetic* for sdk.path — string manipulation with no cwd,
     # no stat, no environment. Named directly rather than reached through
     # ``os.path``, which is one of these two under an alias that also imports

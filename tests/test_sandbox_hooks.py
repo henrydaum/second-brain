@@ -41,7 +41,7 @@ class Doorman(BaseService):
         "turn_start": "on_start",
         "shape_scope": "narrow",
         "vet_permission": "gate",
-        "model_call": "escort",
+        "llm_call": "escort",
         "end_turn": "check_done",
         "turn_finish": "learn",
     }
@@ -77,12 +77,12 @@ class Doorman(BaseService):
 
     def escort(self, sdk, ctx, request):
         """Retry once when the model says nothing."""
-        self._seen.append(("model_call", request.llm, len(request.messages)))
-        response = sdk.model.proceed(request)
+        self._seen.append(("llm_call", request.llm, len(request.messages)))
+        response = sdk.llm.proceed(request)
         if not response.content.strip():
             request.messages = request.messages + [
                 {"role": "user", "content": "Please answer."}]
-            response = sdk.model.proceed(request)
+            response = sdk.llm.proceed(request)
         return response
 
     def check_done(self, sdk, ctx, ending):
@@ -277,7 +277,7 @@ def test_an_escort_can_place_the_call_twice(tmp_path, box, runtime, registry,
     service = _service(tmp_path, runtime)
     base, calls = _backend("", "A real answer.")
 
-    handler = registry.wrap_model_call(session, runtime, base)
+    handler = registry.wrap_llm_call(session, runtime, base)
     brain = SimpleNamespace(model_name="gpt-4o", loaded=True)
     response = handler(ModelRequest(llm=brain,
                                     messages=[{"role": "user", "content": "hi"}]))
@@ -290,31 +290,51 @@ def test_an_escort_can_place_the_call_twice(tmp_path, box, runtime, registry,
     service.unload()
 
 
+@pytest.fixture
+def configured_brains(monkeypatch):
+    """Declare which profile names exist, without building real brains.
+
+    ``apply_model_request`` asks the llm registry whether a name is a
+    configured profile, which is the only thing it needs to know to decide
+    whether an escort's swap is honoured.
+    """
+    import llm
+
+    known = {"gpt-4o", "claude", "other"}
+    monkeypatch.setattr(llm, "brain",
+                        lambda name: object() if name in known else None)
+    return known
+
+
 def test_an_escort_sees_the_brain_by_name(tmp_path, box, runtime, registry,
                                           session):
-    """A live backend cannot cross; its name can, and that is the contract."""
+    """A live backend cannot cross; its name can, and that is the contract.
+
+    ``ModelRequest.llm`` *is* the name — the loop resolves it when it places
+    the call. This test used to hand in an object with a ``model_name``
+    attribute, which is what the kernel carried before the LLM became kernel
+    routing, and it was the reason a real escort was always shown "".
+    """
     service = _service(tmp_path, runtime)
     base, _ = _backend("hello")
-    handler = registry.wrap_model_call(session, runtime, base)
-    handler(ModelRequest(llm=SimpleNamespace(model_name="claude", loaded=True),
+    handler = registry.wrap_llm_call(session, runtime, base)
+    handler(ModelRequest(llm="claude",
                          messages=[{"role": "user", "content": "hi"}]))
 
-    moment, llm, count = next(s for s in service.seen() if s[0] == "model_call")
+    moment, llm, count = next(s for s in service.seen() if s[0] == "llm_call")
     assert (llm, count) == ("claude", 1)
     service.unload()
 
 
 def test_an_escort_can_swap_the_brain(tmp_path, box, runtime, registry,
-                                      session):
-    """Setting request.llm to another loaded backend's name switches it."""
+                                      session, configured_brains):
+    """Naming another configured profile switches which brain takes the call."""
     source = SERVICE.replace(
-        "        response = sdk.model.proceed(request)\n"
+        "        response = sdk.llm.proceed(request)\n"
         "        if not response.content.strip():",
         "        request.llm = 'other'\n"
-        "        response = sdk.model.proceed(request)\n"
+        "        response = sdk.llm.proceed(request)\n"
         "        if not response.content.strip():")
-    other = SimpleNamespace(model_name="other", loaded=True)
-    runtime.services["other"] = other
     service = _service(tmp_path, runtime, source=source)
 
     seen = {}
@@ -325,24 +345,30 @@ def test_an_escort_can_swap_the_brain(tmp_path, box, runtime, registry,
         return SimpleNamespace(content="ok", tool_calls=[], error=None,
                                is_error=False)
 
-    handler = registry.wrap_model_call(session, runtime, base)
-    handler(ModelRequest(llm=SimpleNamespace(model_name="gpt-4o", loaded=True),
+    handler = registry.wrap_llm_call(session, runtime, base)
+    handler(ModelRequest(llm="gpt-4o",
                          messages=[{"role": "user", "content": "hi"}]))
-    assert seen["llm"] is other
+    # The *name*, not a brain: putting an object here would work only by
+    # accident, since the loop calls _brain() on whatever it finds.
+    assert seen["llm"] == "other"
     service.unload()
 
 
-def test_naming_an_unloaded_brain_leaves_the_call_alone(tmp_path, box, runtime,
-                                                        registry, session):
-    """An escort naming a brain that is not there must not break the turn."""
+def test_naming_an_unknown_brain_leaves_the_call_alone(tmp_path, box, runtime,
+                                                       registry, session,
+                                                       configured_brains):
+    """An escort naming a profile that is not configured must not retarget it.
+
+    Silently falling back to the default would be the worst outcome: the turn
+    succeeds and quietly uses the wrong model.
+    """
     source = SERVICE.replace(
-        "        response = sdk.model.proceed(request)\n"
+        "        response = sdk.llm.proceed(request)\n"
         "        if not response.content.strip():",
         "        request.llm = 'nonexistent'\n"
-        "        response = sdk.model.proceed(request)\n"
+        "        response = sdk.llm.proceed(request)\n"
         "        if not response.content.strip():")
     service = _service(tmp_path, runtime, source=source)
-    original = SimpleNamespace(model_name="gpt-4o", loaded=True)
 
     seen = {}
 
@@ -352,14 +378,14 @@ def test_naming_an_unloaded_brain_leaves_the_call_alone(tmp_path, box, runtime,
         return SimpleNamespace(content="ok", tool_calls=[], error=None,
                                is_error=False)
 
-    handler = registry.wrap_model_call(session, runtime, base)
-    handler(ModelRequest(llm=original,
+    handler = registry.wrap_llm_call(session, runtime, base)
+    handler(ModelRequest(llm="gpt-4o",
                          messages=[{"role": "user", "content": "hi"}]))
-    assert seen["llm"] is original
+    assert seen["llm"] == "gpt-4o"
     service.unload()
 
 
-def test_proceed_is_refused_outside_a_model_call_hook(tmp_path, box, runtime,
+def test_proceed_is_refused_outside_a_llm_call_hook(tmp_path, box, runtime,
                                                       registry, session):
     """The token is the whole gate: no token, no call.
 
@@ -410,14 +436,14 @@ def test_a_raising_escort_still_places_the_call(tmp_path, box, runtime,
                                                 registry, session):
     """Escort failure is transparent, not fatal: the model is still called."""
     source = SERVICE.replace(
-        "        response = sdk.model.proceed(request)\n"
+        "        response = sdk.llm.proceed(request)\n"
         "        if not response.content.strip():",
         "        raise ValueError('boom')\n"
         "        if False:")
     service = _service(tmp_path, runtime, source=source)
     base, calls = _backend("still answered")
 
-    handler = registry.wrap_model_call(session, runtime, base)
+    handler = registry.wrap_llm_call(session, runtime, base)
     response = handler(ModelRequest(
         llm=SimpleNamespace(model_name="gpt-4o", loaded=True),
         messages=[{"role": "user", "content": "hi"}]))

@@ -195,7 +195,7 @@ GRANT_FAMILIES = {
     "frontend": "act as a frontend",
     "console": "use the terminal",
     "event": "publish events",
-    "model": "talk to the model",
+    "llm": "talk to the model",
     "parse": "parse files",
     "file": "register files",
     "db": "use the database",
@@ -250,11 +250,31 @@ def _grant_rank(kind: str) -> tuple:
     return (1 if writes else 2, 0, kind)
 
 
+# Prefixes a chain link may carry that a trusted name will not. A box is
+# named for its *file* (``service_timekeeper``), and a resident one roots its
+# chain at ``service:<name>``, while ``skip_permissions`` holds what the user
+# was shown — the plugin's own name. Comparing the two raw meant the trusted
+# list silently never matched anything behind a box.
+_LINK_PREFIXES = ("tool_", "task_", "service_", "command_", "frontend_")
+
+
+def _plain(name: str) -> str:
+    """A chain link reduced to the name a user would recognise."""
+    name = str(name or "")
+    if ":" in name:                       # service:timekeeper, cron:nightly
+        name = name.split(":", 1)[1]
+    for prefix in _LINK_PREFIXES:
+        if name.startswith(prefix) and len(name) > len(prefix):
+            return name[len(prefix):]
+    return name
+
+
 def _trusted(runtime, session_key, chain) -> bool:
     """Whether the user has already decided about the thing that caused this.
 
-    Consulted for the chain's *root* rather than its leaf: a user who trusted
-    a tool trusted what that tool does, including through a service it calls.
+    Consulted across the whole chain rather than just its leaf: a user who
+    trusted a tool trusted what that tool does, including through a service it
+    calls.
     """
     if runtime is None or not session_key:
         return False
@@ -265,7 +285,8 @@ def _trusted(runtime, session_key, chain) -> bool:
         trusted = reader(session_key, "skip_permissions") or []
     except Exception:
         return False
-    names = set(chain.links) | {chain.root}
+    raw = set(chain.links) | {chain.root}
+    names = raw | {_plain(name) for name in raw}
     return bool(names & set(trusted))
 
 

@@ -52,6 +52,14 @@ def install_box(root, box_name: str, extra_roots=()):
     package = f"{PACKAGE_PREFIX}{box_name}"
     existing = sys.modules.get(package)
     if existing is not None:
+        # Merge rather than return early. Members of one box may declare
+        # *different* ``dependencies_files``, and returning here dropped every
+        # root but the first file's — so whichever sibling loaded second could
+        # not import the helper it had declared, with no error until the
+        # import failed somewhere unrelated.
+        for root in (str(root), *(str(p) for p in extra_roots)):
+            if root not in existing.__path__:
+                existing.__path__.append(root)
         return package
     spec = importlib.machinery.ModuleSpec(package, None, is_package=True)
     module = importlib.util.module_from_spec(spec)
@@ -62,11 +70,40 @@ def install_box(root, box_name: str, extra_roots=()):
     return package
 
 
-def load_member(module_path, box_name: str = "", root=None, extra_roots=()):
+class StaleSource(ImportError):
+    """The file on disk is not the file that was validated."""
+
+
+def _verify(path: Path, digest: str) -> None:
+    """Refuse to execute bytes nobody checked.
+
+    Validation reads a path and execution opens it again, so without this the
+    two can disagree — the file may have been edited, or swapped, in between.
+    The window is small and the check is a hash, so it is bought cheaply.
+
+    Scope worth being honest about: this covers the *entry* file, which is what
+    the report describes. Siblings pulled in by ordinary imports off the box's
+    ``__path__`` are not re-checked here.
+    """
+    if not digest:
+        return
+    from hashlib import sha256
+
+    actual = sha256(
+        path.read_text(encoding="utf-8", errors="replace").encode("utf-8")
+    ).hexdigest()
+    if actual != digest:
+        raise StaleSource(
+            f"{path.name} changed after it was validated; it was not loaded")
+
+
+def load_member(module_path, box_name: str = "", root=None, extra_roots=(),
+                digest: str = ""):
     """Import one file as a member of its box and return the module."""
     path = Path(module_path)
     if not path.is_file():
         raise FileNotFoundError(f"no such file: {module_path}")
+    _verify(path, digest)
     root = Path(root) if root else path.parent
     package = install_box(root, box_name or path.stem, extra_roots)
 
@@ -92,7 +129,7 @@ def load_member(module_path, box_name: str = "", root=None, extra_roots=()):
 
 def load_entry(module_path, func_name: str = "", box_name: str = "",
                root=None, bound: bool = True, method: str = "run",
-               extra_roots=()):
+               extra_roots=(), digest: str = ""):
     """Import a box member and resolve what the runner should hold.
 
     ``bound`` decides *what* comes back, because the two lifetimes need
@@ -108,7 +145,7 @@ def load_entry(module_path, func_name: str = "", box_name: str = "",
     agent's scratchpad server is a module whose globals outlive each call.
     """
     module = load_member(module_path, box_name=box_name, root=root,
-                         extra_roots=extra_roots)
+                         extra_roots=extra_roots, digest=digest)
     if not func_name:
         # No entry named: the module itself is the object. Only meaningful
         # for a persistent box, where calls resolve to module-level functions.

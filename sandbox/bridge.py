@@ -32,6 +32,7 @@ import threading
 import types
 from pathlib import Path
 
+from . import provenance
 from .approval import describe_grant
 from .facade import Sandbox
 from .policy import Chain
@@ -227,7 +228,19 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         # Only the root is set here. ``Sandbox.start`` pushes the execution's
         # own name, and pushing it here too would put the plugin in the chain
         # twice — which the cycle detector correctly refuses.
-        chain = Chain(
+        #
+        # When something already inside the sandbox reached us — a tool
+        # calling a tool — we descend from *its* chain instead of starting a
+        # fresh one beside it. Two things follow, and both are the documented
+        # intent rather than a side effect. The cycle detector and MAX_DEPTH
+        # start working, because there is finally a stack to measure. And the
+        # callee spends the *caller's* grant: ``granted`` is deliberately not
+        # consulted here, since re-deriving it from the callee's own
+        # declarations is exactly the widening ``Chain.push`` exists to
+        # prevent. A command's own manifest is read only when the command is
+        # the root of the call.
+        caller = provenance.current()
+        chain = caller.chain if caller is not None else Chain(
             root=_root_for(context),
             approved=(
                 granted

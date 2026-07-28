@@ -39,11 +39,11 @@ from dataclasses import dataclass, field
 TURN_START = "turn_start"
 SHAPE_SCOPE = "shape_scope"
 VET_PERMISSION = "vet_permission"
-MODEL_CALL = "model_call"
+LLM_CALL = "llm_call"
 END_TURN = "end_turn"
 TURN_FINISH = "turn_finish"
 
-MOMENTS = (TURN_START, SHAPE_SCOPE, VET_PERMISSION, MODEL_CALL, END_TURN,
+MOMENTS = (TURN_START, SHAPE_SCOPE, VET_PERMISSION, LLM_CALL, END_TURN,
            TURN_FINISH)
 
 
@@ -205,7 +205,7 @@ PAYLOADS = {
     TURN_START: None,
     SHAPE_SCOPE: Scope,
     VET_PERMISSION: PermissionQuery,
-    MODEL_CALL: ModelRequest,
+    LLM_CALL: ModelRequest,
     END_TURN: TurnEnding,
     TURN_FINISH: TurnOutcome,
 }
@@ -256,7 +256,7 @@ def unwrap(value):
 
 
 __all__ = ["MOMENTS", "TURN_START", "SHAPE_SCOPE", "VET_PERMISSION",
-           "MODEL_CALL", "END_TURN", "TURN_FINISH", "HookContext",
+           "LLM_CALL", "END_TURN", "TURN_FINISH", "HookContext",
            "TurnEnding", "TurnOutcome", "PermissionQuery", "Scope",
            "ModelRequest", "ModelResponse", "PermissionVerdict", "Allow",
            "SendBack", "RequireTool", "Redrive", "wrap", "unwrap"]

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 from .guest import protocol
 from .guest.loader import load_entry, unload_box
@@ -44,6 +45,7 @@ from .interpreter import Execution, Interpreter, clamp_timeout
 from .policy import Chain
 from .runner_subprocess import (GUEST_ROOT, fault_result, send, service_until,
                                 subprocess_for)
+from .watchdog import WATCHDOG
 
 logger = logging.getLogger("Sandbox")
 
@@ -77,13 +79,43 @@ class PersistentBox:
         return self._alive
 
     def call(self, method: str, *args, **kwargs) -> Result:
-        """Invoke a method and wait for its answer. Serialized per box."""
+        """Invoke a method and wait for its answer. Serialized per box.
+
+        If a caller is on this thread — a sandboxed tool that reached us
+        through ``service.call``, say — the box answers *as* that caller for
+        the duration: its chain descends from the caller's rather than
+        starting beside it, and its Requests are answered from the caller's
+        world rather than the kernel's. Serialization is what makes swapping
+        live state safe here; one call is in flight at a time by construction.
+
+        A call with no caller — a poll tick, a bus delivery, a hook — keeps
+        the box's own chain and context, which is right: a service acting on
+        its own initiative is not acting for anybody.
+
+        Deliberately not a ``chain=`` parameter. This method's first parameter
+        is already ``method``, and ``sandbox/hooks.py`` documents having been
+        bitten by that collision once.
+        """
         if not self._alive:
             return Result.failure(f"box {self.name!r} is not running")
+        from . import provenance
+
         with self._lock:
             if not self._alive:
                 return Result.failure(f"box {self.name!r} is not running")
-            return self._call(method, args, kwargs)
+            caller = provenance.current()
+            if caller is None:
+                return self._call(method, args, kwargs)
+            base_chain = self.execution.chain
+            base_context = self.execution.context
+            self.execution.chain = caller.chain.push(self.name)
+            if caller.context is not None:
+                self.execution.context = caller.context
+            try:
+                return self._call(method, args, kwargs)
+            finally:
+                self.execution.chain = base_chain
+                self.execution.context = base_context
 
     def stop(self, timeout: float = 10.0) -> Result:
         """Shut down: ask, then starve, then kill."""
@@ -134,6 +166,8 @@ class InProcessBox(PersistentBox):
         from .guest.channel import Terminated
         from .guest.requests import RequestFailed
 
+        from .watchdog import TICK, overdue as is_overdue
+
         box: dict = {}
         done = threading.Event()
 
@@ -164,7 +198,21 @@ class InProcessBox(PersistentBox):
 
         threading.Thread(target=_worker, daemon=True,
                          name=f"box-{self.name}").start()
-        if not done.wait(timeout=deadline):
+
+        # Wait on the guest, not on the clock. ``running_for`` discounts the
+        # time the kernel spent answering this execution's Requests, so a call
+        # that spends two minutes inside sdk.ui.ask or an escorted model call
+        # is never mistaken for a hung one — while a runaway that spins on
+        # Requests still runs out its deadline, because it is never blocked
+        # for long.
+        started = time.monotonic()
+        expired = False
+        while not done.wait(timeout=TICK):
+            if is_overdue(self.execution, started, deadline):
+                expired = True
+                break
+
+        if expired:
             # Starve it: the thread survives, but its next Request is refused
             # so it can no longer affect anything. For a *resident* box that
             # also ends the box, because cancellation is per-execution and a
@@ -177,7 +225,8 @@ class InProcessBox(PersistentBox):
             # of a frontend that accepts keystrokes and does nothing.
             self._interpreter.cancel(self.execution)
             self._alive = False
-            return Result.failure(f"timed out after {deadline:.1f}s")
+            return Result.failure(
+                f"timed out after {deadline:.1f}s of running")
         return box.get("result", Result(data=None))
 
     def _call(self, method: str, args: tuple, kwargs: dict) -> Result:
@@ -206,7 +255,7 @@ class SubprocessBox(PersistentBox):
     def __init__(self, module_path: str, entry: str, name: str,
                  chain=None, call_timeout=None, box_root=None,
                  memory_mb: int | None = None, extra_roots=(),
-                 manage_lifecycle: bool = True):
+                 manage_lifecycle: bool = True, digest: str = ""):
         super().__init__(name, chain, call_timeout)
         self.module_path = str(module_path)
         self.entry = entry
@@ -214,6 +263,7 @@ class SubprocessBox(PersistentBox):
         self.extra_roots = list(extra_roots or [])
         self.memory_mb = memory_mb
         self.manage_lifecycle = manage_lifecycle
+        self.digest = digest
         self.proc = None
         self._interpreter = None
 
@@ -224,9 +274,10 @@ class SubprocessBox(PersistentBox):
         self.proc = subprocess_for(str(GUEST_ROOT))
         deadline = clamp_timeout(timeout)
 
-        timer = threading.Timer(deadline, self._kill)
-        timer.daemon = True
-        timer.start()
+        # Same reasoning as ``_call``: a guest whose ``start`` is waiting on
+        # the kernel to read a file or fetch a model is not a guest that has
+        # hung, so the start deadline counts guest time too.
+        ticket = WATCHDOG.watch(self.execution, deadline, self._kill)
         try:
             ok = send(self.proc, {
                 "kind": protocol.START,
@@ -239,13 +290,14 @@ class SubprocessBox(PersistentBox):
                 "memory_mb": self.memory_mb,
                 "cpu_seconds": None,
                 "manage_lifecycle": self.manage_lifecycle,
+                "digest": self.digest,
             })
             if not ok:
                 return Result.failure("child exited before it could start")
             message = service_until(interpreter, self.execution, self.proc,
                                     {protocol.READY, protocol.FAULT})
         finally:
-            timer.cancel()
+            WATCHDOG.release(ticket)
 
         if message is None:
             self._reap()
@@ -270,9 +322,13 @@ class SubprocessBox(PersistentBox):
         control, so a hung call cannot be cancelled on its own. Ending it ends
         the box.
         """
-        timer = threading.Timer(self.call_timeout, self._kill)
-        timer.daemon = True
-        timer.start()
+        # Watched rather than timed. This thread is about to block reading the
+        # pipe, so it cannot check anything itself; and the deadline counts
+        # *guest* time, so a call that waits two minutes on a model the kernel
+        # is fetching for it is not overdue at all. A shared watchdog also
+        # spares us a thread per call, which at a 50 ms poll was twenty a
+        # second for the life of the process.
+        ticket = WATCHDOG.watch(self.execution, self.call_timeout, self._kill)
         try:
             if not send(self.proc, {
                 "kind": protocol.CALL,
@@ -286,7 +342,7 @@ class SubprocessBox(PersistentBox):
                                     self.proc,
                                     {protocol.RETURN, protocol.FAULT})
         finally:
-            timer.cancel()
+            WATCHDOG.release(ticket)
 
         if message is None:
             self._alive = False
@@ -303,8 +359,16 @@ class SubprocessBox(PersistentBox):
             self._interpreter.cancel(self.execution)
 
     def _kill(self):
-        """Last resort, and the one thing a thread can never do."""
+        """Last resort, and the one thing a thread can never do.
+
+        Marks the box dead as well as killing the process. Starvation is
+        per-execution and a resident box has one execution for its whole life,
+        so there is no way back from here — and a box that says it is alive
+        while every Request it makes is refused is the shape of bug that had a
+        frontend accepting keystrokes and doing nothing with them.
+        """
         self._starve()
+        self._alive = False
         if self.proc is not None and self.proc.poll() is None:
             try:
                 self.proc.kill()
@@ -352,7 +416,8 @@ def open_box(interpreter: Interpreter, module_path, entry: str = "", *,
              call_timeout: float | None = None,
              start_timeout: float = DEFAULT_START_TIMEOUT,
              box_root=None, memory_mb: int | None = None,
-             extra_roots=(), manage_lifecycle: bool = True) -> PersistentBox:
+             extra_roots=(), manage_lifecycle: bool = True,
+             digest: str = "") -> PersistentBox:
     """Load a resident box and return a handle to call into.
 
     ``entry`` names a plugin class, or is empty for a bare script — in which
@@ -367,10 +432,11 @@ def open_box(interpreter: Interpreter, module_path, entry: str = "", *,
         box = SubprocessBox(module_path, entry, name, chain=chain,
                             call_timeout=call_timeout, box_root=box_root,
                             memory_mb=memory_mb, extra_roots=extra_roots,
-                            manage_lifecycle=manage_lifecycle)
+                            manage_lifecycle=manage_lifecycle, digest=digest)
     else:
         target = load_entry(module_path, entry, box_name=name, root=box_root,
-                            bound=False, extra_roots=extra_roots)
+                            bound=False, extra_roots=extra_roots,
+                            digest=digest)
         box = InProcessBox(target, name, chain=chain,
                            call_timeout=call_timeout,
                            manage_lifecycle=manage_lifecycle)

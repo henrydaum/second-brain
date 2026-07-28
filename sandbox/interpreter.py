@@ -26,9 +26,11 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
+from . import provenance
 from .handlers import HANDLERS
 from .policy import Chain, Decision, classify
 from .guest.channel import Terminated
@@ -42,6 +44,22 @@ logger = logging.getLogger("Sandbox")
 # authorized to affect.)
 MAX_TIMEOUT_SECONDS = 600.0
 DEFAULT_TIMEOUT_SECONDS = 30.0
+
+# Handlers block, and several of them block for a long time on purpose:
+# ``ui.ask`` waits five minutes for a person, ``proc.run`` two for a command,
+# ``net.http`` thirty seconds, and ``tool.call`` / ``service.call`` /
+# ``command.call`` re-enter the sandbox and wait for whatever *that* does. Each
+# one occupies a worker while it waits, so a small pool is not a throughput
+# limit but a liveness one: four workers meant four simultaneous questions
+# stopped the sandbox servicing anything at all, including the Requests the
+# frontend needed to draw those questions.
+#
+# Threads waiting on I/O are cheap and the pool grows lazily, so the ceiling
+# costs nothing until it is used.
+DEFAULT_MAX_WORKERS = 16
+# Asking is slower still and must never queue behind execution, so its pool is
+# sized for concurrent dialogs rather than concurrent work.
+DEFAULT_MAX_APPROVALS = 8
 
 
 def clamp_timeout(declared: float | None) -> float:
@@ -73,12 +91,58 @@ class Execution:
     # single shared context would answer one of them from the other's world.
     context: object = None
 
+    # Time accounting for the deadline. A box waiting on a 90-second model
+    # call is not hung — it is waiting for something the kernel itself
+    # started — so that time belongs to the kernel and must not be charged to
+    # the guest. But "time since the guest last did anything" is the wrong
+    # correction: a runaway that hammers Requests in a loop is never idle for
+    # long, and would be immortal. What is charged is therefore *elapsed time
+    # minus time blocked on us*, which subtracts one long wait in full and a
+    # spin loop's thousand short ones to nearly nothing.
+    in_flight: int = 0
+    blocked_total: float = 0.0
+    _blocked_since: float = 0.0
+    _progress_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def entered(self):
+        """One of this execution's Requests has reached a handler."""
+        with self._progress_lock:
+            if self.in_flight == 0:
+                self._blocked_since = time.monotonic()
+            self.in_flight += 1
+
+    def left(self):
+        """A handler has answered; the guest is about to run again."""
+        with self._progress_lock:
+            self.in_flight = max(0, self.in_flight - 1)
+            if self.in_flight == 0 and self._blocked_since:
+                self.blocked_total += time.monotonic() - self._blocked_since
+                self._blocked_since = 0.0
+
+    def blocked_for(self, now: float) -> float:
+        """Total seconds the kernel has owed this execution an answer."""
+        with self._progress_lock:
+            pending = (now - self._blocked_since
+                       if self.in_flight > 0 and self._blocked_since else 0.0)
+            return self.blocked_total + pending
+
+    def running_for(self, since: float, now: float | None = None) -> float:
+        """Seconds of *guest* execution since ``since``.
+
+        This is what a deadline measures. Waiting on the kernel does not
+        count; running, spinning, and blocking on something the guest chose to
+        do itself all do.
+        """
+        now = time.monotonic() if now is None else now
+        return max(0.0, (now - since) - self.blocked_for(now))
+
 
 class Interpreter:
     """Classifies and services Requests from running sandboxed code."""
 
-    def __init__(self, approve=None, max_workers: int = 4, record=None,
-                 context=None):
+    def __init__(self, approve=None, max_workers: int = DEFAULT_MAX_WORKERS,
+                 record=None,
+                 context=None, context_factory=None):
         """
         approve:
             callable(chain, request, decision) -> bool. Asks the user. When
@@ -93,10 +157,17 @@ class Interpreter:
             to receive, now sitting on the *host* side of the boundary where
             it answers Requests instead of being handed out. Never crosses
             into the guest.
+        context_factory:
+            callable(session_key) -> context, for executions that arrive
+            without one. A resident box is the case that needs it: a service
+            opens long before anything calls into it and has no session of its
+            own, so nothing can hand it a context at open time and it would
+            otherwise answer every Request from nothing at all.
         """
         self._approve = approve
         self._record = record
         self.context = context
+        self._context_factory = context_factory
         self._approver_bound = approve is not None
         self._gate_queue: queue.Queue = queue.Queue()
         self._pool = ThreadPoolExecutor(max_workers=max_workers,
@@ -111,7 +182,7 @@ class Interpreter:
         # unattended session's immediate refusal is never queued behind a
         # foreground dialog nobody has answered yet.
         self._approvals = ThreadPoolExecutor(
-            max_workers=max(2, max_workers),
+            max_workers=max(2, min(max_workers, DEFAULT_MAX_APPROVALS)),
             thread_name_prefix="sandbox-approve")
         self._gate = threading.Thread(target=self._gate_loop, daemon=True,
                                       name="sandbox-gate")
@@ -229,19 +300,59 @@ class Interpreter:
 
     def _execute(self, execution: Execution, request: Request,
                  decision: Decision):
-        """Run the handler off the gate thread and return the result."""
-        handler = HANDLERS.get(request.type)
-        if handler is None:
-            result = Result.failure(f"no handler for {request.type}")
-        else:
-            try:
-                context = (execution.context if execution.context is not None
-                           else self.context)
-                result = handler(context, request.args)
-            except Exception as exc:
-                logger.exception("handler failed: %s", request.type)
-                result = Result.failure(f"handler error: {exc}")
+        """Run the handler off the gate thread and return the result.
+
+        The handler runs marked as *serving this execution*, so anything it
+        reaches that re-enters the sandbox — ``tool.call``, ``service.call``,
+        ``command.call`` — can find out who is asking and descend from that
+        chain rather than starting a fresh one beside it.
+        """
+        execution.entered()
+        try:
+            handler = HANDLERS.get(request.type)
+            if handler is None:
+                result = Result.failure(f"no handler for {request.type}")
+            else:
+                context = self._context_for(execution)
+                try:
+                    with provenance.serving(execution.chain, context):
+                        result = handler(context, request.args)
+                except Exception as exc:
+                    logger.exception("handler failed: %s", request.type)
+                    result = Result.failure(f"handler error: {exc}")
+        finally:
+            execution.left()
         self._settle(execution, request, decision, result)
+
+    def _context_for(self, execution: Execution):
+        """The host object this execution's Requests are answered from.
+
+        Resolved once and cached on the execution rather than rebuilt per
+        Request: a resident box makes thousands, and they all belong to the
+        same asker.
+        """
+        if execution.context is None and self._context_factory is not None:
+            try:
+                execution.context = self._context_factory(None)
+            except Exception:
+                logger.exception("could not build a context for %s",
+                                 execution.name)
+        return (execution.context if execution.context is not None
+                else self.context)
+
+    def set_context_factory(self, factory) -> None:
+        """Install the context builder, once the kernel has parts to build from.
+
+        Boot order forces this exactly as it forces ``set_approver``: services
+        are discovered and loaded before the orchestrator, the tool registry
+        and the runtime exist, so the factory is installed early and reads
+        whatever has been wired by the time it is actually called.
+        """
+        self._context_factory = factory
+
+    def set_record(self, record) -> None:
+        """Install the ledger sink, once there is a database to write to."""
+        self._record = record
 
     def _settle(self, execution: Execution, request: Request,
                 decision: Decision, result: Result):

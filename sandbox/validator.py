@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import ast
 import difflib
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -202,6 +203,14 @@ BANNED_NAMES = {
 # them has to become a Request. Bare ``execute`` and ``lock`` are deliberately
 # absent: they appear on plenty of things that are not databases, and a linter
 # that cries wolf gets worked around.
+#
+# What this is aimed at is reaching around *the kernel's* database, which a
+# plugin does through a context or a service it was handed. It is not aimed at
+# a parser opening some unrelated ``.db`` file of the user's, which is a
+# legitimate parse and the reason ``sqlite3`` is in UNMEDIATED_STDLIB. Those
+# two were in flat contradiction: the module was allowed with a disclaimer and
+# then every method you would call on it was an ERROR, so the tabular parser
+# the comment cites could not actually be written. See ``_is_own_connection``.
 DB_ATTRS = {
     "conn": "sdk.db.query / sdk.db.write",
     "cursor": "sdk.db.query",
@@ -275,6 +284,13 @@ class Report:
     # A syntax error yields an empty set, which is safe only because a file
     # that does not parse never runs at all.
     unmediated: frozenset = frozenset()
+    #: SHA-256 of ``source``. Carrying the bytes was not enough on its own —
+    #: every caller validated a *path* and then handed that path to a loader
+    #: that opened it again, so the file could change in between and the claim
+    #: above was not actually enforced anywhere. The loader re-hashes and
+    #: refuses a mismatch. Last, so existing positional construction of a
+    #: Report keeps meaning what it did.
+    digest: str = ""
 
     @property
     def ok(self) -> bool:
@@ -305,6 +321,15 @@ class Report:
         return f"{self.filename}\n" + "\n".join(lines)
 
 
+def digest_of(source: str) -> str:
+    """Fingerprint the exact text that was checked.
+
+    Computed over the decoded string rather than the raw file so it matches
+    however the caller read it, which is the same thing the loader will do.
+    """
+    return hashlib.sha256((source or "").encode("utf-8")).hexdigest()
+
+
 def _module_root(name: str) -> str:
     """Longest matching prefix present in the effect table, else the root."""
     if name in EFFECT_MODULES or name in PURE_MODULES:
@@ -318,6 +343,12 @@ class _Walker(ast.NodeVisitor):
     def __init__(self):
         self.findings: list[Finding] = []
         self.classes: list[ast.ClassDef] = []
+        # Names bound to a connection the plugin opened itself. A parser
+        # reading a user's ``.db`` is doing exactly what ``sqlite3`` is
+        # allowed (with a disclaimer) for; the DB_ATTRS rule is about reaching
+        # around the *kernel's* database, and firing on both made the
+        # allowance useless.
+        self.own_connections: set[str] = set()
         # Modules whose behaviour the validator cannot see inside: foreign
         # libraries, and the stdlib modules that do their own path I/O. Kept
         # as data rather than left implicit in the warning text, because
@@ -375,6 +406,38 @@ class _Walker(ast.NodeVisitor):
             self._check_module(node.module, node)
 
     # ── calls and attributes ───────────────────────────────────────
+
+    def visit_Assign(self, node):
+        """Remember names bound to a connection this plugin opened itself."""
+        if self._opens_own_connection(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self.own_connections.add(target.id)
+        self.generic_visit(node)
+
+    @staticmethod
+    def _opens_own_connection(value) -> bool:
+        """Whether an expression is ``sqlite3.connect(...)``."""
+        return (isinstance(value, ast.Call)
+                and isinstance(value.func, ast.Attribute)
+                and value.func.attr == "connect"
+                and isinstance(value.func.value, ast.Name)
+                and value.func.value.id == "sqlite3")
+
+    def _is_own_connection(self, node) -> bool:
+        """Whether an attribute hangs off a connection the plugin opened.
+
+        Deliberately shallow — one level, on a name assigned in this file from
+        ``sqlite3.connect``. It is a linter, not a proof, and the shallow
+        version covers the shape a parser actually writes.
+        """
+        base = node.value
+        # Alternating, not one pass each: ``conn.cursor().execute(q).fetchall``
+        # is Attribute-over-Call-over-Attribute-over-Call, and unwinding only
+        # one kind at a time stops halfway down.
+        while isinstance(base, (ast.Call, ast.Attribute)):
+            base = base.func if isinstance(base, ast.Call) else base.value
+        return isinstance(base, ast.Name) and base.id in self.own_connections
 
     def visit_Call(self, node):
         """Direct calls to banned builtins."""
@@ -441,7 +504,8 @@ class _Walker(ast.NodeVisitor):
                      f"uses {node.value.id}.{node.attr}, which reaches the "
                      f"environment directly",
                      PURE_MODULE_ATTRS[(node.value.id, node.attr)])
-        elif node.attr in DB_ATTRS and not self._is_sdk_call(node):
+        elif (node.attr in DB_ATTRS and not self._is_sdk_call(node)
+                and not self._is_own_connection(node)):
             self.add(ERROR, node,
                      f"reaches the database directly via .{node.attr}",
                      DB_ATTRS[node.attr])
@@ -763,23 +827,18 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
                            f"{ceiling:g} and will be clamped")
 
 
-# ``isolation`` is deliberately absent. It was here, and it made the code
+# ``isolation`` is deliberately never collected. It was, and it made the code
 # being contained the authority on its own containment — see
 # ``sandbox/isolation.py``. The kernel now derives it from the file's tree, so
 # reading it off the file would at best be ignored and at worst be believed.
-DECLARATION_KEYS = ("name", "box", "lifetime", "timeout",
-                    "memory_mb", "requests", "exports", "dependencies_files",
-                    "dependencies_pip", "requires_services", "max_calls",
-                    "background_safe", "agent_prompt", "hooks",
-                    "subscribed_channels", "uses_console", "poll_interval",
-                    "max_poll_failures", "background_submit",
-                    "restore_on_start",
-                    # LLM backends. Read rather than asked because the whole
-                    # point is to know what a backend can do without importing
-                    # it — deciding whether to stream a call must not cost a
-                    # provider library import.
-                    "supports_streaming", "supports_tool_choice",
-                    "native_modalities", "display_name", "replaces")
+#
+# There was a ``DECLARATION_KEYS`` tuple here listing what to collect. It was
+# dead: ``_collect_declarations`` takes *every* literal class attribute,
+# because the dual-mode loader has to copy ``parameters``, ``description`` and
+# whatever else a base class grows onto its adapter, and an allowlist that
+# drifts silently drops a plugin's schema. A list nothing reads is worse than
+# no list, since the next person to add a declaration will maintain it and
+# wonder why it changed nothing.
 
 # Reading declarations without importing means *inherited* defaults are
 # invisible: ``class Counter(BaseService)`` never writes ``lifetime`` in the
@@ -868,18 +927,27 @@ def validate(source: str, *, filename: str = "<plugin>",
         tree = ast.parse(source, filename=filename)
     except SyntaxError as exc:
         return Report(filename, (Finding(
-            ERROR, exc.lineno or 0, f"does not parse: {exc.msg}"),), source)
+            ERROR, exc.lineno or 0, f"does not parse: {exc.msg}"),), source,
+            digest=digest_of(source))
 
     walker = _Walker()
     walker.visit(tree)
     _check_contract(tree, walker, filename, known_names)
+    # Before the findings are frozen, not inline in the Report call.
+    # ``_collect_declarations`` *adds* a finding — the advisory that
+    # ``isolation`` is ignored — and Python evaluates arguments left to right,
+    # so building the tuple in place meant that note was appended to a list
+    # nobody read again. The one thing telling an author why their declaration
+    # does nothing was itself doing nothing.
+    declarations = _collect_declarations(tree, walker, filename)
     return Report(
         filename,
         tuple(sorted(walker.findings,
                      key=lambda f: (f.level != ERROR, f.line))),
         source,
-        _collect_declarations(tree, walker, filename),
-        frozenset(walker.unmediated))
+        declarations,
+        frozenset(walker.unmediated),
+        digest_of(source))
 
 
 def validate_file(path, known_names=()) -> Report:
