@@ -34,6 +34,7 @@ READ_ONLY_PREFIXES = ("select", "pragma", "explain", "with")
 DDL_PREFIXES = ("create", "alter", "drop")
 
 MAX_CELL = 500
+MAX_ROWS = 500  # The kernel's own cap on what a db.query answer may carry.
 
 
 class SQLQuery(BaseTool):
@@ -113,6 +114,11 @@ Past conversations live in `my_conversations` and `conversation_messages`. Compa
             return sdk.fail(failed.error + _schema_hint(sdk, failed.error))
 
         header = f"SQL: {sql}\n\nReturned {len(rows)} row(s)."
+        if len(rows) >= MAX_ROWS:
+            # The kernel caps what may cross; saying so is what stops the
+            # model reading a capped answer as the whole table.
+            header += (f" That is the cap — there may be more. "
+                       f"Add LIMIT/OFFSET or an aggregate to see the rest.")
         summary = header if not rows else f"{header}\n\n{_render_table(rows)}"
         return sdk.ok({"rows": rows, "row_count": len(rows), "wrote": False},
                       llm_summary=summary)
