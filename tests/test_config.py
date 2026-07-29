@@ -180,3 +180,80 @@ def test_save_plugin_config_uses_atomic_temp_file(tmp_path):
 
     assert json.loads((tmp_path / "plugin_config.json").read_text(encoding="utf-8")) == {"one": 1}
     assert not list(tmp_path.glob("plugin_config.json.tmp-*"))
+
+
+# ── Settings that graduated from a plugin into the kernel ────────────
+#
+# A capability absorbed into the kernel leaves its settings behind. That was
+# not cosmetic: ``save`` used to treat "already in plugin_config.json" as
+# ownership, so an undeclared key's home was an accident of history, and a
+# key re-homed into SETTINGS_DATA could never reach the file that now owned
+# it. ``llm_profiles`` lived exactly there and users lost their model config.
+
+def test_a_kernel_declaration_beats_an_existing_plugin_config_entry(
+        tmp_path, monkeypatch):
+    """Otherwise the re-homed key can never reach config.json."""
+    plugin_path = str(tmp_path / "plugin_config.json")
+    monkeypatch.setattr(config_manager, "_DEFAULT_PLUGIN_CONFIG_PATH",
+                        plugin_path)
+    config_manager.save_plugin_config({"llm_profiles": {"old": {}}},
+                                      plugin_path)
+
+    path = _cfg(tmp_path)
+    config_manager.save({"llm_profiles": {"new": {}}}, path)
+
+    assert json.loads(open(path).read())["llm_profiles"] == {"new": {}}
+
+
+def test_rehoming_moves_the_value_and_empties_the_old_home(tmp_path,
+                                                           monkeypatch):
+    plugin_path = str(tmp_path / "plugin_config.json")
+    monkeypatch.setattr(config_manager, "_DEFAULT_PLUGIN_CONFIG_PATH",
+                        plugin_path)
+    monkeypatch.setattr(config_manager, "_DEFAULT_CONFIG_PATH", _cfg(tmp_path))
+    config_manager.save_plugin_config(
+        {"llm_profiles": {"m": {"llm_endpoint": "x"}},
+         "default_llm_profile": "m",
+         "some_plugin_setting": 7}, plugin_path)
+
+    runtime = {}
+    moved = config_manager.rehome_kernel_keys(runtime)
+
+    assert moved == ["default_llm_profile", "llm_profiles"]
+    # The new home has them...
+    core = json.loads(open(_cfg(tmp_path)).read())
+    assert core["llm_profiles"] == {"m": {"llm_endpoint": "x"}}
+    assert core["default_llm_profile"] == "m"
+    # ...the old one does not, and an unrelated plugin key is untouched.
+    remaining = json.loads(open(plugin_path).read())
+    assert remaining == {"some_plugin_setting": 7}
+    # And the caller's live config can see them immediately.
+    assert runtime["llm_profiles"] == {"m": {"llm_endpoint": "x"}}
+
+
+def test_rehoming_is_idempotent(tmp_path, monkeypatch):
+    """It runs on every boot, so a second pass must find nothing to do."""
+    plugin_path = str(tmp_path / "plugin_config.json")
+    monkeypatch.setattr(config_manager, "_DEFAULT_PLUGIN_CONFIG_PATH",
+                        plugin_path)
+    monkeypatch.setattr(config_manager, "_DEFAULT_CONFIG_PATH", _cfg(tmp_path))
+    config_manager.save_plugin_config({"llm_profiles": {"m": {}}}, plugin_path)
+
+    assert config_manager.rehome_kernel_keys({}) == ["llm_profiles"]
+    assert config_manager.rehome_kernel_keys({}) == []
+    assert json.loads(open(_cfg(tmp_path)).read())["llm_profiles"] == {"m": {}}
+
+
+def test_the_llm_settings_are_kernel_owned(tmp_path):
+    """The declaration that stops it happening again.
+
+    Talking to a model is kernel routing now — ``llm/`` owns profiles and
+    brains — so nothing outside the kernel declares these.
+    """
+    from plugins.plugin_discovery import get_plugin_settings
+
+    kernel = {entry[1] for entry in SETTINGS_DATA}
+    plugin = {entry[1] for entry in get_plugin_settings()}
+    for key in ("llm_profiles", "default_llm_profile"):
+        assert key in kernel, f"{key} has no declared home"
+        assert key not in plugin, f"{key} is declared in two places"

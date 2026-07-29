@@ -156,7 +156,18 @@ def save(config: dict, path: str = None):
     # plugin settings: the runtime config carries plugin values loaded early
     # (load_plugin_config_early) for plugins not yet discovered/installed, and
     # those must never be duplicated into core config.json.
-    plugin_keys = _get_plugin_keys() | set(load_plugin_config().keys())
+    # Keys already living in plugin_config.json count as plugin keys, not just
+    # currently-registered plugin settings: the runtime config carries values
+    # loaded early for plugins not yet discovered, and those must never be
+    # duplicated into core config.json.
+    #
+    # A *kernel* declaration always wins, though, and that exception is
+    # load-bearing. Without it the rule was "whichever file already has it owns
+    # it", which is not ownership at all — it made a setting's home an accident
+    # of history, and left a key that had been re-homed into SETTINGS_DATA
+    # permanently unable to reach the file that now owns it.
+    plugin_keys = ((_get_plugin_keys() | set(load_plugin_config().keys()))
+                   - set(DEFAULTS))
     existing = {}
     p = Path(path)
     if p.exists():
@@ -236,10 +247,42 @@ def save_plugin_config(plugin_values: dict, path: str = None):
     )
 
 
+def rehome_kernel_keys(config: dict) -> list:
+    """Move settings that have become kernel-owned into config.json.
+
+    A capability that graduates from a plugin into the kernel leaves its
+    settings behind: ``service_llm.py`` declared ``llm_profiles`` and
+    ``default_llm_profile``, and absorbing it into ``llm/`` re-homed the code
+    without re-homing the declaration. The values keep working — right up to
+    the first write that does not carry them, after which readers look in
+    config.json and the file still holding them is plugin_config.json.
+
+    So the correction is a *move*, and the order it happens in is the whole
+    of its safety: config.json gains the values first and plugin_config.json
+    loses them second. Crashing in between costs a duplicated key, which the
+    next boot cleans up; the other order costs the user their model
+    configuration.
+
+    Idempotent — once the keys are gone from plugin_config.json there is
+    nothing left to move — so it is safe on every boot.
+    """
+    saved = load_plugin_config()
+    moving = {key: value for key, value in saved.items() if key in DEFAULTS}
+    if not moving:
+        return []
+    config.update(moving)
+    save(config)
+    save_plugin_config({k: v for k, v in saved.items() if k not in moving})
+    logger.info("Moved %s from plugin_config.json to config.json: they are "
+                "kernel settings now.", ", ".join(sorted(moving)))
+    return sorted(moving)
+
+
 def load_plugin_config_early(config: dict):
     """Phase 1 (before discovery): load existing plugin_config.json values
     into the runtime config so that build_services() etc. can see them.
     """
+    rehome_kernel_keys(config)
     saved = load_plugin_config()
     if saved:
         config.update(saved)

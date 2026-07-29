@@ -88,6 +88,21 @@ class FakeAdapter:
         self.calls.append(("resolve_next", session_key, value))
         return True
 
+    def resolve_approval(self, session_key, request_id, value):
+        """Answer one pending request by id."""
+        self.calls.append(("resolve", session_key, request_id, value))
+        return True
+
+    #: Which approvals this stand-in claims are still waiting. The handler
+    #: settles existence synchronously before it detaches the answering, so a
+    #: double that always says "nothing pending" would make resolve a no-op.
+    pending = True
+
+    def is_approval_pending(self, session_key, request_id=None):
+        """Whether there is still something to answer."""
+        self.calls.append(("is_pending", session_key, request_id))
+        return self.pending
+
 
 @pytest.fixture
 def box():
@@ -259,7 +274,11 @@ def test_resolving_without_an_id_answers_the_next_one(box, tmp_path, adapter):
         unload_box("frontend_talker")
 
     assert result.data is True
-    assert adapter.calls == [("resolve_next", "s1", True)]
+    # Existence is settled first and synchronously, then the answering is
+    # detached — so the verdict stays truthful without holding the box lock
+    # across a turn. See ``_frontend_resolve``.
+    assert adapter.calls == [("is_pending", "s1", None),
+                             ("resolve_next", "s1", True)]
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -586,3 +605,111 @@ def test_a_session_reports_its_phase(box, tmp_path):
     assert described["phase"] == "approving_request"
     assert described["busy"] is True
     assert described["conversation_id"] == 7
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Re-entrancy: the frontend deadlock.
+#
+# A resident frontend calls in from ``poll``, which holds its box's single
+# call lock. Anything that reaches ``runtime.handle_action`` runs the turn
+# synchronously, and a turn renders — straight back into the box that is
+# still waiting for this Request to answer. ``submit`` was detached for this
+# reason; ``resolve`` and ``cancel`` were not, and answering an approval from
+# an inline button froze the transport permanently.
+# ──────────────────────────────────────────────────────────────────────
+
+class _ReentrantAdapter:
+    """An adapter whose state machine renders back into the caller, as a real
+    one does. ``rendered`` only fills in if the Request did not block."""
+
+    background_submit = True
+    name = "reentrant"
+
+    def __init__(self):
+        self.rendered = []
+        self.done = threading.Event()
+
+    def _turn(self, label):
+        """What handle_action does: run, and render on the way."""
+        self.rendered.append(label)
+        self.done.set()
+        return SimpleNamespace(ok=True)
+
+    def submit_text(self, session_key, text):
+        return self._turn("submit")
+
+    def cancel(self, session_key):
+        return self._turn("cancel")
+
+    def is_approval_pending(self, session_key, request_id=None):
+        return True
+
+    def resolve_approval(self, session_key, request_id, value):
+        return self._turn("resolve")
+
+    def resolve_next_approval(self, session_key, value):
+        return self._turn("resolve_next")
+
+
+@pytest.fixture
+def reentrant():
+    """A parked re-entrant adapter."""
+    made = _ReentrantAdapter()
+    made.token = park(made)
+    yield made
+    unpark(made.token)
+
+
+@pytest.mark.parametrize("args,expected", [
+    ({"input_kind": "text", "text": "hi"}, "submit"),
+    ({}, "cancel"),
+    ({"value": True}, "resolve_next"),
+    ({"value": True, "request_id": "req-1"}, "resolve"),
+])
+def test_state_machine_driving_requests_leave_the_callers_thread(
+        reentrant, args, expected):
+    """Each of these drives a turn, so none may run on the caller's thread.
+
+    Asserting on the *thread* rather than on a timeout: a deadlock would hang
+    this test rather than fail it, and a test that hangs CI is worse than the
+    bug. If the work ran inline it would be on this thread, and it is the
+    inline case that cannot survive a render.
+    """
+    from sandbox.handlers.kernel import (_frontend_cancel, _frontend_resolve,
+                                         _frontend_submit)
+
+    handler = {"submit": _frontend_submit, "cancel": _frontend_cancel}.get(
+        expected, _frontend_resolve)
+    here = threading.get_ident()
+    seen = []
+    original = reentrant._turn
+    reentrant._turn = lambda label: (seen.append(threading.get_ident()),
+                                     original(label))[1]
+
+    result = handler(None, {"token": reentrant.token, "session_key": "s1",
+                            **args})
+
+    assert result.ok
+    assert reentrant.done.wait(5), f"{expected} never ran"
+    assert seen and seen[0] != here, (
+        f"{expected} ran on the caller's thread; a render would deadlock")
+    assert reentrant.rendered == [expected]
+
+
+def test_resolving_something_already_answered_still_says_so(reentrant):
+    """Detaching must not cost the caller the verdict.
+
+    A frontend branches on this to decide whether what someone typed was a
+    yes/no or an ordinary message, so an optimistic True would swallow the
+    next thing they said.
+    """
+    from sandbox.handlers.kernel import _frontend_resolve
+
+    reentrant.is_approval_pending = lambda session_key, request_id=None: False
+
+    result = _frontend_resolve(None, {"token": reentrant.token,
+                                      "session_key": "s1", "value": True})
+
+    assert result.ok
+    assert result.data is False
+    assert reentrant.rendered == []

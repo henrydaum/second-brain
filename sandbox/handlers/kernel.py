@@ -1928,6 +1928,55 @@ def _prepare_attachment(ctx, args: dict):
     }
 
 
+def _drive(adapter, work, what: str) -> Result:
+    """Run something that drives the state machine, off the box's thread.
+
+    This is the one shape every re-entrant frontend Request has, and it is a
+    deadlock unless it is handled in exactly one place.
+
+    A resident frontend calls in from ``poll``, which holds its box's single
+    call lock for the duration of the Request. ``handle_action`` runs the
+    turn *synchronously* — and a turn renders: tool status, messages, a form.
+    Every one of those is a ``box.call("render", ...)`` back into the box that
+    is still sitting inside ``poll`` waiting for this answer. The render
+    blocks on the lock, the turn never finishes, the Request never returns,
+    and the frontend is frozen for good.
+
+    ``submit`` was given a thread for this reason. ``resolve`` and ``cancel``
+    were not, and both reach ``handle_action`` by exactly the same path —
+    ``resolve_approval`` and ``cancel`` are ``submit`` with a different action
+    type. Answering an approval from an inline button therefore froze the
+    transport every time. Hoisted here so a sixth entry point cannot be added
+    without inheriting the answer.
+
+    The REPL escaped it by luck rather than design: in ``approving_request``
+    it answers through ``submit_text``, which was already detached. It is the
+    *bus-driven* approval path — the one a rich frontend with buttons uses —
+    that had no protection.
+
+    Returns a Result when the work was detached, or None to run it inline.
+    Detaching costs the caller a real answer, so it reports acceptance: see
+    ``_frontend_resolve`` for what a frontend should ask instead.
+    """
+    if not getattr(adapter, "background_submit", False):
+        return None
+
+    import threading
+
+    def run():
+        """Drive it, and never let the failure escape onto a bare thread."""
+        try:
+            work()
+        except Exception:
+            logger.exception("detached frontend %s failed", what)
+
+    threading.Thread(
+        target=run, daemon=True,
+        name=f"{getattr(adapter, 'name', 'frontend')}-{what}",
+    ).start()
+    return Result(data=True)
+
+
 def _frontend_submit(ctx, args: dict) -> Result:
     """Hand a person's input to the state machine.
 
@@ -1965,20 +2014,8 @@ def _frontend_submit(ctx, args: dict) -> Result:
                                   args.get("payload"))
         raise ValueError(f"unknown submit kind {kind!r}")
 
-    if getattr(adapter, "background_submit", False):
-        import threading
-
-        def run():
-            try:
-                submit()
-            except Exception:
-                logger.exception("background frontend submit failed")
-
-        threading.Thread(
-            target=run, daemon=True,
-            name=f"{getattr(adapter, 'name', 'frontend')}-submit",
-        ).start()
-        return Result(data=True)
+    if (detached := _drive(adapter, submit, "submit")) is not None:
+        return detached
 
     try:
         result = submit()
@@ -1991,12 +2028,24 @@ def _frontend_submit(ctx, args: dict) -> Result:
 
 
 def _frontend_cancel(ctx, args: dict) -> Result:
-    """Stop whatever a session is doing."""
+    """Stop whatever a session is doing.
+
+    ``cancel`` is ``submit`` with a different action type, so it drives the
+    state machine and must be detached for the same reason.
+    """
     adapter, refusal = _at_desk(args)
     if refusal is not None:
         return refusal
+
+    session_key = str(args.get("session_key") or "")
+
+    def cancel():
+        return adapter.cancel(session_key)
+
+    if (detached := _drive(adapter, cancel, "cancel")) is not None:
+        return detached
     try:
-        adapter.cancel(str(args.get("session_key") or ""))
+        cancel()
         return Result(data=True)
     except Exception as exc:
         return Result.failure(f"cancel failed: {exc}")
@@ -2043,19 +2092,43 @@ def _frontend_attend(ctx, args: dict) -> Result:
 
 
 def _frontend_resolve(ctx, args: dict) -> Result:
-    """Answer a pending approval by id, or the session's next one."""
+    """Answer a pending approval by id, or the session's next one.
+
+    Answering drives the state machine — the approved action runs, and the
+    turn it belongs to carries on — so this detaches like ``submit``. That
+    froze every button-answered approval on a rich frontend until it did:
+    the turn's first render blocked on the box lock the caller was holding.
+
+    The answer stays truthful across the detach. Whether the approval is
+    still there is settled *here*, synchronously, because that is a lookup
+    rather than a turn; only the driving is handed to a thread. So ``False``
+    still means "there was nothing to answer" — which is what a frontend
+    branches on to decide whether the person's text was a yes/no or an
+    ordinary message.
+    """
     adapter, refusal = _at_desk(args)
     if refusal is not None:
         return refusal
 
     session_key = str(args.get("session_key") or "")
     request_id = str(args.get("request_id") or "")
+    value = args.get("value")
+
     try:
+        if not adapter.is_approval_pending(session_key, request_id or None):
+            return Result(data=False)
+    except Exception as exc:
+        return Result.failure(f"resolve failed: {exc}")
+
+    def resolve():
         if request_id:
-            return Result(data=bool(adapter.resolve_approval(
-                session_key, request_id, args.get("value"))))
-        return Result(data=bool(adapter.resolve_next_approval(
-            session_key, args.get("value"))))
+            return adapter.resolve_approval(session_key, request_id, value)
+        return adapter.resolve_next_approval(session_key, value)
+
+    if (detached := _drive(adapter, resolve, "resolve")) is not None:
+        return detached
+    try:
+        return Result(data=bool(resolve()))
     except Exception as exc:
         return Result.failure(f"resolve failed: {exc}")
 

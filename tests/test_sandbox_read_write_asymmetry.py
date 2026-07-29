@@ -191,3 +191,86 @@ def test_the_builtins_namespace_is_not_reachable(tmp_path):
     report = validate_file(source)
     assert not report.ok
     assert "__builtins__" in report.render()
+
+
+# ── secret.reveal is gated by ownership, not by need ──────────────────
+#
+# CLAUDE.md described this rule for a long time before the code carried it:
+# a plugin reading back the credential it declared is not asked, because
+# configuring the setting was the consent. Everyone else is asked. The gap
+# had teeth — a frontend needs its own token inside start(), before any
+# frontend exists to draw a dialog, so an unconditional ask there is a
+# question nobody can answer, at boot, every boot.
+
+def _reveal(name: str):
+    from sandbox.guest.requests import SECRET_REVEAL
+
+    return Request(SECRET_REVEAL, {"name": name})
+
+
+def _owned_by(monkeypatch, key: str, owners: list):
+    """Make the setting registry report ``owners`` as declaring ``key``."""
+    import plugins.plugin_discovery as discovery
+
+    monkeypatch.setattr(
+        discovery, "get_setting_plugin_names",
+        lambda setting: list(owners) if setting == key else [])
+
+
+def test_a_plugin_may_read_back_the_secret_it_declared(monkeypatch):
+    _owned_by(monkeypatch, "secret_telegram_bot_token", ["telegram"])
+
+    chain = Chain(root="frontend:telegram").push("frontend_telegram")
+    decision = classify(_reveal("secret_telegram_bot_token"), chain)
+
+    assert decision.level == SAFE
+    assert "telegram" in decision.reason
+
+
+def test_someone_elses_secret_is_still_asked_about(monkeypatch):
+    """The exemption is ownership. Needing the value is not a claim to it."""
+    _owned_by(monkeypatch, "secret_telegram_bot_token", ["telegram"])
+
+    chain = Chain(root="user").push("tool_exfiltrate")
+    decision = classify(_reveal("secret_telegram_bot_token"), chain)
+
+    assert decision.level == UNSAFE
+
+
+def test_an_undeclared_secret_is_asked_about(monkeypatch):
+    """No owner means nobody can claim it — an env var, say."""
+    _owned_by(monkeypatch, "secret_telegram_bot_token", ["telegram"])
+
+    chain = Chain(root="frontend:telegram").push("frontend_telegram")
+
+    assert classify(_reveal("OPENAI_API_KEY"), chain).level == UNSAFE
+    assert classify(_reveal(""), chain).level == UNSAFE
+
+
+def test_ownership_cannot_be_claimed_by_the_caller(monkeypatch):
+    """The identity comes from the kernel-assigned root and the chain links,
+    never from anything the guest says about itself."""
+    _owned_by(monkeypatch, "secret_telegram_bot_token", ["telegram"])
+
+    # A plugin that merely names itself convincingly in its own arguments.
+    chain = Chain(root="user").push("impostor")
+    request = Request("secret.reveal", {"name": "secret_telegram_bot_token",
+                                        "owner": "telegram",
+                                        "plugin": "telegram"})
+
+    assert classify(request, chain).level == UNSAFE
+
+
+def test_a_callee_does_not_inherit_the_owner_s_exemption_by_name(monkeypatch):
+    """Ownership is set membership over the chain, so a tool called *by* the
+    owner is covered — that is the caller spending its own grant — while an
+    unrelated chain is not."""
+    _owned_by(monkeypatch, "secret_telegram_bot_token", ["telegram"])
+
+    inside = Chain(root="frontend:telegram").push("frontend_telegram").push(
+        "tool_helper")
+    outside = Chain(root="frontend:mcp_server").push("frontend_mcp_server")
+
+    assert classify(_reveal("secret_telegram_bot_token"), inside).level == SAFE
+    assert classify(_reveal("secret_telegram_bot_token"),
+                    outside).level == UNSAFE

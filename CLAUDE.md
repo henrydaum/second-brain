@@ -273,6 +273,17 @@ the difference between a microkernel and a pile of assumptions:
   they keep the post-escort brain, bus events, and provider params.
 - **`runtime/runtime_config.py` `build_loop`** — the "no LLM" path now raises a
   friendly message pointing at `/setup` instead of an opaque error.
+- **A capability absorbed into the kernel must take its settings with it.**
+  `service_llm.py` declared `llm_profiles` and `default_llm_profile`; moving
+  the code into `llm/` left the declarations behind, owned by nobody. That was
+  not cosmetic — `config_manager.save` treated "already in plugin_config.json"
+  as ownership, so an undeclared key's home was an accident of history, and any
+  write that did not carry it sent it to config.json while every reader looked
+  in plugin_config.json. Users lost their model configuration on plugin
+  install. Both keys are kernel settings now; a kernel declaration always beats
+  an existing plugin_config entry; and `config_manager.rehome_kernel_keys`
+  moves stragglers at boot, new home first so a crash costs a duplicate rather
+  than the value. Check this whenever something graduates into the kernel.
 - **`config/config_data.py`** — `autoload_services` trimmed to
   `["llm", "timekeeper"]` (extension services auto-load when installed);
   `enabled_frontends` → `["repl"]`;
@@ -635,6 +646,23 @@ methods, and `submit_*` funnelling into `runtime.handle_action`. The base owns
 `render_*` collapse to one `render(kind, payload)` box call (`sandbox/
 frontends.py` holds the `KINDS` both sides must agree on); `capabilities`
 crosses as a literal dict and is rebuilt into `FrontendCapabilities`.
+
+**Anything that drives the state machine leaves the caller's thread**
+(`_drive` in `sandbox/handlers/kernel.py`). A resident frontend calls in from
+`poll`, which holds its box's single call lock; `runtime.handle_action` runs
+the turn *synchronously*, and a turn renders — straight back into the box that
+is still waiting for the Request to answer. The render blocks on the lock and
+the frontend is frozen for good. `submit` was detached for this reason;
+`resolve` and `cancel` were not, and both reach `handle_action` by the same
+path (`resolve_approval` and `cancel` are `submit` with a different action
+type), so answering an approval from an inline button froze Telegram every
+time. The REPL escaped by luck: in `approving_request` it answers through
+`submit_text`, which was already detached. One helper now, so a sixth entry
+point cannot be added without inheriting the answer. Detaching costs the
+caller a real answer, so **existence is settled synchronously and only the
+driving is handed to a thread** — `frontend.resolve` still returns False for
+"there was nothing to answer", which is what a frontend branches on to decide
+whether a line was a yes/no or an ordinary message.
 
 The inbound half — `sdk.frontend.submit_text/submit_attachment/submit_action/
 cancel/bind/attended/resolve` — is five Requests scoped the same way

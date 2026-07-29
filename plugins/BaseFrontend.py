@@ -640,6 +640,22 @@ class BaseFrontend:
         with self._approval_lock:
             return any(not getattr(req, "is_resolved", False) for req in self._pending_approvals.get(session_key, {}).values())
 
+    def is_approval_pending(self, session_key: str, request_id: str | None = None) -> bool:
+        """Whether a specific approval is still waiting to be answered.
+
+        A dictionary lookup, deliberately: it answers "does this still exist?"
+        without driving the state machine, which is what lets a *detached*
+        resolve report honestly instead of optimistically. Answering an
+        approval has to run off the caller's thread — see ``_drive`` in the
+        sandbox handlers — and a caller that only learns "accepted" cannot
+        tell an already-answered request from a live one.
+        """
+        if request_id is None:
+            return self.has_pending_approval(session_key)
+        with self._approval_lock:
+            req = self._pending_approvals.get(session_key, {}).get(request_id)
+            return req is not None and not getattr(req, "is_resolved", False)
+
     def _clear_pending_approval(self, session_key: str, request_id: str | None = None) -> None:
         """Internal helper to clear pending approval."""
         with self._approval_lock:

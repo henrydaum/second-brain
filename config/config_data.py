@@ -146,6 +146,32 @@ SETTINGS_DATA = [
      DEFAULT_SCHEDULED_JOBS,
      {"type": "json_dict", "hidden": True}),
 
+    # --- The LLM ---
+    # Declared here because talking to a model is kernel routing now: the
+    # ``llm/`` package owns profiles and brains, and backends are installable
+    # helpers rather than a service. ``service_llm.py`` used to declare these
+    # two, and when it was absorbed the declaration was not re-homed — so they
+    # belonged to nobody.
+    #
+    # That is not cosmetic. ``config_manager.save`` keeps a key out of
+    # config.json when it is a plugin key *or already present in
+    # plugin_config.json*, so an undeclared setting's home was decided by
+    # whichever file happened to hold it. Present, it stayed put; absent — a
+    # fresh install, or any write that did not carry it — it landed in
+    # config.json while every reader looked in plugin_config.json, and the
+    # user's model configuration silently vanished. See ``_rehome_kernel_keys``.
+    ("LLM Profiles", "llm_profiles",
+     "Named model profiles. Each carries an endpoint, a secret_llm_api_key, "
+     "a context size and the modalities the model accepts natively. "
+     "Managed via /llm.",
+     {},
+     {"type": "json_dict", "hidden": True}),
+
+    ("Default LLM Profile", "default_llm_profile",
+     "Name of the profile used when nothing selects another.",
+     "",
+     {"type": "text", "hidden": True}),
+
     # --- Agent Profiles ---
     # Each profile bundles an LLM reference + optional prompt/tool scope.
     # Managed via /agent. The "default" profile is permanent and

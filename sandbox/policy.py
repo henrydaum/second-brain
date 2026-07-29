@@ -400,6 +400,43 @@ def _classify_shell(kind: str, args: dict) -> Decision:
                     + (f" (in {where})" if where else ""))
 
 
+def _setting_owners(key: str) -> set:
+    """Which plugins declared a config setting, per the setting registry.
+
+    The registry and not the guest, deliberately: ownership has to be a fact
+    the caller cannot assert about itself, or the exemption it unlocks is one
+    any plugin can claim by saying the right thing.
+    """
+    if not key:
+        return set()
+    try:
+        from plugins.plugin_discovery import get_setting_plugin_names
+
+        return set(get_setting_plugin_names(key))
+    except Exception:
+        return set()
+
+
+def _callers(chain: Chain) -> set:
+    """Every plugin identity in this chain, including the resident root.
+
+    Resident roots are assigned by the kernel adapter rather than supplied by
+    guest code, so ``frontend:telegram`` is an authenticated identity and
+    belongs in the set. The box link is commonly the source-file stem
+    (``service_timekeeper``), which is why the root is added rather than
+    relied upon alone.
+    """
+    callers = set(chain.links)
+    if chain.root.startswith(("service:", "frontend:")):
+        callers.add(chain.root.split(":", 1)[1])
+    return callers
+
+
+def _owns_setting(chain: Chain, key: str) -> bool:
+    """Whether this chain contains the plugin that declared ``key``."""
+    return bool(_setting_owners(key) & _callers(chain))
+
+
 def classify(request: Request, chain: Chain) -> Decision:
     """Decide whether a Request may execute without asking the user.
 
@@ -460,9 +497,23 @@ def classify(request: Request, chain: Chain) -> Decision:
         return Decision(SAFE, "scratch space")
 
     # ── plaintext is the one thing always worth asking about ──
+    #
+    # With one exception, and it is the same one ``config.write`` makes below:
+    # a plugin reading back the credential *it declared* is not asked, because
+    # configuring that setting was the consent. Anyone else is asked, which is
+    # the whole point — the exemption is ownership, not need.
+    #
+    # This was documented as the rule and not implemented as one, and the gap
+    # had teeth. A frontend needs its own token during ``start()``, before any
+    # frontend is up to draw a dialog; an unconditional ask there is a question
+    # nobody can answer, at boot, every boot. Ownership comes from the setting
+    # registry rather than from anything the guest says about itself.
     if kind == R.SECRET_REVEAL:
-        return Decision(UNSAFE,
-                        f"plaintext of {args.get('name', 'a secret')}")
+        name = args.get("name") or ""
+        if _owns_setting(chain, name):
+            owner = sorted(_setting_owners(name) & _callers(chain))[0]
+            return Decision(SAFE, f"{owner} reads its own {name}")
+        return Decision(UNSAFE, f"plaintext of {name or 'a secret'}")
 
     # ── secrets are readable as handles, so reading them is safe ──
     if kind in (CONFIG_READ, ENV_READ):
@@ -489,21 +540,8 @@ def classify(request: Request, chain: Chain) -> Decision:
         if chain.typed_command:
             return Decision(SAFE, "a command the user typed")
         key = args.get("key") or ""
-        try:
-            from plugins.plugin_discovery import get_setting_plugin_names
-
-            owners = set(get_setting_plugin_names(key))
-        except Exception:
-            owners = set()
-        callers = set(chain.links)
-        # Resident roots are assigned by the kernel adapter, not supplied by
-        # guest code. Include that authenticated service/frontend identity in
-        # ownership checks; the box link is commonly the source-file stem
-        # (for example ``service_timekeeper``), not the public plugin name.
-        if chain.root.startswith(("service:", "frontend:")):
-            callers.add(chain.root.split(":", 1)[1])
-        if args.get("scope") == "plugin" and owners & callers:
-            owner = sorted(owners & callers)[0]
+        if args.get("scope") == "plugin" and _owns_setting(chain, key):
+            owner = sorted(_setting_owners(key) & _callers(chain))[0]
             return Decision(SAFE, f"{owner} persists its own {key}")
         return Decision(UNSAFE, f"config.write: change setting {key}")
 

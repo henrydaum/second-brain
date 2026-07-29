@@ -549,6 +549,15 @@ An `approval` render carries an `id`; answer it with `sdk.frontend.resolve`.
 Holding the id is enough to answer and *only* enough to answer — the action
 being authorized never crosses.
 
+`resolve`, `cancel` and the `submit_*` calls all drive the state machine, and
+the turn they start renders back into *your* box. The kernel therefore runs
+them off your thread when you declare `background_submit` — without that, the
+render would block on the call lock you are still holding inside `poll`, and
+your transport would freeze permanently. What comes back is whether there was
+anything to do (`resolve` returns False for an approval that was already
+answered or timed out), not whether the turn succeeded; the turn reaches you
+as renders, like everything else.
+
 **A file that arrived over your transport wants `ingest=True`.** Point it at
 scratch from `sdk.fs.temp()`, let the client library download straight there,
 and the kernel moves it into the attachment cache — a watched directory, so the
