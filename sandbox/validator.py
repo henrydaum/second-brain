@@ -618,7 +618,7 @@ def _check_subscribed_channels(walker: _Walker, node, cls, family: str):
 def _check_secret_names(walker: _Walker, node):
     """Warn about a config setting that looks like a credential but is not
     declared as one."""
-    from .secrets import SECRET_PREFIX, looks_secret
+    from .credentials import SECRET_PREFIX, looks_secret
 
     entries = _literal(node.value)
     if not isinstance(entries, (list, tuple)):

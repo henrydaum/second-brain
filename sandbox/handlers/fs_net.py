@@ -25,7 +25,7 @@ from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                               FS_WRITE_BYTES, NET_HTTP, PROC_RUN,
                               SECRET_REVEAL, Result)
 from ..protected import is_protected, reason_for
-from ..secrets import lookup_from, redact, resolve
+from ..credentials import lookup_from, redact, resolve
 
 MAX_READ_BYTES = 8 * 1024 * 1024
 # Binary reads get their own, larger cap: the things that need them are media

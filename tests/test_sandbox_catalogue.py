@@ -1,8 +1,8 @@
-"""The Request catalogue wired to handlers: completeness, secrets, scoping.
+﻿"""The Request catalogue wired to handlers: completeness, secrets, scoping.
 
 Three properties matter more than any individual handler:
 
-- every Request in the catalogue is *classified* — nothing reaches an effect
+- every Request in the catalogue is *classified* â€” nothing reaches an effect
   without a decision
 - every Request is either serviced or explicitly listed as unwired
 - the SDK can actually reach everything the catalogue defines
@@ -20,13 +20,13 @@ from sandbox.guest import requests as R
 from sandbox.guest.sdk import SDK
 from sandbox.handlers import HANDLERS, UNWIRED
 from sandbox.policy import classify
-from sandbox.secrets import handle_for, is_secret, redact, resolve
+from sandbox.credentials import handle_for, is_secret, redact, resolve
 from sandbox.users import ScopeError, scope_sql
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Completeness.
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @pytest.mark.parametrize("kind", sorted(R.ALL_TYPES))
 def test_every_request_is_classified(kind):
@@ -163,9 +163,9 @@ def test_the_sdk_reaches_every_wired_request():
     assert unreachable == set(), f"no SDK route to: {sorted(unreachable)}"
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Policy, family by family.
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_egress_is_unsafe_whatever_the_verb():
     """The single control that makes generous reads safe."""
@@ -235,14 +235,14 @@ def test_reads_stay_broad():
                         Chain()).safe, kind
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Secret handles.
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_the_lint_heuristic_recognises_credential_names():
     """Not policy any more - this is what the validator warns about, and
     what environment variables are still judged by."""
-    from sandbox.secrets import looks_secret
+    from sandbox.credentials import looks_secret
 
     for name in ("brave_api_key", "OPENAI_API_KEY", "client_secret",
                  "db_password", "access_token"):
@@ -287,9 +287,9 @@ def test_config_read_redacts(tmp_path):
     assert everything["secret_brave_api_key"] == "<secret:secret_brave_api_key>"
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Per-user scoping.
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_the_virtual_table_expands_to_the_current_user():
     """Scoping is structural: the plugin cannot forget to filter."""
@@ -343,9 +343,9 @@ def test_scoping_reaches_the_real_query_handler():
     assert not refused.ok
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Handlers that need the kernel degrade rather than explode.
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_a_missing_capability_is_an_ordinary_failure():
     """This is a microkernel: the timekeeper may simply not be installed."""
@@ -424,9 +424,9 @@ def test_a_service_that_raises_fails_the_call_only():
     assert "nope" in result.error
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # End to end through the interpreter.
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_a_secret_is_usable_without_being_readable(tmp_path):
     """The property the whole mechanism exists for."""
@@ -494,13 +494,13 @@ def test_every_namespace_is_exactly_one_request_family():
     assert not mixed, f"namespaces spanning several families: {mixed}"
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Plaintext: the limit of handles, and the door through it.
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_revealing_a_secret_always_asks():
     """Handles work when the kernel makes the call. A plugin driving a
-    foreign library performs its own I/O, so it genuinely needs the value —
+    foreign library performs its own I/O, so it genuinely needs the value â€”
     and that is worth a dialog every single time."""
     decision = classify(Request(R.SECRET_REVEAL, {"name": "gmail_secret"}),
                         Chain(root="user"))
@@ -535,13 +535,13 @@ def test_the_dialog_says_plainly_what_reveal_means():
     assert "user -> service_gmail" in body
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Knowing which settings are secrets.
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def test_the_prefix_is_the_declaration():
     """A config setting holding a credential is called secret_something."""
-    from sandbox import secrets as S
+    from sandbox import credentials as S
 
     assert S.is_secret("secret_brave_api_key")
     assert S.is_secret("secret_notion_integration")   # name says nothing
@@ -550,14 +550,14 @@ def test_the_prefix_is_the_declaration():
 
 def test_an_unmarked_setting_is_not_a_secret():
     """Not marked is an answer, not a maybe. The prefix is the whole rule."""
-    from sandbox import secrets as S
+    from sandbox import credentials as S
 
     assert not S.is_secret("brave_api_key")
 
 
 def test_environment_variables_are_guessed_because_nothing_declares_them():
     """No plugin owns OPENAI_API_KEY, and its name was chosen elsewhere."""
-    from sandbox import secrets as S
+    from sandbox import credentials as S
 
     assert S.is_secret("OPENAI_API_KEY", guess=True)
     assert S.is_secret("GMAIL_CLIENT_SECRET", guess=True)
@@ -633,9 +633,9 @@ class Search(BaseTool):
     assert not validate_file(plugin).of(NOTE)
 
 
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Parsing: what can leave the parser, and what cannot.
-# ──────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _register(output, modality="text", success=True, error="",
               also_contains=()):
@@ -705,7 +705,7 @@ def test_live_object_modalities_are_refused_with_an_explanation(modality):
     """These resolve to PIL images, numpy arrays, an open av.Container.
 
     None of them can cross, and handing back a broken object would be worse
-    than saying so — the message has to point at the way that does work.
+    than saying so â€” the message has to point at the way that does work.
     """
     calls = _register(object(), modality=modality)
     result = _parse(modality)

@@ -109,6 +109,32 @@ def test_host_modules_are_unreachable_from_the_child_at_runtime():
     assert out.stdout.strip() == "unreachable"
 
 
+def test_no_host_module_shadows_a_stdlib_module():
+    """``sandbox/`` is the child's cwd, so its top-level names are the child's.
+
+    That cuts both ways. The guest boundary keeps guest code from *reaching*
+    the host; this keeps the host from *displacing* the stdlib underneath it.
+    ``sandbox/secrets.py`` did exactly that: nothing in the sandbox imports
+    stdlib ``secrets``, so it looked harmless, while inside every box
+    ``import secrets`` returned a host module with no ``token_hex``. litellm
+    calls it, so every model call failed — and the traceback pointed at the
+    library, not at the file that broke it.
+    """
+    stdlib = set(sys.stdlib_module_names)
+    host = GUEST_DIR.parent
+    candidates = [p for p in host.glob("*.py")]
+    candidates += [p for p in host.iterdir()
+                   if p.is_dir() and (p / "__init__.py").exists()]
+    offenders = sorted(
+        p.name for p in candidates
+        if p.stem in stdlib and p.stem != "__init__"
+    )
+    assert not offenders, (
+        f"{offenders} shadow stdlib modules for every sandboxed process. "
+        "Rename them (sandbox/secrets.py became sandbox/credentials.py)."
+    )
+
+
 def test_guest_carries_the_whole_sdk():
     """The shippable unit must actually be complete."""
     names = {p.name for p in _guest_files()}

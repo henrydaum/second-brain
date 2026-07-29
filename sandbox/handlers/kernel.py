@@ -48,7 +48,7 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               UI_APPROVE,
                               UI_ASK, UI_RENDER, USER_LIST, USER_READ,
                               USER_WRITE, Result)
-from ..secrets import lookup_from, redact, redact_nested, resolve
+from ..credentials import lookup_from, redact, redact_nested, resolve
 from ..users import ScopeError, scope_sql, scope_write
 
 # Never returned by any Request, at any level.

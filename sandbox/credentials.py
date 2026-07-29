@@ -20,6 +20,14 @@ Substitution happens on the way out, inside the handler, after the policy
 function has already decided. A handle is meaningless anywhere else — it is
 just a string, and one that does not resolve is left exactly as it is rather
 than being silently blanked, so a mistake looks like a mistake.
+
+**Named ``credentials`` and not ``secrets`` on purpose.** A subprocess box runs
+with ``sandbox/`` as its cwd, so every top-level module here is importable in
+the child under its bare name — and a file called ``secrets.py`` shadowed the
+stdlib ``secrets`` for the whole guest process. Nothing in the sandbox imports
+it, which is why it went unnoticed; litellm does, and every model call died on
+``module 'secrets' has no attribute 'token_hex'``. ``tests/
+test_sandbox_guest_boundary.py`` now refuses any stdlib-shadowing name here.
 """
 
 from __future__ import annotations

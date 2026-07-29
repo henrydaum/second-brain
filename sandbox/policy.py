@@ -30,7 +30,7 @@ from .guest.requests import (AGENT_SCHEDULE, CONFIG_READ, CONV_DELETE,
                              ENV_READ, FS_DELETE, FS_MOVE, FS_TEMP, FS_WRITE,
                              NET_HTTP, PROC_RUN, SESSION_ADD_PROMPT,
                              SESSION_ADD_TOOL, UI_ASK, Request)
-from .secrets import is_secret
+from .credentials import is_secret
 
 SAFE = "safe"
 UNSAFE = "unsafe"
