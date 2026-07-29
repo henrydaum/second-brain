@@ -225,3 +225,126 @@ def test_requests_are_ledgered_from_a_subprocess(tmp_path):
     assert req_type == "fs.read"
     assert chain.endswith("reader")
     assert ok
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Library logging inside a child.
+#
+# Plugin code may not import ``logging`` — ``sdk.log`` is the route — but the
+# libraries it imports have no such rule, and a child inherits stderr rather
+# than piping it. A transport library retrying a dead network logs a full
+# traceback every cycle, so without this an overnight outage costs the whole
+# terminal.
+# ──────────────────────────────────────────────────────────────────────
+
+def _record(message: str, line: int = 10, level=None):
+    """One error record from a fixed call site."""
+    import logging
+
+    return logging.LogRecord("lib.updater", level or logging.ERROR, "lib.py",
+                             line, message, None, None)
+
+
+def test_repeated_errors_from_one_site_collapse():
+    from sandbox.guest.child import _CollapseRepeats
+
+    throttle = _CollapseRepeats(cooldown=1000.0)
+
+    assert throttle.filter(_record("boom")) is True
+    assert [throttle.filter(_record("boom")) for _ in range(20)] == [False] * 20
+
+
+def test_the_backlog_is_counted_when_the_cooldown_lapses():
+    """Silence that never says what it swallowed is indistinguishable from
+    the problem having stopped."""
+    from sandbox.guest.child import _CollapseRepeats
+
+    throttle = _CollapseRepeats(cooldown=0.05)
+    throttle.filter(_record("boom"))
+    for _ in range(7):
+        assert throttle.filter(_record("boom")) is False
+
+    time.sleep(0.06)
+    record = _record("boom")
+    assert throttle.filter(record) is True
+    assert "+7 more like it" in record.getMessage()
+
+
+def test_the_traceback_is_dropped_but_the_message_is_not():
+    """The hundredth copy of a stack is not more informative than the first."""
+    from sandbox.guest.child import _CollapseRepeats
+
+    record = _record("boom")
+    try:
+        raise OSError("getaddrinfo failed")
+    except OSError:
+        import sys
+
+        record.exc_info = sys.exc_info()
+
+    assert _CollapseRepeats().filter(record) is True
+    assert record.exc_info is None
+    assert record.getMessage() == "boom"
+
+
+def test_different_sites_do_not_silence_each_other():
+    from sandbox.guest.child import _CollapseRepeats
+
+    throttle = _CollapseRepeats(cooldown=1000.0)
+
+    assert throttle.filter(_record("boom", line=10)) is True
+    assert throttle.filter(_record("boom", line=99)) is True
+    assert throttle.filter(_record("different", line=10)) is True
+
+
+def test_a_varying_message_still_collapses():
+    """Keyed on the template, so a retry counter in the args does not defeat it."""
+    import logging
+
+    from sandbox.guest.child import _CollapseRepeats
+
+    throttle = _CollapseRepeats(cooldown=1000.0)
+
+    def attempt(n):
+        return logging.LogRecord("lib.updater", logging.ERROR, "lib.py", 10,
+                                 "retry %d failed", (n,), None)
+
+    assert throttle.filter(attempt(1)) is True
+    assert throttle.filter(attempt(2)) is False
+
+
+def test_warnings_are_never_collapsed():
+    """A library at WARNING is not looping, and one at DEBUG was asked for."""
+    import logging
+
+    from sandbox.guest.child import _CollapseRepeats
+
+    throttle = _CollapseRepeats(cooldown=1000.0)
+    for _ in range(5):
+        assert throttle.filter(
+            _record("noisy", level=logging.WARNING)) is True
+
+
+def test_configuring_the_child_logger_is_idempotent_and_deferential():
+    import logging
+
+    from sandbox.guest.child import _CollapseRepeats, _tame_library_logging
+
+    root = logging.getLogger()
+    saved, saved_level = list(root.handlers), root.level
+    try:
+        root.handlers = []
+        _tame_library_logging()
+        _tame_library_logging()
+        assert len(root.handlers) == 1
+        assert any(isinstance(f, _CollapseRepeats)
+                   for f in root.handlers[0].filters)
+
+        # A child that already has handlers keeps them: this configures a
+        # bare process, it does not take over one somebody else set up.
+        existing = logging.NullHandler()
+        root.handlers = [existing]
+        _tame_library_logging()
+        assert root.handlers == [existing]
+    finally:
+        root.handlers, root.level = saved, saved_level

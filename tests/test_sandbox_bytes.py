@@ -144,7 +144,93 @@ def test_an_oversized_file_is_refused(tmp_path, monkeypatch):
     result = fs_net._fs_read_bytes(None, {"path": str(path)})
 
     assert not result.ok
-    assert "exceeds" in result.error
+    # The refusal has to name the way out, or the only route to a file bigger
+    # than one frame is undiscoverable from the error that blocks it.
+    assert "offset=" in result.error and "length=" in result.error
+
+
+def test_the_binary_cap_fits_inside_one_wire_message(tmp_path):
+    """Derived, not guessed.
+
+    It was 32 MB against a 16 MB frame, so every read between the two limits
+    passed the check and then died in ``protocol.encode`` as an unsendable
+    result — a fault where the caller had earned an ordinary failure.
+    """
+    from sandbox.guest import protocol
+    from sandbox.handlers.fs_net import MAX_READ_BINARY
+
+    encoded = (MAX_READ_BINARY + 2) // 3 * 4
+    assert encoded < protocol.MAX_MESSAGE_BYTES
+
+
+def test_a_window_reads_exactly_what_it_asked_for(tmp_path):
+    """``offset``/``length`` are how a file larger than a frame is read at all."""
+    import base64
+
+    from sandbox.handlers.fs_net import _fs_read_bytes
+
+    path = tmp_path / "payload.bin"
+    payload = bytes(range(256))
+    path.write_bytes(payload)
+
+    result = _fs_read_bytes(None, {"path": str(path), "offset": 10,
+                                   "length": 5})
+
+    assert result.ok
+    assert base64.b64decode(result.data) == payload[10:15]
+
+
+def test_windows_reassemble_a_file_bigger_than_the_cap(tmp_path, monkeypatch):
+    """The loop a plugin writes, against a cap small enough to force it."""
+    import base64
+
+    from sandbox.handlers import fs_net
+
+    monkeypatch.setattr(fs_net, "MAX_READ_BINARY", 16)
+    path = tmp_path / "long.bin"
+    payload = bytes(range(256)) * 3
+    path.write_bytes(payload)
+
+    chunks, offset = [], 0
+    while True:
+        result = fs_net._fs_read_bytes(None, {"path": str(path),
+                                              "offset": offset, "length": 16})
+        assert result.ok, result.error
+        chunk = base64.b64decode(result.data)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        offset += len(chunk)
+
+    assert b"".join(chunks) == payload
+
+
+def test_a_window_past_the_end_answers_empty(tmp_path):
+    """What ends the loop above. Returning the whole file here would not."""
+    from sandbox.handlers.fs_net import _fs_read_bytes
+
+    path = tmp_path / "short.bin"
+    path.write_bytes(b"abc")
+
+    result = _fs_read_bytes(None, {"path": str(path), "offset": 99})
+
+    assert result.ok
+    assert result.data == ""
+
+
+def test_a_window_over_the_cap_is_refused_like_a_whole_file(tmp_path,
+                                                            monkeypatch):
+    """The cap is on one answer, so asking for a big window is the same ask."""
+    from sandbox.handlers import fs_net
+
+    monkeypatch.setattr(fs_net, "MAX_READ_BINARY", 8)
+    path = tmp_path / "big.bin"
+    path.write_bytes(b"x" * 100)
+
+    result = fs_net._fs_read_bytes(None, {"path": str(path), "length": 64})
+
+    assert not result.ok
+    assert "offset=" in result.error
 
 
 def test_append_mode_adds_rather_than_replaces(tmp_path):

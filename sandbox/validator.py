@@ -107,6 +107,14 @@ UNMEDIATED_STDLIB = {
     "sqlite3": "opens a database file directly",
     "zipfile": "reads and extracts an archive directly",
     "tarfile": "reads and extracts an archive directly",
+    # Not an allowance — asyncio already landed in the foreign-library branch
+    # below, with the identical warning and the identical subprocess. What it
+    # was missing was an accurate sentence: describing the stdlib's event loop
+    # as "a foreign library" reads as a bug in the linter, and a finding an
+    # author does not believe is a finding they route around. An async client
+    # library is the honest reason to want it, and a frontend that owns a
+    # transport loop is the case in front of us.
+    "asyncio": "runs its own event loop, sockets and subprocesses",
 }
 
 # First-party kernel modules. Importing one is not a foreign-library problem

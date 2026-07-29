@@ -22,6 +22,7 @@ import urllib.request
 from pathlib import Path
 
 from .. import walk
+from ..guest import protocol
 from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                               FS_READ_BYTES, FS_SEARCH, FS_TEMP, FS_WRITE,
                               FS_WRITE_BYTES, NET_HTTP, PROC_LIST, PROC_RUN,
@@ -31,11 +32,22 @@ from ..protected import is_protected, reason_for
 from ..credentials import lookup_from, redact, resolve
 
 MAX_READ_BYTES = 8 * 1024 * 1024
-# Binary reads get their own, larger cap: the things that need them are media
-# files headed for a model, and a 20 MB video is ordinary where a 20 MB text
-# file is a mistake. Base64 inflates by 4/3 on the wire, so this is the real
-# ceiling on one frame.
-MAX_READ_BINARY = 32 * 1024 * 1024
+# Binary reads get their own cap: the things that need them are media files
+# headed for a model or a chat transport, and a 10 MB video is ordinary where a
+# 10 MB text file is a mistake.
+#
+# The number is *derived*, because it was guessed before and the guess was
+# wrong in a way nothing noticed. It read 32 MB with a comment claiming base64
+# made that the real ceiling on one frame; base64 inflates by 4/3, so anything
+# over ~12 MB blew past ``protocol.MAX_MESSAGE_BYTES`` and surfaced as an
+# unsendable-result *fault* — a crash-shaped answer to an ordinary request.
+# Deriving it from the wire means the two cannot drift apart again.
+#
+# It is applied uniformly, including to in-process boxes that have no wire to
+# overflow. A limit that holds in one isolation mode and not the other is the
+# worst kind: code passes every local test and fails once it is subprocessed,
+# which is precisely when nobody is watching.
+MAX_READ_BINARY = (protocol.MAX_MESSAGE_BYTES - 1024 * 1024) * 3 // 4
 MAX_SEARCH_HITS = 500
 HTTP_TIMEOUT = 30.0
 # Ten minutes, because the command that most needs the headroom is the one a
@@ -84,6 +96,12 @@ def _fs_read_bytes(ctx, args: dict) -> Result:
     It exists because the things that need bytes — an image on its way to a
     vision model, audio a provider ingests natively — are exactly the things
     ``fs.read``'s ``errors="replace"`` would silently corrupt.
+
+    ``offset``/``length`` read one window instead of the whole file. They are
+    what makes a file larger than one message readable at all: the cap below is
+    on a single *answer*, not on the file, and a caller that wants a 50 MB video
+    asks for it a window at a time. Which bytes may leave is decided before
+    either is looked at, so windowing is not a way around anything.
     """
     raw = args.get("path")
     if not raw:
@@ -94,12 +112,32 @@ def _fs_read_bytes(ctx, args: dict) -> Result:
     if (why := reason_for(path)):
         return Result.refusal(f"{raw} is not readable: {why}")
     try:
+        offset = max(0, int(args.get("offset") or 0))
+        length = max(0, int(args.get("length") or 0))
+    except (TypeError, ValueError):
+        return Result.failure("fs.read_bytes offset and length must be whole "
+                              "numbers of bytes")
+    try:
         if not path.is_file():
             return Result.failure(f"not a file: {raw}")
-        size = path.stat().st_size
-        if size > MAX_READ_BINARY:
-            return Result.failure(f"file exceeds {MAX_READ_BINARY} bytes")
-        return Result(data=base64.b64encode(path.read_bytes()).decode("ascii"))
+        too_big = Result.failure(
+            f"a single fs.read_bytes answer is capped at {MAX_READ_BINARY} "
+            f"bytes; read it in windows with offset= and length=")
+        if (length or max(0, path.stat().st_size - offset)) > MAX_READ_BINARY:
+            return too_big
+        with open(path, "rb") as handle:
+            if offset:
+                handle.seek(offset)
+            # An explicit window is read exactly: it has already been checked,
+            # and one byte more would quietly hand back more than was asked
+            # for. Without one, read a byte past the cap instead — the size
+            # came from a stat, and a file that grew since then should be
+            # refused rather than truncated into a plausible-looking answer.
+            chunk = (handle.read(length) if length
+                     else handle.read(MAX_READ_BINARY + 1))
+        if len(chunk) > MAX_READ_BINARY:
+            return too_big
+        return Result(data=base64.b64encode(chunk).decode("ascii"))
     except OSError as exc:
         return Result.failure(f"read failed: {exc}", retryable=True)
 

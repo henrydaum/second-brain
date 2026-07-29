@@ -16,7 +16,9 @@ not describe this mode as full isolation until that lands.
 
 from __future__ import annotations
 
+import logging
 import sys
+import time
 import traceback
 
 from . import protocol
@@ -24,6 +26,80 @@ from .channel import PipeChannel, Terminated
 from .loader import load_entry
 from .requests import RequestFailed, Result
 from .sdk import SDK
+
+#: How long an error record silences its own repeats. Five minutes is long
+#: enough that an outage lasting all night costs a screenful rather than a
+#: gigabyte, and short enough that a problem which is still happening keeps
+#: saying so.
+LOG_REPEAT_COOLDOWN = 300.0
+
+
+class _CollapseRepeats(logging.Filter):
+    """Let one of each recurring error through per cooldown, and count the rest.
+
+    Plugin code may not import ``logging`` — ``sdk.log`` is the route, and it
+    goes down the wire to the kernel's sink. The *libraries* plugin code imports
+    have no such rule, and nothing here can give them one. Their records land on
+    ``logging.lastResort``, which writes to stderr, which a subprocess box
+    inherits from the parent rather than piping (a pipe nobody drains is a
+    child that blocks when it fills).
+
+    That arrangement is fine until something retries forever. A chat frontend's
+    long-poll loop meeting a DNS failure logs a full traceback every cycle, all
+    night, and the useful contents of the terminal are gone by morning. So the
+    first occurrence is allowed through — without its traceback, since the
+    hundredth copy of a stack is not more informative than the first —
+    identical ones are dropped for a cooldown, and the next one through says how
+    many were swallowed.
+
+    Keyed on the record's *template* (module, line, unformatted message) rather
+    than its rendered text, so a message that varies only by a retry counter or
+    a timestamp still collapses. Errors only: a library at WARNING is not
+    looping, and one at DEBUG was asked for.
+    """
+
+    def __init__(self, cooldown: float = LOG_REPEAT_COOLDOWN):
+        super().__init__()
+        self.cooldown = cooldown
+        self._seen: dict = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Whether this record is the one that gets to speak."""
+        if record.levelno < logging.ERROR:
+            return True
+        key = (record.name, record.module, record.lineno, str(record.msg))
+        now = time.monotonic()
+        until, suppressed = self._seen.get(key, (0.0, 0))
+        if now < until:
+            self._seen[key] = (until, suppressed + 1)
+            return False
+        record.exc_info = None
+        record.exc_text = None
+        if suppressed:
+            record.msg = (f"{record.getMessage()} (+{suppressed} more like it "
+                          f"in the last {int(self.cooldown)}s)")
+            record.args = ()
+        self._seen[key] = (now + self.cooldown, 0)
+        return True
+
+
+def _tame_library_logging() -> None:
+    """Give the child's root logger a stderr handler that collapses repeats.
+
+    Configured rather than left to ``lastResort`` because a filter needs a
+    handler to hang on: ``lastResort`` is shared process-wide state we would be
+    mutating for everyone, and it has no formatter worth keeping. Idempotent,
+    and it defers to a child that somehow already has handlers.
+    """
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter(
+        "[box] %(levelname)s %(name)s: %(message)s"))
+    handler.addFilter(_CollapseRepeats())
+    root.addHandler(handler)
+    root.setLevel(logging.WARNING)
 
 
 def _redirect_stdout_to_stderr():
@@ -173,6 +249,9 @@ def main() -> int:
     """Run one box, ephemeral or resident."""
     wire_out = _redirect_stdout_to_stderr()
     wire_in = sys.stdin.buffer
+    # Before the target is imported: a library can log at import time, and a
+    # loop that floods is one that started early.
+    _tame_library_logging()
 
     try:
         start = protocol.read_message(wire_in)

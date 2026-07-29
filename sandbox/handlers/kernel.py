@@ -17,6 +17,9 @@ Two conventions run through the file:
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from ..guest.requests import (AGENT_COMPLETE, APP_STOP, COMMAND_CALL,
                               COMMAND_LIST,
                               LLM_DELTA, LLM_PROCEED,
@@ -51,6 +54,12 @@ from ..guest.requests import (AGENT_COMPLETE, APP_STOP, COMMAND_CALL,
                               USER_WRITE, Result)
 from ..credentials import lookup_from, redact, redact_nested, resolve
 from ..users import ScopeError, scope_sql, scope_write
+
+# Two ``except`` paths here already logged and neither could: the name was
+# never bound, so the fallback for "could not resolve the active LLM" and for
+# a failed background submit raised NameError on top of whatever it was
+# reporting. Same sink as the rest of the sandbox.
+logger = logging.getLogger("Sandbox")
 
 # Never returned by any Request, at any level.
 HIDDEN_USER_COLUMNS = {"password_hash"}
@@ -1855,6 +1864,70 @@ def _at_desk(args: dict):
     return adapter, None
 
 
+def _prepare_attachment(ctx, args: dict):
+    """Build the richer send_attachment payload, or None for the plain path.
+
+    Two jobs, both of which exist because a frontend's files arrive over a
+    *transport* rather than off the user's disk.
+
+    **Ingestion.** ``attachments.cache.save`` is the front door for those files:
+    it names them stably, keeps the folder under its size cap, and — the part
+    that matters — puts them in a watched directory, so the pipeline extracts,
+    chunks and indexes them like anything else. A sandboxed frontend cannot
+    call it (kernel module) and cannot be handed the folder either, since
+    writing straight in would skip the eviction the cap depends on. So the
+    guest downloads into scratch it got from ``sdk.fs.temp`` and names that
+    path here; the bytes never cross the boundary, which is the only way a
+    50 MB file gets in at all — one wire message holds ~11 MB.
+
+    **Metadata.** ``caption``, ``file_name`` and ``is_photo`` are what the
+    native frontends have always put on the action and the plain
+    ``submit_attachment`` entry point has no room for.
+
+    Returns None when the guest asked for neither, so the original path stays
+    byte-for-byte what it was.
+    """
+    extras = {key: args.get(key) for key in
+              ("file_name", "caption", "is_photo")}
+    if not args.get("ingest") and not any(extras.values()):
+        return None
+
+    path = Path(str(args.get("path") or ""))
+    file_name = str(extras.get("file_name") or "") or path.name
+    if args.get("ingest"):
+        from attachments.cache import save as save_attachment
+
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            return Result.failure(f"could not read {path.name}: {exc}")
+        try:
+            cap = float((getattr(ctx, "config", None) or {}).get(
+                "attachment_cache_size_gb", 2.0))
+        except (TypeError, ValueError):
+            cap = 2.0
+        try:
+            path = save_attachment(file_name, data, cap)
+        except OSError as exc:
+            return Result.failure(f"could not cache {file_name}: {exc}")
+        # Scratch, and the kernel is what allocated it. Failing to clean up is
+        # not worth failing the message a person just sent.
+        try:
+            Path(str(args.get("path"))).unlink()
+        except OSError:
+            logger.debug("could not remove the ingested temp file %s",
+                         args.get("path"))
+
+    return {
+        "path": str(path),
+        "extension": (str(args.get("extension") or "")
+                      or path.suffix.lstrip(".")),
+        "caption": str(extras.get("caption") or ""),
+        "file_name": file_name,
+        "is_photo": bool(extras.get("is_photo")),
+    }
+
+
 def _frontend_submit(ctx, args: dict) -> Result:
     """Hand a person's input to the state machine.
 
@@ -1868,10 +1941,21 @@ def _frontend_submit(ctx, args: dict) -> Result:
 
     session_key = str(args.get("session_key") or "")
     kind = args.get("input_kind") or "text"
+
+    if kind == "attachment":
+        prepared = _prepare_attachment(ctx, args)
+        if isinstance(prepared, Result):
+            return prepared
+
     def submit():
         if kind == "text":
             return adapter.submit_text(session_key, args.get("text") or "")
         elif kind == "attachment":
+            if prepared is not None:
+                from state_machine.action_map import ACTION_SEND_ATTACHMENT
+
+                return adapter.submit(
+                    session_key, ACTION_SEND_ATTACHMENT, prepared)
             return adapter.submit_attachment(
                 session_key, args.get("path") or "",
                 args.get("extension") or None)

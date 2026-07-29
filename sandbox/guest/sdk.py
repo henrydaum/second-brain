@@ -126,14 +126,29 @@ class _FS(_Namespace):
         """Create, overwrite, or append. ``mode="append"`` to add."""
         return self._ask(FS_WRITE, path=str(path), data=data, mode=mode)
 
-    def read_bytes(self, path) -> bytes:
-        """Read a file as raw bytes.
+    def read_bytes(self, path, offset: int = 0, length: int = 0) -> bytes:
+        """Read a file as raw bytes, or one window of it.
 
         Use this for anything that is not text — an image, audio, a PDF.
         ``read`` decodes as UTF-8 with replacement, which silently mangles
         binary content rather than failing.
+
+        One answer has to fit in one wire message, and base64 costs a third on
+        top, so a whole-file read is capped well below the file sizes a
+        frontend deals in. ``offset``/``length`` are the way past that: ask for
+        successive windows and join them. Reading past the end returns fewer
+        bytes than asked for, and an ``offset`` at or past the end returns
+        ``b""`` — so the loop terminates on a short read, not on a size you had
+        to learn first.
         """
-        return base64.b64decode(self._ask(FS_READ_BYTES, path=str(path)) or "")
+        args = {"path": str(path)}
+        # Sent only when asked for, so the plain call is byte-identical on the
+        # wire to what it always was.
+        if offset:
+            args["offset"] = int(offset)
+        if length:
+            args["length"] = int(length)
+        return base64.b64decode(self._ask(FS_READ_BYTES, **args) or "")
 
     def write_bytes(self, path, data, mode: str = "overwrite"):
         """Write raw bytes. ``mode="append"`` to add.
@@ -671,11 +686,26 @@ class _Frontend(_Namespace):
                          session_key=session_key, input_kind="text", text=text)
 
     def submit_attachment(self, session_key: str, path: str,
-                          extension: str = ""):
-        """Hand over a file someone sent."""
+                          extension: str = "", file_name: str = "",
+                          caption: str = "", is_photo: bool = False,
+                          ingest: bool = False):
+        """Hand over a file someone sent.
+
+        ``ingest`` is for a file that arrived over your *transport* rather than
+        off the user's disk: the kernel moves it into the attachment cache,
+        which is a watched directory, so the pipeline indexes it like any other
+        incoming file. Point it at scratch space you got from ``sdk.fs.temp``
+        and let your transport write there — the bytes never have to cross the
+        boundary, and the temp file is removed once it has been taken.
+
+        ``file_name`` is the name the person's own machine used, which is worth
+        keeping when the transport handed you an opaque path.
+        """
         return self._ask(FRONTEND_SUBMIT, token=self._token(),
                          session_key=session_key, input_kind="attachment",
-                         path=str(path), extension=extension)
+                         path=str(path), extension=extension,
+                         file_name=file_name, caption=caption,
+                         is_photo=bool(is_photo), ingest=bool(ingest))
 
     def submit_action(self, session_key: str, action_type: str, payload=None):
         """Hand over a typed action — a button press, a menu choice."""
@@ -1139,6 +1169,55 @@ class _Markdown:
             [title, ""], pairs, leading_blank=False)
 
     @staticmethod
+    def align_tables(text: str) -> str:
+        """Pad markdown tables into monospace columns; leave the rest alone.
+
+        Half of what ``plain`` does, on its own because the two halves are
+        wanted separately. A surface that renders code fences natively — a
+        chat client showing a ``<pre>`` block — wants the alignment without
+        the fence-stripping, and inlining the padding loop to get it is how
+        two copies of this algorithm start.
+        """
+        import re
+
+        lines = (text or "").split("\n")
+        row = re.compile(r"^\s*\|.*\|\s*$")
+        separator = re.compile(r"^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$")
+
+        def cells(line):
+            """Split one table row, honouring escaped pipes."""
+            parts = re.split(r"(?<!\\)\|", line.strip().strip("|"))
+            return [p.strip().replace("\\|", "|") for p in parts]
+
+        out, i = [], 0
+        while i < len(lines):
+            if (row.match(lines[i]) and i + 1 < len(lines)
+                    and separator.match(lines[i + 1])):
+                block = [lines[i]]
+                j = i + 2
+                while j < len(lines) and row.match(lines[j]):
+                    block.append(lines[j])
+                    j += 1
+                rows = [cells(line) for line in block]
+                width = max(len(r) for r in rows)
+                rows = [r + [""] * (width - len(r)) for r in rows]
+                sizes = [max(len(r[c]) for r in rows) for c in range(width)]
+
+                def fmt(cs):
+                    """One padded line."""
+                    return "  ".join(v.ljust(w)
+                                     for v, w in zip(cs, sizes)).rstrip()
+
+                out.append(fmt(rows[0]))
+                out.append("  ".join("-" * w for w in sizes))
+                out.extend(fmt(r) for r in rows[1:])
+                i = j
+            else:
+                out.append(lines[i])
+                i += 1
+        return "\n".join(out)
+
+    @staticmethod
     def quote(text: str) -> str:
         """Render text as a markdown blockquote."""
         return "\n".join(
@@ -1405,48 +1484,14 @@ class _Forms:
 
         Mirrors the kernel's own ``render_plain``. It lives here because a
         sandboxed frontend cannot import kernel helpers, and because it is
-        pure: no Request, no cost.
+        pure: no Request, no cost. The table half is ``md.align_tables``,
+        which some surfaces want without the fence-stripping.
         """
         import re
 
-        lines = (text or "").split("\n")
-        row = re.compile(r"^\s*\|.*\|\s*$")
-        separator = re.compile(r"^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$")
-
-        def cells(line):
-            """Split one table row, honouring escaped pipes."""
-            parts = re.split(r"(?<!\\)\|", line.strip().strip("|"))
-            return [p.strip().replace("\\|", "|") for p in parts]
-
-        out, i = [], 0
-        while i < len(lines):
-            if (row.match(lines[i]) and i + 1 < len(lines)
-                    and separator.match(lines[i + 1])):
-                block = [lines[i]]
-                j = i + 2
-                while j < len(lines) and row.match(lines[j]):
-                    block.append(lines[j])
-                    j += 1
-                rows = [cells(line) for line in block]
-                width = max(len(r) for r in rows)
-                rows = [r + [""] * (width - len(r)) for r in rows]
-                sizes = [max(len(r[c]) for r in rows) for c in range(width)]
-
-                def fmt(cs):
-                    """One padded line."""
-                    return "  ".join(v.ljust(w)
-                                     for v, w in zip(cs, sizes)).rstrip()
-
-                out.append(fmt(rows[0]))
-                out.append("  ".join("-" * w for w in sizes))
-                out.extend(fmt(r) for r in rows[1:])
-                i = j
-            else:
-                out.append(lines[i])
-                i += 1
-
-        return "\n".join(line for line in out
-                         if not re.fullmatch(r"\s*```\w*\s*", line))
+        return "\n".join(
+            line for line in _Markdown.align_tables(text).split("\n")
+            if not re.fullmatch(r"\s*```\w*\s*", line))
 
 
 # ``plain`` predates the forms namespace; keep it on the markdown surface.

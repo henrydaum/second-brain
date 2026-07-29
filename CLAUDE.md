@@ -37,10 +37,13 @@ future store) — *not* by deleting them. What remains:
   `tool_ask_user_question`, shell/file-editing tools, SQL tools, and plugin
   authoring tools are package capabilities unless discovery shows they are
   installed.
-- **Frontend:** `frontend_repl` only. Telegram and the MCP server
-  (`frontend_mcp_server` — exposes Second Brain to external MCP clients over
-  streamable HTTP; tested from main via `tests/test_frontend_mcp.py`, which
-  loads it off the store ref) live on the store branch. `enabled_frontends`
+- **Frontend:** `frontend_repl` only. Telegram (`frontend_telegram`, migrated
+  to the SDK; tested from main via `tests/test_frontend_telegram.py`) and the
+  MCP server (`frontend_mcp_server` — exposes Second Brain to external MCP
+  clients over streamable HTTP; tested via `tests/test_frontend_mcp.py`) live
+  on the store branch. Both test files load their subject off the store ref,
+  and the Telegram one prefers a store *worktree* when the clone has one, so
+  it checks the file being edited rather than the last commit. `enabled_frontends`
   is deliberately not whitelisted by the kernel: config normalization keeps
   unknown names so installed store frontends survive load, and bootstrap
   *prunes* what discovery can't resolve — a name it cannot match is a store
@@ -591,6 +594,39 @@ runs the loop on the daemon thread `FrontendManager` already gives it, calling
 `poll` repeatedly (truthy = "did work, call me straight back"; falsy = pause
 `poll_interval`). Between polls is when a render lands. Five consecutive poll
 failures stop the frontend rather than spinning on a dead box.
+
+**A transport library that owns an event loop lives inside that inversion**,
+which is the whole of the Telegram migration. python-telegram-bot is
+asyncio-only and expects the process; the guest cannot give it a thread
+(`threading` is an ERROR — the kernel schedules). What resolves it is that a
+subprocess box serves *every* call on one thread (`_serve_persistent` is a
+single read loop), so the loop is created in `start` and driven in slices:
+`poll` does `run_until_complete(asyncio.sleep(0.08))`, which is the library's
+turn, then drains a plain list its handlers appended to. `render` arrives
+between polls with the loop idle, so a send is just awaited; anything
+longer-lived (a streaming pump, a typing pulse) is a `create_task` that
+progresses during later slices. Everything cross-thread — `run_in_executor`
+around a blocking submit, `run_coroutine_threadsafe` bridges, locks in the
+stream tracker — deleted rather than ported.
+
+This shape **requires subprocess isolation** and cannot ask for it: an
+in-process resident box runs each call on a *fresh worker thread*
+(`boxes.PersistentBox._invoke`), where a loop bound in `start` belongs to
+somebody else by the time `poll` returns. It holds structurally for Telegram
+(installed tree + foreign import) rather than by declaration, which is the
+right way round — but it is a real constraint on where such a frontend may
+live, and `tests/test_frontend_telegram.py` pins that the reading comes out
+right.
+
+Two `BaseFrontend` hooks are **not** on the wire and a migrated frontend
+therefore loses them: `render_queued_ack` (return True to replace the textual
+mid-turn ack, e.g. with a message reaction) and `render_conversation_banner`
+(mirror the conversation title on a persistent surface). Telegram used both and
+gave them up. Carrying `queued_ack` means a render call whose *return value*
+matters, which the one-way `_render` deliberately is not; `conversation_banner`
+would fit the existing shape and is the cheaper of the two if either comes
+back. Adding either means growing `KINDS` in `sandbox/frontends.py`, the
+`native_names` map in `_adapt_frontend`, and the test that pins the set.
 
 `BaseFrontend` itself is **not** migrated and should not be: its 880 lines are
 host-side routing — fourteen bus subscriptions funnelling into nine `render_*`

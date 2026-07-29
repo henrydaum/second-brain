@@ -36,6 +36,12 @@ ALLOWED_ABSOLUTE = {
     # ``os.path``, which is one of these two under an alias that also imports
     # ``os`` — the module this boundary exists to keep out.
     "ntpath", "posixpath",
+    # ``child.py`` only, and it is not a route for plugin code: the validator
+    # refuses ``logging`` in a plugin and ``sdk.log`` is the route. This is the
+    # child *process* configuring where the libraries a plugin imports send
+    # their own records, which nothing inside the boundary can otherwise
+    # influence. See ``_tame_library_logging``.
+    "logging",
 }
 
 HOST_MODULES = {"policy", "handlers", "interpreter", "runner",

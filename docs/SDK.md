@@ -135,7 +135,7 @@ Each namespace is exactly one Request family, so `sdk.fs.read` *is* the
 ```python
 sdk.fs.read(path)                          # -> str
 sdk.fs.write(path, data, mode="overwrite") # mode="append" to add
-sdk.fs.read_bytes(path)                    # -> bytes; use for anything non-text
+sdk.fs.read_bytes(path, offset=0, length=0)  # -> bytes; anything non-text
 sdk.fs.write_bytes(path, data, mode="overwrite")
 sdk.fs.list(path, pattern="*")             # -> [str]
 sdk.fs.list(path, details=True)            # -> [{path, name, is_dir, size, mtime}]
@@ -212,6 +212,24 @@ these are the only facts behind it a plugin has a real claim on.
 not text. Reach for `read_bytes` whenever the file is an image, audio, a PDF,
 or an archive. Base64 on the wire is the SDK's problem, not yours — you hand
 over `bytes` and get `bytes` back.
+
+One *answer* has to fit in one wire message, so a whole-file `read_bytes` is
+capped around 11 MB and says so. `offset`/`length` are the way past it: ask for
+successive windows and join them. A short read means you reached the end, so
+the loop terminates without a size you had to fetch first.
+
+```python
+chunks, offset = [], 0
+while True:
+    chunk = sdk.fs.read_bytes(path, offset=offset, length=4 * 1024 * 1024)
+    if not chunk:
+        break
+    chunks.append(chunk)
+    offset += len(chunk)
+    if len(chunk) < 4 * 1024 * 1024:
+        break
+data = b"".join(chunks)
+```
 
 **`list` and `search` each have two shapes**, and passing any of the extra
 arguments switches to the second. Plain, they are a flat glob and a substring
@@ -452,6 +470,49 @@ class Chat(BaseFrontend):
 call `render`, so a slow poll is a frozen display. A long-poll with a short
 server-side timeout is the right shape; an unbounded wait is not.
 
+**A client library that owns an event loop.** Most modern transport libraries
+are asyncio-only and expect to run the process. You may not give one a thread —
+`threading` is refused, because the kernel schedules — so instead create the
+loop in `start` and lend it slices from `poll`:
+
+```python
+class Chat(BaseFrontend):
+    poll_interval = 0.0           # poll already spends its time in the loop
+
+    def start(self, sdk):
+        self._queue = []
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_until_complete(self._connect())   # handlers append to _queue
+        return True
+
+    def poll(self, sdk):
+        self._loop.run_until_complete(asyncio.sleep(0.08))   # the library's turn
+        pending, self._queue = self._queue, []
+        for item in pending:
+            sdk.frontend.submit_text(item["key"], item["text"])
+        return bool(pending)
+
+    def render(self, sdk, session_key, kind, payload):
+        # Between polls the loop is idle, so a send is just awaited.
+        self._loop.run_until_complete(self._send(session_key, payload))
+```
+
+The library's handlers should *queue* rather than submit: `poll` is where
+Requests belong, and everything is one thread, so a plain list is enough
+synchronisation. Work that outlives a single call — a streaming pump, a
+keepalive — goes on the loop with `create_task` and makes progress during
+later slices.
+
+This shape needs **subprocess isolation** and does not announce it. A
+subprocess box serves every call on one thread, so a loop bound in `start` is
+still that thread's loop when `poll` comes back; an in-process resident box
+runs each call on a fresh worker, where `run_until_complete` would be talking
+to a loop belonging to somebody else. Isolation is read off the file's tree and
+imports, never declared, so make sure it comes out right: an installed package
+importing a foreign library always gets a subprocess, and a plugin whose imports
+are all pure will not.
+
 If handing input to the runtime can synchronously produce output, declare
 `background_submit = True`. The host then schedules `sdk.frontend.submit_*`
 off the `poll` call so output can render into the serialized frontend box.
@@ -469,7 +530,8 @@ Carrying what a person *does* back the other way is:
 
 ```python
 sdk.frontend.submit_text(session_key, text)
-sdk.frontend.submit_attachment(session_key, path, extension="")
+sdk.frontend.submit_attachment(session_key, path, extension="", file_name="",
+                               caption="", is_photo=False, ingest=False)
 sdk.frontend.submit_action(session_key, action_type, payload=None)
 sdk.frontend.cancel(session_key)
 sdk.frontend.bind(session_key, external_id=None, user_type="user", config=None)
@@ -486,6 +548,20 @@ same namespace reaches nothing at all.
 An `approval` render carries an `id`; answer it with `sdk.frontend.resolve`.
 Holding the id is enough to answer and *only* enough to answer — the action
 being authorized never crosses.
+
+**A file that arrived over your transport wants `ingest=True`.** Point it at
+scratch from `sdk.fs.temp()`, let the client library download straight there,
+and the kernel moves it into the attachment cache — a watched directory, so the
+pipeline extracts and indexes it like any other incoming file. Leaving it in
+temp would skip all of that. The bytes never cross the boundary, which is also
+the only way a file bigger than one wire message gets in:
+
+```python
+temp = sdk.fs.temp(suffix=sdk.path.suffix(name))
+await handle.download_to_drive(temp)
+sdk.frontend.submit_attachment(key, temp, file_name=name,
+                               caption=caption, ingest=True)
+```
 
 **Ask what is pending; do not remember it.** A transport where a person answers
 by typing "yes" has to know whether a yes/no is what the next line means. You
@@ -544,7 +620,9 @@ person's keystrokes between them, which reads as the machine dropping
 characters — so the kernel lends it to one claimant and refuses the second.
 
 `sdk.md.plain(text)` renders markdown for a monospace surface: tables become
-padded columns and code fences drop away. Pure, no Request.
+padded columns and code fences drop away. `sdk.md.align_tables(text)` is the
+first half alone, for a surface that renders fences itself and wants the tables
+padded inside one. Both pure, no Request.
 
 `bind` is the "whose data is this?" axis, not permissions. With no
 `external_id` the session takes your declared `default_user_id`; with one it is
@@ -670,6 +748,8 @@ sdk.text.truncate(text, limit)
 sdk.text.cosine(vector_a, vector_b)
 sdk.md.table(headers, rows)
 sdk.md.card(title, pairs)
+sdk.md.plain(text)                # monospace: padded tables, fences stripped
+sdk.md.align_tables(text)         # padded tables only, fences left alone
 
 sdk.path.join(root, "helpers", "thing.py")
 sdk.path.parent(p); sdk.path.name(p); sdk.path.stem(p); sdk.path.suffix(p)
