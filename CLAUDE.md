@@ -668,6 +668,26 @@ all. `sandbox/` is reached only from `plugin_discovery`, and nothing
 in `sandbox/` imports `plugins.*` except the bridge (which needs the native
 base classes to subclass).
 
+**A Request may grow arguments; growing the vocabulary is the last resort.**
+`fs.search` was a substring scan and `fs.list` a flat `Path.glob`, so `grep`
+and `glob` had no way across — a guest-side search costs one round trip per
+file, and the walking, pruning, regex and ripgrep they need are exactly the
+unmediated reach the sandbox removes. The engine moved host-side
+(`sandbox/walk.py`) and the two Requests grew *arguments*: pass none and the
+original bare-list answer comes back byte-identical, pass any and the answer
+is a dict with `truncated`/`scan_truncated`. Which types exist and what
+`classify` says about each did not move. Same shape as the parsing and LLM
+migrations — the boundary got narrower by adding kernel code. Ask "is the part
+core actually needs standing knowledge?" before adding a type.
+
+`plugin.validate` is the one type that *was* added, because it had no honest
+home: it runs the loader's own validator over a source file, so its verdict is
+the real one, and it is read-only in the strongest sense — a pure AST walk that
+never imports what it reads. It sits in `ALWAYS_SAFE` with the listings rather
+than with `plugin.register`, since a dialog in the authoring loop would only
+teach an agent to stop checking its work. `tool_test_plugin` is now a thin
+translation layer over it (the store's, not the kernel's).
+
 **The SDK idiom** — Requests return their value and raise on failure; a bare
 return is wrapped:
 
