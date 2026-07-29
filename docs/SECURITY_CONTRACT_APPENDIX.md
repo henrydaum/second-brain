@@ -302,6 +302,15 @@ question died as a `TypeError` reported back as "could not ask".
 
 Scope (`global` / `user`) is an argument, not a separate Request.
 
+Two of `paths.get`'s names are not locations: `python` (the interpreter
+hosting the app) and `platform` (`sys.platform`). They are here because the
+validator refuses `sys` — correctly, it is a door to the interpreter rather
+than a fact about it — while these two facts are things a plugin legitimately
+needs and cannot otherwise learn: which Python `pip install` should target so
+the package lands where Second Brain can import it, and which shell a command
+line is being built for. Both are constants the kernel already knows, so
+answering them costs nothing and closes the only honest reason to want `sys`.
+
 This — not the database — is where the contract's "private information" clause
 belongs. API keys and OAuth tokens live in config and the environment. See
 **secret handles** below.
@@ -605,15 +614,52 @@ Secret handles are substituted here, on the way out.
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `proc.run(argv, timeout)` | Run to completion | argv classification | safe if every segment is read-only, else unsafe |
-| `proc.start(argv)` | Start a persistent process, return a handle | argv | unsafe |
-| `proc.stop(handle)` | Terminate | handle | safe |
+| `proc.run(argv, timeout, cwd, shell)` | Run to completion | the command line | **unsafe** |
+| `proc.start(argv, cwd, shell, label)` | Start something and keep it, return a handle | the command line | **unsafe** |
+| `proc.status(id, tail)` | Ask after one, with the tail of its output | — | safe |
+| `proc.stop(id)` | End one and forget it | — | safe |
+| `proc.list()` | Everything still tracked | — | safe |
 
-The read-only classifier already exists and is battle-tested — `tool_run_command`
-decomposes compound commands at unquoted `&&`, `||`, `;`, `|`, and newlines and
-auto-runs only when every segment is read-only, sending redirection, command
-substitution, backgrounding, and unbalanced quotes down the approval path. Lift
-it wholesale rather than rewriting it.
+**Everything that starts a process is asked about, and there is no classifier.**
+The earlier plan here was to lift `tool_run_command`'s: decompose a compound
+command at unquoted `&&`, `||`, `;`, `|` and newlines, auto-run only when every
+segment matches a read-only whitelist, and send redirection, command
+substitution, backgrounding and unbalanced quotes down the approval path. Five
+hundred lines, modelled on Claude Code's and Codex's, and it worked — mostly.
+
+"Mostly" is the objection. Deciding what an arbitrary command line *does* is
+undecidable, so a classifier of that shape is a whitelist racing against
+quoting forever, and it loses in the invisible direction: a wrong "unsafe"
+gets reported as a bug, a wrong "safe" gets reported as nothing. It also sat
+inside the plugin it authorized, which is the wrong place on principle —
+authorization does not live in the code being authorized.
+
+So the whole family is unsafe and the dialog is the control. That is annoying
+rather than wrong, and annoying is the failure mode to prefer. Where it gets
+better is `_SHELL_RECOGNIZERS` in `policy.py`: a recognizer reads the rendered
+command line and returns a reason to allow it, or `None` to abstain. Two kinds
+are expected — *structural* ("every segment of this pipeline is a read-only
+command", the old classifier rebuilt where the policy can see it) and
+*remembered* ("the user already approved exactly this, at this scope"), the
+second being the more useful. The list is empty today, and adding to it is a
+deliberate widening.
+
+The three read-and-narrow members are safe. `status` and `list` read a
+registry the kernel owns, which holds nothing that was not approved at
+`start`. `stop` is safe for the reason `session.remove_tool` is: it narrows.
+A dev server the agent cannot kill without a dialog is a dev server the agent
+will not start, and the alternative to stopping one is leaving it running.
+
+The kernel builds the invocation from `shell` (`None` = exec the argv
+directly, `"default"` = the platform shell, `"powershell"`, `"cmd"`) rather
+than letting the guest wrap its own, because `cmd.exe` does not understand the
+backslash-escaped quotes `subprocess` produces from a list — a guest passing
+`["cmd", "/c", line]` would have every embedded quote silently mangled.
+
+The registry is in-memory: a `Popen` handle is not serializable, so nothing
+survives a restart. What survives is the log file. A process still running
+when the app exits is orphaned rather than killed, which is why the agent
+prompt is emphatic about stopping them.
 
 ## 19. Self and ambient
 

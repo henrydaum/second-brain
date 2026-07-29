@@ -307,6 +307,13 @@ ALWAYS_SAFE = {
     R.CONSOLE_READ, R.CONSOLE_WRITE,
     R.TASK_ENQUEUE, R.TASK_STATUS, R.TASK_OUTPUT,
     R.TASK_LIST, R.TASK_GRAPH, R.TASK_TRIGGER,
+    # The three ways of speaking about a process this system already started.
+    # Listing and asking after one read a registry the kernel owns, and it
+    # holds nothing that was not approved at ``proc.start``. Stopping is here
+    # for the same reason SESSION_REMOVE_TOOL is: it narrows. A dev server the
+    # agent cannot kill without a dialog is a dev server the agent will not
+    # start, and the alternative to stopping it is leaving it running.
+    R.PROC_STATUS, R.PROC_LIST, R.PROC_STOP,
     R.FILE_REGISTER, R.FILE_LIST,
     R.PARSE_FILE, R.PARSE_MODALITY,
     R.LEDGER_RECORD, R.LEDGER_READ,
@@ -316,7 +323,7 @@ ALWAYS_SAFE = {
 # branch above. Checked at import so a new Request cannot be added without a
 # decision being made about it — silently defaulting to "unsafe" would look
 # like policy when it is really an oversight.
-_BRANCHED = {NET_HTTP, PROC_RUN, FS_WRITE, R.FS_WRITE_BYTES,
+_BRANCHED = {NET_HTTP, PROC_RUN, R.PROC_START, FS_WRITE, R.FS_WRITE_BYTES,
              FS_MOVE, FS_DELETE, FS_TEMP,
              CONFIG_READ, R.CONFIG_WRITE, ENV_READ, R.SECRET_REVEAL,
              R.COMMAND_CALL,
@@ -325,6 +332,72 @@ _BRANCHED = {NET_HTTP, PROC_RUN, FS_WRITE, R.FS_WRITE_BYTES,
              R.TASK_PAUSE, R.TASK_RESET}
 _UNDECIDED = R.ALL_TYPES - ALWAYS_SAFE - ALWAYS_UNSAFE - _BRANCHED
 assert not _UNDECIDED, f"unclassified Requests: {sorted(_UNDECIDED)}"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The shell.
+# ──────────────────────────────────────────────────────────────────────
+#
+# The shell gets its own section because it is the one family where the
+# arguments are a *language* rather than values. Everywhere else the policy
+# function reads a path or a URL and the reading is exact; here it would have
+# to decide what an arbitrary command line does, which is Rice's theorem
+# wearing a hat. Every classifier of this kind — ours included, historically —
+# is a whitelist racing against quoting, substitution and redirection, and the
+# race is lost quietly: a wrong "safe" is silent, and only a wrong "unsafe" is
+# ever reported as a bug.
+#
+# So the answer today is the honest one: **everything is asked**. That is
+# annoying rather than wrong, and annoying is the failure mode to prefer.
+#
+# It is meant to get better, and this is where better goes. A *recognizer*
+# takes the rendered command line and returns a reason to allow it, or None to
+# stay out of the way. Two kinds are expected:
+#
+#   - structural — "every segment of this pipeline is a read-only command",
+#     the classifier the store tool used to carry, rebuilt where the policy
+#     can see it rather than inside the plugin it authorizes
+#   - remembered — "the user already approved exactly this, in this session /
+#     for this chain root", which needs somewhere to persist a decision and a
+#     scope to persist it against, and is the more useful of the two
+#
+# The list is empty on purpose. Adding to it is a deliberate widening of the
+# authorization surface, so it should be as visible as this comment makes it.
+_SHELL_RECOGNIZERS: list = []
+
+
+def render_command(args: dict) -> str:
+    """The command line a shell Request is asking for, as a person reads it.
+
+    One function because three callers need to agree: the dialog, the ledger
+    row, and any future recognizer. A list and the string it would join to
+    must describe the same act, or the record and the question drift apart.
+    """
+    argv = args.get("argv")
+    if isinstance(argv, str):
+        rendered = argv
+    else:
+        rendered = " ".join(str(part) for part in (argv or []))
+    shell = args.get("shell")
+    return f"{rendered} [{shell}]" if shell and shell != "default" else rendered
+
+
+def _classify_shell(kind: str, args: dict) -> Decision:
+    """Decide about one shell Request. See the section comment above."""
+    shown = render_command(args)
+    for recognize in _SHELL_RECOGNIZERS:
+        try:
+            if (why := recognize(shown, args)):
+                return Decision(SAFE, why)
+        except Exception:
+            # A recognizer that raises abstains. It can only ever widen, so
+            # failing it closed costs a dialog and nothing else.
+            continue
+    verb = "start" if kind == R.PROC_START else "run"
+    where = args.get("cwd")
+    return Decision(UNSAFE,
+                    f"{verb} shell command: {shown[:200]}"
+                    + (f" (in {where})" if where else ""))
 
 
 def classify(request: Request, chain: Chain) -> Decision:
@@ -358,10 +431,8 @@ def classify(request: Request, chain: Chain) -> Decision:
         return Decision(UNSAFE, f"outbound request to {args.get('url', '')}")
 
     # ── the shell ─────────────────────────────────────────────────
-    if kind == PROC_RUN:
-        argv = args.get("argv")
-        shown = argv if isinstance(argv, str) else " ".join(map(str, argv or []))
-        return Decision(UNSAFE, f"shell command: {shown[:200]}")
+    if kind in (PROC_RUN, R.PROC_START):
+        return _classify_shell(kind, args)
 
     # ── filesystem writes depend entirely on where ────────────────
     # Text and bytes are the same act with a different encoding, so they get

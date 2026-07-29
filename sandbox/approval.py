@@ -85,10 +85,12 @@ def _detail(kind: str, args: dict) -> str:
     Returns ``""`` when they do not — a Request with nothing but a session key
     reads better as its phrase alone than as a phrase followed by noise.
     """
-    if kind == "proc.run":
-        argv = args.get("argv")
-        shown = (argv if isinstance(argv, str)
-                 else " ".join(map(str, argv or [])))
+    if kind in ("proc.run", "proc.start"):
+        # The same renderer the policy's reason and the ledger row use, so the
+        # command a person approves is the command that gets recorded.
+        from .policy import render_command
+
+        shown = render_command(args)
         return f"\n```\n{shown}\n```" if shown else ""
     if kind == "net.http":
         method = (args.get("method") or "GET").upper()
@@ -127,6 +129,13 @@ def _detail(kind: str, args: dict) -> str:
 GRANT_PHRASES = {
     "app.stop": "shut Second Brain down or restart it",
     "proc.run": "run shell commands",
+    "proc.start": "start background processes that keep running",
+    # The three that only ever speak about a process already started. They are
+    # safe, so they reach a dialog only as part of a command's declared grant —
+    # where saying so is still worth a line.
+    "proc.status": "check on background processes",
+    "proc.stop": "stop background processes",
+    "proc.list": "list background processes",
     "net.http": "make network requests",
     "secret.reveal": "read your credentials in plaintext",
     "config.write": "change settings",
@@ -238,7 +247,8 @@ def describe_grant(name: str, requests) -> str:
 
 # Ordering for the list above. The two that carry the most consequence lead,
 # then everything that changes state, then reads.
-_GRANT_ORDER = ("proc.run", "net.http", "secret.reveal", "app.stop")
+_GRANT_ORDER = ("proc.run", "proc.start", "net.http", "secret.reveal",
+                "app.stop")
 
 
 def _grant_rank(kind: str) -> tuple:

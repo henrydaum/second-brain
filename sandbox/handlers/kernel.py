@@ -975,7 +975,20 @@ def _config_write(ctx, args: dict) -> Result:
 
 
 def _path_get(ctx, args: dict) -> Result:
-    """Resolve one of the application locations exposed to plugins."""
+    """Resolve one of the application locations exposed to plugins.
+
+    Two of these are not directories, and belong here anyway. The validator
+    refuses ``sys``, which is correct — it is a door to the interpreter, not a
+    fact about it — but two of the facts behind that door are things a plugin
+    legitimately needs and cannot otherwise learn: which Python is hosting the
+    app (so ``pip install`` targets *this* environment rather than whatever is
+    first on PATH), and which platform it is on (so a command line is built
+    for the right shell). Both are constants the kernel already knows, so
+    answering them costs nothing and closes the only honest reason to want
+    ``sys``.
+    """
+    import sys
+
     from paths import DATA_DIR, INSTALLED_PLUGINS, ROOT_DIR, SANDBOX_PLUGINS
 
     locations = {
@@ -983,6 +996,8 @@ def _path_get(ctx, args: dict) -> Result:
         "data": DATA_DIR,
         "installed_plugins": INSTALLED_PLUGINS,
         "sandbox_plugins": SANDBOX_PLUGINS,
+        "python": sys.executable,
+        "platform": sys.platform,
     }
     name = args.get("name")
     if name not in locations:

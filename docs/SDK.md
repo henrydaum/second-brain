@@ -155,7 +155,15 @@ sdk.fs.move(src, dst, copy=False)
 sdk.fs.temp(directory=False, suffix="")    # scratch space; always allowed
 
 sdk.net.http(url, method="GET", headers=None, body=None)  # -> {status, body}
-sdk.proc.run(argv, timeout=120.0, cwd=None)               # -> {code, stdout, stderr}
+
+sdk.proc.run(argv, timeout=120.0, cwd=None, shell=None)   # -> {code, stdout,
+                                           #     stderr, command}
+sdk.proc.start(argv, cwd=None, shell=None, label="")      # -> {id, pid, log,
+                                           #     command, running, ...}
+sdk.proc.status(id, tail=4000)             # -> the same, plus `output`
+sdk.proc.stop(id)                          # -> {id, code, log}
+sdk.proc.list()                            # -> [ ... ]
+
 sdk.env.read(name)                         # credentials come back as handles
 sdk.secrets.reveal(name)                   # plaintext; always asks the user
 
@@ -165,6 +173,33 @@ sdk.app.stop(restart=False)                # end the process; always asks
 `sdk.app.stop` returns the message to show the user, and the kernel defers the
 actual stop for a moment so that message arrives first. It is what `/quit` and
 `/restart` are; a plugin has no other reason to reach for it.
+
+**Running commands.** `run` blocks and hands back what the command printed;
+`start` hands back a *handle* to something still running, which `status`,
+`stop` and `list` speak about. Both ask the user first — every command does,
+and no amount of phrasing changes that, so ask for what you actually need.
+Stopping does not ask: a server the agent cannot kill without a dialog is a
+server it will not start.
+
+`shell` is the difference between an argv and a command *line*. Leave it
+`None` and the argv is executed directly — no pipes, no globbing, no
+metacharacters, which is what you want when you built the list yourself. Pass
+`"default"` for the platform shell (`cmd.exe` on Windows, `/bin/sh`
+elsewhere) when you need `|`, `>` or `&&`, or `"powershell"` for that one.
+The kernel builds the invocation, because a guest that wrapped its own
+command as `["cmd", "/c", line]` would have every embedded quote mangled —
+`cmd.exe` does not understand the escaping `subprocess` produces.
+
+A started process cannot stream across the boundary, so its output is teed to
+a log file: `status` returns the tail, and `log` is a path `sdk.fs.read` will
+open. The registry is in memory and does not survive a restart, so anything
+still running when Second Brain goes down is orphaned rather than killed.
+
+Two `sdk.paths.get` names are not directories and belong to this section:
+`"python"` is the interpreter hosting the app — invoke `pip` through it or
+packages land in whatever environment is first on `PATH` — and `"platform"`
+is `sys.platform`. They are here because the validator refuses `sys`, and
+these are the only facts behind it a plugin has a real claim on.
 
 `read` decodes UTF-8 with replacement, which quietly mangles anything that is
 not text. Reach for `read_bytes` whenever the file is an image, audio, a PDF,

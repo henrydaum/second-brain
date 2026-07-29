@@ -705,6 +705,40 @@ not a mitigation for everything in flight dying. The kernel owns the 0.75s
 deferral, because a process that ends before its answer is delivered tells the
 user nothing about why.
 
+**The shell family is where a type earned its place** — `proc.start` /
+`proc.status` / `proc.stop` / `proc.list` beside `proc.run`. Running a command
+and *keeping* one are different acts: a live process outlives the Request that
+made it, so there is a handle to hand back, poll and eventually kill, and no
+return value expresses that. `proc.run`/`proc.start` grew a `shell` argument
+instead of the guest wrapping its own command line, because `cmd.exe` does not
+understand the escaping `subprocess` produces from a list — a guest passing
+`["cmd", "/c", line]` loses every embedded quote, so building the invocation
+is host work.
+
+**And it is where the classifier died.** `tool_run_command` carried ~500 lines
+deciding whether a command was read-only: decompose at unquoted `&&`/`||`/
+`;`/`|`, match each segment against a whitelist, send redirection and
+substitution to approval. It is undecidable in principle and it fails in the
+invisible direction — a wrong "unsafe" gets reported, a wrong "safe" does not
+— and it lived inside the plugin it authorized. So the whole family is
+`UNSAFE` and every command is asked about; the migrated tool contains no
+classifier and must not regrow one. Where it gets less onerous is
+`policy._SHELL_RECOGNIZERS`: a recognizer reads the rendered command line and
+returns a reason to allow it or `None` to abstain, ships empty, and is meant
+to hold a structural read-only check and — more usefully — a *remembered*
+approval scoped to something. `policy.render_command` is the one renderer the
+dialog, the ledger row and any recognizer share, so what a person approves is
+what gets recorded. `status`/`stop`/`list` are `ALWAYS_SAFE`: they speak about
+processes already approved at `start`, and stopping narrows — a dev server the
+agent cannot kill without a dialog is one it will not start.
+
+`paths.get` also gained `python` and `platform`. The validator refuses `sys`,
+correctly — it is a door to the interpreter, not a fact about it — but which
+Python is hosting the app (so `pip install` lands where the app can import
+from) and which platform it is on are things a plugin needs and cannot
+otherwise learn. Two constants the kernel already knows, closing the only
+honest reason to want `sys`.
+
 **The SDK idiom** — Requests return their value and raise on failure; a bare
 return is wrapped:
 

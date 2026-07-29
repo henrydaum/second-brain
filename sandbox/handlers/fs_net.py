@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import base64
 import binascii
+import itertools
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,7 +24,8 @@ from pathlib import Path
 from .. import walk
 from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                               FS_READ_BYTES, FS_SEARCH, FS_TEMP, FS_WRITE,
-                              FS_WRITE_BYTES, NET_HTTP, PROC_RUN,
+                              FS_WRITE_BYTES, NET_HTTP, PROC_LIST, PROC_RUN,
+                              PROC_START, PROC_STATUS, PROC_STOP,
                               SECRET_REVEAL, Result)
 from ..protected import is_protected, reason_for
 from ..credentials import lookup_from, redact, resolve
@@ -35,7 +38,12 @@ MAX_READ_BYTES = 8 * 1024 * 1024
 MAX_READ_BINARY = 32 * 1024 * 1024
 MAX_SEARCH_HITS = 500
 HTTP_TIMEOUT = 30.0
-PROC_TIMEOUT = 120.0
+# Ten minutes, because the command that most needs the headroom is the one a
+# user just approved a dialog for — ``pip install`` of something that builds
+# from source. A box waiting here is *blocked*, not running, so the watchdog
+# does not charge it (see ``Execution.running_for``); the caller's own
+# ``timeout`` is what normally decides, and this only caps it.
+PROC_TIMEOUT = 600.0
 
 # The only schemes ``net.http`` will open. ``urllib`` speaks several others,
 # and two of them make this Request a way around controls it sits beside:
@@ -584,24 +592,225 @@ def _net_http(ctx, args: dict) -> Result:
         return Result.failure(f"request failed: {exc}", retryable=True)
 
 
+# ── running commands ──────────────────────────────────────────────────
+#
+# Building the invocation is host work, not guest work, and the reason is
+# Windows. ``cmd.exe`` does not understand the backslash-escaped quotes that
+# ``subprocess``'s list-to-command-line conversion produces, so a guest that
+# wrapped its own command as ``["cmd", "/c", command]`` would have every
+# embedded quote silently mangled — ``git commit -m "two words"`` arrives as
+# something else entirely. Passing the string with ``shell=True`` hands it to
+# the shell verbatim, which is the only form that round-trips. So the guest
+# names *which shell* and the kernel builds the call.
+
+_SHELLS = (None, "default", "powershell", "cmd")
+
+
+def _command_line(argv) -> str:
+    """An argv rendered as something a shell will parse back the same way."""
+    if isinstance(argv, str):
+        return argv
+    parts = [str(part) for part in (argv or [])]
+    return (subprocess.list2cmdline(parts) if os.name == "nt"
+            else shlex.join(parts))
+
+
+def _invocation(args: dict):
+    """Resolve a shell Request's arguments into what ``subprocess`` wants.
+
+    Answers ``(cmd, use_shell, rendered)``, or a :class:`Result` failure.
+    """
+    argv = args.get("argv")
+    if not argv:
+        return Result.failure("a command is required")
+    shell = args.get("shell")
+    if shell not in _SHELLS:
+        return Result.failure(
+            f"unknown shell {shell!r}; expected one of "
+            f"{[s for s in _SHELLS if s]} or none")
+
+    rendered = _command_line(argv)
+    if shell is None:
+        # No shell: the argv is executed as given. A string is split the way a
+        # shell would, but without one — no globbing, no pipes, no
+        # substitution. This is the right default for a caller that built the
+        # list itself.
+        exact = shlex.split(argv) if isinstance(argv, str) else [
+            str(part) for part in argv]
+        return exact, False, rendered
+    if shell == "powershell":
+        # PowerShell parses its own arguments with rules ``list2cmdline``
+        # matches, so the list form is safe here and gives us -NoProfile.
+        return (["powershell", "-NoProfile", "-Command", rendered],
+                False, rendered)
+    if shell == "cmd" and os.name != "nt":
+        return Result.failure("shell 'cmd' is only available on Windows")
+    return rendered, True, rendered
+
+
 def _proc_run(ctx, args: dict) -> Result:
     """Run a command to completion."""
-    argv = args.get("argv")
-    if isinstance(argv, str):
-        argv = shlex.split(argv)
-    if not argv:
-        return Result.failure("proc.run requires argv")
+    built = _invocation(args)
+    if isinstance(built, Result):
+        return built
+    cmd, use_shell, rendered = built
     timeout = min(float(args.get("timeout") or PROC_TIMEOUT), PROC_TIMEOUT)
     try:
-        done = subprocess.run(argv, capture_output=True, text=True,
-                              timeout=timeout, cwd=args.get("cwd") or None)
+        done = subprocess.run(cmd, shell=use_shell, capture_output=True,
+                              text=True, errors="replace", timeout=timeout,
+                              cwd=args.get("cwd") or None)
         return Result(data={"code": done.returncode,
-                            "stdout": done.stdout[-100_000:],
-                            "stderr": done.stderr[-100_000:]})
+                            "stdout": (done.stdout or "")[-100_000:],
+                            "stderr": (done.stderr or "")[-100_000:],
+                            "command": rendered})
     except subprocess.TimeoutExpired:
         return Result.failure(f"timed out after {timeout:.0f}s", retryable=True)
     except (OSError, ValueError) as exc:
         return Result.failure(f"could not run: {exc}")
+
+
+# ── processes that outlive the Request that started them ──────────────
+#
+# The registry is in memory, and deliberately: a ``Popen`` handle is not
+# serializable, so nothing here survives a restart. What survives is the log
+# file. ``main.pyw`` exits through ``os._exit``, so a process started here and
+# not stopped is orphaned rather than killed when Second Brain goes down —
+# which is why ``proc.stop`` is classified safe, and why the agent prompt says
+# to use it.
+
+_PROCESSES: dict = {}
+_NEXT_ID = itertools.count(1)
+_PROCESS_LIMIT = 64
+
+
+def _reap() -> None:
+    """Drop the oldest finished entries once the registry gets long.
+
+    Nothing else forgets them: an exited process stays listed so its output is
+    still readable, which is the point, but not forever.
+    """
+    while len(_PROCESSES) > _PROCESS_LIMIT:
+        for key, entry in sorted(_PROCESSES.items()):
+            if entry["popen"].poll() is not None:
+                _PROCESSES.pop(key, None)
+                break
+        else:
+            return  # everything still running; nothing to reap
+
+
+def _tail(path: str, limit: int) -> str:
+    """The last ``limit`` characters a process wrote."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return "(log unavailable)"
+    if not text:
+        return "(no output yet)"
+    return text[-limit:] if limit and limit > 0 else text
+
+
+def _described(key: int, entry: dict, tail: int = 0) -> dict:
+    """One registry entry as the guest sees it."""
+    code = entry["popen"].poll()
+    described = {"id": key, "pid": entry["popen"].pid,
+                 "command": entry["command"], "label": entry["label"],
+                 "cwd": entry["cwd"], "log": entry["log"],
+                 "started_at": entry["started_at"],
+                 "running": code is None, "code": code}
+    if tail:
+        described["output"] = _tail(entry["log"], tail)
+    return described
+
+
+def _proc_start(ctx, args: dict) -> Result:
+    """Start a command and leave it running."""
+    built = _invocation(args)
+    if isinstance(built, Result):
+        return built
+    cmd, use_shell, rendered = built
+    cwd = args.get("cwd") or None
+
+    handle = None
+    try:
+        descriptor, log = tempfile.mkstemp(prefix="sb-proc-", suffix=".log")
+        handle = open(descriptor, "w", encoding="utf-8", errors="replace")
+        handle.write(f"$ {rendered}\n# cwd: {cwd or os.getcwd()}\n\n")
+        handle.flush()
+        popen = subprocess.Popen(
+            cmd, shell=use_shell, cwd=cwd,
+            stdout=handle, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            # POSIX: its own process group, so stopping it reaches the
+            # children a shell command line usually has. Windows gets the
+            # same reach from ``taskkill /T``.
+            start_new_session=os.name != "nt")
+    except (OSError, ValueError) as exc:
+        return Result.failure(f"could not start: {exc}")
+    finally:
+        # The child holds its own duplicate of the descriptor.
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+
+    key = next(_NEXT_ID)
+    _PROCESSES[key] = {"popen": popen, "command": rendered, "log": log,
+                       "cwd": str(cwd) if cwd else os.getcwd(),
+                       "label": args.get("label") or "",
+                       "started_at": time.time()}
+    _reap()
+    return Result(data=_described(key, _PROCESSES[key]))
+
+
+def _proc_status(ctx, args: dict) -> Result:
+    """Report on a started process, with the tail of what it has written."""
+    key = args.get("id")
+    entry = _PROCESSES.get(key)
+    if entry is None:
+        return Result.failure(f"no process {key!r}; ask proc.list")
+    tail = args.get("tail")
+    return Result(data=_described(key, entry,
+                                  tail=int(tail) if tail else 4000))
+
+
+def _proc_stop(ctx, args: dict) -> Result:
+    """End a started process and forget it."""
+    key = args.get("id")
+    entry = _PROCESSES.get(key)
+    if entry is None:
+        return Result.failure(f"no process {key!r}; ask proc.list")
+    popen = entry["popen"]
+    if popen.poll() is None:
+        try:
+            if os.name == "nt":
+                # With shell=True the tracked pid is the shell's, so only a
+                # tree kill reaches what was actually asked for.
+                subprocess.run(["taskkill", "/T", "/F", "/PID",
+                                str(popen.pid)],
+                               capture_output=True, timeout=15)
+            else:
+                import signal
+                os.killpg(os.getpgid(popen.pid), signal.SIGTERM)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            try:
+                popen.kill()
+            except OSError:
+                pass
+    try:
+        code = popen.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        code = None
+    _PROCESSES.pop(key, None)
+    return Result(data={"id": key, "code": code, "command": entry["command"],
+                        "log": entry["log"]})
+
+
+def _proc_list(ctx, args: dict) -> Result:
+    """Every process this system started and still remembers."""
+    return Result(data=[_described(key, entry)
+                        for key, entry in sorted(_PROCESSES.items())])
 
 
 def _env_read(ctx, args: dict) -> Result:
@@ -652,5 +861,9 @@ HANDLERS = {
     FS_TEMP: _fs_temp,
     NET_HTTP: _net_http,
     PROC_RUN: _proc_run,
+    PROC_START: _proc_start,
+    PROC_STATUS: _proc_status,
+    PROC_STOP: _proc_stop,
+    PROC_LIST: _proc_list,
     ENV_READ: _env_read,
 }

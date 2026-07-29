@@ -162,6 +162,19 @@ LEDGER_RECORD = "ledger.record"
 LEDGER_READ = "ledger.read"
 NET_HTTP = "net.http"
 PROC_RUN = "proc.run"
+
+# Running a command and *keeping* it is a different act from running one to
+# completion, and it is the one case where growing the vocabulary is right
+# rather than a last resort: a live process outlives the Request that made it,
+# so there is a handle to hand back, poll, and eventually kill — none of which
+# a return value can express. A dev server is the motivating case, and the
+# agent has to be able to clean one up without a dialog or it will not start
+# one at all.
+PROC_START = "proc.start"
+PROC_STATUS = "proc.status"
+PROC_STOP = "proc.stop"
+PROC_LIST = "proc.list"
+
 ENV_READ = "env.read"
 SECRET_REVEAL = "secret.reveal"
 SELF_RESPOND = "self.respond"
@@ -198,7 +211,8 @@ ALL_TYPES = {
     TASK_ENQUEUE, TASK_STATUS, TASK_OUTPUT, TASK_LIST, TASK_GRAPH,
     TASK_PAUSE, TASK_RESET, TASK_TRIGGER, FILE_REGISTER, FILE_LIST,
     PARSE_FILE, PARSE_MODALITY, LEDGER_RECORD, LEDGER_READ,
-    NET_HTTP, PROC_RUN, ENV_READ, SECRET_REVEAL, SELF_RESPOND,
+    NET_HTTP, PROC_RUN, PROC_START, PROC_STATUS, PROC_STOP, PROC_LIST,
+    ENV_READ, SECRET_REVEAL, SELF_RESPOND,
     APP_STOP,
 }
 
@@ -213,6 +227,7 @@ READ_ONLY = {
     CRON_LIST, CRON_GET, TASK_STATUS, TASK_OUTPUT, TASK_LIST, TASK_GRAPH,
     FILE_LIST, PARSE_FILE,
     PARSE_MODALITY, LEDGER_READ, ENV_READ, CONSOLE_READ, FRONTEND_PENDING,
+    PROC_STATUS, PROC_LIST,
 }
 
 

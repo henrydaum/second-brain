@@ -80,7 +80,8 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN, APP_STOP,
                        PLUGIN_DESCRIBE, PLUGIN_INSTALL, PLUGIN_LIST,
                        PLUGIN_REGISTER, PLUGIN_RELOAD, PLUGIN_UNREGISTER,
                        PLUGIN_UNINSTALL, PLUGIN_UPDATE, PLUGIN_VALIDATE,
-                       PROC_RUN,
+                       PROC_LIST, PROC_RUN, PROC_START, PROC_STATUS,
+                       PROC_STOP,
                        SECRET_REVEAL, SELF_RESPOND,
                        SERVICE_CALL, SERVICE_LIST, SERVICE_LOAD,
                        SERVICE_UNLOAD, SESSION_ADD_PROMPT,
@@ -414,7 +415,15 @@ class _Config(_Namespace):
 
 
 class _Paths(_Namespace):
-    """Kernel-owned application locations."""
+    """Kernel-owned application locations, and two facts about the host.
+
+    ``project``, ``data``, ``installed_plugins``, ``sandbox_plugins`` —
+    directories. ``python`` is the interpreter running the app, which is what
+    ``pip`` should be invoked through so it installs into *this* environment;
+    ``platform`` is ``sys.platform``. Both are here because the validator
+    refuses ``sys`` and these are the only things behind it a plugin has a
+    real claim on.
+    """
 
     def get(self, name: str):
         """Resolve a named application location."""
@@ -886,12 +895,50 @@ class _Net(_Namespace):
 
 
 class _Proc(_Namespace):
-    """Running commands."""
+    """Running commands.
 
-    def run(self, argv, timeout: float = 120.0, cwd=None):
+    Two shapes, because running a command and *keeping* one are different
+    acts. :meth:`run` blocks and hands back what the command printed;
+    :meth:`start` hands back a handle to something still running, which
+    :meth:`status`, :meth:`stop` and :meth:`list` then speak about.
+
+    ``shell`` is the difference between an argv and a *command line*.
+    Left at ``None`` the argv is executed directly, which is what you want
+    when you built the list yourself — no quoting, no metacharacters, no
+    surprises. Pass ``"default"`` to hand the string to the platform shell
+    (``cmd.exe`` on Windows, ``/bin/sh`` elsewhere) when you need pipes,
+    redirection or ``&&``; ``"powershell"`` picks that one explicitly. The
+    kernel builds the invocation, because getting it wrong on Windows
+    mangles every embedded quote.
+    """
+
+    def run(self, argv, timeout: float = 120.0, cwd=None, shell=None):
         """Run a command to completion."""
         return self._ask(PROC_RUN, argv=argv, timeout=timeout,
-                         cwd=str(cwd) if cwd else None)
+                         cwd=str(cwd) if cwd else None, shell=shell)
+
+    def start(self, argv, cwd=None, shell=None, label: str = ""):
+        """Start a command and leave it running.
+
+        Answers ``{id, pid, log, command}``. Output is teed to ``log``, a
+        file readable with ``sdk.fs.read`` — a live process cannot stream
+        across the boundary, so the log is how you watch one.
+        """
+        return self._ask(PROC_START, argv=argv,
+                         cwd=str(cwd) if cwd else None, shell=shell,
+                         label=label)
+
+    def status(self, id: int, tail: int = 4000):
+        """Ask after a started process, with the tail of its output."""
+        return self._ask(PROC_STATUS, id=id, tail=tail)
+
+    def stop(self, id: int):
+        """End a started process and forget it."""
+        return self._ask(PROC_STOP, id=id)
+
+    def list(self):
+        """Every process this system started and still remembers."""
+        return self._ask(PROC_LIST)
 
 
 class _App(_Namespace):
