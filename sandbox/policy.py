@@ -323,7 +323,8 @@ ALWAYS_SAFE = {
 # branch above. Checked at import so a new Request cannot be added without a
 # decision being made about it — silently defaulting to "unsafe" would look
 # like policy when it is really an oversight.
-_BRANCHED = {NET_HTTP, PROC_RUN, R.PROC_START, FS_WRITE, R.FS_WRITE_BYTES,
+_BRANCHED = {NET_HTTP, PROC_RUN, R.PROC_START, R.SCRIPT_RUN,
+             FS_WRITE, R.FS_WRITE_BYTES,
              FS_MOVE, FS_DELETE, FS_TEMP,
              CONFIG_READ, R.CONFIG_WRITE, ENV_READ, R.SECRET_REVEAL,
              R.COMMAND_CALL,
@@ -400,6 +401,77 @@ def _classify_shell(kind: str, args: dict) -> Decision:
                     + (f" (in {where})" if where else ""))
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Scripts.
+# ──────────────────────────────────────────────────────────────────────
+#
+# A script is the answer to the shell's problem rather than another instance of
+# it. ``proc.run`` is asked about every time because a command line is a
+# *language* the policy function would have to interpret; a script is SDK code,
+# so there is nothing to interpret — every effect inside it arrives here on its
+# own, individually, with the script still in the chain. Running one therefore
+# widens nothing, which is the same argument that makes ``tool.call`` and
+# ``service.call`` safe.
+#
+# Two things are checked, and both are read off the *destination* — the same
+# shape as the filesystem branches, which ask where a write is aimed rather
+# than what it contains.
+
+def _script_report(path):
+    """Validate a script, or None if it could not be read.
+
+    The kernel re-derives this rather than accepting a verdict passed in the
+    Request. A caller supplying its own report — or a digest standing in for
+    one — would be the code being contained acting as the authority on its own
+    containment, which is the bug ``sandbox/isolation.py`` exists to prevent.
+
+    It is a pure AST walk over one file and never imports what it reads, so the
+    cost is a parse. Worth watching if a loop ever runs scripts in bulk.
+    """
+    from .validator import validate_file
+
+    try:
+        return validate_file(path)
+    except (OSError, ValueError):
+        return None
+
+
+def _classify_script(args: dict) -> Decision:
+    """Decide about running one script."""
+    from .isolation import is_script
+
+    path = args.get("path")
+    if not path:
+        return Decision(UNSAFE, "no script named")
+    if not is_script(path):
+        # Not a refusal of *this* file so much as of the shape of the ask: the
+        # containment story rests entirely on the file living somewhere the
+        # kernel subprocesses unconditionally. Anywhere else and the honest
+        # answer is that nobody knows what this is.
+        return Decision(UNSAFE, f"{path} is not in a scripts/ directory")
+
+    report = _script_report(path)
+    if report is None:
+        return Decision(UNSAFE, f"could not read {path}")
+    if not report.ok:
+        # It would be refused by the loader moments later anyway. Saying so
+        # here means the user is not asked to approve something that cannot
+        # run, which is the worst possible thing to put in a dialog.
+        return Decision(UNSAFE, f"{Path(path).name} does not pass validation")
+    if report.unmediated:
+        # The one case that is asked about. An installed package importing a
+        # foreign library is subprocessed and *not* asked, because somebody
+        # approved it once at ``plugin.install``; a script was never approved
+        # by anyone, and a library the validator cannot see inside is the only
+        # part of a script whose effects do not come back through this
+        # function. Naming it is most of the value of the dialog.
+        libraries = ", ".join(sorted(report.unmediated))
+        return Decision(UNSAFE,
+                        f"run {Path(path).name}, which imports {libraries} — "
+                        f"that library's own actions are not mediated")
+    return Decision(SAFE, f"run the script {Path(path).name} (contained)")
+
+
 def _setting_owners(key: str) -> set:
     """Which plugins declared a config setting, per the setting registry.
 
@@ -470,6 +542,10 @@ def classify(request: Request, chain: Chain) -> Decision:
     # ── the shell ─────────────────────────────────────────────────
     if kind in (PROC_RUN, R.PROC_START):
         return _classify_shell(kind, args)
+
+    # ── scripts: the shell's job, done where it can be answered ───
+    if kind == R.SCRIPT_RUN:
+        return _classify_script(args)
 
     # ── filesystem writes depend entirely on where ────────────────
     # Text and bytes are the same act with a different encoding, so they get

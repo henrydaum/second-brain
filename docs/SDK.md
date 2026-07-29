@@ -25,14 +25,39 @@ No base class, no declarations. A file with functions that take `sdk`:
 """Summarize a file."""
 
 
-def summarize(sdk, path):
+def main(sdk, path):
     """Count the lines and words in a file."""
     lines = sdk.fs.read(path).splitlines()
     return {"lines": len(lines), "words": sum(len(l.split()) for l in lines)}
 ```
 
-That is a complete, runnable sandbox program. Use this for one-off computation
-and scratch work.
+That is a complete, runnable sandbox program.
+
+**Put it in `scripts/`** — `<DATA_DIR>/sandbox_plugins/scripts/<name>.py`,
+which `sdk.paths.get("scripts")` will tell you. The directory is the whole
+declaration, the way `helpers/` is: there is no prefix, no base class and no
+keyword that could say what this file is, so where it sits has to.
+
+Run it with `sdk.scripts.run(path)`, which calls `main(sdk)` by default and
+hands back what it returned. **This is what to reach for instead of
+`sdk.proc.run`.** A shell command is an OS process outside the boundary, so it
+is asked about every single time and no phrasing changes that. A script is
+contained — every effect inside it comes back through the gate on its own and
+is judged there — so running one costs no dialog at all. Anything expressible
+in Python should be a script.
+
+The exception is a script importing a library the validator cannot see inside.
+That is asked about once per run, and the library is named, because a foreign
+library's own actions are the one part of a script that does not come back as a
+Request. Stdlib and SDK only means no interruption.
+
+Scripts are always run in a subprocess, wherever they live. Nothing registers
+one and nobody reviewed it, so containment is the whole of what makes running
+it cheap.
+
+A name is a filename, not a family: `sync_photos.py` is fine, but do not call a
+script `tool_something.py` or `service_something.py` — a family prefix makes
+the validator expect a plugin class and refuse the file.
 
 ### A plugin
 
@@ -164,6 +189,9 @@ sdk.proc.status(id, tail=4000)             # -> the same, plus `output`
 sdk.proc.stop(id)                          # -> {id, code, log}
 sdk.proc.list()                            # -> [ ... ]
 
+sdk.scripts.run(path, entry="main", wait=True, **args)  # -> whatever it
+                                           #     returned; no dialog
+
 sdk.env.read(name)                         # credentials come back as handles
 sdk.secrets.reveal(name)                   # plaintext; always asks the user
 
@@ -173,6 +201,14 @@ sdk.app.stop(restart=False)                # end the process; always asks
 `sdk.app.stop` returns the message to show the user, and the kernel defers the
 actual stop for a moment so that message arrives first. It is what `/quit` and
 `/restart` are; a plugin has no other reason to reach for it.
+
+**Prefer a script to a command.** `sdk.scripts.run` runs a file of SDK code
+from `scripts/` and does not ask, because everything inside it is classified
+individually. `sdk.proc.run` starts a process the kernel cannot see into and
+always asks. The two are not close in cost, so reach for the shell only when
+the work genuinely is another program. Keyword arguments go to the entry
+function — `sdk.scripts.run(p, total=3)` calls `main(sdk, total=3)` — and
+`wait=False` answers as soon as it has started rather than when it finishes.
 
 **Running commands.** `run` blocks and hands back what the command printed;
 `start` hands back a *handle* to something still running, which `status`,

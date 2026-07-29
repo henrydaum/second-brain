@@ -28,6 +28,12 @@ SANDBOX_PLUGINS = DATA_DIR / "sandbox_plugins"
 INSTALLED_PLUGINS = DATA_DIR / "installed_plugins"
 PACKAGES_DIR = DATA_DIR / "packages"
 
+# The agent's own scratchpad: SDK code that is not a plugin. Named here because
+# three separate places need to agree on it — the policy function, the
+# isolation rule, and ``paths.get`` — and a string spelled three times is a
+# string that eventually gets spelled two ways.
+SANDBOX_SCRIPTS = SANDBOX_PLUGINS / "scripts"
+
 # Attachment cache: files dropped in from frontends (e.g. Telegram).
 # Registered as a sync_directory by default so the Stage_2 pipeline indexes them.
 ATTACHMENT_CACHE = DATA_DIR / "attachment_cache"

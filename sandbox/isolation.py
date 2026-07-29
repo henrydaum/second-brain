@@ -49,6 +49,11 @@ SANDBOX = "sandbox"
 INSTALLED = "installed"
 UNKNOWN = "unknown"
 
+# The fourth tree root, beside the five plugin families and ``helpers/``. A
+# script is SDK code that nothing registers: no base class, no entry point, no
+# discovery. See :func:`is_script`.
+SCRIPTS_DIRNAME = "scripts"
+
 
 def _roots() -> tuple:
     """(tree, root) pairs, most specific first.
@@ -94,6 +99,30 @@ def tree_of(source) -> str:
     return UNKNOWN
 
 
+def is_script(source) -> bool:
+    """Whether a file is a *script* — SDK code nothing registers.
+
+    True for ``<tree>/scripts/<name>.py`` at any of the three tree roots. The
+    directory is the whole declaration, exactly as ``helpers/`` is: a script
+    has no base class, no entry point and no family prefix, so there is nothing
+    else about the file that could say what it is.
+
+    Top level only, matching ``helpers/``. A ``scripts/`` folder nested inside
+    a family is not a tree root and is not treated as one.
+    """
+    if not source:
+        return False
+    path = Path(source)
+    for _tree, root in _roots():
+        try:
+            relative = path.resolve().relative_to(Path(root).resolve())
+        except (ValueError, OSError):
+            continue
+        return relative.parts[:1] == (SCRIPTS_DIRNAME,) and len(
+            relative.parts) == 2
+    return False
+
+
 def required_isolation(source, report=None) -> str:
     """The isolation the kernel requires for this file. Not negotiable.
 
@@ -102,6 +131,17 @@ def required_isolation(source, report=None) -> str:
     import it cannot mediate. Absent report means unknown content, which is
     treated the same way as unknown provenance.
     """
+    # Scripts are subprocessed wherever they live, which is the one place the
+    # per-tree answer below is deliberately not consulted. An installed plugin
+    # that is pure computation over the SDK earns in-process execution because
+    # somebody approved it at ``plugin.install`` and it is a declared,
+    # registered capability. A script is neither: nothing registers it, nothing
+    # reviewed it, and the only thing that has ever been said about it is that
+    # it parsed. Containment is the whole of what makes running one cheap, so
+    # it is not something the file's address can buy its way out of.
+    if is_script(source):
+        return SUBPROCESS
+
     tree = tree_of(source)
     if tree == KERNEL:
         return IN_PROCESS

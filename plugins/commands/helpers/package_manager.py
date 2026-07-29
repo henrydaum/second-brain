@@ -16,13 +16,16 @@ from typing import Callable
 from paths import INSTALLED_PLUGINS, ROOT_DIR
 from plugins.commands.helpers.store_backend import GitStoreBackend
 from plugins.helpers.plugin_paths import (HELPERS_FAMILY, PLUGIN_FAMILIES,
-                                          PLUGIN_ROOTS)
+                                          PLUGIN_ROOTS, SCRIPTS_FAMILY)
 
 
-# The family folders, plus ``helpers/`` — shared code that belongs to no
-# family because it is not a plugin at all. Parsers live there: a package
-# ships ``helpers/parse_pdf.py`` and whatever needs it imports it.
-TREE_ROOTS = {family for family, _prefix in PLUGIN_FAMILIES.values()} | {HELPERS_FAMILY}
+# The family folders, plus the two roots that belong to no family because they
+# are not plugins at all. Parsers live in ``helpers/``: a package ships
+# ``helpers/parse_pdf.py`` and whatever needs it imports it. ``scripts/`` holds
+# SDK code that is run rather than registered, which the store can ship for the
+# same reason it ships a helper — the file is the whole package.
+TREE_ROOTS = ({family for family, _prefix in PLUGIN_FAMILIES.values()}
+              | {HELPERS_FAMILY, SCRIPTS_FAMILY})
 DEPENDENCY_FIELDS = ("dependencies_files", "dependencies_pip")
 _PACKAGE_LOCK = threading.RLock()
 Progress = Callable[[str], None]
@@ -673,20 +676,25 @@ def _rel_id(rel: str) -> str:
 def _is_valid_tree_rel(rel: str) -> bool:
     """Whether a store path is a plugin, a family helper, or shared code.
 
-    Three shapes are legal:
+    Four shapes are legal:
 
         tools/tool_x.py            a plugin, prefixed by its family
         tools/helpers/x.py         a helper belonging to one family
         helpers/parse_pdf.py       shared code belonging to no family
+        scripts/backfill.py        SDK code that is run rather than registered
 
-    The last has no prefix rule because it is not a plugin: nothing discovers
-    it, and whoever needs it imports it by name.
+    The last two have no prefix rule because neither is a plugin: nothing
+    discovers them, and a prefix would make the validator expect a plugin
+    class. Both are top level only — ``scripts/helpers/x.py`` falls through to
+    the three-part branch below, which admits family folders and nothing else,
+    and that matches ``isolation.is_script``, which is what decides whether an
+    installed script may run at all.
     """
     p = PurePosixPath(rel)
     if p.suffix != ".py":
         return False
     if len(p.parts) == 2:
-        if p.parts[0] == HELPERS_FAMILY:
+        if p.parts[0] in (HELPERS_FAMILY, SCRIPTS_FAMILY):
             return True
         return any(p.parts[0] == family and p.name.startswith(prefix)
                    for family, prefix in PLUGIN_FAMILIES.values())

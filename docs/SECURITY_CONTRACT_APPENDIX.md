@@ -672,6 +672,54 @@ survives a restart. What survives is the log file. A process still running
 when the app exits is orphaned rather than killed, which is why the agent
 prompt is emphatic about stopping them.
 
+## 18a. Scripts
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `script.run(path, entry, args, wait)` | Run a file of SDK code that is not a plugin | the directory the file is in; what it imports | safe |
+
+**This is the shell's job, moved somewhere it can be answered.** Section 18
+concludes that a command line cannot be classified, so every command is asked
+about — which leaves the agent's *cheapest* capability also its most dangerous
+one, and nothing safe to reach for instead. A script is that alternative. It is
+Python over the SDK, so there is nothing to interpret: every effect inside it
+arrives at the gate on its own, individually, with the script still in the
+chain. Running one therefore widens nothing, which is the same argument that
+makes `tool.call` and `service.call` safe.
+
+Two things are checked, and both are read off the *destination* — the same
+shape as the filesystem branches, which ask where a write is aimed rather than
+what it contains.
+
+**Where the file is.** Only `<tree>/scripts/*.py`, top level, at any of the
+three tree roots. The directory is the whole declaration: a script has no
+family prefix, no base class and no entry point, so there is nothing else about
+the file that could say what it is. A path anywhere else is refused rather than
+asked about, because the containment story rests entirely on the answer.
+
+**What it imports.** A script whose imports the validator cannot see inside is
+**unsafe**, and the dialog names the library. This is deliberately stricter
+than the equivalent rule for plugins: an installed package importing a foreign
+library is subprocessed and *not* asked, because a person approved it once at
+`plugin.install`. A script was never approved by anybody, and a foreign
+library's own actions are the one part of a script that does not come back
+through this function — so this is the only moment there is to ask.
+
+**Scripts are always subprocessed**, wherever they live, which is the one place
+`required_isolation` does not consult the per-tree answer. An installed plugin
+that is pure computation over the SDK earns in-process execution because it is
+a declared, registered, reviewed capability; a script is none of those things.
+
+The verdict is re-derived by the kernel from the path, never supplied on the
+Request. A caller passing its own report — or a digest standing in for one —
+would be the code being contained acting as the authority on its own
+containment, which is the bug `sandbox/isolation.py` exists to prevent.
+
+Ephemeral only. A script that wants to stay resident is a service, and a
+script that wants to run for an hour is a pipeline task; both are families that
+already exist and both are approved at the point they are created, which is
+where a commitment that outlives a turn should be answered for.
+
 ## 19. Self and ambient
 
 | Request | Purpose | Policy inputs | Default |

@@ -115,6 +115,12 @@ base class, no entry point, nothing discovery registers. `helpers/` is a
 fourth tree root beside the five families (`plugin_paths.helper_dirs()`,
 `package_manager.TREE_ROOTS`), and files there carry no name prefix.
 
+`scripts/` is the fifth, and the trees are therefore **code trees rather than
+plugin trees** — a distinction the folder names (`plugins/`,
+`installed_plugins/`, `sandbox_plugins/`) predate and are not worth renaming
+for. A helper exists to be imported; a script exists to be *run*. See
+**Scripts** under the sandbox section.
+
 The **watcher** classifies a changed helper by stem rather than asking
 `plugin_info`, which only knows the five families and answered "not in a known
 plugin folder" for everything under `helpers/` that was not an `llm_*` backend
@@ -795,6 +801,41 @@ dialog, the ledger row and any recognizer share, so what a person approves is
 what gets recorded. `status`/`stop`/`list` are `ALWAYS_SAFE`: they speak about
 processes already approved at `start`, and stopping narrows — a dev server the
 agent cannot kill without a dialog is one it will not start.
+
+**Scripts are what the classifier's death left missing.** Every command being
+asked about left the agent's *cheapest* capability also its most dangerous one,
+with nothing safe to reach for instead — so under pressure everything routes
+through the one door meant to be hardest. `script.run` is the alternative:
+a file of SDK code under `<tree>/scripts/`, run in a subprocess, `SAFE`. It can
+be safe precisely because a command line cannot — Python over the SDK has
+nothing to interpret, so every effect inside arrives at the gate individually
+with the script still in the chain. Same argument as `tool.call`.
+
+The directory is the whole declaration (`isolation.is_script`), because a
+script has no prefix, no base class and no entry point to say what it is. Two
+things are then read off the destination, the same shape as the `fs.write`
+branch: **where** the file is (anywhere but `scripts/` is refused, not asked),
+and **what it imports** — a foreign library makes it `UNSAFE` and the dialog
+names the library. That last rule is deliberately stricter than the plugin
+equivalent: an installed package importing one is subprocessed and not asked
+because somebody approved it at `plugin.install`, whereas a script was never
+approved by anybody. Scripts are subprocessed in *every* tree, the one place
+`required_isolation` skips the per-tree answer. The verdict is re-derived by
+the kernel from the path and never supplied on the Request — a caller passing
+its own report would be the contained code judging its own containment.
+
+Ephemeral only, on purpose. The resident half already works
+(`Sandbox.open` on a module, pinned by `test_a_bare_script_opens_as_a_resident_
+server`) and is deliberately not exposed: a script that wants to stay resident
+is a *service* and one that wants an hour is a *task*, and both are approved
+where a commitment outliving a turn should be answered for. Note the 600s
+`watchdog.HARD_CEILING` bounds ephemeral runs only.
+
+`handlers/kernel._script_run` waits in slices rather than blocking, because
+cancellation reaches code that is *making* Requests and this handler makes
+none while it waits. `provenance.Caller` carries the calling `Execution` for
+exactly that — a cancelled turn would otherwise leave the child running to its
+ceiling on a held pool worker.
 
 `paths.get` also gained `python` and `platform`. The validator refuses `sys`,
 correctly — it is a door to the interpreter, not a fact about it — but which

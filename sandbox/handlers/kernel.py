@@ -46,7 +46,8 @@ from ..guest.requests import (AGENT_COMPLETE, APP_STOP, COMMAND_CALL,
                               SESSION_CANCEL, SESSION_GET, SESSION_LIST,
                               SESSION_PUSH, SESSION_REMOVE_PROMPT,
                               SESSION_REMOVE_TOOL, SESSION_STATE_GET,
-                              SESSION_STATE_SET, TASK_ENQUEUE, TASK_GRAPH,
+                              SESSION_STATE_SET, SCRIPT_RUN,
+                              TASK_ENQUEUE, TASK_GRAPH,
                               TASK_LIST, TASK_OUTPUT, TASK_PAUSE, TASK_RESET,
                               TASK_STATUS, TASK_TRIGGER, TOOL_CALL, TOOL_LIST,
                               UI_APPROVE,
@@ -998,13 +999,19 @@ def _path_get(ctx, args: dict) -> Result:
     """
     import sys
 
-    from paths import DATA_DIR, INSTALLED_PLUGINS, ROOT_DIR, SANDBOX_PLUGINS
+    from paths import (DATA_DIR, INSTALLED_PLUGINS, ROOT_DIR, SANDBOX_PLUGINS,
+                       SANDBOX_SCRIPTS)
 
     locations = {
         "project": getattr(ctx, "root_dir", None) or ROOT_DIR,
         "data": DATA_DIR,
         "installed_plugins": INSTALLED_PLUGINS,
         "sandbox_plugins": SANDBOX_PLUGINS,
+        # Named rather than left to be built out of ``sandbox_plugins``: where
+        # a script goes is what decides whether it can be run without a dialog,
+        # so it is a fact the kernel states rather than a path convention a
+        # plugin is expected to remember.
+        "scripts": SANDBOX_SCRIPTS,
         "python": sys.executable,
         "platform": sys.platform,
     }
@@ -2498,6 +2505,79 @@ def _ledger_read(ctx, args: dict) -> Result:
         return Result.failure(f"ledger read failed: {exc}")
 
 
+# How often the wait below looks up to see whether the caller still wants an
+# answer. Short enough that a cancelled turn dies promptly, long enough that a
+# script running for minutes costs a negligible number of wakeups.
+_SCRIPT_POLL = 0.2
+
+
+def _script_run(ctx, args: dict) -> Result:
+    """Run a file of SDK code that is not a plugin.
+
+    The whole of this handler is plumbing: validation, isolation and
+    classification all happened before it was reached, and every effect the
+    script performs comes back through the gate on its own. What is left is
+    resolving a path, descending the chain, and — the part that is not
+    obvious — noticing if the caller goes away.
+    """
+    from plugins.helpers.plugin_paths import resolve_plugin_path
+
+    from .. import provenance
+    from ..bridge import get_sandbox
+    from ..isolation import is_script
+
+    path, error = resolve_plugin_path((args.get("path") or "").strip())
+    if error:
+        return Result.failure(error)
+    if not path.is_file():
+        return Result.failure(f"no such script: {path}")
+    # Re-checked here as well as in the policy function. The two answer
+    # different questions — the policy decides whether to *ask*, this decides
+    # whether to *run* — and a handler that trusted the classifier to have
+    # covered it would silently start running scripts from anywhere the day
+    # somebody added a branch above it.
+    if not is_script(path):
+        return Result.failure(
+            f"{path.name} is not in a scripts/ directory; scripts live in "
+            f"<tree>/scripts/ and are run from there so that they are "
+            f"contained before they run")
+
+    caller = provenance.current()
+    chain = caller.chain if caller is not None else None
+    entry = (args.get("entry") or "main").strip()
+    kwargs = dict(args.get("args") or {})
+
+    try:
+        sandbox = get_sandbox()
+    except Exception as exc:
+        return Result.failure(f"the sandbox is not available: {exc}")
+
+    try:
+        run = sandbox.start(str(path), entry, kwargs=kwargs, chain=chain,
+                            context=getattr(caller, "context", None))
+    except Exception as exc:
+        # A BoxError here is the useful case: a script declaring a persistent
+        # lifetime is told to be opened rather than run, which is a real
+        # message and not a crash.
+        return Result.failure(f"{path.name} could not start: {exc}")
+
+    if not args.get("wait", True):
+        return Result(data={"script": path.name, "started": True})
+
+    # Waiting in slices rather than one blocking call. Cancellation reaches
+    # code that is making Requests, and this handler is making none while it
+    # waits — so a cancelled caller would otherwise sit here until the child
+    # hit its own ceiling, holding a pool worker and finishing work nobody is
+    # going to read.
+    while True:
+        outcome = run.wait(timeout=_SCRIPT_POLL)
+        if run.done:
+            return outcome
+        if caller is not None and caller.abandoned:
+            run.cancel()
+            return Result.failure(f"{path.name} was cancelled")
+
+
 def _app_stop(ctx, args: dict) -> Result:
     """End the process, optionally starting it again.
 
@@ -2574,5 +2654,6 @@ HANDLERS = {
     FILE_REGISTER: _file_register, FILE_LIST: _file_list,
     PARSE_FILE: _parse_file, PARSE_MODALITY: _parse_modality,
     LEDGER_RECORD: _ledger_record, LEDGER_READ: _ledger_read,
+    SCRIPT_RUN: _script_run,
     APP_STOP: _app_stop,
 }

@@ -136,6 +136,19 @@ def plugin_dirs(plugin_type: str) -> tuple[PluginDir, ...]:
 
 
 HELPERS_FAMILY = "helpers"
+SCRIPTS_FAMILY = "scripts"
+
+
+def script_dirs() -> tuple[tuple[PluginRoot, Path], ...]:
+    """Return each tree's ``scripts/`` directory in precedence order.
+
+    The second non-plugin tree root, after ``helpers/``. A script is SDK code
+    the agent runs directly: no base class, no entry point, nothing discovery
+    registers. It differs from a helper only in intent — a helper exists to be
+    imported by something, a script exists to be run — which is enough to keep
+    them apart on disk, and is why neither carries a family prefix.
+    """
+    return tuple((root, root.path / SCRIPTS_FAMILY) for root in PLUGIN_ROOTS)
 
 
 def helper_dirs() -> tuple[tuple[PluginRoot, Path], ...]:

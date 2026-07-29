@@ -175,6 +175,20 @@ PROC_STATUS = "proc.status"
 PROC_STOP = "proc.stop"
 PROC_LIST = "proc.list"
 
+# Running a file of SDK code that is not a plugin. The vocabulary grew here
+# rather than an argument because there was nothing to grow: a script is not a
+# tool (nothing registers it), not a command (nobody typed it) and not a
+# process (``proc.run`` starts an OS process outside the boundary entirely).
+#
+# It is the counterpart to free authorship. The agent may already write
+# anything it likes under ``sandbox_plugins`` because everything there is
+# contained before it runs; this is how it *runs* one without the file having
+# to become a registered capability first. Every effect the script performs is
+# an ordinary Request classified with the caller still in the chain, so routing
+# work through a script launders nothing — which is what lets this be safe
+# while ``proc.run`` never can be.
+SCRIPT_RUN = "script.run"
+
 ENV_READ = "env.read"
 SECRET_REVEAL = "secret.reveal"
 SELF_RESPOND = "self.respond"
@@ -212,6 +226,7 @@ ALL_TYPES = {
     TASK_PAUSE, TASK_RESET, TASK_TRIGGER, FILE_REGISTER, FILE_LIST,
     PARSE_FILE, PARSE_MODALITY, LEDGER_RECORD, LEDGER_READ,
     NET_HTTP, PROC_RUN, PROC_START, PROC_STATUS, PROC_STOP, PROC_LIST,
+    SCRIPT_RUN,
     ENV_READ, SECRET_REVEAL, SELF_RESPOND,
     APP_STOP,
 }

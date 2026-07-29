@@ -56,19 +56,39 @@ class Caller:
     appears *below* its caller rather than beside it, and the context so a
     service invoked from someone's session reads that person's rows rather
     than the kernel's.
+
+    ``execution`` is the caller itself, and it is here for one reason:
+    cancellation only reaches code that is *making* Requests. A handler that
+    starts nested work and then blocks waiting for it — ``script.run`` is the
+    case — is not making Requests while it waits, so cancelling the caller sets
+    a flag nobody reads and the nested work runs to its own ceiling. Handlers
+    that block on something cancellable poll :meth:`abandoned` and tear it
+    down.
     """
     chain: object
     context: object = None
+    execution: object = None
+
+    @property
+    def abandoned(self) -> bool:
+        """Whether the caller has been cancelled and stopped wanting an answer.
+
+        False when there is no execution to ask, so a handler written against
+        this reads as "carry on" wherever provenance is not being tracked —
+        which is every test that calls a handler directly.
+        """
+        return bool(getattr(self.execution, "cancelled", False))
 
 
 @contextmanager
-def serving(chain, context=None):
+def serving(chain, context=None, execution=None):
     """Mark this thread as servicing one execution's Request.
 
     Reset in a ``finally`` without exception: a pool worker that kept the value
     would hand it to the next Request that happened to land on it.
     """
-    token = _CURRENT.set(Caller(chain=chain, context=context))
+    token = _CURRENT.set(
+        Caller(chain=chain, context=context, execution=execution))
     try:
         yield
     finally:

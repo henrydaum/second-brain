@@ -136,6 +136,12 @@ GRANT_PHRASES = {
     "proc.status": "check on background processes",
     "proc.stop": "stop background processes",
     "proc.list": "list background processes",
+    # Deliberately not phrased as "run code". Everything a script does comes
+    # back through the gate on its own, so what is being granted is much
+    # narrower than the words "run code" would have a person imagine — and a
+    # dialog that overstates a grant erodes trust in the dialog exactly as fast
+    # as one that understates it erodes safety.
+    "script.run": "run its own sandboxed scripts",
     "net.http": "make network requests",
     "secret.reveal": "read your credentials in plaintext",
     "config.write": "change settings",
@@ -258,7 +264,12 @@ def _grant_rank(kind: str) -> tuple:
     verb = kind.split(".", 1)[-1]
     writes = verb.startswith(("write", "delete", "move", "install",
                              "uninstall", "create", "register", "set_",
-                             "add_", "remove", "update", "spawn", "schedule"))
+                             "add_", "remove", "update", "spawn", "schedule",
+                             # ``script.run``. ``proc.run`` never reaches here
+                             # — it leads the explicit order above — so this
+                             # only ever means the contained kind, which still
+                             # belongs above the reads.
+                             "run"))
     return (1 if writes else 2, 0, kind)
 
 

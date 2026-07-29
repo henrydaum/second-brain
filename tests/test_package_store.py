@@ -372,6 +372,21 @@ def test_skill_paths_validate_and_plain_paths_still_reject():
             package_manager._validate_rel_path(bad)
 
 
+def test_scripts_are_a_tree_root_and_only_at_the_top():
+    """The store ships a script the way it ships a helper: the file is the package.
+
+    Top level only, and it has to stay that way — ``isolation.is_script``
+    decides whether an installed script may run at all, and it recognises
+    ``scripts/<name>.py`` and nothing deeper. A package manager that accepted a
+    shape the isolation rule refuses would install files that can never run.
+    """
+    assert package_manager._validate_rel_path("scripts/backfill.py")
+    assert "scripts" in package_manager.TREE_ROOTS
+    for bad in ("scripts/helpers/x.py", "scripts/sub/x.py", "scripts/x.md"):
+        with pytest.raises(package_manager.PackageError):
+            package_manager._validate_rel_path(bad)
+
+
 def test_skill_frontmatter_declares_dependencies():
     meta = package_manager.read_dependency_meta(
         "skills/demo/SKILL.md",

@@ -315,7 +315,8 @@ class Interpreter:
             else:
                 context = self._context_for(execution)
                 try:
-                    with provenance.serving(execution.chain, context):
+                    with provenance.serving(execution.chain, context,
+                                            execution):
                         result = handler(context, request.args)
                 except Exception as exc:
                     logger.exception("handler failed: %s", request.type)

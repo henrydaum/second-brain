@@ -51,8 +51,13 @@ def test_the_document_exists_and_is_python():
 # ──────────────────────────────────────────────────────────────────────
 
 def test_the_script_example_runs(box, tmp_path):
-    """The 'a script' example, executed as written."""
-    source = next(b for b in _blocks("def summarize"))
+    """The 'a script' example, executed as written.
+
+    Entered at ``main``, which is what the document says a script is entered
+    at and what ``sdk.scripts.run`` defaults to — so the example is checked
+    the way it would actually be run.
+    """
+    source = next(b for b in _blocks("def main(sdk, path)"))
     script = tmp_path / "summarize_doc.py"
     script.write_text(source, encoding="utf-8")
 
@@ -60,7 +65,7 @@ def test_the_script_example_runs(box, tmp_path):
     target.write_text("alpha beta\ngamma\n", encoding="utf-8")
 
     try:
-        result = box.run(script, "summarize", kwargs={"path": str(target)})
+        result = box.run(script, "main", kwargs={"path": str(target)})
     finally:
         unload_box("summarize_doc")
 

@@ -82,6 +82,7 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN, APP_STOP,
                        PLUGIN_UNINSTALL, PLUGIN_UPDATE, PLUGIN_VALIDATE,
                        PROC_LIST, PROC_RUN, PROC_START, PROC_STATUS,
                        PROC_STOP,
+                       SCRIPT_RUN,
                        SECRET_REVEAL, SELF_RESPOND,
                        SERVICE_CALL, SERVICE_LIST, SERVICE_LOAD,
                        SERVICE_UNLOAD, SESSION_ADD_PROMPT,
@@ -971,6 +972,34 @@ class _Proc(_Namespace):
         return self._ask(PROC_LIST)
 
 
+class _Scripts(_Namespace):
+    """Running SDK code that is not a plugin.
+
+    A script is a file under ``<tree>/scripts/`` with functions that take
+    ``sdk`` — no base class, no declarations, nothing that registers it. It is
+    what to reach for instead of ``sdk.proc.run`` whenever the work can be
+    written in Python: a shell command is an OS process outside the boundary
+    and is asked about every single time, while a script is contained, so
+    running one costs no dialog at all.
+
+    The exception is a script importing a library the validator cannot see
+    inside. That is asked about, and the library is named — it is the one part
+    of a script whose effects do not come back as Requests.
+    """
+
+    def run(self, path: str, entry: str = "main", *, wait: bool = True,
+            **args):
+        """Run a script and hand back what its entry function returned.
+
+        ``entry`` names the function; everything else is passed to it as
+        keyword arguments, so ``sdk.scripts.run(p, total=3)`` calls
+        ``main(sdk, total=3)``. Pass ``wait=False`` to start it and carry on,
+        which answers as soon as it has begun rather than when it finishes.
+        """
+        return self._ask(SCRIPT_RUN, path=str(path), entry=entry,
+                         args=args, wait=bool(wait))
+
+
 class _App(_Namespace):
     """The application itself."""
 
@@ -1551,6 +1580,7 @@ class SDK:
         self.ledger = _Ledger(self)
         self.net = _Net(self)
         self.proc = _Proc(self)
+        self.scripts = _Scripts(self)
         self.env = _Env(self)
         self.app = _App(self)
         self.secrets = _Secrets(self)
