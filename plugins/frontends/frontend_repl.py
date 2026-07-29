@@ -170,6 +170,12 @@ class ReplFrontend(BaseFrontend):
         elif field.get("enum"):
             display = field.get("enum_labels") or field["enum"]
             parts.append("options: " + ", ".join(map(str, display)))
+        elif field.get("type") == "boolean":
+            # A yes/no question has no enum to list, so without this the
+            # accepted vocabulary appeared only in the retry message after a
+            # wrong guess. Kept next to ``_parse_approval``, which is what
+            # actually defines the words.
+            parts.append("yes/no")
         if field.get("assist"):
             parts.append(str(field["assist"]))
         if field.get("allow_back"):

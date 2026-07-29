@@ -241,7 +241,7 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         # the root of the call.
         caller = provenance.current()
         chain = caller.chain if caller is not None else Chain(
-            root=_root_for(context),
+            root=_root_for(context, family),
             approved=(
                 granted
                 if getattr(context, "approved_by_state_machine", False)
@@ -1002,12 +1002,22 @@ def _form_step(step):
     return FormStep(**fields)
 
 
-def _root_for(context) -> str:
-    """What caused this call, for the chain of provenance."""
+def _root_for(context, family: str = "") -> str:
+    """What caused this call, for the chain of provenance.
+
+    A person's own action roots at ``user``. A slash command they typed roots at
+    ``user:command`` specifically, because policy needs to recognise that case
+    and cannot do it from ``user`` alone: ``Chain()``'s default root is
+    ``user``, so a rule keyed on the bare string would also fire for any chain
+    built without one — the opposite of a deliberate grant. Only the command
+    family is qualified; naming every family would rewrite the root of every
+    tool call for no decision's sake. The suffix is assigned here, from the
+    dispatch path, so guest code cannot claim it.
+    """
     if context is None:
         return "kernel"
     if getattr(context, "user_initiated", False):
-        return "user"
+        return "user:command" if family == "command" else "user"
     session = getattr(context, "session_key", None)
     return str(session) if session else "agent"
 

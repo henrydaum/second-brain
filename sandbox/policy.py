@@ -100,8 +100,23 @@ class Chain:
 
     @property
     def attended(self) -> bool:
-        """Whether a human is plausibly present to answer a dialog."""
-        return self.root == "user"
+        """Whether a human is plausibly present to answer a dialog.
+
+        ``user`` on its own, or qualified with what the person did
+        (``user:command``) — the qualifier narrows who is asking, never whether
+        anyone is there.
+        """
+        return self.root == "user" or self.root.startswith("user:")
+
+    @property
+    def typed_command(self) -> bool:
+        """Whether this is a slash command a person typed, and nothing deeper.
+
+        Depth 1 is the command's own code. Anything it calls sits below that and
+        is judged on its own, so a command cannot lend its standing to a tool or
+        service it reaches.
+        """
+        return self.root == "user:command" and self.depth <= 1
 
     @property
     def cyclic(self) -> bool:
@@ -229,6 +244,9 @@ ALWAYS_UNSAFE = {
     R.USER_WRITE, R.USER_LIST,
     # Destructive.
     R.CONV_DELETE, R.FS_DELETE,
+    # Ending the process. Unconditional, including the restart variant: coming
+    # back up is not a mitigation, since everything in flight still dies.
+    R.APP_STOP,
 }
 
 # Requests that narrow capability, or only ever affect this execution.
@@ -386,6 +404,19 @@ def classify(request: Request, chain: Chain) -> Decision:
     # The setting registry, not the guest's requested scope, establishes
     # ownership; every other config write still requires approval.
     if kind == R.CONFIG_WRITE:
+        # A command the person just typed is its own consent: /config exists to
+        # change settings, and a dialog confirming what someone asked for one
+        # keystroke ago is friction with no decision in it. Scoped to the
+        # command's own code, so a command that delegates to a tool or service
+        # is asked about that callee's write as usual. The root is assigned by
+        # the kernel from the dispatch path (``bridge._root_for``), never
+        # claimed by guest code.
+        #
+        # It stays audible either way: every write announces itself to the chat
+        # by key name, so a change nobody approved is still a change nobody
+        # missed.
+        if chain.typed_command:
+            return Decision(SAFE, "a command the user typed")
         key = args.get("key") or ""
         try:
             from plugins.plugin_discovery import get_setting_plugin_names

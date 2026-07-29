@@ -106,12 +106,43 @@ class FormStep:
         if self.type == "object" and isinstance(value, str):
             import json
             value = json.loads(value)
-        if self.enum and value not in self.enum and self.enum_labels:
-            label_map = {str(label).strip().lower(): self.enum[i] for i, label in enumerate(self.enum_labels[:len(self.enum)])}
-            value = label_map.get(str(value).strip().lower(), value)
-        if self.enum and value not in self.enum:
-            raise ValueError(f"{self.name} must be one of: {', '.join(map(str, self.enum))}.")
+        if self.enum:
+            matched = self.match_enum(value)
+            if matched is None:
+                raise ValueError(f"{self.name} must be one of: {', '.join(map(str, self.enum))}.")
+            value = matched
         return value
+
+    def match_enum(self, value: Any) -> Any | None:
+        """Resolve raw input to one of this step's ``enum`` values, or None.
+
+        Three attempts, narrowest first: an exact value, then a label from
+        ``enum_labels``, then a case-folded value. The last one exists because
+        the case of an option almost never carries meaning — typing
+        ``load it`` for ``Load it`` was rejected outright — and it is tried
+        last so an enum that *does* distinguish case still resolves exactly.
+
+        Returns ``None`` rather than raising: the CLI parser uses this as a
+        lookahead ("does this token belong to that step?"), where no match is
+        an ordinary answer rather than an error.
+        """
+        if not self.enum:
+            return value
+        if value in self.enum:
+            return value
+        folded = str(value).strip().lower()
+        if self.enum_labels:
+            label_map = {
+                str(label).strip().lower(): self.enum[i]
+                for i, label in enumerate(self.enum_labels[:len(self.enum)])
+            }
+            if folded in label_map:
+                return label_map[folded]
+        # Built in reverse so the *first* of two options colliding under a fold
+        # wins, matching the order a person sees them listed in.
+        value_map = {str(option).strip().lower(): option
+                     for option in reversed(self.enum)}
+        return value_map.get(folded)
 
     def validate(self, value: Any) -> tuple[bool, str | None]:
         """Validate one raw field value, including type coercion."""

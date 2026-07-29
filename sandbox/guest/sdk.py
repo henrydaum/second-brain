@@ -60,7 +60,7 @@ import sys
 
 from .channel import Terminated
 from .requests import Denied, RequestFailed
-from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
+from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN, APP_STOP,
                        COMMAND_CALL, COMMAND_LIST, CONFIG_READ, CONFIG_WRITE,
                        CONV_APPEND, CONV_CLEAR, CONV_CREATE, CONV_DELETE, CONV_LIST,
                        CONV_LOAD, CONV_READ, CONV_SET_CATEGORY,
@@ -894,6 +894,19 @@ class _Proc(_Namespace):
                          cwd=str(cwd) if cwd else None)
 
 
+class _App(_Namespace):
+    """The application itself."""
+
+    def stop(self, restart: bool = False):
+        """Shut the application down, optionally starting it again.
+
+        Returns the message to show the user. The kernel defers the actual
+        stop briefly so the answer reaches the frontend first — otherwise the
+        process ends before anyone is told why.
+        """
+        return self._ask(APP_STOP, restart=bool(restart))
+
+
 class _Env(_Namespace):
     """The environment. Credentials come back as handles."""
 
@@ -1447,6 +1460,7 @@ class SDK:
         self.net = _Net(self)
         self.proc = _Proc(self)
         self.env = _Env(self)
+        self.app = _App(self)
         self.secrets = _Secrets(self)
         self.path = _Path()
         self.text = _Text()

@@ -322,7 +322,11 @@ settings panel without polling. Emitted unconditionally so a plugin can
 subscribe without kernel edits.
 Payload:
     scope: str — 'core' | 'plugin'  (user-scoped settings live in the users
-                 table, written elsewhere, and are not covered here)"""
+                 table, written elsewhere, and are not covered here)
+    keys:  list[str] — the setting *names* that changed, sorted. Names only,
+                 never values: config holds tokens, and this is the same rule
+                 the ledger's config_save row follows. Empty when a save
+                 rewrote the file without changing anything."""
 
 
 # ── Reserved (kernel-owned, not yet emitted) ───────────────────────

@@ -125,6 +125,7 @@ def _detail(kind: str, args: dict) -> str:
 # before anything has run. Phrases are plural and verb-first so they read as
 # a list under "wants to:".
 GRANT_PHRASES = {
+    "app.stop": "shut Second Brain down or restart it",
     "proc.run": "run shell commands",
     "net.http": "make network requests",
     "secret.reveal": "read your credentials in plaintext",
@@ -237,7 +238,7 @@ def describe_grant(name: str, requests) -> str:
 
 # Ordering for the list above. The two that carry the most consequence lead,
 # then everything that changes state, then reads.
-_GRANT_ORDER = ("proc.run", "net.http", "secret.reveal")
+_GRANT_ORDER = ("proc.run", "net.http", "secret.reveal", "app.stop")
 
 
 def _grant_rank(kind: str) -> tuple:

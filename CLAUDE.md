@@ -43,10 +43,17 @@ future store) — *not* by deleting them. What remains:
   loads it off the store ref) live on the store branch. `enabled_frontends`
   is deliberately not whitelisted by the kernel: config normalization keeps
   unknown names so installed store frontends survive load, and bootstrap
-  warns/skips what discovery can't resolve.
+  *prunes* what discovery can't resolve — a name it cannot match is a store
+  frontend that is no longer installed, and warning about it on every boot
+  forever taught the user to ignore boot warnings. Normalization still keeps
+  unknown names, because at that point the answer isn't known yet.
 - **Commands:** REPL UX + introspection only — `config`, `setup` (LLM onboarding
   wizard), `llm`, `conversations`, `clear`, `cancel`, `debug`, `frontends`,
-  `locations`, `commands`, `tools`, `services`, `tasks`, `packages`.
+  `locations`, `commands`, `tools`, `services`, `tasks`, `packages`, `quit`,
+  `restart`. The last two used to be native `_HostCommand` instances built in
+  the composition root, holding `shutdown_fn` and the scaffold directly; they
+  are ordinary sandboxed commands over the `app.stop` Request now, which is
+  what parity with the other fifteen means.
   Profile/scheduling/MCP/update commands are package capabilities unless the
   tracked tree still carries a transitional command.
 
@@ -680,13 +687,23 @@ is a dict with `truncated`/`scan_truncated`. Which types exist and what
 migrations — the boundary got narrower by adding kernel code. Ask "is the part
 core actually needs standing knowledge?" before adding a type.
 
-`plugin.validate` is the one type that *was* added, because it had no honest
-home: it runs the loader's own validator over a source file, so its verdict is
-the real one, and it is read-only in the strongest sense — a pure AST walk that
-never imports what it reads. It sits in `ALWAYS_SAFE` with the listings rather
-than with `plugin.register`, since a dialog in the authoring loop would only
-teach an agent to stop checking its work. `tool_test_plugin` is now a thin
-translation layer over it (the store's, not the kernel's).
+Two types *were* added, both because they had no honest home. `plugin.validate`
+runs the loader's own validator over a source file, so its verdict is the real
+one, and it is read-only in the strongest sense — a pure AST walk that never
+imports what it reads. It sits in `ALWAYS_SAFE` with the listings rather than
+with `plugin.register`, since a dialog in the authoring loop would only teach an
+agent to stop checking its work. `tool_test_plugin` is now a thin translation
+layer over it (the store's, not the kernel's).
+
+`app.stop(restart=bool)` is what let `/quit` and `/restart` stop being native:
+ending the process is not reachable through any other Request, and the two
+callables exist only in the composition root, so it travels as
+`context.app_control` like every other host resource. One type with an argument
+rather than two types — stopping and stopping-then-starting are the same act
+with a different tail. `ALWAYS_UNSAFE` in both forms, since coming back up is
+not a mitigation for everything in flight dying. The kernel owns the 0.75s
+deferral, because a process that ends before its answer is delivered tells the
+user nothing about why.
 
 **The SDK idiom** — Requests return their value and raise on failure; a bare
 return is wrapped:

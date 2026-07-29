@@ -52,6 +52,9 @@ class SecondBrainContext:
                                  # need to drive a state-machine session.
     root_dir: Any = None         # Project root for repo/plugin operations.
     command_registry: Any = None # Slash-command registry for command plugins.
+    app_control: Any = None      # object with stop()/restart() -> str; only the
+                                 # composition root has these, and /quit and
+                                 # /restart reach them via the app.stop Request.
     session_key: str | None = None # Frontend conversation/session key, when available.
     user_id: int = DEFAULT_USER_ID # Effective user this call acts for (the base user when no frontend bound one).
     current_user: Any = None     # callable() -> user row dict (config parsed) or None.
@@ -64,7 +67,7 @@ class SecondBrainContext:
 
 def build_context(db, config: dict, services: dict, call_tool=None,
                    tool_registry=None, orchestrator=None,
-                   runtime=None,
+                   runtime=None, app_control=None,
                    root_dir=None, command_registry=None,
                    session_key: str | None = None,
                    user_initiated: bool = False,
@@ -160,6 +163,7 @@ def build_context(db, config: dict, services: dict, call_tool=None,
         tool_registry=tool_registry,
         orchestrator=orchestrator,
         runtime=runtime,
+        app_control=app_control,
         root_dir=root_dir,
         command_registry=command_registry,
         session_key=session_key,

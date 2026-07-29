@@ -561,9 +561,15 @@ class Orchestrator:
 						logger.info(f"Skipping cascade {input_table} -> {output_table} (no path column)")
 
 	def dependency_pipeline_graph(self):
-		"""Return a human-readable view of the current path-task pipeline."""
+		"""Return a human-readable view of the current path-task pipeline.
+
+		Answers with an empty string rather than None when there is nothing to
+		draw: a graph with no nodes is an empty graph, not a failure, and a
+		bare return travelled as a *successful* Request answer of None — which
+		the REPL then silently skipped as falsy.
+		"""
 		if not self.tasks:
-			return
+			return ""
 
 		lines = ["Path Pipeline:"]
 		path_tasks = {

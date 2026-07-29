@@ -17,7 +17,8 @@ Two conventions run through the file:
 
 from __future__ import annotations
 
-from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
+from ..guest.requests import (AGENT_COMPLETE, APP_STOP, COMMAND_CALL,
+                              COMMAND_LIST,
                               LLM_DELTA, LLM_PROCEED,
                               CONFIG_READ, CONFIG_WRITE, CONV_APPEND, CONV_CLEAR,
                               CONV_CREATE, CONV_DELETE, CONV_LIST, CONV_READ,
@@ -516,20 +517,20 @@ def _session_get(ctx, args: dict) -> Result:
         if machine is None:
             data["debug"] = None
             return Result(data=data)
-        from state_machine.debug import format_recent_events, format_state
-
-        flags = [
-            flag
-            for service in (getattr(ctx, "services", None) or {}).values()
-            for flag in (
-                service.debug_flags(session)
-                if callable(getattr(service, "debug_flags", None)) else []
-            )
-        ]
+        # Whatever live services want to say about this session. The
+        # state-machine dump and event log that used to sit beside this came
+        # from state_machine/debug.py, which restated phase and cache contents
+        # nobody read; ``phase``, ``busy`` and ``attended`` above are the part
+        # that was actually useful.
         data["debug"] = {
-            "state": format_state(machine),
-            "service_flags": flags,
-            "recent_events": format_recent_events(machine),
+            "service_flags": [
+                flag
+                for service in (getattr(ctx, "services", None) or {}).values()
+                for flag in (
+                    service.debug_flags(session)
+                    if callable(getattr(service, "debug_flags", None)) else []
+                )
+            ],
         }
     return Result(data=data)
 
@@ -2325,6 +2326,36 @@ def _ledger_read(ctx, args: dict) -> Result:
         return Result.failure(f"ledger read failed: {exc}")
 
 
+def _app_stop(ctx, args: dict) -> Result:
+    """End the process, optionally starting it again.
+
+    The kernel owns the two callables (only the composition root has them) and
+    the delay: answering first and stopping a moment later is what lets the
+    frontend print why it is going away. Without that the process would be gone
+    before the Result reached the box that asked.
+    """
+    control = getattr(ctx, "app_control", None)
+    if (bad := _need(control, "stopping the application")) is not None:
+        return bad
+    restart = bool(args.get("restart"))
+    action = getattr(control, "restart" if restart else "stop", None)
+    if action is None:
+        return Result.failure(
+            "restart is not supported in this frontend" if restart
+            else "stopping the application is not available")
+    try:
+        message = action()
+    except Exception as exc:
+        return Result.failure(f"could not stop the application: {exc}")
+    # No message means nothing was scheduled — a frontend that cannot restart.
+    # Answering ok with no data would print as silence and read as success.
+    if not message:
+        return Result.failure(
+            "restart is not supported in this frontend" if restart
+            else "the application could not be stopped")
+    return Result(data=message)
+
+
 HANDLERS = {
     DB_QUERY: _db_query, DB_WRITE: _db_write, DB_DEFINE: _db_define,
     CONV_CREATE: _conv_create, CONV_READ: _conv_read, CONV_LIST: _conv_list,
@@ -2371,4 +2402,5 @@ HANDLERS = {
     FILE_REGISTER: _file_register, FILE_LIST: _file_list,
     PARSE_FILE: _parse_file, PARSE_MODALITY: _parse_modality,
     LEDGER_RECORD: _ledger_record, LEDGER_READ: _ledger_read,
+    APP_STOP: _app_stop,
 }

@@ -77,3 +77,32 @@ def emit_fallback_push(
         "source_session_key": session_key,
         "sent_at": time.time(),
     })
+
+
+def announce_config_change(payload, *, session_key: str | None) -> None:
+    """Tell the chat which settings just changed.
+
+    Every persisted write announces itself, whether or not it needed approval:
+    a command the user typed writes config without a dialog (see
+    ``sandbox.policy.classify``), so this is the only thing that keeps the
+    change visible. Key *names* only — config holds tokens.
+
+    Defensive throughout. A config write must never fail because announcing it
+    did, which is also why this is a bus subscriber rather than a call inside
+    ``config_manager``.
+    """
+    try:
+        keys = sorted((payload or {}).get("keys") or [])
+        if not keys or not session_key:
+            return
+        bus.emit(CHAT_MESSAGE_PUSHED, {
+            "message": "⚙ Settings changed: " + ", ".join(map(str, keys)),
+            "title": "",
+            "kind": "note",
+            "source": "config",
+            "source_id": (payload or {}).get("scope") or "core",
+            "source_session_key": session_key,
+            "sent_at": time.time(),
+        })
+    except Exception:
+        pass

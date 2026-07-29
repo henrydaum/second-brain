@@ -69,8 +69,11 @@ class TasksCommand(BaseCommand):
         if not name:
             return sdk.md.tasks(tasks)
         if name == PIPELINE:
+            # An empty pipeline answers successfully with nothing, so the
+            # Failed branch alone is not enough — a falsy result would be
+            # dropped by the frontend and print as silence.
             try:
-                return sdk.tasks.graph()
+                return sdk.tasks.graph() or "No pipeline tasks are registered."
             except sdk.Failed:
                 return "Pipeline unavailable."
         task = _find(tasks, name)

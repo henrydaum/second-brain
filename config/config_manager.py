@@ -128,14 +128,21 @@ def _record_config_save(scope: str, changed_keys: list) -> None:
         pass
 
 
-def _emit_config_changed(scope: str) -> None:
+def _emit_config_changed(scope: str, changed_keys=None) -> None:
     """Announce a persisted config change so frontends can resync without
     polling. Defensive: a config write must never fail because of an emit, and
-    the bus is imported lazily to keep this foundational module import-light."""
+    the bus is imported lazily to keep this foundational module import-light.
+
+    ``changed_keys`` carries key *names* only, never values — the same rule the
+    ledger's ``config_save`` row follows, and for the same reason: config holds
+    tokens. It is what lets a subscriber tell the user what changed rather than
+    only that something did.
+    """
     try:
         from events.event_bus import bus
         from events.event_channels import CONFIG_CHANGED
-        bus.emit(CONFIG_CHANGED, {"scope": scope})
+        bus.emit(CONFIG_CHANGED, {"scope": scope,
+                                  "keys": sorted(changed_keys or [])})
     except Exception:
         pass
 
@@ -164,8 +171,9 @@ def save(config: dict, path: str = None):
     with open(path, "w") as f:
         json.dump(to_save, f, indent=4)
     logger.info(f"Config saved to {path}")
-    _record_config_save("core", [k for k in to_save if to_save.get(k) != existing.get(k)])
-    _emit_config_changed("core")
+    changed = [k for k in to_save if to_save.get(k) != existing.get(k)]
+    _record_config_save("core", changed)
+    _emit_config_changed("core", changed)
 
 
 # ── Plugin config ───────────────────────────────────────────────────
@@ -204,12 +212,28 @@ def save_plugin_config(plugin_values: dict, path: str = None):
         path = _DEFAULT_PLUGIN_CONFIG_PATH
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
+    # Read before writing so the announcement can name what actually changed.
+    # Deliberately *not* load_plugin_config: that one repairs a malformed file
+    # by calling back into here, so reusing it would recurse forever. An
+    # unreadable file simply means every key reads as new, which is a fine
+    # answer for an announcement.
+    previous = {}
+    try:
+        previous = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    if not isinstance(previous, dict):
+        previous = {}
     with _CONFIG_LOCK:
         tmp = p.with_name(f"{p.name}.tmp-{os.getpid()}-{threading.get_ident()}")
         tmp.write_text(json.dumps(plugin_values, indent=4), encoding="utf-8")
         os.replace(tmp, p)
     logger.info(f"Plugin config saved to {p}")
-    _emit_config_changed("plugin")
+    _emit_config_changed(
+        "plugin",
+        [k for k in (plugin_values or {})
+         if (plugin_values or {}).get(k) != previous.get(k)],
+    )
 
 
 def load_plugin_config_early(config: dict):

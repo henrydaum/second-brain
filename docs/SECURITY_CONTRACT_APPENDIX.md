@@ -629,6 +629,22 @@ it wholesale rather than rewriting it.
 
 `self.respond` is invalid for persistent containers, which use `self.yield`.
 
+## 20. The application
+
+| Request | Purpose | Policy inputs | Default |
+|---|---|---|---|
+| `app.stop(restart=False)` | End the process, optionally starting it again | — | **unsafe, always** |
+
+One type with an argument rather than `app.quit` plus `app.restart`: stopping
+and stopping-then-starting are the same act with a different tail. Unsafe in
+both forms — coming back up is not a mitigation, since everything in flight
+still dies either way.
+
+This is what `/quit` and `/restart` are, and it is the reason they can be
+ordinary sandboxed commands rather than native ones built in the composition
+root. The kernel owns the delay: the answer reaches the frontend first, then the
+process goes away, because otherwise nobody is told why it ended.
+
 ---
 
 ## The return contract

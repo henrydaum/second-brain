@@ -52,12 +52,23 @@ class CommandRegistry:
         """Unregister command registry."""
         self._commands.pop(name, None)
 
-    def context(self, session_key: str | None = None):
-        """Handle context."""
+    def context(self, session_key: str | None = None, *, user_initiated: bool = False):
+        """Handle context.
+
+        ``user_initiated`` says a person typed this command, as opposed to the
+        agent reaching it through ``command.call``. It is what the sandbox's
+        provenance root is derived from, so it decides whether the chain reads
+        ``user`` — which in turn is what lets policy treat a command's own
+        config write as already consented to, and what makes ``sdk.ui.ask``
+        from a command count as attended. Set post-hoc for the same reason
+        ``command_registry`` is: the context provider is a one-argument
+        closure owned by the composition root.
+        """
         ctx = self._context_provider(session_key) if self._context_provider else None
         if ctx is not None:
             try:
                 ctx.command_registry = self
+                ctx.user_initiated = bool(user_initiated)
             except Exception:
                 pass
         return ctx
@@ -75,8 +86,14 @@ class CommandRegistry:
         session_key: str | None = None,
         _emit: bool = True,
         _approved: bool = False,
+        _user_initiated: bool = False,
     ) -> str | None:
-        """Handle dispatch dict."""
+        """Handle dispatch dict.
+
+        ``_user_initiated`` defaults to False so the agent's ``command.call``
+        path — which also lands here — cannot claim to be a person. Only the
+        state machine's own specs pass True.
+        """
         entry = self._commands.get(name)
         if entry is None:
             return f"Unknown command: '/{name}'."
@@ -84,7 +101,7 @@ class CommandRegistry:
         if _emit:
             call_id = _emit_started(name, args or {}, session_key)
         try:
-            context = self.context(session_key)
+            context = self.context(session_key, user_initiated=_user_initiated)
             if context is not None:
                 context.approved_by_state_machine = bool(_approved)
             out = entry.run(dict(args or {}), context)
@@ -102,7 +119,8 @@ class CommandRegistry:
         entry = self._commands.get(name)
         if not entry:
             return {}
-        ctx = self.context(session_key)
+        # Parsing a typed "/cmd args" line: a person is at the keyboard.
+        ctx = self.context(session_key, user_initiated=True)
         return parse_command_line(raw, lambda a, c: entry.form(a, c), ctx)
 
     def all_commands(self) -> list[BaseCommand]:
@@ -135,8 +153,12 @@ class CommandRegistry:
                     _approved=bool(
                         (cs.cache or {}).get("_approved_command_execution")
                     ),
+                    # This is the state machine's path: a frontend action a
+                    # person took. The agent reaches dispatch_dict through
+                    # command.call instead, and keeps the default.
+                    _user_initiated=True,
                 ),
-                form_factory=lambda args, cs, e=entry: e.form(args, self.context((cs.cache or {}).get("session_key") if cs else None)),
+                form_factory=lambda args, cs, e=entry: e.form(args, self.context((cs.cache or {}).get("session_key") if cs else None, user_initiated=True)),
                 require_approval=getattr(entry, "require_approval", False),
                 approval_predicate=lambda args, e=entry: (
                     e.requires_approval(args)
@@ -177,7 +199,10 @@ def parse_command_line(raw: str, form_factory: Callable[[dict, object], list[For
         last = len(missing) == 1 and not step.enum
         if not step.required and step.enum:
             token, _ = _peel(rest, last=False, field_type=step.type)
-            if token not in step.enum:
+            # Same matching rule the step itself applies, so a lowercase
+            # option is recognised as belonging to this step rather than
+            # being peeled off as the next argument.
+            if step.match_enum(token) is None:
                 if any(s.required for s in missing[1:]):
                     args[step.name] = step.default
                     continue

@@ -137,6 +137,7 @@ CONTEXT_MAP = {
     "current_user": "sdk.users.read",
     "user_config": "sdk.config.read",
     "root_dir": "sdk.fs",
+    "app_control": "sdk.app.stop",
 }
 
 # Reaching for the environment directly. Each maps to the Request that does

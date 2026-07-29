@@ -166,6 +166,11 @@ ENV_READ = "env.read"
 SECRET_REVEAL = "secret.reveal"
 SELF_RESPOND = "self.respond"
 
+# Ending the process. One type with a ``restart`` argument rather than two,
+# because stopping and stopping-then-starting are the same act with a different
+# tail — and growing an argument is cheaper than growing the vocabulary.
+APP_STOP = "app.stop"
+
 
 ALL_TYPES = {
     FS_READ, FS_WRITE, FS_READ_BYTES, FS_WRITE_BYTES,
@@ -194,6 +199,7 @@ ALL_TYPES = {
     TASK_PAUSE, TASK_RESET, TASK_TRIGGER, FILE_REGISTER, FILE_LIST,
     PARSE_FILE, PARSE_MODALITY, LEDGER_RECORD, LEDGER_READ,
     NET_HTTP, PROC_RUN, ENV_READ, SECRET_REVEAL, SELF_RESPOND,
+    APP_STOP,
 }
 
 # Requests that read rather than change. The policy function leans on this,

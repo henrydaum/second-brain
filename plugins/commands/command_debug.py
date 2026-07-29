@@ -31,14 +31,16 @@ def _state_section(sdk):
     if session is None or session.get("debug") is None:
         return "(no active session)"
 
-    debug = session["debug"]
-    parts = [debug["state"]]
-    flags = debug["service_flags"]
+    parts = [
+        f"Phase: {session.get('phase') or 'unknown'}",
+        f"Conversation: {session.get('conversation_id')}",
+        f"Attended: {session.get('attended')}",
+    ]
+    flags = session["debug"]["service_flags"]
     if flags:
         parts.append("Session: " + ", ".join(flag for flag in flags if flag))
     if session["busy"]:
         parts.append("Session: agent turn in progress")
-    parts.append(debug["recent_events"])
     return "\n".join(
         line for block in parts for line in block.splitlines())
 

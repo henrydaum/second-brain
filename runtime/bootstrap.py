@@ -14,46 +14,51 @@ import threading
 from agent.system_prompt import build_prompt_sections
 from config import config_manager
 from events.event_bus import bus
-from plugins.BaseCommand import BaseCommand
+from events.event_channels import CONFIG_CHANGED
 from plugins.frontends.helpers.command_registry import CommandRegistry
 from plugins.plugin_discovery import discover_commands, discover_frontends, get_plugin_settings
 from runtime.context import build_context, set_kernel_parts
 from runtime.agent_scope import load_scope, scoped_registry
 from runtime.conversation_runtime import ConversationRuntime
+from runtime.notifications import announce_config_change
 
 logger = logging.getLogger("Bootstrap")
 
 
-class _HostCommand(BaseCommand):
-    """Host command."""
-    category = "Conversation"
-    require_approval = True
-    approval_actor_id = "user"
+class _AppControl:
+    """Stopping and restarting the process, for the ``app.stop`` Request.
 
-    def __init__(self, name: str, description: str, callback):
-        """Initialize the host command."""
-        self.name = name
-        self.description = description
-        self.callback = callback
+    The two callables exist only here, at the top of the dependency graph, so
+    this is the object the handler is answered from — reached through
+    ``context.app_control`` like every other host resource. ``/quit`` and
+    ``/restart`` are ordinary sandboxed commands on the other side of it.
 
-    def run(self, _args, _context):
-        """Execute `/bootstrap` for the active session."""
-        return self.callback() or None
+    Both defer briefly so the answer reaches the frontend before the process
+    goes away; otherwise the user is told nothing about why it ended.
+    """
 
+    def __init__(self, shutdown_fn, scaffold):
+        """Initialize the app control."""
+        self._shutdown_fn = shutdown_fn
+        self._scaffold = scaffold
 
-def _restart(scaffold):
-    """Internal helper to handle restart."""
-    fn = getattr(scaffold, "restart", None)
-    if fn is None:
-        return "Restart is not supported in this frontend."
-    threading.Timer(0.75, fn).start()
-    return "Restarting - Second Brain will be back in a few seconds."
+    def stop(self) -> str:
+        """Shut down."""
+        threading.Timer(0.75, self._shutdown_fn).start()
+        return "Shutting down."
 
+    def restart(self):
+        """Restart, or None when this frontend cannot.
 
-def _quit(shutdown_fn):
-    """Internal helper to handle quit."""
-    threading.Timer(0.75, shutdown_fn).start()
-    return "Shutting down."
+        None rather than a message: the handler turns a missing capability into
+        a failure, and inventing a successful-looking string here would make a
+        restart that never happened read as one that did.
+        """
+        fn = getattr(self._scaffold, "restart", None)
+        if fn is None:
+            return None
+        threading.Timer(0.75, fn).start()
+        return "Restarting - Second Brain will be back in a few seconds."
 
 
 class FrontendManager:
@@ -178,32 +183,64 @@ def start_frontends(frontends: set[str], scaffold, shutdown_fn, shutdown_event,
         "repl", lambda cls: cls(shutdown_event=shutdown_event)
     )
 
+    # A name discovery cannot resolve is a store frontend that is no longer
+    # installed — Telegram, most often. Config normalization deliberately keeps
+    # unknown names (that is what lets an installed store frontend survive load
+    # order), so the stale entry is dropped here instead, where discovery has
+    # already run and the answer is known. Otherwise it warns on every boot
+    # forever about a package the user removed.
+    stale = []
     for name in sorted(frontends):
         cls = classes.get(name)
         if cls is None:
-            logger.warning(f"Unknown frontend '{name}' - skipping.")
+            stale.append(name)
             continue
         err = manager.register(cls)
         if err:
             logger.warning(err)
+    if stale:
+        _forget_frontends(config, stale)
 
     runtime.frontend_manager = manager
     return runtime, manager.adapters, manager.threads
 
 
+def _forget_frontends(config: dict, names: list) -> None:
+    """Drop frontends discovery could not resolve from the saved config.
+
+    Best-effort: failing to tidy the config is not a reason to fail a boot.
+    """
+    enabled = [n for n in (config.get("enabled_frontends") or [])
+               if n not in set(names)]
+    config["enabled_frontends"] = enabled
+    try:
+        config_manager.save(config)
+    except Exception:
+        logger.exception("could not persist enabled_frontends")
+        return
+    logger.info(
+        f"Removed {', '.join(sorted(names))} from enabled_frontends - "
+        f"not installed."
+    )
+
+
 def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config, root_dir):
     """Internal helper to handle conversation runtime."""
     ref = {}
+    app_control = _AppControl(shutdown_fn, scaffold)
+    # ``call_tool`` is what /tools' "Call tool" action needs: without it
+    # ``sdk.tools.call`` is refused for every command, because the handler only
+    # checks whether the context carries the callable.
     registry = CommandRegistry(
         lambda session_key=None: build_context(
-            scaffold.db, config, services, tool_registry=tool_registry,
+            scaffold.db, config, services, call_tool=tool_registry.call,
+            tool_registry=tool_registry,
             orchestrator=scaffold.orchestrator, runtime=ref.get("runtime"),
+            app_control=app_control,
             root_dir=root_dir, session_key=session_key,
         )
     )
     discover_commands(root_dir, registry, config)
-    registry.register(_HostCommand("quit", "Shutdown", lambda: _quit(shutdown_fn)))
-    registry.register(_HostCommand("restart", "Restart the app", lambda: _restart(scaffold)))
 
     def prompt():
         """Handle prompt."""
@@ -246,7 +283,8 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
     # The last two pieces of the kernel context. Everything a resident service
     # reaches through sdk.session / sdk.conv / sdk.commands hangs off these,
     # and neither exists until here.
-    set_kernel_parts(runtime=runtime, command_registry=registry)
+    set_kernel_parts(runtime=runtime, command_registry=registry,
+                     app_control=app_control)
     # Tasks running through the orchestrator reach the runtime via
     # context.runtime.
     if scaffold.orchestrator is not None:
@@ -254,6 +292,16 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
     if tool_registry is not None:
         tool_registry.runtime = runtime
         tool_registry.command_registry = registry
+    # Settings changes are announced in chat whether or not they needed
+    # approval — a command the user typed writes config without a dialog, so
+    # this is what keeps it visible. Subscribed here rather than in
+    # config_manager: the kernel's foundational config module should not know
+    # about sessions, and a notice must never be able to fail a write.
+    bus.subscribe(
+        CONFIG_CHANGED,
+        lambda payload: announce_config_change(
+            payload, session_key=runtime.active_session_key),
+    )
     return runtime
 
 

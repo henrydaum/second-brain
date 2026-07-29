@@ -363,7 +363,9 @@ def main():
 	scaffold = Scaffold(orchestrator, database, services, config, tool_registry)
 
 	# --- 6b. Determine which frontends to start ---
-	frontends = set(config.get("enabled_frontends", ["repl", "telegram"]))
+	# The fallback is the kernel's own frontend and nothing else. Telegram used
+	# to be named here, which put a store package in the kernel's defaults.
+	frontends = set(config.get("enabled_frontends") or ["repl"])
 	logger.info(f"Enabled frontends: {sorted(frontends)}")
 
 	# --- 7. Start orchestrator ---

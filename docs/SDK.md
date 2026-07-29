@@ -158,7 +158,13 @@ sdk.net.http(url, method="GET", headers=None, body=None)  # -> {status, body}
 sdk.proc.run(argv, timeout=120.0, cwd=None)               # -> {code, stdout, stderr}
 sdk.env.read(name)                         # credentials come back as handles
 sdk.secrets.reveal(name)                   # plaintext; always asks the user
+
+sdk.app.stop(restart=False)                # end the process; always asks
 ```
+
+`sdk.app.stop` returns the message to show the user, and the kernel defers the
+actual stop for a moment so that message arrives first. It is what `/quit` and
+`/restart` are; a plugin has no other reason to reach for it.
 
 `read` decodes UTF-8 with replacement, which quietly mangles anything that is
 not text. Reach for `read_bytes` whenever the file is an image, audio, a PDF,
