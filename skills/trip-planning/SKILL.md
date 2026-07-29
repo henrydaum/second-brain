@@ -1,7 +1,7 @@
 ---
 name: trip-planning
 description: Plan a trip: destination research, day-by-day itinerary, budget table, packing notes — saved as a document. Use for 'plan a trip to X', 'weekend in Y', or travel comparisons.
-dependencies_files: [tools/tool_use_skill.py, tools/tool_web_search.py, tools/tool_edit_file.py, tools/tool_ask_user_question.py]
+dependencies_files: [tools/tool_use_skill.py, tools/tool_web_search.py, tools/tool_edit_file.py, tools/tool_ask_question.py]
 ---
 
 # Trip planning
@@ -11,7 +11,7 @@ scheduled at 30-minute granularity on vacation.
 
 ## Procedure
 
-1. **Constraints first** (`ask_user_question`, one round): dates, origin,
+1. **Constraints first** (`ask_question`, one round): dates, origin,
    budget level, travel party, pace (packed vs relaxed), interests, any
    fixed points (a wedding, a conference).
 2. **Research with recency**: `web_search` for the destination's current

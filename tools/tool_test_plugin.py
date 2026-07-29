@@ -1,365 +1,218 @@
-"""Tool plugin for test plugin."""
+"""Check a plugin source file before trying to load it.
+
+The tool this replaces did something else entirely: it loaded the plugin into
+four fake registries, poked the loaded object for contract violations, and then
+ran the whole pytest suite in a subprocess. Every part of that is now either
+impossible or unnecessary. Loading arbitrary plugin code to inspect it is the
+exact act the sandbox exists to mediate; the contract checks it ran by hand are
+what the validator does by reading; and pytest measured whether the *app* still
+worked, which was never the question being asked.
+
+So this is now one Request and a translation layer. ``plugin.validate`` runs
+the same validator the loader runs, which is what makes its verdict the real
+one rather than a second opinion — if it says the file conforms, the file
+loads. Nothing is imported or executed, so checking a file that would crash on
+import is safe, and that is the case an authoring agent hits most.
+
+Deliberately not a code table. The validator's findings already carry a line
+number, a message and a fix; re-deriving a code by matching the message text
+would be brittle and would add nothing the finding does not say. What this tool
+adds is the *next step* — which document explains the rule that was broken —
+plus the two structural facts the findings cannot state on their own: whether
+the file will load at all, and whether it will be put in a subprocess.
+"""
 
 dependencies_files = []
 dependencies_pip = []
+requests = ["plugin.validate", "fs.list", "paths.get"]
 
-import subprocess
-import sys
-from pathlib import Path
-from types import SimpleNamespace
+from guest.bases import BaseTool
 
-from paths import ROOT_DIR
-from plugins.BaseTool import BaseTool, ToolResult
-from plugins.helpers.plugin_paths import plugin_info, resolve_plugin_path
-from plugins.plugin_discovery import load_single_plugin, unload_plugin
+FAMILIES = ("tools", "tasks", "services", "commands", "frontends", "helpers")
+
+# Which document explains a finding, keyed by a phrase the validator writes.
+# Phrases are lowercase because the message is lowercased before matching, and
+# ordered because the first match wins — "kernel side" has to be tried before
+# the broader "reaches the", or a kernel import gets pointed at the wrong page.
+POINTERS = (
+    ("does not parse", "The file is not valid Python; fix the syntax error first."),
+    ("is not a request type",
+     "docs/SECURITY_CONTRACT_APPENDIX.md lists every Request name. 'requests' is "
+     "read by AST and checked against that list."),
+    ("kernel side",
+     "docs/MIGRATING_PLUGINS.md — a kernel import cannot resolve inside a box, so "
+     "ask for what it gave you with a Request instead."),
+    ("reaches the database",
+     "docs/SDK.md — reach the database through sdk.db.query / sdk.db.write, never "
+     "a connection or cursor."),
+    ("reaches the",
+     "docs/SDK.md — every effect is an sdk.* Request, never a direct call."),
+    ("already registered",
+     "Names must be unique across built-in, sandbox and installed plugins. Pick "
+     "another, or edit the file that already owns this one."),
+    ("must be a literal",
+     "Declarations are read without running the file, so they must be plain "
+     "literals — no tuple(), no comprehension, no f-string."),
+    ("more than one plugin class",
+     "One plugin per file. Split the extra class into its own file."),
+)
+
+DEFAULT_POINTER = "docs/SDK.md is the reference; templates/ has a worked example per family."
 
 
 class TestPlugin(BaseTool):
     """Test plugin."""
     name = "test_plugin"
     description = (
-        "Run purpose-built diagnostics for a plugin source file, then run the broad pytest "
-        "regression suite. Use this while authoring plugins to get naming, folder, import, "
-        "contract, and improvement suggestions. This tool does not register or unregister live plugins."
+        "Check a plugin source file against the sandbox contract and report every "
+        "problem with its line number and how to fix it. Run this after every edit "
+        "while authoring a plugin. It reads the file only — nothing is imported, "
+        "executed, registered or unregistered — so it is safe to run on code that "
+        "would fail on import."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "plugin_path": {"type": "string", "description": "Path to the plugin file to validate."},
+            "plugin_path": {"type": "string", "description": "Path to the plugin file to check."},
         },
         "required": ["plugin_path"],
     }
     requires_services = []
     max_calls = 5
-    background_safe = False
+    background_safe = True
 
-    def agent_prompt_for(self, ctx) -> str:
-        """Plugin-authoring workflow plus a live listing of sandbox drafts."""
-        from paths import ROOT_DIR, SANDBOX_PLUGINS
-        sandbox = []
-        for sd in (SANDBOX_PLUGINS / "tools", SANDBOX_PLUGINS / "tasks", SANDBOX_PLUGINS / "services",
-                   SANDBOX_PLUGINS / "commands", SANDBOX_PLUGINS / "frontends"):
-            if sd.exists():
-                sandbox.extend(f"  {p}" for p in sorted(sd.glob("*.py")) if not p.name.startswith("_"))
-        sandbox_block = "\n".join(sandbox) if sandbox else (
-            "None yet. When new sandbox plugins are made, they will show up here."
-        )
+    def agent_prompt_for(self, sdk) -> str:
+        """The authoring workflow, plus a live listing of sandbox drafts."""
+        sandbox_root = sdk.paths.get("sandbox_plugins")
         return (
             f"""## Building plugins
-You can extend Second Brain by authoring tools, tasks, services, commands, and frontends.
+You can extend Second Brain by authoring tools, tasks, services, commands and frontends. Write them into {sandbox_root}/<family>/ with the required prefix — tool_foo.py in {sandbox_root}/tools/, command_foo.py in {sandbox_root}/commands/, and so on. You may create, edit and delete files anywhere under that tree without asking, because everything there is contained before it runs.
 
-Read the matching template in templates/, then write the plugin into {SANDBOX_PLUGINS}/<family>/ with the required prefix, e.g. tool_foo.py in {SANDBOX_PLUGINS}/tools/. The root directory is {ROOT_DIR}. Do not create sandbox plugins in the project root.
+Plugins are sandboxed. That is the one thing to understand before writing any code: your plugin cannot act, it can only ask. Anything touching disk, network, clock or process is a request to the kernel, made through the `sdk` object every entry point receives — `sdk.fs.read(path)`, not `open(path)`; `sdk.log(...)`, not `logging`; `sdk.db.query(...)`, not a cursor. Requests return their value and raise on failure, so the code reads as straight-line Python.
 
 Workflow:
-1. Understand the user's intended behavior. Ask clarifying questions when a missing decision would materially change the design.
-2. Read the relevant template with read_file.
-3. Read a similar built-in or sandbox plugin when one exists.
-4. Write the file into the correct sandbox directory using the file-editing tools.
-5. Call test_plugin(plugin_path=...) after edits for naming, import, contract, and diagnostic feedback.
-6. Treat pytest output as broad regression context, not proof that the plugin's behavior is correct.
-7. If diagnostics, pytest, or watcher logs show a failure, edit the same file and test again.
+1. Understand the intended behavior. Ask clarifying questions when a missing decision would materially change the design.
+2. Read docs/SDK.md — it is the reference for what `sdk` can do, and its examples are executed by the test suite, so they are correct.
+3. Read the matching file in templates/ (tool_template.py, command_template.py, ...) for a worked example of the family you are writing.
+4. Write the file into the correct sandbox directory.
+5. Call test_plugin(plugin_path=...) after every edit. Fix what it reports and call it again until it says the file conforms.
+6. A conforming file is loaded automatically as soon as it is saved.
 
-Valid plugin files are loaded, reloaded, or unloaded as they change when plugin_watcher is loaded.
-To remove a plugin from the live runtime, delete its file with the run_command tool.
+Rules that are enforced rather than suggested, so a plugin breaking one will not load:
+- Import the base class from `guest.bases` — `from guest.bases import BaseTool`. Never import kernel modules (runtime, config, plugins, state_machine, agent, pipeline, events, paths): a box cannot see them.
+- No `os`, `sys`, `pathlib`, `subprocess`, `requests`, `open()` or `logging`. Each has an sdk equivalent; `sdk.path.*` covers path arithmetic.
+- Exactly one plugin class per file, with a unique `name`.
+- Declarations (`name`, `requests`, `exports`, `hooks`, ...) are read from the source without running it, so they must be plain literals.
 
-Names must be unique across built-in, sandbox, and installed plugins. Import kernel APIs with absolute plugins.* imports; import plugin helpers with relative imports such as from .helpers.foo import bar or from ..helpers.shared import thing. Config settings use (title, variable_name, description, default, type_info), are stored in plugin_config.json, and are read with context.config.get(key).
-
-The context object is passed to every plugin and contains relevant runtime information and helper methods. Read its definition in runtime/context.py if you have questions about how to use it effectively in your plugin code.
+A plugin importing a library that is not in the standard library still works — declare it in `dependencies_pip` — but the kernel will run that file in a separate process, because it cannot see what the library does. test_plugin tells you when this applies.
 
 ## Sandbox plugins
-{sandbox_block}"""
+{_drafts(sdk, sandbox_root)}"""
         )
 
-    def run(self, context, **kwargs) -> ToolResult:
+    def run(self, sdk, **kwargs):
         """Run test plugin."""
-        path, err = resolve_plugin_path((kwargs.get("plugin_path") or "").strip())
-        if err:
-            return ToolResult.failed(err)
-        info, err = plugin_info(path)
-        if err:
-            return ToolResult.failed(err)
-        if not path.exists():
-            return ToolResult.failed(f"Plugin file not found: {path}")
+        raw = (kwargs.get("plugin_path") or "").strip()
+        if not raw:
+            return sdk.fail("plugin_path is required.")
 
-        loaded_name, load_error, diagnostics = _try_load(info.plugin_type, path, getattr(context, "config", {}) or {})
-        pytest_result = _run_pytest(getattr(context, "config", {}) or {})
-        diagnostic_errors = [d for d in diagnostics if d["level"] == "error"]
-        ok = load_error is None and not diagnostic_errors and pytest_result["returncode"] == 0
-        summary = [
-            f"Plugin path: {path}",
-            f"Plugin type: {info.plugin_type}",
-            f"Load check: {'ok: ' + loaded_name if load_error is None else 'failed: ' + load_error}",
-            "Diagnostics:",
-        ]
-        summary.extend(_format_diagnostics(diagnostics))
-        summary.append(f"Pytest regression suite: {'passed' if pytest_result['returncode'] == 0 else 'failed'}")
-        summary.append("Note: pytest checks whether the app still works; plugin diagnostics are the purpose-built signal for this file.")
-        if pytest_result["summary"]:
-            summary.append(pytest_result["summary"])
-        return ToolResult(
-            success=ok,
-            error="" if ok else "Plugin test failed.",
-            data={"plugin_path": str(path), "plugin_type": info.plugin_type, "load_error": load_error, "diagnostics": diagnostics, "pytest": pytest_result},
-            llm_summary="\n".join(summary),
-        )
+        try:
+            report = sdk.plugins.validate(raw)
+        except sdk.Denied as refused:
+            return sdk.fail(str(refused))
+        except sdk.Failed as failed:
+            return sdk.fail(failed.error)
+
+        summary = _render(report)
+        # The verdict is the tool's result: a file that will not load is a
+        # failed check, so the model retries instead of moving on.
+        if report.get("ok"):
+            return sdk.ok(report, llm_summary=summary)
+        return sdk.fail(summary)
 
 
-def _try_load(plugin_type: str, path: Path, config: dict) -> tuple[str | None, str | None, list[dict]]:
-    """Internal helper to handle try load."""
-    tool_registry = _ToolRegistry()
-    orchestrator = _TaskRegistry()
-    command_registry = _CommandRegistry()
-    frontend_manager = _FrontendManager()
-    services = {}
-    state = SimpleNamespace(tool_registry=tool_registry, orchestrator=orchestrator, command_registry=command_registry, frontend_manager=frontend_manager, services=services)
-    name, error = load_single_plugin(
-        plugin_type, path,
-        tool_registry=tool_registry,
-        orchestrator=orchestrator,
-        services=services,
-        config=dict(config),
-        command_registry=command_registry,
-        frontend_manager=frontend_manager,
-    )
-    diagnostics = _diagnose(plugin_type, name, state) if error is None else []
-    unload_plugin(
-        plugin_type, name or "",
-        tool_registry=tool_registry,
-        orchestrator=orchestrator,
-        services=services,
-        source_path=str(path),
-        command_registry=command_registry,
-        frontend_manager=frontend_manager,
-    )
-    return name, error, diagnostics
+def _render(report: dict) -> str:
+    """The whole answer: verdict, findings, isolation, next step."""
+    findings = report.get("findings") or []
+    lines = [f"Checked {report.get('path')}", "", _verdict(report), ""]
+
+    errors = [f for f in findings if f.get("level") == "error"]
+    warnings = [f for f in findings if f.get("level") == "warning"]
+    notes = [f for f in findings if f.get("level") == "note"]
+
+    if errors:
+        lines.append("### Will not load — fix these")
+        lines.extend(_finding(f) for f in errors)
+        lines.append("")
+    if warnings:
+        lines.append("### Loads with a disclaimer")
+        lines.extend(_finding(f) for f in warnings)
+        lines.append("")
+    if notes:
+        lines.append("### Advisory")
+        lines.extend(_finding(f) for f in notes)
+        lines.append("")
+
+    unmediated = report.get("unmediated") or []
+    if unmediated:
+        lines.append(
+            f"This file imports {', '.join(unmediated)}, which the validator "
+            "cannot see inside, so the kernel will run it in a **separate "
+            "process**. That is decided by what the file imports, not by "
+            "anything it declares — there is no way to opt out, and no need "
+            "to. Declare each one in dependencies_pip so it gets installed.")
+        lines.append("")
+
+    if errors:
+        pointers = []
+        for finding in errors:
+            pointer = _pointer(finding.get("message") or "")
+            if pointer not in pointers:
+                pointers.append(pointer)
+        lines.append("Next step:")
+        lines.extend(f"- {p}" for p in pointers)
+    elif not findings:
+        lines.append("Nothing to fix. Save the file and it will load.")
+
+    return "\n".join(lines).rstrip()
 
 
-def _diag(level: str, check: str, message: str, suggestion: str = "") -> dict:
-    """Internal helper to handle diag."""
-    return {"level": level, "check": check, "message": message, "suggestion": suggestion}
+def _verdict(report: dict) -> str:
+    """One line that answers the question actually being asked."""
+    if not report.get("ok"):
+        return "**Will not load.** The errors below have to be fixed first."
+    if report.get("disclaimed"):
+        return "**Loads, with a disclaimer.** Nothing blocks it; read the warnings."
+    return "**Conforms.** This file will load."
 
 
-def _format_diagnostics(items: list[dict]) -> list[str]:
-    """Internal helper to format diagnostics."""
-    if not items:
-        return ["- ok: Load diagnostics did not find additional issues."]
-    lines = []
-    for item in items:
-        line = f"- {item['level']}: {item['check']}: {item['message']}"
-        if item.get("suggestion"):
-            line += f" Suggestion: {item['suggestion']}"
-        lines.append(line)
-    return lines
+def _finding(finding: dict) -> str:
+    """One problem, as a line the agent can act on."""
+    line = f"- line {finding.get('line')}: {finding.get('message')}"
+    fix = (finding.get("fix") or "").strip()
+    return f"{line} — use {fix} instead." if fix else f"{line}."
 
 
-def _diagnose(plugin_type: str, loaded_name: str | None, state) -> list[dict]:
-    """Internal helper to handle diagnose."""
-    checks = []
-    items = _loaded_items(plugin_type, loaded_name, state)
-    if not items:
-        return [_diag("error", "registration", "The plugin loader reported success, but no registered object was found.", "Check the plugin name and registration path.")]
-    for name, obj in items:
-        checks += _common_checks(name, obj)
-        checks += globals()[f"_diagnose_{plugin_type}"](obj)
-    return checks or [_diag("ok", "contract", "No contract issues found.")]
+def _pointer(message: str) -> str:
+    """Where to read about the rule this message is enforcing."""
+    lowered = message.lower()
+    for phrase, pointer in POINTERS:
+        if phrase in lowered:
+            return pointer
+    return DEFAULT_POINTER
 
 
-def _loaded_items(plugin_type: str, loaded_name: str | None, state) -> list[tuple[str, object]]:
-    """Internal helper to handle loaded items."""
-    if plugin_type == "tool":
-        return list(state.tool_registry.tools.items())
-    if plugin_type == "task":
-        return list(state.orchestrator.tasks.items())
-    if plugin_type == "command":
-        return list(state.command_registry._commands.items())
-    if plugin_type == "service":
-        return list(state.services.items())
-    if plugin_type == "frontend":
-        return list(state.frontend_manager.adapters.items())
-    return []
-
-
-def _common_checks(name: str, obj) -> list[dict]:
-    """Internal helper to handle common checks."""
-    checks = []
-    if not isinstance(name, str) or not name.strip():
-        checks.append(_diag("error", "name", "Plugin registered with an empty name.", "Set a stable non-empty name."))
-    if not getattr(obj, "_source_path", ""):
-        checks.append(_diag("error", "source_path", "Plugin did not retain its source path.", "Let plugin_discovery set _source_path during load."))
-    settings = getattr(obj, "config_settings", [])
-    if not isinstance(settings, list) or any(not isinstance(x, tuple) or len(x) != 5 for x in settings):
-        checks.append(_diag("error", "config_settings", "config_settings must be a list of 5-item tuples.", "Use (title, variable_name, description, default, type_info)."))
-    return checks
-
-
-def _diagnose_tool(tool) -> list[dict]:
-    """Internal helper to handle diagnose tool."""
-    from plugins.BaseTool import BaseTool
-    checks = []
-    if not (tool.description or "").strip():
-        checks.append(_diag("warning", "description", "Tool description is empty.", "Explain what the tool does, when to use it, and key limits."))
-    params = getattr(tool, "parameters", None)
-    if not isinstance(params, dict) or params.get("type") != "object" or not isinstance(params.get("properties", {}), dict):
-        checks.append(_diag("error", "parameters", "Tool parameters must be an object JSON schema with properties.", "Use {'type': 'object', 'properties': {...}, 'required': [...]}."))
-    elif any(req not in params.get("properties", {}) for req in params.get("required", [])):
-        checks.append(_diag("error", "parameters.required", "A required parameter is missing from properties.", "Keep required names in sync with properties."))
-    if tool.__class__.run is BaseTool.run:
-        checks.append(_diag("error", "run", "Tool does not override run().", "Implement run(self, context, **kwargs) and return ToolResult."))
-    return checks
-
-
-def _diagnose_task(task) -> list[dict]:
-    """Internal helper to handle diagnose task."""
-    from plugins.BaseTask import BaseTask
-    checks = []
-    trigger = getattr(task, "trigger", "path")
-    if trigger not in ("path", "event"):
-        checks.append(_diag("error", "trigger", f"Unknown trigger '{trigger}'.", "Use trigger='path' or trigger='event'."))
-    if trigger == "event":
-        if task.__class__.run_event is BaseTask.run_event:
-            checks.append(_diag("error", "run_event", "Event task does not override run_event().", "Implement run_event(run_id, payload, context)."))
-        if not getattr(task, "trigger_channels", []):
-            checks.append(_diag("error", "trigger_channels", "Event task has no trigger_channels.", "Declare at least one event bus channel."))
-    elif task.__class__.run is BaseTask.run:
-        checks.append(_diag("error", "run", "Path task does not override run().", "Implement run(paths, context)."))
-    for attr in ("modalities", "reads", "writes", "requires_services"):
-        if not isinstance(getattr(task, attr, None), list):
-            checks.append(_diag("error", attr, f"{attr} must be a list.", f"Set {attr} = [] when unused."))
-    if getattr(task, "writes", []) and not (getattr(task, "output_schema", "") or "").strip():
-        checks.append(_diag("warning", "output_schema", "Task writes tables but has no output_schema.", "Add CREATE TABLE SQL for the tables in writes."))
-    if trigger == "path" and not getattr(task, "reads", []) and not getattr(task, "modalities", []):
-        checks.append(_diag("warning", "modalities", "Root path task has no modalities.", "Declare modalities so file discovery can root the task."))
-    return checks
-
-
-def _diagnose_service(service) -> list[dict]:
-    """Internal helper to handle diagnose service."""
-    from plugins.BaseService import BaseService
-    checks = []
-    if not isinstance(service, BaseService):
-        checks.append(_diag("error", "base_class", "build_services returned a non-BaseService object.", "Return BaseService instances from build_services(config)."))
-    if not (getattr(service, "model_name", "") or service.__class__.__name__).strip():
-        checks.append(_diag("warning", "model_name", "Service has no display name.", "Set model_name to a human-readable name."))
-    if not isinstance(getattr(service, "shared", True), bool):
-        checks.append(_diag("error", "shared", "shared must be a boolean.", "Use shared=True for one shared instance or shared=False for per-call clients."))
-    if service.__class__._load is BaseService._load:
-        checks.append(_diag("error", "_load", "Service does not implement _load().", "Initialize resources in _load() and return True/False."))
-    if service.__class__.unload is BaseService.unload:
-        checks.append(_diag("error", "unload", "Service does not implement unload().", "Release resources safely in unload()."))
-    return checks
-
-
-def _diagnose_command(command) -> list[dict]:
-    """Internal helper to handle diagnose command."""
-    from plugins.BaseCommand import BaseCommand
-    from state_machine.conversation import FormStep
-    checks = []
-    if not (command.description or "").strip():
-        checks.append(_diag("warning", "description", "Command description is empty.", "Add a short user-facing description for help views."))
-    if command.__class__.run is BaseCommand.run:
-        checks.append(_diag("error", "run", "Command does not override run().", "Implement run(args, context)."))
-    try:
-        form = command.form({}, SimpleNamespace())
-        if not isinstance(form, list) or any(not isinstance(step, FormStep) for step in form):
-            checks.append(_diag("error", "form", "form() must return a list of FormStep objects.", "Return [] when the command has no form."))
-    except Exception as e:
-        checks.append(_diag("warning", "form", f"form() raised with empty args and diagnostic context: {e}", "If the form needs runtime context, guard missing context or keep this warning in mind during manual testing."))
-    return checks
-
-
-def _diagnose_frontend(frontend) -> list[dict]:
-    """Internal helper to handle diagnose frontend."""
-    from plugins.BaseFrontend import BaseFrontend, FrontendCapabilities
-    checks = []
-    if not (frontend.description or "").strip():
-        checks.append(_diag("warning", "description", "Frontend description is empty.", "Describe the transport in one short sentence."))
-    if not isinstance(getattr(frontend, "capabilities", None), FrontendCapabilities):
-        checks.append(_diag("error", "capabilities", "capabilities must be a FrontendCapabilities instance.", "Set capabilities = FrontendCapabilities(...)."))
-    for method in ("start", "stop", "session_key", "render_messages", "render_attachments", "render_form_field", "render_approval_request", "render_buttons", "render_error"):
-        if getattr(frontend.__class__, method) is getattr(BaseFrontend, method):
-            checks.append(_diag("error", method, f"Frontend does not override {method}().", f"Implement {method} for this transport."))
-    return checks
-
-
-def _run_pytest(config: dict) -> dict:
-    """Internal helper to run pytest."""
-    timeout = int(config.get("plugin_test_timeout", 120))
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "pytest", "tests"],
-            cwd=ROOT_DIR,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
-        return {"returncode": proc.returncode, "summary": _tail(output), "timed_out": False}
-    except subprocess.TimeoutExpired as e:
-        output = ((e.stdout or "") + "\n" + (e.stderr or "")).strip()
-        return {"returncode": 124, "summary": f"pytest timed out after {timeout}s\n{_tail(output)}".strip(), "timed_out": True}
-
-
-def _tail(text: str, lines: int = 40) -> str:
-    """Internal helper to handle tail."""
-    return "\n".join((text or "").splitlines()[-lines:])
-
-
-class _ToolRegistry:
-    """Tool registry."""
-    def __init__(self):
-        """Initialize the tool registry."""
-        self.tools = {}
-
-    def register(self, tool):
-        """Register tool registry."""
-        self.tools[tool.name] = tool
-
-    def unregister(self, name):
-        """Unregister tool registry."""
-        self.tools.pop(name, None)
-
-
-class _TaskRegistry:
-    """Task registry."""
-    def __init__(self):
-        """Initialize the task registry."""
-        self.tasks = {}
-
-    def register_task(self, task):
-        """Register task."""
-        self.tasks[task.name] = task
-
-    def unregister_task(self, name):
-        """Unregister task."""
-        self.tasks.pop(name, None)
-
-
-class _CommandRegistry:
-    """Command registry."""
-    def __init__(self):
-        """Initialize the command registry."""
-        self._commands = {}
-
-    def register(self, command):
-        """Register command registry."""
-        self._commands[command.name] = command
-
-    def unregister(self, name):
-        """Unregister command registry."""
-        self._commands.pop(name, None)
-
-
-class _FrontendManager:
-    """Frontend manager."""
-    def __init__(self):
-        """Initialize the frontend manager."""
-        self.adapters = {}
-
-    def register(self, cls):
-        """Register frontend manager."""
-        self.adapters[cls.name] = cls()
-        return None
-
-    def unregister(self, name):
-        """Unregister frontend manager."""
-        self.adapters.pop(name, None)
+def _drafts(sdk, sandbox_root) -> str:
+    """Every plugin file currently sitting in the agent's own tree."""
+    found = []
+    for family in FAMILIES:
+        directory = sdk.path.join(sandbox_root, family)
+        try:
+            entries = sdk.fs.list(directory, pattern="*.py")
+        except Exception:
+            continue
+        found.extend(f"  {entry}" for entry in sorted(entries)
+                     if not sdk.path.name(entry).startswith("_"))
+    if not found:
+        return "None yet. New sandbox plugins will show up here once written."
+    return "\n".join(found)

@@ -1,7 +1,7 @@
 {
   "description": "Claude Code-style toolset: grep/glob search, file read/edit, shell, todos, background subagents, planning, skills, and web search.",
   "files": [
-    "tools/tool_ask_user_question.py",
+    "tools/tool_ask_question.py",
     "tools/tool_edit_file.py",
     "tools/tool_glob.py",
     "tools/tool_grep.py",

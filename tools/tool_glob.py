@@ -1,10 +1,16 @@
-"""Find files by name pattern on disk."""
+"""Find files by name pattern on disk.
 
-dependencies_files = ['tools/helpers/file_walk.py']
+Sandboxed. The walk, the junk-directory pruning, the symlink guard and the
+newest-first ordering moved behind ``fs.list``'s recursive shape — they belong
+to every caller, not to whichever tool wanted them first, and none of them can
+be done from inside a box anyway.
+"""
+
+dependencies_files = []
 dependencies_pip = []
+requests = ["fs.list", "paths.get"]
 
-from plugins.BaseTool import BaseTool, ToolResult
-from .helpers.file_walk import compile_glob, iter_files, match_rel, mtime_sorted, resolve_root
+from guest.bases import BaseTool
 
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 500
@@ -33,40 +39,56 @@ class GlobFiles(BaseTool):
     max_calls = 10
     background_safe = True
 
-    def run(self, context, **kwargs) -> ToolResult:
+    def run(self, sdk, **kwargs):
         """Run glob."""
         pattern = (kwargs.get("pattern") or "").strip()
         if not pattern:
-            return ToolResult.failed("No pattern provided.")
-        limit = max(1, min(int(kwargs.get("limit") or DEFAULT_LIMIT), MAX_LIMIT))
+            return sdk.fail("No pattern provided.")
 
-        root, err = resolve_root(kwargs.get("path"))
-        if err:
-            return ToolResult.failed(err)
-        if not root.is_dir():
-            return ToolResult.failed(f"Not a directory: {root}")
+        try:
+            limit = int(kwargs.get("limit") or DEFAULT_LIMIT)
+        except (TypeError, ValueError):
+            limit = DEFAULT_LIMIT
+        limit = max(1, min(limit, MAX_LIMIT))
 
-        compiled = compile_glob(pattern)
-        files, scan_truncated = iter_files(root)
-        matches = mtime_sorted([f for f in files if match_rel(f, root, compiled)])
-        truncated = len(matches) > limit
-        matches = matches[:limit]
+        project = sdk.paths.get("project")
+        root = sdk.path.absolute((kwargs.get("path") or "").strip() or project,
+                                 base=project)
 
-        rels = [f.relative_to(root).as_posix() for f in matches]
+        try:
+            found = sdk.fs.list(root, pattern=pattern, recursive=True,
+                                files_only=True, sort="mtime", limit=limit)
+        except sdk.Denied as refused:
+            return sdk.fail(str(refused))
+        except sdk.Failed as failed:
+            return sdk.fail(failed.error)
+
+        # The Request answers in absolute paths; a listing reads better
+        # relative to the root that was searched.
+        entries = found.get("entries") or []
+        rels = [_relative(sdk, entry, root) for entry in entries]
+
         lines = [f"Glob '{pattern}' under {root} — {len(rels)} file(s)."]
         if not rels:
             lines.append("No files matched.")
         else:
             lines.append("")
             lines.extend(rels)
-        if truncated:
+        if found.get("truncated"):
             lines.append(f"(showing first {limit} newest files; more exist — narrow the pattern or raise limit)")
-        if scan_truncated:
+        if found.get("scan_truncated"):
             lines.append("(file scan hit the enumeration cap — narrow 'path')")
 
-        return ToolResult(
-            True,
-            data={"root": str(root), "pattern": pattern, "results": rels,
-                  "truncated": truncated, "scan_truncated": scan_truncated},
-            llm_summary="\n".join(lines),
-        )
+        return sdk.ok(
+            {"root": root, "pattern": pattern, "results": rels,
+             "truncated": bool(found.get("truncated")),
+             "scan_truncated": bool(found.get("scan_truncated"))},
+            llm_summary="\n".join(lines))
+
+
+def _relative(sdk, path, root) -> str:
+    """``path`` as a posix path under ``root``, or unchanged if it is not."""
+    if not sdk.path.within(path, root):
+        return str(path)
+    trimmed = str(path)[len(str(root)):].lstrip("\\/")
+    return trimmed.replace("\\", "/") or str(path)

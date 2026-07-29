@@ -1,7 +1,7 @@
 ---
 name: writing-editor
 description: Co-write and edit long-form documents iteratively: outline, draft, targeted revision passes in a file. Use for essays, posts, docs, or 'help me write/edit X'.
-dependencies_files: [tools/tool_use_skill.py, tools/tool_read_file.py, tools/tool_edit_file.py, tools/tool_ask_user_question.py]
+dependencies_files: [tools/tool_use_skill.py, tools/tool_read_file.py, tools/tool_edit_file.py, tools/tool_ask_question.py]
 ---
 
 # Writing editor

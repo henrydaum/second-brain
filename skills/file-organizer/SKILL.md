@@ -1,7 +1,7 @@
 ---
 name: file-organizer
 description: Audit and tidy sync directories: find duplicates, misfiled and stale files, propose batch moves/renames, execute after approval. Use for 'organize my files', 'find duplicates', 'clean up folder X'.
-dependencies_files: [tools/tool_use_skill.py, tools/tool_sql_query.py, tools/tool_run_command.py, tools/tool_ask_user_question.py]
+dependencies_files: [tools/tool_use_skill.py, tools/tool_sql_query.py, tools/tool_run_command.py, tools/tool_ask_question.py]
 ---
 
 # File organizer

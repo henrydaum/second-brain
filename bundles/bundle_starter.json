@@ -5,7 +5,7 @@
     "helpers/llm_litellm.py",
     "tasks/task_dream_memory.py",
     "tasks/task_update_titles.py",
-    "tools/tool_ask_user_question.py",
+    "tools/tool_ask_question.py",
     "tools/tool_edit_file.py",
     "tools/tool_memory.py",
     "tools/tool_read_file.py",
