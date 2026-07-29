@@ -412,8 +412,12 @@ class _Walker(ast.NodeVisitor):
                      f"the boundary", "a Request for whatever it needed")
             return
         if self._first_sighting(key):
+            # Named by its root: the finding is about the *library*, and
+            # 'telegram.ext' is the same untrusted thing as 'telegram' with a
+            # longer name. Reporting the submodule invited the reading that
+            # some other import of it had been judged separately.
             self.add(WARNING, node,
-                     f"imports {name!r}, a foreign library. Its actions cannot "
+                     f"imports {key!r}, a foreign library. Its actions cannot "
                      f"be turned into Requests, so they are not mediated - "
                      f"this plugin runs in a subprocess")
 

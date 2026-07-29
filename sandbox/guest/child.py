@@ -123,21 +123,34 @@ def _apply_limits(memory_mb: int | None, cpu_seconds: int | None):
     over, because a limit you believe in but do not have is worse than none.
 
     Both ceilings are *requests*, not guarantees, and failing to get one must
-    never stop the box from starting. macOS is the case that proved it: it
-    refuses ``RLIMIT_AS`` outright in some configurations, and raising the hard
-    limit alongside the soft one is a privileged act everywhere, so passing the
-    same number for both is what produced "current limit exceeds maximum
-    limit" — and killed every Telegram start on that machine. The hard limit is
-    therefore left exactly as found and the soft one asks for the smaller of
-    what we want and what we are allowed.
+    never stop the box from starting. Passing the same number for the soft and
+    hard limit is what killed every Telegram start on macOS: raising a hard
+    limit is privileged everywhere, so the hard limit is now left exactly as
+    found and the soft one asks for the smaller of what we want and what we
+    are already allowed.
+
+    **``RLIMIT_AS`` is not attempted on macOS.** Darwin defines the constant
+    and then rejects the call with ``EINVAL``, which CPython reports as
+    "current limit exceeds maximum limit" — a message describing a clamping
+    problem that is not the actual one. There is no value that works, so
+    trying and reporting the failure only prints a misleading line at every
+    boot. The gap is real and is stated here rather than in the log: on macOS
+    a box has no memory ceiling, and a plugin that leaks without ever hanging
+    is the one runaway nothing here catches (the watchdog measures time, and a
+    leaking poll loop returns promptly every time). Closing it properly needs
+    the OS-level containment the security contract already defers; measuring
+    real memory instead would mean polling RSS, which is a foreign library in
+    the one process that must not have one.
     """
     try:
         import resource
     except ImportError:
         return False
+    limits = [("RLIMIT_CPU", cpu_seconds)]
+    if not sys.platform.startswith("darwin"):
+        limits.insert(0, ("RLIMIT_AS", memory_mb and memory_mb * 1024 * 1024))
     applied = False
-    for name, wanted in (("RLIMIT_AS", memory_mb and memory_mb * 1024 * 1024),
-                         ("RLIMIT_CPU", cpu_seconds)):
+    for name, wanted in limits:
         which = getattr(resource, name, None)
         if which is None or not wanted:
             continue
@@ -148,8 +161,10 @@ def _apply_limits(memory_mb: int | None, cpu_seconds: int | None):
             resource.setrlimit(which, (wanted, hard))
             applied = True
         except (ValueError, OSError) as exc:
-            # Unenforceable here. Say so once; the parent's timeout and kill
-            # still apply, and they are what the box's deadline rests on.
+            # Unenforceable here, and unexpectedly so — the known platform gap
+            # is skipped above rather than caught, so anything reaching this is
+            # worth a line. The parent's timeout and kill still apply, and they
+            # are what the box's deadline rests on.
             sys.stderr.write(
                 f"[box] {name} not applied ({exc}); "
                 f"relying on the kernel's timeout instead\n")
