@@ -523,7 +523,20 @@ class AnswerApproval(Action):
                 raise self.error(ERROR_INVALID_INPUT, "That request is no longer active.", request_id=got)
         value = self._coerce(frame)
         pending = frame.data.get("pending")
-        original_actor = (pending or {}).get("actor_id") or self.cs.other_id(self.actor_id) or self.actor_id
+        # Restore whoever held priority before the frame was pushed. Only an
+        # *action*-initiated approval (``_CallableAction._approval``) can name
+        # the original actor via ``pending``; a programmatic one
+        # (``runtime.request_input`` — every sandbox Request dialog) has no
+        # pending action and records ``previous_priority`` instead. Falling
+        # straight through to ``other_id`` handed priority to the *agent*
+        # after a user answered a mid-command Request, and the session then
+        # refused every subsequent user action with "agent cannot …".
+        original_actor = (
+            (pending or {}).get("actor_id")
+            or (frame.data or {}).get("previous_priority")
+            or self.cs.other_id(self.actor_id)
+            or self.actor_id
+        )
         self.cs.pop_phase()
         self.cs.set_priority(original_actor)
         event = self.cs.event("approval_answered", self.actor_id, value=value, approved=bool(value), pending=pending)
