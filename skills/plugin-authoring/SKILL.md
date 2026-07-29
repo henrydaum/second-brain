@@ -1,6 +1,6 @@
 ---
 name: plugin-authoring
-description: How to write a Second Brain plugin (tool, task, service, command, frontend) — use when asked to build, fix, or extend a sandbox plugin.
+description: How to write Second Brain sandbox code — a script, or a plugin (tool, task, service, command, frontend) — use when asked to build, fix, or extend either.
 dependencies_files: tools/tool_use_skill.py
 ---
 
@@ -20,6 +20,19 @@ Families: `tools/tool_*.py`, `tasks/task_*.py`, `services/service_*.py`,
 in `<family>/helpers/` next to the plugin, imported with RELATIVE imports
 (`from .helpers import x`) so files work in any tree.
 
+## First: does this need to be a plugin at all?
+
+A plugin is a capability the *kernel registers* — it has a name, it stays
+loaded, other code calls it. If you just need to do a piece of work, write a
+**script** instead: `sandbox_plugins/scripts/<name>.py`, a file with a
+`main(sdk)` function, no base class and no declarations, run with the
+`run_script` tool. Scripts are far cheaper to write and are not asked about,
+so they are the right answer for one-off computation, data reshaping, bulk
+file work — anything you would otherwise have used the shell for.
+
+Write a plugin when the thing should still exist tomorrow and be reachable by
+name. Write a script when you just need it done.
+
 ## The flow
 
 1. Read the matching template in `templates/` (`tool_template.py`,
@@ -27,9 +40,10 @@ in `<family>/helpers/` next to the plugin, imported with RELATIVE imports
    `frontend_template.py`) — each is a complete annotated reference.
 2. Read one existing plugin of the same family for current style.
 3. Write `sandbox_plugins/<family>/<prefix>_<name>.py` with a file tool.
-4. Test: if the `test_plugin` tool is installed, call
-   `test_plugin(plugin_path="sandbox_plugins/tools/tool_<name>.py")` —
-   it checks imports, inheritance, naming, collisions, and runs the suite.
+4. Check it: if the `validate` tool is installed, call
+   `validate(path="sandbox_plugins/tools/tool_<name>.py")`. It reads the file
+   without importing it and reports every contract violation with a line
+   number and a fix — imports, inheritance, naming, collisions, declarations.
 5. On failure: read the error, edit the same file, retry. The plugin
    watcher live-loads valid edits; deleting the file unloads it.
 

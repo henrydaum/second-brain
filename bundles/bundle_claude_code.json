@@ -9,12 +9,13 @@
     "tools/tool_read_file.py",
     "tools/tool_render_files.py",
     "tools/tool_run_command.py",
+    "tools/tool_run_script.py",
     "tools/tool_slash_command.py",
     "tools/tool_spawn_agent.py",
     "tools/tool_sql_query.py",
-    "tools/tool_test_plugin.py",
     "tools/tool_todo.py",
     "tools/tool_use_skill.py",
+    "tools/tool_validate.py",
     "tools/tool_web_search.py"
   ],
   "name": "Claude Code"
