@@ -104,8 +104,8 @@ thing and stays a different thing: a person may decide what the code may not.
 | `fs.write(path, data, mode)` | Create, overwrite, or append text | path | safe in scratch and the agent's plugin tree, else unsafe |
 | `fs.read_bytes(path)` | File contents as raw bytes | path | safe, except protected files |
 | `fs.write_bytes(path, data, mode)` | Create, overwrite, or append bytes | path | safe in scratch and the agent's plugin tree, else unsafe |
-| `fs.list(path, pattern, details)` | Directory listing, glob, stat | path | safe |
-| `fs.search(pattern, root)` | Content search across a tree | root path | safe; protected files skipped |
+| `fs.list(path, pattern, details, recursive, files_only, sort, limit)` | Directory listing, glob, stat, pruning walk | path | safe |
+| `fs.search(pattern, root, glob, regex, mode, ...)` | Content search across a tree | root path | safe; protected files skipped |
 | `fs.delete(path)` | Remove a file or tree | path | unsafe |
 | `fs.move(src, dst)` | Copy, rename, replace | both paths | unsafe outside scratch |
 | `fs.temp()` | Allocate a scratch file or directory | — | safe, always |
@@ -133,6 +133,24 @@ before, because containment does not apply there.
 
 `fs.search` is derivable from `fs.list` + `fs.read`, and is a separate Request
 anyway: doing it by hand costs one round trip per file.
+
+**Both grew a second shape rather than a second Request** (`sandbox/walk.py`).
+A real tree search needs regex over file contents, junk-directory pruning, an
+enumeration cap, and ripgrep when it is installed — none of which sandboxed
+code can do for itself, and all of which the first plugin to want them would
+otherwise have built privately behind `proc.run`. So the engine moved host-side
+and the two Requests grew *arguments*: pass any of them and the answer arrives
+as a dict with `truncated` / `scan_truncated`; pass none and the original bare
+list comes back byte-identical. The authorization surface did not move — which
+types exist, and what `classify` says about each, are exactly as before. This is
+the same shape as the parsing and LLM migrations: the boundary got *narrower* by
+adding kernel code, not by widening what a plugin may ask for.
+
+The ripgrep fast path is host code, so it costs no `proc.run` dialog — but it
+knows nothing about `protected.py`, and content hits carry matching lines. Its
+results are therefore filtered through `is_protected` before the limit is
+applied, or the fast path would hand back exactly the config lines the slow path
+exists to withhold.
 
 `fs.list` is also the **stat**: `details=True` adds `is_dir`, `size` and
 `mtime` (`st_mtime_ns`, an int so it survives JSON exactly — compare with
@@ -258,13 +276,21 @@ never does.
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `ui.ask(title, prompt, type)` | Question with typed answer (text/bool/choice) | attendance | safe if attended, refused if not |
+| `ui.ask(prompt, title, type, choices, required, default)` | Question with typed answer | attendance | safe if attended, refused if not |
 | `ui.approve(action, justification)` | Explicit approval for a sensitive action | attendance | safe |
 | `ui.render(paths, caption)` | Show files to the user in chat | paths | safe |
 
 `ui.ask` is definitionally safe when a human is present — it *is* the approval
 channel. In an unattended session it is refused rather than queued, matching the
 kernel's existing default at the `unattended_call` gate.
+
+The handler translates `choices` into the state machine's `enum` and assembles
+the prompt through `form_step_display`, so a sandboxed question renders with the
+same assistance as a native form step. Both belong here rather than in the
+asking plugin because the guest cannot import `state_machine` at all — and the
+translation was missing for long enough to prove the point: `choices=` went
+straight through to a parameter that does not exist, so every multiple-choice
+question died as a `TypeError` reported back as "could not ask".
 
 ## 6. Configuration
 
@@ -298,6 +324,7 @@ belongs. API keys and OAuth tokens live in config and the environment. See
 |---|---|---|---|
 | `plugin.list(family)` | Enumerate installed plugins | — | safe |
 | `plugin.describe(name)` | Metadata, path, dependencies | — | safe |
+| `plugin.validate(path)` | Lint a source file against this contract | path | safe |
 | `plugin.register(path)` | Load a plugin live | path, family | unsafe |
 | `plugin.unregister(path=... / name, family)` | Unload | recognized path or registered identity | unsafe |
 | `plugin.reload(path=... / name, family)` | Reload in place | recognized path or registered identity | unsafe |
@@ -307,6 +334,15 @@ belongs. API keys and OAuth tokens live in config and the environment. See
 
 This family is the literal subject of the LibOS quote: the agent extends itself
 here, and every widening Request in it is unsafe by default.
+
+`plugin.validate` is the exception, and sits with the listings rather than with
+`register` and its neighbours. It changes nothing: the validator is a pure AST
+walk that never imports or executes the file it reads, so a `validate` that
+returns "will not load" has left the system exactly as it found it. It is what
+an agent authoring a plugin uses to check its own work after every edit, and a
+dialog in that loop would only teach the agent to stop checking. Writing the
+file was already free inside `sandbox_plugins/`; *loading* it is the step that
+asks.
 
 ## 9. Services
 

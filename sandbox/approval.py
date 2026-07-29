@@ -147,6 +147,7 @@ GRANT_PHRASES = {
     # dialog exactly as fast as understating it erodes safety.
     "plugin.list": "see what plugins are installed",
     "plugin.describe": "see what plugins are installed",
+    "plugin.validate": "check plugin code for problems",
     "cron.list": "see scheduled jobs", "cron.get": "see scheduled jobs",
     "tool.list": "see what tools exist",
     "command.list": "see what commands exist",

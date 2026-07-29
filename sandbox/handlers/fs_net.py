@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from .. import walk
 from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                               FS_READ_BYTES, FS_SEARCH, FS_TEMP, FS_WRITE,
                               FS_WRITE_BYTES, NET_HTTP, PROC_RUN,
@@ -163,29 +165,91 @@ def _fs_write(ctx, args: dict) -> Result:
         return Result.failure(f"write failed: {exc}", retryable=True)
 
 
+# Arguments that switch fs.list out of its original shape. Presence, not
+# truthiness: a caller passing ``limit=0`` still means "answer in the new
+# shape", and a caller passing nothing at all must get byte-identical
+# behaviour to before these existed.
+_LIST_EXTRAS = ("recursive", "files_only", "sort", "limit")
+
+
 def _fs_list(ctx, args: dict) -> Result:
-    """List a directory, optionally filtered by glob pattern."""
+    """List a directory, optionally filtered by glob pattern.
+
+    Two shapes, chosen by whether the caller passed any of ``_LIST_EXTRAS``.
+    Without them this is the original: a flat ``Path.glob`` returning a bare
+    list. With them it walks, prunes junk directories, sorts, and caps —
+    because ``**/*.py`` across a project through ``Path.glob`` descends into
+    ``.git`` and ``node_modules`` and answers with tens of thousands of paths
+    nobody asked for.
+    """
     raw = args.get("path")
     if not raw:
         return Result.failure("fs.list requires a path")
     pattern = args.get("pattern") or "*"
     path = Path(raw)
+    extended = any(key in args for key in _LIST_EXTRAS)
     try:
         # A file answers for itself. Asking "what do you know about this one
         # path" is the common case behind a stat, and routing it through
         # "list the parent, then filter" made callers build a glob out of a
         # filename — which breaks the moment the name contains [ or *.
         if path.is_file():
-            entries = [path]
-        elif path.is_dir():
-            entries = sorted(path.glob(pattern))
-        else:
+            entries, scan_truncated, truncated = [path], False, False
+        elif not path.is_dir():
             return Result.failure(f"no such directory or file: {raw}")
-        if args.get("details"):
-            return Result(data=[_entry_details(entry) for entry in entries])
-        return Result(data=[str(entry) for entry in entries])
+        elif not extended:
+            entries = sorted(path.glob(pattern))
+            return Result(data=_list_payload(entries, bool(args.get("details"))))
+        else:
+            entries, scan_truncated, truncated = _walked_entries(path, pattern, args)
     except OSError as exc:
         return Result.failure(f"list failed: {exc}", retryable=True)
+
+    if not extended:
+        return Result(data=_list_payload(entries, bool(args.get("details"))))
+    return Result(data={
+        "root": str(path),
+        "entries": _list_payload(entries, bool(args.get("details"))),
+        "truncated": truncated,
+        "scan_truncated": scan_truncated,
+    })
+
+
+def _list_payload(entries, details: bool):
+    """Entries as metadata dicts or as plain path strings."""
+    if details:
+        return [_entry_details(entry) for entry in entries]
+    return [str(entry) for entry in entries]
+
+
+def _walked_entries(root: Path, pattern: str, args: dict):
+    """The pruning-walk half of ``fs.list``; ``(entries, scan_truncated, truncated)``."""
+    files_only = bool(args.get("files_only"))
+    if args.get("recursive"):
+        entries, scan_truncated = (walk.iter_files(root) if files_only
+                                   else walk.iter_entries(root))
+    else:
+        entries, scan_truncated = sorted(root.iterdir()), False
+        if files_only:
+            entries = [e for e in entries if e.is_file()]
+
+    # A bare '*' is "everything here", which both branches above already
+    # produced — and running it through compile_glob would silently re-narrow
+    # a recursive walk to its top level.
+    if pattern and pattern != "*":
+        compiled = walk.compile_glob(pattern)
+        entries = [e for e in entries if walk.match_rel(e, root, compiled)]
+
+    if args.get("sort") == "mtime":
+        entries = walk.mtime_sorted(entries)
+    else:
+        entries = sorted(entries)
+
+    limit = int(args.get("limit") or 0)
+    truncated = bool(limit) and len(entries) > limit
+    if truncated:
+        entries = entries[:limit]
+    return entries, scan_truncated, truncated
 
 
 def _entry_details(entry: Path) -> dict:
@@ -213,16 +277,30 @@ def _entry_details(entry: Path) -> dict:
     }
 
 
+# As with fs.list: presence of any of these switches fs.search into the
+# grep-shaped answer. Without them the original substring scan is returned
+# unchanged, so nothing built on it moves.
+_SEARCH_EXTRAS = ("regex", "case_insensitive", "multiline", "mode",
+                  "context_lines", "limit")
+SEARCH_MODES = ("content", "files", "count")
+DEFAULT_SEARCH_LIMIT = 100
+
+
 def _fs_search(ctx, args: dict) -> Result:
     """Search file contents beneath a root.
 
     Derivable from list + read, and a separate Request anyway: doing it by
-    hand costs one round trip per file.
+    hand costs one round trip per file. That argument gets stronger the more
+    the search can do, which is why regex, output modes and junk-directory
+    pruning live here rather than in whichever plugin wanted them first.
     """
     needle = args.get("pattern")
     root = Path(args.get("root") or ".")
     if not needle:
         return Result.failure("fs.search requires a pattern")
+    if any(key in args for key in _SEARCH_EXTRAS):
+        return _fs_search_extended(needle, root, args)
+
     glob = args.get("glob") or "**/*"
     hits = []
     try:
@@ -248,6 +326,163 @@ def _fs_search(ctx, args: dict) -> Result:
     except OSError as exc:
         return Result.failure(f"search failed: {exc}", retryable=True)
     return Result(data=hits)
+
+
+def _fs_search_extended(needle: str, root: Path, args: dict) -> Result:
+    """The grep-shaped search: regex, output modes, pruning, ripgrep."""
+    mode = args.get("mode") or "content"
+    if mode not in SEARCH_MODES:
+        return Result.failure(
+            f"unknown fs.search mode {mode!r}; expected one of {list(SEARCH_MODES)}")
+    multiline = bool(args.get("multiline"))
+    case_insensitive = bool(args.get("case_insensitive"))
+    context_lines = max(0, min(int(args.get("context_lines") or 0),
+                               walk.MAX_CONTEXT))
+    limit = max(1, min(int(args.get("limit") or DEFAULT_SEARCH_LIMIT),
+                       MAX_SEARCH_HITS))
+    raw_glob = (args.get("glob") or "").strip()
+    if raw_glob == "**/*":
+        raw_glob = ""  # the default means "no filter", not a literal pattern
+
+    flags = re.IGNORECASE if case_insensitive else 0
+    if multiline:
+        flags |= re.DOTALL
+    # A literal search is a regex over the escaped pattern, so one engine
+    # serves both and 'C++' cannot arrive as an invalid quantifier.
+    source = needle if args.get("regex") else re.escape(needle)
+    try:
+        regex = re.compile(source, flags)
+    except re.error as exc:
+        return Result.failure(f"invalid regex: {exc}")
+
+    if not root.exists():
+        return Result.failure(f"no such directory or file: {root}")
+
+    # ripgrep only ever runs against a literal regex over a directory: an
+    # escaped literal round-trips through Rust's engine fine, but a
+    # user-written Python pattern may not, and that fallback is already
+    # handled by run_ripgrep returning None.
+    rg = walk.rg_path() if root.is_dir() else None
+    if rg:
+        found = walk.run_ripgrep(rg, source, root, raw_glob, mode,
+                                 case_insensitive, multiline, context_lines)
+        if found is not None:
+            # rg knows nothing about protected.py, and content hits carry
+            # matching *lines* — so an unfiltered fast path would hand back
+            # exactly the config lines the slow path exists to withhold. The
+            # filter is applied before the limit, so a dropped hit cannot
+            # push a real one off the end.
+            found = _drop_protected(found, root, mode)
+            truncated = len(found) > limit
+            return Result(data=_search_payload(
+                root, mode, found[:limit], truncated, False, 0, 0, "ripgrep"))
+
+    return _search_python(regex, root, raw_glob, mode, multiline,
+                          context_lines, limit)
+
+
+def _search_python(regex, root: Path, raw_glob, mode, multiline,
+                   context_lines, limit) -> Result:
+    """The always-available path: walk, prune, read, match."""
+    scan_truncated = False
+    if root.is_file():
+        files, base = [root], root.parent
+    else:
+        try:
+            files, scan_truncated = walk.iter_files(root)
+        except OSError as exc:
+            return Result.failure(f"search failed: {exc}", retryable=True)
+        base = root
+        if raw_glob:
+            compiled = walk.compile_glob(raw_glob)
+            files = [f for f in files if walk.match_rel(f, base, compiled)]
+        files = walk.mtime_sorted(files)
+
+    results, skipped_binary, skipped_large, truncated = [], 0, 0, False
+    for path in files:
+        try:
+            if path.stat().st_size > walk.MAX_FILE_BYTES:
+                skipped_large += 1
+                continue
+        except OSError:
+            continue
+        # Same reasoning as the substring path: skipped, not refused, because
+        # one protected file in a tree must not fail the whole search — and it
+        # matters as much here, since hits carry matching lines.
+        if is_protected(path):
+            continue
+        if walk.is_binary(path):
+            skipped_binary += 1
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = walk.relative(path, base)
+
+        if mode == "files":
+            if walk.file_matches(regex, multiline, text):
+                results.append(rel)
+        elif mode == "count":
+            if multiline:
+                n = sum(1 for _ in regex.finditer(text))
+            else:
+                n = sum(len(regex.findall(line)) for line in text.splitlines())
+            if n:
+                results.append([rel, n])
+        else:
+            walk.content_matches(regex, multiline, text, rel, context_lines,
+                                 results, limit)
+
+        if len(results) >= limit:
+            truncated = len(results) > limit or path is not files[-1]
+            results = results[:limit]
+            break
+
+    return Result(data=_search_payload(root, mode, results, truncated,
+                                       scan_truncated, skipped_binary,
+                                       skipped_large, "python"))
+
+
+def _drop_protected(results, root: Path, mode: str) -> list:
+    """Remove ripgrep results belonging to a protected file.
+
+    Each shape names its file differently: ``files`` is the path itself,
+    ``count`` is a ``[path, n]`` pair, and a ``content`` group is one or more
+    ``rel:lineno: text`` lines that all came from the same file — so the first
+    line's prefix identifies the group. A content line whose prefix will not
+    parse is dropped rather than kept: an unrecognised shape is not evidence
+    that the file behind it is safe to return.
+    """
+    kept = []
+    for item in results:
+        if mode == "files":
+            rel = item
+        elif mode == "count":
+            rel = item[0]
+        else:
+            head = item.split("\n", 1)[0]
+            match = _CONTENT_PREFIX_RE.match(head)
+            if match is None:
+                continue
+            rel = match.group(1)
+        if not is_protected(root / rel):
+            kept.append(item)
+    return kept
+
+
+# The 'rel:lineno: ' / 'rel:lineno- ' prefix parse_rg writes. Non-greedy, so a
+# relative path containing a colon still yields at the line-number boundary.
+_CONTENT_PREFIX_RE = re.compile(r"^(.+?):\d+[:-] ")
+
+
+def _search_payload(root, mode, results, truncated, scan_truncated,
+                    skipped_binary, skipped_large, backend) -> dict:
+    """The extended search answer, identical across both backends."""
+    return {"root": str(root), "mode": mode, "results": results,
+            "truncated": truncated, "scan_truncated": scan_truncated,
+            "skipped_binary": skipped_binary, "skipped_large": skipped_large,
+            "backend": backend}
 
 
 def _fs_delete(ctx, args: dict) -> Result:

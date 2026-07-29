@@ -79,7 +79,8 @@ from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN,
                        LLM_DELTA, LLM_PROCEED, PATH_GET,
                        PLUGIN_DESCRIBE, PLUGIN_INSTALL, PLUGIN_LIST,
                        PLUGIN_REGISTER, PLUGIN_RELOAD, PLUGIN_UNREGISTER,
-                       PLUGIN_UNINSTALL, PLUGIN_UPDATE, PROC_RUN,
+                       PLUGIN_UNINSTALL, PLUGIN_UPDATE, PLUGIN_VALIDATE,
+                       PROC_RUN,
                        SECRET_REVEAL, SELF_RESPOND,
                        SERVICE_CALL, SERVICE_LIST, SERVICE_LOAD,
                        SERVICE_UNLOAD, SESSION_ADD_PROMPT,
@@ -145,7 +146,8 @@ class _FS(_Namespace):
                          data=base64.b64encode(bytes(data)).decode("ascii"),
                          mode=mode)
 
-    def list(self, path, pattern: str = "*", details: bool = False):
+    def list(self, path, pattern: str = "*", details: bool = False,
+             recursive=None, files_only=None, sort=None, limit=None):
         """List a directory, optionally with entry metadata.
 
         ``details`` adds ``is_dir``, ``size`` and ``mtime`` (``st_mtime_ns``,
@@ -154,13 +156,53 @@ class _FS(_Namespace):
 
         Pointing this at a **file** returns that one entry, which is how you
         ask "has this changed?" without building a glob out of a filename.
-        """
-        return self._ask(
-            FS_LIST, path=str(path), pattern=pattern, details=details)
 
-    def search(self, pattern: str, root=".", glob: str = "**/*"):
-        """Search file contents beneath a root."""
-        return self._ask(FS_SEARCH, pattern=pattern, root=str(root), glob=glob)
+        Passing any of ``recursive`` / ``files_only`` / ``sort`` / ``limit``
+        switches on the walking listing and changes the answer's shape to
+        ``{"root", "entries", "truncated", "scan_truncated"}``. Use it for
+        anything tree-shaped: it prunes ``.git``, ``node_modules`` and friends,
+        never follows a symlink, and caps the enumeration, none of which a
+        plain glob does. ``sort="mtime"`` is newest-first.
+        """
+        args = {"path": str(path), "pattern": pattern, "details": details}
+        # Sent only when asked for: the handler decides which shape to answer
+        # in by whether these keys are *present*, so a default value here
+        # would silently move every existing caller onto the new shape.
+        for key, value in (("recursive", recursive), ("files_only", files_only),
+                           ("sort", sort), ("limit", limit)):
+            if value is not None:
+                args[key] = value
+        return self._ask(FS_LIST, **args)
+
+    def search(self, pattern: str, root=".", glob: str = "**/*",
+               regex=None, case_insensitive=None, multiline=None,
+               mode=None, context_lines=None, limit=None):
+        """Search file contents beneath a root.
+
+        Plain, this is a substring scan returning ``{path, line, text}`` hits.
+        Passing any of the arguments below switches on the full search and
+        answers with ``{"root", "mode", "results", "truncated",
+        "scan_truncated", "skipped_binary", "skipped_large", "backend"}``:
+
+        - ``regex`` — read ``pattern`` as a Python ``re`` pattern.
+        - ``case_insensitive``, ``multiline`` (``.`` matches newlines too).
+        - ``mode`` — ``"content"`` (``rel:lineno: text`` lines, the default),
+          ``"files"`` (matching paths), or ``"count"`` (``[path, n]`` pairs).
+        - ``context_lines`` — lines either side of each hit, content mode, max 10.
+        - ``limit`` — result cap; default 100, max 500.
+
+        The full search prunes junk directories, skips binary and oversized
+        files, and uses ripgrep when it is installed. ``glob`` filters which
+        files are searched: ``"*.py"`` is top level only, ``"**/*.py"`` any depth.
+        """
+        args = {"pattern": pattern, "root": str(root), "glob": glob}
+        for key, value in (("regex", regex),
+                           ("case_insensitive", case_insensitive),
+                           ("multiline", multiline), ("mode", mode),
+                           ("context_lines", context_lines), ("limit", limit)):
+            if value is not None:
+                args[key] = value
+        return self._ask(FS_SEARCH, **args)
 
     def delete(self, path):
         """Remove a file or a tree."""
@@ -307,11 +349,24 @@ class _Session(_Namespace):
 class _UI(_Namespace):
     """Talking to the person."""
 
-    def ask(self, prompt: str, title: str = "Question", type: str = "text",
-            choices=None, timeout: float = 300.0):
-        """Ask a question and wait. Refused when nobody is present."""
+    def ask(self, prompt: str, title: str = "Question", type: str = "string",
+            choices=None, timeout: float = 300.0, required: bool = True,
+            default=None):
+        """Ask a question and wait. Refused when nobody is present.
+
+        ``type`` is the shape of the answer — ``"string"``, ``"integer"``,
+        ``"number"``, ``"boolean"``, ``"array"`` or ``"object"`` — and decides
+        how the question is presented and how the reply is parsed.
+        ``choices`` limits the answer to a list of options; ``required=False``
+        lets the person skip, in which case ``default`` comes back.
+
+        Raises ``sdk.Denied`` when the person cancels, and fails when they
+        never answer — a cancelled question and an unanswered one are
+        different events and a plugin usually wants to treat them differently.
+        """
         return self._ask(UI_ASK, prompt=prompt, title=title, type=type,
-                         choices=list(choices or []), timeout=timeout)
+                         choices=list(choices or []) or None, timeout=timeout,
+                         required=required, default=default)
 
     def approve(self, action: str, justification: str = ""):
         """Ask the user to approve a described action."""
@@ -400,6 +455,17 @@ class _Plugins(_Namespace):
     def describe(self, name: str):
         """Metadata for one plugin."""
         return self._ask(PLUGIN_DESCRIBE, name=name)
+
+    def validate(self, path: str):
+        """Check a plugin source file against the sandbox contract.
+
+        The same validator the loader runs, so its verdict is the real one:
+        ``ok`` means the file will load, ``disclaimed`` means it will load
+        with a warning, and ``unmediated`` names the imports that will put it
+        in a subprocess. ``findings`` carries ``level``, ``line``, ``message``
+        and ``fix`` per problem. Nothing is imported or executed.
+        """
+        return self._ask(PLUGIN_VALIDATE, path=str(path))
 
     def register(self, path: str):
         """Load a recognized plugin source file into the live runtime."""

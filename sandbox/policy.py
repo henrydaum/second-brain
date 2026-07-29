@@ -244,7 +244,13 @@ ALWAYS_SAFE = {
     R.SESSION_REMOVE_PROMPT,
     R.UI_APPROVE, R.UI_RENDER,
     R.USER_READ,
-    R.PLUGIN_LIST, R.PLUGIN_DESCRIBE, R.SERVICE_LIST, R.SERVICE_CALL,
+    # PLUGIN_VALIDATE sits with the listings, not with REGISTER and friends,
+    # because it changes nothing: the validator is a pure AST walk that never
+    # imports the file it reads. It is how an agent authoring a plugin checks
+    # its own work, and putting a dialog in that loop would only teach the
+    # agent to skip the check.
+    R.PLUGIN_LIST, R.PLUGIN_DESCRIBE, R.PLUGIN_VALIDATE,
+    R.SERVICE_LIST, R.SERVICE_CALL,
     R.PATH_GET,
     # TOOL_CALL is safe for the reason SERVICE_CALL is: the callee's own
     # Requests are classified with the caller still in the chain, so routing

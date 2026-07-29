@@ -143,7 +143,13 @@ sdk.fs.list(path, details=True)            # -> [{path, name, is_dir, size, mtim
                                            # one entry — this is how you ask
                                            # "does it exist / has it changed?"
                                            # mtime is st_mtime_ns; compare with !=
+sdk.fs.list(path, recursive=True, files_only=True,
+            sort="mtime", limit=100)       # -> {root, entries, truncated,
+                                           #     scan_truncated}
 sdk.fs.search(pattern, root=".", glob="**/*")   # -> [{path, line, text}]
+sdk.fs.search(pattern, root=".", regex=True, mode="content",
+              case_insensitive=False, multiline=False,
+              context_lines=0, limit=100)  # -> {root, mode, results, ...}
 sdk.fs.delete(path)
 sdk.fs.move(src, dst, copy=False)
 sdk.fs.temp(directory=False, suffix="")    # scratch space; always allowed
@@ -158,6 +164,22 @@ sdk.secrets.reveal(name)                   # plaintext; always asks the user
 not text. Reach for `read_bytes` whenever the file is an image, audio, a PDF,
 or an archive. Base64 on the wire is the SDK's problem, not yours — you hand
 over `bytes` and get `bytes` back.
+
+**`list` and `search` each have two shapes**, and passing any of the extra
+arguments switches to the second. Plain, they are a flat glob and a substring
+scan returning bare lists. With extras, they walk the tree properly — pruning
+`.git`, `node_modules`, `__pycache__` and friends, never following a symlink,
+capping the enumeration — and answer with a dict carrying `truncated` and
+`scan_truncated` alongside the results. Use the second shape for anything
+tree-shaped; a plain `**/*` glob over a project descends into `.git` and hands
+back tens of thousands of paths nobody wanted.
+
+Search modes: `"content"` gives `rel:lineno: text` lines, `"files"` gives
+matching paths, `"count"` gives `[path, n]` pairs. `regex=True` reads the
+pattern as Python `re` (not PCRE — escape literal braces). `glob` filters which
+files are searched, where `"*.py"` is top level only and `"**/*.py"` is any
+depth. Binary and oversized files are skipped and counted, and ripgrep is used
+when it happens to be installed — none of which changes the answer's shape.
 
 ### Data
 
@@ -201,7 +223,11 @@ sdk.db.query("SELECT * FROM my_conversations WHERE title LIKE ?", ["%tax%"])
 ### People and sessions
 
 ```python
-sdk.ui.ask(prompt, title="Question", type="text", choices=None)
+sdk.ui.ask(prompt, title="Question", type="string", choices=None,
+           required=True, default=None, timeout=300.0)
+                                     # type: string | integer | number |
+                                     #       boolean | array | object
+                                     # cancel raises sdk.Denied; no answer fails
 sdk.ui.approve(action, justification)
 sdk.ui.render(paths, caption="")     # show files in the chat
 
@@ -229,6 +255,8 @@ sdk.services.call(name, method, **kwargs)   # only exported methods
 sdk.services.load(name) / unload(name)
 sdk.plugins.list(source="registered", category="")
 sdk.plugins.describe(name)
+sdk.plugins.validate(path)                # -> {ok, disclaimed, findings,
+                                          #     unmediated, declarations, digest}
 sdk.plugins.register(path)
 sdk.plugins.unregister(path=...)          # or name=..., family=...
 sdk.plugins.reload(path=...)              # or name=..., family=...

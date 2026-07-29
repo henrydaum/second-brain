@@ -35,7 +35,7 @@ from ..guest.requests import (AGENT_COMPLETE, COMMAND_CALL, COMMAND_LIST,
                               PARSE_FILE, PARSE_MODALITY, PATH_GET, PLUGIN_DESCRIBE,
                               PLUGIN_INSTALL, PLUGIN_LIST, PLUGIN_UNINSTALL,
                               PLUGIN_REGISTER, PLUGIN_RELOAD,
-                              PLUGIN_UNREGISTER, PLUGIN_UPDATE,
+                              PLUGIN_UNREGISTER, PLUGIN_UPDATE, PLUGIN_VALIDATE,
                               SERVICE_CALL, SERVICE_LIST,
                               SERVICE_LOAD, SERVICE_UNLOAD,
                               SESSION_ADD_PROMPT, SESSION_ADD_TOOL,
@@ -652,7 +652,21 @@ def _session_remove_prompt(ctx, args: dict) -> Result:
 # ──────────────────────────────────────────────────────────────────────
 
 def _ui_ask(ctx, args: dict) -> Result:
-    """Ask a question and wait for the answer."""
+    """Ask a question and wait for the answer.
+
+    The guest says ``choices``; the state machine says ``enum``. Translating
+    between the two is this handler's job, and for a while it did not do it —
+    ``choices=`` went straight through to ``request_input``, which has no such
+    parameter, so every question with options died as a ``TypeError`` reported
+    back as "could not ask". Nothing caught it because nothing sandboxed had
+    asked a multiple-choice question yet.
+
+    The prompt is assembled through ``form_step_display`` so a sandboxed
+    question reads exactly like a native form step — "Select an option.",
+    "Reply with a whole number." and the rest. That assembly used to live in
+    the asking plugin, which is no longer possible: the guest cannot import
+    ``state_machine``.
+    """
     asker = getattr(ctx, "request_user_input", None)
     runtime = _runtime(ctx)
     key = getattr(ctx, "session_key", None)
@@ -663,11 +677,20 @@ def _ui_ask(ctx, args: dict) -> Result:
     if (bad := _need(asker, "asking the user")) is not None:
         return bad
 
+    # "text" was the old default and is not a FormStep type, so it matched
+    # none of the display branches and rendered a question with no assistance.
+    answer_type = args.get("type") or "string"
+    choices = args.get("choices") or None
+    default = args.get("default")
+    required = args.get("required")
+    required = True if required is None else bool(required)
+
     try:
-        request = asker(args.get("title") or "Question",
-                        args.get("prompt") or "",
-                        type=args.get("type") or "text",
-                        choices=args.get("choices") or None)
+        prompt = _ask_prompt(args.get("prompt") or "", answer_type,
+                             choices, default, required)
+        request = asker(args.get("title") or "Question", prompt,
+                        type=answer_type, enum=choices,
+                        default=default, required=required)
         if not request.wait(timeout=float(args.get("timeout") or 300.0)):
             return Result.failure("the user did not answer", retryable=True)
         if request.metadata.get("cancelled"):
@@ -676,6 +699,22 @@ def _ui_ask(ctx, args: dict) -> Result:
                       if hasattr(request, "value") else request.approved)
     except Exception as exc:
         return Result.failure(f"could not ask: {exc}")
+
+
+def _ask_prompt(prompt: str, answer_type, choices, default, required) -> str:
+    """The question plus whatever assistance its answer type calls for."""
+    try:
+        from state_machine.conversation import FormStep
+        from state_machine.form_display import form_step_display
+
+        display = form_step_display(FormStep(
+            "answer", prompt, required, answer_type, choices, default=default))
+    except Exception:
+        # A missing or changed state machine must not make the question
+        # unaskable — the prompt on its own is still a usable question.
+        return prompt
+    return "\n\n".join(part for part in
+                       [display.get("prompt"), display.get("assist")] if part)
 
 
 def _ui_approve(ctx, args: dict) -> Result:
@@ -1179,6 +1218,86 @@ def _plugin_describe(ctx, args: dict) -> Result:
         if schema is not None:
             return Result(data=schema)
     return Result.failure(f"no plugin named {name!r}")
+
+
+def _known_names(ctx, path) -> list:
+    """Every registered plugin name, minus the ones this file already owns.
+
+    The validator's duplicate-name check exists to stop a new plugin
+    shadowing an existing one. Re-validating a file that is *already*
+    registered would otherwise report it as a duplicate of itself — the
+    single most common case, since the point of the check is to run it after
+    every edit. So entries whose ``_source_path`` is this file are dropped.
+    """
+    target = str(path)
+    names = []
+    registries = (
+        getattr(getattr(ctx, "tool_registry", None), "tools", None),
+        getattr(getattr(ctx, "orchestrator", None), "tasks", None),
+        getattr(ctx, "services", None),
+        getattr(getattr(ctx, "command_registry", None), "commands", None),
+    )
+    for registry in registries:
+        for name, obj in dict(registry or {}).items():
+            if str(getattr(obj, "_source_path", "") or "") != target:
+                names.append(name)
+    return names
+
+
+def _plugin_validate(ctx, args: dict) -> Result:
+    """Lint one source file against the sandbox contract.
+
+    The same validator the loader runs, answering to the code being authored
+    rather than only to the kernel refusing it — which is the difference
+    between "your plugin did not load" and a line number with a fix on it.
+    Nothing is imported or executed: this is a pure AST walk.
+    """
+    from plugins.helpers.plugin_paths import resolve_plugin_path
+
+    from ..validator import validate_file
+
+    path, error = resolve_plugin_path((args.get("path") or "").strip())
+    if error:
+        return Result.failure(error)
+    if not path.is_file():
+        return Result.failure(f"no such file: {path}")
+    if path.suffix != ".py":
+        return Result.failure(f"not a Python file: {path.name}")
+    try:
+        report = validate_file(path, known_names=_known_names(ctx, path))
+    except OSError as exc:
+        return Result.failure(f"could not read {path}: {exc}", retryable=True)
+
+    return Result(data={
+        "path": str(path),
+        "filename": report.filename,
+        "ok": report.ok,
+        "disclaimed": report.disclaimed,
+        "digest": report.digest,
+        # A set does not cross the wire, and the order matters to nobody but
+        # the reader — so sorted, which also makes the answer deterministic.
+        "unmediated": sorted(report.unmediated),
+        "declarations": _plain(report.declarations),
+        "findings": [{"level": f.level, "line": f.line,
+                      "message": f.message, "fix": f.fix}
+                     for f in report.findings],
+    })
+
+
+def _plain(value):
+    """Coerce declarations to JSON-safe plain data.
+
+    ``declarations`` comes off an AST walk, so a value is whatever
+    ``ast.literal_eval`` produced — including tuples and sets, which the wire
+    does not carry.
+    """
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_plain(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
 
 
 def _plugin_watcher(ctx):
@@ -2226,6 +2345,7 @@ HANDLERS = {
     PATH_GET: _path_get,
     USER_READ: _user_read, USER_LIST: _user_list, USER_WRITE: _user_write,
     PLUGIN_LIST: _plugin_list, PLUGIN_DESCRIBE: _plugin_describe,
+    PLUGIN_VALIDATE: _plugin_validate,
     PLUGIN_REGISTER: _plugin_register, PLUGIN_UNREGISTER: _plugin_unregister,
     PLUGIN_RELOAD: _plugin_reload,
     PLUGIN_INSTALL: _plugin_install, PLUGIN_UNINSTALL: _plugin_uninstall,
