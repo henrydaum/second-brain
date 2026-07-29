@@ -42,12 +42,16 @@ def test_every_request_is_serviced_or_declared_unwired(kind):
     assert kind in HANDLERS or kind in UNWIRED or kind == R.SELF_RESPOND
 
 
-def test_only_explicitly_deferred_capabilities_are_unwired():
-    """The deferred set stays deliberate as lifecycle holes are closed."""
-    assert set(UNWIRED) <= {
-        R.PLUGIN_INSTALL, R.PLUGIN_UNINSTALL, R.SERVICE_LOAD, R.SERVICE_UNLOAD,
-        R.AGENT_SPAWN, R.AGENT_SCHEDULE,
-    }
+def test_nothing_in_the_catalogue_is_unwired():
+    """Every capability the vocabulary names is now actually serviced.
+
+    This was an allowlist of deliberate holes, shrinking as each was closed.
+    ``agent.spawn`` and ``agent.schedule`` were the last two, and they closed
+    when subagents moved into the kernel. An empty inventory is a stronger
+    statement than a shrinking one: a Request added without a handler now
+    fails here rather than being quietly added to a list.
+    """
+    assert not UNWIRED
 
 
 def test_plugin_lifecycle_handlers_share_the_kernel_watcher():

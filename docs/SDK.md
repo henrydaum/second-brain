@@ -368,15 +368,96 @@ sdk.plugins.install(package_id)
 sdk.plugins.uninstall(package_id)
 sdk.plugins.update()
 
-sdk.agent.complete(prompt)           # a model call
-sdk.agent.spawn(prompt, wait=True)   # a subagent now
-sdk.agent.schedule(prompt, cron)     # a subagent later
+sdk.agent.complete(prompt)                # a model call
+sdk.agent.spawn(prompt, title="Subagent", attachments=None,
+                wait=True, timeout_seconds=None)
+sdk.agent.collect(ids=None, timeout=None) # join children; ids=None = all mine
+sdk.agent.stop(id)                        # cancel one
+sdk.agent.schedule(prompt, cron, title="Scheduled subagent",
+                   attachments=None, one_time=False, name="")
 ```
 
 Plugin lifecycle mutations are approval-gated. Paths must resolve to a
 recognized built-in, sandbox, or installed plugin file. A name-only unload or
 reload must identify exactly one registered plugin; supply `family` when the
 same name exists in more than one registry.
+
+### Orchestrating subagents
+
+A **subagent** is a whole agent turn running in its own conversation, on its
+own thread. `spawn` starts one, and everything else is about getting the answer
+back.
+
+Waiting for one is the easy case — `wait=True` blocks and hands you the report:
+
+```python
+report = sdk.agent.spawn("Summarise every TODO in docs/, grouped by file.")
+sdk.log(report["text"])
+```
+
+The interesting case is several at once, and that is what a **script** is for.
+`spawn(wait=False)` returns straight away with a handle, so N children start in
+the time one would have taken; `collect` joins them. Nothing in between is in
+your context until you ask for it — which is the real reason to write the
+script instead of making N tool calls:
+
+```python
+def main(sdk, questions):
+    """Research several questions at once, then write up what came back."""
+    started = [
+        sdk.agent.spawn(
+            f"Research this and report your findings:\n\n{question}",
+            title=question[:40],
+            wait=False,
+            timeout_seconds=600,
+        )["id"]
+        for question in questions
+    ]
+
+    # Nothing is waiting yet, so anything here happens while they run.
+    sdk.log(f"{len(started)} agents working")
+
+    findings, lost = [], []
+    for report in sdk.agent.collect(started):
+        if report["ok"]:
+            findings.append(f"## {report['title']}\n\n{report['text']}")
+        else:
+            # A cancelled child hit its deadline and produced nothing. Say so;
+            # never fill the gap with a guess.
+            lost.append(f"{report['title']} ({report['state']})")
+
+    if not findings:
+        return sdk.fail("every agent failed: " + ", ".join(lost))
+    return {"report": "\n\n".join(findings), "lost": lost}
+```
+
+Run it with `sdk.scripts.run("research.py", questions=[...])`. One Request, one
+result. (Write the report out with `sdk.fs.write` if you want it on disk —
+that is a separate act and gets its own approval, which is why it is not part
+of the example.)
+
+Four things worth knowing before you write one of these:
+
+- **A report is delivered once.** `collect` takes it; a later `collect` will
+  not hand it over again. Inside an agent turn, anything you did not collect is
+  collected for you before the turn ends, so `wait=False` never loses a result
+  even if you forget it.
+- **`collect(timeout=0)` polls** — running children come back with
+  `state == "running"` and stay uncollected, so a progress display is cheap.
+  With no timeout it waits until each child's own deadline, which is usually
+  what you want.
+- **A deadline is a hard cutoff.** A child still going at `timeout_seconds` is
+  cancelled and comes back as `state == "cancelled"` with no text. That is a
+  real answer, not a missing one, and reporting anything on its behalf is the
+  one mistake worth guarding against. Its partial transcript survives in
+  `conversation_id`.
+- **A subagent cannot spawn subagents,** and nobody can answer a dialog on its
+  behalf — its Requests are unattended, so anything unsafe is refused outright
+  rather than asked about. Give it work that needs no permission.
+
+`sdk.agent.stop(id)` ends one early. `sdk.agent.schedule(prompt, cron)` is the
+same thing on a timer; it is unsafe by policy, because unattended future work
+is the one case where nobody will be there to notice it going wrong.
 
 ### Standing at a doorway
 

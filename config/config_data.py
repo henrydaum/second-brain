@@ -88,6 +88,23 @@ SETTINGS_DATA = [
      600,
      {"type": "slider", "range": (30, 1800, 59), "is_float": False}),
 
+    # --- Subagents ---
+    # Kernel settings because spawning is kernel routing. They were declared by
+    # the store's spawn tool, which is exactly the ownership accident
+    # `rehome_kernel_keys` exists to undo.
+    ("Max Concurrent Subagents", "max_concurrent_subagents",
+     "How many spawned agents may run at once. Also sets the ceiling on the "
+     "LLM box pool, since a subagent plus the foreground turn is the most "
+     "concurrent model calls that can exist.",
+     4,
+     {"type": "slider", "range": (1, 16, 15), "is_float": False}),
+
+    ("Subagent Timeout", "subagent_timeout_seconds",
+     "Max seconds a spawned agent may run. A child still running at this "
+     "deadline is cancelled and reported as failed — never silently dropped.",
+     300,
+     {"type": "slider", "range": (30, 3600, 100), "is_float": False}),
+
     ("Keep Attachments Available Across Turns", "keep_attachments_available_across_turns",
      "Keep attached files available to the model after the first agent response. Useful for repeated media inspection, but native image/audio/video inputs may increase LLM cost.",
      False,

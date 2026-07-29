@@ -100,6 +100,12 @@ class ConversationRuntime:
         # Empty by default; plugins register into it. See runtime/hooks.py.
         from runtime.hooks import HookRegistry
         self.hooks = HookRegistry()
+        # Background agents this runtime has started. Built here rather than
+        # in the composition root because the end-of-turn barrier must exist
+        # whether or not any plugin is installed — the same argument the
+        # compaction layer makes one moment over. See runtime/subagents.py.
+        from runtime.subagents import SubagentRegistry
+        self.subagents = SubagentRegistry(self, self.config)
         self._approval_requests: dict[str, StateMachineApprovalRequest] = {}
         self._sessions_lock = threading.RLock()
         # Single global "active" session — the most recent user-driven

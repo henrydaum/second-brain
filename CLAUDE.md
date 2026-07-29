@@ -52,12 +52,15 @@ future store) — *not* by deleting them. What remains:
   unknown names, because at that point the answer isn't known yet.
 - **Commands:** REPL UX + introspection only — `config`, `setup` (LLM onboarding
   wizard), `llm`, `conversations`, `clear`, `cancel`, `debug`, `frontends`,
-  `locations`, `commands`, `tools`, `services`, `tasks`, `packages`, `quit`,
-  `restart`. The last two used to be native `_HostCommand` instances built in
-  the composition root, holding `shutdown_fn` and the scaffold directly; they
-  are ordinary sandboxed commands over the `app.stop` Request now, which is
-  what parity with the other fifteen means.
-  Profile/scheduling/MCP/update commands are package capabilities unless the
+  `locations`, `commands`, `tools`, `services`, `tasks`, `packages`,
+  `schedule`, `quit`, `restart`. The last two used to be native `_HostCommand`
+  instances built in the composition root, holding `shutdown_fn` and the
+  scaffold directly; they are ordinary sandboxed commands over the `app.stop`
+  Request now, which is what parity with the other sixteen means.
+  `schedule` is kernel because it manages *any* Timekeeper job and the
+  Timekeeper is a kernel service — a store command was the only way to reach
+  two things the kernel already owned.
+  Profile/MCP/update commands are package capabilities unless the
   tracked tree still carries a transitional command.
 
 The pipeline substrate (`pipeline/` — orchestrator, watcher, event_trigger) still
@@ -170,9 +173,13 @@ flag. The pool exists because `PersistentBox.call` serializes under one lock —
 one box per profile would queue a scheduled subagent behind a foreground turn —
 and it *can* exist because a backend is stateless with respect to the profile:
 every model name, key and endpoint arrives on the `LLMRequest`, so any box
-serves any call. Its ceiling is `max_workers + 1`, derived rather than chosen,
-because a subagent runs on an orchestrator worker and that plus the foreground
-turn is the most concurrent calls that can exist.
+serves any call. Its ceiling is `max_concurrent_subagents + 1`, derived rather
+than chosen, because a subagent is the only thing that places a model call
+concurrently with the foreground turn. It read `max_workers` back when a
+subagent ran on an orchestrator worker; it runs on its own pool now, and the
+two must be the *same* setting rather than two that happen to agree — a
+fan-out wider than the pool serializes its calls behind one box lock and
+presents as merely slow.
 
 **A backend is `helpers/llm_*.py`, and belongs to no family** — same as a
 parser: no base class the kernel registers, no entry point, nothing discovery
@@ -902,12 +909,55 @@ The runtime exposes `runtime.active_session_key` / `active_conversation_id`
 so background drivers can identify themselves: anything with a session key
 that doesn't match the active one is, by definition, running unattended.
 The tool registry uses this to refuse `background_safe=False` tools from
-non-active sessions. The scheduled-subagent layer was rebuilt on these
-primitives and ships as the store Scheduling bundle (`command_schedule`,
-`task_spawn_subagent`, `tool_schedule_subagent`): timekeeper jobs emit a
-bus event, the spawn task opens its own `spawn_subagent:<cid>` session and
-drives `runtime.iterate_agent_turn(...)`. There is no `is_subagent` flag in
-the runtime — a subagent is just a session whose key isn't the active one.
+non-active sessions. **Subagents are the kernel capability built on these
+primitives** (`runtime/subagents.py`): a `SubagentRegistry` opens a
+`spawn_subagent:<cid>` session, drives `runtime.iterate_agent_turn(...)` on
+its own pool, and hands back a **handle**. There is no `is_subagent` flag in
+the runtime — a subagent is just a session whose key isn't the active one, and
+that is exactly what makes it safe: its Requests build a chain rooted at that
+key rather than at `user`, so `Chain.attended` is false and nothing unsafe can
+be approved on its behalf.
+
+It got here the way parsing and the LLM did, except there was no
+implementation half to demote — spawning is *all* routing. It was a store task
+plus a store service reaching into `session.pending_user_messages`,
+`session.cancel_event`, and a `task_runs` row located by
+`payload_json LIKE '%"conversation_id": N,%'`. None of that survives a
+sandbox boundary.
+
+**A handle is what the vocabulary grew for.** `agent.spawn` gained
+`agent.collect` and `agent.stop` beside it, the same argument `proc.start`
+makes: a background child outlives the Request that made it. `wait=True` is
+still one Request answering with one report; `wait=False` returns a handle so a
+fan-out is expressible from code that has no turn to hold open — which is every
+script, and the reason spawning is in the SDK at all.
+
+**One delivery, decided by whoever collects first.** A finished child's report
+sits on its handle until an explicit `collect` takes it, or until the kernel's
+end-of-turn **barrier** takes it for children nobody collected. The barrier is
+*stacked* in `ConversationLoop._subagent_barrier` rather than registered as an
+`end_turn` hook — the same argument the compaction layer makes one moment over:
+collecting children must not depend on which plugins are installed. It stands
+ahead of the doormen *and* ahead of `DOORMAN_FIRE_LIMIT`, because a turn that
+spent its doorman budget must still not abandon agents it started.
+
+Two mechanisms died with the migration and should not come back: the
+session-side set of "children the parent already cancelled" (needed only to
+suppress a stale completion echo from a run with no state of its own — a handle
+has state), and the `subagent_llm` escort, which registered the `model_call`
+moment that no longer exists and was therefore already dead code.
+
+Deadlines are hard cutoffs: a child still running at `subagent_timeout_seconds`
+is cancelled and reported as failed, never silently dropped, because "no news"
+is indistinguishable from "still thinking" and an agent that guesses reports
+findings nobody produced. Concurrency is `max_concurrent_subagents`, which is
+also what `llm/registry._pool_ceiling` derives from — see **The LLM**.
+
+`/schedule` is a kernel command (it manages *any* Timekeeper job, and the
+Timekeeper is a kernel service). The store keeps only the two agent-facing
+tools, `tool_spawn_subagent` and `tool_schedule_subagent`, both thin over
+`sdk.agent`. Scheduled spawns arrive on the kernel-owned `SUBAGENT_SPAWN`
+channel, which the registry subscribes to itself.
 
 "Is a human present at this session right now?" is asked in exactly three
 places (interactive-tool gating, the notify-prompt block, background

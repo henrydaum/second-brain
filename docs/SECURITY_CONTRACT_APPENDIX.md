@@ -397,16 +397,36 @@ anyway would forge the consent the mechanism exists to collect.
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
 | `agent.complete(prompt, schema)` | A model call | — | safe |
-| `agent.spawn(prompt, wait)` | Run a subagent now | root, depth | safe |
-| `agent.schedule(prompt, cron)` | Run a subagent later | cron, root | unsafe |
+| `agent.spawn(prompt, wait, …)` | Run a subagent now | root, depth | safe |
+| `agent.collect(ids, timeout)` | Take finished children's reports | — | safe |
+| `agent.stop(id)` | Cancel a running child | — | safe |
+| `agent.schedule(prompt, cron, …)` | Run a subagent later | cron, root | unsafe |
 | `agent.escalate(reason)` | Re-drive on the strong model | — | safe |
 
 `agent.complete` is its own Request and never a generic `service.call`. Keys,
 sockets, and provider details stay kernel-side; the sandbox sees a prompt and a
 schema.
 
-`agent.spawn` is safe because the child's own Requests are gated with the parent
-in the chain — you cannot buy authority by having someone else ask.
+`agent.spawn` is safe because a subagent **can approve nothing**. Its turn runs
+on a session key that is never the active one, so the Requests it makes build a
+chain rooted there rather than at `user`: `Chain.attended` is false, which
+refuses `ui.ask` outright and denies every unsafe Request instead of asking
+about it. The parent's `approved` grant is not inherited either — a turn is not
+a nested call, and its chain starts fresh. A child therefore reaches strictly
+less than whoever started it, which is the property that matters. The kernel
+also refuses a spawn made *from* a subagent session, so the tree is one deep.
+
+(This entry used to read "the child's Requests are gated with the parent in the
+chain". That is not what happens — a subagent turn does not run inside the
+spawning execution — and the real reason is the stronger one.)
+
+`agent.collect` and `agent.stop` speak about children this caller already
+started. Collecting reads a report the child has already produced; stopping
+narrows, and is safe for the reason `session.cancel` and `proc.stop` are — an
+agent that needs a dialog to end something it started will leave it running.
+`agent.collect` is in `READ_ONLY`, so the ledger's sandbox sink drops it: with
+`timeout=0` it is a poll, and a fan-out loop would otherwise write a row a tick.
+
 `agent.schedule` is unsafe because it creates *unattended* future work, where no
 one is present to answer a dialog.
 

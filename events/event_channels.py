@@ -315,6 +315,33 @@ Payload:
     category:        str | None (optional) — for created / recategorized"""
 
 
+# ── Subagents ──────────────────────────────────────────────────────
+
+SUBAGENT_SPAWN = "subagent.spawn"
+"""Run an agent on a prompt, in its own conversation, in the background.
+
+The kernel subscribes to this itself (runtime/subagents.py) — it is how a
+*scheduled* spawn arrives, since a Timekeeper job can only fire a channel. An
+immediate spawn does not come through here at all; it goes straight to the
+registry via the ``agent.spawn`` Request.
+
+The string is what it was when spawning lived in a store task, so jobs created
+before the kernel absorbed it keep firing.
+Payload:
+    prompt:                 str — required; complete and self-contained
+    title:                  str (optional) — names the child's conversation
+    conversation_id:        int (optional) — reuse this conversation; a
+                            recurring job has its own written back after the
+                            first run, so it accumulates one transcript
+    attachments:            list[str] (optional) — file paths
+    report_session_key:     str (optional) — session whose *agent-facing*
+                            message queue receives the child's report. Unset
+                            for scheduled jobs, whose delivery surface is the
+                            user-facing push instead.
+    report_conversation_id: int (optional) — drops the report if that session
+                            has since moved to a different conversation"""
+
+
 # ── Configuration ──────────────────────────────────────────────────
 
 CONFIG_CHANGED = "config_changed"

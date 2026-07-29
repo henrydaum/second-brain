@@ -20,7 +20,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from ..guest.requests import (AGENT_COMPLETE, APP_STOP, COMMAND_CALL,
+from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
+                              AGENT_SPAWN, AGENT_STOP,
+                              APP_STOP, COMMAND_CALL,
                               COMMAND_LIST,
                               LLM_DELTA, LLM_PROCEED,
                               CONFIG_READ, CONFIG_WRITE, CONV_APPEND, CONV_CLEAR,
@@ -1783,6 +1785,159 @@ def _agent_complete(ctx, args: dict) -> Result:
         return Result.failure(f"model call failed: {exc}")
 
 
+_SPAWN_POLL = 0.25
+
+
+def _subagents(ctx):
+    """The kernel's subagent registry, or None."""
+    return getattr(_runtime(ctx), "subagents", None)
+
+
+def _spawn_owner(ctx):
+    """Who is owed this child's report, and in which conversation.
+
+    A session key is the owner. Code with no session — a scheduled task, a
+    script the kernel started — owns nothing, and its children are collected
+    explicitly or not at all.
+    """
+    key = getattr(ctx, "session_key", None) or None
+    session = (getattr(_runtime(ctx), "sessions", None) or {}).get(key)
+    return key, getattr(session, "conversation_id", None)
+
+
+def _agent_spawn(ctx, args: dict) -> Result:
+    """Run an agent on a prompt, in its own conversation.
+
+    ``wait=False`` answers with a handle the caller collects later, which is
+    what makes a fan-out expressible from a script. ``wait=True`` answers with
+    the report and does the waiting here.
+    """
+    from .. import provenance
+
+    registry = _subagents(ctx)
+    if (bad := _need(registry, "subagents")) is not None:
+        return bad
+    owner, owner_cid = _spawn_owner(ctx)
+    try:
+        handle = registry.spawn(
+            args.get("prompt") or "",
+            title=args.get("title") or "Subagent",
+            attachments=args.get("attachments"),
+            timeout_seconds=args.get("timeout_seconds"),
+            owner=owner,
+            owner_conversation_id=owner_cid,
+            user_id=int(getattr(ctx, "user_id", 1) or 1),
+        )
+    except (PermissionError, ValueError, FileNotFoundError) as exc:
+        return Result.failure(str(exc))
+    except Exception as exc:
+        return Result.failure(f"could not start the subagent: {exc}")
+
+    if not args.get("wait", True):
+        return Result(data=handle.report())
+
+    # Waiting in slices for the reason ``_script_run`` does: this handler makes
+    # no Requests while it waits, so cancellation cannot reach it any other
+    # way, and a cancelled caller would otherwise hold a pool worker until the
+    # child's own deadline for an answer nobody will read.
+    caller = provenance.current()
+    while True:
+        reports = registry.collect([handle.id], timeout=_SPAWN_POLL)
+        report = reports[0] if reports else handle.report()
+        if report["state"] != "running":
+            return Result(ok=report["ok"], data=report,
+                          error=report["error"] or "")
+        if caller is not None and caller.abandoned:
+            registry.cancel(handle.id)
+            return Result.failure(
+                f"subagent '{handle.title}' was cancelled "
+                f"(partial transcript in conversation #{handle.conversation_id})")
+
+
+def _agent_collect(ctx, args: dict) -> Result:
+    """Take the reports of subagents this session started."""
+    registry = _subagents(ctx)
+    if (bad := _need(registry, "subagents")) is not None:
+        return bad
+    owner, _ = _spawn_owner(ctx)
+    timeout = args.get("timeout")
+    try:
+        return Result(data=registry.collect(
+            args.get("ids"), owner=owner,
+            timeout=None if timeout is None else float(timeout)))
+    except Exception as exc:
+        return Result.failure(f"could not collect subagents: {exc}")
+
+
+def _agent_stop(ctx, args: dict) -> Result:
+    """Cancel a running subagent."""
+    registry = _subagents(ctx)
+    if (bad := _need(registry, "subagents")) is not None:
+        return bad
+    return Result(data=bool(registry.cancel(args.get("id") or "")))
+
+
+def _agent_schedule(ctx, args: dict) -> Result:
+    """Run a subagent later, on a schedule.
+
+    A Timekeeper job firing the kernel's own spawn channel — which is why this
+    is a Request of its own rather than ``cron.create`` with a hand-built job
+    definition: the channel and payload shape are the kernel's, and a caller
+    that had to spell them itself could spell them wrong.
+    """
+    from events.event_channels import SUBAGENT_SPAWN
+
+    keeper = _timekeeper(ctx)
+    if (bad := _need(keeper, "the timekeeper")) is not None:
+        return bad
+    prompt = (args.get("prompt") or "").strip()
+    if not prompt:
+        return Result.failure("a scheduled subagent needs a prompt")
+    cron = (args.get("cron") or "").strip()
+    if not cron:
+        return Result.failure("a scheduled subagent needs a cron expression")
+    title = (args.get("title") or "Scheduled subagent").strip()
+    name = (args.get("name") or "").strip() or _job_name(title)
+
+    try:
+        schedule = _schedule_def(cron, bool(args.get("one_time")))
+    except Exception as exc:
+        return Result.failure(f"bad cron expression: {exc}")
+    job = {**schedule, "channel": SUBAGENT_SPAWN, "enabled": True,
+           "payload": {"title": title, "prompt": prompt,
+                       "attachments": list(args.get("attachments") or [])}}
+    try:
+        keeper.create_job(name, job)
+    except Exception as exc:
+        return Result.failure(f"could not schedule the subagent: {exc}")
+    return Result(data={"name": name, "title": title, **schedule})
+
+
+def _schedule_def(cron: str, one_time: bool) -> dict:
+    """A Timekeeper schedule from a cron expression.
+
+    A one-time job wants an absolute ``run_at`` rather than a cron, so the
+    next match is resolved here and the cron is discarded — a person saying
+    "at 9am tomorrow" spells it as a cron and means one firing.
+    """
+    from datetime import datetime
+
+    from croniter import croniter
+
+    if one_time:
+        run_at = croniter(cron, datetime.now().astimezone()).get_next(datetime)
+        return {"run_at": run_at.isoformat(), "cron": None, "one_time": True}
+    croniter(cron)  # raises on a malformed expression
+    return {"cron": cron, "run_at": None, "one_time": False}
+
+
+def _job_name(title: str) -> str:
+    """A Timekeeper job name from a human title."""
+    import re
+
+    return re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_") or "subagent"
+
+
 def _timekeeper(ctx):
     """The scheduling service, or None."""
     return _service(ctx, "timekeeper")
@@ -2654,6 +2809,8 @@ HANDLERS = {
     TOOL_LIST: _tool_list, TOOL_CALL: _tool_call,
     COMMAND_LIST: _command_list, COMMAND_CALL: _command_call,
     AGENT_COMPLETE: _agent_complete,
+    AGENT_SPAWN: _agent_spawn, AGENT_COLLECT: _agent_collect,
+    AGENT_STOP: _agent_stop, AGENT_SCHEDULE: _agent_schedule,
     LLM_PROCEED: _model_proceed, LLM_DELTA: _model_delta,
     CRON_LIST: _cron_list, CRON_GET: _cron_get, CRON_CREATE: _cron_create,
     CRON_UPDATE: _cron_update, CRON_REMOVE: _cron_remove,

@@ -270,6 +270,9 @@ def _conversation_runtime(scaffold, shutdown_fn, tool_registry, services, config
     runtime.command_registry = registry
     runtime._orchestrator_ref = scaffold.orchestrator
     ref["runtime"] = runtime
+    # Begin serving scheduled spawns. Immediate ones go straight to the
+    # registry through the agent.spawn Request; this is only the bus half.
+    runtime.subagents.start()
     # Give sandboxed plugins somebody to ask. Until this runs, the sandbox has
     # no approver and refuses every unsafe Request outright — plugins are
     # discovered and loaded long before a runtime exists, so the wiring cannot

@@ -403,6 +403,7 @@ def main():
 			plugin_watcher.stop()
 		event_trigger.stop()
 		watcher.stop()
+		_stop_subagents(scaffold)
 		orchestrator.stop()
 		# Brains hold live boxes (processes, under isolation), so they are
 		# closed explicitly rather than left to the service loop below — which
@@ -470,6 +471,7 @@ def main():
 					plugin_watcher.stop()
 				event_trigger.stop()
 				watcher.stop()
+				_stop_subagents(scaffold)
 				orchestrator.stop()
 				llm.unload_all()
 				for svc in services.values():
@@ -522,6 +524,23 @@ def main():
 			_shutdown.wait(timeout=1.0)
 	except KeyboardInterrupt:
 		shutdown()
+
+def _stop_subagents(scaffold):
+	"""End every background agent before the pieces they run on go away.
+
+	Ahead of the orchestrator and the brains, because a child mid-turn is
+	still driving a model call. The pool's threads are not daemons, so a
+	child left running holds the interpreter open at exit and /quit looks
+	like a hang.
+	"""
+	registry = getattr(getattr(scaffold, "frontend_runtime", None), "subagents", None)
+	if registry is None:
+		return
+	try:
+		registry.stop()
+	except Exception as e:
+		logger.debug(f"Subagent shutdown failed: {e}")
+
 
 def _bind_runtime_services(services, tool_registry, orchestrator, runtime):
 	for svc in services.values():

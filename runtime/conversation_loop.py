@@ -1091,6 +1091,26 @@ class ConversationLoop:
     # The end_turn doorway (doorman gate + budget exhaustion)
     # ──────────────────────────────────────────────────────────────────────
 
+    def _subagent_barrier(self, session) -> bool:
+        """Hold the ending turn open until its background children report.
+
+        Stacked here rather than registered as an ``end_turn`` hook, for the
+        reason the compaction layer is stacked one moment over: collecting
+        children must not depend on which plugins are installed.
+        ``sdk.agent.spawn(wait=False)`` is reachable from any script, and a
+        child nobody collects is work the model paid for and never sees.
+
+        Returns True when reports were queued, which the caller turns into a
+        re-drive so the model reads them inside the same logical turn.
+        """
+        registry = getattr(self.runtime, "subagents", None) if self.runtime else None
+        if registry is None or session is None:
+            return False
+        if not registry.barrier(session):
+            return False
+        session.restart_turn = True
+        return True
+
     def _doorman_gate(self, cs, content, history, new_messages, db, conversation_id) -> str:
         """Consult the doormen when the agent tries to end its turn.
 
@@ -1101,9 +1121,16 @@ class ConversationLoop:
         """
         from runtime.hooks import Allow, Redrive, RequireTool, SendBack, TurnEnding
 
+        session = self._session()
+        # The kernel's barrier stands ahead of the doormen and ahead of the
+        # fire budget, because uncollected children are not a policy question.
+        # A turn that has spent its doorman budget must still not walk away
+        # from agents it started — and the barrier is not a doorman, so it has
+        # no budget to spend.
+        if self._subagent_barrier(session):
+            return "redrive"
         if self._doorman_fires >= self.DOORMAN_FIRE_LIMIT:
             return "end"
-        session = self._session()
         hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
         if hooks is None or session is None:
             return "end"
@@ -1207,6 +1234,10 @@ class ConversationLoop:
 
         verdict = None
         session = self._session()
+        # Same barrier, same reason: an exhausted turn with pending children
+        # still owes the model their reports before it stops.
+        if self._subagent_barrier(session):
+            return
         hooks = getattr(self.runtime, "hooks", None) if self.runtime else None
         if hooks is not None and session is not None and self._doorman_fires < self.DOORMAN_FIRE_LIMIT:
             verdict = hooks.vet_end_turn(session, self.runtime, TurnEnding(

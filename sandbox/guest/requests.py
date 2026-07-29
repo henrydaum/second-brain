@@ -102,6 +102,16 @@ AGENT_COMPLETE = "agent.complete"
 AGENT_SPAWN = "agent.spawn"
 AGENT_SCHEDULE = "agent.schedule"
 
+# Joining and ending a subagent already started. The vocabulary grew here for
+# the reason ``proc.start`` grew it: a background child outlives the Request
+# that made it, so there is a handle to hand back, wait on, and eventually
+# cancel — and no return value expresses that. ``spawn(wait=True)`` is still
+# one Request answering with one result; these two exist so that
+# ``wait=False`` is usable from code that has no agent turn to hold open, which
+# is every script.
+AGENT_COLLECT = "agent.collect"
+AGENT_STOP = "agent.stop"
+
 # Placing the model call an escort was handed. Only meaningful inside a
 # ``llm_call`` hook: it is the escort dialing the phone it holds, and the
 # kernel resolves it to the very call this hook was invoked for.
@@ -217,7 +227,8 @@ ALL_TYPES = {
     PLUGIN_RELOAD, PLUGIN_INSTALL, PLUGIN_UNINSTALL, PLUGIN_UPDATE,
     SERVICE_LIST, SERVICE_CALL, SERVICE_LOAD, SERVICE_UNLOAD,
     TOOL_LIST, TOOL_CALL, COMMAND_LIST, COMMAND_CALL,
-    AGENT_COMPLETE, AGENT_SPAWN, AGENT_SCHEDULE, LLM_PROCEED, LLM_DELTA,
+    AGENT_COMPLETE, AGENT_SPAWN, AGENT_SCHEDULE, AGENT_COLLECT, AGENT_STOP,
+    LLM_PROCEED, LLM_DELTA,
     CRON_LIST, CRON_GET, CRON_CREATE, CRON_UPDATE, CRON_REMOVE, CRON_ENABLE,
     EVENT_EMIT, EVENT_REQUEST,
     FRONTEND_SUBMIT, FRONTEND_CANCEL, FRONTEND_BIND, FRONTEND_ATTEND,
@@ -243,6 +254,12 @@ READ_ONLY = {
     FILE_LIST, PARSE_FILE,
     PARSE_MODALITY, LEDGER_READ, ENV_READ, CONSOLE_READ, FRONTEND_PENDING,
     PROC_STATUS, PROC_LIST,
+    # Taking a finished child's report changes nothing about the world; the
+    # child already did whatever it was going to do. Listed here mainly so the
+    # ledger's sandbox sink drops it: ``collect(timeout=0)`` is a poll, and a
+    # fan-out loop would otherwise write a row per tick forever — the same
+    # problem ``console.read`` is in this set for.
+    AGENT_COLLECT,
 }
 
 

@@ -156,6 +156,8 @@ GRANT_PHRASES = {
     "conv.delete": "delete conversations",
     "agent.schedule": "schedule unattended work",
     "agent.spawn": "start a subagent",
+    "agent.collect": "wait for subagents it started",
+    "agent.stop": "stop a subagent it started",
     "user.write": "change user accounts",
     # Read-only members of families whose fallback phrase is a write. Without
     # these, declaring ``plugin.list`` would be announced as "install, remove

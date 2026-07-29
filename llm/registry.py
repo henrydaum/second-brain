@@ -171,13 +171,19 @@ def backend_display_names() -> dict[str, str]:
 def _pool_ceiling(config: dict) -> int:
     """How many boxes one profile may ever open.
 
-    Derived rather than chosen: a subagent runs on an orchestrator worker
-    thread, so ``max_workers`` plus the foreground turn is the largest number
-    of LLM calls that can be in flight at once. A constant would be either
-    wasteful or wrong the moment that setting changed.
+    Derived rather than chosen: a subagent is the only thing that places a
+    model call concurrently with the foreground turn, so the subagent ceiling
+    plus one is the largest number of calls that can be in flight at once. A
+    constant would be either wasteful or wrong the moment that setting changed.
+
+    This used to read ``max_workers``, from when a subagent ran on an
+    orchestrator worker. It runs on its own pool now (runtime/subagents.py),
+    and the two numbers must be the *same* number rather than two that happen
+    to agree — otherwise a fan-out wider than the pool serializes its model
+    calls behind one box lock and looks merely slow.
     """
     try:
-        return max(1, int((config or {}).get("max_workers", 4))) + 1
+        return max(1, int((config or {}).get("max_concurrent_subagents", 4))) + 1
     except (TypeError, ValueError):
         return 5
 

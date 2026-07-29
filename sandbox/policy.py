@@ -275,7 +275,22 @@ ALWAYS_SAFE = {
     # through a tool launders nothing, and the scope already decides which
     # tools exist. COMMAND_CALL is not — see the branch below.
     R.TOOL_LIST, R.TOOL_CALL, R.COMMAND_LIST,
-    R.AGENT_COMPLETE, R.AGENT_SPAWN,
+    # A subagent is safe because it can approve nothing. Its turn runs on a
+    # session key that is never the active one, so its Requests build a chain
+    # rooted there rather than at ``user`` — ``Chain.attended`` is False, which
+    # refuses ``ui.ask`` and every unsafe Request outright, and the parent's
+    # ``approved`` grant is not inherited. A child therefore reaches strictly
+    # less than whoever started it.
+    #
+    # (This used to be justified as "the child's Requests are classified with
+    # the parent still in the chain", which is not what happens: a turn is not
+    # a nested call and its chain is fresh. The verdict was right; the reason
+    # was wrong, and the real one is stronger.)
+    #
+    # COLLECT reads a report the child already produced. STOP is here for the
+    # reason SESSION_CANCEL and PROC_STOP are: it narrows, and an agent that
+    # needs a dialog to end something it started will leave it running.
+    R.AGENT_COMPLETE, R.AGENT_SPAWN, R.AGENT_COLLECT, R.AGENT_STOP,
     # Safe because it widens nothing: the kernel handed this escort a call it
     # had already decided to place, and proceeding is placing that one. The
     # token is what limits it — code with no token reaches no call at all.

@@ -248,13 +248,21 @@ def test_unload_closes_every_box_in_the_pool(tree):
 # The pool.
 # ──────────────────────────────────────────────────────────────────────
 
-def test_the_ceiling_follows_the_worker_count(tree):
-    """Derived, not chosen: workers plus the foreground turn."""
-    assert _pool_ceiling({"max_workers": 4}) == 5
-    assert _pool_ceiling({"max_workers": 1}) == 2
+def test_the_ceiling_follows_the_subagent_count(tree):
+    """Derived, not chosen: concurrent subagents plus the foreground turn.
+
+    It followed ``max_workers`` while a subagent ran on an orchestrator
+    worker. It runs on its own pool now, and the two numbers have to be the
+    same setting rather than two that happen to agree — otherwise a fan-out
+    wider than the pool serializes behind one box lock and reads as slow.
+    """
+    assert _pool_ceiling({"max_concurrent_subagents": 4}) == 5
+    assert _pool_ceiling({"max_concurrent_subagents": 1}) == 2
     # A nonsense setting must not make the ceiling zero.
-    assert _pool_ceiling({"max_workers": "banana"}) == 5
+    assert _pool_ceiling({"max_concurrent_subagents": "banana"}) == 5
     assert _pool_ceiling({}) == 5
+    # And the setting it used to read no longer moves it.
+    assert _pool_ceiling({"max_workers": 12}) == 5
 
 
 def test_concurrent_calls_grow_the_pool_instead_of_queueing(tree):
@@ -307,7 +315,7 @@ def test_the_pool_stops_growing_at_the_ceiling(tree):
     """Unbounded growth under a runaway loop would be a fork bomb."""
     _write(tree, BACKEND)
     config = _config(tree)
-    config["max_workers"] = 1          # ceiling of 2
+    config["max_concurrent_subagents"] = 1     # ceiling of 2
     llm.refresh(config)
     target = llm.brain("gpt-test")
 

@@ -60,7 +60,8 @@ import sys
 
 from .channel import Terminated
 from .requests import Denied, RequestFailed
-from .requests import (AGENT_COMPLETE, AGENT_SCHEDULE, AGENT_SPAWN, APP_STOP,
+from .requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
+                       AGENT_SPAWN, AGENT_STOP, APP_STOP,
                        COMMAND_CALL, COMMAND_LIST, CONFIG_READ, CONFIG_WRITE,
                        CONV_APPEND, CONV_CLEAR, CONV_CREATE, CONV_DELETE, CONV_LIST,
                        CONV_LOAD, CONV_READ, CONV_SET_CATEGORY,
@@ -616,13 +617,66 @@ class _Agent(_Namespace):
                          messages=list(messages or []),
                          session_key=session_key or None)
 
-    def spawn(self, prompt: str, wait: bool = True):
-        """Run a subagent now."""
-        return self._ask(AGENT_SPAWN, prompt=prompt, wait=wait)
+    def spawn(
+        self,
+        prompt: str,
+        *,
+        title: str = "Subagent",
+        attachments=None,
+        wait: bool = True,
+        timeout_seconds: int | None = None,
+    ):
+        """Run a subagent now, in its own conversation.
 
-    def schedule(self, prompt: str, cron: str):
-        """Run a subagent later. Unattended, so always checked."""
-        return self._ask(AGENT_SCHEDULE, prompt=prompt, cron=cron)
+        The prompt must be complete and self-contained: nobody will answer a
+        follow-up question, and a child can use no tool that needs approval.
+
+        ``wait=True`` returns the finished report::
+
+            report = sdk.agent.spawn("Summarise docs/SDK.md")
+            sdk.log(report["text"])
+
+        ``wait=False`` returns a handle immediately so several can run at
+        once. Collect them when you need the answers::
+
+            ids = [sdk.agent.spawn(p, wait=False)["id"] for p in prompts]
+            for report in sdk.agent.collect(ids):
+                sdk.log(report["title"], report["text"])
+
+        Either way the report is a dict with ``id``, ``conversation_id``,
+        ``title``, ``state``, ``ok``, ``text`` and ``error``. ``state`` is
+        ``running``, ``done``, ``failed`` or ``cancelled`` — and ``cancelled``
+        means the child hit its deadline and produced nothing, so there is
+        never anything to report on its behalf.
+        """
+        return self._ask(AGENT_SPAWN, prompt=prompt, title=title,
+                         attachments=list(attachments or []), wait=wait,
+                         timeout_seconds=timeout_seconds)
+
+    def collect(self, ids=None, timeout: float | None = None):
+        """Wait for subagents and take their reports.
+
+        ``ids=None`` takes every child this session started and has not
+        collected yet. ``timeout=0`` polls without waiting — children still
+        running come back with ``state == "running"`` and stay uncollected, so
+        a later call still gets them. ``timeout=None`` waits until each
+        child's own deadline, which is the usual thing to want.
+
+        Each report is delivered once. Inside an agent turn, whatever you do
+        not collect is collected for you before the turn ends.
+        """
+        return self._ask(AGENT_COLLECT, ids=ids, timeout=timeout)
+
+    def stop(self, id: str):
+        """Cancel a running subagent. Narrows, so it is the safe direction."""
+        return self._ask(AGENT_STOP, id=id)
+
+    def schedule(self, prompt: str, cron: str, *, title: str = "Scheduled subagent",
+                 attachments=None, one_time: bool = False, name: str = ""):
+        """Run a subagent later, on a schedule. Unattended, so always checked."""
+        return self._ask(AGENT_SCHEDULE, prompt=prompt, cron=cron, title=title,
+                         attachments=list(attachments or []),
+                         one_time=one_time, name=name)
 
 
 class _LLM(_Namespace):
