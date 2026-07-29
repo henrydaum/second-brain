@@ -286,7 +286,9 @@ when it happens to be installed — none of which changes the answer's shape.
 ### Data
 
 ```python
-sdk.db.query(sql, params)      # -> [dict]
+sdk.db.query(sql, params, max_rows=0)  # -> [dict]; reads only, capped at 500
+                                       # (max_rows may only lower that cap;
+                                       #  exactly the cap back means more)
 sdk.db.write(sql, params)
 sdk.db.define(ddl)             # create a table your plugin owns
 

@@ -104,6 +104,12 @@ def _rows(value):
 # Database.
 # ──────────────────────────────────────────────────────────────────────
 
+# The answer crosses a process boundary as JSON, so an unbounded SELECT is a
+# hazard rather than a result. A caller that gets exactly this many rows back
+# knows it was capped and can add its own LIMIT.
+DB_MAX_ROWS = 500
+
+
 def _db_query(ctx, args: dict) -> Result:
     """Read rows.
 
@@ -124,8 +130,18 @@ def _db_query(ctx, args: dict) -> Result:
         # Policy, not breakage — so ``except sdk.Denied`` catches it, which is
         # the distinction the whole Result contract rests on.
         return Result.refusal(str(exc))
+    # ``scope_sql`` answers *whose* rows, never whether the statement reads.
+    # A mutation arriving here has skipped the kernel-table check ``db.write``
+    # carries, so it is refused rather than run.
     try:
-        return Result(data=_rows(db.query(scoped, params)))
+        limit = int(args.get("max_rows") or DB_MAX_ROWS)
+    except (TypeError, ValueError):
+        limit = DB_MAX_ROWS
+    limit = max(1, min(limit, DB_MAX_ROWS))
+    try:
+        return Result(data=_rows(db.query_rows(scoped, params, max_rows=limit)))
+    except ValueError as exc:
+        return Result.refusal(str(exc))
     except Exception as exc:
         return Result.failure(f"query failed: {exc}")
 
@@ -153,7 +169,7 @@ def _db_write(ctx, args: dict) -> Result:
     if (bad := _need(db, "the database")) is not None:
         return bad
     try:
-        db.execute_write(sql, args.get("params") or [])
+        db.execute_write(sql, tuple(args.get("params") or ()))
         return Result(data=True)
     except Exception as exc:
         return Result.failure(f"write failed: {exc}")
@@ -177,7 +193,7 @@ def _db_define(ctx, args: dict) -> Result:
     if (bad := _need(db, "the database")) is not None:
         return bad
     try:
-        db.execute_write(ddl, [])
+        db.execute_write(ddl)
         return Result(data=True)
     except Exception as exc:
         return Result.failure(f"define failed: {exc}")

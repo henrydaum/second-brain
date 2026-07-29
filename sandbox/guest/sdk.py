@@ -242,9 +242,14 @@ class _DB(_Namespace):
     ``conversations``.
     """
 
-    def query(self, sql: str, params=None):
-        """Read rows."""
-        return self._ask(DB_QUERY, sql=sql, params=list(params or []))
+    def query(self, sql: str, params=None, max_rows: int = 0):
+        """Read rows.
+
+        Answers a list of dicts, capped by the kernel (``max_rows`` may only
+        lower that cap). Getting exactly the cap back means there was more.
+        """
+        return self._ask(DB_QUERY, sql=sql, params=list(params or []),
+                         max_rows=int(max_rows or 0))
 
     def write(self, sql: str, params=None):
         """Insert, update or delete."""

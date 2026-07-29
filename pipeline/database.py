@@ -909,7 +909,7 @@ class Database:
 	# =================================================================
 	# DIRECT QUERY
 	# =================================================================
-	def query(self, sql: str, max_rows: int = 25) -> dict:
+	def query(self, sql: str, params=(), max_rows: int = 25) -> dict:
 		"""
 		Execute a read-only SQL query and return results.
 
@@ -928,7 +928,7 @@ class Database:
 			raise ValueError("Only SELECT and PRAGMA statements are allowed.")
 
 		with self.lock:
-			cur = self.conn.execute(sql)
+			cur = self.conn.execute(sql, tuple(params or ()))
 			columns = [desc[0] for desc in cur.description] if cur.description else []
 			rows = cur.fetchmany(max_rows + 1)
 
@@ -942,7 +942,35 @@ class Database:
 				"truncated": truncated,
 			}
 
-	def execute_write(self, sql: str) -> dict:
+	# Read prefixes ``query_rows`` accepts. Broader than ``query`` because the
+	# Request path is what plugins actually write SQL against, and EXPLAIN and
+	# CTEs are ordinary reads there.
+	READ_PREFIXES = ("select", "pragma", "explain", "with")
+
+	def query_rows(self, sql: str, params=(), max_rows: int = 500) -> list:
+		"""
+		Execute a read and return ``sqlite3.Row`` objects.
+
+		The counterpart to ``query()`` for callers that want rows rather than
+		a display bundle — the ``db.query`` Request handler is the only one
+		today. Capped at ``max_rows`` because the answer crosses a process
+		boundary as JSON; the caller learns it was capped by getting exactly
+		``max_rows`` back.
+
+		Raises ValueError for a statement that is not a read.
+		Raises sqlite3.Error for invalid SQL.
+		"""
+		normalized = " ".join(sql.strip().split()).lower()
+		if not normalized.startswith(self.READ_PREFIXES):
+			raise ValueError(
+				"Only SELECT / PRAGMA / EXPLAIN / WITH statements read; "
+				"use db.write for a mutation.")
+
+		with self.lock:
+			cur = self.conn.execute(sql, tuple(params or ()))
+			return cur.fetchmany(max_rows)
+
+	def execute_write(self, sql: str, params=()) -> dict:
 		"""
 		Execute a single mutating SQL statement (INSERT/UPDATE/DELETE/DDL) and
 		commit it.
@@ -967,7 +995,7 @@ class Database:
 		Raises sqlite3.Error for invalid SQL.
 		"""
 		with self.lock:
-			cur = self.conn.execute(sql)
+			cur = self.conn.execute(sql, tuple(params or ()))
 			columns = [desc[0] for desc in cur.description] if cur.description else []
 			rows = [tuple(row) for row in cur.fetchall()] if columns else []
 			self.conn.commit()

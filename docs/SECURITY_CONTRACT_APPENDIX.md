@@ -188,7 +188,7 @@ cap — binary reads get a larger one, because a 20 MB video is ordinary where a
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `db.query(sql, params)` | Read rows | resolved tables/columns, user | safe |
+| `db.query(sql, params, max_rows)` | Read rows (reads only; capped at 500) | resolved tables/columns, user | safe |
 | `db.write(sql, params)` | Insert, update, delete | mentioned tables | **refused** on kernel tables, safe on plugin-owned |
 | `db.define(ddl)` | Create or alter a plugin-owned table | mentioned tables | **refused** on kernel tables, safe otherwise |
 

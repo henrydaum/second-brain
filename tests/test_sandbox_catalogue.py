@@ -330,9 +330,12 @@ def test_scoping_reaches_the_real_query_handler():
 
     class Db:
         """Just enough database for the handler."""
-        def query(self, sql, params):
+        # Mirrors Database.query_rows — a double whose signature drifts from
+        # the real one is how the handler shipped calling a method that did
+        # not exist.
+        def query_rows(self, sql, params=(), max_rows=500):
             """Run a read."""
-            return connection.execute(sql, params).fetchall()
+            return connection.execute(sql, tuple(params)).fetchmany(max_rows)
 
     ctx = type("Ctx", (), {"db": Db(), "user_id": 7})()
     result = HANDLERS[R.DB_QUERY](ctx, {"sql": "SELECT * FROM my_conversations"})
@@ -341,6 +344,63 @@ def test_scoping_reaches_the_real_query_handler():
 
     refused = HANDLERS[R.DB_QUERY](ctx, {"sql": "SELECT * FROM conversations"})
     assert not refused.ok
+
+
+def test_the_db_handlers_speak_the_real_database_api(tmp_path):
+    """Read, write and DDL against ``pipeline.database.Database`` itself.
+
+    Every double above is a signature the real class may not have. This is
+    the one that catches it: all three handlers shipped calling ``query``/
+    ``execute_write`` with an argument list neither method accepted, and the
+    tool on top of them failed on every statement.
+    """
+    from pipeline.database import Database
+
+    ctx = SimpleNamespace(db=Database(str(tmp_path / "t.db")), user_id=1)
+
+    assert HANDLERS[R.DB_QUERY](ctx, {"sql": "SELECT 1 AS one"}).data == [
+        {"one": 1}]
+    assert HANDLERS[R.DB_QUERY](
+        ctx, {"sql": "SELECT ? AS given", "params": ["x"]}).data == [
+            {"given": "x"}]
+    assert HANDLERS[R.DB_QUERY](
+        ctx, {"sql": "PRAGMA table_info(files)"}).ok
+
+    assert HANDLERS[R.DB_DEFINE](
+        ctx, {"ddl": "CREATE TABLE plug_x (id INTEGER PRIMARY KEY, v TEXT)"}).ok
+    assert HANDLERS[R.DB_WRITE](
+        ctx, {"sql": "INSERT INTO plug_x (v) VALUES (?)", "params": ["hi"]}).ok
+    assert HANDLERS[R.DB_QUERY](ctx, {"sql": "SELECT v FROM plug_x"}).data == [
+        {"v": "hi"}]
+
+    # db.query only reads: ``scope_sql`` answers whose rows, never whether the
+    # statement mutates, so the kernel-table check lives on the write path and
+    # a mutation arriving here must be refused rather than run.
+    mutating = HANDLERS[R.DB_QUERY](ctx, {"sql": "DELETE FROM plug_x"})
+    assert not mutating.ok and "db.write" in mutating.error
+    assert HANDLERS[R.DB_QUERY](ctx, {"sql": "SELECT v FROM plug_x"}).data
+
+
+def test_a_read_is_capped_before_it_crosses(tmp_path):
+    """An unbounded SELECT is a hazard, not a result."""
+    from pipeline.database import Database
+    from sandbox.handlers.kernel import DB_MAX_ROWS
+
+    db = Database(str(tmp_path / "t.db"))
+    ctx = SimpleNamespace(db=db, user_id=1)
+    HANDLERS[R.DB_DEFINE](ctx, {"ddl": "CREATE TABLE plug_many (n INTEGER)"})
+    for n in range(DB_MAX_ROWS + 10):
+        HANDLERS[R.DB_WRITE](ctx, {"sql": "INSERT INTO plug_many VALUES (?)",
+                                   "params": [n]})
+
+    assert len(HANDLERS[R.DB_QUERY](
+        ctx, {"sql": "SELECT n FROM plug_many"}).data) == DB_MAX_ROWS
+    assert len(HANDLERS[R.DB_QUERY](
+        ctx, {"sql": "SELECT n FROM plug_many", "max_rows": 3}).data) == 3
+    # The cap is a ceiling, not a default a caller may raise.
+    assert len(HANDLERS[R.DB_QUERY](
+        ctx, {"sql": "SELECT n FROM plug_many",
+              "max_rows": DB_MAX_ROWS * 10}).data) == DB_MAX_ROWS
 
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
