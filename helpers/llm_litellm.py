@@ -13,7 +13,6 @@ genuinely per-process: the imported library.
 """
 
 dependencies_pip = ["litellm", "Pillow"]
-isolation = "subprocess"
 lifetime = "persistent"
 supports_streaming = True
 supports_tool_choice = True
@@ -128,7 +127,7 @@ class LiteLLMBackend(BaseLLMBackend):
 
         The deltas are for the user's eyes; the returned response is what the
         kernel records. There is nothing here that checks whether the user
-        cancelled — ``sdk.model.delta`` is one-way and answers nothing. If
+        cancelled — ``sdk.llm.delta`` is one-way and answers nothing. If
         they cancel, the kernel cancels this execution and the next Request
         raises ``Terminated``, which is a ``BaseException`` and must not be
         caught here.
@@ -156,7 +155,7 @@ class LiteLLMBackend(BaseLLMBackend):
             text = getattr(delta, "content", None)
             if text:
                 pieces.append(text)
-                sdk.model.delta(text)
+                sdk.llm.delta(text)
             for call in (getattr(delta, "tool_calls", None) or []):
                 index = getattr(call, "index", 0) or 0
                 entry = calls_by_index.setdefault(
