@@ -53,7 +53,7 @@ dependencies_files = ['frontends/helpers/telegram_renderers.py']
 dependencies_pip = ['python-telegram-bot']
 requests = [
     "frontend.submit", "frontend.pending", "frontend.resolve",
-    "session.get", "config.read", "command.list",
+    "session.get", "config.read", "secret.reveal", "command.list",
     "fs.temp", "fs.read", "fs.read_bytes", "fs.list", "parse.modality",
 ]
 
@@ -251,7 +251,7 @@ class TelegramFrontend(BaseFrontend):
     memory_mb = 768
 
     config_settings = [
-        ("Telegram Bot Token", "telegram_bot_token",
+        ("Telegram Bot Token", "secret_telegram_bot_token",
          "Bot token from @BotFather. Required for Telegram frontend.",
          "", {"type": "text"}),
         ("Telegram Allowed User ID", "telegram_allowed_user_id",
@@ -311,9 +311,17 @@ class TelegramFrontend(BaseFrontend):
 
     def start(self, sdk):
         """Open the transport and return. The kernel drives from here on."""
-        token = str(sdk.config.read("telegram_bot_token") or "").strip()
+        # ``secret_*`` reads back as a handle, never plaintext, so this asks
+        # for the real thing. Not gated: a plugin reading its own declared
+        # setting is not asked, because configuring it *was* the consent. The
+        # token still has to reach python-telegram-bot in the clear — a
+        # credential inside a foreign library is past the kernel's reach, and
+        # the prefix buys keeping it out of /config, config dumps and the
+        # ledger rather than out of the library.
+        token = str(sdk.secrets.reveal("secret_telegram_bot_token")
+                    or "").strip()
         if not token:
-            sdk.log("telegram_bot_token not configured; "
+            sdk.log("secret_telegram_bot_token not configured; "
                     "Telegram frontend disabled.")
             return False
         try:
