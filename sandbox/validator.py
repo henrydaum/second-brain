@@ -370,6 +370,20 @@ class _Walker(ast.NodeVisitor):
         self.findings.append(
             Finding(level, getattr(node, "lineno", 0), message, fix))
 
+    def _first_sighting(self, key: str) -> bool:
+        """Record an unmediated module; True if this is the first time.
+
+        The disclaimer is a fact about the *module*, not about the line — a
+        frontend importing ``telegram`` in eight places got eight identical
+        paragraphs saying the same thing, which is how a real warning turns
+        into scrollback. Reported once, at the first import, and the isolation
+        decision reads ``unmediated`` either way.
+        """
+        if key in self.unmediated:
+            return False
+        self.unmediated.add(key)
+        return True
+
     # ── imports ────────────────────────────────────────────────────
 
     def _check_module(self, name: str, node):
@@ -382,10 +396,11 @@ class _Walker(ast.NodeVisitor):
         if key in SDK_PACKAGES:
             return
         if key in UNMEDIATED_STDLIB:
-            self.unmediated.add(key)
-            self.add(WARNING, node,
-                     f"imports {name!r}, which {UNMEDIATED_STDLIB[key]} and so "
-                     f"cannot be mediated - this plugin runs in a subprocess")
+            if self._first_sighting(key):
+                self.add(WARNING, node,
+                         f"imports {name!r}, which {UNMEDIATED_STDLIB[key]} "
+                         f"and so cannot be mediated - this plugin runs in a "
+                         f"subprocess")
             return
         if key in EFFECT_MODULES:
             self.add(ERROR, node, f"imports {name!r}, which reaches the "
@@ -396,11 +411,11 @@ class _Walker(ast.NodeVisitor):
                      f"imports {name!r}, which lives on the kernel side of "
                      f"the boundary", "a Request for whatever it needed")
             return
-        self.unmediated.add(key)
-        self.add(WARNING, node,
-                 f"imports {name!r}, a foreign library. Its actions cannot be "
-                 f"turned into Requests, so they are not mediated - this "
-                 f"plugin runs in a subprocess")
+        if self._first_sighting(key):
+            self.add(WARNING, node,
+                     f"imports {name!r}, a foreign library. Its actions cannot "
+                     f"be turned into Requests, so they are not mediated - "
+                     f"this plugin runs in a subprocess")
 
     def visit_Import(self, node):
         """import x"""

@@ -76,6 +76,18 @@ class ProtocolError(Exception):
     """The channel carried something unusable."""
 
 
+class StreamClosed(ProtocolError):
+    """The pipe itself is gone — the other side exited.
+
+    Distinct from an unusable *message*, because the responses are opposite:
+    a bad message is worth reporting down the wire, and a dead wire is worth
+    nothing but a quiet exit. During shutdown the parent closes the pipes and
+    the child is mid-write; the failure that surfaces there is an ordinary
+    ``OSError`` (``EPIPE`` on POSIX, ``EINVAL`` on Windows), which is not a
+    fault and must not be printed as a traceback.
+    """
+
+
 def encode(message: dict) -> bytes:
     """Serialize one message for the wire."""
     raw = json.dumps(message, separators=(",", ":"),
@@ -90,9 +102,19 @@ def write_message(stream, message: dict) -> None:
 
     Flushing every message is the point: both sides block waiting for the
     other, so a buffered write is a deadlock.
+
+    Encoding is checked before the stream is touched, so a message that will
+    not fit raises ``ProtocolError`` with the wire still intact and the caller
+    free to report it. Only the write itself can raise ``StreamClosed``.
     """
-    stream.write(encode(message))
-    stream.flush()
+    raw = encode(message)
+    try:
+        stream.write(raw)
+        stream.flush()
+    except (BrokenPipeError, OSError, ValueError) as exc:
+        # ValueError is the "I/O operation on closed file" case; a plain
+        # OSError with EINVAL is what Windows reports for the same thing.
+        raise StreamClosed(f"channel closed: {exc}") from None
 
 
 def read_message(stream) -> dict | None:
@@ -105,7 +127,12 @@ def read_message(stream) -> dict | None:
     # other side sent *before* the size check could refuse it — which made the
     # cap above describe a protection it did not provide. One extra byte, so a
     # message exactly at the limit still reads its terminator.
-    line = stream.readline(MAX_MESSAGE_BYTES + 1)
+    try:
+        line = stream.readline(MAX_MESSAGE_BYTES + 1)
+    except (OSError, ValueError):
+        # The pipe was closed under us. Indistinguishable, from here, from the
+        # other side having hung up cleanly — and the caller handles that.
+        return None
     if not line:
         return None
     if len(line) > MAX_MESSAGE_BYTES or not line.endswith(b"\n"):

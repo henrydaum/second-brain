@@ -63,7 +63,7 @@ def _remove():
 def _context(monkeypatch):
     config = {
         "demo_color_config_test": "red",
-        "stream_responses": True,
+        "keep_attachments_available_across_turns": True,
     }
     saved = {}
     rescans = []

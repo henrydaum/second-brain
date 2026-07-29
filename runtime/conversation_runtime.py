@@ -395,7 +395,10 @@ class ConversationRuntime:
             session.cs.last_error = err
             out.ok = False
             out.error = err.to_dict()
-            out.messages.append(str(e))
+            # Deliberately *not* also appended to ``out.messages``: a frontend
+            # renders both channels, so the same sentence arrived twice — once
+            # bare and once as "Error: ...". ``render_error`` is required of
+            # every frontend, so the error channel alone is enough.
             # A restart requested by a turn that then crashed is void — the
             # finally below must reclaim priority for the user as usual.
             session.restart_turn = False

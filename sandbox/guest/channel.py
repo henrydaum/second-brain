@@ -47,10 +47,15 @@ class PipeChannel:
 
     def send(self, request: Request) -> Result:
         """Send a Request upstream and block for the answer."""
-        protocol.write_message(self._writer, {
-            "kind": protocol.REQUEST,
-            "request": request.to_dict(),
-        })
+        try:
+            protocol.write_message(self._writer, {
+                "kind": protocol.REQUEST,
+                "request": request.to_dict(),
+            })
+        except protocol.StreamClosed:
+            # Same condition as a closed read, one step earlier: the host is
+            # gone. Unwind through the same door so plugin code sees one story.
+            raise Terminated(None) from None
         message = protocol.read_message(self._reader)
         if message is None:
             # The host closed the channel: we are being torn down. Unwind
@@ -73,13 +78,24 @@ class PipeChannel:
         which is why this is not the default and why only a Request that can
         do nothing on its own is sent this way.
         """
-        protocol.write_message(self._writer, {
-            "kind": protocol.NOTICE,
-            "request": request.to_dict(),
-        })
+        try:
+            protocol.write_message(self._writer, {
+                "kind": protocol.NOTICE,
+                "request": request.to_dict(),
+            })
+        except protocol.StreamClosed:
+            raise Terminated(None) from None
 
     def log(self, level: str, message: str) -> None:
-        """Send a log line upstream to the kernel's sink."""
-        protocol.write_message(self._writer, {
-            "kind": protocol.LOG, "level": level, "message": message,
-        })
+        """Send a log line upstream to the kernel's sink.
+
+        A closed wire is swallowed rather than unwound: logging is the one
+        thing a plugin does that must never change control flow, least of all
+        during a teardown where the log line is likely *about* the teardown.
+        """
+        try:
+            protocol.write_message(self._writer, {
+                "kind": protocol.LOG, "level": level, "message": message,
+            })
+        except protocol.StreamClosed:
+            pass

@@ -121,35 +121,68 @@ def _apply_limits(memory_mb: int | None, cpu_seconds: int | None):
     POSIX only. On Windows this is a no-op and the parent's wall-clock timeout
     plus ``kill()`` is the whole story — stated plainly rather than papered
     over, because a limit you believe in but do not have is worse than none.
+
+    Both ceilings are *requests*, not guarantees, and failing to get one must
+    never stop the box from starting. macOS is the case that proved it: it
+    refuses ``RLIMIT_AS`` outright in some configurations, and raising the hard
+    limit alongside the soft one is a privileged act everywhere, so passing the
+    same number for both is what produced "current limit exceeds maximum
+    limit" — and killed every Telegram start on that machine. The hard limit is
+    therefore left exactly as found and the soft one asks for the smaller of
+    what we want and what we are allowed.
     """
     try:
         import resource
     except ImportError:
         return False
-    if memory_mb:
-        limit = memory_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
-    if cpu_seconds:
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
-    return True
+    applied = False
+    for name, wanted in (("RLIMIT_AS", memory_mb and memory_mb * 1024 * 1024),
+                         ("RLIMIT_CPU", cpu_seconds)):
+        which = getattr(resource, name, None)
+        if which is None or not wanted:
+            continue
+        try:
+            _soft, hard = resource.getrlimit(which)
+            if hard != resource.RLIM_INFINITY:
+                wanted = min(wanted, hard)
+            resource.setrlimit(which, (wanted, hard))
+            applied = True
+        except (ValueError, OSError) as exc:
+            # Unenforceable here. Say so once; the parent's timeout and kill
+            # still apply, and they are what the box's deadline rests on.
+            sys.stderr.write(
+                f"[box] {name} not applied ({exc}); "
+                f"relying on the kernel's timeout instead\n")
+    return applied
 
 
 def _fault(wire_out, exc) -> int:
     """Report a failure the code could not express as a Result."""
-    protocol.write_message(wire_out, {
-        "kind": protocol.FAULT,
-        "error": f"{type(exc).__name__}: {exc}",
-        "traceback": traceback.format_exc(),
-    })
+    try:
+        protocol.write_message(wire_out, {
+            "kind": protocol.FAULT,
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": traceback.format_exc(),
+        })
+    except protocol.StreamClosed:
+        return 0    # nobody is listening; the parent already went away
     return 1
 
 
 def _send_result(wire_out, kind: str, result: Result) -> bool:
-    """Send a Result, or fault if it will not fit down the wire."""
+    """Send a Result, or fault if it will not fit down the wire.
+
+    A closed wire is not handled here: it propagates as ``StreamClosed`` to
+    ``main``, which treats it as an ordinary end of life. The two failures look
+    alike and are not — an unsendable result is this box's bug and is worth a
+    fault, while a closed wire means the kernel already moved on.
+    """
     try:
         protocol.write_message(wire_out, {"kind": kind,
                                           "result": result.to_dict()})
         return True
+    except protocol.StreamClosed:
+        raise
     except protocol.ProtocolError as exc:
         protocol.write_message(wire_out, {
             "kind": protocol.FAULT, "error": f"unsendable result: {exc}",
@@ -276,12 +309,18 @@ def main() -> int:
     except Exception as exc:
         return _fault(wire_out, exc)
 
-    if start.get("persistent"):
-        return _serve_persistent(
-            wire_in, wire_out, sdk, target,
-            manage_lifecycle=bool(start.get("manage_lifecycle", True)),
-        )
-    return _run_ephemeral(wire_out, sdk, target, start.get("kwargs") or {})
+    try:
+        if start.get("persistent"):
+            return _serve_persistent(
+                wire_in, wire_out, sdk, target,
+                manage_lifecycle=bool(start.get("manage_lifecycle", True)),
+            )
+        return _run_ephemeral(wire_out, sdk, target, start.get("kwargs") or {})
+    except protocol.StreamClosed:
+        # The kernel closed the pipes — during shutdown, or after killing this
+        # box. There is no one left to tell, and a traceback on the user's
+        # terminal after ``/quit`` says only that we noticed late.
+        return 0
 
 
 if __name__ == "__main__":

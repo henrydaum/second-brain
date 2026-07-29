@@ -337,6 +337,33 @@ def _session_frontend_filter(runtime, session):
     return frontend, frontend_command_filter(runtime.config, name)
 
 
+def _frontend_streams(runtime, session) -> bool:
+    """Whether the session's frontend can render a reply as it arrives.
+
+    Asks the surface, because the surface is what knows. This was the global
+    ``stream_responses`` setting, which put the question to the user — but a
+    terminal that rewrites its last line can stream and a webhook that gets one
+    POST per message cannot, and configuring changes neither. Worse, one global
+    answer covered every frontend at once.
+
+    ``FrontendCapabilities.supports_streaming`` is the declaration, and it was
+    already there: ``_on_agent_text_delta`` has always gated *rendering* on it,
+    so a frontend that could not stream was being sent deltas it discarded.
+    Now the same flag gates emission, and the deltas are simply not produced.
+    The LLM backend has the matching say via its own ``supports_streaming``;
+    streaming needs both, and falls back to whole messages otherwise.
+
+    Unresolvable frontends stream: a background driver or a test double has no
+    surface to ask, and that is the behaviour every such caller had before.
+    """
+    if session is None:
+        return True
+    frontend, _filter = _session_frontend_filter(runtime, session)
+    if frontend is None:
+        return True
+    return bool(getattr(frontend.capabilities, "supports_streaming", False))
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Loop construction
 # ──────────────────────────────────────────────────────────────────────
@@ -375,7 +402,7 @@ def build_loop(runtime, session_key: str | None = None) -> ConversationLoop:
             })
 
     on_delta = None
-    if session_key and runtime.config.get("stream_responses", True):
+    if session_key and _frontend_streams(runtime, session):
         from events.event_channels import AGENT_TEXT_DELTA
 
         def on_delta(payload: dict):

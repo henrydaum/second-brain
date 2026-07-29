@@ -93,12 +93,6 @@ SETTINGS_DATA = [
      False,
      {"type": "bool"}),
 
-    ("Stream Responses", "stream_responses",
-     "Stream agent replies token-by-token to frontends that support it. "
-     "Backends and frontends without streaming support automatically fall "
-     "back to whole messages.",
-     True,
-     {"type": "bool"}),
 
     ("Reveal User Commands to Agent", "reveal_user_commands",
      "Mirror completed slash commands into the conversation as a note the "

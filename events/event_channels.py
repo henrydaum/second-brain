@@ -109,11 +109,12 @@ Payload:
     source_id:str (optional) — producer-specific id"""
 
 AGENT_TEXT_DELTA = "agent_text_delta"
-"""A fragment of streamed assistant text (emitted only when the
-``stream_responses`` config setting is on and the active LLM backend supports
-streaming). Frontends that set ``FrontendCapabilities.supports_streaming``
-render deltas incrementally; everyone else ignores the channel and receives
-the same text as whole messages.
+"""A fragment of streamed assistant text (emitted only when the session's
+frontend declares ``FrontendCapabilities.supports_streaming`` and the active
+LLM backend supports streaming — both halves have to be able to). Frontends
+that declare it render deltas incrementally via ``render_stream_delta``;
+for everyone else nothing is emitted at all and the same text arrives as
+whole messages.
 Payload:
     session_key: str
     stream_id:   str  — unique per LLM call
