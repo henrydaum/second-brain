@@ -641,8 +641,14 @@ def _invocation(args: dict):
     if shell == "powershell":
         # PowerShell parses its own arguments with rules ``list2cmdline``
         # matches, so the list form is safe here and gives us -NoProfile.
-        return (["powershell", "-NoProfile", "-Command", rendered],
-                False, rendered)
+        #
+        # The binary has two names and they are not interchangeable.
+        # ``powershell`` is Windows PowerShell 5.1 and exists only on Windows;
+        # PowerShell Core installs as ``pwsh`` everywhere, which is the only
+        # thing a Mac or Linux box could have. Naming the wrong one turned a
+        # supported shell into "could not run: No such file or directory".
+        binary = "powershell" if os.name == "nt" else "pwsh"
+        return ([binary, "-NoProfile", "-Command", rendered], False, rendered)
     if shell == "cmd" and os.name != "nt":
         return Result.failure("shell 'cmd' is only available on Windows")
     return rendered, True, rendered
@@ -775,36 +781,77 @@ def _proc_status(ctx, args: dict) -> Result:
                                   tail=int(tail) if tail else 4000))
 
 
+def _signal_group(popen, sig) -> None:
+    """Send a signal to a POSIX child's whole process group.
+
+    The group is why ``start_new_session`` is set: a shell command line
+    usually *is* several processes, and signalling only the shell leaves the
+    server it launched running with nothing tracking it.
+    """
+    try:
+        os.killpg(os.getpgid(popen.pid), sig)
+    except OSError:
+        # Already gone, or never got a group. Fall back to the child alone,
+        # which is still the right thing to try.
+        try:
+            popen.send_signal(sig)
+        except OSError:
+            pass
+
+
+def _end(popen) -> int | None:
+    """End a running child as firmly as the platform requires.
+
+    Windows and POSIX are asymmetric here and the asymmetry matters.
+    ``taskkill /T /F`` is already a hard kill of the whole tree, so it either
+    works or the process was unkillable anyway. POSIX ``SIGTERM`` is a
+    *request*, which is the right thing to send a dev server first — it gets
+    to close its socket — but a process that traps or ignores it survives.
+    Stopping has to be escalated, or ``proc.stop`` reports success on a
+    process that is still running and no longer tracked, which is the worst
+    of both.
+    """
+    if popen.poll() is not None:
+        return popen.returncode
+    if os.name == "nt":
+        try:
+            # With shell=True the tracked pid is the shell's, so only a tree
+            # kill reaches what was actually asked for.
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(popen.pid)],
+                           capture_output=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            try:
+                popen.kill()
+            except OSError:
+                pass
+    else:
+        import signal as signals
+
+        _signal_group(popen, signals.SIGTERM)
+        try:
+            return popen.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _signal_group(popen, signals.SIGKILL)
+    try:
+        return popen.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        return None
+
+
 def _proc_stop(ctx, args: dict) -> Result:
     """End a started process and forget it."""
     key = args.get("id")
     entry = _PROCESSES.get(key)
     if entry is None:
         return Result.failure(f"no process {key!r}; ask proc.list")
-    popen = entry["popen"]
-    if popen.poll() is None:
-        try:
-            if os.name == "nt":
-                # With shell=True the tracked pid is the shell's, so only a
-                # tree kill reaches what was actually asked for.
-                subprocess.run(["taskkill", "/T", "/F", "/PID",
-                                str(popen.pid)],
-                               capture_output=True, timeout=15)
-            else:
-                import signal
-                os.killpg(os.getpgid(popen.pid), signal.SIGTERM)
-        except (OSError, ValueError, subprocess.SubprocessError):
-            try:
-                popen.kill()
-            except OSError:
-                pass
-    try:
-        code = popen.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        code = None
+    code = _end(entry["popen"])
     _PROCESSES.pop(key, None)
+    # ``code is None`` means it outlived even a kill. Say so rather than
+    # reporting a clean stop: it is now running untracked, which somebody
+    # needs to know.
     return Result(data={"id": key, "code": code, "command": entry["command"],
-                        "log": entry["log"]})
+                        "log": entry["log"], "stopped": code is not None,
+                        "pid": entry["popen"].pid})
 
 
 def _proc_list(ctx, args: dict) -> Result:

@@ -656,6 +656,17 @@ than letting the guest wrap its own, because `cmd.exe` does not understand the
 backslash-escaped quotes `subprocess` produces from a list — a guest passing
 `["cmd", "/c", line]` would have every embedded quote silently mangled.
 
+Building it host-side is also the only place the platform differences can be
+kept honest, and there are three: `"default"` resolves to `cmd.exe` on Windows
+and `/bin/sh` elsewhere; `"powershell"` is the Windows-only 5.1 binary on
+Windows and PowerShell Core's `pwsh` everywhere else; `"cmd"` is refused by
+name off Windows rather than failing as a missing executable. Ending a process
+is asymmetric for a reason that matters — `taskkill /T /F` is already a hard
+tree kill, while POSIX `SIGTERM` is a *request* that a server may trap, so
+`stop` escalates to `SIGKILL` and reports `stopped: False` if even that loses.
+Without the escalation `proc.stop` reported success on a process still running
+and no longer tracked.
+
 The registry is in-memory: a `Popen` handle is not serializable, so nothing
 survives a restart. What survives is the log file. A process still running
 when the app exits is orphaned rather than killed, which is why the agent

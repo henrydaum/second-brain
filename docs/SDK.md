@@ -195,6 +195,13 @@ a log file: `status` returns the tail, and `log` is a path `sdk.fs.read` will
 open. The registry is in memory and does not survive a restart, so anything
 still running when Second Brain goes down is orphaned rather than killed.
 
+`stop` answers `{id, code, stopped, pid, log}`. On POSIX it sends `SIGTERM`
+first — a dev server should get to close its socket — and escalates to
+`SIGKILL` if that is ignored; on Windows `taskkill /T /F` is already a hard
+kill of the whole tree. `stopped` is `False` in the rare case something
+outlived even that: it is untracked and still running, which is worth saying
+rather than reporting a clean stop.
+
 Two `sdk.paths.get` names are not directories and belong to this section:
 `"python"` is the interpreter hosting the app — invoke `pip` through it or
 packages land in whatever environment is first on `PATH` — and `"platform"`
