@@ -320,7 +320,10 @@ def discover_services(root_dir: Path, config: dict) -> dict:
             module = _load_plugin_module(module_name, py_file, plugin_dir.root.builtin, reload=False)
             if module is None:
                 continue
-            built = _call_build_services(module, module_name, config)
+            built, why_not = _call_build_services(module, module_name, config)
+            if why_not:
+                logger.error("service file %s built nothing: %s",
+                             py_file.name, why_not)
             built_names = [n for n in built if n not in seen_names]
             for svc_name, svc in built.items():
                 if svc_name in seen_names:
@@ -583,9 +586,9 @@ def _load_single_service(file_path: Path, services: dict, config: dict, bindings
     if module is None:
         return None, f"Failed to import {file_path.name}"
 
-    built = _call_build_services(module, module_name, config)
-    if not built:
-        return None, f"build_services() returned nothing in {file_path.name}"
+    built, why_not = _call_build_services(module, module_name, config)
+    if why_not:
+        return None, why_not
 
     names = list(built.keys())
     for svc_name, svc in built.items():
@@ -648,15 +651,36 @@ def _load_plugin_module(module_name: str, file_path: Path, built_in: bool, reloa
 
 
 def _adapt_sandboxed(file_path: Path):
-    """Return a bridged module for a migrated plugin, or None."""
+    """Return a bridged module for a migrated plugin, or None.
+
+    ``None`` means "not a migrated plugin", and the caller acts on it by
+    importing the file the ordinary way. That is right when the file really
+    is native and wrong in every other case: a *migrated* file imported
+    natively yields guest classes the kernel cannot use and, for a service,
+    no ``build_services`` at all — so a bridge failure surfaced three steps
+    later as "build_services() returned nothing", naming neither the failure
+    nor the file that caused it.
+
+    It still answers ``None`` rather than raising, and that is deliberate:
+    every bulk discovery loop treats ``None`` as "skip this file", with no
+    ``try`` around it, so raising here would let one unadaptable plugin abort
+    the discovery of every other one — a worse failure than the one being
+    reported. What changed is that the traceback is now logged. It was a bare
+    ``logger.error`` with the exception's ``str()``, which for the errors that
+    actually occur here (an ``AttributeError`` deep in adapter construction)
+    says almost nothing about where.
+    """
     try:
         from sandbox.bridge import adapt
     except Exception:
         return None
     try:
         return adapt(file_path)
-    except Exception as exc:
-        logger.error(f"Failed to bridge sandboxed plugin {file_path.name}: {exc}")
+    except Exception:
+        logger.exception(
+            "failed to bridge sandboxed plugin %s; it will be imported "
+            "natively, which for a service means no build_services",
+            file_path.name)
         return None
 
 
@@ -760,14 +784,36 @@ def _find_subclasses(module, base_class, module_name: str) -> list:
     return found
 
 
-def _call_build_services(module, module_name: str, config: dict) -> dict:
-    """Call build_services(config) on a module, return resulting dict."""
+def _call_build_services(module, module_name: str, config: dict):
+    """Call ``build_services(config)``, as ``(services, why_not)``.
+
+    The two failures used to collapse into one empty dict, and the caller
+    reported both as "build_services() returned nothing" — a sentence that is
+    true of a missing function and actively misleading about a raised
+    exception. The real reason went to the log with a traceback nobody was
+    told to look for, so a service that failed to build reported a symptom
+    three steps downstream of its cause.
+
+    A missing function is worth naming precisely too, because for a *migrated*
+    plugin it is never the plugin's fault: the bridge synthesizes
+    ``build_services``, so its absence means the file was imported natively —
+    which means the bridge declined it, and the reason for *that* is the
+    thing to go and read.
+    """
     build_fn = getattr(module, "build_services", None)
     if build_fn is None:
-        return {}
+        return {}, (
+            f"{module_name} defines no build_services(). A migrated service "
+            f"gets one from the bridge, so this usually means the bridge "
+            f"declined the file and it was imported natively — check the log "
+            f"for 'Failed to bridge' or 'will not load'.")
     try:
         built = build_fn(config)
-        return built if built else {}
-    except Exception as e:
-        logger.error(f"build_services() in {module_name} failed: {e}. Check config settings for this service with /config.", exc_info=True)
-        return {}
+    except Exception as exc:
+        logger.error("build_services() in %s failed: %s", module_name, exc,
+                     exc_info=True)
+        return {}, (f"build_services() in {module_name} raised "
+                    f"{type(exc).__name__}: {exc}")
+    if not built:
+        return {}, f"build_services() in {module_name} returned no services"
+    return built, None
