@@ -36,14 +36,14 @@ from events.event_channels import (
 )
 from state_machine.serialization import save_compaction_marker, save_history_message
 from runtime.ledger import record_enact
-from runtime.token_stripper import StreamingTokenFilter, strip_model_tokens
+from runtime.token_stripper import ModelTextFilter, filter_text
 
 logger = logging.getLogger("ConversationLoop")
 
 
 def _clean(text: str | None) -> str:
-    """Internal helper to handle clean."""
-    return strip_model_tokens(text or "")[0]
+    """The one cleaner. Deltas run through the same filter, incrementally."""
+    return filter_text(text or "")
 
 
 def _truncate_middle(text: str, max_chars: int) -> str:
@@ -174,9 +174,10 @@ class ConversationLoop:
         self._stream_id: str | None = None
         self._stream_seq = 0
         self._stream_emitted = False
-        # Streaming twin of the _clean() applied to whole responses: keeps
-        # <think> blocks and EOS tokens out of the displayed deltas.
-        self._stream_filter: StreamingTokenFilter | None = None
+        # The same filter _clean() uses, fed incrementally. Not a twin of it —
+        # literally the same class, which is what makes the streamed text and
+        # the final text agree.
+        self._stream_filter: ModelTextFilter | None = None
         # The brain that actually took the most recent call (escorts may swap
         # request.llm per call); the ledger records this, not the default.
         self._last_llm_used = None
@@ -473,11 +474,13 @@ class ConversationLoop:
 
         if getattr(response, "has_tool_calls", False):
             self._pending_tool_calls = list(response.tool_calls)
-            text = getattr(response, "content", None)
-            self._assistant_text_for_pending = text
-            # Surface the model's mid-turn explanatory text to live frontends
-            # (display-only; it still rides on the first tool-call history row).
-            cleaned = _clean(text or "")
+            cleaned = _clean(getattr(response, "content", None))
+            # Cleaned, not raw. This rides on the first tool-call history row
+            # and is therefore replayed into every later prompt — storing the
+            # raw text fed the model its own reasoning tags back, which is the
+            # most likely reason it started emitting them in the wrong places.
+            self._assistant_text_for_pending = cleaned or None
+            # Surface the model's mid-turn explanatory text to live frontends.
             self._finish_stream(cleaned, "narration")
             if cleaned and self.runtime is not None and self.session_key:
                 self.runtime.push_message(self.session_key, cleaned)
@@ -666,10 +669,14 @@ class ConversationLoop:
     def _empty_response_layer(self, proceed):
         """The kernel's own innermost escort: retry an empty response once.
 
-        Empty text-only responses happen with weak models (or a bare think
-        block that strips to nothing — often right after a tool error). Nudge
-        once with an ephemeral message that is NOT recorded in history, then
-        accept whatever comes back. One retry per turn.
+        Empty text-only responses happen with weak models — often right after
+        a tool error. Nudge once with an ephemeral message that is NOT recorded
+        in history, then accept whatever comes back. One retry per turn.
+
+        This used to also catch a bare think block that stripped to nothing.
+        It can't happen any more: the filter deletes only a matched pair, so
+        text with nowhere to go is released rather than eaten. What is left
+        here is a genuine provider outcome, not a symptom.
         """
         def layer(request):
             response = proceed(request)
@@ -860,7 +867,7 @@ class ConversationLoop:
                 self._stream_id = f"st_{uuid.uuid4().hex[:12]}"
                 self._stream_seq = 0
                 self._stream_emitted = False
-                self._stream_filter = StreamingTokenFilter()
+                self._stream_filter = ModelTextFilter()
             response = llm.chat(
                 outgoing, on_delta=self._emit_delta if streaming else None)
         except Exception:
@@ -882,9 +889,9 @@ class ConversationLoop:
     def _emit_delta(self, fragment: str) -> bool:
         """Backend-facing on_delta callback. Returns False to abort the stream.
 
-        Fragments pass through the streaming token filter so thinking blocks
-        and EOS tokens never reach frontends — matching the _clean() applied
-        to the whole response on the non-streaming path."""
+        Fragments pass through the same filter _clean() uses, so thinking
+        blocks and EOS tokens never reach frontends and what streams in is
+        what the whole-message path will deliver."""
         if fragment and self._stream_id is not None:
             if self._stream_filter is not None:
                 fragment = self._stream_filter.feed(fragment)
@@ -912,9 +919,10 @@ class ConversationLoop:
                        aborted: bool = False) -> None:
         """Close the open stream, if any. No-op unless deltas were emitted.
 
-        A clean close carries ``final_text`` — the CLEANED text, byte-identical
-        to what the whole-message path delivers — so frontends that rendered
-        the deltas can dedup the duplicate whole message.
+        A clean close carries ``final_text`` — the CLEANED text, which the
+        deltas already agree with because both came out of the same filter
+        (``ModelTextFilter``; ``filter_text`` is it fed one fragment). That is
+        what lets frontends dedup the duplicate whole message.
         """
         # Release any tail the filter was withholding as a possible partial
         # tag (it wasn't one if we got here without more input).
