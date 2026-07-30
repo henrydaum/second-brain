@@ -2718,11 +2718,17 @@ def _script_run(ctx, args: dict) -> Result:
 
     from .. import provenance
     from ..bridge import get_sandbox
-    from ..isolation import is_script
+    from ..isolation import is_script, resolve_script
 
-    path, error = resolve_plugin_path((args.get("path") or "").strip())
-    if error:
-        return Result.failure(error)
+    raw = (args.get("path") or "").strip()
+    # The script trees answer first, and only for the two shapes they recognise
+    # (see ``resolve_script``). Anything else falls through to the general
+    # resolver, which knows about the plugin families this does not.
+    path = resolve_script(raw)
+    if path is None:
+        path, error = resolve_plugin_path(raw)
+        if error:
+            return Result.failure(error)
     if not path.is_file():
         return Result.failure(f"no such script: {path}")
     # Re-checked here as well as in the policy function. The two answer
@@ -2731,10 +2737,14 @@ def _script_run(ctx, args: dict) -> Result:
     # covered it would silently start running scripts from anywhere the day
     # somebody added a branch above it.
     if not is_script(path):
+        # Naming the real directory rather than ``<tree>/scripts/``: this
+        # message is what the agent has to learn from when it guessed, and an
+        # abstraction is not somewhere a file can be put.
+        from paths import SANDBOX_SCRIPTS
         return Result.failure(
-            f"{path.name} is not in a scripts/ directory; scripts live in "
-            f"<tree>/scripts/ and are run from there so that they are "
-            f"contained before they run")
+            f"{path.name} is not in a scripts/ directory; put it in "
+            f"{SANDBOX_SCRIPTS} and run it from there, so that it is "
+            f"contained before it runs")
 
     caller = provenance.current()
     chain = caller.chain if caller is not None else None

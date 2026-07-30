@@ -123,6 +123,48 @@ def is_script(source) -> bool:
     return False
 
 
+def resolve_script(raw) -> Path | None:
+    """Find a script named the way an agent naturally names one, or None.
+
+    ``resolve_plugin_path`` resolves a bare relative path against the project
+    root and prefers it whenever it exists, which is right for a plugin — every
+    plugin lives under a family directory that is named in the path. A script is
+    named by its own filename, and the answer was consistently wrong in both
+    directions: ``scripts/demo.py`` resolved into the *checkout*, which is not a
+    tree root and so refused as "not in a scripts/ directory", and a bare
+    ``demo.py`` resolved to a project-root file that was never there.
+
+    So the two shapes an agent actually writes — the bare name, and one already
+    relative to ``scripts/`` — are resolved against the script directories
+    first, in tree precedence order. Anything else (an absolute path, or a
+    relative path pointing somewhere else entirely) is left alone for the
+    ordinary resolver and judged on its merits by :func:`is_script`.
+
+    Answering None is not a refusal. It means "this is not a script reference I
+    recognise", and the caller falls back.
+    """
+    if not raw:
+        return None
+    path = Path(str(raw).strip())
+    if path.is_absolute():
+        return None
+    parts = path.parts
+    if len(parts) == 1:
+        relative = Path(SCRIPTS_DIRNAME) / parts[0]
+    elif len(parts) == 2 and parts[0] == SCRIPTS_DIRNAME:
+        relative = path
+    else:
+        return None
+    for _tree, root in _roots():
+        candidate = root / relative
+        try:
+            if candidate.is_file():
+                return candidate.resolve()
+        except OSError:
+            continue
+    return None
+
+
 def required_isolation(source, report=None) -> str:
     """The isolation the kernel requires for this file. Not negotiable.
 

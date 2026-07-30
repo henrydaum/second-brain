@@ -153,6 +153,53 @@ def test_the_verdict_is_re_derived_never_supplied(tree):
     assert _ask(heavy, unmediated=[], digest="whatever").level == UNSAFE
 
 
+# ── naming one the way an agent does ──────────────────────────────────
+#
+# The failure these pin cost a whole Telegram session: an agent wrote a script,
+# named it the two obvious ways, and was refused both times — once as "not in a
+# scripts/ directory" (the checkout's own ``scripts/``, which is not a tree
+# root) and once as "no such script" (a project-root file that never existed).
+# The general resolver prefers the project root for a bare relative path, which
+# is right for a plugin and wrong for a script.
+
+@pytest.mark.parametrize("named", ["tally.py", "scripts/tally.py"])
+def test_a_script_is_found_by_the_names_an_agent_gives_it(tree, named):
+    """A bare filename and a ``scripts/``-relative path both resolve."""
+    from sandbox.isolation import resolve_script
+
+    expected = write(tree)
+    assert resolve_script(named) == expected.resolve()
+
+
+def test_a_name_that_is_not_a_script_reference_is_left_alone(tree):
+    """None means "not mine", so the general resolver still gets its turn."""
+    from sandbox.isolation import resolve_script
+
+    write(tree)
+    assert resolve_script("tools/tally.py") is None
+    assert resolve_script(str(tree / "scripts" / "tally.py")) is None
+    assert resolve_script("") is None
+
+
+def test_a_missing_script_is_not_invented(tree):
+    """Resolution is by existence: nothing there means nothing found."""
+    from sandbox.isolation import resolve_script
+
+    assert resolve_script("absent.py") is None
+
+
+@pytest.mark.parametrize("named", ["tally.py", "scripts/tally.py"])
+def test_the_policy_resolves_the_name_the_handler_will(tree, named):
+    """Both halves must agree, or the dialog is about a path that runs fine.
+
+    Classifying the raw argument while the handler resolved it is how a
+    correctly-named script came to be asked about and *then* work — the exact
+    complaint scripts exist to remove, one layer down.
+    """
+    write(tree)
+    assert _ask(named).level == SAFE
+
+
 # ── running one ───────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -285,3 +332,19 @@ def test_a_handler_with_no_provenance_still_runs(sb, tree, monkeypatch):
                                 "args": {"values": [4, 5]}})
     assert result.ok
     assert result.data == 9
+
+
+def test_a_bare_name_runs(sb, tree, monkeypatch):
+    """End to end on the name the agent actually typed."""
+    from sandbox import bridge
+    from sandbox.handlers.kernel import _script_run
+
+    write(tree)
+    monkeypatch.setattr("plugins.helpers.plugin_paths.ALLOWED_ROOTS",
+                        (tree.parent.resolve(),))
+    bridge.configure(sb)
+
+    result = _script_run(None, {"path": "tally.py",
+                                "args": {"values": [1, 2, 3]}})
+    assert result.ok, result.error
+    assert result.data == 6

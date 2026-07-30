@@ -389,6 +389,57 @@ def test_a_migrated_service_looks_native(tmp_path, box):
     assert service.load_timeout == 0
 
 
+PROMPTING_SERVICE = '''
+"""A migrated service that contributes to the system prompt."""
+
+from guest.bases import BaseService
+
+
+class Advisor(BaseService):
+    """Advise."""
+
+    name = "advisor"
+    exports = ["ping"]
+
+    def start(self, sdk):
+        """Nothing to set up."""
+        self._where = "in the box"
+        return True
+
+    def ping(self, sdk):
+        """Answer something."""
+        return "pong"
+
+    def agent_prompt_for(self, sdk):
+        """Built from state only the residency has, so a literal cannot fake it."""
+        return f"Advice from {self._where}."
+'''
+
+
+def test_a_resident_prompt_contribution_is_answered_in_the_box(tmp_path, box):
+    """The resident half of the same doorway, and it is not a call like the rest.
+
+    A service is not asked through ``_forward`` — it already owns a box — so the
+    forwarding is separate code and would have failed separately and silently.
+    The text is built from state established in ``start`` so that only a real
+    call into the residency can produce it.
+    """
+    module = adapt(_write(tmp_path, "service_advisor.py", PROMPTING_SERVICE))
+    service = module.build_services({})["advisor"]
+
+    # Not loaded: contributes nothing rather than taking the prompt down. And
+    # "nothing" must not become the answer forever — the cache is scoped to one
+    # residency, not to the adapter, so loading clears it.
+    assert service.agent_prompt_for(SimpleNamespace(config={})) == ""
+
+    assert service.load() is True
+    try:
+        assert service.agent_prompt_for(
+            SimpleNamespace(config={})) == "Advice from in the box."
+    finally:
+        service.unload()
+
+
 def test_only_exported_methods_exist(tmp_path, box):
     """``exports`` is the public surface, and it is enforced by absence."""
     service = _service(tmp_path)
@@ -517,6 +568,61 @@ def test_a_command_without_a_form_keeps_the_base_default(tmp_path, box):
     module = adapt(_write(tmp_path, "command_status.py", MIGRATED_COMMAND))
     instance = next(v() for v in vars(module).values() if isinstance(v, type))
     assert instance.form({}, SimpleNamespace(config={})) == []
+
+
+PROMPTING_TOOL = '''
+"""A migrated tool that contributes to the system prompt."""
+
+requests = ["paths.get"]
+
+from guest.bases import BaseTool
+
+
+class Advisor(BaseTool):
+    """Advise."""
+
+    name = "advisor"
+    description = "x"
+
+    def agent_prompt_for(self, sdk):
+        """Say where something lives — the reason this is dynamic at all."""
+        return f"## Scripts\\nThey go in {sdk.paths.get('scripts')}."
+
+    def run(self, sdk):
+        """Do nothing in particular."""
+        return "ok"
+'''
+
+
+def test_a_prompt_contribution_is_bridged(tmp_path, box):
+    """The guidance a migrated plugin writes has to reach the system prompt.
+
+    ``agent/system_prompt._collect`` calls this on the adapter. Unforwarded, the
+    native base answered with its empty static ``agent_prompt`` — so every
+    migrated plugin's point-of-use guidance disappeared while the plugin went on
+    working, and the only symptom was an agent that no longer knew things. The
+    text is dynamic on purpose here: a static literal crosses as a declaration
+    and would pass even with nothing bridged.
+    """
+    module = adapt(_write(tmp_path, "tool_advisor.py", PROMPTING_TOOL))
+    instance = next(v() for v in vars(module).values() if isinstance(v, type))
+    try:
+        text = instance.agent_prompt_for(SimpleNamespace(config={}, scope=None))
+        assert text.startswith("## Scripts")
+        assert "scripts" in text
+        # Computed once: ``_collect`` runs every turn, and for an ephemeral
+        # family every call is a fresh box.
+        assert instance._prompt_text == text
+    finally:
+        unload_box("tool_advisor")
+
+
+def test_a_plugin_that_contributes_nothing_keeps_the_base_default(tmp_path,
+                                                                  box):
+    """Only forward what the file defines — same rule as ``form``."""
+    module = adapt(_write(tmp_path, "tool_word_count.py", MIGRATED_TOOL))
+    instance = next(v() for v in vars(module).values() if isinstance(v, type))
+    assert instance.agent_prompt_for(SimpleNamespace(config={})) == ""
 
 
 @pytest.mark.parametrize("filename, source, base_module, base_name", [

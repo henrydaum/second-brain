@@ -595,12 +595,20 @@ def _script_report(path):
 
 
 def _classify_script(args: dict) -> Decision:
-    """Decide about running one script."""
-    from .isolation import is_script
+    """Decide about running one script.
+
+    The path is resolved here by the *same* resolver the handler uses, and that
+    sharing is load-bearing rather than tidy. Classifying the raw argument while
+    the handler resolved it meant a correctly-named bare script drew a dialog
+    and then ran fine — the "asked about something that should have been free"
+    complaint, one layer below the one that motivated scripts existing at all.
+    """
+    from .isolation import is_script, resolve_script
 
     path = args.get("path")
     if not path:
         return Decision(UNSAFE, "no script named")
+    path = resolve_script(path) or path
     if not is_script(path):
         # Not a refusal of *this* file so much as of the shape of the ask: the
         # containment story rests entirely on the file living somewhere the
