@@ -9,6 +9,7 @@ Three properties matter more than any individual handler:
 """
 
 import sqlite3
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from sandbox.handlers import HANDLERS, UNWIRED
 from sandbox.policy import classify
 from sandbox.credentials import handle_for, is_secret, redact, resolve
 from sandbox.users import ScopeError, scope_sql
+from tests.support import call_handler
 
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -85,12 +87,10 @@ def test_plugin_lifecycle_handlers_share_the_kernel_watcher():
     ctx = SimpleNamespace(
         runtime=SimpleNamespace(plugin_watcher=watcher),
     )
-    registered = HANDLERS[R.PLUGIN_REGISTER](
-        ctx, {"path": str(source)})
-    unloaded = HANDLERS[R.PLUGIN_UNREGISTER](
-        ctx, {"name": "clear", "family": "command"})
-    reloaded = HANDLERS[R.PLUGIN_RELOAD](
-        ctx, {"path": str(source)})
+    registered = call_handler(R.PLUGIN_REGISTER, ctx, {"path": str(source)})
+    unloaded = call_handler(
+        R.PLUGIN_UNREGISTER, ctx, {"name": "clear", "family": "command"})
+    reloaded = call_handler(R.PLUGIN_RELOAD, ctx, {"path": str(source)})
 
     assert registered.ok and unloaded.ok and reloaded.ok
     assert watcher.calls == [
@@ -109,8 +109,8 @@ def test_plugin_lifecycle_rejects_paths_outside_plugin_roots(tmp_path):
     ctx = SimpleNamespace(
         runtime=SimpleNamespace(plugin_watcher=Watcher()),
     )
-    result = HANDLERS[R.PLUGIN_REGISTER](
-        ctx, {"path": str(tmp_path / "tool_bad.py")})
+    result = call_handler(
+        R.PLUGIN_REGISTER, ctx, {"path": str(tmp_path / "tool_bad.py")})
 
     assert not result.ok
     # Pin that the refusal is *about the location* by naming the rejected
@@ -285,7 +285,7 @@ def test_config_read_redacts(tmp_path):
     """The clause belongs on config, not on the database."""
     ctx = type("Ctx", (), {"config": {"secret_brave_api_key": "sk-real",
                                       "model": "opus"}})()
-    handler = HANDLERS[R.CONFIG_READ]
+    handler = partial(call_handler, R.CONFIG_READ)
     assert (handler(ctx, {"key": "secret_brave_api_key"}).data
             == "<secret:secret_brave_api_key>")
     assert handler(ctx, {"key": "model"}).data == "opus"
@@ -344,11 +344,13 @@ def test_scoping_reaches_the_real_query_handler():
             return connection.execute(sql, tuple(params)).fetchmany(max_rows)
 
     ctx = type("Ctx", (), {"db": Db(), "user_id": 7})()
-    result = HANDLERS[R.DB_QUERY](ctx, {"sql": "SELECT * FROM my_conversations"})
+    result = call_handler(
+        R.DB_QUERY, ctx, {"sql": "SELECT * FROM my_conversations"})
     assert result.ok
     assert [row["title"] for row in result.data] == ["mine"]
 
-    refused = HANDLERS[R.DB_QUERY](ctx, {"sql": "SELECT * FROM conversations"})
+    refused = call_handler(
+        R.DB_QUERY, ctx, {"sql": "SELECT * FROM conversations"})
     assert not refused.ok
 
 
@@ -364,27 +366,32 @@ def test_the_db_handlers_speak_the_real_database_api(tmp_path):
 
     ctx = SimpleNamespace(db=Database(str(tmp_path / "t.db")), user_id=1)
 
-    assert HANDLERS[R.DB_QUERY](ctx, {"sql": "SELECT 1 AS one"}).data == [
+    assert call_handler(R.DB_QUERY, ctx, {"sql": "SELECT 1 AS one"}).data == [
         {"one": 1}]
-    assert HANDLERS[R.DB_QUERY](
-        ctx, {"sql": "SELECT ? AS given", "params": ["x"]}).data == [
+    assert call_handler(R.DB_QUERY, ctx,
+                        {"sql": "SELECT ? AS given",
+                         "params": ["x"]}).data == [
             {"given": "x"}]
-    assert HANDLERS[R.DB_QUERY](
-        ctx, {"sql": "PRAGMA table_info(files)"}).ok
+    assert call_handler(
+        R.DB_QUERY, ctx, {"sql": "PRAGMA table_info(files)"}).ok
 
-    assert HANDLERS[R.DB_DEFINE](
-        ctx, {"ddl": "CREATE TABLE plug_x (id INTEGER PRIMARY KEY, v TEXT)"}).ok
-    assert HANDLERS[R.DB_WRITE](
-        ctx, {"sql": "INSERT INTO plug_x (v) VALUES (?)", "params": ["hi"]}).ok
-    assert HANDLERS[R.DB_QUERY](ctx, {"sql": "SELECT v FROM plug_x"}).data == [
+    assert call_handler(
+        R.DB_DEFINE, ctx,
+        {"ddl": "CREATE TABLE plug_x (id INTEGER PRIMARY KEY, v TEXT)"}).ok
+    assert call_handler(
+        R.DB_WRITE, ctx,
+        {"sql": "INSERT INTO plug_x (v) VALUES (?)",
+         "params": ["hi"]}).ok
+    assert call_handler(
+        R.DB_QUERY, ctx, {"sql": "SELECT v FROM plug_x"}).data == [
         {"v": "hi"}]
 
     # db.query only reads: ``scope_sql`` answers whose rows, never whether the
     # statement mutates, so the kernel-table check lives on the write path and
     # a mutation arriving here must be refused rather than run.
-    mutating = HANDLERS[R.DB_QUERY](ctx, {"sql": "DELETE FROM plug_x"})
+    mutating = call_handler(R.DB_QUERY, ctx, {"sql": "DELETE FROM plug_x"})
     assert not mutating.ok and "db.write" in mutating.error
-    assert HANDLERS[R.DB_QUERY](ctx, {"sql": "SELECT v FROM plug_x"}).data
+    assert call_handler(R.DB_QUERY, ctx, {"sql": "SELECT v FROM plug_x"}).data
 
 
 def test_a_read_is_capped_before_it_crosses(tmp_path):
@@ -394,18 +401,21 @@ def test_a_read_is_capped_before_it_crosses(tmp_path):
 
     db = Database(str(tmp_path / "t.db"))
     ctx = SimpleNamespace(db=db, user_id=1)
-    HANDLERS[R.DB_DEFINE](ctx, {"ddl": "CREATE TABLE plug_many (n INTEGER)"})
+    call_handler(
+        R.DB_DEFINE, ctx, {"ddl": "CREATE TABLE plug_many (n INTEGER)"})
     for n in range(DB_MAX_ROWS + 10):
-        HANDLERS[R.DB_WRITE](ctx, {"sql": "INSERT INTO plug_many VALUES (?)",
+        call_handler(
+            R.DB_WRITE, ctx, {"sql": "INSERT INTO plug_many VALUES (?)",
                                    "params": [n]})
 
-    assert len(HANDLERS[R.DB_QUERY](
-        ctx, {"sql": "SELECT n FROM plug_many"}).data) == DB_MAX_ROWS
-    assert len(HANDLERS[R.DB_QUERY](
-        ctx, {"sql": "SELECT n FROM plug_many", "max_rows": 3}).data) == 3
+    assert len(call_handler(
+        R.DB_QUERY, ctx,
+        {"sql": "SELECT n FROM plug_many"}).data) == DB_MAX_ROWS
+    assert len(call_handler(
+        R.DB_QUERY, ctx,
+        {"sql": "SELECT n FROM plug_many", "max_rows": 3}).data) == 3
     # The cap is a ceiling, not a default a caller may raise.
-    assert len(HANDLERS[R.DB_QUERY](
-        ctx, {"sql": "SELECT n FROM plug_many",
+    assert len(call_handler(R.DB_QUERY, ctx, {"sql": "SELECT n FROM plug_many",
               "max_rows": DB_MAX_ROWS * 10}).data) == DB_MAX_ROWS
 
 
@@ -417,7 +427,7 @@ def test_a_missing_capability_is_an_ordinary_failure():
     """This is a microkernel: the timekeeper may simply not be installed."""
     ctx = type("Ctx", (), {"services": {}, "db": None, "runtime": None})()
     for kind in (R.CRON_LIST, R.AGENT_COMPLETE, R.DB_QUERY):
-        result = HANDLERS[kind](ctx, {"sql": "select 1"})
+        result = call_handler(kind, ctx, {"sql": "select 1"})
         assert not result.ok
         assert "not available" in result.error or "requires" in result.error
 
@@ -430,7 +440,7 @@ def test_asking_what_a_file_is_always_answers():
     into a vision model on a bare install.
     """
     ctx = type("Ctx", (), {"services": {}, "db": None, "runtime": None})()
-    result = HANDLERS[R.PARSE_MODALITY](ctx, {"extension": ".png"})
+    result = call_handler(R.PARSE_MODALITY, ctx, {"extension": ".png"})
     assert result.ok
     assert result.data == "image"
 
@@ -445,7 +455,7 @@ def test_password_hash_never_leaves_through_user_read():
                     "password_hash": "$2b$verysecret"}
 
     ctx = type("Ctx", (), {"db": Db(), "user_id": 1})()
-    data = HANDLERS[R.USER_READ](ctx, {}).data
+    data = call_handler(R.USER_READ, ctx, {}).data
     assert data["username"] == "henry"
     assert "password_hash" not in data
 
@@ -465,10 +475,11 @@ def test_service_call_respects_exports():
             return "no"
 
     ctx = type("Ctx", (), {"services": {"svc": Service()}})()
-    allowed = HANDLERS[R.SERVICE_CALL](ctx, {"name": "svc", "method": "public"})
+    allowed = call_handler(
+        R.SERVICE_CALL, ctx, {"name": "svc", "method": "public"})
     assert allowed.data == "yes"
 
-    refused = HANDLERS[R.SERVICE_CALL](ctx, {"name": "svc",
+    refused = call_handler(R.SERVICE_CALL, ctx, {"name": "svc",
                                              "method": "internal"})
     assert refused.denied
     assert "not exported" in refused.error
@@ -485,7 +496,8 @@ def test_a_service_that_raises_fails_the_call_only():
             raise ValueError("nope")
 
     ctx = type("Ctx", (), {"services": {"svc": Service()}})()
-    result = HANDLERS[R.SERVICE_CALL](ctx, {"name": "svc", "method": "boom"})
+    result = call_handler(
+        R.SERVICE_CALL, ctx, {"name": "svc", "method": "boom"})
     assert not result.ok
     assert "nope" in result.error
 
@@ -577,7 +589,7 @@ def test_revealing_a_secret_always_asks():
 def test_reveal_hands_over_the_real_value():
     """It is a door, not a decoration."""
     ctx = type("Ctx", (), {"config": {"brave_api_key": "sk-real"}})()
-    result = HANDLERS[R.SECRET_REVEAL](ctx, {"name": "brave_api_key"})
+    result = call_handler(R.SECRET_REVEAL, ctx, {"name": "brave_api_key"})
     assert result.ok
     assert result.data == "sk-real"
 
@@ -585,7 +597,7 @@ def test_reveal_hands_over_the_real_value():
 def test_reveal_of_something_absent_fails_cleanly():
     """A missing secret is a failure, not an empty string quietly used."""
     ctx = type("Ctx", (), {"config": {}})()
-    result = HANDLERS[R.SECRET_REVEAL](ctx, {"name": "nope"})
+    result = call_handler(R.SECRET_REVEAL, ctx, {"name": "nope"})
     assert not result.ok
 
 
@@ -637,13 +649,13 @@ def test_env_read_redacts_but_config_read_obeys_the_prefix():
 
     ctx = type("Ctx", (), {"config": {"secret_brave_key": "sk-a",
                                       "brave_api_key": "sk-b"}})()
-    read = HANDLERS[R.CONFIG_READ]
+    read = partial(call_handler, R.CONFIG_READ)
     assert read(ctx, {"key": "secret_brave_key"}).data == "<secret:secret_brave_key>"
     assert read(ctx, {"key": "brave_api_key"}).data == "sk-b"
 
     os.environ["SB_TEST_API_KEY"] = "sk-env"
     try:
-        out = HANDLERS[R.ENV_READ](ctx, {"name": "SB_TEST_API_KEY"})
+        out = call_handler(R.ENV_READ, ctx, {"name": "SB_TEST_API_KEY"})
         assert out.data == "<secret:SB_TEST_API_KEY>"
     finally:
         os.environ.pop("SB_TEST_API_KEY", None)
@@ -726,7 +738,7 @@ def _parse(modality="text"):
     from types import SimpleNamespace
 
     ctx = SimpleNamespace(services={})
-    return HANDLERS[R.PARSE_FILE](ctx, {"path": "notes.probe",
+    return call_handler(R.PARSE_FILE, ctx, {"path": "notes.probe",
                                         "modality": modality})
 
 

@@ -817,10 +817,11 @@ def _schedule(args):
     """Call the agent.schedule handler with a recording Timekeeper."""
     from sandbox.guest.requests import AGENT_SCHEDULE
     from sandbox.handlers import HANDLERS
+    from tests.support import call_handler
 
     keeper = RecordingKeeper()
     ctx = SimpleNamespace(services={"timekeeper": keeper}, runtime=None)
-    return HANDLERS[AGENT_SCHEDULE](ctx, args), keeper
+    return call_handler(AGENT_SCHEDULE, ctx, args), keeper
 
 
 def test_scheduling_writes_a_job_on_the_kernels_own_spawn_channel():

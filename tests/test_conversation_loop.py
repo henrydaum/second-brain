@@ -836,6 +836,7 @@ from sandbox import Sandbox
 from sandbox.bridge import adapt, configure
 from sandbox.guest.requests import AGENT_COMPLETE
 from sandbox.handlers import HANDLERS
+from tests.support import call_handler
 
 
 def test_agent_complete_selects_the_session_llm(monkeypatch):
@@ -890,8 +891,7 @@ def test_agent_complete_selects_the_session_llm(monkeypatch):
         ),
     )
 
-    result = HANDLERS[AGENT_COMPLETE](
-        ctx,
+    result = call_handler(AGENT_COMPLETE, ctx,
         {
             "session_key": "chat",
             "messages": [{"role": "user", "content": "history"}],
@@ -954,8 +954,7 @@ def test_agent_complete_resolves_a_named_profile(monkeypatch):
     monkeypatch.setattr("llm.registry.usable_brain",
                         lambda name: Cheap() if name == "cheap" else None)
 
-    result = HANDLERS[AGENT_COMPLETE](
-        SimpleNamespace(config={}),
+    result = call_handler(AGENT_COMPLETE, SimpleNamespace(config={}),
         {"profile": "cheap", "messages": [{"role": "user", "content": "hi"}]})
 
     assert result.ok
@@ -969,8 +968,8 @@ def test_a_named_profile_that_does_not_exist_says_so(monkeypatch):
     expensive model and never mention it."""
     monkeypatch.setattr("llm.registry.usable_brain", lambda name: None)
 
-    result = HANDLERS[AGENT_COMPLETE](
-        SimpleNamespace(config={}), {"profile": "gone", "prompt": "hi"})
+    result = call_handler(AGENT_COMPLETE, SimpleNamespace(config={}),
+                          {"profile": "gone", "prompt": "hi"})
 
     assert not result.ok
     assert "gone" in result.error
@@ -989,7 +988,7 @@ def test_no_profile_and_no_session_uses_the_default_brain(monkeypatch):
 
     monkeypatch.setattr("llm.default_brain", lambda config: Default())
 
-    result = HANDLERS[AGENT_COMPLETE](SimpleNamespace(config={}),
+    result = call_handler(AGENT_COMPLETE, SimpleNamespace(config={}),
                                       {"prompt": "hi"})
 
     assert result.ok
@@ -1010,6 +1009,7 @@ def test_a_prompt_becomes_one_user_message(monkeypatch):
             return LLMResponse(content="ok")
 
     monkeypatch.setattr("llm.default_brain", lambda config: Brain())
-    HANDLERS[AGENT_COMPLETE](SimpleNamespace(config={}), {"prompt": "hello"})
+    call_handler(
+        AGENT_COMPLETE, SimpleNamespace(config={}), {"prompt": "hello"})
 
     assert seen == [[{"role": "user", "content": "hello"}]]

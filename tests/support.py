@@ -189,3 +189,32 @@ def store_source(relative: str):
         if proc.returncode == 0:
             return proc.stdout
     return None
+
+
+# ── Calling a handler the way production does ─────────────────────────
+
+def call_handler(request_type: str, ctx, args: dict):
+    """Run one handler under the same net ``Interpreter._execute`` puts it in.
+
+    Tests reach for ``HANDLERS[TYPE](ctx, args)`` because it needs no
+    interpreter, but that is a contract production does not have: a handler
+    that raises reaches the guest as a failed Result, never as an exception.
+    Calling the raw dict entry asserts a stricter promise than the kernel
+    makes, so a handler dropping its own redundant ``except Exception`` would
+    break such a test for a reason unrelated to behaviour.
+
+    Mirrors ``sandbox/interpreter.py``'s handler branch, message included.
+    """
+    from sandbox.guest.codes import ERROR_HANDLER_ERROR, ERROR_NO_HANDLER
+    from sandbox.guest.requests import Result
+    from sandbox.interpreter import HANDLERS
+
+    handler = HANDLERS.get(request_type)
+    if handler is None:
+        return Result.failure(f"no handler for {request_type}",
+                              code=ERROR_NO_HANDLER)
+    try:
+        return handler(ctx, args)
+    except Exception as exc:                      # noqa: BLE001 - the net
+        return Result.failure(f"handler error: {exc}",
+                              code=ERROR_HANDLER_ERROR)
