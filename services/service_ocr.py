@@ -155,7 +155,8 @@ class OCRService(BaseService):
         """Read text out of one image file. Returns "" when there is none."""
         if not self.engine:
             return ""
-        if not sdk.fs.list(image_path):
+        if not _exists(sdk, image_path):
+            sdk.log(f"image not found: {image_path}", level="warning")
             return ""
 
         name = sdk.path.name(image_path)
@@ -265,6 +266,19 @@ class OCRService(BaseService):
         found = self.reader.readtext(path, detail=0, paragraph=True)
         return "\n".join(line.strip() for line in found
                          if isinstance(line, str) and line.strip())
+
+
+def _exists(sdk, path) -> bool:
+    """Whether a path is there.
+
+    ``sdk.fs.list`` *fails* on a missing path rather than answering with an
+    empty list, and the SDK turns a failed Request into a raise — so
+    ``if sdk.fs.list(p)`` does not test existence, it throws.
+    """
+    try:
+        return bool(sdk.fs.list(path))
+    except sdk.Failed:
+        return False
 
 
 def _missing(engine: str, install: str, err: Exception) -> str:

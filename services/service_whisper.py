@@ -24,6 +24,19 @@ import re
 from guest.bases import BaseService
 
 
+def _exists(sdk, path) -> bool:
+    """Whether a path is there.
+
+    ``sdk.fs.list`` *fails* on a missing path rather than answering with an
+    empty list, and the SDK turns a failed Request into a raise — so
+    ``if sdk.fs.list(p)`` does not test existence, it throws.
+    """
+    try:
+        return bool(sdk.fs.list(path))
+    except sdk.Failed:
+        return False
+
+
 class WhisperService(BaseService):
     """Transcribe audio files to text, on this machine."""
 
@@ -128,7 +141,7 @@ class WhisperService(BaseService):
         """
         if self.model is None:
             return ""
-        if not sdk.fs.list(audio_path):
+        if not _exists(sdk, audio_path):
             sdk.log(f"audio file not found: {audio_path}", level="warning")
             return ""
 

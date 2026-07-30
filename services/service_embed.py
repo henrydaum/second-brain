@@ -24,6 +24,37 @@ dependencies_pip = ['numpy', 'sentence-transformers', 'torch']
 
 from guest.bases import BaseService
 
+#: Model weights live at the **root of DATA_DIR**, one directory per model,
+#: named after it — ``DATA_DIR/BAAI_bge-small-en-v1.5``.
+#:
+#: They used to sit beside the plugin file, which the tree layout turned into
+#: ``installed/services/``. That is a *plugin root*: something globs
+#: ``service_*.py`` there, the package manager installs and removes files
+#: there, and a multi-gigabyte model directory in the middle of it is at best
+#: clutter and at worst something an uninstall walks into. Weights are data,
+#: not code, and DATA_DIR is where data goes.
+#:
+#: There is deliberately only one location now. A second "bundled" path
+#: existed so weights could be shipped next to the plugin; moved out of the
+#: services root it would be the same directory as this one, so it collapsed
+#: rather than being dropped — pre-placing weights here still skips the
+#: download exactly as it did.
+WEIGHTS_NOTE = "DATA_DIR/<model_name_with_underscores>"
+
+
+def _exists(sdk, path) -> bool:
+    """Whether a path is there.
+
+    ``sdk.fs.list`` *fails* on a missing path rather than answering with an
+    empty list, and the SDK turns a failed Request into a raise — so
+    ``if sdk.fs.list(p)`` does not test existence, it throws. This is the
+    idiom the store's file-editing tools already use.
+    """
+    try:
+        return bool(sdk.fs.list(path))
+    except sdk.Failed:
+        return False
+
 
 class _SentenceTransformerEmbedder:
     """The half both embedders share.
@@ -76,21 +107,13 @@ class _SentenceTransformerEmbedder:
         self.device = "cuda" if wants_cuda and torch.cuda.is_available() \
             else "cpu"
 
-        folder = self.model_name.replace("/", "_")
-        bundled = sdk.path.join(sdk.paths.get("installed"), "services", folder)
-        downloaded = sdk.path.join(sdk.paths.get("data"), folder)
+        # One location, at the root of DATA_DIR — see WEIGHTS_NOTE.
+        weights = sdk.path.join(sdk.paths.get("data"),
+                                self.model_name.replace("/", "_"))
 
-        weights = ""
-        if sdk.fs.list(bundled):
-            weights = bundled
-            sdk.log(f"using bundled weights for {self.model_name}")
-        elif sdk.fs.list(downloaded):
-            weights = downloaded
-            sdk.log(f"using downloaded weights for {self.model_name}")
-        elif self._download(sdk, downloaded):
-            weights = downloaded
-
-        if not weights:
+        if _exists(sdk, weights):
+            sdk.log(f"using local weights for {self.model_name}")
+        elif not self._download(sdk, weights):
             return False
 
         self.model = SentenceTransformer(weights, device=self.device,
