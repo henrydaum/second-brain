@@ -113,7 +113,9 @@ def test_plugin_lifecycle_rejects_paths_outside_plugin_roots(tmp_path):
         ctx, {"path": str(tmp_path / "tool_bad.py")})
 
     assert not result.ok
-    assert "must live in one of" in result.error
+    # Pin that the refusal is *about the location* by naming the rejected
+    # directory back, rather than pinning the sentence that says so.
+    assert str(tmp_path) in result.error
 
 
 def test_the_sdk_reaches_every_wired_request():

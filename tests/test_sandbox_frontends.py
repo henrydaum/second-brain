@@ -181,7 +181,7 @@ def test_a_frontend_request_without_a_token_is_refused(box, tmp_path,
         unload_box("frontend_talker")
 
     assert not result.ok
-    assert "only available inside a loaded frontend" in result.error
+    assert "sdk.frontend" in result.error
 
 
 @pytest.mark.parametrize("isolation", ["", "subprocess"])

@@ -220,7 +220,8 @@ def test_search_limit_reports_truncation(tree):
 
 def test_a_missing_root_fails_by_name(tree):
     result = _python_search(tree / "nowhere", pattern="alpha", mode="files")
-    assert "no such directory or file" in result.error
+    assert not result.ok
+    assert "nowhere" in result.error
 
 
 def test_searching_a_single_file_works(tree):
