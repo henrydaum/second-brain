@@ -15,28 +15,49 @@ user rename) is never overwritten, matching the major chat providers. The
 high-water mark advances when a row is processed or already titled (so
 nothing replays every tick), but *not* while a row merely isn't ripe yet
 — it must come back next minute. Each write emits
-``CONVERSATION_CHANGED`` with ``action='retitled'`` so frontends refresh
+``conversation_changed`` with ``action='retitled'`` so frontends refresh
 sidebars/banners live.
+
+Migrated to the SDK, and three things changed shape:
+
+- The candidate query reads ``my_conversations``, the kernel-owned virtual
+  table name that expands to the current user's rows. Reading
+  ``conversations`` directly is refused, which is the point — a sweep that
+  silently retitled everybody's conversations would be a worse bug than a
+  refusal.
+- ``title_update_llm_profile`` now names an **LLM profile** rather than an
+  agent profile. ``sdk.agent.complete(profile=...)`` resolves a model by name
+  because a box cannot hold one; the extra indirection through
+  ``agent_profiles[name]["llm"]`` bought nothing here, since this task has no
+  agent, no tools and no scope — only a model. Empty or "default" follows the
+  default profile.
+- The high-water mark is still ``conversations.last_title_check_message_count``,
+  written with ``sdk.db.write``. Kernel table *rows* are writable and schemas
+  are not; this column is bookkeeping with no ``conv.*`` verb behind it, which
+  is precisely the case that line exists for.
 """
 
 dependencies_files = ['helpers/llm_litellm.py']
 dependencies_pip = []
 
 import json
-import logging
 import re
 import time
 
-from events.event_bus import bus
-from events.event_channels import CONVERSATION_CHANGED
-from plugins.BaseTask import BaseTask, TaskResult
-from runtime.agent_scope import resolve_agent_llm
-from runtime.token_stripper import strip_model_tokens
-
-logger = logging.getLogger("TaskUpdateTitles")
+from guest.bases import BaseTask
 
 UPDATE_TITLES = "update_titles"
 """Plugin-owned event channel for periodic conversation retitling."""
+
+CONVERSATION_CHANGED = "conversation_changed"
+"""The kernel's channel for conversation list changes.
+
+Spelled out rather than imported: ``events.event_channels`` is a kernel module
+and a plugin importing one cannot load in a subprocess. Channel names are
+deliberately not validated against that file — plugins own their own channels —
+so this string has to match by agreement, and it is the same one the kernel
+emits created/deleted/recategorized on.
+"""
 
 _MAX_LEN = 80
 # A conversation with this many user/agent messages is titled without
@@ -77,21 +98,28 @@ _USER_TEMPLATE = (
 
 class UpdateTitles(BaseTask):
     """Update titles."""
+
     name = "update_titles"
+    description = "Give new conversations a real title once they are ripe."
     trigger = "event"
-    trigger_channels = [UPDATE_TITLES]
-    requires_services = ["llm"]
+    # Spelled out, not ``[UPDATE_TITLES]``: declarations are read by AST, so a
+    # name reads as nothing and the task would register subscribed to no
+    # channel at all — loading cleanly and never firing.
+    trigger_channels = ["update_titles"]
     writes = []
     timeout = 600
     event_payload_schema = {"type": "object", "properties": {}, "required": []}
     default_jobs = {
-        "update_titles": {"channel": UPDATE_TITLES, "cron": "* * * * *", "payload": {}},
+        "update_titles": {"channel": "update_titles", "cron": "* * * * *", "payload": {}},
     }
+    requests = ["db.query", "db.write", "conv.read", "conv.set_title",
+                "agent.complete", "event.emit", "config.read"]
 
     config_settings = [
         ("Title Update LLM Profile", "title_update_llm_profile",
-         "Agent profile whose LLM is used to generate conversation titles. "
-         "'default' follows the default LLM.",
+         "LLM profile used to generate conversation titles. 'default' follows "
+         "the default profile. A small, cheap model is the right choice — the "
+         "job is six words.",
          "default", {"type": "text"}),
 
         ("Title Delay (minutes)", "title_delay_minutes",
@@ -104,6 +132,11 @@ class UpdateTitles(BaseTask):
 
     # New-message gate (vs the high-water mark) lives in SQL so the
     # every-minute sweep is one indexed SELECT that usually returns nothing.
+    #
+    # ``my_conversations`` rather than ``conversations``: the kernel expands it
+    # to a subquery filtered to this execution's user, and refuses the bare
+    # name. ``conversation_messages`` carries no owner column, so it is read
+    # directly — the join through ``c.id`` is what scopes it.
     _CANDIDATES_SQL = """
         SELECT c.id    AS id,
                c.title AS title,
@@ -115,41 +148,60 @@ class UpdateTitles(BaseTask):
                (SELECT MIN(m.timestamp) FROM conversation_messages m
                   WHERE m.conversation_id = c.id
                     AND m.role = 'assistant') AS first_agent_ts
-        FROM conversations c
+        FROM my_conversations c
         WHERE (SELECT COUNT(*) FROM conversation_messages m
                  WHERE m.conversation_id = c.id)
               > COALESCE(c.last_title_check_message_count, 0)
         ORDER BY c.updated_at DESC
     """
 
-    def _candidates(self, db) -> list[dict]:
-        """Conversations with messages the sweep hasn't seen yet, as dicts."""
-        out = db.query(self._CANDIDATES_SQL, max_rows=100)
-        columns = out.get("columns") or []
-        return [dict(zip(columns, row)) for row in out.get("rows") or []]
+    _MARK_SQL = """
+        UPDATE conversations
+           SET last_title_check_message_count = ?
+         WHERE id = ?
+    """
 
-    def run_event(self, run_id: str, payload: dict, context) -> TaskResult:
-        """Run event."""
-        db = getattr(context, "db", None)
-        if db is None:
-            return TaskResult.failed("No database available.")
+    def _candidates(self, sdk) -> list:
+        """Conversations with messages the sweep hasn't seen yet, as dicts.
 
-        profile_name = (context.config.get("title_update_llm_profile") or "default").strip() or "default"
-        llm = resolve_agent_llm(profile_name, context.config, context.services)
-        if llm is None or not getattr(llm, "loaded", False):
-            logger.info("Title update skipped: LLM service for profile '%s' not loaded.", profile_name)
-            return TaskResult(success=True)
+        ``sdk.db.query`` answers with a list of dicts already — the native
+        ``db.query`` returned ``{columns, rows}`` and needed zipping, and the
+        Request does that work host-side because dicts are what crosses.
+        """
+        return list(sdk.db.query(self._CANDIDATES_SQL, max_rows=100) or [])
+
+    def _mark(self, sdk, conversation_id, message_count: int) -> None:
+        """Advance the high-water mark, best-effort.
+
+        Swallowed on failure because the mark is an optimization, not the
+        product: a sweep that cannot record where it got to repeats work next
+        minute, which is cheap. One that dies here retitles nothing at all.
+        """
+        try:
+            sdk.db.write(self._MARK_SQL, [int(message_count), conversation_id])
+        except sdk.Failed:
+            sdk.log(f"could not advance the title mark for {conversation_id}",
+                    level="warning")
+
+    def run_event(self, sdk, payload):
+        """Sweep once: find ripe conversations and title them."""
+        profile = str(
+            sdk.config.read("title_update_llm_profile") or "default").strip()
+        # "default" is the setting's way of saying "don't choose"; the Request
+        # spells that as an absent profile.
+        if profile == "default":
+            profile = ""
 
         try:
-            candidates = self._candidates(db)
-        except Exception as e:
-            return TaskResult.failed(f"Failed to list conversations for title check: {e}")
+            candidates = self._candidates(sdk)
+        except sdk.Failed as exc:
+            return sdk.fail(f"Failed to list conversations for title check: {exc}")
 
         if not candidates:
-            return TaskResult(success=True)
+            return sdk.ok({"processed": 0, "candidates": 0})
 
         try:
-            delay_minutes = float(context.config.get("title_delay_minutes", 10))
+            delay_minutes = float(sdk.config.read("title_delay_minutes") or 10)
         except (TypeError, ValueError):
             delay_minutes = 10.0
         now = time.time()
@@ -161,10 +213,7 @@ class UpdateTitles(BaseTask):
             if not _needs_title(row.get("title")):
                 # Titled once (by us or by the user) — never overwrite.
                 # Advance the mark so the row leaves the candidate list.
-                try:
-                    db.update_conversation_title_check_count(conversation_id, message_count)
-                except Exception:
-                    pass
+                self._mark(sdk, conversation_id, message_count)
                 continue
             first_agent_ts = row.get("first_agent_ts")
             if not first_agent_ts:
@@ -174,52 +223,86 @@ class UpdateTitles(BaseTask):
             if not ripe:
                 continue  # don't advance the mark — it must come back
             try:
-                self._process_conversation(db, llm, conversation_id, message_count)
-                updated += 1
-            except Exception as e:
-                logger.warning("Title update failed for conversation %s: %s", conversation_id, e)
+                if self._retitle(sdk, profile, conversation_id, message_count):
+                    updated += 1
+            except sdk.Failed as exc:
+                sdk.log(f"title update failed for conversation "
+                        f"{conversation_id}: {exc}", level="warning")
                 # Still advance the high-water mark so a permanently bad
                 # conversation doesn't block the sweep next tick.
-                try:
-                    db.update_conversation_title_check_count(conversation_id, message_count)
-                except Exception:
-                    pass
+                self._mark(sdk, conversation_id, message_count)
 
-        logger.info("Title update sweep: processed %d/%d conversations.", updated, len(candidates))
-        return TaskResult(success=True)
+        sdk.log(f"title update sweep: processed {updated}/{len(candidates)} "
+                f"conversations.")
+        return sdk.ok({"processed": updated, "candidates": len(candidates)})
 
-    def _process_conversation(self, db, llm, conversation_id, message_count: int) -> None:
-        """Internal helper to handle process conversation."""
-        messages = db.get_conversation_messages(conversation_id) or []
-        # Always advance the high-water mark — even if we skip or fail —
-        # so an empty / un-titleable conversation does not replay.
+    def _retitle(self, sdk, profile, conversation_id, message_count: int) -> bool:
+        """Title one conversation. Returns whether a title was written."""
+        wrote = False
         try:
+            messages = (sdk.conv.read(conversation_id) or {}).get("messages") or []
             transcript = _transcript(messages)
             if not transcript:
-                return
-            response = llm.invoke([
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": _USER_TEMPLATE.format(transcript=transcript)},
-            ])
-            if getattr(response, "error", None):
-                return
-            title = _sanitize(getattr(response, "content", ""))
+                return False
+            response = sdk.agent.complete(
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user",
+                     "content": _USER_TEMPLATE.format(transcript=transcript)},
+                ],
+                profile=profile,
+            ) or {}
+            title = _sanitize(response.get("content") or "")
             if title:
-                db.update_conversation_title(conversation_id, title)
+                sdk.conv.set_title(conversation_id, title)
                 # Frontends (sidebars, pinned banners) refresh off this;
                 # the kernel only emits created/deleted/recategorized.
-                bus.emit(CONVERSATION_CHANGED, {"action": "retitled", "conversation_id": conversation_id})
-                logger.info("Updated conversation %s title to '%s'.", conversation_id, title)
+                sdk.events.emit(CONVERSATION_CHANGED,
+                                {"action": "retitled",
+                                 "conversation_id": conversation_id})
+                sdk.log(f"updated conversation {conversation_id} title to "
+                        f"'{title}'.")
+                wrote = True
         finally:
-            db.update_conversation_title_check_count(conversation_id, message_count)
+            # Always advance the high-water mark — even if we skipped or failed
+            # — so an empty / un-titleable conversation does not replay.
+            self._mark(sdk, conversation_id, message_count)
+        return wrote
 
 
 # ======================================================================
 # Pure helpers
 # ======================================================================
 
-def _transcript(messages: list[dict]) -> str:
-    """Internal helper to handle transcript."""
+# The kernel's ``runtime.token_stripper`` does this and more, and a plugin
+# cannot import it — ``runtime`` is on the kernel side of the boundary. Copied
+# rather than turned into a Request: it is four patterns and a function, it is
+# pure, and growing the Request vocabulary for a string transform would be the
+# wrong direction. Only the batch half is here; the streaming filter has no
+# caller in a task that sees whole responses.
+_THINKING_PATTERN = re.compile(
+    r"<(?:think|thinking)>(.*?)</(?:think|thinking)>", re.DOTALL)
+_STRUCTURAL_PATTERN = re.compile(
+    r"<invoke.*?>.*?</invoke>|<tool_call.*?>.*?</tool_call>|"
+    r"<(?:/)?minimax:tool_call>|<\|im_end\|>|<\|eot_id\|>", re.DOTALL)
+_THINKING_TAG_PATTERN = re.compile(r"</?(?:think|thinking)>")
+
+
+def _strip_model_tokens(text: str) -> str:
+    """Reasoning blocks, tool-call XML and leaked EOS tokens removed.
+
+    The opening tag is *required* on a thinking block. Making it optional means
+    the non-greedy body matches "anything up to the next closer", so two blocks
+    around a title eat the title — a bug the kernel version documents at
+    length. A six-word answer has no room to lose any of itself.
+    """
+    clean = _THINKING_PATTERN.sub("", text or "")
+    clean = _STRUCTURAL_PATTERN.sub("", clean)
+    return _THINKING_TAG_PATTERN.sub("", clean).strip()
+
+
+def _transcript(messages: list) -> str:
+    """The first few turns, flattened to ``ROLE: text`` lines."""
     lines = []
     for msg in messages[:12]:
         role = (msg.get("role") or "").upper()
@@ -231,7 +314,7 @@ def _transcript(messages: list[dict]) -> str:
                 parsed = json.loads(content)
                 if isinstance(parsed, dict) and "tool_calls" in parsed:
                     content = parsed.get("content") or ""
-            except Exception:
+            except (TypeError, ValueError):
                 pass
         content = " ".join(content.split()).strip()
         if not content:
@@ -243,9 +326,8 @@ def _transcript(messages: list[dict]) -> str:
 
 
 def _sanitize(text: str) -> str:
-    """Internal helper to handle sanitize."""
-    title, _ = strip_model_tokens(text or "")
-    title = title.strip()
+    """One clean title line, or "" if the model produced nothing usable."""
+    title = _strip_model_tokens(text)
     if not title:
         return ""
     title = title.splitlines()[0].strip()
