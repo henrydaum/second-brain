@@ -1752,35 +1752,58 @@ def _agent_complete(ctx, args: dict) -> Result:
 
     Its own Request, never a generic ``service.call``: keys, sockets and
     provider details stay kernel-side and the sandbox sees a prompt.
+
+    Three ways to name the model, narrowest first. An explicit ``profile`` is
+    a *model name* the kernel resolves — the same handle-not-the-thing move
+    ``ModelRequest.llm`` makes, and what lets a background task select a
+    cheap model without holding one. A ``session_key`` means "whatever is
+    driving that session". Neither means the default profile.
     """
-    llm = None
+    from llm import default_brain
+    from llm.registry import as_brain, usable_brain
+
+    config = getattr(ctx, "config", None) or {}
+    brain = None
+    profile = (args.get("profile") or "").strip()
     session_key = args.get("session_key")
     runtime = _runtime(ctx)
-    if runtime is not None and session_key:
+    if profile:
+        brain = usable_brain(profile)
+        if brain is None:
+            return Result.failure(
+                f"no usable LLM profile named {profile!r}")
+    elif runtime is not None and session_key:
         try:
             from runtime.runtime_config import active_llm
 
             session = (getattr(runtime, "sessions", None) or {}).get(
                 session_key
             )
-            llm = active_llm(runtime, session)
+            brain = active_llm(runtime, session)
         except Exception:
             logger.exception(
                 "could not resolve the active LLM for %s", session_key
             )
-    llm = llm or _service(ctx, "llm")
-    if (bad := _need(llm, "an LLM")) is not None:
+    # ``as_brain`` is the seam: a Brain passes through, a directly injected
+    # ``chat_with_tools`` object (a test double, an unmigrated router) is
+    # wrapped. Without it this handler spoke a language only the doubles knew
+    # — every real brain exposes ``chat``, not ``chat_with_tools``.
+    brain = as_brain(brain or default_brain(config), config=config)
+    if (bad := _need(brain, "an LLM")) is not None:
         return bad
     messages = args.get("messages")
     if not messages:
         prompt = args.get("prompt") or ""
         messages = [{"role": "user", "content": prompt}]
     try:
-        response = llm.chat_with_tools(messages)
-        return Result(ok=not getattr(response, "is_error", False),
-                      data={"content": getattr(response, "content", ""),
-                            "tool_calls": getattr(response, "tool_calls", [])},
-                      error=str(getattr(response, "error", "") or ""))
+        from sandbox.guest.llm import LLMRequest
+
+        response = brain.chat(LLMRequest(messages=list(messages)))
+        return Result(ok=not response.is_error,
+                      data={"content": response.content or "",
+                            "tool_calls": list(response.tool_calls or []),
+                            "llm": getattr(brain, "name", "") or ""},
+                      error=str(response.error or ""))
     except Exception as exc:
         return Result.failure(f"model call failed: {exc}")
 

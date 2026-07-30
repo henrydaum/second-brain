@@ -622,12 +622,48 @@ def _net_http(ctx, args: dict) -> Result:
     )
     try:
         with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT) as response:
-            payload = response.read().decode("utf-8", errors="replace")
-            return Result(data={"status": response.status, "body": payload})
+            return Result(data=_answer(response))
     except urllib.error.HTTPError as exc:
-        return Result.failure(f"http {exc.code}", retryable=exc.code >= 500)
+        # An error *status* is an answer, not a failed request. The body is
+        # where an API explains itself — which rate limit, which parameter was
+        # wrong, how long to wait — and collapsing it to ``http 429`` threw
+        # away the only part the caller could act on. That loss was survivable
+        # only because callers reached around it: the store's web-search
+        # service carried a ``_read_http_error_body`` helper and its *tool*
+        # called that private method, which is what a discarded answer costs.
+        # The connection was made and the server replied, so this is a Result,
+        # and the guest branches on ``status`` exactly as it would on a 200.
+        return Result(data=_answer(exc))
     except (urllib.error.URLError, OSError, ValueError) as exc:
+        # No reply at all — DNS, refused, timed out. Nothing to hand back but
+        # the reason, so this stays a failure.
         return Result.failure(f"request failed: {exc}", retryable=True)
+
+
+def _answer(response) -> dict:
+    """One HTTP reply as plain data.
+
+    ``HTTPError`` is itself a readable response object, which is why the
+    success and error paths share this: the same three keys either way, so
+    nothing downstream has to know which branch produced it.
+
+    The body is UTF-8-decoded with replacement, so this Request answers about
+    text and text only. Binary egress is deliberately absent — the things that
+    want it (model weights, media) are foreign libraries doing their own I/O
+    inside their own box, already outside the kernel's reach and documented as
+    such.
+    """
+    try:
+        payload = response.read().decode("utf-8", errors="replace")
+    except (OSError, ValueError):
+        payload = ""
+    try:
+        headers = {str(k).lower(): str(v)
+                   for k, v in (response.headers or {}).items()}
+    except Exception:
+        headers = {}
+    status = getattr(response, "status", None) or getattr(response, "code", 0)
+    return {"status": int(status or 0), "body": payload, "headers": headers}
 
 
 # ── running commands ──────────────────────────────────────────────────

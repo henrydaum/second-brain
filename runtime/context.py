@@ -205,6 +205,17 @@ def set_kernel_parts(**parts) -> None:
     _KERNEL_PARTS.update({k: v for k, v in parts.items() if v is not None})
 
 
+def kernel_config() -> dict:
+    """The live config dict the composition root built, or ``{}``.
+
+    A reader for host-side code that needs a setting but has no context and no
+    session — the sandbox's policy function, which is handed a Request and a
+    chain and nothing else. It returns the *same* dict the kernel holds rather
+    than a reload, so a ``/config`` write is visible on the next read.
+    """
+    return _KERNEL_PARTS.get("config") or {}
+
+
 _POSITIONAL = ("db", "config", "services")
 
 

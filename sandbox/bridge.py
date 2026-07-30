@@ -251,7 +251,11 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         result = get_sandbox().run(
             source_path, entry, kwargs=payload, chain=chain, context=context,
             name=self.name or path.stem, method=method)
-        if method != "run":
+        # ``run_event`` is a second *entry point* rather than an exported
+        # helper, so it wants the family's real return translation — the
+        # orchestrator reads a ``TaskResult``, and handing it raw data means a
+        # successful sweep is indistinguishable from a crashed one.
+        if method not in ("run", "run_event"):
             return result.data if result.ok else None
         return _result_to_native(family, result, native_module)
 
@@ -265,6 +269,24 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
     def run_task(self, paths, context):
         """Native task contract."""
         return _forward(self, context, {"paths": list(paths or [])})
+
+    def run_task_event(self, run_id, payload, context):
+        """Native event-task contract.
+
+        A task has *two* entry points, not one, and only ``run`` was bridged —
+        so a migrated task declaring ``trigger = "event"`` loaded, registered,
+        subscribed to its channel, and then did nothing at all when the channel
+        fired: the orchestrator called ``run_event``, got the native base
+        class's do-nothing default, and recorded a successful run. Silence that
+        looks like success is the worst shape a gap can take, which is why this
+        is forwarded rather than left to the one-entry-point assumption.
+
+        ``run_id`` is deliberately not passed through. It identifies a
+        ``task_runs`` row the guest can neither read nor write, so it would be
+        an opaque token with nothing to spend it on.
+        """
+        return _forward(self, context, {"payload": dict(payload or {})},
+                        method="run_event")
 
     def run_command(self, args, context):
         """Native command contract."""
@@ -305,6 +327,12 @@ def adapt(path, entry: str = "", family: str = "") -> types.ModuleType | None:
         "_box": box_name,
         "_entry": entry,
         "run": run,
+        # Only when the file actually defines one, for the same reason
+        # ``form`` is conditional: an adapter carrying a doorway the guest
+        # never wrote would answer the orchestrator's call by forwarding into
+        # nothing.
+        **({"run_event": run_task_event} if family == "task"
+           and _defines(report.source, entry, "run_event") else {}),
         # The sentence the approval dialog asks, rendered from the same
         # declaration the grant is built from so the question a user answers
         # and the authority they hand over cannot drift apart.

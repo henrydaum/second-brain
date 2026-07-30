@@ -124,6 +124,16 @@ SETTINGS_DATA = [
      [],
      {"type": "json_list", "scope": "user"}),
 
+    ("Allowed Network Hosts", "net_allowed_hosts",
+     "Hosts sandboxed plugins may reach without asking you first, e.g. "
+     "api.search.brave.com. A bare domain also covers its subdomains. "
+     "Outbound requests are the one control that makes broad file and "
+     "database reads safe, so anything not listed here raises an approval "
+     "dialog naming the host — this list is how you decide once instead of "
+     "every time. A plugin cannot add to it.",
+     [],
+     {"type": "json_list"}),
+
     ("Data Retention (Days)", "data_retention_days",
      "Delete data older than this many days: idle conversations (and their "
      "messages), action-ledger rows, and finished task-run records. Anything "

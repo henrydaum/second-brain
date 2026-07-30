@@ -250,8 +250,16 @@ CEILINGS = {"load_timeout": 600.0, "timeout": 600.0, "max_calls": 25,
             "poll_interval": 3600.0, "max_poll_failures": 100}
 
 # Declarations the kernel reads without importing, so they must be literals.
+#
+# ``trigger_channels`` and ``subscribed_channels`` are here for the reason the
+# whole list exists, demonstrated: a task written as
+# ``trigger_channels = [UPDATE_TITLES]`` reads as the empty list, so it
+# validates, loads, registers, and then sits subscribed to nothing — the cron
+# job fires forever and the task never runs. There is no symptom to notice,
+# which makes it exactly the kind of thing to refuse at authoring time.
 LITERAL_LISTS = ("dependencies_files", "dependencies_pip",
-                 "requires_services", "requests", "exports")
+                 "requires_services", "requests", "exports",
+                 "trigger_channels", "subscribed_channels")
 LITERAL_STRINGS = ("name", "box", "lifetime")
 
 # Closed vocabularies. A typo here is silent otherwise: an unrecognised

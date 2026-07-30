@@ -191,7 +191,23 @@ class BaseTask(BasePlugin):
     max_workers: int = 0           # 0 means the orchestrator's default
 
     def run(self, sdk, paths):
-        """Process a batch of paths and return a Result."""
+        """Process a batch of paths and return a Result.
+
+        The entry point for ``trigger = "path"``. An event-triggered task
+        writes :meth:`run_event` instead and leaves this alone — the two are
+        different jobs, not one job with an optional argument, and a task that
+        implemented the wrong one used to fail silently.
+        """
+        raise NotImplementedError
+
+    def run_event(self, sdk, payload):
+        """React to one event on a subscribed channel, and return a Result.
+
+        The entry point for ``trigger = "event"``. ``payload`` is whatever the
+        emitter sent, already checked against ``event_payload_schema`` if one
+        is declared. There is no run id: it names a ``task_runs`` row a plugin
+        can neither read nor write.
+        """
         raise NotImplementedError
 
 

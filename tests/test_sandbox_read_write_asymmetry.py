@@ -23,38 +23,123 @@ def _chain():
     return Chain(root="user").push("some_plugin")
 
 
-# ── db.write may not reach what db.query is scoped away from ──────────
+# ── db.write: kernel rows are data, kernel schemas are structure ──────
+#
+# The line here moved once, and the reason is worth keeping. It used to be
+# "kernel tables are not writable at all", argued from ``db.write`` being a way
+# around ``conv.delete``'s dialog. What that actually blocked was bookkeeping:
+# not every kernel *column* has a Request behind it, so a task maintaining one
+# had to mirror rows it could already read into a shadow table. Meanwhile the
+# integrity fear was unfounded — ``ON DELETE CASCADE`` plus
+# ``PRAGMA foreign_keys = ON`` means raw SQL cascades exactly as ``conv.delete``
+# does, that being a bare DELETE itself.
+#
+# So: data is writable, structure is not, and the one irreversible data write
+# is asked about rather than refused.
 
 @pytest.mark.parametrize("sql", [
-    "UPDATE users SET password_hash='x' WHERE id=1",
-    "DELETE FROM conversations",
-    "UPDATE conversations SET user_id=2",
-    "INSERT INTO action_ledger (origin) VALUES ('forged')",
-    "DELETE FROM conversation_messages",
+    "UPDATE conversations SET last_title_check_message_count = 4 WHERE id = 1",
+    "INSERT INTO action_ledger (origin) VALUES ('plugin')",
+    "UPDATE users SET user_type = 'paid' WHERE id = 2",
+    "UPDATE conversation_messages SET content = 'edited' WHERE id = 9",
 ])
-def test_kernel_tables_are_not_writable_through_a_request(sql):
-    """``db.write`` was the way around the rest of the catalogue.
+def test_kernel_table_rows_are_writable(sql):
+    """Changing data cannot change how the kernel works; only structure can."""
+    assert scope_write(sql) == sql
+    assert classify(Request(DB_WRITE, {"sql": sql}), _chain()).level == SAFE
 
-    ``conv.delete`` prompts and ``DELETE FROM conversations`` did not;
-    ``user.write`` prompts and ``UPDATE users SET password_hash`` did not.
-    Both are the same act, so both get the same answer.
+
+@pytest.mark.parametrize("sql", [
+    "DROP TABLE action_ledger",
+    "ALTER TABLE users ADD COLUMN x",
+    "ALTER TABLE conversations DROP COLUMN title",
+    "CREATE TABLE conversations (id INTEGER)",
+])
+def test_kernel_table_schemas_are_not(sql):
+    """A dropped column breaks every query the kernel makes against it."""
+    with pytest.raises(ScopeError):
+        scope_write(sql)
+    assert _db_write(None, {"sql": sql}).denied
+
+
+def test_ddl_is_refused_through_db_define_too():
+    """``db.define`` is the other door onto the same act."""
+    assert _db_define(None, {"ddl": "DROP TABLE action_ledger"}).denied
+
+
+@pytest.mark.parametrize("sql", [
+    "PRAGMA writable_schema = ON",
+    "UPDATE sqlite_master SET sql = 'x'",
+    "UPDATE sqlite_schema SET sql = 'x'",
+])
+def test_ddl_wearing_dml_s_clothes_is_still_ddl(sql):
+    """The bypass that makes the keyword check honest.
+
+    DDL is not only spelled CREATE: ``PRAGMA writable_schema=ON`` followed by
+    an ``UPDATE sqlite_master`` is schema surgery that starts with UPDATE.
+    Without these two refusals the rule above would ship with a hole in it.
     """
     with pytest.raises(ScopeError):
         scope_write(sql)
 
-    assert _db_write(None, {"sql": sql}).denied
+
+@pytest.mark.parametrize("sql", [
+    "ATTACH DATABASE '/etc/passwd' AS other",
+    "DETACH other",
+    "VACUUM",
+])
+def test_statements_that_act_on_the_file_are_refused(sql):
+    """These name no table, so a per-table check waves them straight through.
+
+    ``ATTACH`` is the sharp one: it opens an arbitrary path and exposes it to
+    SQL, which is filesystem access spelled in a language the filesystem rules
+    do not read.
+    """
+    with pytest.raises(ScopeError):
+        scope_write(sql)
 
 
-def test_ddl_cannot_redefine_a_kernel_table():
-    """Dropping the table is the obvious next try once writing is refused."""
-    assert _db_define(None, {"ddl": "DROP TABLE action_ledger"}).denied
-    assert _db_write(None, {"sql": "ALTER TABLE users ADD COLUMN x"}).denied
+def test_a_credential_column_is_never_writable():
+    """Unwritable for the same reason it is unreadable, and not a table rule.
+
+    Every other column on ``users`` is ordinary metadata a frontend may
+    maintain; this one has no bookkeeping use and an unrecoverable accident.
+    """
+    with pytest.raises(ScopeError):
+        scope_write("UPDATE users SET password_hash='x' WHERE id=1")
+    assert _db_write(None, {"sql": "UPDATE users SET password_hash='x'"}).denied
+
+
+@pytest.mark.parametrize("sql", [
+    "DELETE FROM conversations WHERE id = 5",
+    "DELETE FROM conversation_messages",
+    "DELETE FROM users WHERE id = 2",
+])
+def test_deleting_kernel_rows_is_asked_about(sql):
+    """Legitimate, and irreversible — which is what a dialog is for.
+
+    An UPDATE with a bad WHERE clause leaves the rows there to fix. A DELETE
+    with the same bad WHERE clause leaves somebody asking where their
+    conversations went, so this one is asked rather than assumed.
+    """
+    assert scope_write(sql) == sql
+    decision = classify(Request(DB_WRITE, {"sql": sql}), _chain())
+    assert decision.level == UNSAFE
+    assert "delete" in decision.reason
+
+
+def test_a_leading_comment_does_not_hide_the_verb():
+    """The first *word* is the check, and a statement may open with a comment."""
+    sql = "-- tidy up\nDELETE FROM conversations"
+    assert classify(Request(DB_WRITE, {"sql": sql}), _chain()).level == UNSAFE
 
 
 @pytest.mark.parametrize("sql", [
     "INSERT INTO plugin_notes (body) VALUES ('hi')",
     "CREATE TABLE my_notes_files (id INTEGER)",
+    "DROP TABLE my_notes_files",
     "UPDATE search_index SET score = 1",
+    "DELETE FROM search_index WHERE stale = 1",
 ])
 def test_plugin_owned_tables_stay_freely_writable(sql):
     """The check is a table list, not a ban on writing.
@@ -62,14 +147,16 @@ def test_plugin_owned_tables_stay_freely_writable(sql):
     ``my_notes_files`` is the interesting one: it contains ``files``, and a
     substring match rather than a word match would refuse a plugin's own
     table and make ``db.define`` useless for anything with a common noun in
-    its name.
+    its name. The DELETE matters too — a dialog every time a plugin tidies its
+    own cache is how people learn to stop reading dialogs.
     """
     assert scope_write(sql) == sql
+    assert classify(Request(DB_WRITE, {"sql": sql}), _chain()).level == SAFE
 
 
 def test_a_refused_write_is_a_denial_not_a_breakage():
     """``except sdk.Denied`` has to catch policy, or the split means nothing."""
-    assert _db_write(None, {"sql": "DELETE FROM users"}).denied
+    assert _db_write(None, {"sql": "DROP TABLE users"}).denied
 
 
 def test_every_kernel_table_names_the_request_that_replaces_it():

@@ -253,7 +253,7 @@ ALWAYS_UNSAFE = {
 ALWAYS_SAFE = {
     R.SELF_RESPOND, R.FS_TEMP, R.FS_READ, R.FS_READ_BYTES,
     R.FS_LIST, R.FS_SEARCH,
-    R.DB_QUERY, R.DB_WRITE, R.DB_DEFINE,
+    R.DB_QUERY, R.DB_DEFINE,
     R.CONV_READ, R.CONV_LIST, R.CONV_CREATE, R.CONV_APPEND,
     R.CONV_SET_TITLE, R.CONV_SET_CATEGORY, R.CONV_SET_NOTIFICATION_MODE,
     R.CONV_LOAD, R.CONV_CLEAR,
@@ -339,6 +339,7 @@ ALWAYS_SAFE = {
 # decision being made about it — silently defaulting to "unsafe" would look
 # like policy when it is really an oversight.
 _BRANCHED = {NET_HTTP, PROC_RUN, R.PROC_START, R.SCRIPT_RUN,
+             R.DB_WRITE,
              FS_WRITE, R.FS_WRITE_BYTES,
              FS_MOVE, FS_DELETE, FS_TEMP,
              CONFIG_READ, R.CONFIG_WRITE, ENV_READ, R.SECRET_REVEAL,
@@ -348,6 +349,148 @@ _BRANCHED = {NET_HTTP, PROC_RUN, R.PROC_START, R.SCRIPT_RUN,
              R.TASK_PAUSE, R.TASK_RESET}
 _UNDECIDED = R.ALL_TYPES - ALWAYS_SAFE - ALWAYS_UNSAFE - _BRANCHED
 assert not _UNDECIDED, f"unclassified Requests: {sorted(_UNDECIDED)}"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Database writes.
+# ──────────────────────────────────────────────────────────────────────
+#
+# Writing rows is ordinary and stays ordinary — including rows in the kernel's
+# own tables, because data cannot change how the kernel works and only
+# structure can. ``sandbox/users.py`` is where that argument lives and where
+# schema changes are refused outright; this function asks the narrower
+# question the policy layer is actually for: *should a person be told first.*
+#
+# For one statement, yes. A DELETE against a kernel table is the only row write
+# that cannot be undone by writing again — an UPDATE with a bad WHERE clause
+# leaves the rows there to fix, and a DELETE with the same bad WHERE clause
+# leaves a person asking where their conversations went. Nothing else about it
+# is dangerous, which is exactly why asking is the right response rather than
+# refusing: the act is legitimate, it is just irreversible, and irreversible is
+# what a dialog is for.
+#
+# A plugin's own tables are not included. Losing a plugin's cache is a plugin's
+# problem, and a dialog for every row it tidies up is how people learn to stop
+# reading dialogs.
+
+def _classify_db_write(args: dict) -> Decision:
+    """Decide about one database write. See the section comment above."""
+    from .users import is_kernel_delete
+
+    sql = args.get("sql") or ""
+    if (table := is_kernel_delete(sql)):
+        return Decision(UNSAFE, f"delete rows from {table}")
+    return Decision(SAFE, "write rows")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Egress.
+# ──────────────────────────────────────────────────────────────────────
+#
+# ``net.http`` is the single control that makes generous filesystem and
+# database reads safe: a plugin that reads everything still cannot send
+# anything anywhere. So this branch is the one place where relaxing anything
+# has to be argued for rather than assumed, and the argument is narrow.
+#
+# What relaxes it is a **host allowlist the user maintains** — the config
+# setting ``net_allowed_hosts``. That is deliberately not a declaration on the
+# plugin. An ``endpoints = [...]`` line read off the source would make the code
+# being contained the authority on its own reach, which is exactly the bug
+# ``isolation = "subprocess"`` had and ``sandbox/isolation.py`` exists to
+# prevent: an agent authoring a plugin would author its own egress by typing a
+# hostname. A person deciding what code may reach is a different act, and it is
+# the same shape as the planned per-tree isolation override.
+#
+# The host is the unit rather than the URL because the host is what a person
+# can actually decide about. Nobody can usefully answer "may this plugin fetch
+# /v1/web/search?q=…" every time; "may this app talk to api.search.brave.com"
+# is a question with a stable answer. Path and query are therefore *not*
+# matched — inside an allowed host the plugin may ask anything, which is honest
+# about what the grant means.
+#
+# Recognizers exist for the same reason the shell has them: somewhere for a
+# remembered or structural allowance to live later, visible in the policy
+# rather than inside the plugin it authorizes. The list ships empty and the
+# allowlist check is the one built-in rule.
+_NET_RECOGNIZERS: list = []
+
+
+def _allowed_hosts() -> set:
+    """Hosts the user has said this app may talk to.
+
+    Read live from the kernel's config on every call rather than cached, so a
+    ``/config`` edit takes effect on the next Request instead of at the next
+    restart. Removing a host has to be as immediate as adding one — a stale
+    allowlist that still permits what a person just revoked is the failure this
+    cannot afford.
+
+    Absent kernel (tests, a bare container) means an empty allowlist, which
+    refuses everything. Failing closed is the only safe direction here.
+    """
+    try:
+        from runtime.context import kernel_config
+
+        raw = (kernel_config() or {}).get("net_allowed_hosts") or []
+    except Exception:
+        return set()
+    if isinstance(raw, str):
+        raw = [part.strip() for part in raw.split(",")]
+    return {str(host).strip().lower().lstrip(".") for host in raw
+            if str(host).strip()}
+
+
+def request_host(url) -> str:
+    """The host a URL names, lowercased, or "" if it names none.
+
+    Shared by the classifier and the dialog so the host a person is asked
+    about is the host that was matched. Anything unparseable comes back empty,
+    which no allowlist entry can equal — so a malformed URL is asked about
+    rather than slipping through on a comparison that failed open.
+    """
+    from urllib.parse import urlsplit
+
+    try:
+        return (urlsplit(str(url or "")).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _host_allowed(host: str, allowed: set) -> bool:
+    """Whether ``host`` is covered, exactly or as a subdomain.
+
+    ``example.com`` in the allowlist covers ``api.example.com``, because a
+    person naming a service means the service and not one hostname of it. It
+    does **not** cover ``notexample.com`` — the match is on a dot boundary, or
+    a suffix comparison would hand every attacker-registered lookalike the
+    grant.
+    """
+    if not host or not allowed:
+        return False
+    return any(host == entry or host.endswith("." + entry)
+               for entry in allowed)
+
+
+def _classify_net(args: dict) -> Decision:
+    """Decide about one outbound request. See the section comment above."""
+    url = args.get("url", "")
+    host = request_host(url)
+    # A GET with data in the query string is exfiltration exactly as much as a
+    # POST body is, so the verb is not consulted — only where it is going.
+    if _host_allowed(host, _allowed_hosts()):
+        return Decision(SAFE, f"{host} is an allowed host")
+    for recognize in _NET_RECOGNIZERS:
+        try:
+            if (why := recognize(url, args)):
+                return Decision(SAFE, why)
+        except Exception:
+            # A recognizer that raises abstains. It can only ever widen, so
+            # failing it closed costs a dialog and nothing else.
+            continue
+    # The host is named separately from the URL because it is the thing the
+    # answer is really about — and because a URL can be long enough to push
+    # the decision off the end of a dialog.
+    where = f" ({host})" if host else ""
+    return Decision(UNSAFE, f"outbound request to {url}{where}")
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -549,10 +692,11 @@ def classify(request: Request, chain: Chain) -> Decision:
 
     # ── egress: checked regardless of verb ────────────────────────
     if kind == NET_HTTP:
-        # A GET with data in the query string is exfiltration exactly as much
-        # as a POST body is. This is the single control that makes generous
-        # filesystem and database reads safe, so it gets no exceptions.
-        return Decision(UNSAFE, f"outbound request to {args.get('url', '')}")
+        return _classify_net(args)
+
+    # ── database writes: rows are ordinary, losing them is not ────
+    if kind == R.DB_WRITE:
+        return _classify_db_write(args)
 
     # ── the shell ─────────────────────────────────────────────────
     if kind in (PROC_RUN, R.PROC_START):

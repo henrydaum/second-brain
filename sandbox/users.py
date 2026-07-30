@@ -38,18 +38,51 @@ VIRTUAL_PREFIX = "my_"
 
 # Tables the kernel owns, and the Request that maintains each properly.
 #
-# Reads and writes need different shapes of answer. A read can be *narrowed* —
-# rewrite the table name and the caller gets its own rows — but there is no
-# equivalent for a write: SQLite cannot UPDATE a subquery, so the virtual-name
-# trick has nothing to expand into. Refusing outright is the honest version,
-# and it costs nothing, because every one of these tables already has a
-# dedicated Request that does the same job *with* the access check.
+# Kernel table *rows* are writable through ``db.write``; kernel table *schemas*
+# are not. That is the line, and it is a different line than the one this
+# module first drew.
 #
-# Without this, ``db.write`` was a way around the rest of the catalogue:
-# ``conv.delete`` prompts, ``DELETE FROM conversations`` did not; ``user.write``
-# prompts, ``UPDATE users SET password_hash`` did not. Plugin-owned tables —
-# anything a plugin made with ``db.define`` — stay freely writable, which is
-# what ``db.write`` is actually for.
+# **Why rows are fine.** Changing data cannot change how the kernel works —
+# only changing structure can. Every query the kernel issues keeps working
+# against edited rows and stops working against a dropped column, so structure
+# is where the breakage lives. The two objections to opening rows both turned
+# out to be wrong: ``conversation_messages`` declares ``ON DELETE CASCADE`` and
+# the connection runs with ``PRAGMA foreign_keys = ON``, so a raw
+# ``DELETE FROM conversations`` cascades exactly as ``conv.delete`` does — which
+# is itself a bare DELETE — and nothing is orphaned. Meanwhile the wall's real
+# cost was ordinary bookkeeping: not every kernel *column* has a Request behind
+# it (``conversations.last_title_check_message_count`` is a high-water mark with
+# no ``conv.*`` verb), so a task keeping one had to invent a shadow table
+# mirroring rows it could already read.
+#
+# The named Request is still the better route where one exists: it carries the
+# owner check, it emits the bus event frontends redraw from, and it is what the
+# ledger records meaningfully. The mapping below is what an author gets pointed
+# at, not a wall.
+#
+# **Why the keyword check is sound here and was not for the shell.**
+# ``Database.execute_write`` uses ``conn.execute``, which runs exactly one
+# statement — a ``;``-chained script raises. So reading the leading keyword is
+# not racing against chaining, quoting or substitution the way
+# ``tool_run_command``'s whitelist was. One statement, first token, decidable.
+#
+# **Three things stay refused**, and none of them is "a kernel table":
+#
+#   - ``password_hash`` — unwritable for the same reason it is unreadable.
+#     There is no bookkeeping reason to touch a credential column, so the
+#     carve-out costs nothing and the accident it prevents is unrecoverable.
+#   - ``sqlite_master`` / ``sqlite_schema`` and ``PRAGMA`` — because DDL is not
+#     only spelled CREATE. ``PRAGMA writable_schema=ON`` followed by an
+#     ``UPDATE sqlite_master SET sql=…`` is schema surgery wearing DML's
+#     clothes, and without this the rule would ship with a documented bypass.
+#   - DDL naming a kernel table — the actual point.
+#
+# **Known gap, deliberately left.** A row write has no owner check. Reads solve
+# that with the ``my_`` virtual name, and writes cannot: SQLite will not UPDATE
+# a subquery, so there is nothing for the trick to expand into. Today every
+# frontend is single-user and it costs nothing; it becomes real the day a
+# ``per_user`` frontend is, and closing it then means inspecting WHERE clauses —
+# the fragile-parser shape this module otherwise refuses to build.
 KERNEL_TABLES = {
     "users": "sdk.user.write",
     "conversations": "sdk.conv.* (create, set_title, delete, ...)",
@@ -111,23 +144,103 @@ def scope_sql(sql: str, params, user_id):
     return scoped, params
 
 
-def scope_write(sql: str):
-    """Refuse a statement that reaches a table the kernel maintains.
+# Statements that change one table's structure. Refused when they name a kernel
+# table, allowed otherwise — ``db.define`` exists to create things, and a
+# plugin's own table is nobody else's business.
+DDL_KEYWORDS = frozenset({
+    "CREATE", "DROP", "ALTER", "RENAME", "REINDEX",
+})
 
-    Returns ``sql`` unchanged, or raises :class:`ScopeError` naming the
-    Request that does the job properly. Used by ``db.write`` and ``db.define``
-    alike: creating, altering or dropping a kernel table is the same
-    trespass as writing rows into one.
+# Statements that act on the database *file* rather than on any table in it, and
+# are therefore refused whether or not a kernel table is named. Gating these on
+# a table name is a mistake worth spelling out: ``ATTACH DATABASE '/etc/x.db'``
+# mentions no table at all, so a per-table check waves it straight through —
+# and what it actually does is open an arbitrary file and expose it to SQL,
+# which is filesystem access spelled in a language the filesystem rules do not
+# read. ``VACUUM`` rewrites the whole database, which is not a plugin's call to
+# make on a store everything else is using.
+FILE_LEVEL_KEYWORDS = frozenset({"ATTACH", "DETACH", "VACUUM"})
 
-    Deliberately a *table* check rather than a statement parser. Which tables
-    a statement touches is answerable by looking for their names; what an
-    arbitrary statement does is not, and a fragile SQL parser standing where a
-    security boundary should be is the thing this module already refuses to
-    build.
+# The schema table under both of its names, plus the pragma that makes it
+# writable. Refused in any statement, kernel table named or not: there is no
+# legitimate plugin reason to touch either, and together they are the way DML
+# becomes DDL.
+_SCHEMA_NAMES = ("sqlite_master", "sqlite_schema")
+
+_LEADING = re.compile(r"^\s*(?:--[^\n]*\n|/\*.*?\*/|\s)*([A-Za-z_]+)", re.DOTALL)
+
+
+def leading_keyword(sql: str) -> str:
+    """The statement's first bare word, uppercased, or "".
+
+    Comments before it are skipped, since a statement may legitimately open
+    with one. Only one statement can arrive here — ``conn.execute`` refuses a
+    chained script — so this word describes the whole of what will run.
     """
-    for table, instead in KERNEL_TABLES.items():
+    match = _LEADING.match(sql or "")
+    return match.group(1).upper() if match else ""
+
+
+def touches_kernel_table(sql: str) -> str:
+    """The first kernel table a statement mentions, or ""."""
+    for table in KERNEL_TABLES:
         if _mentions(sql, table):
+            return table
+    return ""
+
+
+def is_kernel_delete(sql: str) -> str:
+    """The kernel table a DELETE would empty rows from, or "".
+
+    Separated out because the policy function asks a different question than
+    this module does: not "may this be asked at all" but "should a person be
+    asked first". A delete is the one row write that cannot be undone by
+    writing again.
+    """
+    if leading_keyword(sql) != "DELETE":
+        return ""
+    return touches_kernel_table(sql)
+
+
+def scope_write(sql: str):
+    """Check a statement on its way to ``db.write`` or ``db.define``.
+
+    Returns ``sql`` unchanged, or raises :class:`ScopeError`. Kernel table rows
+    are writable and kernel table schemas are not — see :data:`KERNEL_TABLES`
+    for the argument, and prefer the named Request where one exists, because
+    that is the route carrying the owner check and the bus event.
+
+    Deliberately an *identifier and first-token* check rather than a statement
+    parser. Which names a statement mentions and which word it starts with are
+    both answerable by looking; what an arbitrary statement does is not, and a
+    fragile SQL parser standing where a security boundary should be is the
+    thing this module refuses to build.
+    """
+    for column in FORBIDDEN_COLUMNS:
+        if _mentions(sql, column):
             raise ScopeError(
-                f"{table} is a kernel table and is not writable through a "
-                f"Request; use {instead} instead")
+                f"{column} is never writable through a Request")
+
+    keyword = leading_keyword(sql)
+    if keyword == "PRAGMA":
+        raise ScopeError(
+            "PRAGMA is not available through a Request: it configures the "
+            "database itself, and one setting (writable_schema) turns an "
+            "ordinary UPDATE into a schema change")
+    if keyword in FILE_LEVEL_KEYWORDS:
+        raise ScopeError(
+            f"{keyword} acts on the database file rather than on its rows and "
+            f"is not available through a Request; reach files with sdk.fs")
+    for name in _SCHEMA_NAMES:
+        if _mentions(sql, name):
+            raise ScopeError(
+                f"{name} is the schema itself and is never writable through a "
+                f"Request; use sdk.db.define to create your own tables")
+
+    if keyword in DDL_KEYWORDS and (table := touches_kernel_table(sql)):
+        raise ScopeError(
+            f"{keyword} would change the structure of {table}, a kernel "
+            f"table — its rows are writable but its schema is not. Use "
+            f"{KERNEL_TABLES[table]} to change data, or sdk.db.define to "
+            f"create a table of your own")
     return sql

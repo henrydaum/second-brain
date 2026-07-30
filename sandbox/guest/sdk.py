@@ -611,11 +611,20 @@ class _Agent(_Namespace):
         prompt: str = "",
         messages=None,
         session_key: str | None = None,
+        profile: str = "",
     ):
-        """A model call. Keys and sockets stay kernel-side."""
+        """A model call. Keys and sockets stay kernel-side.
+
+        ``profile`` names a configured LLM profile — a *name*, never a model
+        object, because a box could not hold one anyway. Give it when the
+        choice of model is the plugin's own (a cheap model for a background
+        chore); leave it empty to drive with whatever the session drives with,
+        or the default profile when there is no session.
+        """
         return self._ask(AGENT_COMPLETE, prompt=prompt,
                          messages=list(messages or []),
-                         session_key=session_key or None)
+                         session_key=session_key or None,
+                         profile=profile)
 
     def spawn(
         self,

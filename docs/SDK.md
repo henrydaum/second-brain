@@ -179,7 +179,8 @@ sdk.fs.delete(path)
 sdk.fs.move(src, dst, copy=False)
 sdk.fs.temp(directory=False, suffix="")    # scratch space; always allowed
 
-sdk.net.http(url, method="GET", headers=None, body=None)  # -> {status, body}
+sdk.net.http(url, method="GET", headers=None, body=None)  # -> {status, body,
+                                           #     headers}
 
 sdk.proc.run(argv, timeout=120.0, cwd=None, shell=None)   # -> {code, stdout,
                                            #     stderr, command}
@@ -209,6 +210,20 @@ always asks. The two are not close in cost, so reach for the shell only when
 the work genuinely is another program. Keyword arguments go to the entry
 function — `sdk.scripts.run(p, total=3)` calls `main(sdk, total=3)` — and
 `wait=False` answers as soon as it has started rather than when it finishes.
+
+**Reaching the network.** `sdk.net.http` answers with
+`{status, body, headers}`, and an HTTP *error* status is an ordinary answer
+rather than a failure — check `status` the way you would for a 200. That is
+deliberate: a 429's body is where an API tells you which limit you hit and for
+how long, and only a request that got no reply at all (DNS, refused, timed out)
+raises. `body` is decoded text; there is no binary download.
+
+Whether it asks the user depends entirely on **where** it is going. The kernel
+config setting `net_allowed_hosts` lists hosts a plugin may reach without a
+dialog, and a bare domain covers its subdomains. Anything else prompts, naming
+the host. You cannot declare your own hosts and should not try — the point is
+that a person decides what this app talks to, so a service that needs an
+endpoint says so in its install notes and the user adds it once.
 
 **Running commands.** `run` blocks and hands back what the command printed;
 `start` hands back a *handle* to something still running, which `status`,
@@ -324,6 +339,24 @@ expands to the current user. Reading the base table is refused:
 sdk.db.query("SELECT * FROM my_conversations WHERE title LIKE ?", ["%tax%"])
 ```
 
+**Writing: rows yes, schemas no.** You may write rows in the kernel's own
+tables — data cannot change how the kernel works, only structure can. Prefer
+the named Request where one exists (`sdk.conv.set_title` over an `UPDATE`,
+`sdk.conv.append` over an `INSERT`), because those carry the owner check and
+emit the event frontends redraw from. Reach for `sdk.db.write` when there is no
+verb for what you need, which is mostly bookkeeping columns:
+
+```python
+sdk.db.write("UPDATE conversations SET last_title_check_message_count = ?"
+             " WHERE id = ?", [count, conversation_id])
+```
+
+Refused outright: `CREATE`/`DROP`/`ALTER` naming a kernel table, anything
+touching `sqlite_master`, any `PRAGMA`, `ATTACH`/`DETACH`/`VACUUM`, and
+`users.password_hash`. Asked about rather than refused: `DELETE` from a kernel
+table — it is the one row write you cannot undo by writing again. Your own
+tables, made with `sdk.db.define`, are yours to delete from freely.
+
 ### People and sessions
 
 ```python
@@ -368,7 +401,10 @@ sdk.plugins.install(package_id)
 sdk.plugins.uninstall(package_id)
 sdk.plugins.update()
 
-sdk.agent.complete(prompt)                # a model call
+sdk.agent.complete(prompt, messages=None, session_key=None, profile="")
+                                          # a model call. `profile` names an
+                                          # LLM profile; "" follows the
+                                          # session's, or the default.
 sdk.agent.spawn(prompt, title="Subagent", attachments=None,
                 wait=True, timeout_seconds=None)
 sdk.agent.collect(ids=None, timeout=None) # join children; ids=None = all mine

@@ -189,8 +189,8 @@ cap — binary reads get a larger one, because a 20 MB video is ordinary where a
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
 | `db.query(sql, params, max_rows)` | Read rows (reads only; capped at 500) | resolved tables/columns, user | safe |
-| `db.write(sql, params)` | Insert, update, delete | mentioned tables | **refused** on kernel tables, safe on plugin-owned |
-| `db.define(ddl)` | Create or alter a plugin-owned table | mentioned tables | **refused** on kernel tables, safe otherwise |
+| `db.write(sql, params)` | Insert, update, delete | leading keyword, mentioned tables/columns | safe; **unsafe** for `DELETE` on a kernel table; **refused** for DDL on one |
+| `db.define(ddl)` | Create or alter a plugin-owned table | leading keyword, mentioned tables | safe; **refused** on kernel tables |
 
 Reads stay deliberately unrestricted. Free reads are safe **because the exits
 are gated** — a plugin that reads everything still cannot send anything
@@ -204,27 +204,53 @@ Two narrow exceptions, both structural rather than policy:
   column in the schema.
 - User-scoped tables are reached through **per-user views**, not base tables.
 
-**Writes are narrower than reads**, which is the reverse of how the two usually
-go, and it follows from what each can be walked around. A broad read is
-contained by egress being gated; a broad write is contained by nothing, because
-it *is* the effect. So the kernel's own tables (`users`, `conversations`,
-`conversation_messages`, `action_ledger`, `files`, `registered_tasks`,
-`task_queue`, `task_runs`) are refused outright and reached through the
-Requests that carry their access checks — `conv.append`, `user.write`,
-`ledger.record`, `file.register`, the `task.*` family. Without this, `db.write`
-was a way around the rest of the catalogue: `conv.delete` prompts and
-`DELETE FROM conversations` did not; `user.write` prompts and
-`UPDATE users SET password_hash` did not.
+**For writes the line is data versus structure, not kernel versus plugin.**
+Changing rows cannot change how the kernel works — only changing structure can,
+because every query the kernel issues keeps working against edited rows and
+stops working against a dropped column. So:
 
-Refused rather than merely unsafe, because there is no narrowing available. A
-read can be rewritten to the caller's own rows; SQLite cannot `UPDATE` a
-subquery, so the virtual-name trick has nothing to expand into. And refusal
-costs nothing here — every one of those tables already has a Request that does
-the job properly. Plugin-owned tables stay freely writable, which is what
-`db.write` is actually for. The check is a **table-name** check, not a
-statement parser: which tables a statement mentions is answerable, what an
-arbitrary statement does is not, and a fragile SQL parser standing where a
-security boundary should be is exactly what this module refuses to build.
+- **Rows in kernel tables are writable.** The named Request is still the better
+  route where one exists (`conv.append`, `user.write`, `ledger.record`,
+  `file.register`, the `task.*` family) because it carries the owner check and
+  emits the bus event frontends redraw from. But not every kernel *column* has
+  a Request behind it — `conversations.last_title_check_message_count` is a
+  high-water mark with no `conv.*` verb — and a task maintaining one should not
+  have to mirror rows it can already read into a shadow table.
+- **Schemas in kernel tables are not.** `CREATE`/`DROP`/`ALTER`/`RENAME`/
+  `REINDEX` naming one is refused.
+- **`DELETE` on a kernel table is unsafe rather than safe**, so it prompts. It
+  is the one row write that cannot be undone by writing again: an `UPDATE` with
+  a bad `WHERE` leaves the rows there to fix, and a `DELETE` with the same bad
+  `WHERE` leaves somebody asking where their conversations went. Legitimate but
+  irreversible is what a dialog is for. Plugin-owned tables are excluded — a
+  dialog every time a plugin tidies its own cache is how people learn to stop
+  reading dialogs.
+- **`PRAGMA`, `sqlite_master`/`sqlite_schema`, `ATTACH`/`DETACH`/`VACUUM` are
+  refused outright.** The first two because DDL is not only spelled `CREATE`:
+  `PRAGMA writable_schema=ON` followed by `UPDATE sqlite_master SET sql=…` is
+  schema surgery that starts with `UPDATE`, and without these the keyword check
+  would ship with a hole. The rest because they act on the database *file* — and
+  `ATTACH DATABASE '/etc/x.db'` names no table at all, so a per-table check
+  waves straight through what is really filesystem access spelled in SQL.
+- **`users.password_hash` is refused in writes as in reads.** Not a table rule:
+  every other column on `users` is metadata a frontend may maintain, and this
+  one has no bookkeeping use and an unrecoverable accident.
+
+The check is an **identifier and first-token** check, not a statement parser.
+Which names a statement mentions and which word it begins with are both
+answerable by looking; what an arbitrary statement *does* is not. What makes the
+first token sufficient here — and makes this different from the shell classifier
+that died — is that `Database.execute_write` uses `conn.execute`, which runs
+exactly one statement and raises on a `;`-chained script. There is no second
+statement hiding behind a separator, so there is no race against chaining or
+quoting to lose.
+
+**One gap is left open deliberately.** A row write carries no owner check. Reads
+solve that with the `my_` virtual name and writes cannot: SQLite will not
+`UPDATE` a subquery, so there is nothing for the trick to expand into. While
+every frontend is single-user this costs nothing; it becomes real the day a
+`per_user` frontend is, and closing it then means inspecting `WHERE` clauses —
+the fragile-parser shape this section otherwise refuses to build.
 
 Raw `db.conn` and `db.lock` access is withdrawn — every current use migrates to
 these three Requests. Transaction scoping becomes an argument
@@ -622,13 +648,47 @@ not Requests.
 
 | Request | Purpose | Policy inputs | Default |
 |---|---|---|---|
-| `net.http(method, url, headers, body)` | Any outbound HTTP | host, method, secret handles present | **always checked, never auto-safe** |
+| `net.http(url, method, headers, body)` | Any outbound HTTP | the URL's host | safe for a host in `net_allowed_hosts`, otherwise **unsafe** |
 
 One Request, one gate. The verb is irrelevant: a `GET` with data in the query
-string is exfiltration. This is the single control that makes free filesystem
-and database reads safe, so it does not get exceptions.
+string is exfiltration exactly as much as a `POST` body is, so only the
+destination is consulted. This is the single control that makes free filesystem
+and database reads safe.
 
-Secret handles are substituted here, on the way out.
+**The one thing that relaxes it is a host allowlist the user maintains** — the
+kernel config setting `net_allowed_hosts`, empty by default. A bare domain also
+covers its subdomains, matched on a dot boundary so `example.com` covers
+`api.example.com` and not `notexample.com`. Path and query are not matched: the
+host is what a person can usefully decide about once, where "may this plugin
+fetch /v1/search?q=…" has no stable answer.
+
+It is deliberately **not** a declaration on the plugin. An `endpoints = [...]`
+line read off the source would make the code being contained the authority on
+its own reach — the same bug `isolation = "subprocess"` had, one level down, and
+an agent authoring a plugin would author its own egress by typing a hostname. A
+person deciding what the app may talk to is a different act.
+
+`policy._NET_RECOGNIZERS` exists beside the allowlist for the reason the shell
+has recognizers: somewhere for a remembered or structural allowance to live
+later, visible in the policy rather than inside the plugin it authorizes. It
+ships empty.
+
+Two details that fail closed. The host is parsed from the URL *before* secret
+substitution, so a `<secret:…>` standing where a hostname goes resolves to no
+recognisable host and is asked about rather than allowed. And an unparseable URL
+yields the empty host, which no allowlist entry can equal.
+
+**The answer includes error statuses.** `net.http` returns
+`{status, body, headers}`, and an HTTP error status arrives that way too rather
+than collapsing into a failure — a 429's body is where an API says which limit
+and for how long, and a caller that gets `http 429` and nothing else cannot act
+on it. Only a request that got no reply at all (DNS, refused, timed out) is a
+failure. The body is UTF-8-decoded with replacement, so this Request answers
+about text and text only; binary egress is absent by design, since the things
+wanting it are foreign libraries doing their own I/O inside their own box.
+
+Secret handles are substituted here, on the way out, after the policy function
+has already decided.
 
 ## 18. Process
 
