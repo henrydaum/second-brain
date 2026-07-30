@@ -363,7 +363,10 @@ fact. Four origins:
   a bare Request type cannot. **Reads are dropped** at the sink
   (`requests.READ_ONLY`) or a polling frontend would write twenty
   `console.read` rows a second forever; anything refused is kept regardless
-  of type, since a denied read is a real event.
+  of type, since a denied read is a real event. `error_code` on a sandbox row
+  is now `Result.code` (see **Error codes** below), falling back to `"failed"`
+  for an uncoded failure — it used to be a two-value vocabulary
+  reverse-engineered from whether the *message* started with "denied".
 
 Failure policy: ledger writes are best-effort at every layer
 (`db.record_action` swallows + logs; `runtime/ledger.py` helpers tolerate
@@ -906,6 +909,27 @@ def run(self, sdk, path):
 
 `sdk.Denied` (refused) subclasses `sdk.Failed` (anything). `sdk.ok(x,
 llm_summary=...)` only when attaching extras. `sdk.log(...)`, never `logging`.
+
+**Error codes** (`sandbox/guest/codes.py`). `Result.error` is a sentence, and a
+sentence is for a person; `Result.code` is the `ERROR_*` token code branches on.
+Which of the two `sdk` exceptions gets raised is `code in DENIAL_CODES` — it
+used to be `error.startswith("denied")`, so a handler reporting *"denied by the
+remote host"* made a plugin catch `sdk.Denied`, the kernel's own word for
+policy, for a web server's refusal. The `"denied: "` prefix survives in the
+message text and is now purely cosmetic; nothing reads it.
+
+Two rules keep this a vocabulary rather than a rename of all 166 failure sites.
+**An empty code is not a bug** — most failures are only ever read by a person,
+and a code exists once a *second* reader needs to branch. Only the ~12 failures
+the kernel mints for itself carry one today (timeout, guest fault, cancelled,
+shutting down, approval declined, not permitted). And **`retryable` stays
+orthogonal**: it is set by whoever knows, never derived from the code.
+
+Adding a field to `Result` means editing `to_dict` *and* `from_dict`, which
+enumerate fields by hand — forget the first and the field is lost only on the
+subprocess hop, silent in-process. `tests/test_sandbox_error_contract.py`
+derives its expectation from `dataclasses.fields`, so it fails the moment a
+field is added without a value.
 
 **Secrets.** A config setting holding a credential is *named* `secret_*` —
 that prefix is the declaration, matching how the rest of the system declares

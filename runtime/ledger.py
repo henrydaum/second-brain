@@ -109,7 +109,6 @@ def sandbox_sink(db):
             return
         try:
             ok = bool(getattr(result, "ok", False))
-            refused = bool(getattr(result, "denied", False))
             if request.type in READ_ONLY and ok and decision.safe:
                 return
             write(
@@ -119,8 +118,13 @@ def sandbox_sink(db):
                 name=chain.links[-1] if chain.links else chain.root,
                 actor_id=chain.root,
                 args=request.args,
-                error_code=("denied" if refused
-                            else None if ok else "failed"),
+                # The Result says why now. This used to ask ``result.denied``,
+                # which asked whether the *message* began with "denied" — so
+                # the ledger's two-value vocabulary was reverse-engineered
+                # from prose. ``or "failed"`` keeps the old catch-all for an
+                # uncoded failure, so existing rows stay comparable.
+                error_code=None if ok else (
+                    getattr(result, "code", "") or "failed"),
                 error_message=getattr(result, "error", None) or None,
                 data={"chain": chain.render(), "level": decision.level,
                       "reason": decision.reason},

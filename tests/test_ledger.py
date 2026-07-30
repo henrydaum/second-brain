@@ -271,3 +271,25 @@ def test_polling_reads_are_not_recorded_but_denials_are(tmp_path):
     rows = db.get_ledger_rows(origin=SANDBOX_ORIGIN)
     assert [r["action_type"] for r in rows] == ["fs.read"]
     assert rows[0]["error_code"] == "denied"
+
+
+def test_a_coded_failure_reaches_the_ledger_as_its_code(tmp_path):
+    """The sink records what the Result says, not a guess from its message."""
+    from runtime.ledger import SANDBOX_ORIGIN
+    from sandbox.guest.codes import ERROR_NOT_PERMITTED, ERROR_TIMEOUT
+
+    db, record = _sink(tmp_path)
+    chain = Chain(root="user").push("tool_x")
+
+    record(chain, Request("fs.read", {"path": "/x"}), Decision(UNSAFE, "no"),
+           Result.refusal("protected", code=ERROR_NOT_PERMITTED))
+    record(chain, Request("net.http", {"url": "https://x/"}),
+           Decision(UNSAFE, "no"),
+           Result.failure("timed out", code=ERROR_TIMEOUT))
+    # An uncoded failure keeps the old catch-all, so rows stay comparable.
+    record(chain, Request("proc.run", {"command": "x"}),
+           Decision(UNSAFE, "no"), Result.failure("something broke"))
+
+    # get_ledger_rows is ORDER BY id DESC — newest first.
+    codes = [r["error_code"] for r in db.get_ledger_rows(origin=SANDBOX_ORIGIN)]
+    assert codes == ["failed", ERROR_TIMEOUT, ERROR_NOT_PERMITTED]
