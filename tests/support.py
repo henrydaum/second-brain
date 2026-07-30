@@ -14,7 +14,11 @@ failure that looks like a kernel bug. Fixtures wrapping these live in
 scope.
 """
 
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def response(content="", tool_calls=None, **extra):
@@ -144,3 +148,44 @@ def make_runtime(tmp_path, responses=None, *, name="test.db", services=None,
                                   config=config or {}, **kwargs)
     session = runtime.load_conversation(session_key, cid)
     return runtime, session, llm
+
+
+# ── Reaching the store branch ─────────────────────────────────────────
+#
+# Some kernel invariants are about *store* files: what the validator says
+# about them, and what declarations the bridge reads off them. Those files are
+# not in this tree, so they are materialized from the store branch.
+#
+# A worktree is preferred over the committed ref when the clone has one.
+# Mid-migration the interesting version of a file is the one being edited, and
+# a test that silently checks the last commit instead is a test that passes
+# while the work is broken.
+
+def store_worktree():
+    """A checkout of the store branch, if this clone has one."""
+    proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "worktree", "list", "--porcelain"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        encoding="utf-8", check=False)
+    root = None
+    for line in proc.stdout.splitlines():
+        if line.startswith("worktree "):
+            root = Path(line.split(" ", 1)[1])
+        elif line.strip() in {"branch refs/heads/store", "branch store"}:
+            return root
+    return None
+
+
+def store_source(relative: str):
+    """The store's copy of one file, from a worktree or a ref, or None."""
+    worktree = store_worktree()
+    if worktree is not None and (worktree / relative).is_file():
+        return (worktree / relative).read_text(encoding="utf-8")
+    for ref in ("store", "origin/store"):
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "show", f"{ref}:{relative}"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            encoding="utf-8", check=False)
+        if proc.returncode == 0:
+            return proc.stdout
+    return None

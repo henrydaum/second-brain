@@ -21,6 +21,13 @@ from pathlib import Path
 
 import pytest
 
+# These exercise behaviour of a file on the store branch, so a kernel change
+# cannot break them and they do not belong in the kernel's default run. The
+# claims the *kernel* makes about this frontend -- conformance, the
+# declarations the bridge reads, resolved isolation -- live in
+# tests/test_store_frontend_contracts.py and still run by default.
+pytestmark = pytest.mark.store
+
 # Aliases the guest package under the bare name ``guest``, which is how plugin
 # source resolves its imports both in-process and in a child.
 import sandbox  # noqa: F401
@@ -112,61 +119,12 @@ def renderers(module):
 # Conformance: the verdict that decides whether it loads at all.
 # ──────────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("relative", [_FRONTEND_REL, _HELPER_REL])
-def test_the_store_files_conform(sources, relative):
-    """No ERROR findings — warnings about foreign libraries are the point."""
-    from sandbox.validator import validate
-
-    report = validate(sources[relative], filename=Path(relative).name)
-    errors = [f for f in report.findings if f.level == "error"]
-    assert not errors, report.render()
 
 
-def test_the_frontend_declares_what_the_kernel_has_to_know(sources):
-    """The declarations the bridge reads, and cannot infer if they are missing.
-
-    Each of these changes behaviour rather than describing it, and each is
-    invisible until it is wrong: without ``background_submit`` the box
-    deadlocks against the turn it started, and a ``capabilities`` entry the
-    AST cannot evaluate is silently dropped.
-    """
-    from sandbox.validator import validate
-
-    declared = validate(sources[_FRONTEND_REL],
-                        filename="frontend_telegram.py").declarations
-    assert declared["family"] == "frontend"
-    assert declared["name"] == "telegram"
-    assert declared["background_submit"] is True
-    assert declared["restore_on_start"] is True
-    assert declared["dependencies_files"] == [_HELPER_REL]
-    assert "python-telegram-bot" in declared["dependencies_pip"]
-    assert declared["capabilities"]["max_upload_size"] == 50 * 1024 * 1024
-    assert declared["capabilities"]["max_message_chars"] == 4096
 
 
-def test_every_declared_request_is_a_real_one(sources):
-    """``requests`` is the approval grant, so a typo silently narrows it."""
-    from guest.requests import ALL_TYPES
-    from sandbox.validator import validate
-
-    declared = validate(sources[_FRONTEND_REL],
-                        filename="frontend_telegram.py").declarations
-    assert set(declared["requests"]) <= set(ALL_TYPES)
 
 
-def test_it_needs_a_subprocess(sources):
-    """The event loop it owns cannot survive a thread-per-call box.
-
-    An in-process resident box runs each call on a fresh worker thread, so a
-    loop created in ``start`` could not be driven from ``poll``. Nothing in the
-    file asks for isolation — it is read off the imports, and this pins that
-    the reading comes out right.
-    """
-    from sandbox.validator import validate
-
-    report = validate(sources[_FRONTEND_REL], filename="frontend_telegram.py")
-    assert "telegram" in report.unmediated
-    assert "asyncio" in report.unmediated
 
 
 # ──────────────────────────────────────────────────────────────────────

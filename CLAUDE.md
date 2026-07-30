@@ -38,12 +38,20 @@ future store) — *not* by deleting them. What remains:
   authoring tools are package capabilities unless discovery shows they are
   installed.
 - **Frontend:** `frontend_repl` only. Telegram (`frontend_telegram`, migrated
-  to the SDK; tested from main via `tests/test_frontend_telegram.py`) and the
-  MCP server (`frontend_mcp_server` — exposes Second Brain to external MCP
-  clients over streamable HTTP; tested via `tests/test_frontend_mcp.py`) live
-  on the store branch. Both test files load their subject off the store ref,
-  and the Telegram one prefers a store *worktree* when the clone has one, so
-  it checks the file being edited rather than the last commit. `enabled_frontends`
+  to the SDK) and the MCP server (`frontend_mcp_server` — exposes Second Brain
+  to external MCP clients over streamable HTTP, and **not** yet migrated: it
+  still imports `logging`, `pipeline.database` and
+  `state_machine.conversation_phases`) live on the store branch. Testing them
+  is split by whose behaviour is under test. What the *kernel* claims about
+  them — the validator's verdict, the declarations the bridge reads, the
+  isolation the tree resolves — is `tests/test_store_frontend_contracts.py`
+  and runs by default. Their own behaviour (markdown rendering, chunking, the
+  streamed-reply tracker, media planning, MCP session identity) is marked
+  `store` in `pytest.ini` and deselected, since a kernel change cannot break
+  it; run it with `pytest -m store`. Both reach the store branch through
+  `tests/support.store_source`, which prefers a store *worktree* when the
+  clone has one, so it checks the file being edited rather than the last
+  commit. `enabled_frontends`
   is deliberately not whitelisted by the kernel: config normalization keeps
   unknown names so installed store frontends survive load, and bootstrap
   *prunes* what discovery can't resolve — a name it cannot match is a store
@@ -661,8 +669,8 @@ in-process resident box runs each call on a *fresh worker thread*
 somebody else by the time `poll` returns. It holds structurally for Telegram
 (installed tree + foreign import) rather than by declaration, which is the
 right way round — but it is a real constraint on where such a frontend may
-live, and `tests/test_frontend_telegram.py` pins that the reading comes out
-right.
+live, and `tests/test_store_frontend_contracts.py` pins that the reading comes
+out right.
 
 Two `BaseFrontend` hooks are **not** on the wire and a migrated frontend
 therefore loses them: `render_queued_ack` (return True to replace the textual

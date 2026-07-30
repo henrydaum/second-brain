@@ -15,6 +15,13 @@ from pathlib import Path
 
 import pytest
 
+# These exercise behaviour of a file on the store branch, so a kernel change
+# cannot break them and they do not belong in the kernel's default run. The
+# claims the *kernel* makes about this frontend -- conformance, the
+# declarations the bridge reads, resolved isolation -- live in
+# tests/test_store_frontend_contracts.py and still run by default.
+pytestmark = pytest.mark.store
+
 from pipeline.database import DEFAULT_USER_ID, Database
 
 # Import the state_machine package before runtime modules to settle the
@@ -58,11 +65,6 @@ def _bound_frontend(frontend_cls, tmp_path):
     return fe, rt, db
 
 
-def test_declares_store_contract(frontend_cls):
-    assert frontend_cls.name == "mcp_server"
-    assert frontend_cls.user_binding == "per_user"
-    src = _store_module_source()
-    assert 'dependencies_pip = ["mcp"]' in src  # module-level literal for AST parsing
 
 
 def test_default_client_acts_as_operator_and_unattended(frontend_cls, tmp_path):
