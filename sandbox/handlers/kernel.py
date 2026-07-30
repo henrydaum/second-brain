@@ -55,6 +55,7 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               UI_APPROVE,
                               UI_ASK, UI_RENDER, USER_LIST, USER_READ,
                               USER_WRITE, Result)
+from .args import float_arg, int_arg
 from ..credentials import lookup_from, redact, redact_nested, resolve
 from ..users import ScopeError, scope_sql, scope_write
 
@@ -311,13 +312,15 @@ def _conv_list(ctx, args: dict) -> Result:
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
+    limit, bad = int_arg(args, "limit", 50, lo=1, hi=200)
+    if bad is not None:
+        return bad
     try:
         user_id = getattr(ctx, "user_id", None)
         if args.get("details"):
             import time
 
             category = args.get("category")
-            limit = max(1, min(int(args.get("limit") or 50), 200))
             rows, has_more = db.list_conversations_page(
                 offset=0,
                 limit=limit,
@@ -713,6 +716,9 @@ def _ui_ask(ctx, args: dict) -> Result:
     default = args.get("default")
     required = args.get("required")
     required = True if required is None else bool(required)
+    timeout, bad = float_arg(args, "timeout", 300.0, lo=0.0)
+    if bad is not None:
+        return bad
 
     try:
         prompt = _ask_prompt(args.get("prompt") or "", answer_type,
@@ -720,7 +726,7 @@ def _ui_ask(ctx, args: dict) -> Result:
         request = asker(args.get("title") or "Question", prompt,
                         type=answer_type, enum=choices,
                         default=default, required=required)
-        if not request.wait(timeout=float(args.get("timeout") or 300.0)):
+        if not request.wait(timeout=timeout):
             return Result.failure("the user did not answer", retryable=True)
         if request.metadata.get("cancelled"):
             return Result.refusal("the user cancelled")
@@ -2001,11 +2007,14 @@ def _event_emit(ctx, args: dict) -> Result:
 
 def _event_request(ctx, args: dict) -> Result:
     """Publish and wait for one answer."""
+    timeout, bad = float_arg(args, "timeout", 120.0, lo=0.0)
+    if bad is not None:
+        return bad
     try:
         from events.event_bus import bus
         return Result(data=bus.request(args.get("channel"),
                                        args.get("payload") or {},
-                                       timeout=float(args.get("timeout") or 120.0)))
+                                       timeout=timeout))
     except Exception as exc:
         return Result.failure(f"request failed: {exc}", retryable=True)
 
@@ -2658,9 +2667,11 @@ def _ledger_read(ctx, args: dict) -> Result:
     db = _db(ctx)
     if (bad := _need(db, "the database")) is not None:
         return bad
+    limit, bad = int_arg(args, "limit", 50, lo=1)
+    if bad is not None:
+        return bad
     try:
-        return Result(data=_rows(db.get_ledger_rows(
-            limit=int(args.get("limit") or 50))))
+        return Result(data=_rows(db.get_ledger_rows(limit=limit)))
     except Exception as exc:
         return Result.failure(f"ledger read failed: {exc}")
 

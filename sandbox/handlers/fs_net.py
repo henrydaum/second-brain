@@ -31,6 +31,7 @@ from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                               SECRET_REVEAL, Result)
 from ..protected import is_protected, reason_for
 from ..credentials import lookup_from, redact, resolve
+from .args import float_arg, int_arg
 
 MAX_READ_BYTES = 8 * 1024 * 1024
 # Binary reads get their own cap: the things that need them are media files
@@ -238,6 +239,12 @@ def _fs_list(ctx, args: dict) -> Result:
     pattern = args.get("pattern") or "*"
     path = Path(raw)
     extended = any(key in args for key in _LIST_EXTRAS)
+    # Validated here rather than in ``_walked_entries``, which answers with a
+    # tuple and has no way to report a bad argument.
+    limit, bad = int_arg(args, "limit", 0, lo=0)
+    if bad is not None:
+        return bad
+    args = {**args, "limit": limit}
     try:
         # A file answers for itself. Asking "what do you know about this one
         # path" is the common case behind a stat, and routing it through
@@ -295,7 +302,7 @@ def _walked_entries(root: Path, pattern: str, args: dict):
     else:
         entries = sorted(entries)
 
-    limit = int(args.get("limit") or 0)
+    limit = args.get("limit") or 0
     truncated = bool(limit) and len(entries) > limit
     if truncated:
         entries = entries[:limit]
@@ -386,10 +393,14 @@ def _fs_search_extended(needle: str, root: Path, args: dict) -> Result:
             f"unknown fs.search mode {mode!r}; expected one of {list(SEARCH_MODES)}")
     multiline = bool(args.get("multiline"))
     case_insensitive = bool(args.get("case_insensitive"))
-    context_lines = max(0, min(int(args.get("context_lines") or 0),
-                               walk.MAX_CONTEXT))
-    limit = max(1, min(int(args.get("limit") or DEFAULT_SEARCH_LIMIT),
-                       MAX_SEARCH_HITS))
+    context_lines, bad = int_arg(args, "context_lines", 0,
+                                 lo=0, hi=walk.MAX_CONTEXT)
+    if bad is not None:
+        return bad
+    limit, bad = int_arg(args, "limit", DEFAULT_SEARCH_LIMIT,
+                         lo=1, hi=MAX_SEARCH_HITS)
+    if bad is not None:
+        return bad
     raw_glob = (args.get("glob") or "").strip()
     if raw_glob == "**/*":
         raw_glob = ""  # the default means "no filter", not a literal pattern
@@ -738,7 +749,10 @@ def _proc_run(ctx, args: dict) -> Result:
     if isinstance(built, Result):
         return built
     cmd, use_shell, rendered = built
-    timeout = min(float(args.get("timeout") or PROC_TIMEOUT), PROC_TIMEOUT)
+    timeout, bad = float_arg(args, "timeout", PROC_TIMEOUT,
+                             lo=0.0, hi=PROC_TIMEOUT)
+    if bad is not None:
+        return bad
     try:
         done = subprocess.run(cmd, shell=use_shell, capture_output=True,
                               text=True, errors="replace", timeout=timeout,
