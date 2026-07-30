@@ -55,6 +55,8 @@ from ..guest.requests import (AGENT_COLLECT, AGENT_COMPLETE, AGENT_SCHEDULE,
                               UI_APPROVE,
                               UI_ASK, UI_RENDER, USER_LIST, USER_READ,
                               USER_WRITE, Result)
+from ..guest.codes import (ERROR_INVALID_ARGUMENT, ERROR_NOT_FOUND,
+                          ERROR_UNAVAILABLE)
 from .args import float_arg, int_arg
 from ..credentials import lookup_from, redact, redact_nested, resolve
 from ..users import ScopeError, scope_sql, scope_write
@@ -77,7 +79,8 @@ def _need(value, what: str):
     ...)):`` silently does nothing, which is the opposite of a guard.
     """
     if value is None:
-        return Result.failure(f"{what} is not available in this kernel")
+        return Result.failure(f"{what} is not available in this kernel",
+                              code=ERROR_UNAVAILABLE)
     return None
 
 
@@ -429,7 +432,7 @@ def _conv_set_notification_mode(ctx, args: dict) -> Result:
         mode = setter(
             getattr(ctx, "session_key", None), cid, args.get("mode"))
         if mode is None:
-            return Result.failure("no such conversation")
+            return Result.failure("no such conversation", code=ERROR_NOT_FOUND)
         return Result(data=mode)
     except Exception as exc:
         return Result.failure(f"notification change failed: {exc}")
@@ -471,7 +474,7 @@ def _conv_clear(ctx, args: dict) -> Result:
     if cid is None:
         cid = getattr(session, "conversation_id", None)
     if cid is None:
-        return Result.failure("no conversation loaded")
+        return Result.failure("no conversation loaded", code=ERROR_NOT_FOUND)
     if (refused := _check_access(ctx, cid)) is not None:
         return refused
 
@@ -1148,7 +1151,8 @@ def _plugin_list(ctx, args: dict) -> Result:
     role = args.get("role")
     if role:
         if role != "llm_backend":
-            return Result.failure(f"unknown plugin role {role!r}")
+            return Result.failure(f"unknown plugin role {role!r}",
+                              code=ERROR_INVALID_ARGUMENT)
         if args.get("category") not in (None, "", "services"):
             return Result(data=[])
         try:
@@ -1275,7 +1279,7 @@ def _plugin_validate(ctx, args: dict) -> Result:
     if error:
         return Result.failure(error)
     if not path.is_file():
-        return Result.failure(f"no such file: {path}")
+        return Result.failure(f"no such file: {path}", code=ERROR_NOT_FOUND)
     if path.suffix != ".py":
         return Result.failure(f"not a Python file: {path.name}")
     try:
@@ -1450,7 +1454,8 @@ def _service_load(ctx, args: dict) -> Result:
     name = args.get("name")
     service = _service(ctx, name)
     if service is None:
-        return Result.failure(f"service {name!r} is not registered")
+        return Result.failure(f"service {name!r} is not registered",
+                              code=ERROR_NOT_FOUND)
     from plugins.BaseService import is_user_managed_service
 
     if not is_user_managed_service(service):
@@ -1470,7 +1475,8 @@ def _service_unload(ctx, args: dict) -> Result:
     name = args.get("name")
     service = _service(ctx, name)
     if service is None:
-        return Result.failure(f"service {name!r} is not registered")
+        return Result.failure(f"service {name!r} is not registered",
+                              code=ERROR_NOT_FOUND)
     from plugins.BaseService import is_user_managed_service
 
     if not is_user_managed_service(service):
@@ -1495,7 +1501,8 @@ def _service_call(ctx, args: dict) -> Result:
     name, method = args.get("name"), args.get("method")
     service = _service(ctx, name)
     if service is None:
-        return Result.failure(f"service {name!r} is not loaded")
+        return Result.failure(f"service {name!r} is not loaded",
+                              code=ERROR_NOT_FOUND)
 
     exports = getattr(service, "exports", None)
     if exports is not None and method not in exports:
@@ -1653,7 +1660,8 @@ def _command_call(ctx, args: dict) -> Result:
     name = args.get("name")
     command = (getattr(registry, "_commands", None) or {}).get(name)
     if command is None:
-        return Result.failure(f"unknown command: /{name}")
+        return Result.failure(f"unknown command: /{name}",
+                              code=ERROR_NOT_FOUND)
     if getattr(command, "require_approval", False):
         return Result.refusal(
             f"/{name} requires the user's approval, which only the state "
@@ -2486,7 +2494,7 @@ def _task_pause(ctx, args: dict) -> Result:
         return bad
     name = args.get("name")
     if name not in tasks:
-        return Result.failure(f"unknown task {name!r}")
+        return Result.failure(f"unknown task {name!r}", code=ERROR_NOT_FOUND)
     paused = getattr(orchestrator, "paused", None)
     if (bad := _need(paused, "task pause state")) is not None:
         return bad
@@ -2508,7 +2516,7 @@ def _task_reset(ctx, args: dict) -> Result:
     name = args.get("name")
     task = tasks.get(name)
     if task is None:
-        return Result.failure(f"unknown task {name!r}")
+        return Result.failure(f"unknown task {name!r}", code=ERROR_NOT_FOUND)
     if getattr(task, "trigger", "path") == "event":
         return Result.failure("only path-driven tasks can be reset")
     db = _db(ctx)
@@ -2538,7 +2546,7 @@ def _task_trigger(ctx, args: dict) -> Result:
     name = args.get("name")
     task = tasks.get(name)
     if task is None:
-        return Result.failure(f"unknown task {name!r}")
+        return Result.failure(f"unknown task {name!r}", code=ERROR_NOT_FOUND)
     if getattr(task, "trigger", "path") != "event":
         return Result.failure(
             "only event-driven tasks can be triggered manually")
@@ -2700,7 +2708,7 @@ def _script_run(ctx, args: dict) -> Result:
         if error:
             return Result.failure(error)
     if not path.is_file():
-        return Result.failure(f"no such script: {path}")
+        return Result.failure(f"no such script: {path}", code=ERROR_NOT_FOUND)
     # Re-checked here as well as in the policy function. The two answer
     # different questions — the policy decides whether to *ask*, this decides
     # whether to *run* — and a handler that trusted the classifier to have

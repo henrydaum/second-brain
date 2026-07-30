@@ -920,10 +920,18 @@ message text and is now purely cosmetic; nothing reads it.
 
 Two rules keep this a vocabulary rather than a rename of all 166 failure sites.
 **An empty code is not a bug** — most failures are only ever read by a person,
-and a code exists once a *second* reader needs to branch. Only the ~12 failures
-the kernel mints for itself carry one today (timeout, guest fault, cancelled,
-shutting down, approval declined, not permitted). And **`retryable` stays
-orthogonal**: it is set by whoever knows, never derived from the code.
+and a code exists once a *second* reader needs to branch. And **`retryable`
+stays orthogonal**: it is set by whoever knows, never derived from the code.
+
+What carries a code today is the kernel's own failures (timeout, guest fault,
+cancelled, shutting down, approval declined, not permitted) plus the two a
+plugin actually branches on. `ERROR_NOT_FOUND` is deliberately *one* code
+across files, directories, services, commands, tasks and conversations —
+falling back when something is absent should not require knowing which
+subsystem was asked, nor matching four sentences. `ERROR_UNAVAILABLE` is
+separate and comes from `_need`, which guards ~64 sites in one function:
+"this kernel has no database" is a different thing from "that conversation
+does not exist", and a plugin retrying the second must not retry the first.
 
 Adding a field to `Result` means editing `to_dict` *and* `from_dict`, which
 enumerate fields by hand — forget the first and the field is lost only on the

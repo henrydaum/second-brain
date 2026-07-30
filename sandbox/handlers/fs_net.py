@@ -23,7 +23,7 @@ from pathlib import Path
 
 from .. import walk
 from ..guest import protocol
-from ..guest.codes import ERROR_NOT_PERMITTED
+from ..guest.codes import ERROR_NOT_FOUND, ERROR_NOT_PERMITTED
 from ..guest.requests import (ENV_READ, FS_DELETE, FS_LIST, FS_MOVE, FS_READ,
                               FS_READ_BYTES, FS_SEARCH, FS_TEMP, FS_WRITE,
                               FS_WRITE_BYTES, NET_HTTP, PROC_LIST, PROC_RUN,
@@ -84,7 +84,8 @@ def _fs_read(ctx, args: dict) -> Result:
                               code=ERROR_NOT_PERMITTED)
     try:
         if not path.is_file():
-            return Result.failure(f"not a file: {raw}")
+            return Result.failure(f"not a file: {raw}",
+                                  code=ERROR_NOT_FOUND)
         if path.stat().st_size > MAX_READ_BYTES:
             return Result.failure(f"file exceeds {MAX_READ_BYTES} bytes")
         return Result(data=path.read_text(encoding="utf-8", errors="replace"))
@@ -123,7 +124,8 @@ def _fs_read_bytes(ctx, args: dict) -> Result:
                               "numbers of bytes")
     try:
         if not path.is_file():
-            return Result.failure(f"not a file: {raw}")
+            return Result.failure(f"not a file: {raw}",
+                                  code=ERROR_NOT_FOUND)
         too_big = Result.failure(
             f"a single fs.read_bytes answer is capped at {MAX_READ_BINARY} "
             f"bytes; read it in windows with offset= and length=")
@@ -253,7 +255,8 @@ def _fs_list(ctx, args: dict) -> Result:
         if path.is_file():
             entries, scan_truncated, truncated = [path], False, False
         elif not path.is_dir():
-            return Result.failure(f"no such directory or file: {raw}")
+            return Result.failure(f"no such directory or file: {raw}",
+                                  code=ERROR_NOT_FOUND)
         elif not extended:
             entries = sorted(path.glob(pattern))
             return Result(data=_list_payload(entries, bool(args.get("details"))))
@@ -417,7 +420,8 @@ def _fs_search_extended(needle: str, root: Path, args: dict) -> Result:
         return Result.failure(f"invalid regex: {exc}")
 
     if not root.exists():
-        return Result.failure(f"no such directory or file: {root}")
+        return Result.failure(f"no such directory or file: {root}",
+                                  code=ERROR_NOT_FOUND)
 
     # ripgrep only ever runs against a literal regex over a directory: an
     # escaped literal round-trips through Rust's engine fine, but a
@@ -560,7 +564,8 @@ def _fs_delete(ctx, args: dict) -> Result:
         elif path.exists():
             path.unlink()
         else:
-            return Result.failure(f"no such path: {raw}")
+            return Result.failure(f"no such path: {raw}",
+                                  code=ERROR_NOT_FOUND)
         return Result(data={"deleted": str(path)})
     except OSError as exc:
         return Result.failure(f"delete failed: {exc}")

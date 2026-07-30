@@ -294,3 +294,54 @@ def test_a_genuine_refusal_still_raises_denied(interp):
 
     assert run_in_process(interp, plugin, name="egress").data == \
         "denied, correctly"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The two codes a plugin is most likely to branch on.
+# ──────────────────────────────────────────────────────────────────────
+
+def test_the_things_a_plugin_looks_for_and_cannot_find_are_not_found(
+        interp, tmp_path):
+    """One code across files, directories, services and conversations.
+
+    A plugin falling back when something is absent should not have to know
+    which subsystem it asked, nor match on four different sentences.
+    """
+    from sandbox.guest.codes import ERROR_NOT_FOUND
+
+    def plugin(sdk, missing):
+        seen = {}
+        for label, call in (
+                ("file", lambda: sdk.fs.read(missing + "/nope.txt")),
+                ("dir", lambda: sdk.fs.list(missing + "/nodir")),
+                ("service", lambda: sdk.services.call("nope", "m"))):
+            try:
+                call()
+                seen[label] = "no failure"
+            except sdk.Failed as exc:
+                seen[label] = exc.result.code
+        return sdk.ok(seen)
+
+    seen = run_in_process(interp, plugin, name="seeker",
+                          kwargs={"missing": str(tmp_path)}).data
+    assert seen == {"file": ERROR_NOT_FOUND, "dir": ERROR_NOT_FOUND,
+                    "service": ERROR_NOT_FOUND}
+
+
+def test_an_absent_kernel_capability_is_unavailable_not_missing():
+    """``_need`` guards ~64 sites, so it is one edit and one code.
+
+    Distinct from not_found on purpose: "this kernel has no database" is a
+    different thing from "that conversation does not exist", and a plugin
+    retrying the second should not retry the first.
+    """
+    from types import SimpleNamespace
+
+    from sandbox.guest.codes import ERROR_UNAVAILABLE
+    from sandbox.guest.requests import CONV_LIST
+    from tests.support import call_handler
+
+    result = call_handler(CONV_LIST, SimpleNamespace(db=None), {})
+    assert not result.ok
+    assert result.code == ERROR_UNAVAILABLE
+    assert result.denied is False
