@@ -864,16 +864,12 @@ def _check_contract(tree, walker: _Walker, filename: str, known_names):
 
 # ``isolation`` is deliberately never collected. It was, and it made the code
 # being contained the authority on its own containment — see
-# ``sandbox/isolation.py``. The kernel now derives it from the file's tree, so
+# ``sandbox/isolation.py``. The kernel derives it from the file's tree now, so
 # reading it off the file would at best be ignored and at worst be believed.
 #
-# There was a ``DECLARATION_KEYS`` tuple here listing what to collect. It was
-# dead: ``_collect_declarations`` takes *every* literal class attribute,
-# because the dual-mode loader has to copy ``parameters``, ``description`` and
-# whatever else a base class grows onto its adapter, and an allowlist that
-# drifts silently drops a plugin's schema. A list nothing reads is worse than
-# no list, since the next person to add a declaration will maintain it and
-# wonder why it changed nothing.
+# There is no allowlist of collectable keys, on purpose: the dual-mode loader
+# copies whatever a base class grows onto its adapter, so a list that drifts
+# silently drops a plugin's schema.
 
 # Reading declarations without importing means *inherited* defaults are
 # invisible: ``class Counter(BaseService)`` never writes ``lifetime`` in the
