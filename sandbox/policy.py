@@ -64,13 +64,10 @@ class Chain:
     ``links`` is who called whom, innermost last. The kernel maintains this as
     its own stack, so plugins can neither report nor misstate their identity.
 
-    ``approved`` is what the user said yes to, and it is a *set of Request
-    types*, never a boolean. A person approving ``/update`` is approving a
-    command, not a syscall list — and the honest reading of a command's scope
-    is the capability classes it declared in ``requests``, which is the only
-    thing the approval dialog can truthfully name. Predicting what
-    ``git pull`` will actually do is undecidable; asking whether the command
-    said it would run a shell is not.
+    ``approved`` is what the user said yes to: a *set of Request types*, never
+    a boolean, taken from the command's own declared ``requests``. Why the
+    declaration is the only decidable scope is in CLAUDE.md, "An approval is
+    scoped to what the command declared".
 
     ``None`` means nothing was approved. An empty set means a command was
     approved but declared no Requests, which grants nothing — deliberately
@@ -393,13 +390,10 @@ def _classify_db_write(args: dict) -> Decision:
 # has to be argued for rather than assumed, and the argument is narrow.
 #
 # What relaxes it is a **host allowlist the user maintains** — the config
-# setting ``net_allowed_hosts``. That is deliberately not a declaration on the
-# plugin. An ``endpoints = [...]`` line read off the source would make the code
-# being contained the authority on its own reach, which is exactly the bug
-# ``isolation = "subprocess"`` had and ``sandbox/isolation.py`` exists to
-# prevent: an agent authoring a plugin would author its own egress by typing a
-# hostname. A person deciding what code may reach is a different act, and it is
-# the same shape as the planned per-tree isolation override.
+# setting ``net_allowed_hosts`` — and deliberately not a declaration on the
+# plugin, which would make contained code the authority on its own reach (the
+# ``isolation`` bug one level down; see ``sandbox/isolation.py``). A person
+# deciding what code may reach is a different act.
 #
 # The host is the unit rather than the URL because the host is what a person
 # can actually decide about. Nobody can usefully answer "may this plugin fetch
@@ -497,19 +491,10 @@ def _classify_net(args: dict) -> Decision:
 # The shell.
 # ──────────────────────────────────────────────────────────────────────
 #
-# The shell gets its own section because it is the one family where the
-# arguments are a *language* rather than values. Everywhere else the policy
-# function reads a path or a URL and the reading is exact; here it would have
-# to decide what an arbitrary command line does, which is Rice's theorem
-# wearing a hat. Every classifier of this kind — ours included, historically —
-# is a whitelist racing against quoting, substitution and redirection, and the
-# race is lost quietly: a wrong "safe" is silent, and only a wrong "unsafe" is
-# ever reported as a bug.
+# Everything is asked. Why there is no classifier here and why there must not
+# be one again is in CLAUDE.md, "And it is where the classifier died".
 #
-# So the answer today is the honest one: **everything is asked**. That is
-# annoying rather than wrong, and annoying is the failure mode to prefer.
-#
-# It is meant to get better, and this is where better goes. A *recognizer*
+# It is meant to get less onerous, and this is where better goes. A *recognizer*
 # takes the rendered command line and returns a reason to allow it, or None to
 # stay out of the way. Two kinds are expected:
 #
@@ -564,12 +549,10 @@ def _classify_shell(kind: str, args: dict) -> Decision:
 # ──────────────────────────────────────────────────────────────────────
 #
 # A script is the answer to the shell's problem rather than another instance of
-# it. ``proc.run`` is asked about every time because a command line is a
-# *language* the policy function would have to interpret; a script is SDK code,
-# so there is nothing to interpret — every effect inside it arrives here on its
-# own, individually, with the script still in the chain. Running one therefore
-# widens nothing, which is the same argument that makes ``tool.call`` and
-# ``service.call`` safe.
+# it: SDK code has nothing to interpret, so every effect inside arrives here
+# individually with the script still in the chain, and running one widens
+# nothing. Same argument as ``tool.call``; see CLAUDE.md, "Scripts are what the
+# classifier's death left missing".
 #
 # Two things are checked, and both are read off the *destination* — the same
 # shape as the filesystem branches, which ask where a write is aimed rather

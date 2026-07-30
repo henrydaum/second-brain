@@ -41,9 +41,9 @@ require them.
 
 **A notice is a Request the child does not wait for.** It still passes the
 same gate — classified, recorded, executed by the same handler — so it is not
-a way around policy; the only thing given up is the answer. That matters for
-streaming, where a reply per token would turn a stream into a few hundred
-round trips. Because nothing is awaited, a notice never appears in the
+a way around policy; the only thing given up is the answer. (Why streaming
+needs that is in CLAUDE.md, "Streaming inverted, and lost a feature on
+purpose".) Because nothing is awaited, a notice never appears in the
 ``expected`` set of a pump loop: it is serviced and the loop reads on.
 """
 

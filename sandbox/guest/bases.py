@@ -4,19 +4,10 @@ These live in the guest because every plugin subclasses one, so they are part
 of the shippable SDK rather than of the kernel. A container image copies
 ``guest/`` and has everything a plugin needs to be written against.
 
-What changed from ``plugins/Base*.py``:
-
-- **There is a common ancestor.** The five families were five unrelated
-  classes that happened to share six attributes. Those attributes now live on
-  :class:`BasePlugin` and are declared once.
-- **``context`` became ``sdk``.** A plugin no longer receives a bag of live
-  kernel objects; it receives a handle that can only ask. This is the entire
-  difference, and it is why the base classes had to move.
-- **Boxes.** A plugin declares which execution context it shares with its
-  helpers (see :mod:`guest.box`).
-- **Services declare ``exports``.** Only listed methods are reachable through
-  ``service.call``, which answers "which service methods can a plugin call?"
-  by declaration rather than by guesswork.
+The one difference that produced all the others: a plugin no longer receives a
+bag of live kernel objects, it receives a handle that can only ask. What that
+changes per family — the common ancestor, box membership, ``exports`` — is the
+subject of ``docs/MIGRATING_PLUGINS.md``.
 
 **None of this is required to use the sandbox.** An arbitrary script — an
 agent's scratch computation, a helper module — needs no base class and no
